@@ -151,7 +151,7 @@ A run-level **failure-notification node** (`notify-on-failure`) is appended when
 
 ### `_input.py` (`app/generated/_input.py`)
 
-Typed Python `AppInputContract` dataclass. SDK-owned fields inherited from `ExtractionInput`; app-specific fields generated from `uiConfig.properties`.
+Typed Python `AppInputContract` dataclass. SDK-owned fields inherited from `ExtractionInput`; app-specific fields generated from `uiConfig.properties`. Inherited `include_filter` and `exclude_filter` fields accept APITree object selections by normalizing them to the SDK filter-map shape before validation.
 
 ## Modules
 

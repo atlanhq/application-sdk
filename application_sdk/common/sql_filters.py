@@ -127,6 +127,18 @@ def validate_filter_no_sql_injection(v: Any) -> Any:
                     f"SQL-unsafe sequence {seq!r} not allowed in filter {label}: {value!r}"
                 )
 
+    def _check_value(label: str, value: Any) -> None:
+        if isinstance(value, str):
+            _check_str(label, value)
+        elif isinstance(value, list):
+            for item in value:
+                _check_value("value", item)
+        elif isinstance(value, dict):
+            for nested_key, nested_value in value.items():
+                if isinstance(nested_key, str):
+                    _check_str("key", nested_key)
+                _check_value("value", nested_value)
+
     if isinstance(v, str):
         # Legacy AE callers pass the filter as a JSON-encoded string. The
         # JSON syntax itself carries double-quotes that would trip the
@@ -149,13 +161,9 @@ def validate_filter_no_sql_injection(v: Any) -> Any:
         _check_str("value", v)
     elif isinstance(v, dict):
         for key, values in v.items():
-            _check_str("key", key)
-            if isinstance(values, list):
-                for item in values:
-                    if isinstance(item, str):
-                        _check_str("value", item)
-            elif isinstance(values, str):
-                _check_str("value", values)
+            if isinstance(key, str):
+                _check_str("key", key)
+            _check_value("value", values)
     return v
 
 
@@ -571,9 +579,7 @@ def prepare_filters(
     return normalized_include_regex, normalized_exclude_regex
 
 
-def normalize_filters(
-    filter_dict: dict[str, list[str] | str], is_include: bool
-) -> list[str]:
+def normalize_filters(filter_dict: dict[str, Any], is_include: bool) -> list[str]:
     """Normalize filter dict to fully-anchored ``db.schema`` regex patterns.
 
     Each emitted pattern is anchored with ``^`` and ``$`` so that callers
@@ -583,6 +589,7 @@ def normalize_filters(
     Mapping:
         - ``{"^db$": []}`` or ``{"^db$": "*"}`` → ``^db\\..*$`` (every schema in db)
         - ``{"^db$": ["^sch$"]}`` → ``^db\\.sch$`` (exactly that schema)
+        - ``{"^db$": {"^sch$": {}}}`` → ``^db\\.sch$`` (APITree object shape)
 
     The previous implementation emitted unanchored ``db\\.*`` (literal dot,
     zero-or-more), which substring-matched targets like ``something.atlan_dev``
@@ -604,6 +611,9 @@ def normalize_filters(
         if filtered_schemas == "*" or not filtered_schemas:
             normalized_filter_list.append(f"^{db}\\..*$")
             continue
+
+        if isinstance(filtered_schemas, dict):
+            filtered_schemas = list(filtered_schemas.keys())
 
         if isinstance(filtered_schemas, list):
             for schema in filtered_schemas:
