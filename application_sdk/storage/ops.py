@@ -213,10 +213,8 @@ def _is_azure_container_not_found(exc: BaseException) -> bool:
     distinct from a missing *blob* (``BlobNotFound``) and needs a separate,
     actionable error message so operators know to pre-create the container.
     """
-    msg = str(exc)
-    return "ContainerNotFound" in msg or (
-        "The specified container does not exist" in msg
-    )
+    msg = str(exc).lower()
+    return "containernotfound" in msg or "the specified container does not exist" in msg
 
 
 def _is_not_found(exc: BaseException) -> bool:
