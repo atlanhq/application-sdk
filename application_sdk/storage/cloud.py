@@ -85,9 +85,18 @@ class CloudStore:
     Create via the :meth:`from_credentials` factory method.
     """
 
-    def __init__(self, store: ObjectStore, *, provider: str = "unknown") -> None:
+    def __init__(
+        self,
+        store: ObjectStore,
+        *,
+        provider: str = "unknown",
+        put_attributes: dict[str, str] | None = None,
+    ) -> None:
         self._store = store
         self._provider = provider
+        #: Per-write obstore put attributes (e.g. ``{"Storage-Class": "STANDARD_IA"}``).
+        #: Applied automatically to every write through this store.
+        self._put_attributes: dict[str, str] | None = put_attributes
 
     @property
     def provider(self) -> str:
@@ -360,7 +369,7 @@ class CloudStore:
             Number of bytes uploaded.
         """
         try:
-            await obs.put_async(self._store, key, data)
+            await obs.put_async(self._store, key, data, attributes=self._put_attributes)
         except Exception as exc:
             raise StorageError(f"Failed to upload key: {key}", cause=exc) from exc
         return len(data)

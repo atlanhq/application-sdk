@@ -504,8 +504,8 @@ async def _create_infrastructure(
             wait_for_dapr_sidecar,
         )
         from application_sdk.storage import (  # noqa: PLC0415 — cold path: storage init only when binding YAML present
-            create_store_from_binding,
             create_store_from_binding_optional,
+            create_store_from_binding_with_put_attrs,
         )
 
         await wait_for_dapr_sidecar()
@@ -526,13 +526,17 @@ async def _create_infrastructure(
                 UPSTREAM_OBJECT_STORE_NAME,
             )
 
+        deployment_store, deployment_put_attrs = (
+            create_store_from_binding_with_put_attrs(
+                DEPLOYMENT_OBJECT_STORE_NAME,
+                components_dir=components_dir,
+            )
+        )
         return InfrastructureContext(
             state_store=DaprStateStore(dapr_client, store_name=STATE_STORE_NAME),
             secret_store=DaprSecretStore(dapr_client, store_name=SECRET_STORE_NAME),
-            storage=create_store_from_binding(
-                DEPLOYMENT_OBJECT_STORE_NAME,
-                components_dir=components_dir,
-            ),
+            storage=deployment_store,
+            storage_put_attributes=deployment_put_attrs,
             upstream_storage=upstream_storage,
             event_binding=(
                 DaprBinding(dapr_client, EVENT_STORE_NAME)

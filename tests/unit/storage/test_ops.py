@@ -829,3 +829,59 @@ class TestSafeJoinUnder:
 
         result = _safe_join_under(tmp_path, "")
         assert result == tmp_path.resolve()
+
+
+# ---------------------------------------------------------------------------
+# Azure container-not-found detection
+# ---------------------------------------------------------------------------
+
+
+class TestIsAzureContainerNotFound:
+    """_is_azure_container_not_found must recognise container-absent errors."""
+
+    def test_container_not_found_code(self) -> None:
+        from application_sdk.storage.ops import _is_azure_container_not_found
+
+        assert (
+            _is_azure_container_not_found(
+                RuntimeError(
+                    "Generic S3 error: ContainerNotFound — "
+                    "The specified container does not exist."
+                )
+            )
+            is True
+        )
+
+    def test_prose_message(self) -> None:
+        from application_sdk.storage.ops import _is_azure_container_not_found
+
+        assert (
+            _is_azure_container_not_found(
+                RuntimeError("The specified container does not exist.")
+            )
+            is True
+        )
+
+    def test_unrelated_error_returns_false(self) -> None:
+        from application_sdk.storage.ops import _is_azure_container_not_found
+
+        assert _is_azure_container_not_found(RuntimeError("BlobNotFound")) is False
+        assert _is_azure_container_not_found(RuntimeError("permission denied")) is False
+        assert _is_azure_container_not_found(FileNotFoundError("key")) is False
+
+    async def test_put_raises_storage_config_error_on_container_not_found(
+        self, tmp_path
+    ) -> None:
+        """_put must re-raise as StorageConfigError for Azure container-absent."""
+        from application_sdk.storage.errors import StorageConfigError
+        from application_sdk.storage.factory import create_memory_store
+
+        # Patch put_async to raise a ContainerNotFound error.
+        azure_err = RuntimeError(
+            "Generic HTTP error: ContainerNotFound — "
+            "The specified container does not exist."
+        )
+        store = create_memory_store()
+        with patch("obstore.put_async", AsyncMock(side_effect=azure_err)):
+            with pytest.raises(StorageConfigError, match="pre-create the container"):
+                await _put("key/data.json", b"{}", store=store)

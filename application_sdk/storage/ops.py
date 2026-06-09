@@ -182,6 +182,43 @@ def _resolve_store(store: ObjectStore | None) -> ObjectStore:
     return infra.storage
 
 
+def _resolve_put_attributes(store: ObjectStore | None) -> dict[str, str] | None:
+    """Return binding-level put attributes for the resolved store, or ``None``.
+
+    When *store* is ``None`` (i.e. the caller is using the infra-context store),
+    returns ``InfrastructureContext.storage_put_attributes`` so every write
+    automatically honours attributes such as ``"Storage-Class"`` that were
+    captured at binding construction time.
+
+    When an explicit *store* is passed in, returns ``None`` — the caller owns
+    that store and is responsible for any per-write options.
+    """
+    if store is not None:
+        return None
+    from application_sdk.infrastructure.context import (  # noqa: PLC0415
+        get_infrastructure,
+    )
+
+    infra = get_infrastructure()
+    if infra is None:
+        return None
+    return infra.storage_put_attributes
+
+
+def _is_azure_container_not_found(exc: BaseException) -> bool:
+    """Return True when *exc* indicates an Azure container does not exist.
+
+    Azure Blob Storage returns HTTP 404 with error code ``ContainerNotFound``
+    when a write targets a container that has never been created.  This is
+    distinct from a missing *blob* (``BlobNotFound``) and needs a separate,
+    actionable error message so operators know to pre-create the container.
+    """
+    msg = str(exc)
+    return "ContainerNotFound" in msg or (
+        "The specified container does not exist" in msg
+    )
+
+
 def _is_not_found(exc: BaseException) -> bool:
     """Return True if the exception indicates a missing key.
 
@@ -377,6 +414,7 @@ async def upload_file(
         may not persist an empty object.  GCS and local stores handle them correctly.
     """
     resolved = _resolve_store(store)
+    put_attributes = _resolve_put_attributes(store)
     if normalize:
         key = normalize_key(key)
 
@@ -396,7 +434,7 @@ async def upload_file(
     started = time.monotonic()
     try:
         async with obstore.open_writer_async(
-            resolved, key, buffer_size=effective_chunk
+            resolved, key, buffer_size=effective_chunk, attributes=put_attributes
         ) as writer:
             with path.open("rb") as fh:
                 while True:
@@ -422,8 +460,17 @@ async def upload_file(
             error_class=_exc_class_name(exc),
         )
         if isinstance(exc, Exception):
-            from application_sdk.storage.errors import StorageError  # noqa: PLC0415
+            from application_sdk.storage.errors import (  # noqa: PLC0415
+                StorageConfigError,
+                StorageError,
+            )
 
+            if _is_azure_container_not_found(exc):
+                raise StorageConfigError(
+                    "Azure container does not exist — v3 does not auto-create "
+                    "containers (v2 Dapr did); pre-create the container before "
+                    f"running (failed key: '{key}')"
+                ) from exc
             raise StorageError(
                 f"Failed to upload file to key '{key}'", key=key, cause=exc
             ) from exc
@@ -824,13 +871,23 @@ async def _put(
         RuntimeError: If *store* is ``None`` and no infrastructure store is set.
     """
     resolved = _resolve_store(store)
+    put_attributes = _resolve_put_attributes(store)
     if normalize:
         key = normalize_key(key)
     try:
-        await obstore.put_async(resolved, key, data)
+        await obstore.put_async(resolved, key, data, attributes=put_attributes)
     except Exception as exc:
-        from application_sdk.storage.errors import StorageError  # noqa: PLC0415
+        from application_sdk.storage.errors import (  # noqa: PLC0415
+            StorageConfigError,
+            StorageError,
+        )
 
+        if _is_azure_container_not_found(exc):
+            raise StorageConfigError(
+                "Azure container does not exist — v3 does not auto-create "
+                "containers (v2 Dapr did); pre-create the container before "
+                f"running (failed key: '{key}')"
+            ) from exc
         raise StorageError(f"Failed to put key '{key}'", key=key, cause=exc) from exc
 
 
