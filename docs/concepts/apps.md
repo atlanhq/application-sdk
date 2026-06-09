@@ -54,6 +54,23 @@ Each `@entrypoint` method becomes its own Temporal workflow (`{app-name}:{entry-
 
 See [Entry Points — Default entrypoint resolution](entry-points.md#default-entrypoint-resolution) for the full resolution rules.
 
+### Dynamic manifest (compute_manifest)
+
+A static `manifest.json` is enough for most apps. A multi-entry-point app that must **compute** its manifest per submission (placeholder fill-in, SQL generation, full DAG rewrite) drops a `core.py` in its per-entry-point package exposing a `compute_manifest` hook:
+
+```python
+# app/asset_export_advanced/core.py
+async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+    # `manifest` is the static manifest (already token-substituted);
+    # `fe_inputs` is the decoded frontend form. Return the manifest to serve.
+    ...
+    return manifest
+```
+
+When the app defines it, `GET /workflows/v1/manifest?entrypoint=<name>&fe_inputs=<url-encoded-json>` hands the static manifest plus the decoded `fe_inputs` to the hook and serves its return value; apps without the hook get the static manifest unchanged. The hook must be **`async def`** and return a `dict` — a sync `def` is not discovered and the route serves the static manifest unchanged. If the hook does CPU/IO-bound work (SQL generation, full DAG rewrite) it owns offloading that off the event loop (e.g. `await asyncio.to_thread(...)`). Exceptions are logged internally and surface as a generic `500` (no internals leaked). See [Entry Points — Per-entry-point handler & core modules](entry-points.md#per-entry-point-handler--core-modules) for the module-naming convention.
+
+> **`fe_inputs` size limit.** Because `fe_inputs` rides in the GET query string, it is bounded by the request-line cap of whatever proxy fronts the app (nginx defaults to 8 KB; ALB ~16 KB). The SDK rejects a decoded `fe_inputs` larger than **8 KB** with `413 Payload Too Large` so oversize surfaces as a clear error rather than an opaque upstream truncation. A fully-populated form for the largest connector we ship is ~1.6 KB (≈5 KB for a heavy multi-select), so this is comfortable headroom; forms that genuinely need more should move to a POST body rather than grow the query string.
+
 ## Orchestration in run()
 
 The `run()` method is where you compose tasks. It supports sequential, parallel, and conditional patterns:
