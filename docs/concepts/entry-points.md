@@ -269,7 +269,7 @@ The mapping between the kebab-case entry-point name (on the wire, and the `app/g
 - **`app.<segment>.handler`** — optional `async def test_auth(input, ctx)`, `preflight_check`, `fetch_metadata`. When a request to `/workflows/v1/{auth,check,metadata}` carries an `entrypoint` (the bare name, resolved by the orchestrator from the marketplace catalog), the SDK dispatches to this module **by exact name**. See [Handlers — Per-entry-point handlers](handlers.md#per-entry-point-handlers).
 - **`app.<segment>.core.compute_manifest`** — optional dynamic-manifest hook. See [Apps — Dynamic manifest](apps.md#dynamic-manifest-compute_manifest).
 
-Discovery is best-effort and conservative: a missing module / wrong-shaped attribute falls through to the app-level `Handler` (1:1 with single-entry-point behaviour). A handler `def` that isn't `async`, or a `compute_manifest` that isn't callable, is ignored. A module that *exists but fails to import* (a real bug in the connector's code) is **not** swallowed — it surfaces.
+Discovery is best-effort and conservative: a missing module / wrong-shaped attribute falls through to the app-level `Handler` (1:1 with single-entry-point behaviour). Both the handler functions and `compute_manifest` must be `async def` — a sync `def` is ignored and falls through. A module that *exists but fails to import* (a real bug in the connector's code) is **not** swallowed — it surfaces.
 
 ### Dockerfile
 

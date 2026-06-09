@@ -391,17 +391,16 @@ _ENTRYPOINT_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
 # (``app.<segment>.handler.{test_auth,preflight_check,fetch_metadata}``); the
 # input/output stay ``Any`` because the concrete contract pair is selected by
 # ``fn_name`` at call time. ``ComputeManifestFn`` is the dynamic-manifest hook
-# (``app.<segment>.core.compute_manifest``) — it may be sync or async, so the
-# return is ``dict | Awaitable[dict]`` (the call site branches on
-# ``iscoroutinefunction``: sync hooks run via ``asyncio.to_thread``, async hooks
-# are awaited directly).
+# (``app.<segment>.core.compute_manifest``) — it must be ``async def`` (the hook
+# is prescriptively async-only; the call site simply ``await``s it). A sync
+# ``def`` is not discovered and silently falls through to the static manifest.
 # TODO(BLDX-1354): the connector-author hook surface is typed only as
 # ``dict[str, Any]``; once the manifest / fe_inputs shapes stabilise, replace
 # these with Pydantic models (e.g. ``Manifest`` / ``FeInputs``) so hook authors
 # get validation + editor support instead of bare dicts.
 HandlerFn = Callable[[Any, HandlerContext], Awaitable[Any]]
 ComputeManifestFn = Callable[
-    [dict[str, Any], dict[str, Any]], "dict[str, Any] | Awaitable[dict[str, Any]]"
+    [dict[str, Any], dict[str, Any]], Awaitable[dict[str, Any]]
 ]
 
 
@@ -438,14 +437,17 @@ def _discover_compute_manifest(entrypoint: str) -> ComputeManifestFn | None:
     manifest substitution (placeholder fill-in, SQL generation, full DAG
     rewrite) drop a ``core.py`` next to their package's hand-written code with::
 
-        def compute_manifest(manifest: dict, fe_inputs: dict) -> dict: ...
+        async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict: ...
 
-    The static manifest (already token-substituted) is passed in; the
-    callable's return value becomes the response body. Apps that don't
-    define this module get the static manifest unchanged.
+    The hook must be ``async def`` — a sync ``def`` is not discovered and the
+    route serves the static manifest unchanged. The static manifest (already
+    token-substituted) is passed in; the coroutine's return value becomes the
+    response body. Apps that don't define this module get the static manifest
+    unchanged.
 
-    Returns the callable or ``None`` if the module / attribute is absent.
-    Best-effort discovery — never raises on import failure.
+    Returns the callable or ``None`` if the module / attribute is absent or
+    not a coroutine function. Best-effort discovery — never raises on import
+    failure.
     """
     # Lazy: app.entrypoint pulls in app.base, which imports this module
     # (handler.service is the FastAPI entry point); deferring to this cold
@@ -459,28 +461,40 @@ def _discover_compute_manifest(entrypoint: str) -> ComputeManifestFn | None:
     if module is None:
         return None
     fn = getattr(module, "compute_manifest", None)
-    # compute_manifest may be sync or async; the call site branches on
-    # ``inspect.iscoroutinefunction`` (sync → ``asyncio.to_thread``, async →
-    # awaited directly), so accept any callable here.
-    return cast("ComputeManifestFn | None", fn if callable(fn) else None)
+    # The hook is prescriptively async-only: the call site ``await``s it
+    # directly, so require a coroutine function. A sync ``def`` (or any
+    # non-callable) is not discovered and silently falls through to the
+    # static manifest — mirroring ``_discover_handler_fn``.
+    return cast(
+        "ComputeManifestFn | None", fn if inspect.iscoroutinefunction(fn) else None
+    )
 
 
 def _validated_entrypoint(name: str) -> str:
-    """Return the per-entrypoint name to dispatch to, or ``""`` for none.
+    """Return the per-entrypoint name to dispatch to, or ``""`` when none is sent.
 
     The orchestrator resolves the exact entry-point name (e.g.
     ``asset-export-advanced``) from the Global Marketplace app catalog and
     sends it in the ``entrypoint`` field, so resolution is a direct,
     deterministic reference — there is no parsing, filesystem glob, or
     suffix-matching of the legacy ``connector`` string. The name becomes part
-    of a module path (``app.<segment>.handler`` / ``.core``), so we only
-    validate its format and otherwise use it verbatim.
+    of a module path (``app.<segment>.handler`` / ``.core``), so we validate
+    its format and otherwise use it verbatim.
 
-    Returns ``""`` for an empty or malformed name — single-entrypoint apps
-    (which send no ``entrypoint``) then fall through to the app-level
-    ``Handler`` instance, 1:1 with today's behavior.
+    - **Empty / absent** → ``""``: single-entrypoint apps send no ``entrypoint``
+      and fall through to the app-level ``Handler`` instance, 1:1 with today's
+      behavior.
+    - **Non-empty but malformed** → ``HTTPException(400)``: a bad name is a
+      client error, not a silent fall-back to the default entrypoint. This
+      keeps the auth/check/metadata routes consistent with
+      ``/workflows/v1/manifest`` and the input-contract route, which already
+      reject malformed names with 400.
     """
-    return name if _ENTRYPOINT_NAME_RE.match(name) else ""
+    if not name:
+        return ""
+    if not _ENTRYPOINT_NAME_RE.match(name):
+        raise HTTPException(status_code=400, detail="Invalid entrypoint name")
+    return name
 
 
 def _discover_handler_fn(entrypoint: str, fn_name: str) -> HandlerFn | None:
@@ -1728,18 +1742,12 @@ def _register_workflow_routes(
                 fe_inputs_decoded = _decode_fe_inputs(fe_inputs)
                 manifest_dict = json.loads(raw)
                 try:
-                    if inspect.iscoroutinefunction(compute):
-                        # Async hook: await it directly (to_thread would run the
-                        # coroutine fn in a worker thread and hand back an
-                        # un-awaited coroutine, never the dict).
-                        computed = await compute(manifest_dict, fe_inputs_decoded)
-                    else:
-                        # Sync hook (the documented form): run off the event
-                        # loop — the use case (SQL generation / full DAG rewrite)
-                        # is CPU/IO-bound and would otherwise block FastAPI.
-                        computed = await asyncio.to_thread(
-                            compute, manifest_dict, fe_inputs_decoded
-                        )
+                    # The hook is async-only (discovery rejects sync defs), so
+                    # await it directly. Authors doing CPU/IO-bound work inside
+                    # (SQL generation, full DAG rewrite) own offloading it — e.g.
+                    # `await asyncio.to_thread(...)` — rather than the SDK
+                    # guessing on their behalf.
+                    computed = await compute(manifest_dict, fe_inputs_decoded)
                 except HTTPException:
                     raise
                 except Exception:
@@ -2106,6 +2114,11 @@ def create_app_handler_service(
                 raise HTTPException(
                     status_code=_app_error_to_http_status(e), detail=str(e)
                 ) from None
+            except HTTPException:
+                # Deliberate HTTP responses (e.g. 400 from a malformed
+                # entrypoint name) are already client-facing — pass them
+                # through rather than masking them as a generic 500.
+                raise
             except Exception as e:
                 logger.error(
                     "Auth test failed unexpectedly for app %s (request %s): %s",
@@ -2230,6 +2243,11 @@ def create_app_handler_service(
                 raise HTTPException(
                     status_code=_app_error_to_http_status(e), detail=str(e)
                 ) from None
+            except HTTPException:
+                # Deliberate HTTP responses (e.g. 400 from a malformed
+                # entrypoint name) are already client-facing — pass them
+                # through rather than masking them as a generic 500.
+                raise
             except Exception as e:
                 logger.error(
                     "Preflight check failed unexpectedly for app %s (request %s): %s",
@@ -2326,6 +2344,11 @@ def create_app_handler_service(
                 raise HTTPException(
                     status_code=_app_error_to_http_status(e), detail=str(e)
                 ) from None
+            except HTTPException:
+                # Deliberate HTTP responses (e.g. 400 from a malformed
+                # entrypoint name) are already client-facing — pass them
+                # through rather than masking them as a generic 500.
+                raise
             except Exception as e:
                 logger.error(
                     "Metadata fetch failed unexpectedly for app %s (request %s): %s",

@@ -4719,7 +4719,7 @@ class TestComputeManifestHook:
 
         captured: dict[str, object] = {}
 
-        def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+        async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
             captured["manifest"] = manifest
             captured["fe_inputs"] = fe_inputs
             return {"dag": {"extract": {"computed": True, "echo": fe_inputs}}}
@@ -4820,6 +4820,35 @@ class TestComputeManifestHook:
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
+    def test_sync_compute_manifest_ignored(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The hook is async-only: a *sync* ``def compute_manifest`` is not
+        discovered and the route serves the static manifest unchanged (rather
+        than running it via asyncio.to_thread)."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "sync-hook"
+        ep_dir.mkdir(parents=True)
+        manifest_data = {"dag": {"static": True}}
+        (ep_dir / "manifest.json").write_text(json.dumps(manifest_data))
+
+        # Sync def — must be ignored under the async-only contract.
+        def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+            return {"dag": {"computed": "should-not-appear"}}
+
+        self._install_fake_core(monkeypatch, "sync-hook", compute_manifest)
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            response = _make_client().get("/workflows/v1/manifest?entrypoint=sync-hook")
+            assert response.status_code == 200
+            assert response.json() == manifest_data
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
     def test_fe_inputs_defaults_to_empty_dict(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -4833,7 +4862,7 @@ class TestComputeManifestHook:
 
         captured: dict[str, object] = {}
 
-        def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+        async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
             captured["fe_inputs"] = fe_inputs
             return manifest
 
@@ -4860,7 +4889,10 @@ class TestComputeManifestHook:
         ep_dir.mkdir(parents=True)
         (ep_dir / "manifest.json").write_text("{}")
 
-        self._install_fake_core(monkeypatch, "bad-form", lambda m, f: m)
+        async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+            return manifest
+
+        self._install_fake_core(monkeypatch, "bad-form", compute_manifest)
 
         original = svc_module.CONTRACT_GENERATED_DIR
         svc_module.CONTRACT_GENERATED_DIR = contract_dir
@@ -4887,7 +4919,7 @@ class TestComputeManifestHook:
         ep_dir.mkdir(parents=True)
         (ep_dir / "manifest.json").write_text("{}")
 
-        def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+        async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
             raise AssertionError("hook must not run for oversize fe_inputs")
 
         self._install_fake_core(monkeypatch, "big-form", compute_manifest)
@@ -4941,7 +4973,7 @@ class TestComputeManifestHook:
         """A hook raising a generic exception → 500 with a generic body; the
         exception text is NOT leaked to the client."""
 
-        def boom(manifest: dict, fe_inputs: dict) -> dict:
+        async def boom(manifest: dict, fe_inputs: dict) -> dict:
             raise RuntimeError("secret connection string leaked here")
 
         response = self._run_hook(tmp_path, monkeypatch, "hook-boom", boom)
@@ -4956,7 +4988,7 @@ class TestComputeManifestHook:
         (the ``except HTTPException: raise`` branch), not coerced to 500."""
         from fastapi import HTTPException
 
-        def conflict(manifest: dict, fe_inputs: dict) -> dict:
+        async def conflict(manifest: dict, fe_inputs: dict) -> dict:
             raise HTTPException(status_code=409, detail="entrypoint conflict")
 
         response = self._run_hook(tmp_path, monkeypatch, "hook-conflict", conflict)
@@ -4968,7 +5000,7 @@ class TestComputeManifestHook:
     ) -> None:
         """A hook returning a non-dict (list/str/None) → 500 (isinstance guard)."""
 
-        def returns_list(manifest: dict, fe_inputs: dict):
+        async def returns_list(manifest: dict, fe_inputs: dict):
             return [1, 2, 3]
 
         response = self._run_hook(tmp_path, monkeypatch, "hook-list", returns_list)
@@ -4986,7 +5018,11 @@ class TestComputeManifestHook:
         ep_dir = contract_dir / "at-cap"
         ep_dir.mkdir(parents=True)
         (ep_dir / "manifest.json").write_text("{}")
-        self._install_fake_core(monkeypatch, "at-cap", lambda m, f: {"ok": True})
+
+        async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+            return {"ok": True}
+
+        self._install_fake_core(monkeypatch, "at-cap", compute_manifest)
 
         overhead = len(json.dumps({"x": ""}).encode("utf-8"))
         at_cap = json.dumps({"x": "a" * (svc_module._MAX_FE_INPUTS_BYTES - overhead)})
@@ -5014,7 +5050,11 @@ class TestComputeManifestHook:
         ep_dir = contract_dir / "over-cap"
         ep_dir.mkdir(parents=True)
         (ep_dir / "manifest.json").write_text("{}")
-        self._install_fake_core(monkeypatch, "over-cap", lambda m, f: {"ok": True})
+
+        async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+            return {"ok": True}
+
+        self._install_fake_core(monkeypatch, "over-cap", compute_manifest)
 
         overhead = len(json.dumps({"x": ""}).encode("utf-8"))
         over = json.dumps({"x": "a" * (svc_module._MAX_FE_INPUTS_BYTES - overhead + 1)})
@@ -5042,7 +5082,7 @@ class TestComputeManifestHook:
         ep_dir.mkdir(parents=True)
         (ep_dir / "manifest.json").write_text(json.dumps({"orig": True}))
 
-        def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+        async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
             return {**manifest, "fe": fe_inputs}
 
         self._install_fake_core(monkeypatch, "legacy-ep", compute_manifest)
@@ -5071,7 +5111,7 @@ class TestComputeManifestHook:
         ep_dir.mkdir(parents=True)
         (ep_dir / "manifest.json").write_text(json.dumps({"static": True}))
 
-        def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+        async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
             return {"computed": True}
 
         # Module is registered under app.csa_hello_a (snake) — the hook does the translation.
@@ -5198,16 +5238,39 @@ class TestPerEntrypointHandlerHook:
         assert response.status_code == 200
         assert response.json()["data"]["message"] == "auth ok"
 
-    def test_auth_invalid_entrypoint_name_falls_back(self) -> None:
-        """A malformed ``entrypoint`` (e.g. path-traversal attempt) fails the
-        format check → no dispatch, app-level Handler runs."""
+    def test_auth_invalid_entrypoint_name_returns_400(self) -> None:
+        """A non-empty but malformed ``entrypoint`` (e.g. a path-traversal
+        attempt) is a client error → 400, consistent with the manifest and
+        input-contract routes — NOT a silent fall-back to the app-level
+        Handler / default entrypoint."""
+        client = _make_client()
+        for bad in ("../evil", "1leading-digit", "has space", "dot.sep"):
+            response = client.post(
+                "/workflows/v1/auth",
+                json={"entrypoint": bad, "credentials": []},
+            )
+            assert response.status_code == 400, f"expected 400 for {bad!r}"
+            assert response.json()["detail"] == "Invalid entrypoint name"
+
+    def test_check_invalid_entrypoint_name_returns_400(self) -> None:
+        """Malformed ``entrypoint`` on /check → 400 (consistency across routes)."""
         client = _make_client()
         response = client.post(
-            "/workflows/v1/auth",
+            "/workflows/v1/check",
             json={"entrypoint": "../evil", "credentials": []},
         )
-        assert response.status_code == 200
-        assert response.json()["data"]["message"] == "auth ok"
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Invalid entrypoint name"
+
+    def test_metadata_invalid_entrypoint_name_returns_400(self) -> None:
+        """Malformed ``entrypoint`` on /metadata → 400 (consistency across routes)."""
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/metadata",
+            json={"entrypoint": "../evil", "credentials": []},
+        )
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Invalid entrypoint name"
 
     def test_auth_connector_is_not_used_for_routing(
         self, monkeypatch: pytest.MonkeyPatch
