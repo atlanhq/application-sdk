@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.15.0
-source-sha:    5560ba62ce44663e3811e16d50d740669fd9075e
-source-date:   2026-06-05T22:38:17+01:00
+sdk-version:   3.15.1
+source-sha:    26f7a411b3b5e1669a0ae20779b611a4f94e7629
+source-date:   2026-06-09T16:25:40+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -30,7 +30,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 22 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 23 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 5 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 15 |
 
@@ -1884,7 +1884,7 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `CloudStore`
 
 - **Import:** `from application_sdk.storage import CloudStore`
-- **Signature:** `class CloudStore(store: ObjectStore, *, provider: str = 'unknown')`
+- **Signature:** `class CloudStore(store: ObjectStore, *, provider: str = 'unknown', put_attributes: dict[str, str] | None = None)`
 - **Summary:** Async client for external customer-provided cloud object stores.
 - **Defined in:** `application_sdk/storage/cloud.py`
 
@@ -1958,6 +1958,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Import:** `from application_sdk.storage import create_store_from_binding_optional`
 - **Signature:** `create_store_from_binding_optional(name: str, *, components_dir: Path | str = Path('./components'))`
 - **Summary:** Create an obstore store from a Dapr component binding, or ``None`` if absent.
+- **Defined in:** `application_sdk/storage/binding.py`
+
+#### `create_store_from_binding_with_put_attrs`
+
+- **Import:** `from application_sdk.storage import create_store_from_binding_with_put_attrs`
+- **Signature:** `create_store_from_binding_with_put_attrs(name: str, *, components_dir: Path | str = Path('./components'))`
+- **Summary:** Create an obstore store and any associated put attributes from a Dapr binding.
 - **Defined in:** `application_sdk/storage/binding.py`
 
 #### `delete`
