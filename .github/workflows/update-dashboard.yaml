@@ -224,12 +224,63 @@ jobs:
           if chosen and ":" in chosen:
               sdk_version = chosen.split(":")[-1]
 
+          # Extract the Atlan SDK Python library version (the actual code
+          # running inside the connector — separate from the base image tag
+          # read above). Two repos pinning the same base tag (e.g. ":3") can
+          # still ship different SDK library versions, which is exactly the
+          # confusion this resolves on the dashboard.
+          #
+          # Source preference: uv.lock (resolved/pinned) > pyproject.toml
+          # (may be a range) > requirements.txt (legacy).
+          sdk_lib_version = "unknown"
+          # uv.lock — TOML, but parsed via regex to avoid the Python 3.11+
+          # tomllib dependency on the runner.
+          try:
+              with open("uv.lock") as f:
+                  lock_content = f.read()
+              for block in lock_content.split("[[package]]")[1:]:
+                  section = block.split("\n[")[0]
+                  name_m = _re.search(r'^\s*name\s*=\s*"([^"]+)"', section, _re.MULTILINE)
+                  ver_m = _re.search(r'^\s*version\s*=\s*"([^"]+)"', section, _re.MULTILINE)
+                  if name_m and ver_m:
+                      n = name_m.group(1).lower().replace("_", "-")
+                      if n in ("atlan-application-sdk", "application-sdk"):
+                          sdk_lib_version = ver_m.group(1)
+                          break
+          except FileNotFoundError:
+              pass
+          if sdk_lib_version == "unknown":
+              try:
+                  with open("pyproject.toml") as f:
+                      m = _re.search(
+                          r'(?:atlan-)?application[-_]sdk(?:\[[^\]]*\])?\s*==\s*([^\s"\',]+)',
+                          f.read(),
+                      )
+                  if m:
+                      sdk_lib_version = m.group(1)
+              except FileNotFoundError:
+                  pass
+          if sdk_lib_version == "unknown":
+              try:
+                  with open("requirements.txt") as f:
+                      for line in f:
+                          m = _re.match(
+                              r'\s*(?:atlan-)?application[-_]sdk(?:\[[^\]]*\])?\s*==\s*([^\s;#]+)',
+                              line,
+                          )
+                          if m:
+                              sdk_lib_version = m.group(1)
+                              break
+              except FileNotFoundError:
+                  pass
+
           repo_slug = repo_name.replace("/", "_")
           app_count = sum(1 for v in unique if v["source_type"] == "app")
           base_count = sum(1 for v in unique if v["source_type"] == "base_image")
           repo_data = {
               "repo": repo_name,
               "sdk_version": sdk_version,
+              "sdk_lib_version": sdk_lib_version,
               "vulnerabilities": unique,
               "scanned_at": datetime.now().isoformat() + "Z",
               "total": len(unique),
@@ -256,7 +307,8 @@ jobs:
           app_count = sum(1 for v in unique if v['source_type'] == 'app')
           base_count = sum(1 for v in unique if v['source_type'] == 'base_image')
           print(f"Dashboard data generated: {len(unique)} vulnerabilities for {repo_name}")
-          print(f"  SDK version: {sdk_version}")
+          print(f"  Base image:  {sdk_version}")
+          print(f"  SDK lib:     {sdk_lib_version}")
           print(f"  CRITICAL: {repo_data['critical']}")
           print(f"  HIGH: {repo_data['high']}")
           print(f"  Base image: {base_count}")
@@ -271,6 +323,7 @@ jobs:
               "date": datetime.now().strftime("%Y-%m-%d"),
               "repo": repo_name,
               "sdk_version": sdk_version,
+              "sdk_lib_version": sdk_lib_version,
               "total": len(unique),
               "critical": repo_data["critical"],
               "high": repo_data["high"],
