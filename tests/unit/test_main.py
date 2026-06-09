@@ -551,7 +551,10 @@ class TestCreateInfrastructureEventBinding:
             patch(f"{self._DAPR_CLIENT_MOD}.AsyncDaprClient"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprStateStore"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprSecretStore"),
-            patch(f"{self._STORAGE_MOD}.create_store_from_binding"),
+            patch(
+                f"{self._STORAGE_MOD}.create_store_from_binding_with_put_attrs",
+                return_value=(MagicMock(), None),
+            ),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprBinding") as mock_binding,
         ):
             infra = await _create_infrastructure()
@@ -575,7 +578,10 @@ class TestCreateInfrastructureEventBinding:
             patch(f"{self._DAPR_CLIENT_MOD}.AsyncDaprClient"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprStateStore"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprSecretStore"),
-            patch(f"{self._STORAGE_MOD}.create_store_from_binding"),
+            patch(
+                f"{self._STORAGE_MOD}.create_store_from_binding_with_put_attrs",
+                return_value=(MagicMock(), None),
+            ),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprBinding") as mock_binding,
         ):
             infra = await _create_infrastructure()
@@ -609,7 +615,10 @@ class TestCreateInfrastructureUpstreamStore:
             patch(f"{self._DAPR_CLIENT_MOD}.AsyncDaprClient"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprStateStore"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprSecretStore"),
-            patch(f"{self._STORAGE_MOD}.create_store_from_binding"),
+            patch(
+                f"{self._STORAGE_MOD}.create_store_from_binding_with_put_attrs",
+                return_value=(MagicMock(), None),
+            ),
             patch(
                 f"{self._STORAGE_MOD}.create_store_from_binding_optional",
                 return_value=None,
@@ -637,7 +646,10 @@ class TestCreateInfrastructureUpstreamStore:
             patch(f"{self._DAPR_CLIENT_MOD}.AsyncDaprClient"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprStateStore"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprSecretStore"),
-            patch(f"{self._STORAGE_MOD}.create_store_from_binding") as mock_required,
+            patch(
+                f"{self._STORAGE_MOD}.create_store_from_binding_with_put_attrs",
+                return_value=(MagicMock(), None),
+            ) as mock_required,
             patch(
                 f"{self._STORAGE_MOD}.create_store_from_binding_optional",
                 return_value=upstream_store,
@@ -1635,7 +1647,7 @@ class TestInlineImportSymbols:
             ("application_sdk.app.base", "_pascal_to_kebab"),
             ("application_sdk.observability.observability", "AtlanObservability"),
             ("application_sdk.server.health", "WorkerHealthServer"),
-            ("application_sdk.storage", "create_store_from_binding"),
+            ("application_sdk.storage", "create_store_from_binding_with_put_attrs"),
             ("application_sdk.storage.binding", "_parse_dapr_metadata"),
             ("application_sdk.constants", "DEPLOYMENT_OBJECT_STORE_NAME"),
             ("application_sdk.constants", "EVENT_STORE_NAME"),
