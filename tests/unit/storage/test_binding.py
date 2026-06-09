@@ -13,11 +13,14 @@ from application_sdk.storage.binding import (
     _AZURE_AUTHORITY_HOSTS,
     GCS_SERVICE_ACCOUNT_FIELDS,
     _coerce_bool,
+    _create_store_from_binding_optional_with_put_attrs,
+    _endpoint_is_aws,
     _find_broken_metadata_fields,
     _nonempty,
     _resolve_metadata_value,
     create_store_from_binding,
     create_store_from_binding_optional,
+    create_store_from_binding_with_put_attrs,
     is_binding_configured,
 )
 from application_sdk.storage.errors import (
@@ -1116,6 +1119,66 @@ class TestCreateStoreFromBindingOptional:
 
 
 # ---------------------------------------------------------------------------
+# _create_store_from_binding_optional_with_put_attrs
+# ---------------------------------------------------------------------------
+
+
+class TestCreateStoreFromBindingOptionalWithPutAttrs:
+    _PATCHED = (
+        "application_sdk.storage.binding.create_store_from_binding_with_put_attrs"
+    )
+
+    def test_returns_none_when_component_absent(self, tmp_path: Path) -> None:
+        """Returns (None, None) and logs INFO with operator guidance when no component exists."""
+        with patch("application_sdk.storage.binding._get_logger") as mock_get_logger:
+            mock_logger = MagicMock()
+            mock_get_logger.return_value = mock_logger
+            store, put_attrs = _create_store_from_binding_optional_with_put_attrs(
+                "nonexistent", components_dir=tmp_path
+            )
+        assert store is None
+        assert put_attrs is None
+        mock_logger.info.assert_called_once()
+        info_args = mock_logger.info.call_args[0]
+        assert "Configure this binding" in " ".join(str(a) for a in info_args)
+
+    def test_returns_none_and_warns_when_binding_broken(self, tmp_path: Path) -> None:
+        """Returns (None, None) and logs a warning that includes the broken field names."""
+        broken = StorageBindingBrokenError(
+            "component has unresolvable fields",
+            binding_name="my-store",
+            broken_fields=["accessKey", "secretKey"],
+        )
+        with (
+            patch(self._PATCHED, side_effect=broken),
+            patch("application_sdk.storage.binding._get_logger") as mock_get_logger,
+        ):
+            mock_logger = MagicMock()
+            mock_get_logger.return_value = mock_logger
+            store, put_attrs = _create_store_from_binding_optional_with_put_attrs(
+                "my-store", components_dir=tmp_path
+            )
+        assert store is None
+        assert put_attrs is None
+        mock_logger.warning.assert_called_once()
+        warning_args = mock_logger.warning.call_args[0]
+        warning_text = " ".join(str(a) for a in warning_args)
+        assert "accessKey" in warning_text
+        assert "secretKey" in warning_text
+
+    def test_returns_store_and_put_attrs_on_success(self, tmp_path: Path) -> None:
+        """Passes through (store, put_attrs) from the underlying factory unchanged."""
+        mock_store = MagicMock()
+        expected_put_attrs = {"Storage-Class": "STANDARD_IA"}
+        with patch(self._PATCHED, return_value=(mock_store, expected_put_attrs)):
+            store, put_attrs = _create_store_from_binding_optional_with_put_attrs(
+                "my-store", components_dir=tmp_path
+            )
+        assert store is mock_store
+        assert put_attrs == expected_put_attrs
+
+
+# ---------------------------------------------------------------------------
 # _find_broken_metadata_fields
 # ---------------------------------------------------------------------------
 
@@ -1342,3 +1405,397 @@ class TestIsBindingConfigured:
         assert (
             is_binding_configured("localstore", components_dir=components_dir) is True
         )
+
+
+# ---------------------------------------------------------------------------
+# _endpoint_is_aws
+# ---------------------------------------------------------------------------
+
+
+class TestEndpointIsAws:
+    """Parametrised tests for the _endpoint_is_aws helper.
+
+    The helper must correctly identify real-AWS endpoints and not raise for any
+    input scheme form (https://, http://, scheme-less host:port, SDK URI forms).
+    """
+
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            # Standard public AWS
+            "https://s3.amazonaws.com",
+            "https://s3.us-east-1.amazonaws.com",
+            "https://mybucket.s3.us-west-2.amazonaws.com",
+            # AWS China
+            "https://s3.cn-north-1.amazonaws.com.cn",
+            "https://mybucket.s3.cn-northwest-1.amazonaws.com.cn",
+            # FIPS / dualstack variants
+            "https://s3-fips.us-east-1.amazonaws.com",
+            "https://s3.dualstack.us-east-1.amazonaws.com",
+            # http scheme (e.g. LocalStack)
+            "http://s3.amazonaws.com",
+            # Trailing root dot (FQDN form) — must not break AWS detection
+            "https://s3.amazonaws.com.",
+            "https://s3.cn-north-1.amazonaws.com.cn.",
+            # Empty / absent endpoint → real AWS credential chain
+            "",
+        ],
+    )
+    def test_aws_endpoints_return_true(self, endpoint: str) -> None:
+        assert _endpoint_is_aws(endpoint) is True
+
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            # Cloudflare R2
+            "https://abc123.r2.cloudflarestorage.com",
+            # Backblaze B2
+            "https://s3.us-west-002.backblazeb2.com",
+            # GCS S3-interop
+            "https://storage.googleapis.com",
+            # MinIO with scheme
+            "http://minio:9000",
+            "https://minio.example.com:9000",
+            # Scheme-less host:port
+            "minio.local:9000",
+            # SDK-internal URI forms
+            "s3://my-bucket",
+            "objectstore://host",
+            "adls://account.dfs.core.windows.net",
+            # Ceph RADOSGW
+            "https://ceph.internal.example.com",
+        ],
+    )
+    def test_non_aws_endpoints_return_false(self, endpoint: str) -> None:
+        assert _endpoint_is_aws(endpoint) is False
+
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            # Pathological inputs — must not raise
+            "not-a-url",
+            "///",
+            "http://",
+            ":9000",
+        ],
+    )
+    def test_no_exception_on_pathological_input(self, endpoint: str) -> None:
+        """_endpoint_is_aws must never raise regardless of input form."""
+        result = _endpoint_is_aws(endpoint)
+        assert isinstance(result, bool)
+
+
+# ---------------------------------------------------------------------------
+# S3 compatibility knobs (tagging, pass-through fields, storageClass)
+# ---------------------------------------------------------------------------
+
+
+class TestS3CompatibilityKnobs:
+    """Tests for the Section-C gap fixes in _build_s3_config."""
+
+    # --- Tagging auto-detect ------------------------------------------------
+
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            "https://abc123.r2.cloudflarestorage.com",
+            "https://s3.us-west-002.backblazeb2.com",
+            "https://storage.googleapis.com",
+            "http://minio:9000",
+            "https://minio.example.com",
+        ],
+    )
+    @patch("obstore.store.S3Store")
+    def test_non_aws_endpoint_auto_disables_tagging(
+        self, mock_s3_cls: MagicMock, tmp_path: Path, endpoint: str
+    ) -> None:
+        components_dir = _write_component(
+            tmp_path / endpoint.replace("/", "_").replace(":", "_"),
+            "objectstore",
+            "bindings.aws.s3",
+            {"bucket": "b", "endpoint": endpoint},
+        )
+        mock_s3_cls.return_value = MagicMock()
+        create_store_from_binding("objectstore", components_dir=components_dir)
+        config = mock_s3_cls.call_args.kwargs["config"]
+        assert (
+            config.get("aws_disable_tagging") == "true"
+        ), f"Expected disable_tagging for {endpoint!r}"
+
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            "",  # no endpoint → real AWS
+            "https://s3.amazonaws.com",
+            "https://s3.us-east-1.amazonaws.com",
+            "https://s3.cn-north-1.amazonaws.com.cn",
+        ],
+    )
+    @patch("obstore.store.S3Store")
+    def test_aws_endpoint_does_not_disable_tagging(
+        self, mock_s3_cls: MagicMock, tmp_path: Path, endpoint: str
+    ) -> None:
+        meta: dict = {"bucket": "b"}
+        if endpoint:
+            meta["endpoint"] = endpoint
+        components_dir = _write_component(
+            tmp_path / endpoint.replace("/", "_").replace(":", "_"),
+            "objectstore",
+            "bindings.aws.s3",
+            meta,
+        )
+        mock_s3_cls.return_value = MagicMock()
+        create_store_from_binding("objectstore", components_dir=components_dir)
+        config = mock_s3_cls.call_args.kwargs.get("config") or {}
+        assert (
+            "aws_disable_tagging" not in config
+        ), f"Should not disable tagging for AWS endpoint {endpoint!r}"
+
+    @patch("obstore.store.S3Store")
+    def test_explicit_disable_tagging_true_overrides_aws_endpoint(
+        self, mock_s3_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        """disableTagging=true wins even on a real AWS endpoint."""
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.aws.s3",
+            {
+                "bucket": "b",
+                "endpoint": "https://s3.amazonaws.com",
+                "disableTagging": "true",
+            },
+        )
+        mock_s3_cls.return_value = MagicMock()
+        create_store_from_binding("objectstore", components_dir=components_dir)
+        config = mock_s3_cls.call_args.kwargs["config"]
+        assert config.get("aws_disable_tagging") == "true"
+
+    @patch("obstore.store.S3Store")
+    def test_explicit_disable_tagging_false_overrides_non_aws_auto_detect(
+        self, mock_s3_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        """disableTagging=false wins over the non-AWS auto-detect rule."""
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.aws.s3",
+            {"bucket": "b", "endpoint": "http://minio:9000", "disableTagging": "false"},
+        )
+        mock_s3_cls.return_value = MagicMock()
+        create_store_from_binding("objectstore", components_dir=components_dir)
+        config = mock_s3_cls.call_args.kwargs.get("config") or {}
+        # Explicit false → key absent (obstore default applies)
+        assert "aws_disable_tagging" not in config
+
+    # --- Pass-through override fields --------------------------------------
+
+    @patch("obstore.store.S3Store")
+    def test_conditional_put_pass_through(
+        self, mock_s3_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.aws.s3",
+            {"bucket": "b", "conditionalPut": "etag"},
+        )
+        mock_s3_cls.return_value = MagicMock()
+        create_store_from_binding("objectstore", components_dir=components_dir)
+        config = mock_s3_cls.call_args.kwargs["config"]
+        assert config.get("aws_conditional_put") == "etag"
+
+    @patch("obstore.store.S3Store")
+    def test_copy_if_not_exists_pass_through(
+        self, mock_s3_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.aws.s3",
+            {"bucket": "b", "copyIfNotExists": "multipart"},
+        )
+        mock_s3_cls.return_value = MagicMock()
+        create_store_from_binding("objectstore", components_dir=components_dir)
+        config = mock_s3_cls.call_args.kwargs["config"]
+        assert config.get("aws_copy_if_not_exists") == "multipart"
+
+    @patch("obstore.store.S3Store")
+    def test_checksum_algorithm_pass_through(
+        self, mock_s3_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.aws.s3",
+            {"bucket": "b", "checksumAlgorithm": "SHA256"},
+        )
+        mock_s3_cls.return_value = MagicMock()
+        create_store_from_binding("objectstore", components_dir=components_dir)
+        config = mock_s3_cls.call_args.kwargs["config"]
+        assert config.get("aws_checksum_algorithm") == "SHA256"
+
+    @patch("obstore.store.S3Store")
+    def test_sse_kms_pair_pass_through(
+        self, mock_s3_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.aws.s3",
+            {
+                "bucket": "b",
+                "serverSideEncryption": "aws:kms",
+                "sseKmsKeyId": "arn:aws:kms:us-east-1:123456789012:key/abc",
+            },
+        )
+        mock_s3_cls.return_value = MagicMock()
+        create_store_from_binding("objectstore", components_dir=components_dir)
+        config = mock_s3_cls.call_args.kwargs["config"]
+        assert config.get("aws_server_side_encryption") == "aws:kms"
+        assert config.get("aws_sse_kms_key_id") == (
+            "arn:aws:kms:us-east-1:123456789012:key/abc"
+        )
+
+    @patch("obstore.store.S3Store")
+    def test_absent_override_fields_leave_config_untouched(
+        self, mock_s3_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        """Existing configs with none of the new fields must be unchanged."""
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.aws.s3",
+            {"bucket": "b", "region": "us-east-1", "accessKey": "k", "secretKey": "s"},
+        )
+        mock_s3_cls.return_value = MagicMock()
+        create_store_from_binding("objectstore", components_dir=components_dir)
+        config = mock_s3_cls.call_args.kwargs.get("config") or {}
+        for key in (
+            "aws_conditional_put",
+            "aws_copy_if_not_exists",
+            "aws_checksum_algorithm",
+            "aws_server_side_encryption",
+            "aws_sse_kms_key_id",
+            "aws_disable_tagging",
+        ):
+            assert key not in config, f"Unexpected key {key!r} in config"
+
+    # --- storageClass / put attributes -------------------------------------
+
+    @patch("obstore.store.S3Store")
+    def test_storage_class_produces_put_attributes(
+        self, mock_s3_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.aws.s3",
+            {"bucket": "b", "storageClass": "STANDARD_IA"},
+        )
+        mock_s3_cls.return_value = MagicMock()
+        store, put_attrs = create_store_from_binding_with_put_attrs(
+            "objectstore", components_dir=components_dir
+        )
+        assert put_attrs == {"Storage-Class": "STANDARD_IA"}
+
+    @patch("obstore.store.S3Store")
+    def test_absent_storage_class_returns_none_put_attributes(
+        self, mock_s3_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.aws.s3",
+            {"bucket": "b", "region": "us-east-1"},
+        )
+        mock_s3_cls.return_value = MagicMock()
+        store, put_attrs = create_store_from_binding_with_put_attrs(
+            "objectstore", components_dir=components_dir
+        )
+        assert put_attrs is None
+
+    @patch("obstore.store.S3Store")
+    def test_storage_class_glacier_ir(
+        self, mock_s3_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.aws.s3",
+            {"bucket": "b", "storageClass": "GLACIER_IR"},
+        )
+        mock_s3_cls.return_value = MagicMock()
+        _, put_attrs = create_store_from_binding_with_put_attrs(
+            "objectstore", components_dir=components_dir
+        )
+        assert put_attrs == {"Storage-Class": "GLACIER_IR"}
+
+    @patch("obstore.store.AzureStore")
+    def test_azure_storage_class_produces_put_attributes(
+        self, mock_az_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.azure.blobstorage",
+            {
+                "containerName": "c",
+                "accountName": "acct",
+                "accountKey": "key==",
+                "storageClass": "Cool",
+            },
+        )
+        mock_az_cls.return_value = MagicMock()
+        _, put_attrs = create_store_from_binding_with_put_attrs(
+            "objectstore", components_dir=components_dir
+        )
+        assert put_attrs == {"x-ms-access-tier": "Cool"}
+
+    @patch("obstore.store.AzureStore")
+    def test_azure_absent_storage_class_returns_none_put_attributes(
+        self, mock_az_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.azure.blobstorage",
+            {"containerName": "c", "accountName": "acct", "accountKey": "key=="},
+        )
+        mock_az_cls.return_value = MagicMock()
+        _, put_attrs = create_store_from_binding_with_put_attrs(
+            "objectstore", components_dir=components_dir
+        )
+        assert put_attrs is None
+
+    @patch("obstore.store.GCSStore")
+    def test_gcs_storage_class_produces_put_attributes(
+        self, mock_gcs_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.gcp.bucket",
+            {"bucket": "b", "storageClass": "NEARLINE"},
+        )
+        mock_gcs_cls.return_value = MagicMock()
+        _, put_attrs = create_store_from_binding_with_put_attrs(
+            "objectstore", components_dir=components_dir
+        )
+        assert put_attrs == {"X-Goog-Storage-Class": "NEARLINE"}
+
+    @patch("obstore.store.GCSStore")
+    def test_gcs_absent_storage_class_returns_none_put_attributes(
+        self, mock_gcs_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.gcp.bucket",
+            {"bucket": "b"},
+        )
+        mock_gcs_cls.return_value = MagicMock()
+        _, put_attrs = create_store_from_binding_with_put_attrs(
+            "objectstore", components_dir=components_dir
+        )
+        assert put_attrs is None

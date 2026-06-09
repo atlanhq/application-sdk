@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.15.1
-source-sha:    5ba1be4922083122cc0d1aed42cb180d70e80eca
-source-date:   2026-06-08T23:31:21+05:30
+source-sha:    0a490e9128563a2e1d1d688134bcc352ac800a87
+source-date:   2026-06-09T22:04:25+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -30,7 +30,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 22 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 24 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 5 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 15 |
 
@@ -1888,10 +1888,17 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 
 ### Classes
 
+#### `BoundStore`
+
+- **Import:** `from application_sdk.storage import BoundStore`
+- **Signature:** `class BoundStore(store: ObjectStore, put_attributes: dict[str, str] | None = None)`
+- **Summary:** An :class:`~obstore.store.ObjectStore` paired with per-write put attributes.
+- **Defined in:** `application_sdk/storage/ops.py`
+
 #### `CloudStore`
 
 - **Import:** `from application_sdk.storage import CloudStore`
-- **Signature:** `class CloudStore(store: ObjectStore, *, provider: str = 'unknown')`
+- **Signature:** `class CloudStore(store: ObjectStore, *, provider: str = 'unknown', put_attributes: dict[str, str] | None = None)`
 - **Summary:** Async client for external customer-provided cloud object stores.
 - **Defined in:** `application_sdk/storage/cloud.py`
 
@@ -1967,10 +1974,17 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Summary:** Create an obstore store from a Dapr component binding, or ``None`` if absent.
 - **Defined in:** `application_sdk/storage/binding.py`
 
+#### `create_store_from_binding_with_put_attrs`
+
+- **Import:** `from application_sdk.storage import create_store_from_binding_with_put_attrs`
+- **Signature:** `create_store_from_binding_with_put_attrs(name: str, *, components_dir: Path | str = Path('./components'))`
+- **Summary:** Create an obstore store and any associated put attributes from a Dapr binding.
+- **Defined in:** `application_sdk/storage/binding.py`
+
 #### `delete`
 
 - **Import:** `from application_sdk.storage import delete`
-- **Signature:** `delete(key: str, store: ObjectStore | None = None, *, normalize: bool = True)`
+- **Signature:** `delete(key: str, store: BoundStore | ObjectStore | None = None, *, normalize: bool = True)`
 - **Summary:** Delete the object at *key*.
 - **Defined in:** `application_sdk/storage/ops.py`
 
@@ -1998,7 +2012,7 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `exists`
 
 - **Import:** `from application_sdk.storage import exists`
-- **Signature:** `exists(key: str, store: ObjectStore | None = None, *, normalize: bool = True)`
+- **Signature:** `exists(key: str, store: BoundStore | ObjectStore | None = None, *, normalize: bool = True)`
 - **Summary:** Return ``True`` if *key* exists in the store.
 - **Defined in:** `application_sdk/storage/ops.py`
 
@@ -2019,7 +2033,7 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `put_json`
 
 - **Import:** `from application_sdk.storage import put_json`
-- **Signature:** `put_json(key: str, obj: JsonValue, store: ObjectStore | None = None, *, normalize: bool = True)`
+- **Signature:** `put_json(key: str, obj: JsonValue, store: BoundStore | ObjectStore | None = None, *, normalize: bool = True)`
 - **Summary:** Serialise *obj* to JSON and write to *key*.
 - **Defined in:** `application_sdk/storage/ops.py`
 
