@@ -9,7 +9,7 @@ import glob
 import json
 import os
 import re
-from typing import Any
+from typing import Any, TypeAlias
 
 from application_sdk.common.sql_filters_errors import InvalidSqlFilterError
 from application_sdk.errors import AppError
@@ -89,6 +89,11 @@ _FORBIDDEN_FILTER_SEQUENCES: tuple[str, ...] = (
 SAFE_FILTER_PATTERN: str = r"^[^'\";\x00]*$"
 _SAFE_FILTER_PATTERN = SAFE_FILTER_PATTERN  # backward-compat alias
 
+FilterTreeNode: TypeAlias = dict[str, "FilterTreeNode"]
+FilterValue: TypeAlias = list[str] | str | FilterTreeNode
+
+_MAX_FILTER_NESTING_DEPTH = 4
+
 
 def validate_filter_no_sql_injection(v: Any) -> Any:
     """Reject filter values containing SQL-meaningful character sequences.
@@ -127,17 +132,21 @@ def validate_filter_no_sql_injection(v: Any) -> Any:
                     f"SQL-unsafe sequence {seq!r} not allowed in filter {label}: {value!r}"
                 )
 
-    def _check_value(label: str, value: Any) -> None:
+    def _check_value(label: str, value: Any, depth: int = 0) -> None:
+        if depth > _MAX_FILTER_NESTING_DEPTH:
+            raise ValueError(
+                f"Filter nesting exceeds maximum depth {_MAX_FILTER_NESTING_DEPTH}"
+            )
         if isinstance(value, str):
             _check_str(label, value)
         elif isinstance(value, list):
             for item in value:
-                _check_value("value", item)
+                _check_value("value", item, depth + 1)
         elif isinstance(value, dict):
             for nested_key, nested_value in value.items():
                 if isinstance(nested_key, str):
                     _check_str("key", nested_key)
-                _check_value("value", nested_value)
+                _check_value("value", nested_value, depth + 1)
 
     if isinstance(v, str):
         # Legacy AE callers pass the filter as a JSON-encoded string. The
@@ -579,7 +588,9 @@ def prepare_filters(
     return normalized_include_regex, normalized_exclude_regex
 
 
-def normalize_filters(filter_dict: dict[str, Any], is_include: bool) -> list[str]:
+def normalize_filters(
+    filter_dict: dict[str, FilterValue], is_include: bool
+) -> list[str]:
     """Normalize filter dict to fully-anchored ``db.schema`` regex patterns.
 
     Each emitted pattern is anchored with ``^`` and ``$`` so that callers

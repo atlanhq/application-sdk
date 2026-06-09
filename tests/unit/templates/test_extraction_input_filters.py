@@ -142,6 +142,19 @@ class TestFilterSQLInjectionGuard:
         with pytest.raises(ValueError, match=r"SQL-unsafe sequence"):
             ExtractionInput.model_validate(payload)
 
+    def test_single_quote_in_deeper_apitree_descendant_rejected(self):
+        payload = {
+            "include_filter": {
+                "AwsDataCatalog": {
+                    "mswtest_2": {
+                        "schema'; DROP TABLE--": {},
+                    }
+                }
+            }
+        }
+        with pytest.raises(ValueError, match=r"SQL-unsafe sequence"):
+            ExtractionInput.model_validate(payload)
+
     def test_semicolon_rejected(self):
         # Statement separator — would let an attacker stack a second
         # statement after the filter substitution.

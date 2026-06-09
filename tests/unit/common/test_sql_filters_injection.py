@@ -96,6 +96,11 @@ class TestValidateFilterNoSqlInjection:
         with pytest.raises(ValueError, match=r"SQL-unsafe sequence"):
             validate_filter_no_sql_injection("{ not really json ' }")
 
+    def test_excessive_nested_filter_depth_raises(self) -> None:
+        deeply_nested = {"a": {"b": {"c": {"d": {"e": {"f": {}}}}}}}
+        with pytest.raises(ValueError, match=r"Filter nesting exceeds maximum depth"):
+            validate_filter_no_sql_injection(deeply_nested)
+
 
 # ---------------------------------------------------------------------------
 # prepare_filters — string/dict inputs are gated before normalization

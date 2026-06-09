@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 import orjson
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, JsonValue, field_validator, model_validator
 
 from application_sdk.common.sql_filters import (
     SAFE_FILTER_PATTERN,
@@ -37,13 +37,25 @@ FilterMap = Annotated[
 # any in-tree import path remains valid.
 _validate_filter_no_sql_injection = validate_filter_no_sql_injection
 
+_FILTER_FIELD_JSON_SCHEMA_EXTRA: dict[str, JsonValue] = {
+    "x-accepted-before-validation": [
+        "dict[str, list[str]]",
+        "APITree-style dict[str, dict]",
+        "list[str]",
+        "str",
+        "None",
+    ]
+}
+
 
 def _normalize_tree_filter_value(v: dict[str, Any]) -> dict[str, Any]:
     """Normalize APITree-style selections to the existing FilterMap shape.
 
     APITree widgets can emit ``{"catalog": {"db": {}}}`` while the SDK
     filter contract is ``{"catalog": ["db"]}``. Preserve existing list and
-    string values; only collapse object children to their selected keys.
+    string values; only collapse immediate object children to their selected
+    keys. Deeper descendants are validated before flattening, but are not
+    represented because the SDK filter contract is catalog/schema-level.
     """
     normalized: dict[str, Any] = {}
     changed = False
@@ -77,6 +89,8 @@ def _coerce_filter_value(v: Any) -> Any:
     if isinstance(v, str):
         return normalize_legacy_filter_value(v)
     if isinstance(v, dict):
+        # Validate before flattening so deeper APITree descendants that are not
+        # represented in FilterMap cannot hide unsafe strings.
         validate_filter_no_sql_injection(v)
         return _normalize_tree_filter_value(v)
     return v
@@ -174,7 +188,9 @@ class ExtractionInput(Input):
     output_path: str = ""
     """Local or object store path for output files."""
 
-    exclude_filter: FilterMap | str = Field(default="")
+    exclude_filter: FilterMap | str = Field(
+        default="", json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA
+    )
     """Filter for excluding schemas/tables.
 
     Accepts:
@@ -182,9 +198,14 @@ class ExtractionInput(Input):
     - APITree-style ``dict[str, dict]`` — normalized to ``dict[str, list[str]]``
     - ``str`` — JSON string or raw regex (backward compat)
     - ``None`` → empty string
+
+    APITree inputs are accepted in the before-validator and stored as the
+    normalized ``dict[str, list[str]]`` shape.
     """
 
-    include_filter: FilterMap | str = Field(default="")
+    include_filter: FilterMap | str = Field(
+        default="", json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA
+    )
     """Filter for including schemas/tables.
 
     Accepts:
@@ -192,6 +213,9 @@ class ExtractionInput(Input):
     - APITree-style ``dict[str, dict]`` — normalized to ``dict[str, list[str]]``
     - ``str`` — JSON string or raw regex (backward compat)
     - ``None`` → empty string
+
+    APITree inputs are accepted in the before-validator and stored as the
+    normalized ``dict[str, list[str]]`` shape.
     """
 
     temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)] = ""
@@ -260,8 +284,12 @@ class ExtractionTaskInput(Input):
     credential_ref: CredentialRef | None = None
     output_prefix: str = ""
     output_path: str = ""
-    exclude_filter: FilterMap | str = Field(default="")
-    include_filter: FilterMap | str = Field(default="")
+    exclude_filter: FilterMap | str = Field(
+        default="", json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA
+    )
+    include_filter: FilterMap | str = Field(
+        default="", json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA
+    )
     temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)] = ""
     source_tag_prefix: str = ""
 
