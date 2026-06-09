@@ -1006,3 +1006,50 @@ async def test_read_batches_empty_micropartition_yields_no_batches(monkeypatch) 
     reader = ParquetFileReader(path="/tmp/empty", dataframe_type=DataframeType.daft)
     batches = [batch async for batch in reader._get_batched_daft_dataframe()]
     assert batches == []
+
+
+@pytest.mark.asyncio
+async def test_read_batches_non_micropartition_daft_exception_propagates(
+    monkeypatch,
+) -> None:
+    """A DaftCoreException whose message does NOT contain "MicroPartition" must
+    propagate unchanged — the reader only swallows the empty-concat variant."""
+    import sys
+    import types
+
+    dummy_daft = types.ModuleType("daft")
+    dummy_exceptions = types.ModuleType("daft.exceptions")
+
+    class DaftCoreException(Exception):
+        pass
+
+    dummy_exceptions.DaftCoreException = DaftCoreException  # type: ignore[attr-defined]
+    dummy_daft.exceptions = dummy_exceptions  # type: ignore[attr-defined]
+
+    class FailingDaftDataFrame:
+        def count_rows(self):
+            raise DaftCoreException("some other daft failure")
+
+    dummy_daft.read_parquet = lambda path, **kwargs: FailingDaftDataFrame()  # type: ignore[attr-defined]
+
+    monkeypatch.setitem(sys.modules, "daft", dummy_daft)
+    monkeypatch.setitem(sys.modules, "daft.exceptions", dummy_exceptions)
+
+    async def dummy_download(path, file_extension, file_names=None):
+        return [f"{path}/some.parquet"]
+
+    monkeypatch.setattr(
+        "application_sdk.storage.formats.parquet._download_files",
+        dummy_download,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "application_sdk.storage.formats.parquet._build_unified_daft_schema",
+        lambda files, daft: None,
+        raising=False,
+    )
+
+    reader = ParquetFileReader(path="/tmp/fail", dataframe_type=DataframeType.daft)
+    with pytest.raises(DaftCoreException, match="some other daft failure"):
+        async for _ in reader._get_batched_daft_dataframe():
+            pass

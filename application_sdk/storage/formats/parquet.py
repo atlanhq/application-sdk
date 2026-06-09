@@ -751,7 +751,14 @@ class ParquetFileWriter(Writer):
             if isinstance(write_mode, str):
                 write_mode = WriteMode(write_mode)
 
-            row_count = dataframe.count_rows()
+            from daft.exceptions import DaftCoreException  # noqa: PLC0415
+
+            try:
+                row_count = dataframe.count_rows()
+            except DaftCoreException as exc:
+                if "MicroPartition" in str(exc):
+                    return
+                raise
             if row_count == 0:
                 return
 
