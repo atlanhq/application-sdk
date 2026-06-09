@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.15.1
-source-sha:    26f7a411b3b5e1669a0ae20779b611a4f94e7629
-source-date:   2026-06-09T16:25:40+01:00
+source-sha:    899714a177c537b4dcff59542326d6f280e4f8e0
+source-date:   2026-06-09T18:52:40+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -30,7 +30,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 23 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 25 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 5 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 15 |
 
@@ -1887,6 +1887,20 @@ Output collectors and record models for Automation Engine
 Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 
 ### Classes
+
+#### `BoundStore`
+
+- **Import:** `from application_sdk.storage import BoundStore`
+- **Signature:** `class BoundStore(store: ObjectStore, put_attributes: dict[str, str] | None = None)`
+- **Summary:** An :class:`~obstore.store.ObjectStore` paired with per-write put attributes.
+- **Defined in:** `application_sdk/storage/ops.py`
+
+#### `BoundStore`
+
+- **Import:** `from application_sdk.storage import BoundStore`
+- **Signature:** `class BoundStore(store: ObjectStore, put_attributes: dict[str, str] | None = None)`
+- **Summary:** An :class:`~obstore.store.ObjectStore` paired with per-write put attributes.
+- **Defined in:** `application_sdk/storage/ops.py`
 
 #### `CloudStore`
 
