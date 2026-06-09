@@ -1671,7 +1671,28 @@ class TestS3CompatibilityKnobs:
         assert put_attrs == {"Storage-Class": "GLACIER_IR"}
 
     @patch("obstore.store.AzureStore")
-    def test_azure_binding_returns_none_put_attributes(
+    def test_azure_storage_class_produces_put_attributes(
+        self, mock_az_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.azure.blobstorage",
+            {
+                "containerName": "c",
+                "accountName": "acct",
+                "accountKey": "key==",
+                "storageClass": "Cool",
+            },
+        )
+        mock_az_cls.return_value = MagicMock()
+        _, put_attrs = create_store_from_binding_with_put_attrs(
+            "objectstore", components_dir=components_dir
+        )
+        assert put_attrs == {"x-ms-access-tier": "Cool"}
+
+    @patch("obstore.store.AzureStore")
+    def test_azure_absent_storage_class_returns_none_put_attributes(
         self, mock_az_cls: MagicMock, tmp_path: Path
     ) -> None:
         components_dir = _write_component(
@@ -1681,6 +1702,38 @@ class TestS3CompatibilityKnobs:
             {"containerName": "c", "accountName": "acct", "accountKey": "key=="},
         )
         mock_az_cls.return_value = MagicMock()
+        _, put_attrs = create_store_from_binding_with_put_attrs(
+            "objectstore", components_dir=components_dir
+        )
+        assert put_attrs is None
+
+    @patch("obstore.store.GCSStore")
+    def test_gcs_storage_class_produces_put_attributes(
+        self, mock_gcs_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.gcp.bucket",
+            {"bucket": "b", "storageClass": "NEARLINE"},
+        )
+        mock_gcs_cls.return_value = MagicMock()
+        _, put_attrs = create_store_from_binding_with_put_attrs(
+            "objectstore", components_dir=components_dir
+        )
+        assert put_attrs == {"X-Goog-Storage-Class": "NEARLINE"}
+
+    @patch("obstore.store.GCSStore")
+    def test_gcs_absent_storage_class_returns_none_put_attributes(
+        self, mock_gcs_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.gcp.bucket",
+            {"bucket": "b"},
+        )
+        mock_gcs_cls.return_value = MagicMock()
         _, put_attrs = create_store_from_binding_with_put_attrs(
             "objectstore", components_dir=components_dir
         )

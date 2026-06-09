@@ -848,6 +848,14 @@ class TestResolvePutAttributes:
     - no infra context: returns None.
     """
 
+    @pytest.fixture(autouse=True)
+    def _clear_infra(self):
+        from application_sdk.infrastructure.context import clear_infrastructure
+
+        clear_infrastructure()
+        yield
+        clear_infrastructure()
+
     def _make_infra(
         self, store, put_attrs, *, upstream_store=None, upstream_put_attrs=None
     ):
@@ -868,10 +876,7 @@ class TestResolvePutAttributes:
         store = create_memory_store()
         put_attrs = {"Storage-Class": "STANDARD_IA"}
         set_infrastructure(self._make_infra(store, put_attrs))
-        try:
-            assert _resolve_put_attributes(None) == put_attrs
-        finally:
-            set_infrastructure(None)
+        assert _resolve_put_attributes(None) == put_attrs
 
     def test_explicit_infra_store_returns_put_attributes(self) -> None:
         """Identity match: explicit store IS infra.storage → attributes returned."""
@@ -882,10 +887,7 @@ class TestResolvePutAttributes:
         store = create_memory_store()
         put_attrs = {"Storage-Class": "STANDARD_IA"}
         set_infrastructure(self._make_infra(store, put_attrs))
-        try:
-            assert _resolve_put_attributes(store) == put_attrs
-        finally:
-            set_infrastructure(None)
+        assert _resolve_put_attributes(store) == put_attrs
 
     def test_upstream_store_returns_upstream_put_attributes(self) -> None:
         """SDR mode: store IS infra.upstream_storage → upstream put_attributes returned."""
@@ -904,18 +906,13 @@ class TestResolvePutAttributes:
                 upstream_put_attrs=upstream_put_attrs,
             )
         )
-        try:
-            assert _resolve_put_attributes(upstream_store) == upstream_put_attrs
-        finally:
-            set_infrastructure(None)
+        assert _resolve_put_attributes(upstream_store) == upstream_put_attrs
 
     def test_bound_store_returns_embedded_put_attributes(self) -> None:
         """BoundStore: put_attributes read from the wrapper, no infra context needed."""
-        from application_sdk.infrastructure.context import set_infrastructure
         from application_sdk.storage.factory import create_memory_store
         from application_sdk.storage.ops import BoundStore, _resolve_put_attributes
 
-        set_infrastructure(None)
         raw = create_memory_store()
         put_attrs = {"Storage-Class": "GLACIER"}
         bound = BoundStore(raw, put_attrs)
@@ -923,21 +920,17 @@ class TestResolvePutAttributes:
 
     def test_bound_store_none_put_attributes(self) -> None:
         """BoundStore with no put_attributes returns None."""
-        from application_sdk.infrastructure.context import set_infrastructure
         from application_sdk.storage.factory import create_memory_store
         from application_sdk.storage.ops import BoundStore, _resolve_put_attributes
 
-        set_infrastructure(None)
         bound = BoundStore(create_memory_store(), None)
         assert _resolve_put_attributes(bound) is None
 
     def test_resolve_store_unwraps_bound_store(self) -> None:
         """_resolve_store returns the inner ObjectStore when given a BoundStore."""
-        from application_sdk.infrastructure.context import set_infrastructure
         from application_sdk.storage.factory import create_memory_store
         from application_sdk.storage.ops import BoundStore, _resolve_store
 
-        set_infrastructure(None)
         raw = create_memory_store()
         bound = BoundStore(raw, {"Storage-Class": "GLACIER"})
         assert _resolve_store(bound) is raw
@@ -953,17 +946,12 @@ class TestResolvePutAttributes:
         set_infrastructure(
             self._make_infra(infra_store, {"Storage-Class": "STANDARD_IA"})
         )
-        try:
-            assert _resolve_put_attributes(other_store) is None
-        finally:
-            set_infrastructure(None)
+        assert _resolve_put_attributes(other_store) is None
 
     def test_no_infra_context_returns_none(self) -> None:
-        from application_sdk.infrastructure.context import set_infrastructure
         from application_sdk.storage.factory import create_memory_store
         from application_sdk.storage.ops import _resolve_put_attributes
 
-        set_infrastructure(None)
         assert _resolve_put_attributes(None) is None
         assert _resolve_put_attributes(create_memory_store()) is None
 

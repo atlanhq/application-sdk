@@ -633,6 +633,44 @@ class TestCreateInfrastructureUpstreamStore:
         assert infra.upstream_storage is None
         assert infra.upstream_storage_put_attributes is None
 
+    async def test_upstream_storage_none_when_component_broken(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """upstream_storage is None when the component YAML has unresolvable fields."""
+        self._make_dapr_env(monkeypatch)
+        from application_sdk.storage.errors import StorageBindingBrokenError
+
+        deployment_store = MagicMock()
+
+        def _side_effect(name, *, components_dir):
+            if "atlan-objectstore" in name:
+                raise StorageBindingBrokenError(
+                    f"Component '{name}' has broken fields",
+                    binding_name=name,
+                    broken_fields=["spec.metadata.value"],
+                )
+            return (deployment_store, None)
+
+        with (
+            patch(
+                "application_sdk.main._log_dapr_components",
+                new_callable=AsyncMock,
+                return_value=set(),
+            ),
+            patch(f"{self._DAPR_CLIENT_MOD}.AsyncDaprClient"),
+            patch(f"{self._DAPR_CLIENT_MOD}.DaprStateStore"),
+            patch(f"{self._DAPR_CLIENT_MOD}.DaprSecretStore"),
+            patch(
+                f"{self._STORAGE_MOD}.create_store_from_binding_with_put_attrs",
+                side_effect=_side_effect,
+            ),
+        ):
+            infra = await _create_infrastructure()
+
+        assert infra.upstream_storage is None
+        assert infra.upstream_storage_put_attributes is None
+
     async def test_upstream_storage_set_when_component_present(
         self,
         monkeypatch: pytest.MonkeyPatch,

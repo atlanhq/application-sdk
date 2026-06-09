@@ -256,9 +256,28 @@ def _is_azure_container_not_found(exc: BaseException) -> bool:
     when a write targets a container that has never been created.  This is
     distinct from a missing *blob* (``BlobNotFound``) and needs a separate,
     actionable error message so operators know to pre-create the container.
+
+    Class-based detection runs first (obstore >=0.9 ``GenericError``); the
+    substring fallback catches older obstore versions and future wording drift
+    is caught by the recorded-error regression tests.
     """
+    if _ObstoreBaseError is not None and isinstance(exc, _ObstoreBaseError):
+        msg = str(exc).lower()
+        return (
+            "containernotfound" in msg
+            or "the specified container does not exist" in msg
+        )
     msg = str(exc).lower()
     return "containernotfound" in msg or "the specified container does not exist" in msg
+
+
+def _azure_container_not_found_message(key: str) -> str:
+    """Return the standard user-facing message for a missing Azure container."""
+    return (
+        "Azure container does not exist — v3 does not auto-create "
+        "containers (v2 Dapr did); pre-create the container before "
+        f"running (failed key: '{key}')"
+    )
 
 
 def _is_not_found(exc: BaseException) -> bool:
@@ -408,7 +427,7 @@ def _compute_part_size(file_size: int, chunk_size: int) -> int:
 async def upload_file(
     key: str,
     local_path: str | Path,
-    store: ObjectStore | None = None,
+    store: BoundStore | ObjectStore | None = None,
     *,
     chunk_size: int = 8 * 1024 * 1024,
     normalize: bool = True,
@@ -549,7 +568,7 @@ async def upload_file(
 async def download_file(
     key: str,
     local_path: str | Path,
-    store: ObjectStore | None = None,
+    store: BoundStore | ObjectStore | None = None,
     *,
     compute_hash: bool = False,
     min_chunk_size: int = 10 * 1024 * 1024,
@@ -663,7 +682,7 @@ async def download_file(
 
 async def get_file_size(
     key: str,
-    store: ObjectStore | None = None,
+    store: BoundStore | ObjectStore | None = None,
     *,
     normalize: bool = True,
 ) -> int | None:
@@ -705,7 +724,7 @@ async def get_file_size(
 async def download_file_chunked(
     key: str,
     local_path: str | Path,
-    store: ObjectStore | None = None,
+    store: BoundStore | ObjectStore | None = None,
     *,
     chunk_size_bytes: int = 16 * 1024 * 1024,
     max_concurrent_chunks: int = 4,
@@ -842,7 +861,7 @@ async def download_file_chunked(
 
 async def _get_bytes(
     key: str,
-    store: ObjectStore | None = None,
+    store: BoundStore | ObjectStore | None = None,
     *,
     normalize: bool = True,
 ) -> bytes | None:
@@ -888,7 +907,7 @@ async def _get_bytes(
 async def _put(
     key: str,
     data: bytes,
-    store: ObjectStore | None = None,
+    store: BoundStore | ObjectStore | None = None,
     *,
     normalize: bool = True,
 ) -> None:
@@ -925,18 +944,14 @@ async def _put(
         )
 
         if _is_azure_container_not_found(exc):
-            raise StorageConfigError(
-                "Azure container does not exist — v3 does not auto-create "
-                "containers (v2 Dapr did); pre-create the container before "
-                f"running (failed key: '{key}')"
-            ) from exc
+            raise StorageConfigError(_azure_container_not_found_message(key)) from exc
         raise StorageError(f"Failed to put key '{key}'", key=key, cause=exc) from exc
 
 
 async def put_json(
     key: str,
     obj: JsonValue,
-    store: ObjectStore | None = None,
+    store: BoundStore | ObjectStore | None = None,
     *,
     normalize: bool = True,
 ) -> None:
@@ -962,7 +977,7 @@ async def put_json(
 
 async def delete(
     key: str,
-    store: ObjectStore | None = None,
+    store: BoundStore | ObjectStore | None = None,
     *,
     normalize: bool = True,
 ) -> bool:
@@ -1001,7 +1016,7 @@ async def delete(
 
 async def exists(
     key: str,
-    store: ObjectStore | None = None,
+    store: BoundStore | ObjectStore | None = None,
     *,
     normalize: bool = True,
 ) -> bool:

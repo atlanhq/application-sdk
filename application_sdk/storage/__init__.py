@@ -89,5 +89,4 @@ __all__ = [
     "StorageBindingNotFoundError",
     "StorageBindingBrokenError",
     "create_store_from_binding_with_put_attrs",
-    "BoundStore",
 ]

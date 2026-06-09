@@ -504,6 +504,7 @@ async def _create_infrastructure(
             wait_for_dapr_sidecar,
         )
         from application_sdk.storage import (  # noqa: PLC0415 — cold path: storage init only when binding YAML present
+            StorageBindingBrokenError,
             StorageBindingNotFoundError,
             create_store_from_binding_with_put_attrs,
         )
@@ -528,6 +529,14 @@ async def _create_infrastructure(
                 "the deployment store. Configure this binding in SDR deployments to "
                 "route to the upstream bucket.",
                 UPSTREAM_OBJECT_STORE_NAME,
+            )
+        except StorageBindingBrokenError as exc:
+            upstream_storage, upstream_put_attrs = None, None
+            logger.warning(
+                "Dapr component '%s' has unresolvable configuration "
+                "(broken fields: %s) — treating upstream storage as absent",
+                UPSTREAM_OBJECT_STORE_NAME,
+                ", ".join(exc.broken_fields or []),
             )
 
         deployment_store, deployment_put_attrs = (

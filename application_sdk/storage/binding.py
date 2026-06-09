@@ -12,8 +12,12 @@ Dapr metadata fields that have no obstore equivalent are silently ignored:
   contentType (GCS)
   publicAccessLevel, disableEntityManagement, getBlobRetryCount (Azure)
 
-S3 ``storageClass`` is NOT silently ignored — it is applied as a per-request
-``"Storage-Class"`` put attribute on every write via the infrastructure context.
+``storageClass`` is applied as a per-request put attribute on every write via
+the infrastructure context, for all supported cloud backends:
+
+  S3    → ``Storage-Class: <value>``         (e.g. STANDARD_IA, GLACIER_IR)
+  Azure → ``x-ms-access-tier: <value>``      (e.g. Hot, Cool, Cold, Archive)
+  GCS   → ``X-Goog-Storage-Class: <value>``  (e.g. NEARLINE, COLDLINE, ARCHIVE)
 """
 
 from __future__ import annotations
@@ -341,10 +345,13 @@ def _build_azure_config(
     name: str,
     meta: dict[str, str],
     sdk_client_options: dict[str, object],
-) -> tuple[str, dict[str, str], dict[str, object], object]:
+) -> tuple[str, dict[str, str], dict[str, object], object, dict[str, str] | None]:
     """Translate Azure Blob Dapr binding metadata into obstore AzureStore constructor args.
 
-    Returns *(container, config, client_options, credential_provider)*.
+    Returns *(container, config, client_options, credential_provider, put_attributes)*.
+
+    *put_attributes* is ``{"x-ms-access-tier": "<tier>"}`` when ``storageClass``
+    is set in the binding metadata, or ``None`` otherwise.
     """
     from application_sdk.storage.errors import StorageConfigError  # noqa: PLC0415
 
@@ -451,15 +458,30 @@ def _build_azure_config(
     if _nonempty(meta, "msiResourceId"):
         az_config["azure_storage_msi_resource_id"] = meta["msiResourceId"]
 
-    return container, az_config, az_client_options, az_credential_provider
+    # --- Storage class (Azure access tier) ------------------------------------
+    storage_class = _nonempty(meta, "storageClass")
+    put_attributes: dict[str, str] | None = (
+        {"x-ms-access-tier": storage_class} if storage_class else None
+    )
+
+    return (
+        container,
+        az_config,
+        az_client_options,
+        az_credential_provider,
+        put_attributes,
+    )
 
 
 def _build_gcs_config(
     meta: dict[str, str],
-) -> tuple[str, dict[str, str]]:
+) -> tuple[str, dict[str, str], dict[str, str] | None]:
     """Translate GCS Dapr binding metadata into obstore GCSStore constructor args.
 
-    Returns *(bucket, config)*.
+    Returns *(bucket, config, put_attributes)*.
+
+    *put_attributes* is ``{"X-Goog-Storage-Class": "<class>"}`` when ``storageClass``
+    is set in the binding metadata, or ``None`` otherwise.
     """
     import orjson  # noqa: PLC0415 — defensive: keep inline
 
@@ -482,7 +504,13 @@ def _build_gcs_config(
             sa_data["private_key"] = sa_data["private_key"].replace("\\n", "\n")
         gcs_config["google_service_account_key"] = orjson.dumps(sa_data).decode()
 
-    return bucket, gcs_config
+    # --- Storage class --------------------------------------------------------
+    storage_class = _nonempty(meta, "storageClass")
+    put_attributes: dict[str, str] | None = (
+        {"X-Goog-Storage-Class": storage_class} if storage_class else None
+    )
+
+    return bucket, gcs_config, put_attributes
 
 
 def create_store_from_binding_with_put_attrs(
@@ -610,7 +638,7 @@ def _create_store_core(
         return store, put_attrs
 
     if store_kind == "azure":
-        container, az_config, az_client_options, az_credential_provider = (
+        container, az_config, az_client_options, az_credential_provider, put_attrs = (
             _build_azure_config(name, meta, sdk_client_options)
         )
         store = make_azure_store(
@@ -619,17 +647,17 @@ def _create_store_core(
             client_options=az_client_options,
             credential_provider=az_credential_provider,
         )
-        return store, None
+        return store, put_attrs
 
     if store_kind == "gcs":
-        bucket, gcs_config = _build_gcs_config(meta)
+        bucket, gcs_config, put_attrs = _build_gcs_config(meta)
         store = make_gcs_store(
             bucket,
             # Pass ``None`` (not {}) so obstore uses Application Default Credentials.
             gcs_config if gcs_config else None,
             client_options=sdk_client_options,
         )
-        return store, None
+        return store, put_attrs
 
     raise StorageConfigError(f"Store kind not implemented: {store_kind!r}")
 
