@@ -13,6 +13,7 @@ from application_sdk.storage.binding import (
     _AZURE_AUTHORITY_HOSTS,
     GCS_SERVICE_ACCOUNT_FIELDS,
     _coerce_bool,
+    _create_store_from_binding_optional_with_put_attrs,
     _endpoint_is_aws,
     _find_broken_metadata_fields,
     _nonempty,
@@ -1115,6 +1116,60 @@ class TestCreateStoreFromBindingOptional:
         with pytest.raises(StorageBindingNotFoundError) as exc_info:
             create_store_from_binding("atlan-objectstore", components_dir=tmp_path)
         assert exc_info.value.binding_name == "atlan-objectstore"
+
+
+# ---------------------------------------------------------------------------
+# _create_store_from_binding_optional_with_put_attrs
+# ---------------------------------------------------------------------------
+
+
+class TestCreateStoreFromBindingOptionalWithPutAttrs:
+    _PATCHED = (
+        "application_sdk.storage.binding.create_store_from_binding_with_put_attrs"
+    )
+
+    def test_returns_none_when_component_absent(self, tmp_path: Path) -> None:
+        """Returns (None, None) without raising when no Dapr component exists."""
+        store, put_attrs = _create_store_from_binding_optional_with_put_attrs(
+            "nonexistent", components_dir=tmp_path
+        )
+        assert store is None
+        assert put_attrs is None
+
+    def test_returns_none_and_warns_when_binding_broken(self, tmp_path: Path) -> None:
+        """Returns (None, None) and logs a warning that includes the broken field names."""
+        broken = StorageBindingBrokenError(
+            "component has unresolvable fields",
+            binding_name="my-store",
+            broken_fields=["accessKey", "secretKey"],
+        )
+        with (
+            patch(self._PATCHED, side_effect=broken),
+            patch("application_sdk.storage.binding._get_logger") as mock_get_logger,
+        ):
+            mock_logger = MagicMock()
+            mock_get_logger.return_value = mock_logger
+            store, put_attrs = _create_store_from_binding_optional_with_put_attrs(
+                "my-store", components_dir=tmp_path
+            )
+        assert store is None
+        assert put_attrs is None
+        mock_logger.warning.assert_called_once()
+        warning_args = mock_logger.warning.call_args[0]
+        warning_text = " ".join(str(a) for a in warning_args)
+        assert "accessKey" in warning_text
+        assert "secretKey" in warning_text
+
+    def test_returns_store_and_put_attrs_on_success(self, tmp_path: Path) -> None:
+        """Passes through (store, put_attrs) from the underlying factory unchanged."""
+        mock_store = MagicMock()
+        expected_put_attrs = {"Storage-Class": "STANDARD_IA"}
+        with patch(self._PATCHED, return_value=(mock_store, expected_put_attrs)):
+            store, put_attrs = _create_store_from_binding_optional_with_put_attrs(
+                "my-store", components_dir=tmp_path
+            )
+        assert store is mock_store
+        assert put_attrs == expected_put_attrs
 
 
 # ---------------------------------------------------------------------------

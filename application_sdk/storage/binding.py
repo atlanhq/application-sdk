@@ -755,17 +755,20 @@ def create_store_from_binding_optional(
         return None
 
 
-def create_store_from_binding_optional_with_put_attrs(
+def _create_store_from_binding_optional_with_put_attrs(
     name: str,
     *,
     components_dir: Path | str = Path("./components"),
 ) -> tuple[ObjectStore, dict[str, str] | None] | tuple[None, None]:
     """Create an obstore store and put attributes from a Dapr binding, or ``(None, None)`` if absent.
 
-    Identical to :func:`create_store_from_binding_with_put_attrs` except that a
-    missing or broken component returns ``(None, None)`` instead of raising.
-    Use this for optional bindings (e.g. ``UPSTREAM_OBJECT_STORE_NAME``) that
-    are only present in certain deployment configurations.
+    Internal helper for infrastructure-wiring code (``main.py``).  Not part of
+    the public storage API — callers that need an optional store without put
+    attributes should use :func:`create_store_from_binding_optional` instead.
+
+    A missing component logs at INFO (absent is the normal non-SDR path).
+    A broken component (template placeholders, unresolvable secretKeyRef) logs
+    at WARNING and is treated as absent.
 
     Args:
         name: The Dapr component name (e.g. ``"atlan-objectstore"``).
@@ -778,8 +781,7 @@ def create_store_from_binding_optional_with_put_attrs(
     Raises:
         StorageConfigError: If the component exists but is genuinely
             misconfigured (unsupported binding type, missing required options,
-            etc.).  Broken components — template placeholders or unresolvable
-            ``secretKeyRef`` env vars — are treated as absent and return
+            etc.).  Broken components are treated as absent and return
             ``(None, None)`` with a warning instead of raising.
     """
     from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
@@ -792,6 +794,12 @@ def create_store_from_binding_optional_with_put_attrs(
             name, components_dir=components_dir
         )
     except StorageBindingNotFoundError:
+        _get_logger().info(
+            "No Dapr component named '%s' found — App.upload/download will use "
+            "the deployment store. Configure this binding in SDR deployments to "
+            "route to the upstream bucket.",
+            name,
+        )
         return None, None
     except StorageBindingBrokenError as exc:
         _get_logger().warning(

@@ -599,11 +599,16 @@ class TestCreateInfrastructureUpstreamStore:
     def _make_dapr_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
 
-    async def test_upstream_storage_none_when_component_absent(
+    async def test_upstream_storage_none_when_optional_helper_returns_none(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """upstream_storage is None in non-SDR deployments (no atlan-objectstore component)."""
+        """upstream_storage is None when the optional helper returns (None, None).
+
+        Whether that happens because the component is absent or broken is tested
+        in TestCreateStoreFromBindingOptionalWithPutAttrs; here we only verify
+        that _create_infrastructure surfaces (None, None) correctly.
+        """
         self._make_dapr_env(monkeypatch)
         deployment_store = MagicMock()
 
@@ -617,38 +622,7 @@ class TestCreateInfrastructureUpstreamStore:
             patch(f"{self._DAPR_CLIENT_MOD}.DaprStateStore"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprSecretStore"),
             patch(
-                f"{self._STORAGE_MOD}.create_store_from_binding_optional_with_put_attrs",
-                return_value=(None, None),
-            ),
-            patch(
-                f"{self._STORAGE_MOD}.create_store_from_binding_with_put_attrs",
-                return_value=(deployment_store, None),
-            ),
-        ):
-            infra = await _create_infrastructure()
-
-        assert infra.upstream_storage is None
-        assert infra.upstream_storage_put_attributes is None
-
-    async def test_upstream_storage_none_when_component_broken(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """upstream_storage is None when the component YAML has unresolvable fields."""
-        self._make_dapr_env(monkeypatch)
-        deployment_store = MagicMock()
-
-        with (
-            patch(
-                "application_sdk.main._log_dapr_components",
-                new_callable=AsyncMock,
-                return_value=set(),
-            ),
-            patch(f"{self._DAPR_CLIENT_MOD}.AsyncDaprClient"),
-            patch(f"{self._DAPR_CLIENT_MOD}.DaprStateStore"),
-            patch(f"{self._DAPR_CLIENT_MOD}.DaprSecretStore"),
-            patch(
-                f"{self._STORAGE_MOD}.create_store_from_binding_optional_with_put_attrs",
+                "application_sdk.storage.binding._create_store_from_binding_optional_with_put_attrs",
                 return_value=(None, None),
             ),
             patch(
@@ -680,7 +654,7 @@ class TestCreateInfrastructureUpstreamStore:
             patch(f"{self._DAPR_CLIENT_MOD}.DaprStateStore"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprSecretStore"),
             patch(
-                f"{self._STORAGE_MOD}.create_store_from_binding_optional_with_put_attrs",
+                "application_sdk.storage.binding._create_store_from_binding_optional_with_put_attrs",
                 return_value=(upstream_store, None),
             ) as mock_optional,
             patch(

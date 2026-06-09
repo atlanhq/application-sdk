@@ -504,8 +504,10 @@ async def _create_infrastructure(
             wait_for_dapr_sidecar,
         )
         from application_sdk.storage import (  # noqa: PLC0415 — cold path: storage init only when binding YAML present
-            create_store_from_binding_optional_with_put_attrs,
             create_store_from_binding_with_put_attrs,
+        )
+        from application_sdk.storage.binding import (  # noqa: PLC0415
+            _create_store_from_binding_optional_with_put_attrs,
         )
 
         await wait_for_dapr_sidecar()
@@ -515,7 +517,7 @@ async def _create_infrastructure(
         logger.info("Dapr sidecar detected — using Dapr infrastructure")
 
         upstream_storage, upstream_put_attrs = (
-            create_store_from_binding_optional_with_put_attrs(
+            _create_store_from_binding_optional_with_put_attrs(
                 UPSTREAM_OBJECT_STORE_NAME,
                 components_dir=components_dir,
             )
