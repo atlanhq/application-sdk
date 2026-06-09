@@ -845,7 +845,7 @@ class TestIsAzureContainerNotFound:
         assert (
             _is_azure_container_not_found(
                 RuntimeError(
-                    "Generic S3 error: ContainerNotFound — "
+                    "AzureError: ContainerNotFound — "
                     "The specified container does not exist."
                 )
             )
@@ -876,12 +876,33 @@ class TestIsAzureContainerNotFound:
         from application_sdk.storage.errors import StorageConfigError
         from application_sdk.storage.factory import create_memory_store
 
-        # Patch put_async to raise a ContainerNotFound error.
         azure_err = RuntimeError(
-            "Generic HTTP error: ContainerNotFound — "
-            "The specified container does not exist."
+            "AzureError: ContainerNotFound — " "The specified container does not exist."
         )
         store = create_memory_store()
         with patch("obstore.put_async", AsyncMock(side_effect=azure_err)):
             with pytest.raises(StorageConfigError, match="pre-create the container"):
                 await _put("key/data.json", b"{}", store=store)
+
+    async def test_upload_file_raises_storage_config_error_on_container_not_found(
+        self, tmp_path
+    ) -> None:
+        """upload_file must re-raise as StorageConfigError for Azure container-absent."""
+        from application_sdk.storage.errors import StorageConfigError
+        from application_sdk.storage.factory import create_memory_store
+        from application_sdk.storage.ops import upload_file
+
+        src = tmp_path / "data.json"
+        src.write_bytes(b"{}")
+        azure_err = RuntimeError(
+            "AzureError: ContainerNotFound — " "The specified container does not exist."
+        )
+        store = create_memory_store()
+        with (
+            patch(
+                "application_sdk.storage.ops.obstore.open_writer_async",
+                side_effect=azure_err,
+            ),
+            pytest.raises(StorageConfigError, match="pre-create the container"),
+        ):
+            await upload_file("key/data.json", src, store=store)

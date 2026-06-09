@@ -56,10 +56,11 @@ from application_sdk.storage.errors import (
     StorageNotFoundError,
 )
 from application_sdk.storage.ops import (
+    _compute_part_size,
+    _is_azure_container_not_found,
     _list_items,
     _safe_join_under,
     download_file,
-    upload_file,
 )
 
 # Lazy import: direct get_logger() at module load would create a circular
@@ -94,8 +95,6 @@ class CloudStore:
     ) -> None:
         self._store = store
         self._provider = provider
-        #: Per-write obstore put attributes (e.g. ``{"Storage-Class": "STANDARD_IA"}``).
-        #: Applied automatically to every write through this store.
         self._put_attributes: dict[str, str] | None = put_attributes
 
     @property
@@ -343,17 +342,25 @@ class CloudStore:
         path = Path(local_path)
         try:
             size = path.stat().st_size
-            await upload_file(
-                key,
-                path,
-                store=self._store,
-                normalize=False,
-                retain_local_copy=True,
-                compute_hash=False,
-            )
+            chunk = _compute_part_size(size, 8 * 1024 * 1024)
+            async with obs.open_writer_async(
+                self._store, key, buffer_size=chunk, attributes=self._put_attributes
+            ) as writer:
+                with path.open("rb") as fh:
+                    while True:
+                        buf = fh.read(chunk)
+                        if not buf:
+                            break
+                        await writer.write(buf)
         except StorageError:
             raise
         except Exception as exc:
+            if _is_azure_container_not_found(exc):
+                raise StorageConfigError(
+                    "Azure container does not exist — v3 does not auto-create "
+                    "containers (v2 Dapr did); pre-create the container before "
+                    f"running (failed key: '{key}')"
+                ) from exc
             raise StorageError(f"Failed to upload key: {key}", cause=exc) from exc
         _log().info("Uploaded key=%s bytes=%d", key, size)
         return size

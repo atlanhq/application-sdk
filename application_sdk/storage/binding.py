@@ -120,7 +120,7 @@ def _endpoint_is_aws(endpoint: str) -> bool:
         return True  # no custom endpoint → real AWS
     # Ensure urlparse can extract the hostname regardless of scheme.
     normalised = endpoint if "//" in endpoint else f"//{endpoint}"
-    host = urlparse(normalised).hostname or ""
+    host = (urlparse(normalised).hostname or "").rstrip(".")
     return host.endswith((".amazonaws.com", ".amazonaws.com.cn"))
 
 
@@ -263,7 +263,13 @@ def _build_s3_config(
     if _nonempty(meta, "disableTagging"):
         if _coerce_bool(meta["disableTagging"]):
             config["aws_disable_tagging"] = "true"
-        # explicit false: leave config key absent (let obstore default apply)
+        elif not _endpoint_is_aws(endpoint):
+            _get_logger().warning(
+                "disableTagging=false on non-AWS endpoint '%s' — obstore will send "
+                "x-amz-tagging which many S3-compatible stores (B2, R2, GCS-interop) "
+                "reject; set disableTagging=true to suppress the header",
+                endpoint or "(none)",
+            )
     elif not _endpoint_is_aws(endpoint):
         config["aws_disable_tagging"] = "true"
 

@@ -1373,6 +1373,9 @@ class TestEndpointIsAws:
             "https://s3.dualstack.us-east-1.amazonaws.com",
             # http scheme (e.g. LocalStack)
             "http://s3.amazonaws.com",
+            # Trailing root dot (FQDN form) — must not break AWS detection
+            "https://s3.amazonaws.com.",
+            "https://s3.cn-north-1.amazonaws.com.cn.",
             # Empty / absent endpoint → real AWS credential chain
             "",
         ],
