@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import inspect
 import json
 import mimetypes
 import os
@@ -37,8 +38,10 @@ import re
 import shutil
 import tempfile
 import warnings
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
+from types import ModuleType
 from typing import TYPE_CHECKING, Annotated, Any, cast
 from uuid import uuid4
 
@@ -381,6 +384,219 @@ CONTRACT_GENERATED_DIR = Path(_CONTRACT_GENERATED_DIR)
 # Identical to the @entrypoint decorator constraint. Used as a path-traversal guard
 # in get_manifest() before any filesystem path is constructed.
 _ENTRYPOINT_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
+
+
+# Per-entry-point hook signatures resolved by the discovery helpers below.
+# ``HandlerFn`` is the per-entry-point handler convention
+# (``app.<segment>.handler.{test_auth,preflight_check,fetch_metadata}``); the
+# input/output stay ``Any`` because the concrete contract pair is selected by
+# ``fn_name`` at call time. ``_ComputeManifestFn`` is the dynamic-manifest hook
+# (``app.<segment>.core.compute_manifest``) — it must be ``async def`` (the hook
+# is prescriptively async-only; the call site simply ``await``s it). A sync
+# ``def`` is not discovered and silently falls through to the static manifest.
+# TODO(BLDX-1354): the connector-author hook surface is typed only as
+# ``dict[str, Any]``; once the manifest / fe_inputs shapes stabilise, replace
+# these with Pydantic models (e.g. ``Manifest`` / ``FeInputs``) so hook authors
+# get validation + editor support instead of bare dicts.
+HandlerFn = Callable[[Any, HandlerContext], Awaitable[Any]]
+_ComputeManifestFn = Callable[
+    [dict[str, Any], dict[str, Any]], Awaitable[dict[str, Any]]
+]
+
+
+def _import_optional_app_module(dotted: str) -> ModuleType | None:
+    """Import an optional consumer-owned module by dotted path.
+
+    Returns ``None`` only when the module *itself* (or one of its parent
+    packages) is absent — the expected "this app ships no such hook" case.
+    Re-raises when the module exists but fails to import: a transitive
+    ``ModuleNotFoundError`` (a missing dependency named somewhere other than the
+    target's own dotted path) or any other ``ImportError`` is a real bug in the
+    connector's code and must surface, not be silently swallowed into a
+    fall-through.
+    """
+    import importlib  # noqa: PLC0415 — cold path: per-entrypoint discovery only
+
+    try:
+        return importlib.import_module(dotted)
+    except ModuleNotFoundError as exc:
+        missing = exc.name or ""
+        # Swallow only if what's missing is the target or one of its parents
+        # (e.g. ``app``, ``app.<segment>``, ``app.<segment>.core``).
+        if missing == dotted or dotted.startswith(f"{missing}."):
+            return None
+        raise
+
+
+def _discover_compute_manifest(entrypoint: str) -> _ComputeManifestFn | None:
+    """Look for a per-entrypoint ``compute_manifest`` hook.
+
+    Convention: ``app.<segment>.core.compute_manifest`` where ``segment`` is
+    :func:`~application_sdk.app.entrypoint.entrypoint_module_segment` of the
+    entry-point name. Multi-entrypoint apps that need *dynamic* per-submission
+    manifest substitution (placeholder fill-in, SQL generation, full DAG
+    rewrite) drop a ``core.py`` next to their package's hand-written code with::
+
+        async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict: ...
+
+    The hook must be ``async def`` — a sync ``def`` is not discovered and the
+    route serves the static manifest unchanged. The static manifest (already
+    token-substituted) is passed in; the coroutine's return value becomes the
+    response body. Apps that don't define this module get the static manifest
+    unchanged.
+
+    Returns the callable or ``None`` if the module / attribute is absent or
+    not a coroutine function. Best-effort discovery — never raises on import
+    failure.
+    """
+    # Lazy: app.entrypoint pulls in app.base, which imports this module
+    # (handler.service is the FastAPI entry point); deferring to this cold
+    # path avoids the import cycle.
+    from application_sdk.app.entrypoint import (  # noqa: PLC0415
+        entrypoint_module_segment,
+    )
+
+    segment = entrypoint_module_segment(entrypoint)
+    module = _import_optional_app_module(f"app.{segment}.core")
+    if module is None:
+        return None
+    fn = getattr(module, "compute_manifest", None)
+    # The hook is prescriptively async-only: the call site ``await``s it
+    # directly, so require a coroutine function. A sync ``def`` (or any
+    # non-callable) is not discovered and silently falls through to the
+    # static manifest — mirroring ``_discover_handler_fn``.
+    if fn is not None and not inspect.iscoroutinefunction(fn):
+        logger.debug(
+            "app.%s.core.compute_manifest found but not async; falling through to static manifest",
+            segment,
+        )
+    return cast(
+        "_ComputeManifestFn | None", fn if inspect.iscoroutinefunction(fn) else None
+    )
+
+
+def _validated_entrypoint(name: str) -> str:
+    """Return the per-entrypoint name to dispatch to, or ``""`` when none is sent.
+
+    The orchestrator resolves the exact entry-point name (e.g.
+    ``asset-export-advanced``) from the Global Marketplace app catalog and
+    sends it in the ``entrypoint`` field, so resolution is a direct,
+    deterministic reference — there is no parsing, filesystem glob, or
+    suffix-matching of the legacy ``connector`` string. The name becomes part
+    of a module path (``app.<segment>.handler`` / ``.core``), so we validate
+    its format and otherwise use it verbatim.
+
+    - **Empty / absent** → ``""``: single-entrypoint apps send no ``entrypoint``
+      and fall through to the app-level ``Handler`` instance, 1:1 with today's
+      behavior.
+    - **Non-empty but malformed** → ``HTTPException(400)``: a bad name is a
+      client error, not a silent fall-back to the default entrypoint. This
+      keeps the auth/check/metadata routes consistent with
+      ``/workflows/v1/manifest`` and the input-contract route, which already
+      reject malformed names with 400.
+    """
+    if not name:
+        return ""
+    if not _ENTRYPOINT_NAME_RE.match(name):
+        raise HTTPException(status_code=400, detail="Invalid entrypoint name")
+    return name
+
+
+def _discover_handler_fn(entrypoint: str, fn_name: str) -> HandlerFn | None:
+    """Look for a per-entrypoint handler function.
+
+    Convention: ``app.<segment>.handler.<fn_name>`` where ``segment`` is
+    :func:`~application_sdk.app.entrypoint.entrypoint_module_segment` of the
+    entry-point name and ``fn_name`` is one of ``"test_auth"``,
+    ``"preflight_check"``, ``"fetch_metadata"``. Multi-entrypoint apps that
+    need *per-entrypoint* lifecycle hooks drop a ``handler.py`` next to their
+    package's hand-written code with::
+
+        async def test_auth(input: AuthInput, ctx: HandlerContext) -> AuthOutput: ...
+        async def preflight_check(input: PreflightInput, ctx: HandlerContext) -> PreflightOutput: ...
+        async def fetch_metadata(input: MetadataInput, ctx: HandlerContext) -> MetadataOutput: ...
+
+    The dispatch is best-effort: if the per-entrypoint module / attribute
+    is absent, the route falls through to the app-level ``Handler`` instance
+    (``DefaultHandler`` if no custom handler is configured), preserving
+    today's single-entrypoint behavior 1:1.
+
+    Precedence & silent fall-through — important when reasoning about which
+    code actually runs (mirrored in ``docs/concepts/handlers.md``):
+
+    - When a per-entrypoint ``<fn_name>`` exists, it **pre-empts** the
+      app-level ``Handler.<fn_name>`` for that entry point. Defining both
+      silently runs the module one; the class method never executes.
+    - Resolution is per-op: a module that defines only ``fetch_metadata``
+      leaves ``test_auth`` / ``preflight_check`` falling back to the
+      app-level ``Handler`` — one entry point can be split across two files.
+    - A wrong name or a non-``async`` ``def`` does not match (see the
+      ``iscoroutinefunction`` check below) and **silently** falls through
+      rather than erroring — so a typo'd hook quietly does nothing.
+
+    Returns the callable or ``None`` if absent.
+    """
+    # Lazy: app.entrypoint pulls in app.base, which imports this module
+    # (handler.service is the FastAPI entry point); deferring to this cold
+    # path avoids the import cycle.
+    from application_sdk.app.entrypoint import (  # noqa: PLC0415
+        entrypoint_module_segment,
+    )
+
+    segment = entrypoint_module_segment(entrypoint)
+    module = _import_optional_app_module(f"app.{segment}.handler")
+    if module is None:
+        return None
+    fn = getattr(module, fn_name, None)
+    # The dispatch ``await``s the result, so require a coroutine function — a
+    # sync ``def`` falls through to the app-level Handler rather than blowing up
+    # with a TypeError at request time.
+    if fn is not None and not inspect.iscoroutinefunction(fn):
+        logger.debug(
+            "app.%s.%s found but not async; falling through to app-level Handler",
+            segment,
+            fn_name,
+        )
+    return cast("HandlerFn | None", fn if inspect.iscoroutinefunction(fn) else None)
+
+
+#: Max size of the decoded ``fe_inputs`` query payload, in UTF-8 bytes.
+#
+# ``fe_inputs`` rides in a GET query string (``/workflows/v1/manifest?...``),
+# so it is bounded by the request-line caps of whatever proxy fronts the app
+# (nginx ``large_client_header_buffers`` defaults to 8 KB; ALB allows ~16 KB).
+# This app-side cap turns "payload too large" into a clear 413 instead of an
+# opaque upstream truncation/414. 8 KB was chosen empirically from the largest
+# connector form we ship (asset-export-advanced, ~65 fields): a fully-populated
+# form is ~1.6 KB decoded and a heavy multi-select (lists of qualified names /
+# GUIDs / tags) is ~5 KB — so 8 KB leaves headroom without rejecting legitimate
+# forms. Anything materially larger should move to a POST body (tracked
+# follow-up) rather than grow the query string.
+_MAX_FE_INPUTS_BYTES = 8192
+
+
+def _decode_fe_inputs(raw: str | None) -> dict[str, Any]:
+    """Decode the ``fe_inputs`` query payload (JSON, sent URL-encoded by
+    Heracles for dynamic-manifest apps). Returns ``{}`` when absent; raises
+    ``HTTPException(413)`` when it exceeds :data:`_MAX_FE_INPUTS_BYTES` and
+    ``HTTPException(400)`` when present but malformed."""
+    if not raw:
+        return {}
+    if len(raw.encode("utf-8")) > _MAX_FE_INPUTS_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"fe_inputs exceeds the {_MAX_FE_INPUTS_BYTES}-byte limit",
+        )
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=400, detail=f"fe_inputs is not valid JSON: {exc}"
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=400, detail="fe_inputs must be a JSON object")
+    return parsed
+
 
 # Allowed characters for config_id and config_type path components.
 # Prevents path traversal (no slashes, dots, or percent-encoding) when these
@@ -1502,7 +1718,10 @@ def _register_workflow_routes(
     # ------------------------------------------------------------------
 
     @app.get("/workflows/v1/manifest")
-    async def get_manifest(entrypoint: str | None = None) -> Response:
+    async def get_manifest(
+        entrypoint: str | None = None,
+        fe_inputs: str | None = None,
+    ) -> Response:
         deployment = (DEPLOYMENT_NAME or "default").encode()
 
         if entrypoint:
@@ -1526,6 +1745,45 @@ def _register_workflow_routes(
             raw = ep_manifest.read_bytes()
             raw = raw.replace(b"{deployment_name}", deployment)
             raw = raw.replace(b"{app_name}", (app_name or "").encode())
+
+            # Dynamic-manifest hook: if the app defines
+            # `app.<entrypoint_snake>.core.compute_manifest`, hand the
+            # static manifest + decoded `fe_inputs` to it and use the
+            # returned dict as the response body. Apps that don't define
+            # the hook get the static manifest unchanged (current behavior).
+            compute = _discover_compute_manifest(entrypoint)
+            if compute is not None:
+                fe_inputs_decoded = _decode_fe_inputs(fe_inputs)
+                manifest_dict = json.loads(raw)
+                try:
+                    # The hook is async-only (discovery rejects sync defs), so
+                    # await it directly. Authors doing CPU/IO-bound work inside
+                    # (SQL generation, full DAG rewrite) own offloading it — e.g.
+                    # `await asyncio.to_thread(...)` — rather than the SDK
+                    # guessing on their behalf.
+                    computed = await compute(manifest_dict, fe_inputs_decoded)
+                except HTTPException:
+                    raise
+                except Exception:
+                    # Don't leak the hook's internals (stack/SQL/paths) to the
+                    # caller — mirror the other handler routes' generic 500.
+                    logger.error(
+                        "compute_manifest hook failed for entrypoint %r",
+                        entrypoint,
+                        exc_info=True,
+                    )
+                    raise HTTPException(
+                        status_code=500, detail="Internal server error"
+                    ) from None
+                if not isinstance(computed, dict):
+                    logger.error(
+                        "compute_manifest for entrypoint %r returned %s, expected dict",
+                        entrypoint,
+                        type(computed).__name__,
+                    )
+                    raise HTTPException(status_code=500, detail="Internal server error")
+                raw = json.dumps(computed).encode()
+
             return Response(content=raw, media_type="application/json")
 
         # No entrypoint param: single-entrypoint path
@@ -1554,7 +1812,10 @@ def _register_workflow_routes(
     # ------------------------------------------------------------------
 
     @app.get("/manifest", include_in_schema=False)
-    async def get_manifest_legacy(entrypoint: str | None = None) -> Response:
+    async def get_manifest_legacy(
+        entrypoint: str | None = None,
+        fe_inputs: str | None = None,
+    ) -> Response:
         """Unversioned alias for ``GET /workflows/v1/manifest``.
 
         .. deprecated::
@@ -1564,7 +1825,7 @@ def _register_workflow_routes(
             orchestrators have been updated to use ``/workflows/v1/manifest``.
             Do **not** add new callers of this endpoint.
         """
-        return await get_manifest(entrypoint=entrypoint)
+        return await get_manifest(entrypoint=entrypoint, fe_inputs=fe_inputs)
 
     # ------------------------------------------------------------------
     # Input-contract endpoint
@@ -1809,7 +2070,22 @@ def create_app_handler_service(
                     app_name,
                     context.request_id_str,
                 )
-                result = await handler.test_auth(auth_input)
+                # Per-entrypoint dispatch: multi-entrypoint apps may ship
+                # `app.<segment>.handler.test_auth`. The orchestrator sends the
+                # exact entry-point name (resolved from the marketplace
+                # catalog), so this is a direct lookup — when it maps to a
+                # per-entrypoint module, route to it; else (empty/single-
+                # entrypoint) fall through to the app-level `Handler` instance.
+                entrypoint = _validated_entrypoint(auth_input.entrypoint)
+                ep_fn = (
+                    _discover_handler_fn(entrypoint, "test_auth")
+                    if entrypoint
+                    else None
+                )
+                if ep_fn is not None:
+                    result = await ep_fn(auth_input, context)
+                else:
+                    result = await handler.test_auth(auth_input)
                 logger.info(
                     "Auth test completed: app=%s request=%s status=%s",
                     app_name,
@@ -1852,6 +2128,11 @@ def create_app_handler_service(
                 raise HTTPException(
                     status_code=_app_error_to_http_status(e), detail=str(e)
                 ) from None
+            except HTTPException:
+                # Deliberate HTTP responses (e.g. 400 from a malformed
+                # entrypoint name) are already client-facing — pass them
+                # through rather than masking them as a generic 500.
+                raise
             except Exception as e:
                 logger.error(
                     "Auth test failed unexpectedly for app %s (request %s): %s",
@@ -1884,7 +2165,17 @@ def create_app_handler_service(
                     app_name,
                     context.request_id_str,
                 )
-                result = await handler.preflight_check(preflight_input)
+                # Per-entrypoint dispatch (see test_auth above for rationale).
+                entrypoint = _validated_entrypoint(preflight_input.entrypoint)
+                ep_fn = (
+                    _discover_handler_fn(entrypoint, "preflight_check")
+                    if entrypoint
+                    else None
+                )
+                if ep_fn is not None:
+                    result = await ep_fn(preflight_input, context)
+                else:
+                    result = await handler.preflight_check(preflight_input)
                 logger.info(
                     "Preflight check completed: app=%s request=%s status=%s checks=%d",
                     app_name,
@@ -1966,6 +2257,11 @@ def create_app_handler_service(
                 raise HTTPException(
                     status_code=_app_error_to_http_status(e), detail=str(e)
                 ) from None
+            except HTTPException:
+                # Deliberate HTTP responses (e.g. 400 from a malformed
+                # entrypoint name) are already client-facing — pass them
+                # through rather than masking them as a generic 500.
+                raise
             except Exception as e:
                 logger.error(
                     "Preflight check failed unexpectedly for app %s (request %s): %s",
@@ -1986,6 +2282,16 @@ def create_app_handler_service(
     async def fetch_metadata(request: Request) -> JSONResponse:
         body = _normalize_credentials(await request.json())
         metadata_input = MetadataInput.model_validate(body)
+        # The widget routing key (``metadataTemplateKey`` / ``type`` on the
+        # wire) now lands in its documented home, ``metadata_template_key``,
+        # via the field's validation alias. Mirror it onto ``object_filter``
+        # when that's empty so per-entrypoint hooks reading the legacy field
+        # (e.g. asset-export-advanced's tags vs connectors vs typenames widgets)
+        # keep working. New hooks can read ``metadata_template_key`` directly.
+        if not metadata_input.object_filter and metadata_input.metadata_template_key:
+            metadata_input = metadata_input.model_copy(
+                update={"object_filter": metadata_input.metadata_template_key}
+            )
         credentials = [
             HandlerCredential(key=c.key, value=c.value)
             for c in metadata_input.credentials
@@ -1998,7 +2304,17 @@ def create_app_handler_service(
                     app_name,
                     context.request_id_str,
                 )
-                result = await handler.fetch_metadata(metadata_input)
+                # Per-entrypoint dispatch (see test_auth above for rationale).
+                entrypoint = _validated_entrypoint(metadata_input.entrypoint)
+                ep_fn = (
+                    _discover_handler_fn(entrypoint, "fetch_metadata")
+                    if entrypoint
+                    else None
+                )
+                if ep_fn is not None:
+                    result = await ep_fn(metadata_input, context)
+                else:
+                    result = await handler.fetch_metadata(metadata_input)
 
                 # Both SqlMetadataOutput and ApiMetadataOutput expose
                 # .objects — model_dump() produces the correct shape for
@@ -2042,6 +2358,11 @@ def create_app_handler_service(
                 raise HTTPException(
                     status_code=_app_error_to_http_status(e), detail=str(e)
                 ) from None
+            except HTTPException:
+                # Deliberate HTTP responses (e.g. 400 from a malformed
+                # entrypoint name) are already client-facing — pass them
+                # through rather than masking them as a generic 500.
+                raise
             except Exception as e:
                 logger.error(
                     "Metadata fetch failed unexpectedly for app %s (request %s): %s",
