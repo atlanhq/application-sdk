@@ -1,0 +1,109 @@
+name: Renovate Fan-out Dispatch (Reusable)
+
+# Triggers Renovate runs on all consumer app repos immediately after an SDK or
+# contract-toolkit release. Consumer repos pick up the new version within
+# minutes rather than waiting for the next scheduled Renovate run.
+#
+# Usage — add a fan-out job to tag-and-publish.yaml (after the publish step):
+#
+#   fan-out:
+#     name: Fan out Renovate to consumers
+#     needs: [publish]          # run after PyPI/gh-pages publish completes
+#     uses: atlanhq/application-sdk/.github/workflows/reusable-renovate-dispatch.yaml@main
+#     secrets:
+#       fleet-dispatch-token: ${{ secrets.FLEET_DISPATCH_TOKEN }}
+#
+# Usage — same pattern in contract-toolkit-publish.yml (after Pages publish):
+#
+#   fan-out:
+#     name: Fan out Renovate to consumers
+#     needs: [publish]
+#     uses: atlanhq/application-sdk/.github/workflows/reusable-renovate-dispatch.yaml@main
+#     secrets:
+#       fleet-dispatch-token: ${{ secrets.FLEET_DISPATCH_TOKEN }}
+#
+# FLEET_DISPATCH_TOKEN: store as a repo/org secret. Requires:
+#   - Personal Access Token (classic) with repo + workflow scope, OR
+#   - GitHub App installation token with contents:write + actions:write on each
+#     consumer repo.
+#   The token must have write access to every atlan-*-app repo you want to reach.
+#
+# Each consumer repo must have a .github/workflows/renovate.yaml that accepts
+# workflow_dispatch (see renovate-config/README.md for the template). If a
+# consumer has not yet adopted the preset the dispatch is skipped with a warning.
+
+on:
+  workflow_call:
+    inputs:
+      workflow-file:
+        description: Workflow filename to trigger in each consumer repo.
+        required: false
+        default: "renovate.yaml"
+        type: string
+      ref:
+        description: Branch/ref to run the workflow on in consumer repos.
+        required: false
+        default: "main"
+        type: string
+    secrets:
+      fleet-dispatch-token:
+        description: PAT or GitHub App token with actions:write on consumer repos.
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    name: Discover consumer repos
+    runs-on: ubuntu-latest
+    outputs:
+      repos: ${{ steps.discover.outputs.repos }}
+    steps:
+      - name: Discover atlan-application-sdk consumers
+        id: discover
+        env:
+          GH_TOKEN: ${{ secrets.fleet-dispatch-token }}
+        run: |
+          set -euo pipefail
+          # Search for repos in the atlanhq org that list atlan-application-sdk
+          # as a dependency. gh search code returns up to 100 results per query;
+          # for a fleet > 100 repos, page through with --limit / --page.
+          repos=$(gh search code \
+            --owner atlanhq \
+            "atlan-application-sdk filename:pyproject.toml" \
+            --json repository \
+            --jq '[.[].repository.nameWithOwner] | unique | @json' \
+            --limit 100 2>/dev/null || echo "[]")
+
+          if [ "$repos" = "[]" ] || [ -z "$repos" ]; then
+            echo "::warning::No consumer repos discovered. Check FLEET_DISPATCH_TOKEN permissions."
+          else
+            echo "Discovered $(echo "$repos" | jq '. | length') consumer repos"
+          fi
+          echo "repos=${repos}" >> "$GITHUB_OUTPUT"
+
+  dispatch:
+    name: Trigger ${{ matrix.repo }}
+    needs: [discover]
+    if: needs.discover.outputs.repos != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        repo: ${{ fromJson(needs.discover.outputs.repos) }}
+      fail-fast: false   # attempt all consumers even if some fail
+      max-parallel: 10   # avoid GitHub API rate limits
+    steps:
+      - name: Trigger workflow_dispatch
+        env:
+          GH_TOKEN: ${{ secrets.fleet-dispatch-token }}
+        run: |
+          set -euo pipefail
+          if gh workflow run "${{ inputs.workflow-file }}" \
+              --repo "${{ matrix.repo }}" \
+              --ref "${{ inputs.ref }}"; then
+            echo "Triggered Renovate in ${{ matrix.repo }}"
+          else
+            echo "::warning::Could not trigger ${{ inputs.workflow-file }} in ${{ matrix.repo }}" \
+              "(workflow may not exist yet or token lacks permissions)"
+          fi

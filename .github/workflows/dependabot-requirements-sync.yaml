@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - 'dependabot/**'
+      - 'renovate/**'
     paths:
       - 'uv.lock'
 

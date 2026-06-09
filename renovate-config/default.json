@@ -1,0 +1,92 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Atlan fleet upgrade policy for atlan-*-app repos. Extend via: {\"extends\": [\"github>atlanhq/application-sdk//renovate-config/default.json\"]}",
+  "extends": ["config:recommended"],
+  "schedule": ["at any time"],
+  "prHourlyLimit": 0,
+  "prConcurrentLimit": 10,
+  "labels": ["dependencies"],
+  "dependencyDashboard": true,
+  "postUpdateOptions": ["uvLock"],
+  "packageRules": [
+    {
+      "description": "SDK: minor+patch in one PR; auto-merge on green gate. Major bumps are manual (consumers pin >=3.0.0,<4.0.0; DeprecationWarnings precede removal by one major).",
+      "matchPackageNames": ["atlan-application-sdk"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "atlan-application-sdk",
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true,
+      "addLabels": ["sdk-update"]
+    },
+    {
+      "description": "SDK: disable major bumps — these are opt-in manual migrations.",
+      "matchPackageNames": ["atlan-application-sdk"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
+      "description": "app-contract-toolkit (Pkl): minor+patch in one PR; auto-merge on green. Matched by the regex customManager below.",
+      "matchManagers": ["regex"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "app-contract-toolkit",
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true,
+      "addLabels": ["contract-toolkit-update"]
+    },
+    {
+      "description": "app-contract-toolkit: disable major bumps.",
+      "matchManagers": ["regex"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
+      "description": "Python transitive deps (all except atlan-application-sdk): group minor+patch; auto-merge on green.",
+      "matchManagers": ["uv"],
+      "matchPackageNames": ["!atlan-application-sdk"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "python-transitive-deps",
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true
+    },
+    {
+      "description": "GitHub Actions: group minor+patch; auto-merge on green.",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "github-actions",
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true
+    }
+  ],
+  "customManagers": [
+    {
+      "description": "Pkl app-contract-toolkit: track the @<version> URI pinned in contract/PklProject. Uses github-tags datasource against atlanhq/application-sdk, filtering to contract-toolkit-v* tags.",
+      "customType": "regex",
+      "managerFilePatterns": ["(^|/)contract/PklProject$"],
+      "matchStrings": [
+        "uri\\s*=\\s*\"package://atlanhq\\.github\\.io/application-sdk/contracts/app-contract-toolkit@(?<currentValue>[^\"]+)\""
+      ],
+      "depNameTemplate": "app-contract-toolkit",
+      "packageNameTemplate": "atlanhq/application-sdk",
+      "datasourceTemplate": "github-tags",
+      "versioningTemplate": "semver",
+      "extractVersionTemplate": "^contract-toolkit-v(?<version>.+)$"
+    }
+  ],
+  "postUpgradeTasks": {
+    "commands": [
+      "uv lock",
+      "uv export --no-hashes --frozen > requirements.txt",
+      "if [ -d contract ] && [ -f contract/PklProject ] && command -v pkl >/dev/null 2>&1; then pkl project resolve contract/; fi"
+    ],
+    "fileFilters": [
+      "uv.lock",
+      "requirements.txt",
+      "contract/PklProject.deps.json"
+    ],
+    "executionMode": "branch"
+  }
+}
