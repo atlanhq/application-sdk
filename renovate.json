@@ -1,0 +1,12 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "application-sdk dogfood config — extends its own fleet preset (renovate-config/default.json).",
+  "extends": [
+    "local>renovate-config/default.json"
+  ],
+  "ignorePaths": [
+    ".venv/**",
+    "**/node_modules/**",
+    "contract-toolkit/examples/**"
+  ]
+}
