@@ -450,7 +450,23 @@ class ParquetFileReader(Reader):
             # and _build_unified_daft_schema for the failure modes guarded.
             daft_schema = _build_unified_daft_schema(parquet_files, daft)
             lazy_df = daft.read_parquet(parquet_files, schema=daft_schema)
-            total_rows = lazy_df.count_rows()
+
+            # An empty/degenerate parquet set produces zero MicroPartitions, and
+            # count_rows() then raises DaftCoreException ("Need at least 1
+            # MicroPartition to perform concat"). An empty input is not an
+            # error (a fetch may legitimately return no rows) — emit no batches
+            # instead of crashing the caller.
+            from daft.exceptions import DaftCoreException  # noqa: PLC0415
+
+            try:
+                total_rows = lazy_df.count_rows()
+            except DaftCoreException as exc:
+                if "MicroPartition" in str(exc):
+                    logger.info(
+                        "Parquet file(s) contain no data; yielding no batches"
+                    )
+                    return
+                raise
 
             for offset in range(0, total_rows, self.buffer_size):
                 chunk = lazy_df.offset(offset).limit(self.buffer_size)

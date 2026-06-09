@@ -956,3 +956,53 @@ class TestReadNonBatchedSchemaUnification:
             "bar",
             "foo",
         ]
+
+
+@pytest.mark.asyncio
+async def test_read_batches_empty_micropartition_yields_no_batches(monkeypatch) -> None:
+    """Empty parquet input => zero MicroPartitions => count_rows() raises
+    DaftCoreException ("Need at least 1 MicroPartition to perform concat").
+
+    The batched daft reader should treat that as an empty result and yield no
+    batches, instead of propagating the error and crashing the activity.
+    """
+    import sys
+    import types
+
+    dummy_daft = types.ModuleType("daft")
+    dummy_exceptions = types.ModuleType("daft.exceptions")
+
+    class DaftCoreException(Exception):
+        pass
+
+    dummy_exceptions.DaftCoreException = DaftCoreException  # type: ignore[attr-defined]
+    dummy_daft.exceptions = dummy_exceptions  # type: ignore[attr-defined]
+
+    class EmptyDaftDataFrame:
+        def count_rows(self):
+            raise DaftCoreException(
+                "DaftError::ValueError Need at least 1 MicroPartition to perform concat"
+            )
+
+    dummy_daft.read_parquet = lambda path, **kwargs: EmptyDaftDataFrame()  # type: ignore[attr-defined]
+
+    monkeypatch.setitem(sys.modules, "daft", dummy_daft)
+    monkeypatch.setitem(sys.modules, "daft.exceptions", dummy_exceptions)
+
+    async def dummy_download(path, file_extension, file_names=None):
+        return [f"{path}/empty.parquet"]
+
+    monkeypatch.setattr(
+        "application_sdk.storage.formats.parquet._download_files",
+        dummy_download,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "application_sdk.storage.formats.parquet._build_unified_daft_schema",
+        lambda files, daft: None,
+        raising=False,
+    )
+
+    reader = ParquetFileReader(path="/tmp/empty", dataframe_type=DataframeType.daft)
+    batches = [batch async for batch in reader._get_batched_daft_dataframe()]
+    assert batches == []
