@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.15.1
-source-sha:    fb5ce5677ed33bc03f84fc73d2661829093e0626
-source-date:   2026-06-09T19:30:10+01:00
+source-sha:    95b9d784a9d01c46cd3ffa4ddade57578b9ff41b
+source-date:   2026-06-09T21:23:54+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -30,7 +30,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 24 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 25 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 5 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 15 |
 
@@ -1972,6 +1972,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Import:** `from application_sdk.storage import create_store_from_binding_optional`
 - **Signature:** `create_store_from_binding_optional(name: str, *, components_dir: Path | str = Path('./components'))`
 - **Summary:** Create an obstore store from a Dapr component binding, or ``None`` if absent.
+- **Defined in:** `application_sdk/storage/binding.py`
+
+#### `create_store_from_binding_optional_with_put_attrs`
+
+- **Import:** `from application_sdk.storage import create_store_from_binding_optional_with_put_attrs`
+- **Signature:** `create_store_from_binding_optional_with_put_attrs(name: str, *, components_dir: Path | str = Path('./components'))`
+- **Summary:** Create an obstore store and put attributes from a Dapr binding, or ``(None, None)`` if absent.
 - **Defined in:** `application_sdk/storage/binding.py`
 
 #### `create_store_from_binding_with_put_attrs`
