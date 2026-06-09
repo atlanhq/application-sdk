@@ -390,7 +390,7 @@ _ENTRYPOINT_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
 # ``HandlerFn`` is the per-entry-point handler convention
 # (``app.<segment>.handler.{test_auth,preflight_check,fetch_metadata}``); the
 # input/output stay ``Any`` because the concrete contract pair is selected by
-# ``fn_name`` at call time. ``ComputeManifestFn`` is the dynamic-manifest hook
+# ``fn_name`` at call time. ``_ComputeManifestFn`` is the dynamic-manifest hook
 # (``app.<segment>.core.compute_manifest``) — it must be ``async def`` (the hook
 # is prescriptively async-only; the call site simply ``await``s it). A sync
 # ``def`` is not discovered and silently falls through to the static manifest.
@@ -399,7 +399,7 @@ _ENTRYPOINT_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
 # these with Pydantic models (e.g. ``Manifest`` / ``FeInputs``) so hook authors
 # get validation + editor support instead of bare dicts.
 HandlerFn = Callable[[Any, HandlerContext], Awaitable[Any]]
-ComputeManifestFn = Callable[
+_ComputeManifestFn = Callable[
     [dict[str, Any], dict[str, Any]], Awaitable[dict[str, Any]]
 ]
 
@@ -428,7 +428,7 @@ def _import_optional_app_module(dotted: str) -> ModuleType | None:
         raise
 
 
-def _discover_compute_manifest(entrypoint: str) -> ComputeManifestFn | None:
+def _discover_compute_manifest(entrypoint: str) -> _ComputeManifestFn | None:
     """Look for a per-entrypoint ``compute_manifest`` hook.
 
     Convention: ``app.<segment>.core.compute_manifest`` where ``segment`` is
@@ -465,8 +465,13 @@ def _discover_compute_manifest(entrypoint: str) -> ComputeManifestFn | None:
     # directly, so require a coroutine function. A sync ``def`` (or any
     # non-callable) is not discovered and silently falls through to the
     # static manifest — mirroring ``_discover_handler_fn``.
+    if fn is not None and not inspect.iscoroutinefunction(fn):
+        logger.debug(
+            "app.%s.core.compute_manifest found but not async; falling through to static manifest",
+            segment,
+        )
     return cast(
-        "ComputeManifestFn | None", fn if inspect.iscoroutinefunction(fn) else None
+        "_ComputeManifestFn | None", fn if inspect.iscoroutinefunction(fn) else None
     )
 
 
@@ -546,6 +551,12 @@ def _discover_handler_fn(entrypoint: str, fn_name: str) -> HandlerFn | None:
     # The dispatch ``await``s the result, so require a coroutine function — a
     # sync ``def`` falls through to the app-level Handler rather than blowing up
     # with a TypeError at request time.
+    if fn is not None and not inspect.iscoroutinefunction(fn):
+        logger.debug(
+            "app.%s.%s found but not async; falling through to app-level Handler",
+            segment,
+            fn_name,
+        )
     return cast("HandlerFn | None", fn if inspect.iscoroutinefunction(fn) else None)
 
 
@@ -577,11 +588,14 @@ def _decode_fe_inputs(raw: str | None) -> dict[str, Any]:
             detail=f"fe_inputs exceeds the {_MAX_FE_INPUTS_BYTES}-byte limit",
         )
     try:
-        return json.loads(raw)
+        parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise HTTPException(
             status_code=400, detail=f"fe_inputs is not valid JSON: {exc}"
         ) from exc
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=400, detail="fe_inputs must be a JSON object")
+    return parsed
 
 
 # Allowed characters for config_id and config_type path components.
