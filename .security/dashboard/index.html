@@ -232,7 +232,7 @@
             </div>
             <div style="overflow-x:auto">
                 <table id="trendTable"><thead><tr>
-                    <th style="width:40px">#</th><th data-ts="repo">Repo</th><th data-ts="sdk">SDK Version</th><th data-ts="scanned">Last Scan</th><th data-ts="app">App CVEs</th><th data-ts="base">Base CVEs</th><th data-ts="now">Total CVEs</th><th data-ts="old" id="thCompare">7d ago</th><th data-ts="delta">Change</th><th>Status</th>
+                    <th style="width:40px">#</th><th data-ts="repo">Repo</th><th data-ts="sdk">Base Image</th><th data-ts="sdk_lib">SDK Version</th><th data-ts="scanned">Last Scan</th><th data-ts="app">App CVEs</th><th data-ts="base">Base CVEs</th><th data-ts="now">Total CVEs</th><th data-ts="old" id="thCompare">7d ago</th><th data-ts="delta">Change</th><th>Status</th>
                 </tr></thead><tbody id="trendTableBody"></tbody></table>
             </div>
         </div>
@@ -786,7 +786,7 @@ async function loadHistory(){
     if(!Object.keys(historyData).length){
         visibleRepoKeys().forEach(r=>{
             const d=D.repos[r];
-            historyData[r]=[{date:new Date().toISOString().slice(0,10),repo:r,sdk_version:d.sdk_version||'unknown',total:d.total,critical:d.critical,high:d.high,base_image:d.base_image_count||0,app:d.app_count||0,allowlisted:d.allowlisted,new:d.new||0}];
+            historyData[r]=[{date:new Date().toISOString().slice(0,10),repo:r,sdk_version:d.sdk_version||'unknown',sdk_lib_version:d.sdk_lib_version||'unknown',total:d.total,critical:d.critical,high:d.high,base_image:d.base_image_count||0,app:d.app_count||0,allowlisted:d.allowlisted,new:d.new||0}];
         });
     }
 }
@@ -1085,7 +1085,7 @@ function renderTrends(){
         const oldStart=getOldTotal(r);
         const peak=getMaxInWindow(r);
         const now=D.repos[r].total||0;
-        return{repo:r,sdk:D.repos[r].sdk_version||'?',now,
+        return{repo:r,sdk:D.repos[r].sdk_version||'?',sdk_lib:D.repos[r].sdk_lib_version||'?',now,
             old:oldStart,delta:now-oldStart,                 // window-start basis (used by table & regressions)
             peak,improvementDelta:now-peak,                  // peak basis (used by improvements)
             app:D.repos[r].app_count||0,base:D.repos[r].base_image_count||0,
@@ -1146,7 +1146,7 @@ function renderTrends(){
     document.querySelectorAll('#trendTable th[data-ts]').forEach(th=>{
         const isActive=th.dataset.ts===ts.col;
         const arrow=isActive?(ts.dir==='asc'?' ▲':' ▼'):'';
-        const baseLabels={repo:'Repo',sdk:'SDK Version',scanned:'Last Scan',app:'App CVEs',base:'Base CVEs',now:'Total CVEs',delta:'Change'};
+        const baseLabels={repo:'Repo',sdk:'Base Image',sdk_lib:'SDK Version',scanned:'Last Scan',app:'App CVEs',base:'Base CVEs',now:'Total CVEs',delta:'Change'};
         if(th.id==='thCompare')return; // compare label is dynamic, handled separately
         if(baseLabels[th.dataset.ts]!==undefined)th.innerHTML=baseLabels[th.dataset.ts]+arrow;
         th.style.cursor='pointer';th.style.userSelect='none';
@@ -1183,6 +1183,7 @@ function renderTrends(){
             <td style="color:#b0b3c6;font-weight:600">${i+1}</td>
             <td><span class="repo-tag">${esc(r.repo.split('/').pop())}</span></td>
             <td><span class="badge" style="${isV3?'background:#dafbe1;color:#16a34a':'background:#fff7ed;color:#ea580c'}">${esc(r.sdk)}</span></td>
+            <td><span class="badge" style="background:#eef2ff;color:#4f46e5">${esc(r.sdk_lib||'?')}</span></td>
             <td title="${esc(scan.title)}" style="color:${scan.color};font-size:11px">${scan.label}</td>
             <td>${r.app}</td>
             <td>${r.base}</td>
@@ -1303,7 +1304,7 @@ function exportTrendCSV(){
     const repos=sdkFilter==='all'?allRepos:allRepos.filter(r=>(D.repos[r].sdk_version||'')==sdkFilter);
     const days=parseInt(document.getElementById('fTrendDays').value);
     const cutoff=new Date();cutoff.setDate(cutoff.getDate()-days);const cutoffStr=cutoff.toISOString().slice(0,10);
-    let csv='Repo,SDK,Last Scan,Total Today,App CVEs,Base CVEs,Compare Period,Change,Status\n';
+    let csv='Repo,Base Image,SDK Version,Last Scan,Total Today,App CVEs,Base CVEs,Compare Period,Change,Status\n';
     repos.forEach(r=>{
         const d=D.repos[r];
         const all=(historyData[r]||[]).slice().sort((a,b)=>a.date.localeCompare(b.date));
@@ -1312,7 +1313,7 @@ function exportTrendCSV(){
         const delta=(d.total||0)-old;
         const status=(d.total||0)===0?'Clean':delta<0?'Improving':delta>0?'Degraded':'Stable';
         const scanDate=(d.scanned_at||'').slice(0,10);
-        csv+=`${r.split('/').pop()},${d.sdk_version||'?'},${scanDate},${d.total||0},${d.app_count||0},${d.base_image_count||0},${old},${delta},${status}\n`;
+        csv+=`${r.split('/').pop()},${d.sdk_version||'?'},${d.sdk_lib_version||'?'},${scanDate},${d.total||0},${d.app_count||0},${d.base_image_count||0},${old},${delta},${status}\n`;
     });
     const blob=new Blob([csv],{type:'text/csv'});const url=URL.createObjectURL(blob);
     const a=document.createElement('a');a.href=url;a.download='vulnerability-trends.csv';a.click();URL.revokeObjectURL(url);
@@ -1404,7 +1405,7 @@ function renderCategoryView(category){
     };
     const rows=repos.map(r=>{
         const d=D.repos[r];
-        return {repo:r,sdk:d.sdk_version||'?',total:d.total||0,crit:d.critical||0,high:d.high||0,app:d.app_count||0,base:d.base_image_count||0,scanned:d.scanned_at||''};
+        return {repo:r,sdk:d.sdk_version||'?',sdk_lib:d.sdk_lib_version||'?',total:d.total||0,crit:d.critical||0,high:d.high||0,app:d.app_count||0,base:d.base_image_count||0,scanned:d.scanned_at||''};
     }).sort((a,b)=>b.total-a.total);
 
     const catLabel=category==='system'?'System Apps':'Connector Apps';
@@ -1454,7 +1455,7 @@ function renderCategoryView(category){
             <div class="card-title">Per Repo — ${catLabel} <span style="color:#b0b3c6;font-weight:500">(${rows.length})</span></div>
             <div style="overflow-x:auto">
                 <table style="width:100%"><thead><tr>
-                    <th style="width:40px">#</th><th>Repo</th><th>SDK</th><th>Last Scan</th><th>App CVEs</th><th>Base CVEs</th><th>Critical</th><th>High</th><th>Total</th>
+                    <th style="width:40px">#</th><th>Repo</th><th>Base Image</th><th>SDK Version</th><th>Last Scan</th><th>App CVEs</th><th>Base CVEs</th><th>Critical</th><th>High</th><th>Total</th>
                 </tr></thead><tbody>
                 ${rows.map((r,i)=>{
                     const isV3=r.sdk.startsWith('3')||r.sdk.includes('v3')||r.sdk.includes('refactor-v3');
@@ -1463,6 +1464,7 @@ function renderCategoryView(category){
                         <td style="color:#b0b3c6;font-weight:600">${i+1}</td>
                         <td><span class="repo-tag">${esc(r.repo.split('/').pop())}</span></td>
                         <td><span class="badge" style="${isV3?'background:#dafbe1;color:#16a34a':'background:#fff7ed;color:#ea580c'}">${esc(r.sdk)}</span></td>
+                        <td><span class="badge" style="background:#eef2ff;color:#4f46e5">${esc(r.sdk_lib||'?')}</span></td>
                         <td title="${esc(scan.title)}" style="color:${scan.color};font-size:11px">${scan.label}</td>
                         <td>${r.app}</td>
                         <td>${r.base}</td>
