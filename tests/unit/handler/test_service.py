@@ -4909,6 +4909,128 @@ class TestComputeManifestHook:
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
+    def _run_hook(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        entrypoint: str,
+        hook: object,
+    ):
+        """Install ``hook`` as compute_manifest for ``entrypoint`` and GET the
+        manifest; returns the response."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / entrypoint
+        ep_dir.mkdir(parents=True)
+        (ep_dir / "manifest.json").write_text("{}")
+        self._install_fake_core(monkeypatch, entrypoint, hook)
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            return _make_client().get(
+                "/workflows/v1/manifest", params={"entrypoint": entrypoint}
+            )
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_hook_generic_exception_returns_generic_500(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A hook raising a generic exception → 500 with a generic body; the
+        exception text is NOT leaked to the client."""
+
+        def boom(manifest: dict, fe_inputs: dict) -> dict:
+            raise RuntimeError("secret connection string leaked here")
+
+        response = self._run_hook(tmp_path, monkeypatch, "hook-boom", boom)
+        assert response.status_code == 500
+        assert response.json()["detail"] == "Internal server error"
+        assert "secret connection string" not in response.text
+
+    def test_hook_httpexception_passes_through(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A hook raising HTTPException → its status/detail pass through
+        (the ``except HTTPException: raise`` branch), not coerced to 500."""
+        from fastapi import HTTPException
+
+        def conflict(manifest: dict, fe_inputs: dict) -> dict:
+            raise HTTPException(status_code=409, detail="entrypoint conflict")
+
+        response = self._run_hook(tmp_path, monkeypatch, "hook-conflict", conflict)
+        assert response.status_code == 409
+        assert response.json()["detail"] == "entrypoint conflict"
+
+    def test_hook_non_dict_return_returns_500(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A hook returning a non-dict (list/str/None) → 500 (isinstance guard)."""
+
+        def returns_list(manifest: dict, fe_inputs: dict):
+            return [1, 2, 3]
+
+        response = self._run_hook(tmp_path, monkeypatch, "hook-list", returns_list)
+        assert response.status_code == 500
+        assert response.json()["detail"] == "Internal server error"
+
+    def test_fe_inputs_at_exact_cap_passes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Exactly ``_MAX_FE_INPUTS_BYTES`` is allowed — the cap is ``>``, not
+        ``>=`` (boundary guard against an off-by-one)."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "at-cap"
+        ep_dir.mkdir(parents=True)
+        (ep_dir / "manifest.json").write_text("{}")
+        self._install_fake_core(monkeypatch, "at-cap", lambda m, f: {"ok": True})
+
+        overhead = len(json.dumps({"x": ""}).encode("utf-8"))
+        at_cap = json.dumps({"x": "a" * (svc_module._MAX_FE_INPUTS_BYTES - overhead)})
+        assert len(at_cap.encode("utf-8")) == svc_module._MAX_FE_INPUTS_BYTES
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            response = _make_client().get(
+                "/workflows/v1/manifest",
+                params={"entrypoint": "at-cap", "fe_inputs": at_cap},
+            )
+            assert response.status_code == 200
+            assert response.json() == {"ok": True}
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_fe_inputs_one_byte_over_cap_returns_413(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One byte over the cap → 413 (the other half of the boundary)."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "over-cap"
+        ep_dir.mkdir(parents=True)
+        (ep_dir / "manifest.json").write_text("{}")
+        self._install_fake_core(monkeypatch, "over-cap", lambda m, f: {"ok": True})
+
+        overhead = len(json.dumps({"x": ""}).encode("utf-8"))
+        over = json.dumps({"x": "a" * (svc_module._MAX_FE_INPUTS_BYTES - overhead + 1)})
+        assert len(over.encode("utf-8")) == svc_module._MAX_FE_INPUTS_BYTES + 1
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            response = _make_client().get(
+                "/workflows/v1/manifest",
+                params={"entrypoint": "over-cap", "fe_inputs": over},
+            )
+            assert response.status_code == 413
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
     def test_legacy_alias_forwards_fe_inputs(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

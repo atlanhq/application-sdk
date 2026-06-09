@@ -391,13 +391,18 @@ _ENTRYPOINT_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
 # (``app.<segment>.handler.{test_auth,preflight_check,fetch_metadata}``); the
 # input/output stay ``Any`` because the concrete contract pair is selected by
 # ``fn_name`` at call time. ``ComputeManifestFn`` is the dynamic-manifest hook
-# (``app.<segment>.core.compute_manifest``).
+# (``app.<segment>.core.compute_manifest``) — it may be sync or async, so the
+# return is ``dict | Awaitable[dict]`` (the call site branches on
+# ``iscoroutinefunction``: sync hooks run via ``asyncio.to_thread``, async hooks
+# are awaited directly).
 # TODO(BLDX-1354): the connector-author hook surface is typed only as
 # ``dict[str, Any]``; once the manifest / fe_inputs shapes stabilise, replace
 # these with Pydantic models (e.g. ``Manifest`` / ``FeInputs``) so hook authors
 # get validation + editor support instead of bare dicts.
 HandlerFn = Callable[[Any, HandlerContext], Awaitable[Any]]
-ComputeManifestFn = Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
+ComputeManifestFn = Callable[
+    [dict[str, Any], dict[str, Any]], "dict[str, Any] | Awaitable[dict[str, Any]]"
+]
 
 
 def _import_optional_app_module(dotted: str) -> ModuleType | None:
@@ -454,8 +459,9 @@ def _discover_compute_manifest(entrypoint: str) -> ComputeManifestFn | None:
     if module is None:
         return None
     fn = getattr(module, "compute_manifest", None)
-    # compute_manifest is a *sync* callable (run off-loop via asyncio.to_thread
-    # at the call site), so accept any callable here.
+    # compute_manifest may be sync or async; the call site branches on
+    # ``inspect.iscoroutinefunction`` (sync → ``asyncio.to_thread``, async →
+    # awaited directly), so accept any callable here.
     return cast("ComputeManifestFn | None", fn if callable(fn) else None)
 
 
