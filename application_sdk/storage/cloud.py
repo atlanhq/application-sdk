@@ -494,9 +494,14 @@ def _create_gcs_store(
     if sa_json:
         gcs_config["google_service_account_key"] = sa_json
 
+    storage_class = (extra.get("storageClass") or "").strip()
+    put_attrs: dict[str, str] | None = (
+        {"X-Goog-Storage-Class": storage_class} if storage_class else None
+    )
+
     return make_gcs_store(
         bucket, gcs_config if gcs_config else None, label="cloud-gcs"
-    ), None
+    ), put_attrs
 
 
 def _create_azure_store(
@@ -532,4 +537,9 @@ def _create_azure_store(
         if access_key:
             az_config["azure_storage_client_secret"] = access_key
 
-    return make_azure_store(container, az_config, label="cloud-azure"), None
+    storage_class = (extra.get("storageClass") or "").strip()
+    put_attrs: dict[str, str] | None = (
+        {"x-ms-access-tier": storage_class} if storage_class else None
+    )
+
+    return make_azure_store(container, az_config, label="cloud-azure"), put_attrs

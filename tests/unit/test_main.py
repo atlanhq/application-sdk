@@ -605,14 +605,7 @@ class TestCreateInfrastructureUpstreamStore:
     ) -> None:
         """upstream_storage is None in non-SDR deployments (no atlan-objectstore component)."""
         self._make_dapr_env(monkeypatch)
-        from application_sdk.storage.errors import StorageBindingNotFoundError
-
         deployment_store = MagicMock()
-
-        def _side_effect(name, *, components_dir):
-            if "atlan-objectstore" in name:
-                raise StorageBindingNotFoundError(name)
-            return (deployment_store, None)
 
         with (
             patch(
@@ -624,8 +617,12 @@ class TestCreateInfrastructureUpstreamStore:
             patch(f"{self._DAPR_CLIENT_MOD}.DaprStateStore"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprSecretStore"),
             patch(
+                f"{self._STORAGE_MOD}.create_store_from_binding_optional_with_put_attrs",
+                return_value=(None, None),
+            ),
+            patch(
                 f"{self._STORAGE_MOD}.create_store_from_binding_with_put_attrs",
-                side_effect=_side_effect,
+                return_value=(deployment_store, None),
             ),
         ):
             infra = await _create_infrastructure()
@@ -639,18 +636,7 @@ class TestCreateInfrastructureUpstreamStore:
     ) -> None:
         """upstream_storage is None when the component YAML has unresolvable fields."""
         self._make_dapr_env(monkeypatch)
-        from application_sdk.storage.errors import StorageBindingBrokenError
-
         deployment_store = MagicMock()
-
-        def _side_effect(name, *, components_dir):
-            if "atlan-objectstore" in name:
-                raise StorageBindingBrokenError(
-                    f"Component '{name}' has broken fields",
-                    binding_name=name,
-                    broken_fields=["spec.metadata.value"],
-                )
-            return (deployment_store, None)
 
         with (
             patch(
@@ -662,8 +648,12 @@ class TestCreateInfrastructureUpstreamStore:
             patch(f"{self._DAPR_CLIENT_MOD}.DaprStateStore"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprSecretStore"),
             patch(
+                f"{self._STORAGE_MOD}.create_store_from_binding_optional_with_put_attrs",
+                return_value=(None, None),
+            ),
+            patch(
                 f"{self._STORAGE_MOD}.create_store_from_binding_with_put_attrs",
-                side_effect=_side_effect,
+                return_value=(deployment_store, None),
             ),
         ):
             infra = await _create_infrastructure()
@@ -680,9 +670,6 @@ class TestCreateInfrastructureUpstreamStore:
         upstream_store = MagicMock()
         deployment_store = MagicMock()
 
-        # Call order: upstream first, deployment second
-        side_effects = [(upstream_store, None), (deployment_store, None)]
-
         with (
             patch(
                 "application_sdk.main._log_dapr_components",
@@ -693,8 +680,12 @@ class TestCreateInfrastructureUpstreamStore:
             patch(f"{self._DAPR_CLIENT_MOD}.DaprStateStore"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprSecretStore"),
             patch(
+                f"{self._STORAGE_MOD}.create_store_from_binding_optional_with_put_attrs",
+                return_value=(upstream_store, None),
+            ) as mock_optional,
+            patch(
                 f"{self._STORAGE_MOD}.create_store_from_binding_with_put_attrs",
-                side_effect=side_effects,
+                return_value=(deployment_store, None),
             ) as mock_binding,
             patch(
                 "application_sdk.constants.DEPLOYMENT_OBJECT_STORE_NAME",
@@ -709,8 +700,8 @@ class TestCreateInfrastructureUpstreamStore:
 
         assert infra.upstream_storage is upstream_store
         assert infra.storage is deployment_store
-        mock_binding.assert_any_call("atlan-objectstore", components_dir=ANY)
-        mock_binding.assert_any_call("objectstore", components_dir=ANY)
+        mock_optional.assert_called_once_with("atlan-objectstore", components_dir=ANY)
+        mock_binding.assert_called_once_with("objectstore", components_dir=ANY)
 
 
 class TestInstallGracefulSignalHandlers:

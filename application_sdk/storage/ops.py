@@ -528,9 +528,7 @@ async def upload_file(
 
             if _is_azure_container_not_found(exc):
                 raise StorageConfigError(
-                    "Azure container does not exist — v3 does not auto-create "
-                    "containers (v2 Dapr did); pre-create the container before "
-                    f"running (failed key: '{key}')"
+                    _azure_container_not_found_message(key)
                 ) from exc
             raise StorageError(
                 f"Failed to upload file to key '{key}'", key=key, cause=exc

@@ -753,3 +753,51 @@ def create_store_from_binding_optional(
             ", ".join(exc.broken_fields or []),
         )
         return None
+
+
+def create_store_from_binding_optional_with_put_attrs(
+    name: str,
+    *,
+    components_dir: Path | str = Path("./components"),
+) -> tuple[ObjectStore, dict[str, str] | None] | tuple[None, None]:
+    """Create an obstore store and put attributes from a Dapr binding, or ``(None, None)`` if absent.
+
+    Identical to :func:`create_store_from_binding_with_put_attrs` except that a
+    missing or broken component returns ``(None, None)`` instead of raising.
+    Use this for optional bindings (e.g. ``UPSTREAM_OBJECT_STORE_NAME``) that
+    are only present in certain deployment configurations.
+
+    Args:
+        name: The Dapr component name (e.g. ``"atlan-objectstore"``).
+        components_dir: Directory containing Dapr component YAML files.
+
+    Returns:
+        ``(store, put_attributes)`` on success, or ``(None, None)`` if the
+        component is absent or has unresolvable configuration.
+
+    Raises:
+        StorageConfigError: If the component exists but is genuinely
+            misconfigured (unsupported binding type, missing required options,
+            etc.).  Broken components — template placeholders or unresolvable
+            ``secretKeyRef`` env vars — are treated as absent and return
+            ``(None, None)`` with a warning instead of raising.
+    """
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        StorageBindingBrokenError,
+        StorageBindingNotFoundError,
+    )
+
+    try:
+        return create_store_from_binding_with_put_attrs(
+            name, components_dir=components_dir
+        )
+    except StorageBindingNotFoundError:
+        return None, None
+    except StorageBindingBrokenError as exc:
+        _get_logger().warning(
+            "Dapr component '%s' has unresolvable configuration "
+            "(broken fields: %s) — treating as absent",
+            name,
+            ", ".join(exc.broken_fields or []),
+        )
+        return None, None

@@ -529,3 +529,75 @@ class TestCloudStorePutAttributes:
             )
 
         assert cs._put_attributes is None
+
+    def test_from_credentials_gcs_storage_class_put_attrs(self) -> None:
+        """storageClass in extra is forwarded as X-Goog-Storage-Class put attribute for GCS."""
+        from unittest.mock import MagicMock, patch
+
+        from application_sdk.storage.cloud import CloudStore
+
+        with patch("application_sdk.storage.cloud._create_gcs_store") as mock_create:
+            put_attrs = {"X-Goog-Storage-Class": "NEARLINE"}
+            mock_create.return_value = (MagicMock(), put_attrs)
+            cs = CloudStore.from_credentials(
+                {
+                    "authType": "gcs",
+                    "extra": {"gcs_bucket": "b", "storageClass": "NEARLINE"},
+                }
+            )
+
+        assert cs._put_attributes == {"X-Goog-Storage-Class": "NEARLINE"}
+
+    def test_from_credentials_gcs_no_storage_class_gives_none_put_attrs(self) -> None:
+        """When storageClass is absent on GCS, _put_attributes is None."""
+        from unittest.mock import MagicMock, patch
+
+        from application_sdk.storage.cloud import CloudStore
+
+        with patch("application_sdk.storage.cloud._create_gcs_store") as mock_create:
+            mock_create.return_value = (MagicMock(), None)
+            cs = CloudStore.from_credentials(
+                {"authType": "gcs", "extra": {"gcs_bucket": "b"}}
+            )
+
+        assert cs._put_attributes is None
+
+    def test_from_credentials_azure_storage_class_put_attrs(self) -> None:
+        """storageClass in extra is forwarded as x-ms-access-tier put attribute for Azure."""
+        from unittest.mock import MagicMock, patch
+
+        from application_sdk.storage.cloud import CloudStore
+
+        with patch("application_sdk.storage.cloud._create_azure_store") as mock_create:
+            put_attrs = {"x-ms-access-tier": "Cool"}
+            mock_create.return_value = (MagicMock(), put_attrs)
+            cs = CloudStore.from_credentials(
+                {
+                    "authType": "adls",
+                    "password": "key==",
+                    "extra": {
+                        "storage_account_name": "acct",
+                        "storageClass": "Cool",
+                    },
+                }
+            )
+
+        assert cs._put_attributes == {"x-ms-access-tier": "Cool"}
+
+    def test_from_credentials_azure_no_storage_class_gives_none_put_attrs(self) -> None:
+        """When storageClass is absent on Azure, _put_attributes is None."""
+        from unittest.mock import MagicMock, patch
+
+        from application_sdk.storage.cloud import CloudStore
+
+        with patch("application_sdk.storage.cloud._create_azure_store") as mock_create:
+            mock_create.return_value = (MagicMock(), None)
+            cs = CloudStore.from_credentials(
+                {
+                    "authType": "adls",
+                    "password": "key==",
+                    "extra": {"storage_account_name": "acct"},
+                }
+            )
+
+        assert cs._put_attributes is None
