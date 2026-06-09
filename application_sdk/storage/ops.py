@@ -59,6 +59,7 @@ except ImportError:  # pragma: no cover
     _ObstoreBaseError = None  # type: ignore[assignment,misc]
     _ObstoreNotFoundError = None  # type: ignore[assignment,misc]
 
+
 if TYPE_CHECKING:
     from typing import Any
 
@@ -69,6 +70,37 @@ if TYPE_CHECKING:
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+
+class BoundStore:
+    """An :class:`~obstore.store.ObjectStore` paired with per-write put attributes.
+
+    Returned by :func:`~application_sdk.storage.binding.create_store_from_binding_with_put_attrs`
+    (and similar helpers) when the Dapr binding specifies a ``storageClass`` or other
+    per-write options.  Pass a ``BoundStore`` anywhere an ``ObjectStore`` is accepted:
+    :func:`upload_file`, :func:`_put`, and the SDK I/O helpers automatically extract
+    both the underlying store and its attributes without extra plumbing at the call site.
+    """
+
+    __slots__ = ("_put_attributes", "_store")
+
+    def __init__(
+        self,
+        store: ObjectStore,
+        put_attributes: dict[str, str] | None = None,
+    ) -> None:
+        self._store = store
+        self._put_attributes = put_attributes
+
+    @property
+    def store(self) -> ObjectStore:
+        """Underlying obstore instance."""
+        return self._store
+
+    @property
+    def put_attributes(self) -> dict[str, str] | None:
+        """Per-write put attributes (e.g. ``{"Storage-Class": "STANDARD_IA"}``)."""
+        return self._put_attributes
 
 
 def normalize_key(key: str) -> str:
@@ -160,14 +192,17 @@ def _normalize_listing_prefix(prefix: str, normalize: bool) -> str:
     return prefix
 
 
-def _resolve_store(store: ObjectStore | None) -> ObjectStore:
-    """Return *store* if provided, otherwise resolve from the infrastructure context.
+def _resolve_store(store: BoundStore | ObjectStore | None) -> ObjectStore:
+    """Return the underlying ObjectStore, resolving from infrastructure when None.
+
+    Accepts a :class:`BoundStore` (unwraps it), a raw ``ObjectStore``, or ``None``
+    (resolved from the infrastructure context).
 
     Raises:
         RuntimeError: If *store* is ``None`` and no infrastructure context is set.
     """
     if store is not None:
-        return store
+        return store.store if isinstance(store, BoundStore) else store
     from application_sdk.infrastructure.context import (  # noqa: PLC0415
         get_infrastructure,
     )
@@ -182,21 +217,24 @@ def _resolve_store(store: ObjectStore | None) -> ObjectStore:
     return infra.storage
 
 
-def _resolve_put_attributes(store: ObjectStore | None) -> dict[str, str] | None:
-    """Return binding-level put attributes for the resolved store, or ``None``.
+def _resolve_put_attributes(
+    store: BoundStore | ObjectStore | None,
+) -> dict[str, str] | None:
+    """Return binding-level put attributes for *store*, or ``None``.
 
-    Returns ``InfrastructureContext.storage_put_attributes`` when either:
-    - *store* is ``None`` (caller uses the default infra store), or
-    - *store* is the exact same object as ``infra.storage`` (identity check,
-      not equality — obstore stores are unhashable).
+    Resolution order:
+    1. ``BoundStore`` — return its embedded ``put_attributes`` directly.
+    2. ``store is None`` — return ``infra.storage_put_attributes``.
+    3. ``store is infra.storage`` — same as (2); handles callers that hold an
+       explicit reference to the infra deployment store.
+    4. ``store is infra.upstream_storage`` — return
+       ``infra.upstream_storage_put_attributes``; covers SDR-mode App.upload.
+    5. Any other explicit store (CloudStore, test stores, etc.) — ``None``.
 
-    The second case ensures that callers who hold an explicit reference to the
-    infra store (e.g. ``App.upload`` passes ``self.context.storage``) still
-    receive the binding-level attributes — otherwise ``storageClass`` would be
-    silently dropped on every App-level write.
-
-    Returns ``None`` for any other explicit store (upstream, CloudStore, etc.).
+    Uses identity (``is``) rather than equality because obstore stores are unhashable.
     """
+    if isinstance(store, BoundStore):
+        return store.put_attributes
     from application_sdk.infrastructure.context import (  # noqa: PLC0415
         get_infrastructure,
     )
@@ -206,6 +244,8 @@ def _resolve_put_attributes(store: ObjectStore | None) -> dict[str, str] | None:
         return None
     if store is None or store is infra.storage:
         return infra.storage_put_attributes
+    if infra.upstream_storage is not None and store is infra.upstream_storage:
+        return infra.upstream_storage_put_attributes
     return None
 
 

@@ -434,3 +434,98 @@ class TestCloudStoreLogMessageFormat:
             assert path.resolve().is_relative_to(out.resolve())
         contents = {p.read_bytes() for p in downloaded}
         assert contents == set(files_in.values())
+
+
+class TestCloudStorePutAttributes:
+    """storageClass in extra is forwarded as a put attribute on every write."""
+
+    @pytest.mark.asyncio
+    async def test_from_credentials_s3_storage_class_passed_to_upload(
+        self, tmp_path
+    ) -> None:
+        """from_credentials with storageClass → upload() calls open_writer_async with attributes."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.storage.cloud import CloudStore
+
+        mock_writer = AsyncMock()
+        mock_writer.__aenter__ = AsyncMock(return_value=mock_writer)
+        mock_writer.__aexit__ = AsyncMock(return_value=False)
+
+        src = tmp_path / "f.bin"
+        src.write_bytes(b"hello")
+
+        with (
+            patch("application_sdk.storage.cloud._create_s3_store") as mock_create,
+            patch(
+                "obstore.open_writer_async", return_value=mock_writer
+            ) as mock_writer_call,
+        ):
+            mock_store = MagicMock()
+            put_attrs = {"Storage-Class": "STANDARD_IA"}
+            mock_create.return_value = (mock_store, put_attrs)
+
+            cs = CloudStore.from_credentials(
+                {
+                    "authType": "s3",
+                    "username": "KEY",
+                    "password": "SECRET",
+                    "extra": {"s3_bucket": "b", "storageClass": "STANDARD_IA"},
+                }
+            )
+            await cs.upload(src, "out/f.bin")
+
+        _call_kwargs = mock_writer_call.call_args
+        assert _call_kwargs.kwargs.get("attributes") == put_attrs or (
+            len(_call_kwargs.args) > 2 and _call_kwargs.args[2] == put_attrs
+        ), f"attributes not forwarded; call was {_call_kwargs}"
+
+    @pytest.mark.asyncio
+    async def test_from_credentials_s3_storage_class_passed_to_upload_bytes(
+        self,
+    ) -> None:
+        """from_credentials with storageClass → upload_bytes() calls put_async with attributes."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.storage.cloud import CloudStore
+
+        with (
+            patch("application_sdk.storage.cloud._create_s3_store") as mock_create,
+            patch("obstore.put_async", new_callable=AsyncMock) as mock_put,
+        ):
+            mock_store = MagicMock()
+            put_attrs = {"Storage-Class": "STANDARD_IA"}
+            mock_create.return_value = (mock_store, put_attrs)
+
+            cs = CloudStore.from_credentials(
+                {
+                    "authType": "s3",
+                    "username": "KEY",
+                    "password": "SECRET",
+                    "extra": {"s3_bucket": "b", "storageClass": "STANDARD_IA"},
+                }
+            )
+            await cs.upload_bytes("out/f.bin", b"hello")
+
+        mock_put.assert_awaited_once()
+        _, call_kwargs = mock_put.call_args[0], mock_put.call_args
+        assert call_kwargs.kwargs.get("attributes") == put_attrs
+
+    def test_from_credentials_s3_no_storage_class_gives_none_put_attrs(self) -> None:
+        """When storageClass is absent, _put_attributes is None."""
+        from unittest.mock import MagicMock, patch
+
+        from application_sdk.storage.cloud import CloudStore
+
+        with patch("application_sdk.storage.cloud._create_s3_store") as mock_create:
+            mock_create.return_value = (MagicMock(), None)
+            cs = CloudStore.from_credentials(
+                {
+                    "authType": "s3",
+                    "username": "K",
+                    "password": "S",
+                    "extra": {"s3_bucket": "b"},
+                }
+            )
+
+        assert cs._put_attributes is None

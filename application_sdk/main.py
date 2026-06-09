@@ -504,7 +504,7 @@ async def _create_infrastructure(
             wait_for_dapr_sidecar,
         )
         from application_sdk.storage import (  # noqa: PLC0415 — cold path: storage init only when binding YAML present
-            create_store_from_binding_optional,
+            StorageBindingNotFoundError,
             create_store_from_binding_with_put_attrs,
         )
 
@@ -514,11 +514,15 @@ async def _create_infrastructure(
         registered_components = await _log_dapr_components(dapr_client, components_dir)
         logger.info("Dapr sidecar detected — using Dapr infrastructure")
 
-        upstream_storage = create_store_from_binding_optional(
-            UPSTREAM_OBJECT_STORE_NAME,
-            components_dir=components_dir,
-        )
-        if upstream_storage is None:
+        try:
+            upstream_storage, upstream_put_attrs = (
+                create_store_from_binding_with_put_attrs(
+                    UPSTREAM_OBJECT_STORE_NAME,
+                    components_dir=components_dir,
+                )
+            )
+        except StorageBindingNotFoundError:
+            upstream_storage, upstream_put_attrs = None, None
             logger.warning(
                 "No Dapr component named '%s' found; App.upload/download will use "
                 "the deployment store. Configure this binding in SDR deployments to "
@@ -538,6 +542,7 @@ async def _create_infrastructure(
             storage=deployment_store,
             storage_put_attributes=deployment_put_attrs,
             upstream_storage=upstream_storage,
+            upstream_storage_put_attributes=upstream_put_attrs,
             event_binding=(
                 DaprBinding(dapr_client, EVENT_STORE_NAME)
                 if EVENT_STORE_NAME in registered_components

@@ -44,6 +44,9 @@ class InfrastructureContext:
     #: Populated from the Dapr binding when ``storageClass`` is set; ``None`` otherwise.
     storage_put_attributes: dict[str, str] | None = field(default=None)
     upstream_storage: ObjectStore | None = field(default=None)
+    #: Per-write put attributes for *upstream_storage* (SDR mode).
+    #: Populated from the Dapr binding when ``storageClass`` is set; ``None`` otherwise.
+    upstream_storage_put_attributes: dict[str, str] | None = field(default=None)
     event_binding: Binding | None = field(default=None)
     _dapr_client: Any = field(default=None, repr=False)
 

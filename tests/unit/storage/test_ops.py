@@ -837,16 +837,28 @@ class TestSafeJoinUnder:
 
 
 class TestResolvePutAttributes:
-    """_resolve_put_attributes must apply put_attributes when store IS infra.storage.
+    """_resolve_put_attributes returns the correct put attributes for every store variant.
 
-    Regression guard: App.upload() passes self.context.storage explicitly, so
-    the helper must recognise the infra store by identity (not just store=None).
+    Covers:
+    - BoundStore: returns embedded put_attributes directly (no infra lookup needed).
+    - store=None: returns infra.storage_put_attributes.
+    - store IS infra.storage: identity match, returns infra.storage_put_attributes.
+    - store IS infra.upstream_storage: returns infra.upstream_storage_put_attributes.
+    - unrelated store: returns None.
+    - no infra context: returns None.
     """
 
-    def _make_infra(self, store, put_attrs):
+    def _make_infra(
+        self, store, put_attrs, *, upstream_store=None, upstream_put_attrs=None
+    ):
         from application_sdk.infrastructure.context import InfrastructureContext
 
-        return InfrastructureContext(storage=store, storage_put_attributes=put_attrs)
+        return InfrastructureContext(
+            storage=store,
+            storage_put_attributes=put_attrs,
+            upstream_storage=upstream_store,
+            upstream_storage_put_attributes=upstream_put_attrs,
+        )
 
     def test_none_store_returns_infra_put_attributes(self) -> None:
         from application_sdk.infrastructure.context import set_infrastructure
@@ -875,8 +887,63 @@ class TestResolvePutAttributes:
         finally:
             set_infrastructure(None)
 
+    def test_upstream_store_returns_upstream_put_attributes(self) -> None:
+        """SDR mode: store IS infra.upstream_storage → upstream put_attributes returned."""
+        from application_sdk.infrastructure.context import set_infrastructure
+        from application_sdk.storage.factory import create_memory_store
+        from application_sdk.storage.ops import _resolve_put_attributes
+
+        deploy_store = create_memory_store()
+        upstream_store = create_memory_store()
+        upstream_put_attrs = {"Storage-Class": "INTELLIGENT_TIERING"}
+        set_infrastructure(
+            self._make_infra(
+                deploy_store,
+                {"Storage-Class": "STANDARD_IA"},
+                upstream_store=upstream_store,
+                upstream_put_attrs=upstream_put_attrs,
+            )
+        )
+        try:
+            assert _resolve_put_attributes(upstream_store) == upstream_put_attrs
+        finally:
+            set_infrastructure(None)
+
+    def test_bound_store_returns_embedded_put_attributes(self) -> None:
+        """BoundStore: put_attributes read from the wrapper, no infra context needed."""
+        from application_sdk.infrastructure.context import set_infrastructure
+        from application_sdk.storage.factory import create_memory_store
+        from application_sdk.storage.ops import BoundStore, _resolve_put_attributes
+
+        set_infrastructure(None)
+        raw = create_memory_store()
+        put_attrs = {"Storage-Class": "GLACIER"}
+        bound = BoundStore(raw, put_attrs)
+        assert _resolve_put_attributes(bound) == put_attrs
+
+    def test_bound_store_none_put_attributes(self) -> None:
+        """BoundStore with no put_attributes returns None."""
+        from application_sdk.infrastructure.context import set_infrastructure
+        from application_sdk.storage.factory import create_memory_store
+        from application_sdk.storage.ops import BoundStore, _resolve_put_attributes
+
+        set_infrastructure(None)
+        bound = BoundStore(create_memory_store(), None)
+        assert _resolve_put_attributes(bound) is None
+
+    def test_resolve_store_unwraps_bound_store(self) -> None:
+        """_resolve_store returns the inner ObjectStore when given a BoundStore."""
+        from application_sdk.infrastructure.context import set_infrastructure
+        from application_sdk.storage.factory import create_memory_store
+        from application_sdk.storage.ops import BoundStore, _resolve_store
+
+        set_infrastructure(None)
+        raw = create_memory_store()
+        bound = BoundStore(raw, {"Storage-Class": "GLACIER"})
+        assert _resolve_store(bound) is raw
+
     def test_unrelated_store_returns_none(self) -> None:
-        """A different store (e.g. CloudStore, upstream) must not get infra attrs."""
+        """A different store (e.g. CloudStore, test store) must not get infra attrs."""
         from application_sdk.infrastructure.context import set_infrastructure
         from application_sdk.storage.factory import create_memory_store
         from application_sdk.storage.ops import _resolve_put_attributes

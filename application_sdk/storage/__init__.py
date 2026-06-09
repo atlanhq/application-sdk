@@ -50,6 +50,7 @@ from application_sdk.storage.errors import (
 )
 from application_sdk.storage.factory import create_local_store, create_memory_store
 from application_sdk.storage.ops import (
+    BoundStore,
     delete,
     download_file,
     exists,
@@ -66,6 +67,8 @@ __all__ = [
     "create_store_from_binding_optional",
     "create_local_store",
     "create_memory_store",
+    # Store wrapper
+    "BoundStore",
     # Core ops
     "upload_file",
     "upload_file_from_bytes",
@@ -86,4 +89,5 @@ __all__ = [
     "StorageBindingNotFoundError",
     "StorageBindingBrokenError",
     "create_store_from_binding_with_put_attrs",
+    "BoundStore",
 ]

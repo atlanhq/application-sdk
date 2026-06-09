@@ -605,6 +605,14 @@ class TestCreateInfrastructureUpstreamStore:
     ) -> None:
         """upstream_storage is None in non-SDR deployments (no atlan-objectstore component)."""
         self._make_dapr_env(monkeypatch)
+        from application_sdk.storage.errors import StorageBindingNotFoundError
+
+        deployment_store = MagicMock()
+
+        def _side_effect(name, *, components_dir):
+            if "atlan-objectstore" in name:
+                raise StorageBindingNotFoundError(name)
+            return (deployment_store, None)
 
         with (
             patch(
@@ -617,17 +625,13 @@ class TestCreateInfrastructureUpstreamStore:
             patch(f"{self._DAPR_CLIENT_MOD}.DaprSecretStore"),
             patch(
                 f"{self._STORAGE_MOD}.create_store_from_binding_with_put_attrs",
-                return_value=(MagicMock(), None),
+                side_effect=_side_effect,
             ),
-            patch(
-                f"{self._STORAGE_MOD}.create_store_from_binding_optional",
-                return_value=None,
-            ) as mock_optional,
         ):
             infra = await _create_infrastructure()
 
         assert infra.upstream_storage is None
-        mock_optional.assert_called_once()
+        assert infra.upstream_storage_put_attributes is None
 
     async def test_upstream_storage_set_when_component_present(
         self,
@@ -636,6 +640,10 @@ class TestCreateInfrastructureUpstreamStore:
         """upstream_storage is a live store in SDR deployments (component present)."""
         self._make_dapr_env(monkeypatch)
         upstream_store = MagicMock()
+        deployment_store = MagicMock()
+
+        # Call order: upstream first, deployment second
+        side_effects = [(upstream_store, None), (deployment_store, None)]
 
         with (
             patch(
@@ -648,12 +656,8 @@ class TestCreateInfrastructureUpstreamStore:
             patch(f"{self._DAPR_CLIENT_MOD}.DaprSecretStore"),
             patch(
                 f"{self._STORAGE_MOD}.create_store_from_binding_with_put_attrs",
-                return_value=(MagicMock(), None),
-            ) as mock_required,
-            patch(
-                f"{self._STORAGE_MOD}.create_store_from_binding_optional",
-                return_value=upstream_store,
-            ) as mock_optional,
+                side_effect=side_effects,
+            ) as mock_binding,
             patch(
                 "application_sdk.constants.DEPLOYMENT_OBJECT_STORE_NAME",
                 "objectstore",
@@ -666,8 +670,9 @@ class TestCreateInfrastructureUpstreamStore:
             infra = await _create_infrastructure()
 
         assert infra.upstream_storage is upstream_store
-        mock_required.assert_called_once_with("objectstore", components_dir=ANY)
-        mock_optional.assert_called_once_with("atlan-objectstore", components_dir=ANY)
+        assert infra.storage is deployment_store
+        mock_binding.assert_any_call("atlan-objectstore", components_dir=ANY)
+        mock_binding.assert_any_call("objectstore", components_dir=ANY)
 
 
 class TestInstallGracefulSignalHandlers:

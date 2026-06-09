@@ -149,11 +149,11 @@ class CloudStore:
         )
 
         if auth_type == "s3":
-            store = _create_s3_store(credentials, extra)
+            store, put_attrs = _create_s3_store(credentials, extra)
         elif auth_type == "gcs":
-            store = _create_gcs_store(credentials, extra)
+            store, put_attrs = _create_gcs_store(credentials, extra)
         elif auth_type == "adls":
-            store = _create_azure_store(credentials, extra)
+            store, put_attrs = _create_azure_store(credentials, extra)
         else:
             raise StorageConfigError(
                 f"Cannot determine cloud provider from credentials. "
@@ -161,7 +161,7 @@ class CloudStore:
             )
 
         _log().debug("Created CloudStore provider=%s", auth_type)
-        return cls(store, provider=auth_type)
+        return cls(store, provider=auth_type, put_attributes=put_attrs)
 
     # ------------------------------------------------------------------
     # Read operations
@@ -440,8 +440,15 @@ def _infer_auth_type(extra: dict[str, Any]) -> str:
     return ""
 
 
-def _create_s3_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectStore:
-    """Create an S3 store from credentials."""
+def _create_s3_store(
+    creds: dict[str, Any], extra: dict[str, Any]
+) -> tuple[ObjectStore, dict[str, str] | None]:
+    """Create an S3 store from credentials.
+
+    Returns *(store, put_attributes)* where *put_attributes* is
+    ``{"Storage-Class": value}`` when ``extra["storageClass"]`` is set,
+    or ``None`` otherwise.
+    """
     from application_sdk.storage._obstore_config import make_s3_store  # noqa: PLC0415
 
     bucket = extra.get("s3_bucket", "")
@@ -465,10 +472,17 @@ def _create_s3_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectStor
         config["aws_role_session_name"] = "cloud-store-session"
         _log().debug("S3 role-based auth configured")
 
-    return make_s3_store(bucket, config or None, label="cloud-s3")
+    storage_class = (extra.get("storageClass") or "").strip()
+    put_attrs: dict[str, str] | None = (
+        {"Storage-Class": storage_class} if storage_class else None
+    )
+
+    return make_s3_store(bucket, config or None, label="cloud-s3"), put_attrs
 
 
-def _create_gcs_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectStore:
+def _create_gcs_store(
+    creds: dict[str, Any], extra: dict[str, Any]
+) -> tuple[ObjectStore, dict[str, str] | None]:
     """Create a GCS store from credentials."""
     from application_sdk.storage._obstore_config import make_gcs_store  # noqa: PLC0415
 
@@ -481,10 +495,14 @@ def _create_gcs_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectSto
     if sa_json:
         gcs_config["google_service_account_key"] = sa_json
 
-    return make_gcs_store(bucket, gcs_config if gcs_config else None, label="cloud-gcs")
+    return make_gcs_store(
+        bucket, gcs_config if gcs_config else None, label="cloud-gcs"
+    ), None
 
 
-def _create_azure_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectStore:
+def _create_azure_store(
+    creds: dict[str, Any], extra: dict[str, Any]
+) -> tuple[ObjectStore, dict[str, str] | None]:
     """Create an Azure (ADLS) store from credentials."""
     from application_sdk.storage._obstore_config import (  # noqa: PLC0415
         make_azure_store,
@@ -515,4 +533,4 @@ def _create_azure_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectS
         if access_key:
             az_config["azure_storage_client_secret"] = access_key
 
-    return make_azure_store(container, az_config, label="cloud-azure")
+    return make_azure_store(container, az_config, label="cloud-azure"), None
