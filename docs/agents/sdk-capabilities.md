@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.15.1
-source-sha:    899714a177c537b4dcff59542326d6f280e4f8e0
-source-date:   2026-06-09T18:52:40+01:00
+source-sha:    fb5ce5677ed33bc03f84fc73d2661829093e0626
+source-date:   2026-06-09T19:30:10+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -30,7 +30,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 25 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 24 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 5 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 15 |
 
@@ -1895,13 +1895,6 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Summary:** An :class:`~obstore.store.ObjectStore` paired with per-write put attributes.
 - **Defined in:** `application_sdk/storage/ops.py`
 
-#### `BoundStore`
-
-- **Import:** `from application_sdk.storage import BoundStore`
-- **Signature:** `class BoundStore(store: ObjectStore, put_attributes: dict[str, str] | None = None)`
-- **Summary:** An :class:`~obstore.store.ObjectStore` paired with per-write put attributes.
-- **Defined in:** `application_sdk/storage/ops.py`
-
 #### `CloudStore`
 
 - **Import:** `from application_sdk.storage import CloudStore`
@@ -1991,7 +1984,7 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `delete`
 
 - **Import:** `from application_sdk.storage import delete`
-- **Signature:** `delete(key: str, store: ObjectStore | None = None, *, normalize: bool = True)`
+- **Signature:** `delete(key: str, store: BoundStore | ObjectStore | None = None, *, normalize: bool = True)`
 - **Summary:** Delete the object at *key*.
 - **Defined in:** `application_sdk/storage/ops.py`
 
@@ -2019,7 +2012,7 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `exists`
 
 - **Import:** `from application_sdk.storage import exists`
-- **Signature:** `exists(key: str, store: ObjectStore | None = None, *, normalize: bool = True)`
+- **Signature:** `exists(key: str, store: BoundStore | ObjectStore | None = None, *, normalize: bool = True)`
 - **Summary:** Return ``True`` if *key* exists in the store.
 - **Defined in:** `application_sdk/storage/ops.py`
 
@@ -2040,7 +2033,7 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `put_json`
 
 - **Import:** `from application_sdk.storage import put_json`
-- **Signature:** `put_json(key: str, obj: JsonValue, store: ObjectStore | None = None, *, normalize: bool = True)`
+- **Signature:** `put_json(key: str, obj: JsonValue, store: BoundStore | ObjectStore | None = None, *, normalize: bool = True)`
 - **Summary:** Serialise *obj* to JSON and write to *key*.
 - **Defined in:** `application_sdk/storage/ops.py`
 
