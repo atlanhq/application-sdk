@@ -462,9 +462,7 @@ class ParquetFileReader(Reader):
                 total_rows = lazy_df.count_rows()
             except DaftCoreException as exc:
                 if "MicroPartition" in str(exc):
-                    logger.info(
-                        "Parquet file(s) contain no data; yielding no batches"
-                    )
+                    logger.info("Parquet file(s) contain no data; yielding no batches")
                     return
                 raise
 
