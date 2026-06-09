@@ -506,7 +506,7 @@ async def _create_infrastructure(
         from application_sdk.storage import (  # noqa: PLC0415 — cold path: storage init only when binding YAML present
             create_store_from_binding_with_put_attrs,
         )
-        from application_sdk.storage.binding import (  # noqa: PLC0415
+        from application_sdk.storage.binding import (  # noqa: PLC0415 — cold path: private helper used only inside _create_infrastructure
             _create_store_from_binding_optional_with_put_attrs,
         )
 

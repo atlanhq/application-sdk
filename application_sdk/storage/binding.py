@@ -762,9 +762,7 @@ def _create_store_from_binding_optional_with_put_attrs(
 ) -> tuple[ObjectStore, dict[str, str] | None] | tuple[None, None]:
     """Create an obstore store and put attributes from a Dapr binding, or ``(None, None)`` if absent.
 
-    Internal helper for infrastructure-wiring code (``main.py``).  Not part of
-    the public storage API — callers that need an optional store without put
-    attributes should use :func:`create_store_from_binding_optional` instead.
+    Internal helper for infrastructure-wiring code (``main.py``).
 
     A missing component logs at INFO (absent is the normal non-SDR path).
     A broken component (template placeholders, unresolvable secretKeyRef) logs

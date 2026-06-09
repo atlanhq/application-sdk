@@ -1129,12 +1129,18 @@ class TestCreateStoreFromBindingOptionalWithPutAttrs:
     )
 
     def test_returns_none_when_component_absent(self, tmp_path: Path) -> None:
-        """Returns (None, None) without raising when no Dapr component exists."""
-        store, put_attrs = _create_store_from_binding_optional_with_put_attrs(
-            "nonexistent", components_dir=tmp_path
-        )
+        """Returns (None, None) and logs INFO with operator guidance when no component exists."""
+        with patch("application_sdk.storage.binding._get_logger") as mock_get_logger:
+            mock_logger = MagicMock()
+            mock_get_logger.return_value = mock_logger
+            store, put_attrs = _create_store_from_binding_optional_with_put_attrs(
+                "nonexistent", components_dir=tmp_path
+            )
         assert store is None
         assert put_attrs is None
+        mock_logger.info.assert_called_once()
+        info_args = mock_logger.info.call_args[0]
+        assert "Configure this binding" in " ".join(str(a) for a in info_args)
 
     def test_returns_none_and_warns_when_binding_broken(self, tmp_path: Path) -> None:
         """Returns (None, None) and logs a warning that includes the broken field names."""
