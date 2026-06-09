@@ -185,16 +185,18 @@ def _resolve_store(store: ObjectStore | None) -> ObjectStore:
 def _resolve_put_attributes(store: ObjectStore | None) -> dict[str, str] | None:
     """Return binding-level put attributes for the resolved store, or ``None``.
 
-    When *store* is ``None`` (i.e. the caller is using the infra-context store),
-    returns ``InfrastructureContext.storage_put_attributes`` so every write
-    automatically honours attributes such as ``"Storage-Class"`` that were
-    captured at binding construction time.
+    Returns ``InfrastructureContext.storage_put_attributes`` when either:
+    - *store* is ``None`` (caller uses the default infra store), or
+    - *store* is the exact same object as ``infra.storage`` (identity check,
+      not equality — obstore stores are unhashable).
 
-    When an explicit *store* is passed in, returns ``None`` — the caller owns
-    that store and is responsible for any per-write options.
+    The second case ensures that callers who hold an explicit reference to the
+    infra store (e.g. ``App.upload`` passes ``self.context.storage``) still
+    receive the binding-level attributes — otherwise ``storageClass`` would be
+    silently dropped on every App-level write.
+
+    Returns ``None`` for any other explicit store (upstream, CloudStore, etc.).
     """
-    if store is not None:
-        return None
     from application_sdk.infrastructure.context import (  # noqa: PLC0415
         get_infrastructure,
     )
@@ -202,7 +204,9 @@ def _resolve_put_attributes(store: ObjectStore | None) -> dict[str, str] | None:
     infra = get_infrastructure()
     if infra is None:
         return None
-    return infra.storage_put_attributes
+    if store is None or store is infra.storage:
+        return infra.storage_put_attributes
+    return None
 
 
 def _is_azure_container_not_found(exc: BaseException) -> bool:

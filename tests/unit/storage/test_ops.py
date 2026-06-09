@@ -832,6 +832,75 @@ class TestSafeJoinUnder:
 
 
 # ---------------------------------------------------------------------------
+# _resolve_put_attributes — identity-based infra-store matching
+# ---------------------------------------------------------------------------
+
+
+class TestResolvePutAttributes:
+    """_resolve_put_attributes must apply put_attributes when store IS infra.storage.
+
+    Regression guard: App.upload() passes self.context.storage explicitly, so
+    the helper must recognise the infra store by identity (not just store=None).
+    """
+
+    def _make_infra(self, store, put_attrs):
+        from application_sdk.infrastructure.context import InfrastructureContext
+
+        return InfrastructureContext(storage=store, storage_put_attributes=put_attrs)
+
+    def test_none_store_returns_infra_put_attributes(self) -> None:
+        from application_sdk.infrastructure.context import set_infrastructure
+        from application_sdk.storage.factory import create_memory_store
+        from application_sdk.storage.ops import _resolve_put_attributes
+
+        store = create_memory_store()
+        put_attrs = {"Storage-Class": "STANDARD_IA"}
+        set_infrastructure(self._make_infra(store, put_attrs))
+        try:
+            assert _resolve_put_attributes(None) == put_attrs
+        finally:
+            set_infrastructure(None)
+
+    def test_explicit_infra_store_returns_put_attributes(self) -> None:
+        """Identity match: explicit store IS infra.storage → attributes returned."""
+        from application_sdk.infrastructure.context import set_infrastructure
+        from application_sdk.storage.factory import create_memory_store
+        from application_sdk.storage.ops import _resolve_put_attributes
+
+        store = create_memory_store()
+        put_attrs = {"Storage-Class": "STANDARD_IA"}
+        set_infrastructure(self._make_infra(store, put_attrs))
+        try:
+            assert _resolve_put_attributes(store) == put_attrs
+        finally:
+            set_infrastructure(None)
+
+    def test_unrelated_store_returns_none(self) -> None:
+        """A different store (e.g. CloudStore, upstream) must not get infra attrs."""
+        from application_sdk.infrastructure.context import set_infrastructure
+        from application_sdk.storage.factory import create_memory_store
+        from application_sdk.storage.ops import _resolve_put_attributes
+
+        infra_store = create_memory_store()
+        other_store = create_memory_store()
+        set_infrastructure(
+            self._make_infra(infra_store, {"Storage-Class": "STANDARD_IA"})
+        )
+        try:
+            assert _resolve_put_attributes(other_store) is None
+        finally:
+            set_infrastructure(None)
+
+    def test_no_infra_context_returns_none(self) -> None:
+        from application_sdk.infrastructure.context import set_infrastructure
+        from application_sdk.storage.factory import create_memory_store
+        from application_sdk.storage.ops import _resolve_put_attributes
+
+        set_infrastructure(None)
+        assert _resolve_put_attributes(None) is None
+        assert _resolve_put_attributes(create_memory_store()) is None
+
+
 # Azure container-not-found detection
 # ---------------------------------------------------------------------------
 
