@@ -6,16 +6,5 @@
   "_expiry_policy": {
     "CRITICAL": 15,
     "HIGH": 30
-  },
-  "CVE-2026-33814": {
-    "package": "stdlib / dapr-daprd-1.17",
-    "severity": "HIGH",
-    "reason": "Base image - Dapr runtime dependency (Go stdlib used by daprd binary)",
-    "expires": "2026-06-13",
-    "added_by": "mananjain99",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
   }
 }
