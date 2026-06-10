@@ -55,7 +55,7 @@
     {
       "description": "GitHub Actions: group minor+patch; auto-merge on green.",
       "matchManagers": ["github-actions"],
-      "matchUpdateTypes": ["minor", "patch"],
+      "matchUpdateTypes": ["minor", "patch", "digest"],
       "groupName": "github-actions",
       "automerge": true,
       "automergeType": "pr",
