@@ -226,8 +226,8 @@ class _MetricsActivityInboundInterceptor(ActivityInboundInterceptor):
                     cpu_s, mem_gib_s = resource_sampler.compute_deltas(
                         start_sample, end_sample, duration_s
                     )
-                    _activity_cpu_seconds().record(cpu_s, attrs)
-                    _activity_mem_gib_seconds().record(mem_gib_s, attrs)
+                    _activity_cpu_seconds().record(cpu_s, tagged)
+                    _activity_mem_gib_seconds().record(mem_gib_s, tagged)
             except Exception:  # noqa: S110 — best-effort observability; never block the activity on metric emission
                 pass
 
