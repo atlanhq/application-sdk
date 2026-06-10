@@ -130,7 +130,7 @@ activities retry on the workflow worker. No extra registration is needed: the
 combined worker already registers every `@task` activity, and Temporal uses
 the same definition for local execution.
 
-See [ADR-0019](../adr/0019-local-activities-and-batched-fanout.md) for the
+See [ADR-0018](../adr/0018-local-activities-and-batched-fanout.md) for the
 rationale.
 
 ## Manual Heartbeats with Progress

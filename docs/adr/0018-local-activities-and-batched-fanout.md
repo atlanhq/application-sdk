@@ -1,4 +1,4 @@
-# ADR-0019: Local Activities and Batched Fan-Out
+# ADR-0018: Local Activities and Batched Fan-Out
 
 ## Status
 **Accepted**
