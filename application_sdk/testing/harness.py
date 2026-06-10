@@ -221,9 +221,7 @@ class AppTestHarness:
                 self._make_inline_task_runner(app, attr_name, task_name),
             )
 
-    def _make_inline_task_runner(
-        self, app: App, attr_name: str, task_name: str
-    ) -> Any:
+    def _make_inline_task_runner(self, app: App, attr_name: str, task_name: str) -> Any:
         original = getattr(type(app), attr_name)
 
         async def runner(input_data: Input) -> Output:
