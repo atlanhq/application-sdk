@@ -41,7 +41,7 @@ jobs:
     steps:
       - name: Get PR metadata
         id: pr
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const pr = await github.rest.pulls.get({
@@ -56,7 +56,7 @@ jobs:
 
       - name: Reject on fork
         if: steps.pr.outputs.is_fork == 'true'
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             await github.rest.issues.createComment({
@@ -69,7 +69,7 @@ jobs:
 
       - name: Skip on bump-version branch
         if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version == 'true'
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             await github.rest.issues.createComment({
@@ -81,7 +81,7 @@ jobs:
 
       - name: React to comment
         if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             await github.rest.reactions.createForIssueComment({
@@ -125,7 +125,7 @@ jobs:
 
       - name: Reply on PR
         if: always() && steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const status = '${{ steps.commit.outputs.status }}';
