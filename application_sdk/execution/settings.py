@@ -8,7 +8,15 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+# VersioningBehavior is a temporalio type. Importing it directly here leaks the
+# execution-backend dependency, but temporalio is a hard core dependency so the
+# coupling is acceptable. Re-exporting via _temporal/ would invert the layer
+# direction without providing any real isolation.
 from temporalio.common import VersioningBehavior
+
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -84,6 +92,8 @@ def _load_versioning_behavior(env_var: str) -> VersioningBehavior:
     val = os.environ.get(env_var, "").strip().upper()
     if val == "AUTO_UPGRADE":
         return VersioningBehavior.AUTO_UPGRADE
+    if val and val != "PINNED":
+        logger.warning("%s=%r not recognized; falling back to PINNED", env_var, val)
     return VersioningBehavior.PINNED
 
 
