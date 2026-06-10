@@ -75,18 +75,5 @@
       "versioningTemplate": "semver",
       "extractVersionTemplate": "^contract-toolkit-v(?<version>.+)$"
     }
-  ],
-  "postUpgradeTasks": {
-    "commands": [
-      "uv lock",
-      "uv export --no-hashes --frozen > requirements.txt",
-      "if [ -d contract ] && [ -f contract/PklProject ] && command -v pkl >/dev/null 2>&1; then pkl project resolve contract/; fi"
-    ],
-    "fileFilters": [
-      "uv.lock",
-      "requirements.txt",
-      "contract/PklProject.deps.json"
-    ],
-    "executionMode": "branch"
-  }
+  ]
 }
