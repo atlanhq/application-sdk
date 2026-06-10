@@ -8,5 +8,9 @@
     ".venv/**",
     "**/node_modules/**",
     "contract-toolkit/examples/**"
+  ],
+  "ignoreDeps": [
+    "cgr.dev/atlan.com/app-framework-golden",
+    "atlanhq/.github"
   ]
 }
