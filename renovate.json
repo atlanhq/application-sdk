@@ -12,6 +12,7 @@
   ],
   "ignoreDeps": [
     "cgr.dev/atlan.com/app-framework-golden",
-    "atlanhq/.github"
+    "atlanhq/.github",
+    "daft"
   ]
 }

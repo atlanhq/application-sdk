@@ -4,7 +4,7 @@
   "extends": ["config:recommended"],
   "schedule": ["at any time"],
   "prHourlyLimit": 0,
-  "prConcurrentLimit": 10,
+  "prConcurrentLimit": 3,
   "labels": ["dependencies"],
   "dependencyDashboard": true,
   "ignorePaths": ["requirements.txt"],
@@ -43,11 +43,12 @@
       "enabled": false
     },
     {
-      "description": "Python transitive deps (all except atlan-application-sdk): group minor+patch; auto-merge on green.",
+      "description": "Python transitive deps (all except atlan-application-sdk): group minor+patch; auto-merge on green. rangeStrategy update-lockfile keeps pyproject.toml untouched when the new version satisfies the existing constraint.",
       "matchManagers": ["uv"],
       "matchPackageNames": ["!atlan-application-sdk"],
       "matchUpdateTypes": ["minor", "patch"],
       "groupName": "python-transitive-deps",
+      "rangeStrategy": "update-lockfile",
       "automerge": true,
       "automergeType": "pr",
       "platformAutomerge": true
