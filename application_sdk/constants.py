@@ -414,6 +414,12 @@ AWS_SESSION_NAME = os.getenv("AWS_SESSION_NAME", "temp-session")
 # Log batching configuration
 LOG_BATCH_SIZE = int(os.environ.get("ATLAN_LOG_BATCH_SIZE", 100))
 LOG_FLUSH_INTERVAL_SECONDS = int(os.environ.get("ATLAN_LOG_FLUSH_INTERVAL_SECONDS", 10))
+#: Minimum seconds between repeated INFO summaries for the Cloudflare 504
+#: long-poll suppression filter (TFKB ERROR-NET-001).  Increase for very
+#: chatty multi-worker deployments; decrease to see summaries more frequently.
+LOG_CLOUDFLARE_504_SUMMARY_INTERVAL_SECONDS = float(
+    os.environ.get("ATLAN_LOG_CLOUDFLARE_504_SUMMARY_INTERVAL_SECONDS", "60")
+)
 
 # Log Retention configuration
 LOG_RETENTION_DAYS = int(os.environ.get("ATLAN_LOG_RETENTION_DAYS", 30))
