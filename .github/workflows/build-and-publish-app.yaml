@@ -502,7 +502,17 @@ jobs:
           # the default groups, pruning any test deps an app keeps in a non-default
           # group — which silently breaks async/plugin-dependent suites and trips
           # this gate on a packaging gap rather than a real failure.
-          uv run --all-groups --with pytest-cov pytest tests/unit --cov=app --cov-report=term
+          #
+          # Bare --cov (no value) defers to the app's [tool.coverage.run] source
+          # config — an explicit --cov=app would override it and measure nothing
+          # for apps whose package isn't literally named `app` (e.g. the
+          # automation engine's `automation_engine`), reporting 0% coverage.
+          # --cov-fail-under=0 keeps this gate purely about test pass/fail: an
+          # app-level [tool.coverage.report] fail_under would otherwise fail
+          # pytest on a coverage shortfall and masquerade as failing unit tests,
+          # hard-blocking publish. The threshold check belongs to the dedicated
+          # warn-only step below.
+          uv run --all-groups --with pytest-cov pytest tests/unit --cov --cov-report=term --cov-fail-under=0
 
       - name: "Coverage threshold (>=85%)"
         id: coverage_threshold
