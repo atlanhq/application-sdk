@@ -328,7 +328,7 @@ rignore==0.7.6
     # via fastapi-cloud-cli
 s3transfer==0.18.0
     # via boto3
-sentry-sdk==2.61.1
+sentry-sdk==2.62.0
     # via fastapi-cloud-cli
 shellingham==1.5.4
     # via typer
