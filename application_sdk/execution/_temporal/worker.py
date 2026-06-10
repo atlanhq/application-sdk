@@ -303,7 +303,7 @@ def create_worker(
             executions. Passing an explicit value forces fixed slot counts —
             it overrides ``ATLAN_WORKER_TUNER_MODE=resource`` (Temporal
             forbids combining a tuner with fixed ``max_concurrent_*`` limits;
-            see ADR-0017).
+            see ADR-0016).
         max_concurrent_workflow_tasks: Maximum number of in-flight workflow task
             pollers, which bounds the number of workflow sandboxes the worker
             spins up concurrently. Leave ``None`` to use Temporal's default. Pin
@@ -447,7 +447,7 @@ def create_worker(
 
     execution_settings = load_execution_settings()
 
-    # Resource-based worker tuning (ADR-0017): when ATLAN_WORKER_TUNER_MODE=
+    # Resource-based worker tuning (ADR-0016): when ATLAN_WORKER_TUNER_MODE=
     # resource, Temporal sizes slot handout from observed CPU/memory usage
     # instead of fixed slot counts. Temporal forbids combining ``tuner`` with
     # the fixed ``max_concurrent_*`` arguments, so explicit caller-supplied

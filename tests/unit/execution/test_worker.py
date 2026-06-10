@@ -317,7 +317,7 @@ class TestCreateWorker:
 
         assert app_worker._start_event_params["max_concurrent_workflow_tasks"] == 3
 
-    # ── worker tuner mode (ADR-0017) ──────────────────────────────────────
+    # ── worker tuner mode (ADR-0016) ──────────────────────────────────────
 
     def _capture_worker_kwargs(self, **create_kwargs) -> dict:
         """Run create_worker with a mocked Temporal Worker; return its kwargs."""

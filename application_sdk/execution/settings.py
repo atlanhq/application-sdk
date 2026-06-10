@@ -47,7 +47,7 @@ class ExecutionSettings:
     safely without OOMing under fanout. When ``resource`` is active, the
     fixed ``max_concurrent_activities`` / ``max_concurrent_workflow_tasks``
     limits are not passed to the worker (Temporal forbids combining them
-    with a tuner). See ADR-0017.
+    with a tuner). See ADR-0016.
     """
 
     tuner_target_memory_usage: float = 0.8

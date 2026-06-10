@@ -1,4 +1,4 @@
-# ADR-0017: Resource-Based Worker Tuning
+# ADR-0016: Resource-Based Worker Tuning
 
 ## Status
 **Accepted**
