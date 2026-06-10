@@ -115,11 +115,14 @@ jobs:
           GITHUB_TOKEN is pre-injected by the sandbox. Use \`gh\` for all
           GitHub operations.
 
-          Triage every CVE listed on ticket ${TICKET}. For each, classify
-          and remediate per ORCHESTRATION.md (bump / allowlist / alternative),
-          update the Linear ticket at every state transition, and include a
-          link to GHA_RUN_URL in the ticket summary so the reader can jump to
-          the workflow run that produced the work.
+          Triage every CVE listed on ticket ${TICKET}. For each, classify per
+          ORCHESTRATION.md, then either:
+            - Case 1 (our dependency, scan-confirmed fix) → open a DRAFT PR with
+              the bump (never ready, never merged); or
+            - Case 2/3/4 (allowlist / alternative / base-image rebuild) → detail
+              the recommended remediation on the ticket.
+          Tag Vaibhav or Chris to act. Include a link to GHA_RUN_URL in the
+          ticket summary. Never merge, never push to main.
 
           Linear / GPT proxy access: use the \$PROXY_BASE and \$PROXY_JWT
           env vars injected by mothership (see tools.md).

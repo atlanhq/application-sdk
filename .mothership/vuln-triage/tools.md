@@ -29,19 +29,22 @@ echo "$GITHUB_TOKEN" | gh auth login --with-token
 cd /workspace/application-sdk
 ```
 
+Used for: read-only work (scan artifacts, advisories, inspecting
+`pyproject.toml`/`uv.lock`) **and**, for **Case 1 only**, pushing a branch +
+opening a **draft** PR. Never push to `main`, never mark ready, never merge. For
+Cases 2/3/4 you do not touch git — the recommendation goes into the ticket.
+
 ```bash
-# Branch per CVE-target package
+# Case 1 ONLY (our dependency, scan-confirmed fix). Draft PR — human finalizes.
 git checkout -b fix/bump-<pkg>-<version>-<cve-id> origin/main
-
-# Push + open PR
+# ... run the uv recipe + validation greps below ...
 git push origin fix/bump-<pkg>-<version>-<cve-id>
-gh pr create --repo atlanhq/application-sdk --base main \
+gh pr create --draft --repo atlanhq/application-sdk --base main \
   --title "fix(security): bump <pkg> to <version> to resolve <CVE-IDs>" \
-  --label "vulnerabilities" --label "e2e-test" \
+  --label "vulnerabilities" \
   --body "..."
-
-# Hand off for review
-gh pr comment <PR_NUMBER> --repo atlanhq/application-sdk --body "@sdk-review"
+# Link the draft PR on the ticket + tag Vaibhav/Chris. Do NOT @sdk-review,
+# do NOT mark ready, do NOT merge.
 ```
 
 ## The scan artifacts (source of truth for ALL CVEs)
@@ -67,7 +70,8 @@ wait, then download.
 
 ## uv dependency-bump recipe (Case 1)
 
-Run these in order. **One CVE PR = full dep upgrade** (PR #1995 policy).
+Run this to produce the Case-1 draft PR. **One CVE fix = full dep upgrade**
+(PR #1995 policy). Run the validation greps below before pushing the draft PR.
 
 ```bash
 # 1. Match uv to main's lockfile format so the regen doesn't downgrade it.
@@ -92,10 +96,10 @@ uv sync --all-extras --all-groups --upgrade
 uv export --no-hashes --frozen > requirements.txt
 ```
 
-## Validation greps (MUST pass before any push)
+## Validation greps (MUST pass before pushing the Case-1 draft PR)
 
-If any of these fails, STOP and tag Vaibhav or Chris — pushing in this state
-recreates the regression that motivated this flow.
+If any fails, do NOT open the PR — a regen in this state recreates the regression
+that motivated this flow. Detail the blocker on the ticket and tag Vaibhav/Chris.
 
 ```bash
 grep -q '^revision = '  uv.lock          || { echo "FAIL: lock revision header lost"; exit 1; }
@@ -114,30 +118,19 @@ curl -s "$PROXY_BASE/proxy/linear" \
   -H "Authorization: Bearer $PROXY_JWT" -H "Content-Type: application/json" \
   -d '{"query": "query($id: String!){ issue(id: $id){ id identifier title description url state { name } } }", "variables": {"id": "<TICKET>"}}'
 
-# Add a comment (per-CVE classification, PR links, escalations)
+# Add a comment (per-CVE classification + recommendation; draft PR link for Case 1)
 curl -s "$PROXY_BASE/proxy/linear" \
   -H "Authorization: Bearer $PROXY_JWT" -H "Content-Type: application/json" \
   -d '{"query": "mutation($input: CommentCreateInput!){ commentCreate(input: $input){ success } }", "variables": {"input": {"issueId": "<issue_id>", "body": "..."}}}'
-
-# Update status (e.g. → In Review with PR linked)
-curl -s "$PROXY_BASE/proxy/linear" \
-  -H "Authorization: Bearer $PROXY_JWT" -H "Content-Type: application/json" \
-  -d '{"query": "mutation($id: String!, $input: IssueUpdateInput!){ issueUpdate(id: $id, input: $input){ success } }", "variables": {"id": "<issue_id>", "input": {"stateId": "<state_id>"}}}'
 ```
 
-## SDK review verdict loop
-
-After commenting `@sdk-review`, watch for the latest `mothership.ai` comment
-containing `<!-- SDK_REVIEW -->`. The verdict is the line matching
-`^## Verdict: (.+)$`.
-- `READY TO MERGE` → surface in the ticket, hand to Vaibhav/Chris (you never merge).
-- Anything else → apply the requested changes, re-comment `@sdk-review`, loop.
-- `<!-- SDK_REVIEW_STARTED -->` with no `<!-- SDK_REVIEW -->` within ~15 min, or
-  `status: error/failure` → report on the ticket, tag Vaibhav/Chris, stop looping.
+Leave the ticket open and awaiting Vaibhav/Chris — do not set "Done" and do not
+move it to a review column (the Case-1 PR is a draft they finalize).
 
 ## Prohibited
 
 - No direct Linear API calls outside the proxy.
-- No pushing to main. No force-push. No `git add -A` / `git add .`.
-- No committing an allowlist entry without explicit Vaibhav/Chris approval.
-- No `apk` workarounds in the Dockerfile.
+- No pushing to `main`. No force-push. No `git add -A` / `git add .`.
+- No marking a PR ready / merging — Case-1 PRs are drafts the team finalizes.
+- No committing an allowlist entry (Case 2) — recommend it on the ticket only.
+- No editing the Dockerfile / base image; no `apk` workarounds (Case 4 → rebuild).

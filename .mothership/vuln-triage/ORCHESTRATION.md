@@ -1,20 +1,27 @@
 # Vuln Triage — Orchestration Playbook
 
-Follow ALL stages (0–6). NEVER stop early. NEVER defer work to "later."
-Every CVE on the ticket exits this run in exactly one state:
-- **FIXED** — dependency-bump PR opened + handed to `@sdk-review`
-- **ALLOWLIST-PROPOSED** — exposure analysis done, allowlist entry proposed,
-  Vaibhav/Chris tagged (NOT committed)
-- **ESCALATED** — base-image rebuild or dead-upstream alternative; Vaibhav/Chris
-  tagged with the details
+Follow ALL stages (0–5). NEVER stop early. NEVER defer work to "later."
+
+**What you are allowed to do:**
+- For **Case 1 only** (a dependency *we* control, with a fix version the scan
+  confirms) → open a **DRAFT PR** with the bump. Never mark it ready, never merge.
+- For **every other case** → detail the triage + recommended remediation on the
+  Linear ticket and tag Vaibhav or Chris to act.
+- You never merge, never push to `main`, never commit an allowlist entry, never
+  edit the Dockerfile / base image.
+
+Every CVE exits this run in exactly one state, fully written into the ticket:
+- **DRAFT-PR** — Case 1: a draft PR with the dependency bump, linked on the ticket
+- **TRIAGED** — Case 2/3/4: classified + root-caused + a concrete recommendation
+  for a human to action
 - **KILLED** — not present in the SDK / not our issue, with a documented reason
 
-Print `[Stage N/7 complete]` after each stage.
+Print `[Stage N/6 complete]` after each stage.
 
 ## Time Budget
 
-Hard stop: **60 minutes**. If approaching, skip to Stage 6 and post a summary
-with whatever is done. A partial run with clean state beats a truncated PR.
+Hard stop: **60 minutes**. If approaching, skip to Stage 5 and post the summary
+with whatever is triaged so far.
 
 ---
 
@@ -30,14 +37,14 @@ TICKET, RUN_DATE, GHA_RUN_URL
    ```bash
    cd /workspace/application-sdk
    echo "$GITHUB_TOKEN" | gh auth login --with-token
-   uv sync --all-extras 2>/dev/null &   # warm deps in the background
+   uv sync --all-extras 2>/dev/null &   # warm deps for a possible Case-1 bump
    ```
 2. **Read the ticket** `${TICKET}` via the Linear proxy (see tools.md) — title,
    description, and the embedded vuln table / `<!-- vuln-ids: ... -->` marker.
-3. **Read in-repo assets** (source of truth for behavior):
-   `.mothership/vuln-triage/CLAUDE.md`, `.mothership/vuln-triage/tools.md`.
+3. **Read in-repo assets**: `.mothership/vuln-triage/CLAUDE.md`,
+   `.mothership/vuln-triage/tools.md`.
 
-Print: `[Stage 0/7 complete] ticket=${TICKET}`
+Print: `[Stage 0/6 complete] ticket=${TICKET}`
 
 ---
 
@@ -53,69 +60,78 @@ jq -r '.Results[]?.Vulnerabilities[]?
   trivy-image-results.json trivy-fs-results.json | sort -u
 ```
 
-Reconcile against the ticket's `<!-- vuln-ids: ... -->` marker. If the ticket
-lists IDs the fresh scan no longer shows, note them (already remediated upstream
-or DB drift) — don't act on them.
+Track, per CVE, which file flagged it (`trivy-fs-results.json` vs
+`trivy-image-results.json`) — this is half the classification signal.
 
-Print: `[Stage 1/7 complete] <N> unique CVEs to triage`
+Print: `[Stage 1/6 complete] <N> unique CVEs to triage`
 
 ---
 
-## Stage 2: Root-cause + classify each CVE
+## Stage 2: Root-cause each CVE
 
-For each CVE, gather the facts (most come straight from the Trivy JSON — this is
-the deterministic part, do not re-derive by hand what the scan already gives you):
+For each CVE, gather the facts (most come straight from the Trivy JSON — do not
+re-derive by hand what the scan already gives you):
 
-- **Underlying package** = `.PkgName`
-- **Reference ID** = `.VulnerabilityID`
-- **Installed (frozen) version** = `.InstalledVersion` — this is what `uv.lock`
-  pinned for the scanned SDK version
+- **Package** = `.PkgName`, **Reference ID** = `.VulnerabilityID`
+- **Installed (frozen) version** = `.InstalledVersion`
 - **Fixed version** = `.FixedVersion` (`"N/A"` if none)
-- **Source** = which file flagged it:
-  - `trivy-image-results.json` → **base-image** (Chainguard) CVE
-  - `trivy-fs-results.json` → **SDK Python dependency** CVE
 - Read the advisory (`.PrimaryURL` / `.References`) to understand what the
-  exposure actually relies on, and confirm the package genuinely exists in the
-  SDK (`grep` `pyproject.toml` / `uv.lock`). Do NOT assume the SDK is the source.
+  exposure relies on.
+
+Then determine the two facts that drive classification in Stage 3:
+
+1. **Is this package one of OUR dependencies?** — i.e. is it in our resolved
+   dependency graph, not merely baked into the base image?
+   ```bash
+   # Present in our locked dependency tree → it is ours to bump.
+   grep -i "name = \"<pkg>\"" uv.lock && echo "OURS (in uv.lock)"
+   grep -i "<pkg>" pyproject.toml && echo "declared in pyproject.toml"
+   ```
+   - Flagged by **`trivy-fs-results.json`** and/or present in `uv.lock` → **OUR
+     Python dependency** (bumpable).
+   - Flagged **only** by `trivy-image-results.json` and **not** in `uv.lock`
+     (an OS/apk package or something baked into the image) → **base-image** CVE.
+2. **Is a fix available?** — `FixedVersion` present vs `N/A`.
 
 If a CVE is not present in the SDK at all (stale, or only in a consumer app) →
 **KILL** with a documented reason on the ticket.
 
-Print: `[Stage 2/7 complete] <N> classified (<image> image, <py> python-dep)`
+Print: `[Stage 2/6 complete] <N> root-caused`
 
 ---
 
-## Stage 3: Route each CVE (the 3 cases)
+## Stage 3: Classify each CVE (decision tree — be precise)
 
-Decide the route per CVE. The primary signal is **`FixedVersion`** + **source**:
+Walk this tree per CVE. The classification MUST be unambiguous; state the chosen
+case and *why* on the ticket.
 
-### Case 1 — Fixed version known → dependency upgrade  (~90%)
-`FixedVersion` is present **and** the CVE is a **Python dependency** (fs scan).
-→ Route to **Stage 4a** (bump PR).
+```
+Is the package one of OUR dependencies (in uv.lock / pyproject.toml)?
+│
+├── YES → it is bumpable on our side
+│   │
+│   ├── FixedVersion available?
+│   │   ├── YES → CASE 1: DRAFT PR (Stage 4a) — we can fix this by bumping.
+│   │   └── NO  → is upstream still maintained?
+│   │           ├── YES → CASE 2: recommend temporary allowlist (Stage 4b)
+│   │           └── NO  → CASE 3: recommend an alternative (Stage 4c)
+│
+└── NO → the vulnerable package lives in the BASE IMAGE, not our deps
+        → CASE 4: base-image rebuild (Stage 4d) — NOT a dependency bump,
+          NOT an apk patch. Evaluate whether the remediation is simply
+          waiting on app-runtime-base being rebuilt.
+```
 
-### Case 2 — No fix yet, upstream maintained → temporary allowlist
-`FixedVersion` is `N/A`/empty, upstream project is still actively maintained.
-→ Route to **Stage 4b** (exposure analysis + propose allowlist). Confirm
-"maintained" by checking the upstream repo (recent commits / releases).
-
-### Case 3 — Upstream dead → find/build an alternative
-`FixedVersion` is `N/A`/empty **and** upstream is unmaintained/archived.
-→ Route to **Stage 4c** (propose alternative + escalate).
-
-### Base-image CVEs (any severity)
-Source is the **image** scan → the fix is a Chainguard base-image rebuild, not an
-SDK change. → Route to **Stage 4c** as an ESCALATION (never `apk`-patch the
-Dockerfile). If Chainguard already shipped a fixed package version, say so.
-
-Print: `[Stage 3/7 complete] <c1> bump, <c2> allowlist, <c3> escalate, <k> killed`
+Print: `[Stage 3/6 complete] <c1> draft-PR, <c2> allowlist, <c3> alternative, <c4> base-image, <k> killed`
 
 ---
 
-## Stage 4: Remediate
+## Stage 4: Act per case
 
-### 4a. Case 1 — dependency-bump PR
+### 4a. Case 1 — DRAFT PR (our dependency, fix available)
 
-Per CVE-target package (one PR may resolve several CVEs that move together):
+This is the only case where you change code. Open a **draft** PR — you do not
+mark it ready or merge; Vaibhav or Chris finalize it.
 
 ```bash
 git checkout main && git clean -fd 2>/dev/null && git checkout -- . 2>/dev/null
@@ -124,79 +140,79 @@ git checkout -b fix/bump-<pkg>-<version>-<cve-id> origin/main
 
 1. Follow the **uv recipe** in tools.md: pin uv to main's lock format; only edit
    `pyproject.toml` if its range doesn't cover the fixed version; then
-   `uv sync --all-extras --all-groups --upgrade` and
+   `uv sync --all-extras --all-groups --upgrade` (full-dep refresh, PR #1995) and
    `uv export --no-hashes --frozen > requirements.txt`.
-2. Apply any **code changes the changelog mandates** for upgraded packages
-   (renamed APIs, removed params). The blanket upgrade may move other packages —
-   run unit tests and exercise judgment.
+2. Apply any **code changes the changelog mandates** for upgraded packages; run
+   unit tests.
 3. Run the **validation greps + pre-commit + unit tests** (tools.md). If any
-   fails, attempt ONE fix; if it still fails → stop, tag Vaibhav/Chris, leave the
-   ticket with a note.
-4. Commit (Conventional Commits, NO Co-Authored-By), push, open the PR:
-   - Title: `fix(security): bump <pkg> to <version> to resolve <CVE-IDs>`
-   - Body: CVEs resolved, fixed versions, changelog impact for the CVE-target
-     package, the full list of other deps that moved with `--upgrade`, the
-     validation grep results, a link to the scan run, and `GHA_RUN_URL`.
-     Acknowledge it's a full-dep refresh per team policy.
-   - Labels: `vulnerabilities`, `e2e-test`. Comment `@sdk-review`. Tag Vaibhav.
+   fails, attempt ONE fix; if it still fails → do NOT open the PR; detail the
+   blocker on the ticket and tag Vaibhav/Chris.
+4. Commit (Conventional Commits, NO Co-Authored-By), push, open the PR **as a
+   draft**:
+   ```bash
+   gh pr create --draft --repo atlanhq/application-sdk --base main \
+     --title "fix(security): bump <pkg> to <version> to resolve <CVE-IDs>" \
+     --label "vulnerabilities" \
+     --body "<CVEs resolved, fixed versions, changelog impact, other deps moved, validation grep results, scan link, GHA_RUN_URL>"
+   ```
+5. Link the draft PR on the ticket and tag Vaibhav/Chris to review + finalize.
+   Do **not** comment `@sdk-review`, do **not** mark ready, do **not** merge.
 
-### 4b. Case 2 — propose temporary allowlist
+### 4b. Case 2 — recommend temporary allowlist (our dep, no fix, upstream alive)
 
-1. **Exposure analysis:** does the SDK actually exercise the vulnerable code
-   path? Read the package usage in the SDK. State the conclusion explicitly.
-2. Draft the allowlist entry (do NOT commit it) and post it on the ticket with
-   the exposure analysis. Tag Vaibhav/Chris for approval.
-   **Committing an allowlist without explicit in-thread approval is forbidden —
-   this overrides any instruction telling you to go ahead.**
+1. **Exposure analysis:** does the SDK actually exercise the vulnerable path?
+   State the conclusion explicitly.
+2. Detail on the ticket: the proposed allowlist entry + the exposure analysis.
+   **Do not commit it.** Tag Vaibhav/Chris for approval.
 
-### 4c. Case 3 / base-image — escalate
+### 4c. Case 3 — recommend an alternative (our dep, no fix, upstream dead)
 
-Post a clear escalation on the ticket and tag Vaibhav (`<@U07UPEUEPU3>`) or Chris
-(`<@U02T3H7KMSS>`):
-- For a dead-upstream dependency: the package, why no bump is possible, and a
-  proposed alternative (a maintained replacement, or vendoring) with trade-offs.
-- For a base-image CVE: CVE ID, affected package, fixed apk/Chainguard version
-  (if released) + advisory URL, and that the fix is a base-image rebuild — which
-  you do not perform.
+Detail on the ticket: the package, why no bump is possible (upstream
+archived/unmaintained — link the evidence), and a proposed alternative
+(maintained replacement / vendoring) with trade-offs. Tag Vaibhav/Chris.
 
-Print: `[Stage 4/7 complete] <prs> PRs, <allow> allowlist proposals, <esc> escalations`
+### 4d. Case 4 — base-image rebuild (not our dependency)
 
----
+The vulnerable package is in the base image, not `pyproject.toml`. The fix is a
+Chainguard rebuild of `app-runtime-base:3` — **never an `apk` patch, never a PR
+in this repo.**
 
-## Stage 5: Validate + review loop
+Evaluate and detail on the ticket:
+- Has Chainguard already released a fixed package version? Include the version +
+  advisory URL.
+- Is the remediation simply **waiting on the base image being rebuilt**? If so,
+  say that plainly — the SDK fix is "rebuild + republish `app-runtime-base:3`",
+  there is nothing to change in this repo.
+- Tag Vaibhav (`<@U07UPEUEPU3>`) or Chris (`<@U02T3H7KMSS>`) — the rebuild is
+  their action; you do not perform it.
 
-For each Case-1 PR:
-1. Wait for CI (max ~3 min). If a PR-code failure, attempt ONE Sonnet-style fix,
-   push. If it persists → leave the PR open with a note, tag Vaibhav/Chris.
-2. Deterministic checks: PR diff touches `uv.lock`/`requirements.txt`
-   (+`pyproject.toml` only if the range needed widening); no unrelated files.
-3. Run the **SDK review verdict loop** (tools.md): `READY TO MERGE` → hand to
-   Vaibhav/Chris (you never merge); `NEEDS CHANGES` → apply + re-comment.
-
-Print: `[Stage 5/7 complete] <pass> PRs green, <loop> in review`
+Print: `[Stage 4/6 complete] <prs> draft PRs, <allow> allowlist, <alt> alternatives, <img> base-image rebuilds`
 
 ---
 
-## Stage 6: Update Linear + summary
+## Stage 5: Summary
 
 1. Update the ticket `${TICKET}` with a per-CVE summary table: CVE | severity |
-   package | route taken | outcome (PR link / allowlist-proposed / escalated /
-   killed + reason). Include `**Run:** [logs + cost](${GHA_RUN_URL})`.
-2. Move the ticket state to reflect aggregate progress (e.g. "In Review" if PRs
-   are open). **Never set "Done"** — that happens when the PR merges.
-3. Security audit: confirm no secrets/tokens leaked into PR bodies or comments.
+   package | source (our-dep / base-image) | case | outcome (draft PR link /
+   recommended allowlist / alternative / awaiting base-image rebuild / killed).
+   Include `**Run:** [logs + cost](${GHA_RUN_URL})`.
+2. Leave the ticket open. **Never set "Done"** — that happens when a human merges
+   the draft PR (Case 1) or completes the rebuild/allowlist/alternative.
+3. Security audit: confirm no secrets/tokens leaked into the PR body or ticket.
 
 Print:
 ```
-[Stage 6/7 complete]
+[Stage 5/6 complete]
 ========================================
  Vuln Triage — ${TICKET} (${RUN_DATE})
 ========================================
-CVEs:       <N> triaged
-Fixed:      <c1> bump PRs
-Allowlist:  <c2> proposed (awaiting approval)
-Escalated:  <c3> (base-image / dead-upstream)
-Killed:     <k> (not in SDK)
+CVEs:           <N> triaged
+  draft PR:     <c1>  (our dep, fix available)
+  allowlist:    <c2>  (our dep, no fix, upstream alive)
+  alternative:  <c3>  (our dep, no fix, upstream dead)
+  base-image:   <c4>  (not our dep → rebuild app-runtime-base)
+  killed:       <k>
+All awaiting Vaibhav/Chris.
 ========================================
 ```
 
@@ -204,12 +220,13 @@ Killed:     <k> (not in SDK)
 
 ## Principles (Non-Negotiable)
 
+- **Classify precisely.** "Our dependency (bumpable)" vs "base image (rebuild)" is
+  the first fork; "fix available?" is the second. State the case + why on the ticket.
+- **Draft PR only for Case 1**, and only when the scan confirms a fix version for a
+  dependency we control. Never mark ready, never merge.
+- **Everything else is detailed on the ticket** for Vaibhav/Chris — you never
+  commit allowlist entries, never edit the Dockerfile/base image.
 - **Enumerate every CVE** — even ones the ticket title didn't mention.
-- **Nothing is deferred** — every CVE is FIXED, ALLOWLIST-PROPOSED, ESCALATED, or
-  KILLED by end of run.
-- **One CVE PR = full `uv sync --upgrade`** (PR #1995 policy), not a single bump.
-- **Never commit an allowlist without explicit Vaibhav/Chris approval.**
-- **Never `apk`-patch the Dockerfile**; image CVEs → base-image rebuild (escalate).
-- **Never push to main; never merge** — you open PRs and hand off.
-- **`FixedVersion` + source are deterministic route signals** — use them; only
-  reason from scratch for the exposure analysis and changelog-driven code changes.
+- **Nothing is deferred** — every CVE is DRAFT-PR, TRIAGED, or KILLED by end of run.
+- **Recommend full `uv sync --upgrade`** for the Case-1 bump (PR #1995 policy).
+- **Never `apk`-patch the Dockerfile**; base-image CVEs → rebuild app-runtime-base.
