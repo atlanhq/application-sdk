@@ -31,7 +31,7 @@ azure-identity==1.25.3
 boto3==1.43.24
     # via atlan-application-sdk
 boto3-stubs==1.43.24
-botocore==1.43.24
+botocore==1.43.26
     # via
     #   boto3
     #   s3transfer
