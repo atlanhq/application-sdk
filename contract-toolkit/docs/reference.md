@@ -106,6 +106,16 @@ The single entry point for all new native app contracts. Supersedes `NativeApp.p
 | `workflowTypeOverride` | String? | null | Explicit workflow type (used as-is, overrides `workflowType`). |
 | `taskQueuePrefix` | String | `"atlan-{name}"` | Task queue prefix. Override for multi-entrypoint apps sharing a deployment. |
 
+### E2E Test Harness
+
+These three fields are emitted into `app/generated/_e2e_base.py` and are required by `BaseE2ETest` / `SQLAppE2ETest`. The defaults are derived from `name`; 95% of connectors never need to override them.
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `argoPackageName` | String | `"@atlan/{name}"` | Argo WorkflowTemplate package name. Override when the app uses a scoped or non-standard Argo package. |
+| `argoTemplateName` | String | `"atlan-{name}"` | Argo WorkflowTemplate resource name as deployed in-cluster. Matches `taskQueuePrefix` by default. |
+| `appServiceUrl` | String | `"http://{name}.{name}-app.svc.cluster.local"` | In-cluster Dapr service URL forwarded to by the e2e harness. Override when the app's Kubernetes service name deviates from the standard `{name}-app` pattern. |
+
 ### Pipeline Block
 
 The typed `pipeline` block replaces per-flag properties. Each step is nullable to opt out.
@@ -314,6 +324,48 @@ Credential files are hoisted by matching `connectorConfigName`. If two entrypoin
 | `manifestTopLevelArgs` | Mapping<String, String> | `{"credential_guid": "credential-guid", "connection": "connection"}` | Explicit top-level extract args. |
 | `publishTagPipelineEnabled` | Boolean\|String? | auto | Value for `PublishNode`'s `tag_pipeline_enabled`. Auto-wired when `enable-tags` or `enable-tag-sync` is in the form. |
 | `publishTagAttachmentsPrefix` | String? | auto | Value for `PublishNode`'s `tag_attachments_prefix`. |
+| `notifyOnFailure` | Boolean | `false` | When set to `true`, appends a run-level failure-notification node (`NotificationNode`, key `notify-on-failure`) that fires when the workflow run terminates in failure. The node depends on the reserved run-level `workflow_failure` tag (a `DependencyCondition` with no `nodeId`), so AE runs it once per failed run as a finalizer and dispatches the `notification-app` to fan alerts out to the tenant's enabled integrations. Also skipped when `extraNodes` defines a `notify-on-failure` key. See [NotificationNode](#notificationnode). |
+
+---
+
+### Failure Notification Overview
+
+```pkl
+class NotificationNode extends DAGNode {
+  displayName = "Notify on workflow failure"
+  workflowType = "NotificationWorkflow"
+  appName = "notification-app"
+  dependsOnCondition = new DependencyCondition { tag = "workflow_failure" }
+  args { ["metadata"] { /* run-level templated fields */ } }
+}
+```
+
+Pre-built failure-notification node. The toolkit appends it automatically as
+`notify-on-failure` when an app opts in with `notifyOnFailure = true`. It
+renders `app_name = "notification-app"` and
+`task_queue = "atlan-notification-app-{deployment_name}"`, and depends on the
+reserved run-level `workflow_failure` tag.
+
+That tag is the one `DependencyCondition` permitted without a `nodeId`: AE treats
+a node-less `workflow_failure` condition as a finalizer that evaluates true once
+the run terminates in failure (any non-finalizer node failed), so the alert
+fires once per failed run rather than per node. Any other tag without a `nodeId`
+is a contract error.
+
+Its `args.metadata` is templated from the run-level context AE injects at
+dispatch (`$.workflow.*` and `$.failure.*`): `notification_type`,
+`workflow_name`, `workflow_qualified_name`, `workflow_slug`, `status`,
+`started_at`, `completed_at`, `duration_ms`, `connector`, `schedule`,
+`next_run_time`, `last_runs`, `creator_name`, `modified_by_name`,
+`run_details_url`, `workflow_run_guid`, `error_message`, `error_category`,
+`suggested_action`, `failed_node_id`, and `failed_activity`. The richer
+fields (`connector`, `schedule`, `next_run_time`, `last_runs`, `creator_name`,
+`modified_by_name`) are populated best-effort by AE's failure-alert enrichment
+activity for the finalizer node only; any that can't be resolved arrive empty.
+
+To enable, set `notifyOnFailure = true`. To retarget the alert (different
+`appName`/`taskQueue`/args), define `extraNodes["notify-on-failure"]`. See
+`tests/notify_on_failure_test.pkl` and `examples/full/app.pkl`.
 
 ---
 
@@ -651,10 +703,13 @@ class FieldSpec {
   helpText: String?                      // Tooltip
   required: Boolean = true
   includeRequiredWhenFalse: Boolean = false
-  sensitive: Boolean = false             // true → password widget
-  fieldType: FieldType = "text"          // text|password|textarea|select|number|checkbox|url|email
+  sensitive: Boolean = false             // true → password widget unless fieldType is an upload widget
+  fieldType: FieldType = "text"          // text|password|textarea|select|number|checkbox|url|email|inputRepeater|fileUpload|credentialFileInput
   options: Listing<String>?              // For select fields
   optionLabels: Mapping<String, String>? // Display labels for options
+  fileTypes: Listing<String>?            // For upload widgets: accepted extensions or MIME types
+  fileMetadata: Boolean = true           // For upload widgets: emit metadata JSON mode
+  removeBeforeUpload: Boolean = false    // For upload widgets: emit legacy remove-before-upload flag
   defaultValue: String?                  // Pre-filled value
   validationRegex: String?               // Regex pattern
   width: Int = 8                         // Grid: 8=full, 4=half, 2=quarter
@@ -700,6 +755,8 @@ configmaps. New apps should normally leave them at their defaults.
 | `fieldType = "checkbox"` | `checkbox` |
 | `fieldType = "textarea"` | `TextInput` |
 | `fieldType = "inputRepeater"` | `inputRepeater` |
+| `fieldType = "fileUpload"` | `fileUpload` |
+| `fieldType = "credentialFileInput"` | `credentialFileInput` |
 | Default | `input` |
 
 ## ConditionalFieldSpec — Conditional Credential Field
@@ -767,6 +824,15 @@ open class AuthOption {
 Use `NamedWidget` when a workflow-style `Config.UIElement` needs a key inside
 the credential form. `fields`, `extraFields`, and `postExtraFields` all preserve
 declaration order.
+
+Use `fieldType = "fileUpload"` for credential fields that should render the
+frontend upload-only credential widget. Use `fieldType = "credentialFileInput"`
+for frontend's credential file-reference input: uploaded files are stored as JSON
+upload references, while typed reference values (for example secret-store keys or
+`objectstore://` paths) remain plain strings. The generated schema remains
+`type = "string"` and emits the selected upload widget plus optional `ui.accept`
+from `fileTypes`, `ui.fileMetadata`, and opt-in `ui.removeBeforeUpload` when the
+widget is emitted.
 
 Use `credentialSharedExtraFields` when the same `extra` metadata should be
 available regardless of auth type instead of being duplicated in every option.
@@ -884,6 +950,11 @@ When `credentialUrlGroup != null`, the credential JSON emits:
    - **`ui`** — default top-level `AdvancedJDBCUrlGroup` widget block pointing
      at `credential-guid.connectBy` / `credential-guid.extra.compiled_url`.
    - **`anyOf`** — enforces the selected auth-option pane is present.
+
+The renderer also emits each auth pane at the credential root as a hidden merge
+target for agent credential overrides. These root-level panes are not the
+visible credential UI; the visible JDBC auth panes live under
+`jdbcUrl.properties.<authKey>`.
 
 ### Classes
 
@@ -1123,7 +1194,7 @@ connections: Annotated[list[ConnectionRef], MaxItems(1000)] = Field(default_fact
 |---|---|---|---|
 | `NestedInput` | `nested` | `dict[str, Any]` | `inputs` — sub-element map |
 | `Sage` / `SageV2` | `sage` / `sageV2` | `str` | `checks` — preflight definitions. `connectorConfig` + `selectedCredentialGuid` route per-dialect checks to a selected connection's configmap. |
-| `FileUploader` | `fileUpload` | `FileReference \| None` | `fileTypes` |
+| `FileUploader` | `fileUpload` | `FileReference \| None` | `fileTypes`, optional `removeBeforeUpload` |
 | `AgentSelector` | `agent` | `dict[str, Any]` | `agentConfigEntries` — use `Listing<Any>` with `Mapping` for nested objects needing `"default"` keys |
 | `InfoBanner` | `infoBanner` | omitted by default | Static markdown banner with `bannerType`, `content`, optional `iconName`, `hideBannerIcon`, and `linkConfig`. Defaults to `includeInManifest=false` and `includeInInput=false`. Use `widgetName = "InfoBanner"` for credential banners that need that casing. |
 | `Switcher` | `switcher` | `bool` | Boolean switch with `switchTitle`, `defaultSelection`, optional `begin`, and `toastConfig`. Can be used in credential configs through `NamedWidget`. |
@@ -1252,6 +1323,11 @@ condition trees. It is mutually exclusive with `dependsOn`. For pre-built nodes
 that define a default `dependsOn`, set `dependsOn = null` before setting
 `dependsOnCondition`.
 
+The reserved `workflow_failure` tag is the only node-less tag condition the
+toolkit permits. It is run-level, not node-level: Automation Engine evaluates it
+for finalizer nodes once the workflow run fails. This is used by
+`NotificationNode`; other tags still require `nodeId`.
+
 ```pkl
 class DependencyCondition {
   nodeId: String?
@@ -1267,6 +1343,14 @@ Direct condition:
 dependsOnCondition = new DependencyCondition {
   nodeId = "extract"
   tag = "success"
+}
+```
+
+Run-level failure finalizer condition:
+
+```pkl
+dependsOnCondition = new DependencyCondition {
+  tag = "workflow_failure"
 }
 ```
 
@@ -1427,6 +1511,47 @@ For built-in extract/default publish retry and timeout policy, use
 manifest `error_handling` without replacing the generated nodes, and only accept
 workflow-safe `ErrorHandlingConfig` values. See `examples/publish-controls/`.
 
+### NotificationNode
+
+Pre-built run-failure notification system node. The toolkit appends it
+automatically as `notify-on-failure` when `notifyOnFailure = true`:
+
+```pkl
+class NotificationNode extends DAGNode {
+  displayName = "Notify on workflow failure"
+  workflowType = "NotificationWorkflow"
+  appName = "notification-app"
+  dependsOnCondition = new DependencyCondition { tag = "workflow_failure" }
+  args {
+    ["metadata"] {
+      ["notification_type"] = "workflow_failure_alert"
+      ["workflow_name"] = "$.workflow.name"
+      ["workflow_qualified_name"] = "$.workflow.qualified_name"
+      ["workflow_slug"] = "$.workflow.slug"
+      ["status"] = "$.workflow.status"
+      ["run_details_url"] = "$.workflow.run_url"
+      ["workflow_run_guid"] = "$.workflow.run_id"
+      ["error_message"] = "$.failure.message"
+      ["error_category"] = "$.failure.category"
+      ["suggested_action"] = "$.failure.suggested_action"
+      ["failed_node_id"] = "$.failure.node_id"
+      ["failed_activity"] = "$.failure.activity"
+    }
+  }
+}
+```
+
+It renders `app_name = "notification-app"` and
+`task_queue = "atlan-notification-app-{deployment_name}"`. Automation Engine
+resolves the `$.workflow.*` and `$.failure.*` placeholders when the finalizer
+runs, then the notification app fans the alert out to the tenant's enabled
+integrations. The finalizer uses `$.workflow.status`; Automation Engine exposes
+the effective terminal workflow status for this run-level failure node.
+
+Set `notifyOnFailure = true` for apps that should self-notify on workflow-run
+failure. To replace the default target or payload, define
+`extraNodes["notify-on-failure"]`.
+
 ### QueryIntelligenceNode
 
 Pre-built Query Intelligence workflow node. Defaults:
@@ -1456,18 +1581,18 @@ class QueryIntelligenceNode extends DAGNode {
   sqlKey: String
   catalogKey: String = "DATABASE_NAME"
   schemaKey: String = "SCHEMA_NAME"
-  timestampKey: String = "START_TIME"
-  mineOutputType: "parquet"|"json" = "parquet"
-  parsingMode: "fast"|"fallback"|"schema-aware"|"competitive"|"lorien-only" = "fallback"
+  @Deprecated timestampKey: String = "START_TIME"
+  mineOutputType: "parquet"|"json" = "json"
+  @Deprecated parsingMode: "fast"|"fallback"|"schema-aware"|"competitive"|"lorien-only" = "fallback"
   extraFilter: String?
   indirectLineage: Boolean|String? = null
   ignoreOrphans: Boolean|String? = null
-  columnsToPreserve: String?
+  @Deprecated columnsToPreserve: String?
   relatedAssetsOutputPrefix: String?
-  parserArtifactsKey: String?
+  @Deprecated parserArtifactsKey: String?
   connectionCacheKey: String?
   currentStatePrefix: String?
-  instanceName: String?
+  @Deprecated instanceName: String?
 }
 ```
 
@@ -1476,6 +1601,23 @@ Validation enforced at `pkl eval` time:
 
 Cloud bucket and backend are resolved from the QI app's pod environment, not
 per-workflow args. Configure storage at the QI app deployment, not on this node.
+
+**Deprecated fields (kept for back-compat, ignored by the QI app):**
+
+| Field | Reason |
+|---|---|
+| `timestampKey` | QI no longer filters records by timestamp. |
+| `parsingMode` | Parsing strategy is now tuned internally by QI per workload. |
+| `columnsToPreserve` | All columns/fields are preserved in JSON mode (now the default). |
+| `parserArtifactsKey` | No longer consumed by QI. |
+| `instanceName` | Instance name is read from QI app environment variables, not workflow args. |
+
+These fields still emit their corresponding args into `manifest.json` when set,
+but the QI app discards them. New contracts should not set them.
+
+**`mineOutputType` default flipped to `"json"`.** New integrations get JSON
+automatically. `"parquet"` remains valid for legacy miner-style inputs but
+should not be used by new contracts.
 
 Typical crawler-style example:
 
@@ -1486,9 +1628,6 @@ extraNodes {
     sqlKey = "attributes.definition"
     catalogKey = "attributes.databaseName"
     schemaKey = "attributes.schemaName"
-    timestampKey = ""
-    mineOutputType = "json"
-    parsingMode = "competitive"
     inputPrefix = "$.extract.outputs.transformed_data_prefix"
     outputPrefix = "$.extract.outputs.view_lineage_output_prefix"
   }
@@ -1571,9 +1710,8 @@ Per-source guidance for the source-shape fields:
 - `sourceQueryTypeQi`: SQL expression projected as `SOURCE_QUERY_TYPE` on the
   parsed-data view (`v_qi`). Snowflake / BigQuery parsed_data carry this
   column natively; Databricks parsed_data does NOT, so set
-  `"NULL::VARCHAR"` there. Also set `"NULL::VARCHAR"` for any source whose
-  Query Intelligence step is configured with a `columnsToPreserve` that
-  omits `SOURCE_QUERY_TYPE` (e.g. BigQuery today).
+  `"NULL::VARCHAR"` there. Set `"NULL::VARCHAR"` for any source whose
+  parsed_data does not natively expose `SOURCE_QUERY_TYPE`.
 - `parsedDataKeepFilter`: SQL predicate applied at `v_qi` build time to keep
   only popularity-relevant parsed rows. Default is QI's `OUTPUT_FLAGS`
   bitmask — bit 25 (Gudusoft, `33554432`) plus bit 26 (sqlglot,
@@ -1813,9 +1951,6 @@ extraNodes {
     sqlKey = "attributes.definition"
     catalogKey = "attributes.databaseName"
     schemaKey = "attributes.schemaName"
-    timestampKey = ""
-    mineOutputType = "json"
-    parsingMode = "competitive"
     inputPrefix = "$.extract.outputs.transformed_data_prefix"
     outputPrefix = "$.extract.outputs.view_lineage_output_prefix"
   }
@@ -1911,8 +2046,6 @@ extraNodes {
     sqlKey = "rendered_source"
     catalogKey = "datasource/database"
     schemaKey = ""
-    timestampKey = ""
-    mineOutputType = "json"
     inputPrefix = "$.extract.outputs.transformed_data_prefix"
     outputPrefix = "$.extract.outputs.qi_output_prefix"
   }

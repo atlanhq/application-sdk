@@ -103,7 +103,19 @@ inputs:
   dapr-version:
     required: false
     description: Dapr runtime version to install.
-    default: "1.16.2"
+    default: "1.17.9"
+  dapr-cli-version:
+    required: false
+    description: Dapr CLI version to download (may differ from the runtime version).
+    default: "1.17.1"
+  force-external-runtime:
+    required: false
+    description: >
+      Force the external Dapr CLI + Temporal CLI install steps to run even when the
+      installed SDK reports embedded runtime support (SDK >= 3.13). Use when the
+      connector's main.py has NOT been migrated to the embedded runtime path yet
+      and still expects external daprd at localhost:3500 + temporal at localhost:7233.
+    default: "false"
 
 runs:
   using: "composite"
@@ -132,35 +144,36 @@ runs:
         echo "SDK ${VER} -> embedded runtime: ${EMBEDDED}"
 
     - name: Install Dapr CLI
-      if: steps.runtime.outputs.embedded != 'true'
+      if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
       shell: bash
       run: |
-        DAPR_VERSION="${{ inputs.dapr-version }}"
-        wget -q "https://github.com/dapr/cli/releases/download/v${DAPR_VERSION}/dapr_linux_amd64.tar.gz" -O /tmp/dapr.tar.gz
+        DAPR_CLI_VERSION="${{ inputs.dapr-cli-version }}"
+        DAPR_RUNTIME_VERSION="${{ inputs.dapr-version }}"
+        wget -q "https://github.com/dapr/cli/releases/download/v${DAPR_CLI_VERSION}/dapr_linux_amd64.tar.gz" -O /tmp/dapr.tar.gz
         tar -xzf /tmp/dapr.tar.gz -C /tmp
         sudo mv /tmp/dapr /usr/local/bin/
         chmod +x /usr/local/bin/dapr
-        dapr init --runtime-version "${DAPR_VERSION}" --slim
+        dapr init --runtime-version "${DAPR_RUNTIME_VERSION}" --slim
 
     - name: Install Temporal CLI
-      if: steps.runtime.outputs.embedded != 'true'
+      if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
       shell: bash
       run: curl -sSf https://temporal.download/cli.sh | sh
 
     - name: Add Dapr and Temporal to PATH
-      if: steps.runtime.outputs.embedded != 'true'
+      if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
       shell: bash
       run: |
         echo "$HOME/.dapr/bin" >> "$GITHUB_PATH"
         echo "$HOME/.temporalio/bin" >> "$GITHUB_PATH"
 
     - name: Download Dapr components
-      if: steps.runtime.outputs.embedded != 'true'
+      if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
       shell: bash
       run: uv run poe download-components
 
     - name: Start Dapr + Temporal
-      if: steps.runtime.outputs.embedded != 'true'
+      if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
       shell: bash
       run: |
         uv run poe start-deps

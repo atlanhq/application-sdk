@@ -19,9 +19,6 @@ pipeline {
     sqlKey = "attributes.definition"
     catalogKey = "attributes.databaseName"
     schemaKey = "attributes.schemaName"
-    timestampKey = ""
-    mineOutputType = "json"
-    parsingMode = "competitive"
     inputPrefix = "$.extract.outputs.transformed_data_prefix"
     outputPrefix = "$.extract.outputs.view_lineage_output_prefix"
     // Demonstrates wiring ParseQueriesStep.ignoreOrphans /

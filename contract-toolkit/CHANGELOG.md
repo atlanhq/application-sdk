@@ -6,6 +6,31 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.11.1] - 2026-06-08
+
+### Bug fixes
+
+- hide JDBC merge-target auth panes (#2014) ([c290a98](https://github.com/atlanhq/application-sdk/commit/c290a98))
+
+## [0.11.0] - 2026-06-05
+
+### Features
+
+- add experimental run-failure notification node (ARUN-619) (#1988) ([b64ef49](https://github.com/atlanhq/application-sdk/commit/b64ef49))
+- support credential file upload widgets (#1997) ([fec1937](https://github.com/atlanhq/application-sdk/commit/fec1937))
+- codegen _e2e_base.py, _e2e_credential.py, _e2e_substitutions.py (#1980) ([0e70b7b](https://github.com/atlanhq/application-sdk/commit/0e70b7b))
+
+### Bug fixes
+
+- preserve in-pipeline position for extraNodes publish override (#1993) ([f1eda93](https://github.com/atlanhq/application-sdk/commit/f1eda93))
+
+## [0.10.5] - 2026-06-03
+
+### Bug fixes
+
+- update QI contract (#1971) ([a6345f6](https://github.com/atlanhq/application-sdk/commit/a6345f6))
+- emit lint-clean generated input contracts (#1967) ([c1dcdde](https://github.com/atlanhq/application-sdk/commit/c1dcdde))
+
 ## [0.10.4] - 2026-05-29
 
 ### Bug fixes

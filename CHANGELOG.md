@@ -1,5 +1,56 @@
 # Changelog
 
+## v3.16.0 (June 10, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.15.1...v3.16.0
+
+### Features
+
+- per-entrypoint compute_manifest hook for dynamic apps (#1629) (by @OnkarVO7 in [ff7ac8b](https://github.com/atlanhq/application-sdk/commit/ff7ac8b))
+- make worker default_versioning_behavior configurable (default PINNED) (#2029) (by @TechyMT in [c5025d4](https://github.com/atlanhq/application-sdk/commit/c5025d4))
+- emit per-activity cpu and memory cost metrics (#2030) (by @cmgrote in [c8ee9d8](https://github.com/atlanhq/application-sdk/commit/c8ee9d8))
+
+### Bug Fixes
+
+- use crane to copy large images GHCR → Docker Hub (#2020) (by @adityachoudhury-cloud in [d2dd1c0](https://github.com/atlanhq/application-sdk/commit/d2dd1c0))
+- handle empty parquet (0 MicroPartitions) in batched daft reader (#2028) (by @nishantmunjal7 in [b5ed14e](https://github.com/atlanhq/application-sdk/commit/b5ed14e))
+- close v2→v3 objectstore migration gaps (#2025) (by @cmgrote in [49fa19d](https://github.com/atlanhq/application-sdk/commit/49fa19d))
+- suppress Cloudflare 504 long-poll noise from Temporal gRPC bridge (#2031) (by @cmgrote in [8a5ef78](https://github.com/atlanhq/application-sdk/commit/8a5ef78))
+- remove postUpgradeTasks from shared preset (#2034) (by @cmgrote in [1e8b0b8](https://github.com/atlanhq/application-sdk/commit/1e8b0b8))
+- bump e2e HTTP per-request timeout from 30s to 60s (#2035) (by @cmgrote in [a17fce0](https://github.com/atlanhq/application-sdk/commit/a17fce0))
+
+
+## v3.15.1 (June 08, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.15.0...v3.15.1
+
+### Bug Fixes
+
+- bump dependencies and exclude sdk-version from capability manifest drift check (#2012) (by @cmgrote in [8ed4b09](https://github.com/atlanhq/application-sdk/commit/8ed4b09))
+
+
+## v3.15.0 (June 05, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.14.0...v3.15.0
+
+### Features
+
+- recommend embedded_runtime pattern for v3 (#1955) (by @vaibhavatlan in [915977c](https://github.com/atlanhq/application-sdk/commit/915977c))
+- align docs and skills with two-store storage architecture (ADR-0014) (#1982) (by @cmgrote in [44a113e](https://github.com/atlanhq/application-sdk/commit/44a113e))
+- /workflows/v1/input-contract + default entrypoint resolution (#1965) (by @OnkarVO7 in [40d7e92](https://github.com/atlanhq/application-sdk/commit/40d7e92))
+- App.upload FileReference fallback for cross-pod safety and SHA-256 dedup (BLDX-1377) (#2000) (by @cmgrote in [2ef2858](https://github.com/atlanhq/application-sdk/commit/2ef2858))
+
+### Bug Fixes
+
+- null-typed column safeguards at transformer + parquet reader (#1946) (by @vaibhavatlan in [6012944](https://github.com/atlanhq/application-sdk/commit/6012944))
+- align embedded Dapr store roots with static components (#1952) (by @cmgrote in [f203fcf](https://github.com/atlanhq/application-sdk/commit/f203fcf))
+- preserve ObjectStoreReadError classification in _download_files (#1959) (by @vaibhavatlan in [df95b55](https://github.com/atlanhq/application-sdk/commit/df95b55))
+- install all dependency groups when running app unit tests (#1974) (by @mustafahasankhan in [bac2752](https://github.com/atlanhq/application-sdk/commit/bac2752))
+- clearer Slack messages — label the app repo (#1977) (by @AtMrun in [1739a67](https://github.com/atlanhq/application-sdk/commit/1739a67))
+- preserve metadata template routing key in MetadataInput (#1968) (by @fyzanshaik-atlan in [92e4657](https://github.com/atlanhq/application-sdk/commit/92e4657))
+- harden key-type handling for None + non-primitive keys (#2001) (by @adityachoudhury-cloud in [d16878b](https://github.com/atlanhq/application-sdk/commit/d16878b))
+
+
 ## v3.14.0 (May 29, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.13.4...v3.14.0

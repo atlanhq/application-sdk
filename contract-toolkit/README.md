@@ -124,15 +124,30 @@ Credentials are shared — a user creates credentials once and reuses them acros
 
 Credential `FieldSpec` values render to frontend widget schemas. For boolean
 credential checkboxes, use `fieldType = "checkbox"`; the generated JSON keeps
-`type = "boolean"` and emits `ui.widget = "checkbox"`. When `credentialAuthOptions`
-has a single entry, the auth-type radio is auto-hidden — the generated default
-is still emitted, so no form input is required.
+`type = "boolean"` and emits `ui.widget = "checkbox"`. For credential file
+uploads, use `fieldType = "fileUpload"` with `fileTypes { ".crt"; ".pem" }`.
+For frontend's credential file-reference input, use
+`fieldType = "credentialFileInput"`; uploaded files are stored as JSON upload
+references, while typed reference values (for example secret-store keys or
+`objectstore://` paths) remain plain strings. The generated JSON emits the
+selected upload widget plus `ui.accept`, `ui.fileMetadata`, and opt-in
+`ui.removeBeforeUpload` when the widget is emitted. When
+`credentialAuthOptions` has a single entry, the auth-type radio is auto-hidden —
+the generated default is still emitted, so no form input is required.
+For `credentialUrlGroup` forms, the visible auth panes live inside
+`jdbcUrl.properties`; root-level auth panes are hidden merge targets for agent
+credential overrides.
 
 ### Manifest (`app/generated/manifest.json`)
 
 Automation Engine DAG template. Auto-derived from the declared workflow params and the typed `pipeline` block. Heracles substitutes `{{param}}` placeholders with form values before sending to AE.
 
-Default pipeline: `extract → publish`. Opt out of publish with `pipeline.publish = null`. Add parseQueries, popularity, or lineage steps by setting the corresponding `pipeline.*` field.
+Default pipeline: `extract → publish`. Opt out of publish with
+`pipeline.publish = null`. Add parseQueries, popularity, or lineage steps by
+setting the corresponding `pipeline.*` field. Opt in to failure notifications
+with `notifyOnFailure = true`.
+
+A run-level **failure-notification node** (`notify-on-failure`) is appended when `notifyOnFailure = true`. It depends on the reserved run-level `workflow_failure` tag — Automation Engine runs it once when the workflow run terminates in failure — and dispatches the `notification-app` to fan alerts out to the tenant's enabled integrations (Teams, etc.). By default the node is not emitted.
 
 ### `_input.py` (`app/generated/_input.py`)
 
@@ -231,6 +246,21 @@ pipeline {
 
 Dependencies between pipeline steps are **auto-wired** based on position — you do not write `dependsOn` for pipeline steps. Use `extraNodes` for custom nodes outside the typed pipeline.
 
+The toolkit can append a run-level failure notification node when an app opts in:
+
+```pkl
+notifyOnFailure = true
+```
+
+When enabled, the generated manifest includes `notify-on-failure`, a
+`NotificationNode` that dispatches `NotificationWorkflow` in `notification-app`.
+It depends on the reserved run-level `workflow_failure` tag, so Automation
+Engine runs it once after the workflow run fails and resolves the payload from
+`$.workflow.*` and `$.failure.*` context. The notification app then fans the
+alert out to the tenant's enabled integrations.
+
+To replace the generated node, define `extraNodes["notify-on-failure"]`.
+
 **Mapping from old API:**
 
 | Old | New |
@@ -246,7 +276,7 @@ Dependencies between pipeline steps are **auto-wired** based on position — you
 | `extraNodes { ["lineage-app"] = new LineageNode { ... } }` | `pipeline.lineage = new LineageStep { ... }` |
 | `extraNodes { ["lineage-publish"] = new LineagePublishNode { ... } }` | `pipeline.publish.lineagePublish = new LineagePublishStep { ... }` |
 
-`extraNodes` is still available as an escape hatch for nodes that fall outside the canonical pipeline (e.g. custom fan-in or notification steps).
+`extraNodes` is still available as an escape hatch for nodes that fall outside the canonical pipeline (e.g. custom fan-in steps).
 
 ## Deploy Block
 

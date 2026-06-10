@@ -8,10 +8,10 @@ from datetime import datetime, timedelta
 from time import time
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
 
-import orjson
-
 if TYPE_CHECKING:
-    from obstore.store import ObjectStore
+    from application_sdk.storage.ops import BoundStore
+
+import orjson
 
 from application_sdk.constants import (
     APPLICATION_NAME,
@@ -70,8 +70,8 @@ class AtlanObservability(Generic[T], ABC):
 
     _last_cleanup_key = "last_cleanup_time"
     _instances: ClassVar[list[Any]] = []
-    _deployment_store: ClassVar["ObjectStore | None"] = None
-    _upstream_store: ClassVar["ObjectStore | None"] = None
+    _deployment_store: ClassVar["BoundStore | None"] = None
+    _upstream_store: ClassVar["BoundStore | None"] = None
 
     @classmethod
     def _components_dir(cls) -> str:
@@ -80,29 +80,33 @@ class AtlanObservability(Generic[T], ABC):
         return os.environ.get("DAPR_COMPONENTS_PATH", "./components")
 
     @classmethod
-    def _get_deployment_store(cls):
+    def _get_deployment_store(cls) -> "BoundStore":
         if cls._deployment_store is None:
             from application_sdk.storage.binding import (  # noqa: PLC0415
-                create_store_from_binding,
+                create_store_from_binding_with_put_attrs,
             )
+            from application_sdk.storage.ops import BoundStore  # noqa: PLC0415
 
-            cls._deployment_store = create_store_from_binding(
+            store, put_attrs = create_store_from_binding_with_put_attrs(
                 DEPLOYMENT_OBJECT_STORE_NAME,
                 components_dir=cls._components_dir(),
             )
+            cls._deployment_store = BoundStore(store, put_attrs)
         return cls._deployment_store
 
     @classmethod
-    def _get_upstream_store(cls):
+    def _get_upstream_store(cls) -> "BoundStore":
         if cls._upstream_store is None:
             from application_sdk.storage.binding import (  # noqa: PLC0415 — deferred to break the observability→storage circular import
-                create_store_from_binding,
+                create_store_from_binding_with_put_attrs,
             )
+            from application_sdk.storage.ops import BoundStore  # noqa: PLC0415
 
-            cls._upstream_store = create_store_from_binding(
+            store, put_attrs = create_store_from_binding_with_put_attrs(
                 UPSTREAM_OBJECT_STORE_NAME,
                 components_dir=cls._components_dir(),
             )
+            cls._upstream_store = BoundStore(store, put_attrs)
         return cls._upstream_store
 
     def __init__(

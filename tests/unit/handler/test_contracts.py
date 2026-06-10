@@ -460,3 +460,56 @@ class TestMetadataInputFieldTypes:
         )
         assert isinstance(inp.connection_config, BaseConnectionConfig)
         assert inp.connection_config.model_extra == {"host": "db"}
+
+    def test_metadata_template_key_accepts_canonical_field(self):
+        inp = MetadataInput.model_validate(
+            {"credentials": [], "metadata_template_key": "feedbacks"}
+        )
+        assert inp.metadata_template_key == "feedbacks"
+
+    def test_metadata_template_key_accepts_wire_aliases(self):
+        # The orchestrator sends the routing key as ``metadataTemplateKey`` (with
+        # a ``type`` mirror); both populate ``metadata_template_key`` via the
+        # field's validation alias rather than being punned into object_filter.
+        for key in ("metadataTemplateKey", "type"):
+            inp = MetadataInput.model_validate({"credentials": [], key: "feedbacks"})
+            assert inp.metadata_template_key == "feedbacks"
+
+
+class TestEntrypointRefAlias:
+    """`entrypoint_ref` is a NEW field added by this PR. It accepts the wire key
+    `connector` (validation_alias) and serializes back to `connector`
+    (serialization_alias), so Heracles' existing payload shape works without an
+    orchestrator-side change. It is informational only — per-entrypoint routing
+    uses the separate `entrypoint` field, not this one.
+    """
+
+    @pytest.mark.parametrize("cls", [AuthInput, PreflightInput, MetadataInput])
+    def test_wire_connector_key_populates_entrypoint_ref(self, cls):
+        inp = cls.model_validate({"credentials": [], "connector": "bundle-ep-a"})
+        assert inp.entrypoint_ref == "bundle-ep-a"
+
+    @pytest.mark.parametrize("cls", [AuthInput, PreflightInput, MetadataInput])
+    def test_canonical_entrypoint_ref_key_accepted(self, cls):
+        inp = cls.model_validate({"credentials": [], "entrypoint_ref": "bundle-ep-a"})
+        assert inp.entrypoint_ref == "bundle-ep-a"
+
+    def test_serializes_back_to_connector_wire_key(self):
+        inp = AuthInput.model_validate({"credentials": [], "connector": "bundle-ep-a"})
+        dumped = inp.model_dump(by_alias=True)
+        assert dumped["connector"] == "bundle-ep-a"
+        assert "entrypoint_ref" not in dumped
+
+    @pytest.mark.parametrize("cls", [AuthInput, PreflightInput, MetadataInput])
+    def test_explicit_entrypoint_field_is_independent(self, cls):
+        """The authoritative `entrypoint` (bare name) is a distinct field from
+        the legacy `entrypoint_ref` (bundle-prefixed connector)."""
+        inp = cls.model_validate(
+            {
+                "credentials": [],
+                "entrypoint": "asset-export-advanced",
+                "connector": "csa-uber-asset-export-advanced",
+            }
+        )
+        assert inp.entrypoint == "asset-export-advanced"
+        assert inp.entrypoint_ref == "csa-uber-asset-export-advanced"

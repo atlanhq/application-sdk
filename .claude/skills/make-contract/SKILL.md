@@ -180,6 +180,12 @@ Rules for stable contracts:
 
 ## Authoring Rules
 
+> **FileReference and App.upload():** If your contract carries a `FileReference` that must
+> reach a downstream Atlan system app (publish, lineage, quality), the connector must call
+> `App.upload()` explicitly from `run()` — the task-to-task activity interceptor only writes
+> to the customer-owned `objectstore`. See
+> [ADR-0014](../../docs/adr/0014-two-store-storage-architecture.md).
+
 Prefer typed toolkit APIs over raw JSON:
 
 - `NativeApp.pkl` for standard single-entrypoint contracts.

@@ -55,11 +55,6 @@ on:
         required: false
         type: string
         default: "https://home.atlan.com"
-      snyk_monitor:
-        description: "Push scan results to Snyk UI dashboard via snyk container monitor (default: false)"
-        required: false
-        type: boolean
-        default: false
       release_tag:
         description: "Git tag of the release (e.g. v1.2.3) — when set, pushes a version-tag ladder to GHCR in addition to the standard branch tags. Pass github.event.release.tag_name for release events."
         required: false
@@ -70,6 +65,11 @@ on:
         required: false
         type: string
         default: ""
+      lfs:
+        description: "Check out git-LFS objects before building the image (default false). Set true for apps that vendor LFS-tracked assets (e.g. large parser jars) into the Docker build context — without it the build copies the LFS pointer, not the real file. Only applied to the image-build checkout; other jobs do not need LFS content."
+        required: false
+        type: boolean
+        default: false
     secrets:
       ORG_PAT_GITHUB:
         required: true
@@ -80,6 +80,9 @@ on:
       APP_PUBLISH_TOKEN:
         required: false
         description: "API token for marketplace publish — required when publish=true"
+      SLACK_LEAK_SCAN_WEBHOOK:
+        required: false
+        description: "Slack incoming-webhook URL (hooks.slack.com) for credential-leak (creds-into-logs) WARNINGS. Org-level secret, passed via `secrets: inherit` — same convention as SLACK_DEP_COOLDOWN_WEBHOOK. Warnings are non-blocking; when unset the Slack ping is skipped. Never receives secret values — only file:line locations."
 
 permissions:
   contents: read
@@ -204,7 +207,12 @@ jobs:
   # `unit_tests_workflow_file` — apps that have not onboarded skip the gate.
   unit-tests-gate:
     name: Unit-tests gate
-    if: inputs.publish && inputs.unit_tests_workflow_file != ''
+    # Permanently disabled (#1943): unit-test enforcement now lives in the
+    # `certify` job, which runs the app's tests directly. The job body and the
+    # `unit_tests_workflow_file` input are retained for backward compatibility
+    # — callers that still pass the input validate fine and the value is simply
+    # ignored, so nothing fails hard. Revert this line to re-enable the gate.
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -416,11 +424,50 @@ jobs:
         working-directory: app
         run: uv sync --all-extras --frozen
 
-      # ── 3. Contract drift ─────────────────────────────────────────────────────
+      # PKL is required by pkl-based apps' `poe generate` (run in the Contract
+      # drift step below, which does `rm -rf app/generated && pkl eval ...`).
+      # The contract-toolkit-* workflows install it but this Certify job did
+      # not, so for pkl apps `poe generate` failed with `pkl: not found` AFTER
+      # wiping app/generated — breaking the enforced unit-test step.
+      - name: Install PKL
+        if: steps.app_install.outcome == 'success'
+        run: |
+          set -euo pipefail
+          PKL_VERSION="0.27.2"
+          curl -fsSL -o /tmp/pkl "https://github.com/apple/pkl/releases/download/${PKL_VERSION}/pkl-linux-amd64"
+          chmod +x /tmp/pkl
+          sudo mv /tmp/pkl /usr/local/bin/pkl
+          pkl --version
+
+      # Most app `poe generate` tasks invoke `pkl eval --ca-certificates
+      # ~/.pkl-ca-bundle.pem ...` — that path is Atlan's local-dev convention
+      # (per atlan-cli's defaultCert and ~20 connector pyproject.toml files)
+      # for honoring the corporate proxy/VPN CA. GitHub runners have no such
+      # file, so pkl fails with "Cannot find CA certificate file" BEFORE it
+      # can resolve `@app-contract-toolkit/NativeApp.pkl` over HTTPS. Seed
+      # ~/.pkl-ca-bundle.pem from the runner's system trust store so every
+      # app's `--ca-certificates ~/.pkl-ca-bundle.pem` resolves to a valid
+      # bundle in CI without app-side changes.
+      - name: Seed pkl CA bundle from system trust store
+        if: steps.app_install.outcome == 'success'
+        run: |
+          set -euo pipefail
+          SYSTEM_CA="/etc/ssl/certs/ca-certificates.crt"
+          if [ ! -f "$SYSTEM_CA" ]; then
+            echo "::warning::System CA bundle $SYSTEM_CA not found; skipping pkl CA seed."
+            exit 0
+          fi
+          cp "$SYSTEM_CA" "$HOME/.pkl-ca-bundle.pem"
+          echo "Seeded $HOME/.pkl-ca-bundle.pem from $SYSTEM_CA"
+
+      # ── 3. Contract drift (enforced) ─────────────────────────────────────────
+      # Failure here exits non-zero and (via the standard step-fail cascade)
+      # also fails the job. Unit tests + coverage below use `always() &&` so
+      # they still run and report — the user sees every signal in one pass —
+      # even though the job's final status is already failed.
       - name: "Contract drift — poe generate must be a no-op"
         id: contract_drift
         if: steps.app_install.outcome == 'success'
-        continue-on-error: true
         working-directory: app
         run: |
           set -euo pipefail
@@ -432,16 +479,16 @@ jobs:
             echo "::warning::'poe' task runner not available — cannot run drift check."
             exit 0
           fi
-          uv run poe generate || { echo "::warning::'poe generate' failed"; exit 1; }
+          uv run poe generate || { echo "::error::'poe generate' failed"; exit 1; }
           if ! git diff --exit-code -- generated/; then
-            echo "::warning::generated/ is stale — run 'poe generate' locally and commit."
+            echo "::error::generated/ is stale — run 'poe generate' locally and commit."
             exit 1
           fi
 
       # ── 4. Unit tests (enforced) + coverage threshold (warn-only) ───────────────
       - name: "Unit tests"
         id: unit
-        if: steps.app_install.outcome == 'success'
+        if: always() && steps.app_install.outcome == 'success'
         continue-on-error: true
         working-directory: app
         run: |
@@ -450,11 +497,16 @@ jobs:
             echo "No tests/unit/ — skipping."
             exit 0
           fi
-          uv run --with pytest-cov pytest tests/unit --cov=app --cov-report=term
+          # --all-groups so the app's test dependency group (pytest plugins like
+          # pytest-asyncio, etc.) is installed. `uv run` otherwise re-syncs to only
+          # the default groups, pruning any test deps an app keeps in a non-default
+          # group — which silently breaks async/plugin-dependent suites and trips
+          # this gate on a packaging gap rather than a real failure.
+          uv run --all-groups --with pytest-cov pytest tests/unit --cov=app --cov-report=term
 
       - name: "Coverage threshold (>=85%)"
         id: coverage_threshold
-        if: steps.unit.outcome == 'success'
+        if: always() && steps.unit.outcome == 'success'
         continue-on-error: true
         working-directory: app
         run: |
@@ -466,10 +518,12 @@ jobs:
           uv run coverage report --data-file=.coverage --fail-under=85
 
       # ── Verdict ───────────────────────────────────────────────────────────────
-      # Unit test pass/fail (UT) ENFORCES: a ❌ exits non-zero, trips
-      # `prepare`'s `if: !failure()`, and skips build + publish.
-      # Coverage threshold (COV), v3 shape (CM), and contract drift (CD)
-      # are warn-only — they annotate but do not block.
+      # Unit test pass/fail (UT) and contract drift (CD) ENFORCE: a ❌ exits
+      # non-zero, trips `prepare`'s `if: !failure()`, and skips build + publish.
+      # (CD's enforcement comes from the step itself — no continue-on-error.
+      # The verdict re-checks CD only to render the summary correctly.)
+      # Coverage threshold (COV) and v3 shape (CM) are warn-only — they
+      # annotate but do not block.
       - name: Certification verdict
         if: always()
         env:
@@ -498,11 +552,11 @@ jobs:
             echo "### App certification"
             echo ""
             render "$cm_label" "$CM"
-            render "Contract drift (poe generate) — warn-only${app_label}" "$CD"
+            render "Contract drift (poe generate) — enforced${app_label}" "$CD"
             render "Unit tests — enforced${app_label}" "$UT"
             render "Coverage (>=85%) — warn-only" "$COV"
             echo ""
-            echo "**Unit test pass/fail blocks publish on ❌.** Coverage threshold, v3 shape, and contract drift are warn-only during rollout. See [docs/standards/app-certification.md](https://github.com/atlanhq/application-sdk/blob/main/docs/standards/app-certification.md)."
+            echo "**Unit tests and contract drift block publish on ❌.** Coverage threshold and v3 shape are warn-only during rollout. See [docs/standards/app-certification.md](https://github.com/atlanhq/application-sdk/blob/main/docs/standards/app-certification.md)."
           } >> "${GITHUB_STEP_SUMMARY}"
           if [ "$SDK_INSTALL" != "success" ]; then
             echo "::warning title=Certification incomplete::SDK install failed, so check_migration did not run."
@@ -510,11 +564,20 @@ jobs:
           if [ "$APP_INSTALL" != "success" ]; then
             echo "::warning title=Certification incomplete::App install failed; contract drift and unit tests did not run."
           fi
-          if [ "$CM" = "failure" ] || [ "$CD" = "failure" ]; then
-            echo "::warning title=Certification warning (warn-only)::v3 shape and/or contract drift failed; publish proceeded (warn-only)."
+          if [ "$CM" = "failure" ]; then
+            echo "::warning title=Certification warning (warn-only)::v3 shape failed; publish proceeded (warn-only)."
           fi
           if [ "$COV" = "failure" ]; then
             echo "::warning title=Certification warning (warn-only)::Coverage below 85%; publish proceeded (warn-only)."
+          fi
+          if [ "$CD" = "failure" ]; then
+            {
+              echo ""
+              echo "### ❌ Publish blocked — contract drift"
+              echo ""
+              echo "\`poe generate\` either failed or produced changes in \`app/generated/\`. Run it locally and commit the diff."
+            } >> "${GITHUB_STEP_SUMMARY}"
+            echo "::error title=Publish blocked::Contract drift detected. Build and publish blocked."
           fi
           if [ "$UT" = "failure" ]; then
             {
@@ -524,23 +587,251 @@ jobs:
               echo "Fix the failing tests and re-run."
             } >> "${GITHUB_STEP_SUMMARY}"
             echo "::error title=Publish blocked::Unit tests failed. Build and publish blocked."
+          fi
+          if [ "$CD" = "failure" ] || [ "$UT" = "failure" ]; then
             exit 1
           fi
           exit 0
 
+  # ── Job 0d: Credential-leak gate ──────────────────────────────────────────────
+  # Two deterministic layers (no LLM, no token), run before any build minutes:
+  #   1. Hardcoded secrets (gitleaks) — BLOCKING. A committed secret (API key,
+  #      token, private key) fails the job, which trips prepare's `!failure()`
+  #      and skips build + publish. High precision; honors .gitleaks.toml.
+  #   2. Creds-into-logs (scan.py) — WARN-ONLY. Flags credentials reaching
+  #      log/print/format/CLI sinks (the APP-1602 audit class). Pure-regex
+  #      detection has an irreducible false-positive rate (it cannot always tell
+  #      a logged secret value from a logged non-secret field), so it does NOT
+  #      block: it annotates the run summary and pings Slack when there are
+  #      warnings. Honors an app-level .credential-leak-allow allowlist.
+  # Only runs when publish=true (matches validate-channel / certify).
+  # See docs/standards/credential-leak-gate.md.
+  leak-scan:
+    name: Credential leak gate
+    if: inputs.publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout app
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          path: app
+          fetch-depth: 1
+
+      - name: Checkout SDK gate assets
+        # Pull only the vendored scanner + ruleset from the SDK at main, so the
+        # gate is self-contained at publish time (no private cross-repo fetch of
+        # the connector-pulse nightly skill). ORG_PAT_GITHUB grants the
+        # cross-repo read a consumer app's scoped GITHUB_TOKEN cannot.
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          repository: atlanhq/application-sdk
+          ref: main
+          path: sdk
+          sparse-checkout: .github/scripts/credential-leak-gate
+          sparse-checkout-cone-mode: false
+          token: ${{ secrets.ORG_PAT_GITHUB }}
+
+      # ── Layer 1: deterministic hardcoded-secret scan (gitleaks) ───────────────
+      - name: Install gitleaks
+        run: |
+          set -euo pipefail
+          GITLEAKS_VERSION=8.21.2
+          # Pin the artifact by SHA-256 (not just version): the checksum is
+          # hardcoded here, so a tampered release asset fails verification
+          # rather than being trusted because it sits at the right URL.
+          GITLEAKS_SHA256=5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba
+          curl -sSL \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            -o /tmp/gitleaks.tar.gz
+          echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: gitleaks — hardcoded secrets
+        id: gitleaks
+        working-directory: app
+        run: |
+          set -euo pipefail
+          # Scan the working tree, not git history: a publish checkout is a
+          # single shallow commit. Drop .git so gitleaks doesn't walk internals.
+          rm -rf .git
+          CONFIG_ARGS=()
+          if [ -f .gitleaks.toml ]; then
+            echo "Using app-level .gitleaks.toml allowlist"
+            CONFIG_ARGS=(--config .gitleaks.toml)
+          fi
+          set +e
+          # --redact: replace secret values with "REDACTED" in the report, so
+          # the raw secret never lands on disk. The summary/Slack steps read only
+          # File/StartLine/RuleID anyway, but this is defense-in-depth.
+          gitleaks dir \
+            --redact \
+            --report-format json \
+            --report-path /tmp/gitleaks-report.json \
+            "${CONFIG_ARGS[@]}" \
+            .
+          RC=$?
+          set -e
+          COUNT=$(jq 'length' /tmp/gitleaks-report.json 2>/dev/null || echo 0)
+          if [ "$RC" -ne 0 ] || [ "$COUNT" -gt 0 ]; then
+            # Emit redacted finding LOCATIONS only — never the secret value
+            # (the report's Secret/Match fields are not printed or uploaded).
+            {
+              echo "### ❌ Publish blocked — hardcoded secret(s) detected"
+              echo ""
+              echo "gitleaks found ${COUNT} hardcoded secret(s) in the source. Locations only (values withheld):"
+              echo ""
+              jq -r '.[] | "- `\(.File):\(.StartLine)` — rule: \(.RuleID)"' /tmp/gitleaks-report.json 2>/dev/null || true
+              echo ""
+              echo "Remove the secret(s), **rotate** any that were committed, and re-run. Allowlist confirmed false positives in \`.gitleaks.toml\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=Publish blocked::gitleaks found ${COUNT} hardcoded secret(s). See workflow summary."
+            exit 1
+          fi
+          echo "gitleaks: no hardcoded secrets found."
+
+      - name: Notify Slack on hardcoded-secret block
+        # The gitleaks layer hard-blocks the publish — alert Slack too. Runs only
+        # when the gitleaks step failed. Same webhook + host allowlist + hardened
+        # curl as the warn-only creds-into-logs notifier. Posts finding LOCATIONS
+        # only (never the secret value). Exits 0 so it can't mask the block.
+        if: always() && steps.gitleaks.outcome == 'failure'
+        env:
+          WEBHOOK: ${{ secrets.SLACK_LEAK_SCAN_WEBHOOK }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "${WEBHOOK:-}" ]; then
+            echo "::notice::SLACK_LEAK_SCAN_WEBHOOK not set — skipping Slack notification."
+            exit 0
+          fi
+          case "$WEBHOOK" in
+            https://hooks.slack.com/*) ;;
+            *) echo "::warning::SLACK_LEAK_SCAN_WEBHOOK is not a hooks.slack.com URL — refusing to send."; exit 0 ;;
+          esac
+          R=/tmp/gitleaks-report.json
+          COUNT=$(jq 'length' "$R" 2>/dev/null || echo "?")
+          # Top 10 locations only — the report's Secret/Match fields are never read.
+          LOCS=$(jq -r '.[] | "• `\(.File):\(.StartLine)` — \(.RuleID)"' "$R" 2>/dev/null | head -10)
+          TEXT=$(printf ':no_entry: *Publish BLOCKED — hardcoded secret(s)*\n*App repo:* `%s`\ngitleaks found %s secret(s) in source. Remove and *rotate* them — locations below (values withheld):\n%s\n<%s|View workflow run>' \
+            "$REPO" "$COUNT" "$LOCS" "$RUN_URL")
+          jq -n --arg t "$TEXT" '{text: $t}' \
+            | curl -sS --fail --max-time 10 -X POST -H 'Content-type: application/json' --data @- "$WEBHOOK" \
+            || echo "::warning::Slack notification failed (non-blocking)."
+
+      # ── Layer 2: creds-into-logs scan (regex, no LLM) — WARN-ONLY ─────────────
+      - name: Creds-into-logs scan (warn-only)
+        id: credscan
+        # `|| true`: this layer never fails the job. scan.py exits non-zero when
+        # it finds CRITICAL/HIGH, but here that is advisory — only gitleaks
+        # (Layer 1) blocks the publish. The verdict JSON is the source of truth.
+        run: |
+          set -uo pipefail
+          python3 sdk/.github/scripts/credential-leak-gate/scan.py \
+            --root app \
+            --report /tmp/leak-gate-verdict.json || true
+          # Surface counts for the summary + Slack steps. Defaults are safe if
+          # the scan errored (warn-only — an operational failure must not block).
+          V=/tmp/leak-gate-verdict.json
+          if [ -f "$V" ] && jq empty "$V" 2>/dev/null; then
+            echo "findings=$(jq -r '.summary.total_findings // 0' "$V")" >> "$GITHUB_OUTPUT"
+            echo "blocking=$(jq -r '.summary.blocking // 0' "$V")" >> "$GITHUB_OUTPUT"
+            echo "critical=$(jq -r '.summary.critical // 0' "$V")" >> "$GITHUB_OUTPUT"
+            echo "high=$(jq -r '.summary.high // 0' "$V")" >> "$GITHUB_OUTPUT"
+            echo "medium=$(jq -r '.summary.medium // 0' "$V")" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning title=Creds-into-logs scan incomplete::No valid verdict produced; reporting 0 (warn-only, publish not blocked)."
+            echo "findings=0" >> "$GITHUB_OUTPUT"
+            echo "blocking=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Creds-into-logs report (run summary)
+        if: always() && steps.gitleaks.outcome == 'success'
+        env:
+          WARN: ${{ steps.credscan.outputs.blocking || '0' }}
+          CRIT: ${{ steps.credscan.outputs.critical || '0' }}
+          HIGH: ${{ steps.credscan.outputs.high || '0' }}
+          MED: ${{ steps.credscan.outputs.medium || '0' }}
+        run: |
+          set -euo pipefail
+          V=/tmp/leak-gate-verdict.json
+          if [ "${WARN}" -gt 0 ]; then
+            {
+              echo "### ⚠️ Credential leak warnings (non-blocking)"
+              echo ""
+              echo "gitleaks: ✅ no hardcoded secrets (blocking layer passed)."
+              echo ""
+              echo "Creds-into-logs found ${WARN} likely finding(s) (${CRIT} critical, ${HIGH} high). **This does not block the publish** — review and fix, or allowlist confirmed false positives in \`.credential-leak-allow\`. Locations only (values never recorded):"
+              echo ""
+              jq -r '.findings[]? | select(.severity=="CRITICAL" or .severity=="HIGH") | "- `\(.file):\(.line)` — \(.pattern_id) (var: \(.variable_name), \(.severity))"' "$V"
+              echo ""
+              echo "See docs/standards/credential-leak-gate.md."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning title=Credential-leak warnings::${WARN} credential(s) may reach a log/CLI sink (non-blocking). See run summary."
+          else
+            {
+              echo "### ✅ Credential leak gate"
+              echo ""
+              echo "gitleaks: ✅ no hardcoded secrets (blocking). Creds-into-logs: ✅ no warnings (${MED} medium, non-blocking)."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Notify Slack on warnings
+        # Warn-only signal → Slack. Gated on the step OUTPUT (not the secret):
+        # secrets are unavailable in `if:`, so the secret presence is checked
+        # inside the step instead. Mirrors reusable-dep-cooldown.yml.
+        if: always() && steps.gitleaks.outcome == 'success' && (steps.credscan.outputs.blocking || '0') != '0'
+        env:
+          WEBHOOK: ${{ secrets.SLACK_LEAK_SCAN_WEBHOOK }}
+          CRIT: ${{ steps.credscan.outputs.critical }}
+          HIGH: ${{ steps.credscan.outputs.high }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "${WEBHOOK:-}" ]; then
+            echo "::notice::SLACK_LEAK_SCAN_WEBHOOK not set — skipping Slack notification."
+            exit 0
+          fi
+          # Host allowlist: refuse to send if the secret is ever tampered to
+          # point somewhere other than Slack.
+          case "$WEBHOOK" in
+            https://hooks.slack.com/*) ;;
+            *) echo "::warning::SLACK_LEAK_SCAN_WEBHOOK is not a hooks.slack.com URL — refusing to send."; exit 0 ;;
+          esac
+          V=/tmp/leak-gate-verdict.json
+          # Top 10 locations only — never secret values.
+          LOCS=$(jq -r '.findings[]? | select(.severity=="CRITICAL" or .severity=="HIGH") | "• `\(.file):\(.line)` — \(.pattern_id) (\(.severity))"' "$V" | head -10)
+          TEXT=$(printf ':warning: *Credential-leak warning — publish NOT blocked*\n*App repo:* `%s`\n%s critical, %s high credential(s) reaching log/CLI sinks — locations below (values withheld):\n%s\n<%s|View workflow run>' \
+            "$REPO" "$CRIT" "$HIGH" "$LOCS" "$RUN_URL")
+          # jq builds the JSON so the message is safely escaped. --fail/--max-time
+          # so a hung Slack endpoint can't stall or fail the job (warn-only).
+          jq -n --arg t "$TEXT" '{text: $t}' \
+            | curl -sS --fail --max-time 10 -X POST -H 'Content-type: application/json' --data @- "$WEBHOOK" \
+            || echo "::warning::Slack notification failed (non-blocking)."
+
   # ── Job 1: Read atlan.yaml, validate secrets, compute all image tags ──────────
   prepare:
-    needs: [validate-channel, unit-tests-gate, certify]
-    # `needs: [validate-channel, unit-tests-gate, certify]` only enforces
-    # ordering when those jobs run. When publish=false, all three are skipped
-    # via their `if:` — which by default would propagate "skipped" to
-    # dependents. The condition below explicitly allows prepare to run when
-    # those jobs are skipped OR successful, but NOT when one failed. `certify`
-    # enforces its unit + coverage check: a failing run exits non-zero, which
-    # trips `failure()` here and correctly skips prepare → build → publish. Its
-    # other layers (v3 shape, contract drift) stay warn-only (always exit 0) so
-    # they never trip this yet. `unit-tests-gate` is currently warn-only;
-    # its enforcement-flip is tracked separately.
+    needs: [validate-channel, unit-tests-gate, certify, leak-scan]
+    # `needs: [...]` only enforces ordering when those jobs run. When
+    # publish=false, all of them are skipped via their `if:` — which by default
+    # would propagate "skipped" to dependents. The condition below explicitly
+    # allows prepare to run when those jobs are skipped OR successful, but NOT
+    # when one failed. `certify` enforces unit tests and contract drift: a
+    # failing run exits non-zero, which trips `failure()` here and correctly
+    # skips prepare → build → publish. Its other layers (v3 shape, coverage
+    # threshold) stay warn-only (always exit 0) so they never trip this yet.
+    # `leak-scan` blocks ONLY on its gitleaks (hardcoded-secret) layer: that
+    # step exits non-zero, fails the job, and trips `failure()` here to skip the
+    # publish. Its creds-into-logs layer is warn-only (annotates + pings Slack,
+    # never fails the job), so warnings do not block. `unit-tests-gate` is
+    # currently warn-only; its enforcement-flip is tracked separately.
     if: ${{ !failure() && !cancelled() }}
     name: Prepare
     runs-on: ubuntu-latest
@@ -762,6 +1053,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           ref: ${{ inputs.ref || github.ref }}
+          lfs: ${{ inputs.lfs }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -798,10 +1090,21 @@ jobs:
     if: ${{ !failure() && !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # A job-level `permissions` block REPLACES the workflow-level default, so we
+    # re-declare what merge needs. `id-token: write` is required for cosign
+    # keyless signing of the Docker Hub image (OIDC token exchange with Fulcio).
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
 
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Install Cosign
+        if: needs.prepare.outputs.enable_sdr == 'true'
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
@@ -849,16 +1152,57 @@ jobs:
             while IFS= read -r tag; do [ -n "$tag" ] && echo "    ${tag}"; done <<< "${RELEASE_TAGS}"
           fi
 
+      - name: Install crane
+        if: needs.prepare.outputs.enable_sdr == 'true'
+        uses: imjasonh/setup-crane@59c71e96a00b28651f10369ba3359a6d730740a0 # v0.6
+
+      # setup-crane's final step runs `crane auth login ghcr.io` with the
+      # calling repo's GITHUB_TOKEN, overwriting the ghcr.io credential the
+      # "Log in to GHCR" step wrote. GITHUB_TOKEN has no access to
+      # PAT-published GHCR packages, so `crane copy` would fail with DENIED.
+      # Log back in with the org PAT before copying.
+      - name: Restore GHCR auth (setup-crane clobbers it with GITHUB_TOKEN)
+        if: needs.prepare.outputs.enable_sdr == 'true'
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_PAT:  ${{ secrets.ORG_PAT_GITHUB }}
+        run: crane auth login ghcr.io --username "${GHCR_USER}" --password-stdin <<< "${GHCR_PAT}"
+
       - name: Push to Docker Hub (re-tag, no rebuild)
+        id: dockerhub_push
         if: needs.prepare.outputs.enable_sdr == 'true'
         env:
           GHCR_IMAGE:      ${{ needs.prepare.outputs.ghcr_image }}
           DOCKERHUB_IMAGE: ${{ needs.prepare.outputs.dockerhub_image }}
         run: |
-          docker buildx imagetools create \
-            --tag "${DOCKERHUB_IMAGE}" \
-            "${GHCR_IMAGE}"
+          set -euo pipefail
+          # Use `crane copy`, not `docker buildx imagetools create`, for the
+          # cross-registry GHCR -> Docker Hub copy. imagetools uploads each blob
+          # to Docker Hub with a monolithic PUT, which Docker Hub rejects with
+          # HTTP 400 once a layer is large (e.g. apps that vendor a ~100MB jar).
+          # crane does chunked uploads + cross-repo blob mounts, so it handles
+          # large layers and copies the full multi-arch index byte-identically.
+          # Auth comes from ~/.docker/config.json written by the GHCR + Docker Hub
+          # login steps above.
+          crane copy "${GHCR_IMAGE}" "${DOCKERHUB_IMAGE}"
           echo "Pushed to DockerHub: ${DOCKERHUB_IMAGE}"
+
+          # Resolve the pushed manifest digest so we can sign by digest (immutable)
+          # rather than by tag (mutable). `${DOCKERHUB_IMAGE%%:*}` strips the tag.
+          DIGEST="$(crane digest "${DOCKERHUB_IMAGE}")"
+          echo "digest_ref=${DOCKERHUB_IMAGE%%:*}@${DIGEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Sign Docker Hub image (cosign keyless)
+        if: needs.prepare.outputs.enable_sdr == 'true'
+        env:
+          # Keyless signing — no long-lived key. Cosign uses the job's ambient
+          # GitHub OIDC token (id-token: write) to obtain a short-lived Fulcio
+          # cert and records the signature in the Rekor transparency log.
+          DIGEST_REF: ${{ steps.dockerhub_push.outputs.digest_ref }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes "${DIGEST_REF}"
+          echo "Signed (keyless): ${DIGEST_REF}"
 
       - name: Summary
         run: |
@@ -869,12 +1213,13 @@ jobs:
           echo "| Immutable image | \`${{ needs.prepare.outputs.ghcr_image }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Branch tag (mutable) | \`${{ needs.prepare.outputs.ghcr_branch_tag }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| DockerHub image | \`${{ needs.prepare.outputs.dockerhub_image }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Signed digest (cosign) | \`${{ steps.dockerhub_push.outputs.digest_ref }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Tag | \`${{ needs.prepare.outputs.image_tag }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Branch | \`${{ needs.prepare.outputs.branch }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Dockerfile | \`${{ needs.prepare.outputs.dockerfile }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| SDR push | \`${{ needs.prepare.outputs.enable_sdr }}\` |" >> $GITHUB_STEP_SUMMARY
 
-  # ── Job 4: Security scan — Trivy + Snyk + allowlist gate (non-blocking on merge path) ──
+  # ── Job 4: Security scan — Trivy + allowlist gate (non-blocking on merge path) ──
   security-scan:
     name: Security Scan
     needs: [prepare, merge]
@@ -882,8 +1227,6 @@ jobs:
     uses: atlanhq/application-sdk/.github/workflows/build-and-scan.yaml@main
     with:
       image: ${{ needs.prepare.outputs.ghcr_image }}
-      snyk_org: partner-images
-      snyk_monitor: ${{ inputs.snyk_monitor }}
       fail_on_findings: false
     secrets: inherit
 
@@ -928,6 +1271,7 @@ jobs:
           APP_ID: ${{ needs.prepare.outputs.app_id }}
           APP_NAME: ${{ needs.prepare.outputs.app_name }}
           DEPLOY_CONFIG: ${{ needs.prepare.outputs.deploy_config }}
+          ENABLE_SDR: ${{ needs.prepare.outputs.enable_sdr }}
           SDK_VERSION: ${{ needs.prepare.outputs.sdk_version }}
           ENTRYPOINTS: ${{ needs.prepare.outputs.entrypoints }}
           CHANNEL: ${{ inputs.channel }}
@@ -1036,6 +1380,13 @@ jobs:
           }
 
           config = os.environ.get("DEPLOY_CONFIG", "").strip()
+          # SDR capability rides inside the opaque config YAML — GM stores
+          # versions.config as raw TEXT and echoes it back in the tenant
+          # catalog, so LM can gate "Install on more environments" per app
+          # without a GM schema change. Only injected when true: absence
+          # means not SDR-capable (keeps non-SDR configs byte-identical).
+          if os.environ.get("ENABLE_SDR", "").strip() == "true":
+              config = f"self_deployed_runtime: true\n{config}".strip()
           if config:
               body["config"] = config
 

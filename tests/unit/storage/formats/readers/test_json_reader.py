@@ -174,6 +174,51 @@ async def test_download_file_error_propagation() -> None:
         assert exc_info.value.code == "DEPENDENCY_UNAVAILABLE_OBJECT_STORE_DOWNLOAD"
 
 
+@pytest.mark.asyncio
+async def test_no_matching_files_surfaces_read_error_not_download_error() -> None:
+    """Empty prefix listing must raise ObjectStoreReadError, not ObjectStoreDownloadError.
+
+    Regression guard for the classification bug where the broad ``except Exception``
+    around the prefix-listing path swallowed the typed ``ObjectStoreReadError`` and
+    re-wrapped it as ``ObjectStoreDownloadError`` — producing the mismatched
+    ``DEPENDENCY_UNAVAILABLE_OBJECT_STORE_DOWNLOAD`` code + "Downloaded but no
+    matching files found" message seen in production.
+    """
+    from application_sdk.storage.formats.format_errors import (
+        ObjectStoreDownloadError,
+        ObjectStoreReadError,
+    )
+
+    path = "/local"
+
+    with (
+        patch("os.path.isfile", return_value=False),
+        patch("os.path.isdir", return_value=True),
+        patch("glob.glob", return_value=[]),
+        patch(
+            "application_sdk.storage.formats.utils._resolve_store",
+            return_value=_MOCK_STORE,
+        ),
+        patch(
+            "application_sdk.storage.formats.utils._list_keys",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+    ):
+        with pytest.raises(ObjectStoreReadError) as exc_info:
+            await _download_files(path, ".json", None)
+        assert exc_info.value.code == "DEPENDENCY_UNAVAILABLE_OBJECT_STORE_READ"
+        assert not isinstance(exc_info.value, ObjectStoreDownloadError)
+        # Operator-visible fields: prefix + extension must round-trip so the
+        # alert tells you exactly what was searched.
+        assert exc_info.value.path == path
+        assert exc_info.value.file_extension == ".json"
+        # `message` states what happened; `suggested_action` states what to
+        # do — kept separate per the AppError contract.
+        assert exc_info.value.suggested_action is not None
+        assert "upstream" in exc_info.value.suggested_action.lower()
+
+
 # ---------------------------------------------------------------------------
 # Pandas-related helpers & tests
 # ---------------------------------------------------------------------------

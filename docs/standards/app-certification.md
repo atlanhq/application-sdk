@@ -43,29 +43,25 @@ for free, with zero changes to its repo.
 | Layer | Mode |
 |-------|------|
 | **Unit tests** | **Enforced** — a ❌ exits the verdict step non-zero and blocks publish. |
+| **Contract drift** | **Enforced** — a ❌ on the step fails the job (no `continue-on-error`) and blocks publish. |
 | **Coverage threshold** | Warn-only — annotated, does not block. |
 | **v3 shape** | Warn-only — annotated, does not block. |
-| **Contract drift** | Warn-only — annotated, does not block. |
 
-Unit test pass/fail is enforced: consistent with the `unit-tests-gate` job
-(PR #1945), a failing test run blocks publish. Coverage threshold, v3 shape,
-and contract drift remain warn-only during rollout — every check runs and the
-verdict is annotated on the workflow summary, but only a test failure exits
-non-zero.
+Unit test pass/fail and contract drift are enforced: a failing run blocks
+publish. Coverage threshold and v3 shape remain warn-only during rollout —
+every check runs and the verdict is annotated on the workflow summary, but
+only a test or contract-drift failure exits non-zero.
 
 Checks that don't apply to an app skip cleanly (➖) so non-conforming apps are
 never hard-failed before they onboard. In particular, an app with no
-`tests/unit/` directory skips both the unit and coverage checks (➖).
+`tests/unit/` directory skips both the unit and coverage checks (➖), and an
+app with no `contract/app.pkl` skips the contract-drift check.
 
 ## Known rollout gaps (before enforcement)
 
 - **Coverage threshold fixed at 85%.** Before flipping to enforcing, verify
   active connector repos meet this bar. Raise the enforcement question in
   `#pod-app-distribution`.
-- **Contract drift needs the pkl toolchain.** If `poe generate` requires pkl
-  and it isn't installed on the runner, the check is recorded as a failure.
-  Installing pkl in the `certify` job is a prerequisite for flipping
-  contract-drift to blocking.
 
 ## Relationship to the other layers
 
@@ -78,4 +74,4 @@ certify ──────────┴─> prepare ─> build ─> merge ─>
 ```
 
 It complements — does not replace — the image security scan
-(`build-and-scan.yaml`, Trivy + Snyk + allowlist), which runs after the build.
+(`build-and-scan.yaml`, Trivy + allowlist), which runs after the build.

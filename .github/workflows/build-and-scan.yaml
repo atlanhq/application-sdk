@@ -1,6 +1,6 @@
 # Build & Scan — reusable security scanning template.
 #
-# Builds a Docker image and runs Trivy + Snyk in parallel.
+# Builds a Docker image and runs Trivy.
 # Checks results against .security/allowlist.json in the caller repo.
 # Fails if any CRITICAL/HIGH CVE is not in the allowlist.
 #
@@ -27,16 +27,6 @@ on:
         description: "Pre-built image to scan (skip build if provided)"
         required: false
         type: string
-      snyk_org:
-        description: "Snyk organization slug"
-        required: false
-        type: string
-        default: "partner-images"
-      snyk_monitor:
-        description: "Push scan results to Snyk UI dashboard via snyk container monitor"
-        required: false
-        type: boolean
-        default: false
       fail_on_findings:
         description: "Exit 1 if new non-allowlisted vulnerabilities found (true for PR gate, false for merge path)"
         required: false
@@ -113,7 +103,7 @@ jobs:
           path: /tmp/image.tar
           retention-days: 7
 
-  # ── Trivy scan (parallel with Snyk) ─────────────────────────────────────────
+  # ── Trivy scan ──────────────────────────────────────────────────────────────
   trivy-scan:
     name: Trivy Scan
     needs: build
@@ -173,69 +163,10 @@ jobs:
           path: /tmp/trivy_results.json
           retention-days: 7
 
-  # ── Snyk scan (parallel with Trivy) ─────────────────────────────────────────
-  snyk-scan:
-    name: Snyk Scan
-    needs: build
-    if: always() && (needs.build.result == 'success' || inputs.image != '')
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Download image artifact
-        if: inputs.image == ''
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: docker-image
-          path: /tmp
-
-      - name: Load local image
-        if: inputs.image == ''
-        run: docker load -i /tmp/image.tar
-
-      - name: Log in to GHCR
-        if: inputs.image != ''
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.ORG_PAT_GITHUB }}
-
-      - name: Set up Snyk CLI
-        uses: snyk/actions/setup@b98d498629f1c368650224d6d212bf7dfa89e4bf # 0.4.0
-
-      - name: Run Snyk container scan
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-          SNYK_API: https://api.us.snyk.io
-        run: |
-          IMAGE="${{ inputs.image || needs.build.outputs.scan_image }}"
-          snyk container test "$IMAGE" \
-            --severity-threshold=high \
-            --org=${{ inputs.snyk_org }} \
-            --json-file-output=/tmp/snyk_results.json || true
-
-      - name: Monitor with Snyk (push results to Snyk UI)
-        if: inputs.snyk_monitor
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-          SNYK_API: https://api.us.snyk.io
-        run: |
-          IMAGE="${{ inputs.image || needs.build.outputs.scan_image }}"
-          snyk container monitor "$IMAGE" \
-            --severity-threshold=high \
-            --org=${{ inputs.snyk_org }}
-
-      - name: Upload Snyk results
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: snyk-results
-          path: /tmp/snyk_results.json
-          retention-days: 7
-
-  # ── Security Gate — merge results, check allowlist ──────────────────────────
+  # ── Security Gate — check Trivy results against allowlist ───────────────────
   security-gate:
     name: Security Gate
-    needs: [trivy-scan, snyk-scan]
+    needs: [trivy-scan]
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -258,41 +189,10 @@ jobs:
           name: trivy-results
           path: /tmp
 
-      - name: Download Snyk results
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        continue-on-error: true
-        with:
-          name: snyk-results
-          path: /tmp
-
       - name: Check against allowlist
         env:
           FAIL_ON_FINDINGS: ${{ inputs.fail_on_findings }}
-        run: python3 _sdk/.github/scripts/check_allowlist.py --trivy-results /tmp/trivy_results.json --snyk-results /tmp/snyk_results.json --write-comment
-
-      - name: Report Snyk findings (informational)
-        if: always()
-        run: |
-          if [ -f /tmp/snyk_results.json ]; then
-            python3 - <<'PYEOF'
-          import json, sys
-          try:
-              with open("/tmp/snyk_results.json") as f:
-                  snyk = json.load(f)
-              if snyk.get("error"):
-                  print(f"Snyk error: {snyk['error']}")
-              else:
-                  vulns = snyk.get("vulnerabilities", [])
-                  critical_high = [v for v in vulns if v.get("severity", "").upper() in {"CRITICAL", "HIGH"}]
-                  print(f"Snyk (informational): {len(critical_high)} CRITICAL/HIGH findings")
-                  for v in critical_high[:20]:
-                      print(f"  {v.get('severity','?'):8s} {v.get('id','')} {v.get('packageName','')}")
-          except Exception as e:
-              print(f"Warning: Snyk results unavailable: {e}")
-          PYEOF
-          else
-            echo "No Snyk results available"
-          fi
+        run: python3 _sdk/.github/scripts/check_allowlist.py --trivy-results /tmp/trivy_results.json --write-comment
 
       - name: Comment on PR
         if: always() && github.event_name == 'pull_request'

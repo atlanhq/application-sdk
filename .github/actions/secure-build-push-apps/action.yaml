@@ -1,5 +1,5 @@
-name: 'Composite Build, Snyk/Trivy Scan, and Push'
-description: 'A drop-in replacement for docker/build-push-action that adds mandatory Snyk and Trivy scans before pushing.'
+name: 'Composite Build, Trivy Scan, and Push'
+description: 'A drop-in replacement for docker/build-push-action that adds a mandatory Trivy scan before pushing.'
 
 #==================================================================
 # == INPUTS                                                      ==
@@ -13,21 +13,6 @@ inputs:
     description: "Set to 'true' to attempt a push after a successful scan."
     required: false
     default: 'false'
-  snyk-token:
-    description: 'Token for Snyk authentication.'
-    required: true
-  snyk-ghcr-integration-id:
-    description: 'Snyk Integration ID for GitHub Container Registry.'
-    required: true
-  snyk-docker-integration-id:
-    description: 'Snyk Integration ID for Docker Hub.'
-    required: true
-  snyk-integration-id:
-    description: 'Default Snyk Integration ID.'
-    required: true
-  snyk-org-id:
-    description: 'Snyk Organization ID.'
-    required: true
 
   # == Complete list of inputs from docker/build-push-action ==
   add-hosts:
@@ -132,14 +117,8 @@ inputs:
 #==================================================================
 outputs:
   scan-passed:
-    description: "'true' if both scans found zero critical/high vulnerabilities, otherwise 'false'."
+    description: "'true' if the scan found zero critical/high vulnerabilities, otherwise 'false'."
     value: ${{ steps.decision.outputs.result }}
-  snyk-critical-count:
-    description: "Number of critical vulnerabilities found by Snyk."
-    value: ${{ steps.parse_snyk.outputs.critical-count }}
-  snyk-high-count:
-    description: "Number of high vulnerabilities found by Snyk."
-    value: ${{ steps.parse_snyk.outputs.high-count }}
   trivy-critical-count:
     description: "Number of critical vulnerabilities found by Trivy."
     value: ${{ steps.parse_trivy.outputs.critical-count }}
@@ -156,11 +135,6 @@ runs:
     - name: Configure Scan Policies
       id: config
       shell: bash
-      env:
-        SNYK_GHCR_INTEGRATION_ID: ${{ inputs.snyk-ghcr-integration-id }}
-        SNYK_DOCKER_INTEGRATION_ID: ${{ inputs.snyk-docker-integration-id }}
-        SNYK_INTEGRATION_ID: ${{ inputs.snyk-integration-id }}
-        SNYK_ORG_ID: ${{ inputs.snyk-org-id }}
       run: |
         # =================================================================
         # == 🛡️ ADMIN CONFIGURATION SECTION                             ==
@@ -183,31 +157,8 @@ runs:
         #
         # =================================================================
 
-        # ⭐ SNYK INTEGRATION ID MAPPING (from GitHub Secrets)
-        #   Map registry hostnames to their Snyk Integration IDs.
-        #   The script will automatically select the correct ID based on the image tag.
-        #   - Use 'default' for Docker Hub or images without a full domain.
-        #   - Add new entries for other registries as needed.
-        #
-        SNYK_INTEGRATION_IDS="
-        ghcr.io=${SNYK_GHCR_INTEGRATION_ID}
-        docker.io=${SNYK_DOCKER_INTEGRATION_ID}
-        default=${SNYK_INTEGRATION_ID}
-        "
-        #
-        # =================================================================
-
         echo "ENFORCEMENT_MODE=$ENFORCEMENT_MODE" >> $GITHUB_OUTPUT
         echo "SEVERITY_THRESHOLD=$SEVERITY_THRESHOLD" >> $GITHUB_OUTPUT
-        echo "SNYK_ORG_ID=$SNYK_ORG_ID" >> $GITHUB_OUTPUT
-        echo "SNYK_INTEGRATION_IDS<<EOF" >> $GITHUB_OUTPUT
-        echo "$SNYK_INTEGRATION_IDS" >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
-
-        # Snyk's '--severity-threshold' flag requires the LOWEST severity you want to see.
-        # This logic finds the last severity in the list (assuming CRITICAL,HIGH,MEDIUM order).
-        SNYK_LOWEST_SEVERITY=$(echo "$SEVERITY_THRESHOLD" | awk -F, '{print $NF}' | tr '[:upper:]' '[:lower:]')
-        echo "SNYK_SEVERITY_ARGS=--severity-threshold=$SNYK_LOWEST_SEVERITY" >> $GITHUB_OUTPUT
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
@@ -249,57 +200,10 @@ runs:
         tags: ${{ inputs.tags }}
         target: ${{ inputs.target }}
         ulimit: ${{ inputs.ulimit }}
-        # Load the image for the scanners to use
+        # Load the image for the scanner to use
         load: true
         push: false
 
-    - name: Run Snyk Scan to Generate Report
-      id: snyk_scan
-      continue-on-error: true
-      uses: snyk/actions/docker@0.4.0
-      env:
-        SNYK_TOKEN: ${{ inputs.snyk-token }}
-        SNYK_API: 'https://api.us.snyk.io'
-      with:
-        image: ${{ inputs.tags }}
-        args: ${{ steps.config.outputs.SNYK_SEVERITY_ARGS }} --json-file-output=snyk-results.json
-
-    # - name: DEBUG - Validate Snyk JSON
-    #   if: always()
-    #   shell: bash
-    #   run: |
-    #     echo "Validating snyk-results.json syntax..."
-    #     jq . snyk-results.json || echo "JQ validation failed: The JSON is malformed."
-
-    # - name: DEBUG - Show Snyk JSON Content
-    #   if: always()
-    #   shell: bash
-    #   run: |
-    #     echo "--- Start of snyk-results.json ---"
-    #     cat snyk-results.json
-    #     echo "--- End of snyk-results.json ---"
-
-    - name: Parse Snyk Results
-      id: parse_snyk
-      shell: bash
-      run: |
-        if [ ! -f snyk-results.json ]; then
-          echo "Snyk scan failed to produce a report file. See 'Run Snyk Scan' step for details."
-          exit 1
-        fi
-
-        # CORRECTED: This jq query safely combines OS and all application vulnerabilities before processing.
-        CRITICAL_COUNT=$(jq '((.vulnerabilities // []) + ([.applications[]?.vulnerabilities // []] | flatten)) | map(select(.severity == "critical")) | unique_by(.id) | length' snyk-results.json)
-        HIGH_COUNT=$(jq '((.vulnerabilities // []) + ([.applications[]?.vulnerabilities // []] | flatten)) | map(select(.severity == "high")) | unique_by(.id) | length' snyk-results.json)
-        MEDIUM_COUNT=$(jq '((.vulnerabilities // []) + ([.applications[]?.vulnerabilities // []] | flatten)) | map(select(.severity == "medium")) | unique_by(.id) | length' snyk-results.json)
-
-        echo "Snyk Found: $CRITICAL_COUNT critical, $HIGH_COUNT high, $MEDIUM_COUNT medium vulnerabilities."
-
-        echo "critical-count=$CRITICAL_COUNT" >> $GITHUB_OUTPUT
-        echo "high-count=$HIGH_COUNT" >> $GITHUB_OUTPUT
-        echo "medium-count=$MEDIUM_COUNT" >> $GITHUB_OUTPUT
-
-    #Faced issues with Trivy not able to handle multi line inputs for image tags. Snyk handles this directly
     - name: Extract Primary Image Tag for Scans
       id: extract_tag
       shell: bash
@@ -312,7 +216,6 @@ runs:
       id: trivy_scan
       uses: aquasecurity/trivy-action@0.35.0
       with:
-        # UPDATED: Use the single, primary tag from the step above
         image-ref: ${{ steps.extract_tag.outputs.primary_tag }}
         format: 'json'
         output: 'trivy-results.json'
@@ -331,7 +234,6 @@ runs:
       id: parse_trivy
       shell: bash
       run: |
-        # Now we parse all severities, not just critical and high
         CRITICAL_COUNT=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' trivy-results.json)
         HIGH_COUNT=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity == "HIGH")] | length' trivy-results.json)
         MEDIUM_COUNT=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity == "MEDIUM")] | length' trivy-results.json)
@@ -346,9 +248,6 @@ runs:
       env:
         ENFORCEMENT_MODE: ${{ steps.config.outputs.ENFORCEMENT_MODE }}
         SEVERITY_THRESHOLD: ${{ steps.config.outputs.SEVERITY_THRESHOLD }}
-        SNYK_CRITICAL: ${{ steps.parse_snyk.outputs.critical-count }}
-        SNYK_HIGH: ${{ steps.parse_snyk.outputs.high-count }}
-        SNYK_MEDIUM: ${{ steps.parse_snyk.outputs.medium-count }}
         TRIVY_CRITICAL: ${{ steps.parse_trivy.outputs.critical-count }}
         TRIVY_HIGH: ${{ steps.parse_trivy.outputs.high-count }}
         TRIVY_MEDIUM: ${{ steps.parse_trivy.outputs.medium-count }}
@@ -357,28 +256,28 @@ runs:
         echo "Failing on severities: $SEVERITY_THRESHOLD"
 
         VULNS_FOUND=0
-        if [[ "$SEVERITY_THRESHOLD" == *"CRITICAL"* && ($SNYK_CRITICAL -gt 0 || $TRIVY_CRITICAL -gt 0) ]]; then
+        if [[ "$SEVERITY_THRESHOLD" == *"CRITICAL"* && $TRIVY_CRITICAL -gt 0 ]]; then
           echo "CRITICAL vulnerabilities found."
           VULNS_FOUND=1
         fi
-        if [[ "$SEVERITY_THRESHOLD" == *"HIGH"* && ($SNYK_HIGH -gt 0 || $TRIVY_HIGH -gt 0) ]]; then
+        if [[ "$SEVERITY_THRESHOLD" == *"HIGH"* && $TRIVY_HIGH -gt 0 ]]; then
           echo "HIGH vulnerabilities found."
           VULNS_FOUND=1
         fi
-        if [[ "$SEVERITY_THRESHOLD" == *"MEDIUM"* && ($SNYK_MEDIUM -gt 0 || $TRIVY_MEDIUM -gt 0) ]]; then
+        if [[ "$SEVERITY_THRESHOLD" == *"MEDIUM"* && $TRIVY_MEDIUM -gt 0 ]]; then
           echo "MEDIUM vulnerabilities found."
           VULNS_FOUND=1
         fi
 
         if [[ "$ENFORCEMENT_MODE" == "true" && $VULNS_FOUND -eq 1 ]]; then
-          echo "❌ Scans failed in ENFORCEMENT mode. Vulnerabilities found at or above threshold."
+          echo "❌ Scan failed in ENFORCEMENT mode. Vulnerabilities found at or above threshold."
           echo "result=false" >> $GITHUB_OUTPUT
           exit 1
         else
           if [[ $VULNS_FOUND -eq 1 ]]; then
             echo "⚠️ Vulnerabilities found, but continuing in FEEDBACK mode."
           else
-            echo "✅ All scans passed."
+            echo "✅ Scan passed."
           fi
           echo "result=true" >> $GITHUB_OUTPUT
         fi
@@ -412,17 +311,14 @@ runs:
         labels: ${{ inputs.labels }}
         network: ${{ inputs.network }}
         no-cache: ${{ inputs.no-cache }}
-        # CORRECTED
         no-cache-filters: ${{ inputs.no-cache-filters }}
         outputs: ${{ inputs.outputs }}
         # Use the platforms the developer originally requested
         platforms: ${{ inputs.platforms }}
         provenance: ${{ inputs.provenance }}
         pull: ${{ inputs.pull }}
-        # NEW
         sbom: ${{ inputs.sbom }}
         secrets: ${{ inputs.secrets }}
-        # NEW
         secret-envs: ${{ inputs.secret-envs }}
         secret-files: ${{ inputs.secret-files }}
         shm-size: ${{ inputs.shm-size }}
@@ -432,10 +328,3 @@ runs:
         ulimit: ${{ inputs.ulimit }}
         push: ${{ inputs.push }}
         load: ${{ inputs.load }}
-
-    # NOTE: Snyk dashboard upload (previously "Import or Monitor Image in Snyk")
-    # was removed intentionally. Going forward, only images that go through a
-    # global-marketplace release land in Snyk — global-marketplace's release
-    # flow does the import via core/release/security_scan_service.py. This
-    # keeps the bu-apps Snyk org showing only deployed image SHAs instead of
-    # one project per main build.

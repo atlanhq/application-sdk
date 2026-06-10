@@ -17,8 +17,27 @@ class UploadInput(Input):
     ``local_path`` may point to a single file or a directory — the SDK
     detects which automatically.
 
+    The SDK applies a three-step upload strategy internally:
+
+    1. **Cross-store SHA-256 dedup** — if the deployment-store sidecar already
+       matches the upstream sidecar the upload is skipped with no bytes
+       transferred (idempotent retry support).
+    2. **Local upload** — if ``local_path`` exists on this pod, the file is
+       uploaded directly (no download cost).
+    3. **Deployment-store fallback** — if ``local_path`` is absent (cross-pod
+       SDR deployment or writer-deleted by ``use_consolidation=True``), the SDK
+       streams from the deployment store instead.  All existing call sites gain
+       this fallback for free with no API changes.
+
     Args:
         local_path: Local file or directory path to upload.
+        ref: Optional existing ``FileReference`` to upload from — its
+            ``storage_path`` is used as the deployment-store source key when
+            ``local_path`` is absent (cross-pod or writer-deleted scenarios in
+            SDR deployments).  Symmetric with ``DownloadInput.ref``.  Either
+            provide ``ref`` directly or let the SDK derive it automatically from
+            ``local_path`` — no call-site changes are required for existing
+            connectors to gain the cross-pod fallback.
         storage_path: Destination key (single file) or prefix (directory)
             in the store.  Auto-namespaced based on *tier* when ``None``.
         storage_subdir: Subdirectory name appended to the auto-generated run prefix.
@@ -48,6 +67,7 @@ class UploadInput(Input):
     """
 
     local_path: str = ""
+    ref: FileReference | None = None
     storage_path: str | None = None
     storage_subdir: str | None = None
     tier: StorageTier = StorageTier.RETAINED

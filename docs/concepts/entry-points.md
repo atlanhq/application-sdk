@@ -188,9 +188,35 @@ curl -X POST 'http://localhost:8000/workflows/v1/start?entrypoint=mine-queries' 
   -d '{"credentials": {...}, "connection": {...}, "metadata": {...}}'
 ```
 
-For single-entry-point apps, `?entrypoint=` is optional — the sole entry point is selected automatically. For multi-entry-point apps it is **required** (returns 400 otherwise).
+When `?entrypoint=` is omitted the SDK resolves the default entry point automatically — see [Default entrypoint resolution](#default-entrypoint-resolution) below. Pass `?entrypoint=<name>` to target a specific entry point explicitly.
 
 > **Transitional fallback:** The body field `workflow_type` is accepted for backward compatibility with legacy Heracles callers. Query param takes precedence if both are provided. The body field will be removed in a future release.
+
+### Default entrypoint resolution
+
+The SDK resolves which entry point to invoke when `?entrypoint=` is omitted, following these rules in order:
+
+| App shape | Default resolution |
+|---|---|
+| `run()` only | `run()` is the implicit default (backward compat) |
+| Single `@entrypoint` | that entry point is the default (len==1 rule) |
+| Multiple `@entrypoint`s, none explicit | first alphabetically is auto-marked default |
+| Multiple `@entrypoint`s, one `default=True` | that one is the default |
+| Multiple `@entrypoint`s, multiple `default=True` | error at class definition time |
+| `run()` + `@entrypoint`(s) | `run()` is always the default; `@entrypoint(default=True)` raises |
+
+The `default=True` flag on `@entrypoint` is only meaningful when the app has multiple `@entrypoint` methods and no `run()` override. Mark it explicitly if you want a specific non-alphabetical entry point to be the default:
+
+```python
+class SnowflakeApp(App):
+    @entrypoint                       # not the default — 'e' < 'm' alphabetically
+    async def mine_queries(self, input: MiningInput) -> MiningOutput: ...
+
+    @entrypoint(default=True)         # explicitly the default
+    async def extract_metadata(self, input: ExtractionInput) -> ExtractionOutput: ...
+```
+
+`run()` and `@entrypoint` methods can coexist in the same class. In that case `run()` permanently holds the default regardless of any `default=True` flag on `@entrypoint`.
 
 ### Shared infrastructure
 
@@ -226,6 +252,24 @@ Behaviour:
 For single-entry-point apps, `GET /workflows/v1/manifest` (no query param) is unchanged.
 
 > **Configmap discovery** also benefits from the subfolder layout: the handler uses `rglob("*.json")` so configmap files can live inside per-entry subfolders alongside the manifests.
+
+### Per-entry-point handler & core modules
+
+A multi-entry-point app can ship **per-entry-point** lifecycle code next to its hand-written package, discovered by convention:
+
+```
+app/
+  asset_export_advanced/        # snake_case package
+    handler.py                  # async test_auth / preflight_check / fetch_metadata
+    core.py                     # compute_manifest (see Apps — Dynamic manifest)
+```
+
+The mapping between the kebab-case entry-point name (on the wire, and the `app/generated/<name>/` contract dir) and the snake_case Python package is the single canonical conversion `entrypoint_module_segment(name)` (`asset-export-advanced → asset_export_advanced`) — `application_sdk.handler.service` and entry-point registration both route through it, so the two never drift.
+
+- **`app.<segment>.handler`** — optional `async def test_auth(input, ctx)`, `preflight_check`, `fetch_metadata`. When a request to `/workflows/v1/{auth,check,metadata}` carries an `entrypoint` (the bare name, resolved by the orchestrator from the marketplace catalog), the SDK dispatches to this module **by exact name**. See [Handlers — Per-entry-point handlers](handlers.md#per-entry-point-handlers).
+- **`app.<segment>.core.compute_manifest`** — optional dynamic-manifest hook. See [Apps — Dynamic manifest](apps.md#dynamic-manifest-compute_manifest).
+
+Discovery is best-effort and conservative: a missing module / wrong-shaped attribute falls through to the app-level `Handler` (1:1 with single-entry-point behaviour). Both the handler functions and `compute_manifest` must be `async def` — a sync `def` is ignored and falls through. A module that *exists but fails to import* (a real bug in the connector's code) is **not** swallowed — it surfaces.
 
 ### Dockerfile
 

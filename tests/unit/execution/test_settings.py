@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from temporalio.common import VersioningBehavior
 
 from application_sdk.execution.settings import (
     ExecutionSettings,
@@ -34,6 +35,10 @@ class TestExecutionSettingsDefaults:
     def test_default_graceful_shutdown_timeout(self) -> None:
         settings = ExecutionSettings()
         assert settings.graceful_shutdown_timeout_seconds == 3600
+
+    def test_default_versioning_behavior_is_pinned(self) -> None:
+        settings = ExecutionSettings()
+        assert settings.default_versioning_behavior == VersioningBehavior.PINNED
 
     def test_is_frozen(self) -> None:
         settings = ExecutionSettings()
@@ -85,6 +90,41 @@ class TestLoadExecutionSettingsFromEnv:
         settings = load_execution_settings()
         assert settings.host == "localhost:7233"
         assert settings.namespace == "default"
+
+    def test_versioning_behavior_auto_upgrade_from_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("TEMPORAL_DEFAULT_VERSIONING_BEHAVIOR", "AUTO_UPGRADE")
+        settings = load_execution_settings()
+        assert settings.default_versioning_behavior == VersioningBehavior.AUTO_UPGRADE
+
+    def test_versioning_behavior_is_case_insensitive(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("TEMPORAL_DEFAULT_VERSIONING_BEHAVIOR", "auto_upgrade")
+        settings = load_execution_settings()
+        assert settings.default_versioning_behavior == VersioningBehavior.AUTO_UPGRADE
+
+    def test_versioning_behavior_pinned_from_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("TEMPORAL_DEFAULT_VERSIONING_BEHAVIOR", "PINNED")
+        settings = load_execution_settings()
+        assert settings.default_versioning_behavior == VersioningBehavior.PINNED
+
+    def test_versioning_behavior_unknown_falls_back_to_pinned(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("TEMPORAL_DEFAULT_VERSIONING_BEHAVIOR", "bogus")
+        settings = load_execution_settings()
+        assert settings.default_versioning_behavior == VersioningBehavior.PINNED
+
+    def test_versioning_behavior_unset_defaults_to_pinned(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("TEMPORAL_DEFAULT_VERSIONING_BEHAVIOR", raising=False)
+        settings = load_execution_settings()
+        assert settings.default_versioning_behavior == VersioningBehavior.PINNED
 
 
 class TestInterceptorSettingsDefaults:

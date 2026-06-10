@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.14.0
-source-sha:    0ef594aefde221c861d45a54d896d314ca1d906b
-source-date:   2026-06-01T18:50:15+05:30
+sdk-version:   3.15.1
+source-sha:    0a490e9128563a2e1d1d688134bcc352ac800a87
+source-date:   2026-06-09T22:04:25+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -18,7 +18,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 
 | Subpackage | Purpose | Exports |
 |---|---|---|
-| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 25 |
+| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 26 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 11 |
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 9 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
@@ -30,7 +30,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 22 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 24 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 5 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 15 |
 
@@ -145,7 +145,7 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 #### `@entrypoint`
 
 - **Import:** `from application_sdk.app import entrypoint`
-- **Signature:** `entrypoint(func: F | None = None, *, name: str | None = None) -> F | Callable[[F], F]`
+- **Signature:** `entrypoint(func: F | None = None, *, name: str | None = None, default: bool = False) -> F | Callable[[F], F]`
 - **Summary:** Decorator to mark a method as an independently-triggerable entry point.
 - **Defined in:** `application_sdk/app/entrypoint.py`
 
@@ -157,6 +157,13 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Defined in:** `application_sdk/app/task.py`
 
 ### Functions
+
+#### `entrypoint_module_segment`
+
+- **Import:** `from application_sdk.app import entrypoint_module_segment`
+- **Signature:** `entrypoint_module_segment(name: str)`
+- **Summary:** Convert a kebab-case entry-point name to its Python module segment.
+- **Defined in:** `application_sdk/app/entrypoint.py`
 
 #### `mcp_tool`
 
@@ -1881,10 +1888,17 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 
 ### Classes
 
+#### `BoundStore`
+
+- **Import:** `from application_sdk.storage import BoundStore`
+- **Signature:** `class BoundStore(store: ObjectStore, put_attributes: dict[str, str] | None = None)`
+- **Summary:** An :class:`~obstore.store.ObjectStore` paired with per-write put attributes.
+- **Defined in:** `application_sdk/storage/ops.py`
+
 #### `CloudStore`
 
 - **Import:** `from application_sdk.storage import CloudStore`
-- **Signature:** `class CloudStore(store: ObjectStore, *, provider: str = 'unknown')`
+- **Signature:** `class CloudStore(store: ObjectStore, *, provider: str = 'unknown', put_attributes: dict[str, str] | None = None)`
 - **Summary:** Async client for external customer-provided cloud object stores.
 - **Defined in:** `application_sdk/storage/cloud.py`
 
@@ -1960,10 +1974,17 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Summary:** Create an obstore store from a Dapr component binding, or ``None`` if absent.
 - **Defined in:** `application_sdk/storage/binding.py`
 
+#### `create_store_from_binding_with_put_attrs`
+
+- **Import:** `from application_sdk.storage import create_store_from_binding_with_put_attrs`
+- **Signature:** `create_store_from_binding_with_put_attrs(name: str, *, components_dir: Path | str = Path('./components'))`
+- **Summary:** Create an obstore store and any associated put attributes from a Dapr binding.
+- **Defined in:** `application_sdk/storage/binding.py`
+
 #### `delete`
 
 - **Import:** `from application_sdk.storage import delete`
-- **Signature:** `delete(key: str, store: ObjectStore | None = None, *, normalize: bool = True)`
+- **Signature:** `delete(key: str, store: BoundStore | ObjectStore | None = None, *, normalize: bool = True)`
 - **Summary:** Delete the object at *key*.
 - **Defined in:** `application_sdk/storage/ops.py`
 
@@ -1991,7 +2012,7 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `exists`
 
 - **Import:** `from application_sdk.storage import exists`
-- **Signature:** `exists(key: str, store: ObjectStore | None = None, *, normalize: bool = True)`
+- **Signature:** `exists(key: str, store: BoundStore | ObjectStore | None = None, *, normalize: bool = True)`
 - **Summary:** Return ``True`` if *key* exists in the store.
 - **Defined in:** `application_sdk/storage/ops.py`
 
@@ -2012,7 +2033,7 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 #### `put_json`
 
 - **Import:** `from application_sdk.storage import put_json`
-- **Signature:** `put_json(key: str, obj: JsonValue, store: ObjectStore | None = None, *, normalize: bool = True)`
+- **Signature:** `put_json(key: str, obj: JsonValue, store: BoundStore | ObjectStore | None = None, *, normalize: bool = True)`
 - **Summary:** Serialise *obj* to JSON and write to *key*.
 - **Defined in:** `application_sdk/storage/ops.py`
 
@@ -2333,6 +2354,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Summary:** Input for ``App.upload``.
 - **Fields:**
   - `local_path: str` `= ''`
+  - `ref: FileReference | None`
   - `storage_path: str | None`
   - `storage_subdir: str | None`
   - `tier: StorageTier` `= StorageTier.RETAINED`
@@ -2378,6 +2400,8 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Fields:**
   - `credentials: list[HandlerCredential]` `= []` — Credentials to authenticate with.
   - `connection_id: str` `= ''` — Optional connection ID for context.
+  - `entrypoint: str` `= ''` — Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative
+  - `entrypoint_ref: str` `= Field(default='', validation_alias=(AliasChoices('entrypoint_ref', 'connector')), serialization_alias='connector')` — App-qualified entry-point reference (``{app_name}-{entrypoint.name}``).
   - `timeout_seconds: int` `= 30` — Maximum seconds to wait for auth response.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
@@ -2464,6 +2488,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Summary:** Input for the fetch_metadata handler operation.
 - **Fields:**
   - `credentials: list[HandlerCredential]` `= []` — Credentials to use for metadata discovery.
+  - `entrypoint: str` `= ''` — Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative
+  - `entrypoint_ref: str` `= Field(default='', validation_alias=(AliasChoices('entrypoint_ref', 'connector')), serialization_alias='connector')` — App-qualified entry-point reference (``{app_name}-{entrypoint.name}``).
+  - `metadata_template_key: str` `= Field(default='', validation_alias=(AliasChoices('metadata_template_key', 'metadataTemplateKey', 'type')))` — Metadata source routing key for multi-source metadata widgets (e.g.
   - `connection_config: BaseConnectionConfig` `= Field(default_factory=BaseConnectionConfig)` — Connection configuration.
   - `object_filter: str` `= ''` — Filter pattern (e.g., 'public.*', 'mydb.myschema.*').
   - `include_fields: bool` `= True` — Whether to include field/column details.
@@ -2496,6 +2523,8 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Summary:** Input for the preflight_check handler operation.
 - **Fields:**
   - `credentials: list[HandlerCredential]` `= []` — Credentials to use during preflight.
+  - `entrypoint: str` `= ''` — Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative
+  - `entrypoint_ref: str` `= Field(default='', validation_alias=(AliasChoices('entrypoint_ref', 'connector')), serialization_alias='connector')` — App-qualified entry-point reference (``{app_name}-{entrypoint.name}``).
   - `connection_config: BaseConnectionConfig` `= Field(default_factory=BaseConnectionConfig)` — Connection configuration (host, port, database, etc.).
   - `metadata: BaseMetadataConfig` `= Field(default_factory=BaseMetadataConfig)` — Form-level metadata forwarded by heracles alongside the credential.
   - `checks_to_run: list[str]` `= []` — Specific checks to run (empty = run all).

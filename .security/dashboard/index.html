@@ -118,7 +118,6 @@
         .b-critical{background:linear-gradient(135deg,#fef2f2,#fee2e2);color:#dc2626;}
         .b-high{background:linear-gradient(135deg,#fff7ed,#ffedd5);color:#ea580c;}
         .b-trivy{background:linear-gradient(135deg,#eff6ff,#dbeafe);color:#2563eb;}
-        .b-snyk{background:linear-gradient(135deg,#faf5ff,#f3e8ff);color:#7c3aed;}
         .b-new{background:linear-gradient(135deg,#fef2f2,#fee2e2);color:#dc2626;animation:badgePulse 2s ease infinite;}
         @keyframes badgePulse{0%,100%{box-shadow:0 0 0 0 rgba(220,38,38,0.2)}50%{box-shadow:0 0 8px 2px rgba(220,38,38,0.15)}}
         .b-allowlisted{background:linear-gradient(135deg,#f0fdf4,#dcfce7);color:#16a34a;}
@@ -463,9 +462,9 @@ function renderOverview(){
                 if(!scanOf[v.id])scanOf[v.id]=v.scanner||'other';
             });
         });
-        const counts={base:0,app:0,trivy:0,snyk:0,total:0};
+        const counts={base:0,app:0,trivy:0,total:0};
         Object.values(srcOf).forEach(s=>{counts.total++;if(s==='base')counts.base++;else if(s==='app')counts.app++;});
-        Object.values(scanOf).forEach(s=>{if(s==='trivy')counts.trivy++;else if(s==='snyk')counts.snyk++;});
+        Object.values(scanOf).forEach(s=>{if(s==='trivy')counts.trivy++;});
         return counts;
     };
     const renderInto=(containerId,prefix,data)=>{
@@ -488,7 +487,6 @@ function renderOverview(){
         ]);
         donut(prefix+'ScanDonut',[
             {label:'Trivy',count:data.trivy,color:'#2563eb'},
-            {label:'Snyk',count:data.snyk,color:'#7c3aed'},
         ]);
     };
     renderInto('connectorBreakdown','conn',buildCategoryBreakdown(allRepos.filter(r=>!isSystemRepo(r))));

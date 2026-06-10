@@ -194,8 +194,9 @@ credentialFieldName: String? = if (hasCredentialConfig) "\(name.replaceAll("-", 
 // ---------------------------------------------------------------------------
 
 /// Supported field types for credential UI generation.
-/// Aligned with application_sdk.credentials.types.FieldType.
-typealias FieldType = "text"|"password"|"textarea"|"select"|"number"|"checkbox"|"url"|"email"|"inputRepeater"
+/// Extends application_sdk.credentials.types.FieldType with frontend credential
+/// config widget types such as `fileUpload`.
+typealias FieldType = "text"|"password"|"textarea"|"select"|"number"|"checkbox"|"url"|"email"|"inputRepeater"|"fileUpload"|"credentialFileInput"
 
 /// A single credential field definition.
 /// Aligned with application_sdk.credentials.types.FieldSpec — same properties,
@@ -229,7 +230,8 @@ class FieldSpec {
   includeRequiredWhenFalse: Boolean = false
 
   /// Whether this field should be masked (password input).
-  /// When true, overrides fieldType to render as password widget.
+  /// When true, renders as password unless `fieldType` selects a more specific
+  /// frontend widget such as `fileUpload`.
   sensitive: Boolean = false
 
   /// Field type for UI rendering.
@@ -241,6 +243,15 @@ class FieldSpec {
   /// For select fields — display labels for each option.
   /// If not provided, option values are used as labels.
   optionLabels: Mapping<String, String>?
+
+  /// File extensions or MIME types accepted by file upload credential fields.
+  fileTypes: Listing<String>?
+
+  /// Whether file upload fields return upload metadata JSON.
+  fileMetadata: Boolean = true
+
+  /// Whether file upload fields should remove the prior upload before accepting a replacement.
+  removeBeforeUpload: Boolean = false
 
   /// Pre-filled default value.
   defaultValue: String?
@@ -1678,9 +1689,11 @@ local function renderField(f: FieldSpec): Mapping<String, Any> = new Mapping {
 
   // UI rendering config
   ["ui"] = new Mapping {
-    // Widget selection: sensitive → password, select with ≤4 options → radio, etc.
+    // Widget selection: upload field types, password/sensitive fields, select radio fallback, etc.
     when (f.includeUiWidget) {
-      ["widget"] = if (f.sensitive || f.fieldType == "password") "password"
+      ["widget"] = if (f.fieldType == "fileUpload") "fileUpload"
+        else if (f.fieldType == "credentialFileInput") "credentialFileInput"
+        else if (f.sensitive || f.fieldType == "password") "password"
         else if (f.fieldType == "textarea") "TextInput"
         else if (f.fieldType == "number") "inputNumber"
         else if (f.fieldType == "checkbox") "checkbox"
@@ -1700,6 +1713,11 @@ local function renderField(f: FieldSpec): Mapping<String, Any> = new Mapping {
     when (f.feedback != null) { ["feedback"] = f.feedback }
     when (f.message != null) { ["message"] = f.message }
     when (f.byocDisabled != null) { ["BYOCdisabled"] = f.byocDisabled }
+    when (f.includeUiWidget) {
+      when ((f.fieldType == "fileUpload" || f.fieldType == "credentialFileInput") && f.fileTypes != null) { ["accept"] = f.fileTypes!!.toList() }
+      when (f.fieldType == "fileUpload" || f.fieldType == "credentialFileInput") { ["fileMetadata"] = f.fileMetadata }
+      when ((f.fieldType == "fileUpload" || f.fieldType == "credentialFileInput") && f.removeBeforeUpload) { ["removeBeforeUpload"] = true }
+    }
     when (f.validationRules != null) {
       ["rules"] = f.validationRules
     }
@@ -1846,6 +1864,11 @@ local function renderJdbcAuthOption(opt: AuthOption): Mapping<String, Any> = new
     }
   }
 }
+
+local function renderJdbcAuthMergeTargetOption(opt: AuthOption): Mapping<String, Any> =
+  let (auth = renderJdbcAuthOption(opt).toMap())
+  let (ui = (auth["ui"] as Mapping<String, Any>).toMap())
+  auth.put("ui", ui.put("hidden", true).toMapping()).toMapping()
 
 /// Namespace prefix per extraction-method. `credential-guid` is the form-field
 /// path for the direct credential input; `agent-json` is the path used when the
@@ -2290,7 +2313,7 @@ local function generateCredentialConfig(): Mapping<String, Any> =
         // the merge creates orphaned entries with no ui metadata → empty boxes.
         // These hidden copies ensure the merge inherits correct ui (HYP-1251).
         for (k, opt in credentialAuthOptions!!) {
-          [k] = renderJdbcAuthOption(opt)
+          [k] = renderJdbcAuthMergeTargetOption(opt)
         }
       }
       // Plain auth-type flow (non-JDBC): auth-type radio + nested panes
@@ -2658,6 +2681,13 @@ local credentialConfigOutput: FileOutput = new FileOutput {
 /// consumers (Pydantic models, Go structs) receive valid identifiers.
 local function toPyName(k: String): String = k.replaceAll("-", "_")
 
+local function getPyDefaultFactoryField(k: String, fieldType: String, factory: String): String =
+  let (line = "\(k): \(fieldType) = Field(default_factory=\(factory))")
+  if (line.length <= 84)
+    line
+  else
+    "\(k): \(fieldType) = Field(\n        default_factory=\(factory)\n    )"
+
 /// Map a single UI widget to its Python field declaration (name: type = default).
 /// Does not include the trailing docstring — see generateInputClassPy for that.
 local function getInputPyField(k: String, u: Config.UIElement): String =
@@ -2676,7 +2706,7 @@ local function getInputPyField(k: String, u: Config.UIElement): String =
     "\(k): ConnectionRef | None = None"
   else if (u is Config.ConnectionRefInput)
     (if ((u as Config.ConnectionRefInput).multiSelect)
-      "\(k): Annotated[list[ConnectionRef], MaxItems(1000)] = Field(default_factory=list)"
+      getPyDefaultFactoryField(k, "Annotated[list[ConnectionRef], MaxItems(1000)]", "list")
     else
       "\(k): ConnectionRef | None = None")
   else if (u is Config.ConnectionSelector)
@@ -2686,12 +2716,12 @@ local function getInputPyField(k: String, u: Config.UIElement): String =
   else if (u is Config.PasswordInput)
     "\(k): str = \"\""
   else if (u is Config.TagsInput)
-    "\(k): Annotated[list[str], MaxItems(1000)] = Field(default_factory=list)"
+    getPyDefaultFactoryField(k, "Annotated[list[str], MaxItems(1000)]", "list")
   else if (u is Config.InputRepeater)
-    "\(k): Annotated[list[str], MaxItems(1000)] = Field(default_factory=list)"
+    getPyDefaultFactoryField(k, "Annotated[list[str], MaxItems(1000)]", "list")
   else if (u is Config.DropDown)
     (if ((u as Config.DropDown).multiSelect)
-      "\(k): Annotated[list[str], MaxItems(1000)] = Field(default_factory=list)"
+      getPyDefaultFactoryField(k, "Annotated[list[str], MaxItems(1000)]", "list")
     else
       "\(k): str = \"\(if ((u as Config.DropDown).default != null) (u as Config.DropDown).default!! else "")\"")
   else if (u is Config.Radio)
@@ -2711,11 +2741,11 @@ local function getInputPyField(k: String, u: Config.UIElement): String =
   else if (u is Config.ConditionalInput)
     (let (ci = u as Config.ConditionalInput)
       if (ci.outputValueType == "object")
-        "\(k): Annotated[dict[str, Any], MaxItems(1000)] = Field(default_factory=dict)"
+        getPyDefaultFactoryField(k, "Annotated[dict[str, Any], MaxItems(1000)]", "dict")
       else
         "\(k): str = \"\(if (ci.default != null) ci.default!!.toString() else "")\"")
   else if (u is Config.NestedInput || u is Config.APITree || u is Config.ApiTreeSelect || u is Config.DsnTreeMap || u is Config.SqlTree || u is Config.AgentSelector)
-    "\(k): Annotated[dict[str, Any], MaxItems(1000)] = Field(default_factory=dict)"
+    getPyDefaultFactoryField(k, "Annotated[dict[str, Any], MaxItems(1000)]", "dict")
   else
     "\(k): str = \"\""
 
@@ -2797,6 +2827,8 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     "                return parsed\n" +
     "        return value\n\n"
   else ""
+  local objectStringCoercionSeparator: String =
+    if (!uiFieldLines.isEmpty && !objectStringCoercionBlock.isEmpty) "\n" else ""
   local credFieldLine: String = if (credentialFieldName != null && !skipFields.contains(credentialFieldName!!))
     "    \(credentialFieldName!!): CredentialRef | None = None\n"
   else ""
@@ -2819,20 +2851,64 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     "    publish_dry_run: bool = False\n" +
     "    \"\"\"When True, skip the Atlas publish step (executor_enabled=False).\"\"\"\n"
   else ""
+  local usesAnnotated: Boolean = uiFieldLines.contains("Annotated[")
+  local usesAny: Boolean = uiFieldLines.contains("dict[str, Any]") || !objectStringCoercionFields.isEmpty
+  local usesClassVar: Boolean = hasPublishStep && hasPublishInputFields
+  local typingImports: List<String> = (new Listing {
+    when (usesAnnotated) {
+      "Annotated"
+    }
+    when (usesAny) {
+      "Any"
+    }
+    when (usesClassVar) {
+      "ClassVar"
+    }
+  }).toList()
+  local stdlibImportLines: String =
+    (if (!objectStringCoercionFields.isEmpty) "import json\n" else "") +
+    (if (!typingImports.isEmpty) "from typing import \(typingImports.join(", "))\n" else "")
+  local pydanticImports: List<String> = (new Listing {
+    when (uiFieldLines.contains(" = Field(")) {
+      "Field"
+    }
+    when (!objectStringCoercionFields.isEmpty) {
+      "field_validator"
+    }
+  }).toList()
+  local pydanticImportLines: String =
+    if (!pydanticImports.isEmpty) "from pydantic import \(pydanticImports.join(", "))\n" else ""
+  local sdkTypeImports: List<String> = (new Listing {
+    when (uiFieldLines.contains(": ConnectionRef") || uiFieldLines.contains("list[ConnectionRef]")) {
+      "ConnectionRef"
+    }
+    when (uiFieldLines.contains(": FileReference")) {
+      "FileReference"
+    }
+    when (uiFieldLines.contains("MaxItems(")) {
+      "MaxItems"
+    }
+  }).toList()
+  local firstPartyImportLines: String =
+    (if (!sdkTypeImports.isEmpty)
+      "from application_sdk.contracts.types import \(sdkTypeImports.join(", "))\n"
+    else "") +
+    (if (!credFieldLine.isEmpty) "from application_sdk.credentials.ref import CredentialRef\n" else "") +
+    "from application_sdk.templates.contracts import ExtractionInput\n"
+  local inputImportBlock: String =
+    "from __future__ import annotations\n\n" +
+    (if (!stdlibImportLines.isEmpty) stdlibImportLines + "\n" else "") +
+    (if (!pydanticImportLines.isEmpty) pydanticImportLines + "\n" else "") +
+    firstPartyImportLines +
+    "\n\n"
   text =
     "# AUTO-GENERATED from app.pkl — DO NOT EDIT MANUALLY.\n" +
     "# To regenerate: make generate\n" +
-    "from __future__ import annotations\n" +
-    (if (!objectStringCoercionFields.isEmpty) "import json\n" else "") +
-    "from typing import Annotated, Any, ClassVar\n" +
-    "from pydantic import Field\(if (!objectStringCoercionFields.isEmpty) ", field_validator" else "")\n" +
-    "from application_sdk.contracts.types import ConnectionRef, FileReference, MaxItems\n" +
-    "from application_sdk.credentials.ref import CredentialRef\n" +
-    "from application_sdk.templates.contracts import ExtractionInput\n" +
-    "\n\n" +
+    inputImportBlock +
     "class AppInputContract(ExtractionInput):\n" +
     publishHashExcludeBlock +
     uiFieldLines +
+    objectStringCoercionSeparator +
     objectStringCoercionBlock +
     credFieldLine +
     publishFieldBlock

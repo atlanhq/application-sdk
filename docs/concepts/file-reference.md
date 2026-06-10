@@ -36,12 +36,58 @@ failures.
 | Task B always needs what task A produced, and the file is always present | `FileReference` field (eager, default) | SDK downloads it before task B runs. |
 | Task B only sometimes needs the file (e.g. only when `mode == "full"`) | `Annotated[FileReference \| None, Lazy()]` | SDK skips the download; task B fetches on demand with `fetch()`. |
 | Multiple tasks all share the same large manifest file | Single `FileReference` passed through the chain | SDK downloads it exactly once per task via dedup. |
-| Push a completed artifact so it appears in the Atlan UI after the run | `await self.upload(UploadInput(..., tier=StorageTier.RETAINED))` | Writes to a stable run-scoped prefix that the platform indexes. |
+| Push a completed artifact so it appears in the Atlan UI after the run | `await self.upload(UploadInput(local_path=...))` | `RETAINED` is the default tier — writes to a stable run-scoped prefix that the platform indexes. |
 | Write a file that must persist across multiple runs (e.g. incremental bookmark) | `await self.upload(UploadInput(..., tier=StorageTier.PERSISTENT))` | Writes to a fixed path not cleaned up between runs. |
 | Directory of output files (e.g. partitioned Parquet) from task A to task B | `FileReference(local_path=str(dir_path))` — same API, directory-aware | SDK uploads all files in the directory and re-creates the structure on download. |
+| Pass intermediate data between tasks using `App.upload()` | **Don't — use `FileReference`** | `App.upload()` routes to Atlan's `atlan-objectstore` in SDR, polluting it with internal artifacts; bypasses SHA-256 dedup; and doesn't wire into cross-worker auto-materialization. |
 
 **Key rule:** `FileReference` is for *within-run* transfer. `App.upload()` is
 for *durable outbound* delivery.
+
+> **Anti-pattern: `App.upload()` for task-to-task data.** Using `App.upload()` to
+> move data between tasks — instead of `FileReference` — causes three distinct harms:
+>
+> 1. **Wrong bucket.** In SDR, `App.upload()` routes to the Atlan-owned
+>    `atlan-objectstore`. Intermediate pipeline data (raw SQL rows, partial
+>    transforms) pollutes Atlan's bucket with artifacts that the publish app treats
+>    as connector output.
+> 2. **Bypasses SHA-256 dedup.** The `FileReference` interceptor maintains a
+>    `.sha256` sidecar so re-transfers across workers are skipped automatically.
+>    `App.upload()` performs a full upload on every call — no dedup, no sidecar,
+>    no skip.
+> 3. **No cross-worker auto-materialization.** `FileReference` input fields are
+>    automatically re-downloaded before a task runs when the local file is absent
+>    (cross-worker fault tolerance). `App.upload()` produces a bare `FileReference`
+>    without wiring it into the SDK's materialization machinery.
+>
+> For task-to-task data: declare `FileReference` on your `Output` and `Input`
+> contracts — the interceptor handles persistence and materialization automatically.
+
+### Which store does each API write to?
+
+These two APIs route to **different object stores**:
+
+| API | Store | Who can read it |
+|-----|-------|-----------------|
+| `FileReference` (via interceptor) | `objectstore` — `infra.storage`, customer-owned | Other tasks in the same deployment |
+| `App.upload()` | `atlan-objectstore` — `infra.upstream_storage`, Atlan-owned (in SDR); falls back to `infra.storage` in local dev | Atlan system apps (publish, QI, lineage) and the Atlan UI |
+
+The activity interceptor's persist step always writes `FileReference` objects to
+`infra.storage` (`objectstore`). This is intentional: intermediate task outputs
+stay inside the customer's deployment perimeter and never cross into Atlan's
+infrastructure unless the connector explicitly decides to hand them off.
+
+`App.upload()` uses `upstream_storage or storage`. In SDR deployments
+`upstream_storage` is the `atlan-objectstore` Dapr binding (pointing to
+`{tenant}/api/blobstorage`), so `App.upload()` routes to Atlan's S3.
+
+**Consequence for connector authors:** if your connector produces artifacts that
+Atlan's publish app must consume, you must call `App.upload()` explicitly from
+`run()` — the interceptor alone is not sufficient. Omitting the explicit call
+produces a silent failure: the DAG runs to completion but the publish app finds
+nothing in Atlan's S3 and publishes zero assets. See
+[ADR-0014](../adr/0014-two-store-storage-architecture.md) for the full
+rationale.
 
 ---
 
@@ -58,7 +104,7 @@ class FileReference(BaseModel, frozen=True):
     storage_path: str | None = None    # object-store key (set after persist)
     is_durable: bool = False           # True once uploaded to the store
     tier: StorageTier = StorageTier.TRANSIENT
-    file_count: int | None = None      # set for directories; number of files
+    file_count: int = 1                # number of files; >1 for directory uploads
     auto_materialize: bool = True      # False = SDK never touches this ref
 ```
 
@@ -173,7 +219,8 @@ return BookmarkOutput(
 #### Persist (output side)
 
 After your `@task` returns an Output containing an ephemeral `FileReference`
-(one with `local_path` set but `is_durable=False`), the SDK automatically:
+(one with `local_path` set but `is_durable=False`), the SDK automatically
+uploads it to **`infra.storage`** (`objectstore` — the deployment store):
 
 1. Computes the storage path from the tier prefix.
 2. Uploads the local file (or all files in a local directory) to the store.
@@ -312,57 +359,65 @@ await self.upload(input: UploadInput) -> UploadOutput
 
 ```python
 class UploadInput(BaseModel):
-    local_path: str                            # required: path to the file on disk
+    local_path: str = ""                       # path to the file or directory on disk
     tier: StorageTier = StorageTier.RETAINED   # where to store it
     storage_path: str | None = None            # override the full destination key
     storage_subdir: str | None = None          # append a subdir under the run prefix
     skip_if_exists: bool = False               # skip upload when remote SHA-256 matches
+    raise_on_empty: bool = False               # raise if the upload produces 0 files
 ```
 
 | Field | Required | Description |
 |---|---|---|
-| `local_path` | Yes | Absolute path to the file to upload. |
+| `local_path` | Yes | Path to the file or directory to upload. Defaults to `""` (must be set before calling `App.upload()`). |
 | `tier` | No (default `RETAINED`) | Tier that controls the destination prefix and cleanup policy. |
 | `storage_path` | No | Fully-qualified destination key. Overrides the auto-generated path. Use this when you need an exact fixed path (e.g. `argo-artifacts/spec.json`). |
 | `storage_subdir` | No | Subdirectory appended under the run prefix. Useful for grouping related uploads without spelling out the full path. |
 | `skip_if_exists` | No (default `False`) | When `True`, skip uploading files whose SHA-256 already matches the stored `{key}.sha256` sidecar. Useful for retried tasks and idempotent re-uploads. |
+| `raise_on_empty` | No (default `False`) | When `True`, raise `StorageEmptyUploadError` if the upload completes with zero files (e.g. `local_path` pointed at an empty directory). Leave `False` for incremental extractors where a quiet run legitimately produces no output; set `True` when zero files indicates a bug. |
 
 ### Path Computation
 
 When `storage_path` is **not** set, the destination key is computed as:
 
 ```
-{run_prefix}/{tier_subdir}/{filename}
+{app_prefix}/{filename}
 ```
 
-Where `run_prefix` is:
+Where `app_prefix` depends on the tier:
 
-```
-artifacts/apps/{app_name}/workflows/{workflow_id}/{run_id}
-```
-
-And `tier_subdir` depends on the tier:
-
-| Tier | tier_subdir |
+| Tier | `app_prefix` (= destination key without filename) |
 |---|---|
-| `RETAINED` | `file_refs/` |
-| `PERSISTENT` | (uses `persistent-artifacts/` as the base, ignores run_prefix) |
+| `RETAINED` (default) | `artifacts/apps/{app_name}/workflows/{run_id}` |
+| `TRANSIENT` | `file_refs` |
+| `PERSISTENT` | `persistent-artifacts/apps/{app_name}` |
 
-When `storage_subdir` is set:
+> **Note:** the `{uuid}` segment (e.g. `file_refs/{uuid}/tables.parquet`) only appears when the **FileReference activity interceptor** auto-persists a ref returned from a `@task` — that path is computed by `StorageTier.auto_persist_key()`, not by `App.upload()`. `App.upload()` uses `StorageTier.upload_prefix()`, which puts the file directly under `{app_prefix}/{filename}`.
+
+When `storage_subdir` is set, it is appended between the run prefix and the filename:
 
 ```
-{run_prefix}/{storage_subdir}/{filename}
+artifacts/apps/{app_name}/workflows/{run_id}/{storage_subdir}/{filename}
 ```
+
+TRANSIENT and PERSISTENT tiers ignore `storage_subdir`.
 
 ### UploadOutput
 
 ```python
 class UploadOutput(BaseModel):
     ref: FileReference    # durable ref pointing at the uploaded file
+    synced: bool = False  # True if at least one file was actually transferred
+    reason: str = ""      # human-readable outcome, e.g. "uploaded" or "skipped:hash_match"
 ```
 
-The returned `ref` is already durable (`is_durable=True`, `storage_path` set).
-You can pass it as a `FileReference` field on a subsequent task's Input.
+| Field | Description |
+|---|---|
+| `ref` | Durable `FileReference` with `is_durable=True` and `storage_path` set. `file_count` reflects the number of files uploaded (1 for a single file, N for a directory). |
+| `synced` | `True` if at least one file was transferred to the store. `False` when all files were skipped (e.g. `skip_if_exists=True` and every file already matched its SHA-256 sidecar). |
+| `reason` | Short string describing the transfer outcome. Typical values: `"uploaded"`, `"skipped:hash_match"`, `"empty"`. Useful for logging. |
+
+The returned `ref` is already durable — you can pass it as a `FileReference` field on a subsequent task's Input.
 
 ### Usage Patterns
 
@@ -374,14 +429,11 @@ from application_sdk.contracts.types import StorageTier
 
 # Inside run() or a @task method:
 upload_result = await self.upload(
-    UploadInput(
-        local_path="/tmp/output/tables.parquet",
-        tier=StorageTier.RETAINED,
-    )
+    UploadInput(local_path="/tmp/output/tables.parquet")  # RETAINED is the default tier
 )
 # upload_result.ref is now a durable FileReference
 # storage_path will be something like:
-# artifacts/apps/myapp/workflows/wf-123/run-456/file_refs/tables.parquet
+# artifacts/apps/myapp/workflows/run-abc123/tables.parquet
 ```
 
 #### Pattern 2 — Upload to a known subdir (e.g. argo-artifacts pattern)
@@ -412,9 +464,7 @@ upload_result = await self.upload(
 
 ```python
 # In the extract task:
-upload_result = await self.upload(
-    UploadInput(local_path=extract_output.db_path, tier=StorageTier.RETAINED)
-)
+upload_result = await self.upload(UploadInput(local_path=extract_output.db_path))
 
 # Pass the durable ref to the transform task:
 transform_input = TransformInput(source_db=upload_result.ref)
@@ -457,8 +507,7 @@ async def transform(self, input: TransformInput) -> TransformOutput:
 
 # In the run() method — push result for the platform to index:
 result = await self.upload(
-    UploadInput(local_path=transform_output.result_parquet.local_path,
-                tier=StorageTier.RETAINED)
+    UploadInput(local_path=transform_output.result_parquet.local_path)  # RETAINED is the default
 )
 # result.ref.storage_path is stable and survives workflow completion
 ```
@@ -510,7 +559,6 @@ class MyConnector(App):
         upload = await self.upload(
             UploadInput(
                 local_path=transform_out.result_parquet.local_path,
-                tier=StorageTier.RETAINED,
                 storage_subdir="argo-artifacts",
             )
         )
@@ -621,7 +669,7 @@ return Output(ref=FileReference(local_path=str(result), tier=StorageTier.RETAINE
 # The Atlan platform cannot index this on its own
 
 # CORRECT — use App.upload() to push to a stable, platform-visible path:
-await self.upload(UploadInput(local_path=str(result), tier=StorageTier.RETAINED))
+await self.upload(UploadInput(local_path=str(result)))  # RETAINED is the default tier
 ```
 
 ---
@@ -678,12 +726,7 @@ await self.upload_to_atlan(UploadInput(output_path=input.output_path))
 **Replacement:**
 
 ```python
-up = await self.upload(
-    UploadInput(
-        local_path=input.output_path,
-        tier=StorageTier.RETAINED,
-    )
-)
+up = await self.upload(UploadInput(local_path=input.output_path))
 records_uploaded = up.ref.file_count or 0
 ```
 

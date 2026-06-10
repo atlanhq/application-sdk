@@ -163,18 +163,35 @@ jobs:
             sleep 2
           done
 
+      - name: Resolve pinned daprd version
+        id: dapr
+        run: |
+          set -euo pipefail
+          ver=$(grep '^__dapr_version' application_sdk/version.py | cut -d'"' -f2)
+          if [[ -z "$ver" ]]; then
+            echo "::error::Failed to parse __dapr_version from application_sdk/version.py"
+            exit 1
+          fi
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "Resolved pinned daprd version: $ver"
+
       - name: Install and start Dapr runtime (daprd)
         run: |
-          DAPR_CLI_VERSION="1.16.2"
-          curl -sSLf "https://github.com/dapr/cli/releases/download/v${DAPR_CLI_VERSION}/dapr_linux_amd64.tar.gz" \
-            -o /tmp/dapr-cli.tar.gz
-          tar -xzf /tmp/dapr-cli.tar.gz -C /tmp dapr
-          chmod +x /tmp/dapr
-          sudo mv /tmp/dapr /usr/local/bin/dapr
-          dapr init --runtime-version 1.16.0 --slim
+          # Download daprd directly from the Dapr release. Mirrors the SDK's
+          # own embedded-runtime path (application_sdk/dev/_dapr.py) instead
+          # of invoking `dapr init --slim`, which also tries to fetch the
+          # placement binary — a binary we never use (we run with
+          # --placement-host-address '') and whose download has been a
+          # recurring source of 504s on this job.
+          DAPR_VERSION="${{ steps.dapr.outputs.version }}"
+          mkdir -p "$HOME/.dapr/bin"
+          curl -sSLf "https://github.com/dapr/dapr/releases/download/v${DAPR_VERSION}/daprd_linux_amd64.tar.gz" \
+            -o /tmp/daprd.tar.gz
+          tar -xzf /tmp/daprd.tar.gz -C "$HOME/.dapr/bin" daprd
+          chmod +x "$HOME/.dapr/bin/daprd"
           mkdir -p tests/integration/dapr-data/objectstore
           # Run daprd directly (no sidecar pattern) for deterministic behavior
-          $HOME/.dapr/bin/daprd \
+          "$HOME/.dapr/bin/daprd" \
             --app-id integ-test \
             --dapr-http-port 3500 \
             --resources-path ./tests/integration/dapr-components \
@@ -226,7 +243,7 @@ jobs:
           # Get the target branch of PR
           TARGET_BRANCH="${{ github.base_ref }}"
           # Default matrix if no label provided
-          DEFAULT_MATRIX="{\"include\":[{\"repo_name\":\"atlan-openapi-app\",\"target_branch\":\"${TARGET_BRANCH}\"}]}"
+          DEFAULT_MATRIX="{\"include\":[{\"repo_name\":\"atlan-openapi-app\",\"target_branch\":\"${TARGET_BRANCH}\"},{\"repo_name\":\"atlan-mysql-app\",\"target_branch\":\"${TARGET_BRANCH}\"},{\"repo_name\":\"atlan-metabase-app\",\"target_branch\":\"${TARGET_BRANCH}\"}]}"
 
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             # Parse labels from GitHub Script output
@@ -293,11 +310,13 @@ jobs:
           snowflake-user: ${{ secrets.SNOWFLAKE_USER }}
           snowflake-password: ${{ secrets.SNOWFLAKE_PASSWORD }}
 
-  # E2E Tests: This step is run for each app in the matrix
-  e2e-apps:
-    name: E2E (Apps)
+  # Connector tests: runs on every code-changing PR against both connector
+  # repos. Always dispatches tests.yaml (unit + integration); adds e2e when
+  # the 'e2e' label is present on the SDK PR.
+  connector-tests:
+    name: Connector Tests (${{ matrix.repo_name }})
     needs: [changes, matrix-builder]
-    if: ((github.event.action == 'labeled' && github.event.label.name == 'e2e-test') || contains(github.event.pull_request.labels.*.name, 'e2e-test')) && github.event.pull_request.head.repo.fork != true && github.event.pull_request.user.login != 'dependabot[bot]'
+    if: needs.changes.outputs.code == 'true' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true && github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -309,139 +328,9 @@ jobs:
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
           repo-name: ${{ matrix.repo_name }}
           target-branch: "refs/heads/${{ matrix.target_branch }}"
+          workflow: tests.yaml
+          workflow-inputs: ${{ contains(github.event.pull_request.labels.*.name, 'e2e') && format('{{"application_sdk_ref":"{0}","run_e2e":"true"}}', github.event.pull_request.head.sha) || format('{{"application_sdk_ref":"{0}"}}', github.event.pull_request.head.sha) }}
 
-  # SDR matrix — same <repo>:<branch> label parsing as matrix-builder
-  # above, but a different default (the SDR-enabled connector fleet,
-  # not openapi-app). Keeping them separate so the SDR path can grow
-  # connectors independently of the legacy e2e path.
-  #
-  # Label-gated on `sdr-e2e-test`. The SDR connector suite (~3 min per
-  # app) was previously auto-on, but the dispatched-from-SDK code path
-  # consistently red-failed inside atlan-configurator due to a CI
-  # secret gap (`atlan.client_secret: Client secret is required`) in
-  # downstream connector repos, blocking SDK PRs on environment state
-  # that's not part of any single PR's diff. Gating opt-in via the
-  # `sdr-e2e-test` label keeps the capability available while
-  # decoupling normal SDK PR signal from downstream secret health.
-  # Custom <repo>:<branch> labels still override the default matrix.
-  sdr-matrix-builder:
-    name: Build SDR Test Matrix
-    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'sdr-e2e-test')
-    runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Get PR Labels
-        id: get-labels
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const { data: labels } = await github.rest.issues.listLabelsOnIssue({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number
-            });
-            const labelNames = labels.map(label => label.name).join(',');
-            console.log(`PR Labels: ${labelNames}`);
-            core.setOutput('labels', labelNames);
-
-      - name: Build matrix from PR labels
-        id: set-matrix
-        run: |
-          TARGET_BRANCH="${{ github.base_ref }}"
-          # SDR-enabled connector fleet — extend this list as new
-          # connectors wire up sdr-integration-tests.yaml.
-          DEFAULT_MATRIX="{\"include\":[{\"repo_name\":\"atlan-mysql-app\",\"target_branch\":\"${TARGET_BRANCH}\"}]}"
-
-          LABELS="${{ steps.get-labels.outputs.labels }}"
-          FOUND_LABEL=false
-          INCLUDES=""
-
-          IFS=',' read -ra LABEL_ARRAY <<< "$LABELS"
-          for LABEL in "${LABEL_ARRAY[@]}"; do
-            if [[ $LABEL =~ ^([^:]+):([^:]+)$ ]]; then
-              REPO="${BASH_REMATCH[1]}"
-              BRANCH="${BASH_REMATCH[2]}"
-              if [[ "$FOUND_LABEL" == "true" ]]; then
-                INCLUDES="${INCLUDES},"
-              fi
-              INCLUDES="${INCLUDES}{\"repo_name\":\"${REPO}\",\"target_branch\":\"${BRANCH}\"}"
-              FOUND_LABEL=true
-              echo "Added SDR matrix entry: $REPO:$BRANCH"
-            fi
-          done
-
-          if [[ "$FOUND_LABEL" == "true" ]]; then
-            MATRIX="{\"include\":[${INCLUDES}]}"
-          else
-            MATRIX="$DEFAULT_MATRIX"
-            echo "No repo:branch labels found, using default SDR matrix"
-          fi
-
-          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
-          echo "Matrix output: $MATRIX"
-
-  # SDR E2E Tests: dispatched on the connector repo at the PR's head SHA
-  # so SDK changes are validated end-to-end against the connector fleet.
-  # The connector's sdr-integration-tests.yaml accepts the
-  # application_sdk_ref input and re-pins atlan-application-sdk to that
-  # SHA before building the image + running tests.
-  sdr-e2e-apps:
-    name: SDR Integration Tests (testcontainer) — ${{ matrix.repo_name }}
-    needs: [changes, sdr-matrix-builder]
-    # Label-gated on `sdr-e2e-test`. See the comment block on
-    # `sdr-matrix-builder` above for the rationale (downstream CI
-    # secret gap was making this red on every SDK PR). Add the label
-    # to opt a PR back in to end-to-end SDR validation.
-    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'sdr-e2e-test') && github.event.pull_request.head.repo.fork != true && github.event.pull_request.user.login != 'dependabot[bot]' && needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJson(needs.sdr-matrix-builder.outputs.matrix) }}
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: "./.github/actions/e2e-apps"
-        with:
-          github-token: ${{ secrets.ORG_PAT_GITHUB }}
-          repo-name: ${{ matrix.repo_name }}
-          target-branch: "refs/heads/${{ matrix.target_branch }}"
-          workflow: sdr-integration-tests.yaml
-          workflow-inputs: |
-            { "application_sdk_ref": "${{ github.event.pull_request.head.sha }}" }
-
-  # Full-DAG e2e against the mysql connector. Opt-in via the
-  # `e2e-full-mysql` label because each run is ~20 min and creates
-  # real Connection assets on the test tenant. Add a similar job +
-  # label per app as more connectors adopt the e2e-full harness — the
-  # e2e-apps composite action is generic; just change the `workflow`
-  # filename + the dispatch label (e2e-full-postgres, e2e-full-mssql,
-  # …) when wiring up a new connector.
-  e2e-full-mysql:
-    name: E2E Full Tests (system apps) — atlan-mysql-app
-    needs: [changes]
-    if: |
-      (
-        (github.event.action == 'labeled' && github.event.label.name == 'e2e-full-mysql') ||
-        contains(github.event.pull_request.labels.*.name, 'e2e-full-mysql')
-      ) && github.event.pull_request.head.repo.fork != true && github.event.pull_request.user.login != 'dependabot[bot]'
-    runs-on: ubuntu-latest
-    # The dispatched mysql-app run budget is timeout-minutes: 120
-    # (matches the SDK's e2e-full-reusable.yaml ceiling). Add ~10 min
-    # of overhead for dispatch + queue + artifact-fetch + comment-post
-    # on this side so the SDK job doesn't get killed before the
-    # dispatched run finishes legitimately.
-    timeout-minutes: 130
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: "./.github/actions/e2e-apps"
-        with:
-          github-token: ${{ secrets.ORG_PAT_GITHUB }}
-          repo-name: atlan-mysql-app
-          target-branch: "refs/heads/${{ github.base_ref }}"
-          workflow: e2e-full.yaml
-          workflow-inputs: |
-            { "application_sdk_ref": "${{ github.event.pull_request.head.sha }}" }
+  # (sdr-matrix-builder, sdr-e2e-apps, and e2e-full-mysql removed —
+  # superseded by connector-tests + the 'e2e' label on tests.yaml)
 
