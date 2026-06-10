@@ -42,6 +42,8 @@ dependencies = [
     # Temporal runtime (httpx-retries at L29 is the Dapr HTTP client replacement)
     "temporalio>=1.25.0,<2.0.0",
     "orjson>=3.11.6,<4.0.0",
+    # Temporal payload compression codec (execution/_temporal/codec.py)
+    "zstandard>=0.23.0,<1.0.0",
 ]
 
 [project.scripts]

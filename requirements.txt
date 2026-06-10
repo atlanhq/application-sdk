@@ -411,3 +411,5 @@ yarl==1.24.2
     # via aiohttp
 zipp==4.1.0
     # via importlib-metadata
+zstandard==0.25.0
+    # via atlan-application-sdk

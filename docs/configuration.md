@@ -45,6 +45,16 @@ Injected by the Local Marketplace into the Helm release at deploy time, and expo
 | `ATLAN_TASK_QUEUE` | _(derived)_ | Temporal task queue name. Defaults to `atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}` when both are set, or just the app name when only `ATLAN_APPLICATION_NAME` is set, or `{ClassName}-queue` (kebab-case) when neither is set. |
 | `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` | `127.0.0.1:9464` | Bind address for the Temporal SDK Prometheus endpoint (~40 built-in metrics). Loopback-only by default — operators should not scrape this port directly; combined-mode FastAPI `/metrics` proxies it in-process. See [Monitoring](concepts/monitoring.md). |
 
+### Payload Compression
+
+Compresses Temporal payloads (workflow args, activity inputs/outputs) before they enter workflow history, reducing history storage, egress, and replay bandwidth. **Decoding is always on** — any worker on an SDK with the codec can read compressed payloads regardless of these settings; only *encoding* is gated. See [ADR-0018](adr/0018-payload-compression-codec.md) for the rollout choreography.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ATLAN_PAYLOAD_COMPRESSION` | `off` | Payload compression for outgoing Temporal payloads: `off` or `zstd`. Flip to `zstd` per-app only after every worker that can replay the app's workflows runs a decode-capable SDK. |
+| `ATLAN_PAYLOAD_COMPRESSION_MIN_BYTES` | `4096` | Minimum payload size (bytes) to compress. Smaller payloads pass through unencoded — the wrap overhead isn't worth it. |
+| `ATLAN_PAYLOAD_COMPRESSION_LEVEL` | `3` | zstd compression level. The default balances ratio against CPU; higher levels rarely pay off for JSON payloads under the Temporal payload cap. |
+
 ### Worker Versioning
 
 Used by the Temporal Worker Deployment controller (TWD). Leave empty unless your cluster uses versioned deployments.

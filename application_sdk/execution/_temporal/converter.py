@@ -11,10 +11,13 @@ is required.
 
 from __future__ import annotations
 
+import dataclasses
 from typing import TYPE_CHECKING
 
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.converter import DataConverter, EncodingPayloadConverter
+
+from application_sdk.execution._temporal.codec import ZstdPayloadCodec
 
 if TYPE_CHECKING:
     from application_sdk.app.base import App
@@ -26,10 +29,14 @@ def create_data_converter(
     """Create a data converter with Pydantic support.
 
     When no additional converters are provided, returns the official
-    ``pydantic_data_converter`` directly.
+    ``pydantic_data_converter`` with the SDK payload codec attached.
 
     When app-specific converters are provided, they are prepended to the
     standard Pydantic converter chain.
+
+    Every converter returned here carries :class:`ZstdPayloadCodec`, so any
+    client or worker built from it can always *decode* zstd-compressed
+    payloads; *encoding* is gated by ``ATLAN_PAYLOAD_COMPRESSION=zstd``.
 
     Args:
         additional_converters: Optional app-specific converters to check first.
@@ -42,7 +49,9 @@ def create_data_converter(
         client = await Client.connect("localhost:7233", data_converter=converter)
     """
     if not additional_converters:
-        return pydantic_data_converter
+        return dataclasses.replace(
+            pydantic_data_converter, payload_codec=ZstdPayloadCodec()
+        )
 
     from temporalio.converter import (  # noqa: PLC0415 — cold path: temporal data converter setup
         BinaryNullPayloadConverter,
@@ -73,9 +82,10 @@ def create_data_converter(
             break
 
     payload_converter = CompositePayloadConverter(*converters)
-    return DataConverter(
+    converter = DataConverter(
         payload_converter_class=lambda: payload_converter,  # type: ignore[arg-type]
     )
+    return dataclasses.replace(converter, payload_codec=ZstdPayloadCodec())
 
 
 def create_data_converter_for_app(app_class: type[App]) -> DataConverter:

@@ -11,13 +11,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from temporalio.client import Client
-from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.runtime import PrometheusConfig, Runtime, TelemetryConfig
 
 from application_sdk.constants import (
     ENABLE_ATLAN_UPLOAD,
     TEMPORAL_PROMETHEUS_BIND_ADDRESS,
 )
+from application_sdk.execution._temporal.converter import create_data_converter
 from application_sdk.execution.retry import RetryPolicy, _to_temporal_retry_policy
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.utils import get_metric_enrichment_labels
@@ -549,9 +549,12 @@ async def create_temporal_client(
         "target_host": resolved_host,
         "namespace": namespace,
         "tls": tls_config,
+        # Default converter goes through create_data_converter() so the
+        # payload codec (ZstdPayloadCodec) is attached even when the caller
+        # doesn't supply a converter.
         "data_converter": data_converter
         if data_converter is not None
-        else pydantic_data_converter,
+        else create_data_converter(),
     }
     if api_key:
         kwargs["api_key"] = api_key
