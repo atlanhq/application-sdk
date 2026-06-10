@@ -14,7 +14,7 @@ Rollout is two-phase by design:
 2. **Encode is gated** by ``ATLAN_PAYLOAD_COMPRESSION=zstd``, flipped
    per-app only after the whole fleet is decode-capable.
 
-See ``docs/adr/0018-payload-compression-codec.md`` for the decision
+See ``docs/adr/0017-payload-compression-codec.md`` for the decision
 record and the full rollout choreography.
 """
 

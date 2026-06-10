@@ -47,7 +47,7 @@ Injected by the Local Marketplace into the Helm release at deploy time, and expo
 
 ### Payload Compression
 
-Compresses Temporal payloads (workflow args, activity inputs/outputs) before they enter workflow history, reducing history storage, egress, and replay bandwidth. **Decoding is always on** — any worker on an SDK with the codec can read compressed payloads regardless of these settings; only *encoding* is gated. See [ADR-0018](adr/0018-payload-compression-codec.md) for the rollout choreography.
+Compresses Temporal payloads (workflow args, activity inputs/outputs) before they enter workflow history, reducing history storage, egress, and replay bandwidth. **Decoding is always on** — any worker on an SDK with the codec can read compressed payloads regardless of these settings; only *encoding* is gated. See [ADR-0017](adr/0017-payload-compression-codec.md) for the rollout choreography.
 
 | Variable | Default | Description |
 |----------|---------|-------------|

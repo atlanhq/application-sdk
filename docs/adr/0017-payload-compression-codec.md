@@ -1,4 +1,4 @@
-# ADR-0018: Zstd Payload Compression Codec
+# ADR-0017: Zstd Payload Compression Codec
 
 ## Status
 **Accepted**
