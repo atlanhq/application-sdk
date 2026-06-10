@@ -10,7 +10,7 @@ import sys
 import threading
 import warnings
 from abc import ABC
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Any, ClassVar, Literal, Never, TypeVar, cast, get_type_hints
@@ -29,6 +29,7 @@ from application_sdk.app._ep_registration import (
 )
 from application_sdk.app.base_errors import (
     AbstractRunNotImplementedError,
+    MapBatchedInvalidArgumentError,
     ObjectStoreNotConfiguredError,
 )
 from application_sdk.app.context import (
@@ -76,6 +77,15 @@ except importlib.metadata.PackageNotFoundError:
 # Type variable for require() method
 T = TypeVar("T")
 HT = TypeVar("HT", bound=HeartbeatDetails)
+
+# Type variables for App.map_batched()
+_ItemT = TypeVar("_ItemT")
+_TaskInT = TypeVar("_TaskInT", bound=Input)
+_TaskOutT = TypeVar("_TaskOutT", bound=Output)
+
+# Default chunk concurrency for App.map_batched(). Conservative so a single
+# fan-out cannot monopolise the worker's activity slots; callers tune per app.
+_DEFAULT_MAP_BATCHED_CONCURRENCY = 5
 
 # BLDX-878: inter-app calls deactivated pending review.
 # TChildInput = TypeVar("TChildInput", bound=Input)
@@ -836,6 +846,121 @@ class App(ABC):
             args=[input],
             memo={"correlation_id": self.correlation_id},
         )
+
+    async def map_batched(
+        self,
+        task: Callable[[_TaskInT], "Awaitable[_TaskOutT]"],
+        items: "Sequence[_ItemT]",
+        *,
+        batch_size: int,
+        input_factory: Callable[[list["_ItemT"]], "_TaskInT"],
+        max_concurrency: int = _DEFAULT_MAP_BATCHED_CONCURRENCY,
+    ) -> list["_TaskOutT"]:
+        """Fan out a @task over ``items`` in chunks of ``batch_size``.
+
+        Instead of one activity per item (10k tables = 10k activities — 10k
+        billable actions and 10k schedule-to-start waits), ``map_batched``
+        invokes ``task`` once per chunk, dividing the action count by
+        ``batch_size``. Chunks run concurrently (bounded by
+        ``max_concurrency``) and results are returned **in chunk order** —
+        one ``Output`` per chunk.
+
+        Call from ``run()`` (workflow context). Works with both remote and
+        ``local=True`` tasks; only deterministic operations are used, so it is
+        replay-safe.
+
+        Payload safety (ADR-0008): each chunk travels as a workflow payload —
+        ``batch_size`` x per-item size must stay well under Temporal's 2 MB
+        limit. The task's ``Input`` must bound the chunk field
+        (``Annotated[list[...], MaxItems(batch_size)]``); for large items,
+        pass ``FileReference`` objects instead of inline data.
+
+        Retry semantics: a chunk is the retry unit. The task's own retry
+        policy applies per chunk, and a chunk that exhausts its retries fails
+        the whole ``map_batched`` call (the first failing chunk's error
+        propagates, like ``asyncio.gather``). Choose ``batch_size`` with that
+        granularity trade-off in mind.
+
+        Example::
+
+            class TableChunkInput(Input):
+                tables: Annotated[list[str], MaxItems(500)]
+
+            class TableChunkOutput(Output):
+                processed: int
+
+            class MyConnector(App):
+                @task
+                async def process_tables(
+                    self, input: TableChunkInput
+                ) -> TableChunkOutput:
+                    ...
+
+                async def run(self, input: RunInput) -> RunOutput:
+                    outputs = await self.map_batched(
+                        self.process_tables,
+                        input.tables,
+                        batch_size=100,
+                        input_factory=lambda chunk: TableChunkInput(tables=chunk),
+                    )
+                    return RunOutput(total=sum(o.processed for o in outputs))
+
+        Args:
+            task: The @task method to invoke once per chunk (e.g.
+                ``self.process_tables``).
+            items: The items to process. An empty sequence returns ``[]``
+                without invoking the task.
+            batch_size: Number of items per chunk (the last chunk may be
+                smaller). Must be >= 1.
+            input_factory: Builds the task's ``Input`` from one chunk of
+                items. Keeps the single-dataclass contract (ADR-0006)
+                explicit — no implicit field mapping.
+            max_concurrency: Maximum chunks in flight at once. Must be >= 1.
+                Default: 5.
+
+        Returns:
+            One ``Output`` per chunk, in chunk order. Flatten per-item results
+            from your output field, e.g.
+            ``[r for out in outputs for r in out.results]``.
+
+        Raises:
+            MapBatchedInvalidArgumentError: If ``batch_size`` or
+                ``max_concurrency`` is < 1.
+        """
+        if batch_size < 1:
+            raise MapBatchedInvalidArgumentError(
+                message=f"map_batched() batch_size must be >= 1, got {batch_size}",
+                field="batch_size",
+                constraint=">= 1",
+                value_summary=str(batch_size),
+            )
+        if max_concurrency < 1:
+            raise MapBatchedInvalidArgumentError(
+                message=(
+                    f"map_batched() max_concurrency must be >= 1, "
+                    f"got {max_concurrency}"
+                ),
+                field="max_concurrency",
+                constraint=">= 1",
+                value_summary=str(max_concurrency),
+            )
+
+        if not items:
+            return []
+
+        chunks: list[list[_ItemT]] = [
+            list(items[i : i + batch_size]) for i in range(0, len(items), batch_size)
+        ]
+
+        # asyncio.gather / Semaphore are deterministic under Temporal's
+        # workflow event loop (same pattern as on_complete()'s gather).
+        semaphore = asyncio.Semaphore(max_concurrency)
+
+        async def _run_chunk(chunk: list[_ItemT]) -> _TaskOutT:
+            async with semaphore:
+                return await task(input_factory(chunk))
+
+        return list(await asyncio.gather(*(_run_chunk(chunk) for chunk in chunks)))
 
     # =========================================================================
     # Framework-provided storage tasks
@@ -1732,6 +1857,7 @@ def _wrap_instance_tasks(app_instance: Any, context_data: dict[str, Any]) -> Non
                     task_meta.heartbeat_timeout_seconds,
                     task_meta.auto_heartbeat_seconds,
                     task_meta.retry_policy,
+                    local=task_meta.local,
                 )
                 setattr(app_instance, attr_name, wrapper)
 
@@ -1747,6 +1873,8 @@ def _create_task_activity_wrapper(
     heartbeat_timeout_seconds: int | None = 60,
     auto_heartbeat_seconds: int | None = 10,
     retry_policy: Any = None,
+    *,
+    local: bool = False,
 ) -> Any:
     """Create a wrapper that executes a task as a Temporal activity.
 
@@ -1761,6 +1889,9 @@ def _create_task_activity_wrapper(
         heartbeat_timeout_seconds: Heartbeat timeout. None disables.
         auto_heartbeat_seconds: Auto-heartbeat interval. None disables.
         retry_policy: Full retry policy (overrides max_attempts/interval if set).
+        local: Execute via ``workflow.execute_local_activity`` on the workflow
+            worker (no task-queue round-trip). Heartbeat options must already
+            be None — the @task decorator enforces this at class definition.
 
     Returns:
         Async function that executes the task as an activity.
@@ -1801,15 +1932,32 @@ def _create_task_activity_wrapper(
             auto_heartbeat_seconds=auto_heartbeat_seconds,
         )
 
+        # Extract summary from input for Temporal UI display
+        summary = input_data.summary() if hasattr(input_data, "summary") else None
+
+        if local:
+            # Local tasks run on the workflow worker itself — no task-queue
+            # round-trip, no heartbeats (the decorator forces both heartbeat
+            # options to None). The eviction-retry loop is deliberately not
+            # used: a local activity dies with its workflow worker, and
+            # Temporal re-dispatches the whole workflow task to another
+            # worker — there is no orphaned activity attempt to re-drive.
+            local_result: Output = await workflow.execute_local_activity(
+                f"{app_name}:{task_name}",
+                args=[task_context, input_data],
+                start_to_close_timeout=timedelta(seconds=timeout_seconds),
+                retry_policy=temporal_retry_policy,
+                result_type=output_type,
+                summary=summary,
+            )
+            return local_result
+
         # Build heartbeat timeout if enabled
         heartbeat_timeout = (
             timedelta(seconds=heartbeat_timeout_seconds)
             if heartbeat_timeout_seconds is not None
             else None
         )
-
-        # Extract summary from input for Temporal UI display
-        summary = input_data.summary() if hasattr(input_data, "summary") else None
 
         # Execute as activity, routed through the SDK eviction-retry loop so
         # worker pod evictions (SIGTERM mid-activity) re-dispatch as fresh

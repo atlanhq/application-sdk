@@ -848,6 +848,37 @@ class TestScanAndWrap:
         assert "cleanup_files" in called_task_names
         assert "cleanup_storage" in called_task_names
 
+    def test_wrap_instance_tasks_passes_local_flag(self) -> None:
+        """The local flag from TaskMetadata reaches the wrapper factory."""
+
+        class _LocalFlagApp(App):
+            @task(local=True)
+            async def quick(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+            @task
+            async def slow(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+        instance = _LocalFlagApp()
+        with mock.patch(
+            "application_sdk.app.base._create_task_activity_wrapper",
+            return_value=object(),
+        ) as factory:
+            _wrap_instance_tasks(instance, {"run_id": "r", "correlation_id": "c"})
+
+        local_by_task = {
+            call.args[1]: call.kwargs.get("local", False)
+            for call in factory.call_args_list
+        }
+        assert local_by_task["quick"] is True
+        assert local_by_task["slow"] is False
+        # Framework tasks stay remote.
+        assert local_by_task["upload"] is False
+
     def test_wrap_instance_tasks_skips_underscore_prefixed(self) -> None:
         class _UApp(App):
             async def run(self, input: _BLDXInput) -> _BLDXOutput:
@@ -922,6 +953,106 @@ class TestCreateTaskActivityWrapper:
             await wrapper(_BLDXInput())
         # When heartbeat is disabled the kwarg is None.
         assert exec_act.call_args.kwargs["heartbeat_timeout"] is None
+
+    @pytest.mark.asyncio
+    async def test_local_wrapper_invokes_execute_local_activity(self) -> None:
+        """local=True routes through workflow.execute_local_activity."""
+        from datetime import timedelta
+
+        wrapper = _create_task_activity_wrapper(
+            app_name="my-app",
+            task_name="quick-task",
+            timeout_seconds=60,
+            retry_max_attempts=2,
+            retry_max_interval_seconds=5,
+            output_type=_BLDXOutput,
+            context_data={"run_id": "rid", "correlation_id": "cid"},
+            heartbeat_timeout_seconds=None,
+            auto_heartbeat_seconds=None,
+            retry_policy=None,
+            local=True,
+        )
+
+        sentinel_out = _BLDXOutput(result="ok")
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.execute_local_activity",
+                new_callable=mock.AsyncMock,
+                return_value=sentinel_out,
+            ) as exec_local,
+            mock.patch(
+                "application_sdk.app.base.workflow.execute_activity",
+                new_callable=mock.AsyncMock,
+            ) as exec_remote,
+        ):
+            result = await wrapper(_BLDXInput(value="in"))
+
+        assert result is sentinel_out
+        exec_local.assert_awaited_once()
+        exec_remote.assert_not_awaited()
+        call_args = exec_local.call_args
+        # Same "<app>:<task>" naming as remote activities.
+        assert call_args.args[0] == "my-app:quick-task"
+        assert call_args.kwargs["result_type"] is _BLDXOutput
+        assert call_args.kwargs["start_to_close_timeout"] == timedelta(seconds=60)
+        # Local activities do not support heartbeats — kwarg must not be sent.
+        assert "heartbeat_timeout" not in call_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_local_wrapper_forwards_retry_policy(self) -> None:
+        """Local tasks keep per-task retry policies (local retries)."""
+        from application_sdk.execution.retry import RetryPolicy
+
+        wrapper = _create_task_activity_wrapper(
+            app_name="a",
+            task_name="t",
+            timeout_seconds=1,
+            retry_max_attempts=99,
+            retry_max_interval_seconds=99,
+            output_type=_BLDXOutput,
+            context_data={},
+            heartbeat_timeout_seconds=None,
+            auto_heartbeat_seconds=None,
+            retry_policy=RetryPolicy(max_attempts=4),
+            local=True,
+        )
+        with mock.patch(
+            "application_sdk.app.base.workflow.execute_local_activity",
+            new_callable=mock.AsyncMock,
+            return_value=_BLDXOutput(),
+        ) as exec_local:
+            await wrapper(_BLDXInput())
+        passed = exec_local.call_args.kwargs["retry_policy"]
+        assert passed.maximum_attempts == 4
+
+    @pytest.mark.asyncio
+    async def test_remote_wrapper_never_calls_execute_local_activity(self) -> None:
+        """Default (local=False) tasks never touch the local-activity path."""
+        wrapper = _create_task_activity_wrapper(
+            app_name="a",
+            task_name="t",
+            timeout_seconds=10,
+            retry_max_attempts=1,
+            retry_max_interval_seconds=1,
+            output_type=_BLDXOutput,
+            context_data={},
+            heartbeat_timeout_seconds=None,
+            auto_heartbeat_seconds=None,
+        )
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.execute_activity",
+                new_callable=mock.AsyncMock,
+                return_value=_BLDXOutput(),
+            ) as exec_remote,
+            mock.patch(
+                "application_sdk.app.base.workflow.execute_local_activity",
+                new_callable=mock.AsyncMock,
+            ) as exec_local,
+        ):
+            await wrapper(_BLDXInput())
+        exec_remote.assert_awaited_once()
+        exec_local.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_wrapper_passes_explicit_retry_policy_through(self) -> None:

@@ -13,6 +13,11 @@ Tasks support heartbeating for long-running operations:
 - Auto-heartbeating sends periodic signals to Temporal (default: every 10s)
 - Manual heartbeating allows progress tracking for resume on retry
 - If heartbeats stop, Temporal restarts the activity (default: after 60s)
+
+Small, fast tasks can opt into local execution with ``@task(local=True)``:
+they run on the workflow worker as Temporal local activities (no task-queue
+round-trip, no schedule-to-start latency, one fewer billable action), at the
+cost of no heartbeats and a 300 s timeout cap.
 """
 
 import inspect
@@ -40,6 +45,13 @@ _USE_DEFAULT = object()
 _DEFAULT_HEARTBEAT_TIMEOUT_SECONDS: int = env_int("ATLAN_HEARTBEAT_TIMEOUT_SECONDS", 60)
 _DEFAULT_TIMEOUT_SECONDS: int = env_int("ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS", 600)
 
+# Upper bound for @task(local=True) timeouts. Local activities run on the
+# workflow worker without heartbeats, so they must stay short — Temporal's
+# guidance is seconds, not minutes. 300 s matches the framework's own
+# short-task convention (the built-in cleanup_files / cleanup_storage tasks
+# use timeout_seconds=300) and is half the default remote-task timeout.
+_MAX_LOCAL_TASK_TIMEOUT_SECONDS: int = 300
+
 # Type alias for methods with single Input param returning Output
 TaskMethod = Callable[..., Any]
 
@@ -50,6 +62,18 @@ class UnresolvableTaskAnnotationsError(InvalidInputError):
 
     code: ClassVar[str] = "INVALID_INPUT_TASK_UNRESOLVABLE_ANNOTATIONS"
     field: str | None = "annotations"
+
+
+@dataclass(kw_only=True)
+class LocalTaskConfigurationError(InvalidInputError):
+    """``@task(local=True)`` combined with options local activities do not support.
+
+    Raised at class-definition time (ADR-0008 style: fail at import, not at
+    runtime) when a local task requests heartbeating or a timeout above
+    :data:`_MAX_LOCAL_TASK_TIMEOUT_SECONDS`.
+    """
+
+    code: ClassVar[str] = "INVALID_INPUT_LOCAL_TASK_CONFIGURATION"
 
 
 class TaskContractError(InvalidInputError):
@@ -129,6 +153,13 @@ class TaskMetadata:
     Set to None to disable auto-heartbeating (use manual heartbeats only).
     Should be less than heartbeat_timeout_seconds (recommended: 1/6 of timeout).
     Default: 10 seconds."""
+
+    local: bool = False
+    """Execute as a Temporal *local* activity on the workflow worker.
+
+    Local tasks skip the task-queue round-trip (no schedule-to-start latency,
+    no separate billable action) but cannot heartbeat and are capped at
+    ``_MAX_LOCAL_TASK_TIMEOUT_SECONDS`` (300 s). Reserve for small, fast steps."""
 
 
 def _validate_task_signature(
@@ -242,6 +273,7 @@ def task(
     retry_max_interval_seconds: int = 30,
     heartbeat_timeout_seconds: int | None | object = _USE_DEFAULT,
     auto_heartbeat_seconds: int | None | object = _USE_DEFAULT,
+    local: bool = False,
 ) -> Callable[[F], F]: ...
 
 
@@ -256,6 +288,7 @@ def task(
     retry_max_interval_seconds: int = 30,
     heartbeat_timeout_seconds: int | None | object = _USE_DEFAULT,
     auto_heartbeat_seconds: int | None | object = _USE_DEFAULT,
+    local: bool = False,
 ) -> F | Callable[[F], F]:
     """Decorator to mark a method as a task (Temporal activity).
 
@@ -333,12 +366,24 @@ def task(
         auto_heartbeat_seconds: Auto-heartbeat interval - framework sends
             heartbeats at this rate in a background task. Set to None to disable
             auto-heartbeating (manual only). Default: 10 seconds (~1/6 of timeout).
+        local: Execute as a Temporal *local* activity on the workflow worker —
+            no task-queue round-trip, no schedule-to-start latency, and one
+            fewer billable action per invocation. Reserve for small, fast steps
+            (path normalization, metadata shaping). Local tasks cannot
+            heartbeat: passing a numeric ``heartbeat_timeout_seconds`` or
+            ``auto_heartbeat_seconds`` raises ``LocalTaskConfigurationError``
+            at class-definition time, and the env-var heartbeat defaults are
+            not applied. ``timeout_seconds`` is capped at 300 s (the
+            framework's short-task convention); when unset it defaults to
+            ``min(ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS, 300)``.
 
     Returns:
         The decorated function with task metadata attached.
 
     Raises:
         TaskContractError: If the method doesn't follow the contract pattern.
+        LocalTaskConfigurationError: If ``local=True`` is combined with
+            heartbeat options or a timeout above 300 s.
     """
     # Resolve sentinels at decoration time so test-side monkeypatching of
     # _DEFAULT_* constants takes effect on subsequent @task uses; env-var values
@@ -362,6 +407,68 @@ def task(
     def decorator(fn: F) -> F:
         task_name = name or getattr(fn, "__name__", repr(fn))
 
+        final_timeout = resolved_timeout
+        final_heartbeat_timeout = resolved_heartbeat_timeout
+        final_auto_heartbeat = resolved_auto_heartbeat
+
+        if local:
+            # Local activities run on the workflow worker and do not support
+            # heartbeating — reject explicit heartbeat options at class
+            # definition time and suppress the env-var heartbeat defaults.
+            if (
+                heartbeat_timeout_seconds is not _USE_DEFAULT
+                and heartbeat_timeout_seconds is not None
+            ):
+                raise LocalTaskConfigurationError(
+                    message=(
+                        f"Task '{task_name}': local=True is incompatible with "
+                        f"heartbeat_timeout_seconds={heartbeat_timeout_seconds!r}. "
+                        f"Local activities cannot heartbeat — remove the heartbeat "
+                        f"option, or drop local=True if the task needs heartbeats."
+                    ),
+                    field="heartbeat_timeout_seconds",
+                    constraint="must be unset or None when local=True",
+                    value_summary=str(heartbeat_timeout_seconds),
+                )
+            if (
+                auto_heartbeat_seconds is not _USE_DEFAULT
+                and auto_heartbeat_seconds is not None
+            ):
+                raise LocalTaskConfigurationError(
+                    message=(
+                        f"Task '{task_name}': local=True is incompatible with "
+                        f"auto_heartbeat_seconds={auto_heartbeat_seconds!r}. "
+                        f"Local activities cannot heartbeat — remove the heartbeat "
+                        f"option, or drop local=True if the task needs heartbeats."
+                    ),
+                    field="auto_heartbeat_seconds",
+                    constraint="must be unset or None when local=True",
+                    value_summary=str(auto_heartbeat_seconds),
+                )
+            final_heartbeat_timeout = None
+            final_auto_heartbeat = None
+
+            # Local activities must stay short (Temporal guidance: seconds).
+            # Cap explicit timeouts at _MAX_LOCAL_TASK_TIMEOUT_SECONDS and clamp
+            # the env-var default so an unset timeout never exceeds the cap.
+            if timeout_seconds is _USE_DEFAULT:
+                final_timeout = min(
+                    _DEFAULT_TIMEOUT_SECONDS, _MAX_LOCAL_TASK_TIMEOUT_SECONDS
+                )
+            elif final_timeout > _MAX_LOCAL_TASK_TIMEOUT_SECONDS:
+                raise LocalTaskConfigurationError(
+                    message=(
+                        f"Task '{task_name}': local=True requires timeout_seconds "
+                        f"<= {_MAX_LOCAL_TASK_TIMEOUT_SECONDS}, got {final_timeout}. "
+                        f"Local activities run on the workflow worker and must be "
+                        f"short — lower the timeout, or drop local=True for "
+                        f"long-running work."
+                    ),
+                    field="timeout_seconds",
+                    constraint=f"<= {_MAX_LOCAL_TASK_TIMEOUT_SECONDS}",
+                    value_summary=str(final_timeout),
+                )
+
         # Validate signature and extract types
         input_type, output_type = _validate_task_signature(fn)
 
@@ -373,12 +480,13 @@ def task(
             output_type=output_type,
             app_name="",  # Will be set by App registration
             description=description or fn.__doc__ or "",
-            timeout_seconds=resolved_timeout,
+            timeout_seconds=final_timeout,
             retry_policy=retry_policy,
             retry_max_attempts=retry_max_attempts,
             retry_max_interval_seconds=retry_max_interval_seconds,
-            heartbeat_timeout_seconds=resolved_heartbeat_timeout,
-            auto_heartbeat_seconds=resolved_auto_heartbeat,
+            heartbeat_timeout_seconds=final_heartbeat_timeout,
+            auto_heartbeat_seconds=final_auto_heartbeat,
+            local=local,
         )
 
         return fn

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import pytest
 
 from application_sdk.app.task import (
+    LocalTaskConfigurationError,
     TaskContractError,
     TaskMetadata,
     get_task_metadata,
@@ -336,6 +337,161 @@ class TestTaskRetryPolicy:
         metadata = get_task_metadata(MyApp.my_task)
         assert metadata is not None
         assert metadata.retry_policy is None
+
+
+# =============================================================================
+# @task(local=True) — import-time validation and metadata
+# =============================================================================
+
+
+class TestLocalTaskValidation:
+    """Tests for @task(local=True) class-definition-time validation."""
+
+    @staticmethod
+    def _task_module():
+        import sys
+
+        return sys.modules["application_sdk.app.task"]
+
+    def test_local_task_accepted_and_marked(self) -> None:
+        """A valid local task is accepted and marked local in metadata."""
+
+        class MyApp:
+            @task(local=True)
+            async def normalize_paths(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.normalize_paths)
+        assert metadata is not None
+        assert metadata.local is True
+        # Local activities cannot heartbeat — env-var defaults are suppressed.
+        assert metadata.heartbeat_timeout_seconds is None
+        assert metadata.auto_heartbeat_seconds is None
+
+    def test_default_task_is_not_local(self) -> None:
+        """Tasks default to remote (local=False)."""
+
+        class MyApp:
+            @task
+            async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.my_task)
+        assert metadata is not None
+        assert metadata.local is False
+
+    def test_local_default_timeout_clamped_to_cap(self) -> None:
+        """Unset timeout defaults to min(env default, 300) for local tasks."""
+
+        class MyApp:
+            @task(local=True)
+            async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.my_task)
+        assert metadata is not None
+        # Default ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS is 600 → clamped to 300.
+        assert metadata.timeout_seconds == 300
+
+    def test_local_default_timeout_respects_lower_env_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A fleet-wide default below the cap is used as-is for local tasks."""
+        monkeypatch.setattr(self._task_module(), "_DEFAULT_TIMEOUT_SECONDS", 120)
+
+        class MyApp:
+            @task(local=True)
+            async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.my_task)
+        assert metadata is not None
+        assert metadata.timeout_seconds == 120
+
+    def test_local_explicit_timeout_below_cap_accepted(self) -> None:
+        """Explicit timeout at or below 300 s is preserved."""
+
+        class MyApp:
+            @task(local=True, timeout_seconds=60)
+            async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.my_task)
+        assert metadata is not None
+        assert metadata.timeout_seconds == 60
+
+    def test_local_timeout_at_cap_accepted(self) -> None:
+        """timeout_seconds=300 is exactly the cap and accepted."""
+
+        class MyApp:
+            @task(local=True, timeout_seconds=300)
+            async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.my_task)
+        assert metadata is not None
+        assert metadata.timeout_seconds == 300
+
+    def test_local_timeout_over_cap_raises_at_class_definition(self) -> None:
+        """timeout_seconds > 300 with local=True fails at class definition."""
+        with pytest.raises(
+            LocalTaskConfigurationError, match=r"requires timeout_seconds <= 300"
+        ):
+
+            class MyApp:
+                @task(local=True, timeout_seconds=301)
+                async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                    return SimpleOutput()
+
+    def test_local_with_heartbeat_timeout_raises_at_class_definition(self) -> None:
+        """local=True + numeric heartbeat_timeout_seconds fails at class definition."""
+        with pytest.raises(
+            LocalTaskConfigurationError,
+            match=r"incompatible with heartbeat_timeout_seconds",
+        ):
+
+            class MyApp:
+                @task(local=True, heartbeat_timeout_seconds=30)
+                async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                    return SimpleOutput()
+
+    def test_local_with_auto_heartbeat_raises_at_class_definition(self) -> None:
+        """local=True + numeric auto_heartbeat_seconds fails at class definition."""
+        with pytest.raises(
+            LocalTaskConfigurationError,
+            match=r"incompatible with auto_heartbeat_seconds",
+        ):
+
+            class MyApp:
+                @task(local=True, auto_heartbeat_seconds=5)
+                async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                    return SimpleOutput()
+
+    def test_local_with_explicit_none_heartbeat_accepted(self) -> None:
+        """Explicitly disabling heartbeats (None) is redundant but allowed."""
+
+        class MyApp:
+            @task(
+                local=True,
+                heartbeat_timeout_seconds=None,
+                auto_heartbeat_seconds=None,
+            )
+            async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.my_task)
+        assert metadata is not None
+        assert metadata.local is True
+        assert metadata.heartbeat_timeout_seconds is None
+
+    def test_local_error_is_invalid_input_leaf(self) -> None:
+        """LocalTaskConfigurationError is a typed InvalidInputError (ADR-0013)."""
+        from application_sdk.errors.leaves import InvalidInputError
+
+        assert issubclass(LocalTaskConfigurationError, InvalidInputError)
+        assert (
+            LocalTaskConfigurationError.code == "INVALID_INPUT_LOCAL_TASK_CONFIGURATION"
+        )
 
 
 # =============================================================================

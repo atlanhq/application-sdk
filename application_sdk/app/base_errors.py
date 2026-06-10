@@ -5,7 +5,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
-from application_sdk.errors.leaves import PreconditionError, UnimplementedError
+from application_sdk.errors.leaves import (
+    InvalidInputError,
+    PreconditionError,
+    UnimplementedError,
+)
+
+
+@dataclass(kw_only=True)
+class MapBatchedInvalidArgumentError(InvalidInputError):
+    """App.map_batched() called with an invalid batch_size or max_concurrency."""
+
+    code: ClassVar[str] = "INVALID_INPUT_MAP_BATCHED_ARGUMENT"
 
 
 @dataclass(kw_only=True)
