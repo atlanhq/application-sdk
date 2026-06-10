@@ -18,7 +18,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Pull target image
         run: docker pull "$TARGET_IMAGE"
@@ -29,7 +29,7 @@ jobs:
       #   namespace pkg_count=159 detected_os="chainguard"
       # and silently reports 0 OS findings on Chainguard/Wolfi images.
       - name: Install Trivy CLI
-        uses: aquasecurity/setup-trivy@3fb12ec12f41e471780db15c232d5dd185dcb514 # v0.2.6
+        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
         with:
           # Pin to a specific version so scan results don't drift between
           # runs as Trivy's vuln DB schema and detection logic evolve. Bump

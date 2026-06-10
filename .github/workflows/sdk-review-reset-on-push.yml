@@ -58,7 +58,7 @@ jobs:
           echo "Stripped stale sdk-review-* labels from PR #${PR_NUMBER} (if present)."
 
       - name: Reset sdk-review commit status on new HEAD
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             // The `sdk-review` context lives on a specific SHA. When a new
