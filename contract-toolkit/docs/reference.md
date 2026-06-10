@@ -126,7 +126,7 @@ The typed `pipeline` block replaces per-flag properties. Each step is nullable t
 | `pipeline.parseQueries` | ParseQueriesStep? | null | Query Intelligence node (default-off). |
 | `pipeline.popularity` | PopularityStep? | null | Popularity node (default-off). |
 | `pipeline.lineage` | LineageStep? | null | Lineage app node (default-off). |
-| `pipeline.publish` | PublishStep? | `new PublishStep {}` | Publish node (default-on). `errorHandling` defaults to 24h `startToCloseTimeoutSeconds`. Set null for utility apps. |
+| `pipeline.publish` | PublishStep? | `new PublishStep {}` | Publish node (default-on). `errorHandling` defaults to 72h `startToCloseTimeoutSeconds`. Set null for utility apps. |
 | `extraNodes` | Mapping<String, DAGNode> | `{}` | Custom nodes outside the typed pipeline. `"publish"` key replaces auto-generated publish. |
 
 **Pipeline step classes:**
@@ -170,7 +170,7 @@ class PublishStep {
   includeInputFields: Boolean = true     // generates output_dir/load_to_atlan/publish_dry_run in _input.py
   lineagePublish: LineagePublishStep?    // opt-in lineage publish (default-off)
   errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
-    startToCloseTimeoutSeconds = 86400  // 24h default — AE's 2h is too tight for large tenants
+    startToCloseTimeoutSeconds = 259200  // 72h default — AE's 2h is too tight for large tenants
   }
 }
 
