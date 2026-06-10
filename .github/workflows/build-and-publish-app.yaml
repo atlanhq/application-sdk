@@ -1156,6 +1156,18 @@ jobs:
         if: needs.prepare.outputs.enable_sdr == 'true'
         uses: imjasonh/setup-crane@59c71e96a00b28651f10369ba3359a6d730740a0 # v0.6
 
+      # setup-crane's final step runs `crane auth login ghcr.io` with the
+      # calling repo's GITHUB_TOKEN, overwriting the ghcr.io credential the
+      # "Log in to GHCR" step wrote. GITHUB_TOKEN has no access to
+      # PAT-published GHCR packages, so `crane copy` would fail with DENIED.
+      # Log back in with the org PAT before copying.
+      - name: Restore GHCR auth (setup-crane clobbers it with GITHUB_TOKEN)
+        if: needs.prepare.outputs.enable_sdr == 'true'
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_PAT:  ${{ secrets.ORG_PAT_GITHUB }}
+        run: crane auth login ghcr.io --username "${GHCR_USER}" --password-stdin <<< "${GHCR_PAT}"
+
       - name: Push to Docker Hub (re-tag, no rebuild)
         id: dockerhub_push
         if: needs.prepare.outputs.enable_sdr == 'true'
