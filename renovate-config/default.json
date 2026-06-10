@@ -4,9 +4,11 @@
   "extends": ["config:recommended"],
   "schedule": ["at any time"],
   "prHourlyLimit": 0,
-  "prConcurrentLimit": 10,
+  "prConcurrentLimit": 3,
   "labels": ["dependencies"],
   "dependencyDashboard": true,
+  "ignorePaths": ["requirements.txt"],
+  "gitIgnoredAuthors": ["github-actions[bot]@users.noreply.github.com"],
   "postUpdateOptions": ["uvLock"],
   "packageRules": [
     {
@@ -42,11 +44,12 @@
       "enabled": false
     },
     {
-      "description": "Python transitive deps (all except atlan-application-sdk): group minor+patch; auto-merge on green.",
+      "description": "Python transitive deps (all except atlan-application-sdk): group minor+patch; auto-merge on green. rangeStrategy update-lockfile keeps pyproject.toml untouched when the new version satisfies the existing constraint.",
       "matchManagers": ["uv"],
       "matchPackageNames": ["!atlan-application-sdk"],
       "matchUpdateTypes": ["minor", "patch"],
       "groupName": "python-transitive-deps",
+      "rangeStrategy": "update-lockfile",
       "automerge": true,
       "automergeType": "pr",
       "platformAutomerge": true
@@ -54,11 +57,17 @@
     {
       "description": "GitHub Actions: group minor+patch; auto-merge on green.",
       "matchManagers": ["github-actions"],
-      "matchUpdateTypes": ["minor", "patch"],
+      "matchUpdateTypes": ["minor", "patch", "digest"],
       "groupName": "github-actions",
       "automerge": true,
       "automergeType": "pr",
       "platformAutomerge": true
+    },
+    {
+      "description": "Trivy CLI version (version: in with: blocks): disable auto-updates. The scanner version is pinned deliberately — scan results drift when Trivy's vuln DB schema or detection logic changes, so bumps must be a conscious decision.",
+      "matchPackageNames": ["aquasecurity/trivy"],
+      "matchManagers": ["github-actions"],
+      "enabled": false
     }
   ],
   "customManagers": [
@@ -75,18 +84,5 @@
       "versioningTemplate": "semver",
       "extractVersionTemplate": "^contract-toolkit-v(?<version>.+)$"
     }
-  ],
-  "postUpgradeTasks": {
-    "commands": [
-      "uv lock",
-      "uv export --no-hashes --frozen > requirements.txt",
-      "if [ -d contract ] && [ -f contract/PklProject ] && command -v pkl >/dev/null 2>&1; then pkl project resolve contract/; fi"
-    ],
-    "fileFilters": [
-      "uv.lock",
-      "requirements.txt",
-      "contract/PklProject.deps.json"
-    ],
-    "executionMode": "branch"
-  }
+  ]
 }

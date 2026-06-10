@@ -70,6 +70,11 @@ on:
         required: false
         type: boolean
         default: false
+      coverage_source:
+        description: "Python package (or path) measured for unit-test coverage — passed to `pytest --cov=<value>` in the certify gate. Defaults to 'app', the standard SDK app package name, so existing callers are unaffected. Apps whose importable package differs override this (e.g. automation-engine sets 'automation_engine'); otherwise coverage measures a non-existent module, records 0%, and trips the app's coverage fail_under gate."
+        required: false
+        type: string
+        default: "app"
     secrets:
       ORG_PAT_GITHUB:
         required: true
@@ -371,7 +376,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout app
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ inputs.ref || github.ref }}
           path: app
@@ -384,7 +389,7 @@ jobs:
         # of a consumer app repo whose GITHUB_TOKEN is scoped to that repo and
         # cannot read other org repos (even public ones via cross-repo reusable
         # workflow invocations). An org PAT grants the necessary read access.
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: atlanhq/application-sdk
           ref: main
@@ -394,7 +399,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
-          version: "0.7.3"
+          version: "0.11.19"
 
       # ── 1. v3 shape ─────────────────────────────────────────────────────────
       - name: Install SDK (migration tooling)
@@ -502,7 +507,7 @@ jobs:
           # the default groups, pruning any test deps an app keeps in a non-default
           # group — which silently breaks async/plugin-dependent suites and trips
           # this gate on a packaging gap rather than a real failure.
-          uv run --all-groups --with pytest-cov pytest tests/unit --cov=app --cov-report=term
+          uv run --all-groups --with pytest-cov pytest tests/unit --cov=${{ inputs.coverage_source }} --cov-report=term
 
       - name: "Coverage threshold (>=85%)"
         id: coverage_threshold
@@ -615,7 +620,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout app
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ inputs.ref || github.ref }}
           path: app
@@ -626,7 +631,7 @@ jobs:
         # gate is self-contained at publish time (no private cross-repo fetch of
         # the connector-pulse nightly skill). ORG_PAT_GITHUB grants the
         # cross-repo read a consumer app's scoped GITHUB_TOKEN cannot.
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: atlanhq/application-sdk
           ref: main
@@ -856,7 +861,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ inputs.ref || github.ref }}
 
@@ -865,7 +870,7 @@ jobs:
         # github.workflow_ref and github.workflow_sha both resolve to the *caller's*
         # ref in a reusable workflow context (GitHub bug) — ref is pinned to main
         # so it always picks up the latest released version of the scripts.
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: atlanhq/application-sdk
           ref: main
@@ -1050,7 +1055,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ inputs.ref || github.ref }}
           lfs: ${{ inputs.lfs }}

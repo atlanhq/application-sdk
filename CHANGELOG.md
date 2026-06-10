@@ -1,5 +1,25 @@
 # Changelog
 
+## v3.16.0 (June 10, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.15.1...v3.16.0
+
+### Features
+
+- per-entrypoint compute_manifest hook for dynamic apps (#1629) (by @OnkarVO7 in [ff7ac8b](https://github.com/atlanhq/application-sdk/commit/ff7ac8b))
+- make worker default_versioning_behavior configurable (default PINNED) (#2029) (by @TechyMT in [c5025d4](https://github.com/atlanhq/application-sdk/commit/c5025d4))
+- emit per-activity cpu and memory cost metrics (#2030) (by @cmgrote in [c8ee9d8](https://github.com/atlanhq/application-sdk/commit/c8ee9d8))
+
+### Bug Fixes
+
+- use crane to copy large images GHCR → Docker Hub (#2020) (by @adityachoudhury-cloud in [d2dd1c0](https://github.com/atlanhq/application-sdk/commit/d2dd1c0))
+- handle empty parquet (0 MicroPartitions) in batched daft reader (#2028) (by @nishantmunjal7 in [b5ed14e](https://github.com/atlanhq/application-sdk/commit/b5ed14e))
+- close v2→v3 objectstore migration gaps (#2025) (by @cmgrote in [49fa19d](https://github.com/atlanhq/application-sdk/commit/49fa19d))
+- suppress Cloudflare 504 long-poll noise from Temporal gRPC bridge (#2031) (by @cmgrote in [8a5ef78](https://github.com/atlanhq/application-sdk/commit/8a5ef78))
+- remove postUpgradeTasks from shared preset (#2034) (by @cmgrote in [1e8b0b8](https://github.com/atlanhq/application-sdk/commit/1e8b0b8))
+- bump e2e HTTP per-request timeout from 30s to 60s (#2035) (by @cmgrote in [a17fce0](https://github.com/atlanhq/application-sdk/commit/a17fce0))
+
+
 ## v3.15.1 (June 08, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.15.0...v3.15.1
