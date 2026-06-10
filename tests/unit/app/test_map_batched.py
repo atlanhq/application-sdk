@@ -210,9 +210,7 @@ class TestMapBatchedValidation:
             )
         assert exc_info.value.field == "batch_size"
 
-    async def test_negative_batch_size_raises_typed_error(
-        self, app: _BatchApp
-    ) -> None:
+    async def test_negative_batch_size_raises_typed_error(self, app: _BatchApp) -> None:
         with pytest.raises(
             MapBatchedInvalidArgumentError, match=r"batch_size must be >= 1"
         ):
