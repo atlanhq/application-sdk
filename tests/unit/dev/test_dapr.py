@@ -8,7 +8,10 @@ real ``daprd``.
 
 from __future__ import annotations
 
+import hashlib
 import os
+import shutil as _shutil
+import tarfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -17,12 +20,16 @@ import pytest
 from application_sdk.dev._dapr import (
     _COMPONENTS_YAML,
     EmbeddedDapr,
+    _download_daprd,
+    _fetch_expected_sha256,
     _pick_free_port,
     _platform_tuple,
+    _verify_archive_checksum,
     _write_components,
     embedded_dapr,
 )
 from application_sdk.dev._dapr_errors import (
+    DaprdChecksumMismatchError,
     UnsupportedArchitectureError,
     UnsupportedOsError,
 )
@@ -245,3 +252,137 @@ class TestEmbeddedDaprLifecycle:
 
         _stub_subprocess_and_binary.terminate.assert_called_once()
         _stub_subprocess_and_binary.wait.assert_awaited()
+
+
+class TestDownloadDaprdIntegrity:
+    """The daprd archive must pass SHA256 verification against the release's
+    published ``.sha256`` asset before it is ever extracted or executed."""
+
+    BINARY_PAYLOAD = b"#!/bin/sh\necho daprd\n"
+
+    @pytest.fixture
+    def _linux_platform(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Force a deterministic os/arch + archive ext regardless of host."""
+        monkeypatch.setattr("platform.system", lambda: "Linux")
+        monkeypatch.setattr("platform.machine", lambda: "x86_64")
+
+    def _make_archive(self, tmp_path: Path) -> Path:
+        """Build a tiny tar.gz containing a fake ``daprd`` binary."""
+        binary = tmp_path / "daprd"
+        binary.write_bytes(self.BINARY_PAYLOAD)
+        archive = tmp_path / "daprd_linux_amd64.tar.gz"
+        with tarfile.open(archive, "w:gz") as tar:
+            tar.add(binary, arcname="daprd")
+        return archive
+
+    @staticmethod
+    def _sha256(path: Path) -> str:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def test_extracts_when_checksum_matches(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _linux_platform: None,
+    ) -> None:
+        archive = self._make_archive(tmp_path)
+        digest = self._sha256(archive)
+
+        def fake_urlretrieve(url: str, filename: str) -> None:
+            _shutil.copyfile(archive, filename)
+
+        monkeypatch.setattr("urllib.request.urlretrieve", fake_urlretrieve)
+        monkeypatch.setattr(
+            "application_sdk.dev._dapr._fetch_expected_sha256",
+            lambda _url: digest,
+        )
+
+        target = tmp_path / "cache" / "daprd"
+        _download_daprd(target)
+
+        assert target.read_bytes() == self.BINARY_PAYLOAD
+        assert os.access(target, os.X_OK)
+
+    def test_mismatch_raises_and_nothing_is_extracted(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _linux_platform: None,
+    ) -> None:
+        archive = self._make_archive(tmp_path)
+        real_digest = self._sha256(archive)
+        wrong_digest = "0" * 64
+        assert wrong_digest != real_digest
+
+        def fake_urlretrieve(url: str, filename: str) -> None:
+            _shutil.copyfile(archive, filename)
+
+        monkeypatch.setattr("urllib.request.urlretrieve", fake_urlretrieve)
+        monkeypatch.setattr(
+            "application_sdk.dev._dapr._fetch_expected_sha256",
+            lambda _url: wrong_digest,
+        )
+
+        target = tmp_path / "cache" / "daprd"
+        with pytest.raises(DaprdChecksumMismatchError) as exc_info:
+            _download_daprd(target)
+
+        # The tampered archive must never be extracted.
+        assert not target.exists()
+        # The error carries both digests for diagnosis.
+        assert exc_info.value.expected_sha256 == wrong_digest
+        assert exc_info.value.actual_sha256 == real_digest
+
+    def test_verify_archive_checksum_passes_on_match(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        archive = self._make_archive(tmp_path)
+        monkeypatch.setattr(
+            "application_sdk.dev._dapr._fetch_expected_sha256",
+            lambda _url: self._sha256(archive),
+        )
+        # Must not raise.
+        _verify_archive_checksum(str(archive), "https://example.invalid/a.tar.gz")
+
+    def test_fetch_expected_sha256_parses_release_format(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        digest = "d5" * 32
+        resp = MagicMock()
+        resp.read.return_value = f"{digest} *daprd_linux_amd64.tar.gz\n".encode()
+        resp.__enter__.return_value = resp
+        monkeypatch.setattr("urllib.request.urlopen", lambda _url: resp)
+
+        result = _fetch_expected_sha256("https://example.invalid/a.tar.gz.sha256")
+
+        assert result == digest
+
+    def test_fetch_expected_sha256_normalises_uppercase(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        digest = "AB" * 32
+        resp = MagicMock()
+        resp.read.return_value = f"{digest} *daprd_linux_amd64.tar.gz\n".encode()
+        resp.__enter__.return_value = resp
+        monkeypatch.setattr("urllib.request.urlopen", lambda _url: resp)
+
+        assert _fetch_expected_sha256("https://example.invalid/x.sha256") == "ab" * 32
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            b"",  # empty checksum file
+            b"not-a-digest *daprd_linux_amd64.tar.gz\n",  # non-hex token
+            b"abc123 *daprd_linux_amd64.tar.gz\n",  # too short
+        ],
+    )
+    def test_fetch_expected_sha256_rejects_malformed(
+        self, monkeypatch: pytest.MonkeyPatch, payload: bytes
+    ) -> None:
+        resp = MagicMock()
+        resp.read.return_value = payload
+        resp.__enter__.return_value = resp
+        monkeypatch.setattr("urllib.request.urlopen", lambda _url: resp)
+
+        with pytest.raises(DaprdChecksumMismatchError):
+            _fetch_expected_sha256("https://example.invalid/x.sha256")

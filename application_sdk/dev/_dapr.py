@@ -12,6 +12,7 @@ production while requiring nothing on the host beyond Python and ``uv``.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import platform
 import shutil
@@ -27,6 +28,7 @@ from pathlib import Path
 
 from application_sdk.dev._dapr_errors import (
     DaprdBinaryMissingError,
+    DaprdChecksumMismatchError,
     DaprReadinessTimeoutError,
     UnsupportedArchitectureError,
     UnsupportedOsError,
@@ -43,6 +45,45 @@ _DAPRD_RELEASE_BASE = (
     "https://github.com/dapr/dapr/releases/download/v{version}/daprd_{os}_{arch}"
 )
 _CACHE_DIR = Path.home() / ".cache" / "atlan-sdk" / "dapr" / _DAPRD_VERSION
+
+
+def _fetch_expected_sha256(checksum_url: str) -> str:
+    """Fetch the published ``.sha256`` asset and return the hex digest.
+
+    Dapr release checksum files contain ``<hex-digest> *<asset-name>`` —
+    the first whitespace-separated token is the digest.
+    """
+    with urllib.request.urlopen(checksum_url) as resp:
+        text = resp.read().decode("utf-8")
+    tokens = text.split()
+    digest = tokens[0].lower() if tokens else ""
+    if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+        raise DaprdChecksumMismatchError(
+            archive_url=checksum_url,
+            expected_sha256=digest or None,
+            actual_sha256=None,
+        )
+    return digest
+
+
+def _verify_archive_checksum(archive_path: str, archive_url: str) -> None:
+    """Verify *archive_path* against the release's published SHA256.
+
+    Raises :class:`DaprdChecksumMismatchError` on any mismatch so a
+    corrupted or tampered archive is never extracted or executed.
+    """
+    expected = _fetch_expected_sha256(archive_url + ".sha256")
+    sha = hashlib.sha256()
+    with open(archive_path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            sha.update(chunk)
+    actual = sha.hexdigest()
+    if actual != expected:
+        raise DaprdChecksumMismatchError(
+            archive_url=archive_url,
+            expected_sha256=expected,
+            actual_sha256=actual,
+        )
 
 
 def _daprd_binary_name() -> str:
@@ -95,6 +136,9 @@ def _download_daprd(target: Path) -> None:
     os.close(tmp_fd)
     try:
         urllib.request.urlretrieve(url, tmp_name)
+        # Verify against the release's published checksum BEFORE extracting —
+        # never extract or execute an archive that fails integrity checks.
+        _verify_archive_checksum(tmp_name, url)
         if ext == ".zip":
             import zipfile  # noqa: PLC0415 — Windows-only cold path
 

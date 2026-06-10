@@ -34,6 +34,20 @@ class DaprdBinaryMissingError(InternalError):
 
 
 @dataclass(kw_only=True)
+class DaprdChecksumMismatchError(InternalError):
+    code: ClassVar[str] = "INTERNAL_DAPR_CHECKSUM_MISMATCH"
+    message: str = (
+        "daprd archive failed SHA256 verification — refusing to extract. "
+        "The download may be corrupted or tampered with; delete any partial "
+        "cache under ~/.cache/atlan-sdk/dapr/ and retry."
+    )
+    component: str | None = "embedded_dapr"
+    archive_url: str | None = None
+    expected_sha256: str | None = None
+    actual_sha256: str | None = None
+
+
+@dataclass(kw_only=True)
 class DaprReadinessTimeoutError(AppTimeoutError):
     code: ClassVar[str] = "TIMEOUT_DAPR_READINESS"
     message: str = "Embedded Dapr did not become ready within deadline"
