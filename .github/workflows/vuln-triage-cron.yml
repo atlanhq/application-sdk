@@ -1,0 +1,233 @@
+# Vuln Triage — autonomous CVE remediation rover
+#
+# Dispatches a Cloudflare sandbox via mothership's Rover Direct API
+# (POST /api/sandbox/execute, mode=direct, snapshot=_base) to triage a
+# security-scan Linear ticket created by daily-security-scan.yml.
+#
+# The sandbox clones the repo into /workspace/application-sdk and then
+# reads .mothership/vuln-triage/ORCHESTRATION.md from disk — all the
+# per-CVE classification + remediation logic lives there, not on mothership.
+#
+# Triggered (1) automatically by daily-security-scan.yml right after it
+# files a new "vulnerabilities" ticket, passing that ticket's identifier,
+# and (2) manually via workflow_dispatch for re-runs / backfill.
+#
+# Required configuration (shared with sdk-evolution-cron.yml):
+#   secrets.HARNESS_TOKEN           Bearer token for /api/sandbox/execute.
+#   secrets.GLOBALPROTECT_USERNAME  VPN auth.
+#   secrets.GLOBALPROTECT_PASSWORD  VPN auth.
+#   vars.GLOBALPROTECT_PORTAL_URL   VPN portal URL.
+#   vars.MOTHERSHIP_URL             e.g. https://mothership.atlan.dev
+
+name: Vuln Triage (Rover)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ticket:
+        description: 'Linear ticket identifier to triage (e.g. BLDX-1234)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    # The sandbox runs for up to 2h (max_timeout_seconds: 7200) and the
+    # curl --max-time matches.
+    timeout-minutes: 130
+    steps:
+      - name: Checkout repo (for local globalprotect-connect action)
+        uses: actions/checkout@v4
+
+      - name: Connect to VPN (attempt 1/3)
+        id: vpn1
+        uses: ./.github/actions/globalprotect-connect
+        continue-on-error: true
+        with:
+          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+
+      - name: Connect to VPN (attempt 2/3)
+        if: steps.vpn1.outcome == 'failure'
+        id: vpn2
+        uses: ./.github/actions/globalprotect-connect
+        continue-on-error: true
+        with:
+          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+
+      - name: Connect to VPN (attempt 3/3)
+        if: steps.vpn2.outcome == 'failure'
+        uses: ./.github/actions/globalprotect-connect
+        with:
+          portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
+          username: ${{ secrets.GLOBALPROTECT_USERNAME }}
+          password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+
+      - name: Dispatch Vuln Triage to mothership Rover Direct API
+        env:
+          MOTHERSHIP_URL: ${{ vars.MOTHERSHIP_URL }}
+          HARNESS_TOKEN: ${{ secrets.HARNESS_TOKEN }}
+          TICKET: ${{ inputs.ticket }}
+          GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          # Mothership reachability check (5 retries).
+          for attempt in 1 2 3 4 5; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 \
+              "${MOTHERSHIP_URL}/health" 2>/dev/null || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "Mothership reachable (attempt $attempt)"
+              break
+            fi
+            echo "Mothership unreachable (status=$STATUS), retry $attempt/5"
+            sleep 5
+          done
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Cannot reach mothership after 5 attempts"
+            exit 1
+          fi
+
+          RUN_DATE=$(date -u +%Y-%m-%d)
+
+          PROMPT=$(cat <<PROMPT_END
+          You are running the vuln-triage rover in a Cloudflare sandbox.
+
+          Repository cloned at: /workspace/application-sdk (on main).
+          Working directory: cd /workspace/application-sdk
+
+          Read and follow the orchestration:
+            .mothership/vuln-triage/ORCHESTRATION.md
+            .mothership/vuln-triage/CLAUDE.md
+            .mothership/vuln-triage/tools.md
+
+          Run metadata (use these verbatim):
+            TICKET:       ${TICKET}        # the Linear ticket to triage
+            RUN_DATE:     ${RUN_DATE}
+            GHA_RUN_URL:  ${GHA_RUN_URL}
+
+          GITHUB_TOKEN is pre-injected by the sandbox. Use \`gh\` for all
+          GitHub operations.
+
+          Triage every CVE listed on ticket ${TICKET}. For each, classify
+          and remediate per ORCHESTRATION.md (bump / allowlist / alternative),
+          update the Linear ticket at every state transition, and include a
+          link to GHA_RUN_URL in the ticket summary so the reader can jump to
+          the workflow run that produced the work.
+
+          Linear / GPT proxy access: use the \$PROXY_BASE and \$PROXY_JWT
+          env vars injected by mothership (see tools.md).
+          PROMPT_END
+          )
+
+          PAYLOAD=$(jq -n \
+            --arg source_id "vuln-triage-${TICKET}-${RUN_DATE}" \
+            --arg prompt "${PROMPT}" \
+            --arg ticket "${TICKET}" \
+            --arg run_date "${RUN_DATE}" \
+            '{
+              mode: "direct",
+              stream: true,
+              source: "github-cron",
+              source_id: $source_id,
+              repositories: ["atlanhq/application-sdk"],
+              base_branch: "main",
+              snapshot: "_base",
+              prompt: $prompt,
+              max_timeout_seconds: 7200,
+              idle_timeout_seconds: 1800,
+              metadata: {
+                ticket: $ticket,
+                run_date: $run_date
+              }
+            }')
+
+          # SSE streaming dispatch (sync mode 504s behind mothership's nginx;
+          # see sdk-review.yml for the full rationale).
+          EVENT=""
+          COMPLETED=0
+          ERRORED=0
+          STREAM_GOT_EVENT=0
+          FINAL_STATUS=""
+          FINAL_COST=""
+          FINAL_ERR_CODE=""
+          FINAL_ERR_MSG=""
+
+          while IFS= read -r line; do
+            case "$line" in
+              "") EVENT="" ;;
+              ":"*) ;;
+              "event: "*) EVENT="${line#event: }"; STREAM_GOT_EVENT=1 ;;
+              "id: "*) ;;
+              "data: "*)
+                DATA="${line#data: }"
+                case "$EVENT" in
+                  started)
+                    SESS=$(printf '%s' "$DATA" | jq -r '.session_id // empty' 2>/dev/null)
+                    SBX=$(printf '%s' "$DATA" | jq -r '.sandbox_id // empty' 2>/dev/null)
+                    echo "[started]   session=${SESS} sandbox=${SBX}"
+                    ;;
+                  action)
+                    AN=$(printf '%s' "$DATA" | jq -r '.action_name // empty' 2>/dev/null)
+                    [ -n "$AN" ] && echo "[action]    ${AN}"
+                    ;;
+                  thought) : ;;
+                  response) echo "[response]  (agent posted a response)" ;;
+                  elicitation)
+                    echo "[elicit]    sandbox requested user input — treating as error"
+                    ERRORED=1
+                    FINAL_ERR_CODE="elicitation"
+                    FINAL_ERR_MSG="Sandbox requires interactive input; cannot answer from GHA"
+                    ;;
+                  error)
+                    ERRORED=1
+                    FINAL_ERR_CODE=$(printf '%s' "$DATA" | jq -r '.code // "unknown"' 2>/dev/null)
+                    FINAL_ERR_MSG=$(printf '%s' "$DATA" | jq -r '.message // ""' 2>/dev/null)
+                    echo "[error]     code=${FINAL_ERR_CODE} message=${FINAL_ERR_MSG}"
+                    ;;
+                  complete)
+                    COMPLETED=1
+                    FINAL_STATUS=$(printf '%s' "$DATA" | jq -r '.status // "unknown"' 2>/dev/null)
+                    FINAL_COST=$(printf '%s' "$DATA" | jq -r '.cost_usd // empty' 2>/dev/null)
+                    if [ "$FINAL_STATUS" = "error" ]; then
+                      FINAL_ERR_CODE=$(printf '%s' "$DATA" | jq -r '.error.code // "none"' 2>/dev/null)
+                      FINAL_ERR_MSG=$(printf '%s' "$DATA" | jq -r '.error.message // ""' 2>/dev/null)
+                    fi
+                    echo "[complete]  status=${FINAL_STATUS} cost_usd=${FINAL_COST}"
+                    ;;
+                  "") echo "[raw]       ${DATA:0:200}" ;;
+                esac
+                ;;
+              "<"*) echo "[html]      ${line}" ;;
+              *) echo "[unknown]   ${line}" ;;
+            esac
+          done < <(curl -sS -N --max-time 7200 \
+            -X POST "${MOTHERSHIP_URL}/api/sandbox/execute" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${HARNESS_TOKEN}" \
+            -d "${PAYLOAD}" 2>&1)
+
+          if [ "$ERRORED" = "1" ]; then
+            echo "::error::Sandbox error: code=${FINAL_ERR_CODE} message=${FINAL_ERR_MSG}"
+            exit 1
+          fi
+          if [ "$STREAM_GOT_EVENT" = "0" ]; then
+            echo "::error::Stream ended without a single SSE event — likely VPN/network/proxy issue"
+            exit 1
+          fi
+          if [ "$COMPLETED" != "1" ]; then
+            echo "::error::Stream ended without a 'complete' event"
+            exit 1
+          fi
+          if [ "$FINAL_STATUS" != "completed" ]; then
+            echo "::error::Sandbox final status=${FINAL_STATUS} (expected 'completed')"
+            exit 1
+          fi
+
+          echo "Vuln triage completed successfully (cost=${FINAL_COST})."

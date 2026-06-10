@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  actions: write # dispatch the vuln-triage rover for newly-created tickets
 
 env:
   TARGET_IMAGE: registry.atlan.com/public/app-runtime-base:3
@@ -109,7 +110,8 @@ jobs:
           TOTAL_HIGH=$((TI_HIGH + TF_HIGH))
           TOTAL_MED=$((TI_MED  + TF_MED))
           TOTAL_LOW=$((TI_LOW  + TF_LOW))
-          TOTAL_ACTIONABLE=$((TOTAL_CRIT + TOTAL_HIGH))
+          # All severities are actionable — we file + triage every finding.
+          TOTAL_ACTIONABLE=$((TOTAL_CRIT + TOTAL_HIGH + TOTAL_MED + TOTAL_LOW))
 
           echo "ti_crit=$TI_CRIT" >> "$GITHUB_OUTPUT"
           echo "ti_high=$TI_HIGH" >> "$GITHUB_OUTPUT"
@@ -129,27 +131,25 @@ jobs:
             {
               echo 'vuln_detail<<VULN_EOF'
 
-              if [ "$((TI_CRIT + TI_HIGH))" -gt 0 ]; then
-                echo "### Trivy — Image CRITICAL/HIGH"
+              if [ "$((TI_CRIT + TI_HIGH + TI_MED + TI_LOW))" -gt 0 ]; then
+                echo "### Trivy — Image (app-runtime-base)"
                 echo ""
                 echo "| Severity | Package | Installed | Fixed | CVE |"
                 echo "|----------|---------|-----------|-------|-----|"
                 jq -r '.Results[]?.Vulnerabilities[]?
-                  | select(.Severity == "CRITICAL" or .Severity == "HIGH")
                   | "| \(.Severity) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // "N/A") | \(.VulnerabilityID) |"' \
-                  trivy-image-results.json | sort -t'|' -k2,2 | head -50
+                  trivy-image-results.json | sort -t'|' -k2,2 | head -200
                 echo ""
               fi
 
-              if [ "$((TF_CRIT + TF_HIGH))" -gt 0 ]; then
-                echo "### Trivy — Python Deps CRITICAL/HIGH"
+              if [ "$((TF_CRIT + TF_HIGH + TF_MED + TF_LOW))" -gt 0 ]; then
+                echo "### Trivy — Python Deps (uv.lock / pyproject.toml)"
                 echo ""
                 echo "| Severity | Package | Installed | Fixed | CVE |"
                 echo "|----------|---------|-----------|-------|-----|"
                 jq -r '.Results[]?.Vulnerabilities[]?
-                  | select(.Severity == "CRITICAL" or .Severity == "HIGH")
                   | "| \(.Severity) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // "N/A") | \(.VulnerabilityID) |"' \
-                  trivy-fs-results.json | sort -t'|' -k2,2 | head -50
+                  trivy-fs-results.json | sort -t'|' -k2,2 | head -200
                 echo ""
               fi
 
@@ -159,7 +159,7 @@ jobs:
 
           echo "Trivy Image  — C:$TI_CRIT H:$TI_HIGH M:$TI_MED L:$TI_LOW"
           echo "Trivy Python — C:$TF_CRIT H:$TF_HIGH M:$TF_MED L:$TF_LOW"
-          echo "Actionable (C+H): $TOTAL_ACTIONABLE"
+          echo "Total findings (all severities): $TOTAL_ACTIONABLE"
 
       # ── Workflow summary ──────────────────────────────────────────────────
 
@@ -179,17 +179,18 @@ jobs:
             echo "| 🔵 Low      | ${{ steps.parse.outputs.ti_low  || 0 }} | ${{ steps.parse.outputs.tf_low  || 0 }} | **${{ steps.parse.outputs.total_low  || 0 }}** |"
             echo ""
             if [ "${{ steps.parse.outputs.total_actionable || 0 }}" -gt 0 ]; then
-              echo "> ⚠️ **${{ steps.parse.outputs.total_actionable }} CRITICAL/HIGH findings — see Linear ticket step below**"
+              echo "> ⚠️ **${{ steps.parse.outputs.total_actionable }} findings (all severities) — see Linear ticket step below**"
             else
-              echo "> ✅ **No CRITICAL/HIGH findings**"
+              echo "> ✅ **No findings**"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # ── Create Linear issue (CRITICAL/HIGH only, deduped against open
+      # ── Create Linear issue (all severities, deduped against open
       #    issues carrying the "vulnerabilities" label so we don't refile
       #    the same vulns every day). New issues land in the team's
       #    "Backlog" state.
       - name: Create Linear issue (deduped)
+        id: linear
         if: steps.parse.outputs.total_actionable != '0'
         env:
           LINEAR_API_KEY:      ${{ secrets.LINEAR_API_KEY }}
@@ -201,3 +202,15 @@ jobs:
         run: |
           export SCAN_DATE=$(date -u +%Y-%m-%d)
           python3 .github/scripts/security_scan_create_linear.py
+
+      # ── Dispatch the vuln-triage rover for the newly-created ticket. Only
+      #    fires when a *new* (non-deduped) issue was filed this run, so the
+      #    heavy VPN/mothership job runs only when there's something to triage.
+      - name: Dispatch vuln-triage rover
+        if: steps.linear.outputs.new_issue_identifier != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TICKET: ${{ steps.linear.outputs.new_issue_identifier }}
+        run: |
+          echo "Dispatching vuln-triage rover for ticket: $TICKET"
+          gh workflow run vuln-triage-cron.yml --ref "${{ github.ref_name }}" -f ticket="$TICKET"

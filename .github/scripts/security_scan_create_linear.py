@@ -2,7 +2,7 @@
 """Create a Linear ticket for daily security scan findings, with dedup.
 
 Compared to a naive "create one ticket per run":
-- Every CRITICAL/HIGH finding is identified by a stable ID (Trivy CVE).
+- Every finding (all severities) is identified by a stable ID (Trivy CVE).
 - All previously-created issues are tagged with the ``vulnerabilities``
   label. We fetch every open issue carrying that label and look for a
   hidden marker line in each description:
@@ -35,6 +35,7 @@ Optional:
     LINEAR_ASSIGNEE_ID
     LINEAR_VULN_LABEL_NAME  default: "vulnerabilities"
     GITHUB_STEP_SUMMARY     Markdown is appended for visibility
+    GITHUB_OUTPUT           new_issue_identifier / new_issue_url emitted here
 """
 
 from __future__ import annotations
@@ -51,7 +52,13 @@ LINEAR_URL = "https://api.linear.app/graphql"
 
 TRIVY_FILES = ["trivy-image-results.json", "trivy-fs-results.json"]
 
-ACTIONABLE_SEVERITIES_TRIVY = {"CRITICAL", "HIGH"}
+# All severities are ticketed. The hourly scan runs with --ignore-unfixed, so
+# every finding that reaches here has a fix available; the rover triages each
+# one (bump / allowlist / alternative) from the ticket.
+ACTIONABLE_SEVERITIES_TRIVY = {"CRITICAL", "HIGH", "MEDIUM", "LOW"}
+
+# Lower rank sorts first.
+SEVERITY_RANK = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
 
 
 def gql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
@@ -75,7 +82,7 @@ def gql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
 
 
 def collect_findings() -> list[dict]:
-    """Build the list of CRITICAL/HIGH findings across Trivy scanners.
+    """Build the list of findings (all severities) across Trivy scanners.
 
     Each finding is a dict with id, severity, package, version, source.
     """
@@ -109,7 +116,8 @@ def collect_findings() -> list[dict]:
                 }
 
     return sorted(
-        findings.values(), key=lambda v: (v["severity"] != "CRITICAL", v["id"])
+        findings.values(),
+        key=lambda v: (SEVERITY_RANK.get(v["severity"], 99), v["id"]),
     )
 
 
@@ -255,6 +263,7 @@ def build_description(
     visible_ids = "\n".join(f"- `{vid}`" for vid in new_ids)
     table = render_table(new_findings)
     marker = f"{VULN_MARKER_PREFIX}{','.join(all_today_ids)}{VULN_MARKER_SUFFIX}"
+    plural = "" if len(new_findings) == 1 else "ies"
     return f"""## Daily Security Scan — New Findings
 
 **Image:** `{target_image}`
@@ -262,9 +271,8 @@ def build_description(
 **Scan date:** {scan_date}
 **Workflow run:** [View logs]({run_url})
 
-This issue tracks **{len(new_findings)} new CRITICAL/HIGH** vulnerability\
-{"" if len(new_findings) == 1 else "ies"} not already covered by an \
-open Linear issue in this project.
+This issue tracks **{len(new_findings)} new** vulnerabilit{plural} \
+(all severities) not already covered by an open Linear issue in this project.
 
 ---
 
@@ -300,14 +308,22 @@ def write_summary(line: str) -> None:
             f.write(line + "\n")
 
 
+def emit_output(name: str, value: str) -> None:
+    """Write a step output to ``$GITHUB_OUTPUT`` so later jobs can consume it."""
+    output_path = os.environ.get("GITHUB_OUTPUT")
+    if output_path:
+        with open(output_path, "a") as f:
+            f.write(f"{name}={value}\n")
+
+
 def main() -> int:
     findings = collect_findings()
     if not findings:
-        write_summary("> ✅ No CRITICAL/HIGH findings — no Linear issue created.")
+        write_summary("> ✅ No findings — no Linear issue created.")
         return 0
 
     today_ids = [f["id"] for f in findings]
-    print(f"Today's CRITICAL/HIGH findings: {len(today_ids)}")
+    print(f"Today's findings (all severities): {len(today_ids)}")
     for vid in today_ids:
         print(f"  - {vid}")
 
@@ -347,14 +363,12 @@ def main() -> int:
 
     if not new_findings:
         write_summary(
-            f"> ✅ All {len(today_ids)} CRITICAL/HIGH finding(s) already tracked — "
+            f"> ✅ All {len(today_ids)} finding(s) already tracked — "
             "no new Linear issue created."
         )
         return 0
 
-    write_summary(
-        f"> ⚠️ {len(new_findings)} new CRITICAL/HIGH finding(s) — creating Linear issue."
-    )
+    write_summary(f"> ⚠️ {len(new_findings)} new finding(s) — creating Linear issue.")
 
     backlog_state_id = resolve_backlog_state_id(team_id)
     if not backlog_state_id:
@@ -368,7 +382,7 @@ def main() -> int:
         new_findings, today_ids, target_image, scan_date, run_url
     )
     title = (
-        f"[Security] {len(new_findings)} new CRITICAL/HIGH "
+        f"[Security] {len(new_findings)} new "
         f"vulnerabilit{'y' if len(new_findings) == 1 else 'ies'} ({scan_date})"
     )
 
@@ -410,6 +424,8 @@ def main() -> int:
 
     issue = result.get("issue") or {}
     write_summary(f"### Linear Issue: [{issue.get('identifier')}]({issue.get('url')})")
+    emit_output("new_issue_identifier", issue.get("identifier") or "")
+    emit_output("new_issue_url", issue.get("url") or "")
     return 0
 
 
