@@ -126,7 +126,7 @@ runs:
   using: composite
   steps:
     - name: Log in to GHCR
-      uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+      uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
       with:
         registry: ghcr.io
         username: ${{ github.actor }}
@@ -215,7 +215,7 @@ runs:
     # Must run before atlan-configurator generates ci-deploy/ — setup-deps
     # uses actions/checkout internally which would wipe generated files.
     - name: Setup Python and dependencies
-      uses: atlanhq/application-sdk/.github/actions/setup-deps@v3.0.0
+      uses: atlanhq/application-sdk/.github/actions/setup-deps@v3.16.0
 
     # setup-deps' actions/checkout wipes the pre-build re-pin above. Do
     # it again so the host pytest runtime resolves the dispatched SDK
@@ -873,7 +873,7 @@ runs:
     # mutating an old one, which makes "what's the latest run" obvious.
     - name: Render PR comment + post (when on a PR)
       if: always()
-      uses: actions/github-script@v7
+      uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
       env:
         APP_NAME: ${{ inputs.app-name }}
         OUTCOME: ${{ steps.tests.outcome }}
@@ -1033,7 +1033,7 @@ runs:
     # the same rendered report.
     - name: Upload test results
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: sdr-integration-tests-${{ inputs.app-name }}-results
         path: results/
