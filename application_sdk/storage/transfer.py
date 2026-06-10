@@ -492,22 +492,40 @@ async def upload(
             append_leaf=False,
         )
         files = [p for p in src.rglob("*") if p.is_file()]
-        if raise_on_empty and not files:
-            from application_sdk.storage.errors import (  # noqa: PLC0415
-                StorageEmptyUploadError,
-            )
+        # rglob/iterdir listing transients settle within ~350ms — absorb
+        # internally so callers never see file_count=0 for a populated dir.
+        for backoff_s in (0.05, 0.1, 0.2):
+            if files or not any(p.is_file() for p in src.iterdir()):
+                break
+            await asyncio.sleep(backoff_s)
+            files = [p for p in src.rglob("*") if p.is_file()]
+        if not files:
+            if any(p.is_file() for p in src.iterdir()):
+                from application_sdk.storage.errors import StorageError  # noqa: PLC0415
 
-            raise StorageEmptyUploadError(
-                f"upload(local_path={local_path!r}): directory contains "
-                "zero files. Either the extract step produced no output, "
-                "or files were written to a different path than the one "
-                "passed here. If quiet-day empty uploads are expected "
-                "(e.g. incremental extracts with no new data), drop "
-                "``raise_on_empty=True``. Otherwise verify the extract "
-                "wrote files to the expected ``local_path``. See the "
-                "dbt / databricks / coalesce connectors for the "
-                "stream-uploaded-per-file workaround pattern.",
-                local_path=local_path,
+                raise StorageError(
+                    f"upload(local_path={local_path!r}): rglob persistently "
+                    f"inconsistent with iterdir after retries."
+                )
+            if raise_on_empty:
+                from application_sdk.storage.errors import (  # noqa: PLC0415
+                    StorageEmptyUploadError,
+                )
+
+                raise StorageEmptyUploadError(
+                    f"upload(local_path={local_path!r}): directory contains "
+                    "zero files. Either the extract step produced no output, "
+                    "or files were written to a different path than the one "
+                    "passed here. If quiet-day empty uploads are expected "
+                    "(e.g. incremental extracts with no new data), drop "
+                    "``raise_on_empty=True``. Otherwise verify the extract "
+                    "wrote files to the expected ``local_path``. See the "
+                    "dbt / databricks / coalesce connectors for the "
+                    "stream-uploaded-per-file workaround pattern.",
+                    local_path=local_path,
+                )
+            return _make_upload_output(
+                str(src), prefix, 0, _tier, 0, "empty", is_dir=True
             )
         sem = asyncio.Semaphore(max_concurrency)
         keys = [

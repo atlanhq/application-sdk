@@ -182,6 +182,234 @@ class TestUploadRaiseOnEmpty:
         assert out.synced is True
 
 
+class TestUploadDirectoryListingTransient:
+    """PART-1148: absorb the rglob/iterdir listing transient inside the SDK.
+
+    Before the fix, the directory branch of :func:`upload` enumerated the
+    local tree with a single ``src.rglob("*")`` walk and trusted the
+    result. When that walk returned empty for a directory that DID
+    contain files (filesystem-listing transient, observed on macOS APFS
+    under concurrent activity load), the SDK silently completed with
+    ``ref.file_count=0, reason="skipped:hash_match"``. Downstream
+    consumers branching on ``ref.file_count == 0`` then dropped the
+    whole stage — invisible to telemetry.
+
+    The fix has two parts:
+
+    1. Internal retry-with-backoff (50/100/200 ms) when ``rglob`` and
+       ``iterdir`` disagree on whether the directory has top-level
+       files. Caller code never sees the transient; the library
+       absorbs it. Standard pattern across cloud SDKs for transient
+       I/O.
+    2. Observability: emit ``reason="empty"`` (not the misleading
+       ``"skipped:hash_match"``) for genuinely empty input.
+
+    Tests below pin every branch of the new behaviour:
+    happy-path / quiet-day-empty / one-retry recovery / two-retry
+    recovery / persistent disagreement raises / race-takes-precedence
+    over raise_on_empty / no false positive on subdir-only / explicit
+    top-level-only scope.
+    """
+
+    @pytest.fixture
+    def captured_sleeps(self, monkeypatch):
+        """Mock ``asyncio.sleep`` inside transfer.py — capture durations, skip waits."""
+        sleeps: list[float] = []
+
+        async def _fake_sleep(seconds):
+            sleeps.append(seconds)
+
+        monkeypatch.setattr(
+            "application_sdk.storage.transfer.asyncio.sleep", _fake_sleep
+        )
+        return sleeps
+
+    async def test_genuinely_empty_dir_default_returns_empty_reason(
+        self, store, tmp_path, captured_sleeps
+    ) -> None:
+        """Empty input + default ``raise_on_empty=False`` → silent quiet-day path.
+
+        Pins both BLDX-1255 contract (silent ``file_count=0``) AND the
+        observability correction (no more misleading ``skipped:hash_match``
+        reason on empty input).
+        """
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        out = await upload(str(empty), "myprefix", store=store)
+        assert out.ref.file_count == 0
+        assert out.synced is False
+        assert out.reason == "empty", (
+            f"reason={out.reason!r}: empty input must report a distinct "
+            f"reason. 'skipped:hash_match' falsely implies hash-match "
+            f"skipping happened."
+        )
+        assert captured_sleeps == []
+
+    async def test_genuinely_empty_dir_with_raise_on_empty_still_raises(
+        self, store, tmp_path, captured_sleeps
+    ) -> None:
+        """Existing BLDX-1255 opt-in path preserved unchanged."""
+        from application_sdk.storage.errors import StorageEmptyUploadError
+
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        with pytest.raises(StorageEmptyUploadError, match="contains zero files"):
+            await upload(str(empty), "myprefix", store=store, raise_on_empty=True)
+        assert captured_sleeps == []
+
+    async def test_happy_path_no_sleeps(self, store, tmp_path, captured_sleeps) -> None:
+        """When rglob succeeds first try, retries never fire — zero latency cost."""
+        (tmp_path / "data.txt").write_bytes(b"hello")
+        out = await upload(str(tmp_path), "myprefix", store=store)
+        assert out.ref.file_count == 1
+        assert out.reason == "uploaded"
+        assert captured_sleeps == []
+
+    async def test_transient_recovers_on_first_retry(
+        self, store, tmp_path, captured_sleeps, monkeypatch
+    ) -> None:
+        """One empty rglob → 50ms backoff → next call returns the file → uploads normally.
+
+        Models the macOS APFS readdir-after-write window. Caller observes
+        a normal ``reason="uploaded"`` result — no surfacing of the
+        transient.
+        """
+        from pathlib import Path
+
+        local_dir = tmp_path / "raced"
+        local_dir.mkdir()
+        (local_dir / "file.txt").write_bytes(b"data")
+
+        original_rglob = Path.rglob
+        n = {"calls": 0}
+
+        def _flaky_rglob(self, pattern):
+            n["calls"] += 1
+            return iter([]) if n["calls"] == 1 else original_rglob(self, pattern)
+
+        monkeypatch.setattr(Path, "rglob", _flaky_rglob)
+
+        out = await upload(str(local_dir), "raced", store=store)
+        assert out.ref.file_count == 1
+        assert out.reason == "uploaded"
+        assert captured_sleeps == [0.05]
+
+    async def test_transient_recovers_on_second_retry(
+        self, store, tmp_path, captured_sleeps, monkeypatch
+    ) -> None:
+        """Two empty rglobs (50, 100ms backoffs) → third call recovers → succeeds."""
+        from pathlib import Path
+
+        local_dir = tmp_path / "raced"
+        local_dir.mkdir()
+        (local_dir / "file.txt").write_bytes(b"data")
+
+        original_rglob = Path.rglob
+        n = {"calls": 0}
+
+        def _flaky_rglob(self, pattern):
+            n["calls"] += 1
+            return iter([]) if n["calls"] <= 2 else original_rglob(self, pattern)
+
+        monkeypatch.setattr(Path, "rglob", _flaky_rglob)
+
+        out = await upload(str(local_dir), "raced", store=store)
+        assert out.ref.file_count == 1
+        assert out.reason == "uploaded"
+        assert captured_sleeps == [0.05, 0.1]
+
+    async def test_persistent_disagreement_raises_after_retries(
+        self, store, tmp_path, captured_sleeps, monkeypatch
+    ) -> None:
+        """rglob STAYS empty across all three backoffs → ``StorageError``.
+
+        Three retries (50/100/200 ms) fire before the raise. Caller
+        knows it's not a transient — either truly broken filesystem or
+        an external observer that keeps removing files.
+        """
+        from pathlib import Path
+
+        from application_sdk.storage.errors import StorageError
+
+        local_dir = tmp_path / "broken"
+        local_dir.mkdir()
+        (local_dir / "file.txt").write_bytes(b"data")
+
+        monkeypatch.setattr(Path, "rglob", lambda self, pattern: iter([]))
+
+        with pytest.raises(StorageError, match="persistently inconsistent"):
+            await upload(str(local_dir), "broken", store=store)
+        assert captured_sleeps == [0.05, 0.1, 0.2]
+
+    async def test_persistent_disagreement_precedes_raise_on_empty(
+        self, store, tmp_path, captured_sleeps, monkeypatch
+    ) -> None:
+        """Race raise takes precedence over BLDX-1255's empty-upload raise.
+
+        Without this ordering, a caller opting in to ``raise_on_empty=True``
+        would see ``StorageEmptyUploadError("extract produced no output")``
+        when the actual cause is the SDK's inability to list the
+        already-present file — sending them looking in the wrong place.
+        """
+        from pathlib import Path
+
+        from application_sdk.storage.errors import StorageError
+
+        local_dir = tmp_path / "raced"
+        local_dir.mkdir()
+        (local_dir / "file.txt").write_bytes(b"x")
+
+        monkeypatch.setattr(Path, "rglob", lambda self, pattern: iter([]))
+
+        with pytest.raises(StorageError, match="persistently inconsistent"):
+            await upload(str(local_dir), "raced", store=store, raise_on_empty=True)
+
+    async def test_no_false_positive_on_only_empty_subdir(
+        self, store, tmp_path, captured_sleeps
+    ) -> None:
+        """A directory whose only child is an empty subdir is genuinely empty.
+
+        The iterdir disagreement check scopes to top-level FILES
+        (matching ``rglob``'s ``is_file()`` filter). A subdir at top
+        level isn't a file → no false retry → correct genuine-empty
+        report.
+        """
+        outer = tmp_path / "outer"
+        outer.mkdir()
+        (outer / "empty_sub").mkdir()
+        out = await upload(str(outer), "outer", store=store)
+        assert out.ref.file_count == 0
+        assert out.reason == "empty"
+        assert captured_sleeps == []
+
+    async def test_iterdir_check_is_top_level_only(
+        self, store, tmp_path, captured_sleeps, monkeypatch
+    ) -> None:
+        """The cheap iterdir check is scoped to top level (documented limit).
+
+        When rglob returns empty AND the only top-level entry is a
+        subdir (even if that subdir contains a deeply-nested file), the
+        check correctly returns "no race" — matching the rglob
+        ``is_file()`` filter. Deep-tree transients are out of scope; if
+        they ever surface in the wild we'd add a recursive secondary
+        check. This test pins the current scope as intentional.
+        """
+        from pathlib import Path
+
+        outer = tmp_path / "outer"
+        outer.mkdir()
+        inner = outer / "subdir"
+        inner.mkdir()
+        (inner / "deep.txt").write_bytes(b"nested")
+
+        monkeypatch.setattr(Path, "rglob", lambda self, pattern: iter([]))
+
+        out = await upload(str(outer), "outer", store=store)
+        assert out.ref.file_count == 0
+        assert out.reason == "empty"
+        assert captured_sleeps == []
+
+
 class TestUploadStorageSubdir:
     """Tests for the storage_subdir parameter on upload."""
 
