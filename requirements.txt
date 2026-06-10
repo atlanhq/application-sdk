@@ -70,7 +70,7 @@ cryptography==48.0.0
     #   trustme
 detect-installer==0.1.0
     # via fastapi-cloud-cli
-distlib==0.4.1
+distlib==0.4.2
     # via virtualenv
 dnspython==2.8.0
     # via email-validator
