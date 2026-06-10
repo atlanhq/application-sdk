@@ -22,7 +22,7 @@ asgiref==3.11.1
     # via opentelemetry-instrumentation-asgi
 attrs==26.1.0
     # via aiohttp
-authlib==1.6.12
+authlib==1.7.2
     # via pyatlan
 azure-core==1.41.0
     # via azure-identity
