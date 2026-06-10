@@ -70,6 +70,11 @@ on:
         required: false
         type: boolean
         default: false
+      coverage_source:
+        description: "Python package (or path) measured for unit-test coverage — passed to `pytest --cov=<value>` in the certify gate. Defaults to 'app', the standard SDK app package name, so existing callers are unaffected. Apps whose importable package differs override this (e.g. automation-engine sets 'automation_engine'); otherwise coverage measures a non-existent module, records 0%, and trips the app's coverage fail_under gate."
+        required: false
+        type: string
+        default: "app"
     secrets:
       ORG_PAT_GITHUB:
         required: true
@@ -502,7 +507,7 @@ jobs:
           # the default groups, pruning any test deps an app keeps in a non-default
           # group — which silently breaks async/plugin-dependent suites and trips
           # this gate on a packaging gap rather than a real failure.
-          uv run --all-groups --with pytest-cov pytest tests/unit --cov=app --cov-report=term
+          uv run --all-groups --with pytest-cov pytest tests/unit --cov=${{ inputs.coverage_source }} --cov-report=term
 
       - name: "Coverage threshold (>=85%)"
         id: coverage_threshold
