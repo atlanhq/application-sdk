@@ -13,6 +13,7 @@ from application_sdk.app.base_errors import (
     SecretStoreNotConfiguredError,
     StateStoreNotConfiguredError,
 )
+from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
 from application_sdk.contracts.base import HeartbeatDetails
 from application_sdk.credentials.resolver import CredentialResolver
 from application_sdk.observability.context import get_execution_context
@@ -257,11 +258,31 @@ class AppContext:
         """
         return self._cancelled
 
+    def _state_key(self, key: str) -> str:
+        """Build the namespaced state key for this app/run.
+
+        The leading namespace component is the deployment identity
+        (``ATLAN_DEPLOYMENT_NAME``) when running in a deployed environment,
+        so two deployments of the same app sharing a state store can never
+        read or overwrite each other's keys. When the deployment name is
+        unset (local development), the key shape is identical to the
+        pre-namespacing behavior: ``{app_name}:{run_id}:{key}``.
+
+        Both ``save_state`` and ``load_state`` go through this helper, so
+        reads and writes within one run are always consistent.
+        """
+        namespace = (
+            DEPLOYMENT_NAME
+            if DEPLOYMENT_NAME and DEPLOYMENT_NAME != LOCAL_ENVIRONMENT
+            else self.app_name
+        )
+        return f"{namespace}:{self.run_id}:{key}"
+
     async def save_state(self, key: str, value: dict[str, Any]) -> None:
         """Save state to the state store.
 
         Args:
-            key: State key (will be namespaced to this app/run).
+            key: State key (will be namespaced to this deployment/app/run).
             value: State data to save.
 
         Raises:
@@ -269,14 +290,13 @@ class AppContext:
         """
         if self._state_store is None:
             raise StateStoreNotConfiguredError()
-        namespaced_key = f"{self.app_name}:{self.run_id}:{key}"
-        await self._state_store.save(namespaced_key, value)
+        await self._state_store.save(self._state_key(key), value)
 
     async def load_state(self, key: str) -> dict[str, Any] | None:
         """Load state from the state store.
 
         Args:
-            key: State key (will be namespaced to this app/run).
+            key: State key (will be namespaced to this deployment/app/run).
 
         Returns:
             The saved state or None if not found.
@@ -286,8 +306,7 @@ class AppContext:
         """
         if self._state_store is None:
             raise StateStoreNotConfiguredError()
-        namespaced_key = f"{self.app_name}:{self.run_id}:{key}"
-        return await self._state_store.load(namespaced_key)
+        return await self._state_store.load(self._state_key(key))
 
     async def get_secret(self, name: str) -> str:
         """Get a secret by name from the secret store.

@@ -497,6 +497,12 @@ LOCK_RETRY_INTERVAL_SECONDS = int(os.getenv("LOCK_RETRY_INTERVAL_SECONDS", "60")
 ENABLE_MCP = os.getenv("ENABLE_MCP", "false").lower() == "true"
 MCP_METADATA_KEY = "__atlan_application_sdk_mcp_metadata"
 
+# Server security posture (see docs/standards/authentication.md)
+#: Expose the FastAPI OpenAPI surface (/docs, /redoc, /openapi.json).
+#: Always enabled in local development (ATLAN_DEPLOYMENT_NAME unset/"local");
+#: in deployed environments the endpoints are disabled unless this flag is true.
+ENABLE_OPENAPI_DOCS = os.getenv("ATLAN_ENABLE_OPENAPI_DOCS", "false").lower() == "true"
+
 #: Windows extended-length path prefix
 WINDOWS_EXTENDED_PATH_PREFIX = "\\\\?\\"
 

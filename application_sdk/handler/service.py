@@ -917,6 +917,9 @@ async def _provision_local_vault(guid: str, body: dict[str, Any]) -> JSONRespons
             mode="wb",
             suffix=".json.tmp",
         ) as tmp:
+            # Owner-only permissions, set explicitly (umask-independent) so
+            # the renamed secrets.json is never group/world readable.
+            os.fchmod(tmp.fileno(), 0o600)
             tmp.write(orjson.dumps(all_secrets))
             tmp_path = tmp.name
         os.replace(tmp_path, str(secrets_file))
@@ -1871,12 +1874,17 @@ def _register_workflow_routes(
     # Dev-only: local credential provisioning
     # ------------------------------------------------------------------
 
-    @app.post("/workflows/v1/dev/local-vault")
-    async def provision_local_vault(request: Request) -> JSONResponse:
-        """Provision credentials for local development (auto-generates GUID)."""
-        body: dict[str, Any] = await request.json()
-        guid = uuid4().hex
-        return await _provision_local_vault(guid, body)
+    # Registered only in local development so the route does not exist at
+    # all in deployed environments. The runtime check inside
+    # _provision_local_vault stays as defense-in-depth.
+    if DEPLOYMENT_NAME == LOCAL_ENVIRONMENT:
+
+        @app.post("/workflows/v1/dev/local-vault")
+        async def provision_local_vault(request: Request) -> JSONResponse:
+            """Provision credentials for local development (auto-generates GUID)."""
+            body: dict[str, Any] = await request.json()
+            guid = uuid4().hex
+            return await _provision_local_vault(guid, body)
 
 
 # ---------------------------------------------------------------------------
@@ -1992,7 +2000,16 @@ def create_app_handler_service(
 
     from application_sdk.constants import (  # noqa: PLC0415 — cold path: only at handler service startup
         ENABLE_MCP,
+        ENABLE_OPENAPI_DOCS,
     )
+
+    # OpenAPI surface (/docs, /redoc, /openapi.json) is a discovery aid, not a
+    # runtime dependency — keep it off in deployed environments unless
+    # explicitly requested, and always on for local development.
+    docs_enabled = ENABLE_OPENAPI_DOCS or DEPLOYMENT_NAME == LOCAL_ENVIRONMENT
+    docs_url = "/docs" if docs_enabled else None
+    redoc_url = "/redoc" if docs_enabled else None
+    openapi_url = "/openapi.json" if docs_enabled else None
 
     if ENABLE_MCP and app_name:
         from contextlib import (  # noqa: PLC0415 — cold path: lifespan setup, only when MCP enabled
@@ -2004,6 +2021,14 @@ def create_app_handler_service(
         )
 
         _mcp_server = MCPServer(application_name=app_name)
+        # The SDK does not authenticate the MCP mount itself — platform
+        # ingress/network policy is the authentication layer (see
+        # docs/standards/authentication.md). Make that dependency loud.
+        logger.warning(
+            "MCP endpoints are exposed without SDK-level authentication; "
+            "ensure platform ingress/network policy restricts access to "
+            "them before enabling MCP in a deployed environment."
+        )
 
         @asynccontextmanager
         async def _mcp_lifespan(fastapi_app: FastAPI):  # type: ignore[type-arg]
@@ -2018,9 +2043,19 @@ def create_app_handler_service(
             description=description,
             version=version,
             lifespan=_mcp_lifespan,
+            docs_url=docs_url,
+            redoc_url=redoc_url,
+            openapi_url=openapi_url,
         )
     else:
-        app = FastAPI(title=title, description=description, version=version)
+        app = FastAPI(
+            title=title,
+            description=description,
+            version=version,
+            docs_url=docs_url,
+            redoc_url=redoc_url,
+            openapi_url=openapi_url,
+        )
 
     from opentelemetry.instrumentation.fastapi import (  # noqa: PLC0415 — cold path: FastAPI instrumentor wired at app creation
         FastAPIInstrumentor,
@@ -2029,6 +2064,7 @@ def create_app_handler_service(
     from application_sdk.server.middleware import (  # noqa: PLC0415 — cold path: middleware setup at app creation
         EXCLUDED_LOG_PATHS,
         LogMiddleware,
+        SecurityHeadersMiddleware,
     )
 
     # Auto-instrument HTTP server with OTel: emits http.server.duration,
@@ -2041,6 +2077,32 @@ def create_app_handler_service(
         excluded_urls=",".join(sorted(EXCLUDED_LOG_PATHS)),
     )
     app.add_middleware(LogMiddleware)
+    # Added last → runs outermost, so hardening headers land on every
+    # response including error responses.
+    app.add_middleware(SecurityHeadersMiddleware)
+
+    @app.exception_handler(Exception)
+    async def _unhandled_exception_handler(
+        request: Request, exc: Exception
+    ) -> JSONResponse:
+        """Catch-all for exceptions that escape route-level handling.
+
+        HTTPException (and the AppError → HTTPException mappings inside the
+        routes) never reach here — FastAPI's own handlers run first — so
+        deliberate status codes are preserved. Everything else gets a
+        generic 500 with no internals disclosed to the client.
+        """
+        logger.error(
+            "Unhandled exception: method=%s path=%s error_type=%s",
+            request.method,
+            request.url.path,
+            type(exc).__name__,
+            exc_info=exc,
+        )
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "message": "Internal server error"},
+        )
 
     def _create_context(credentials: list[HandlerCredential]) -> HandlerContext:
         return HandlerContext(
@@ -2480,7 +2542,9 @@ def create_app_handler_service(
             status_code=404,
         )
 
-    static_dir = Path(frontend_assets_path)
+    # Resolve to a canonical absolute path before mounting so the static
+    # root is anchored (no relative-path ambiguity for the file server).
+    static_dir = Path(frontend_assets_path).resolve()
     if static_dir.is_dir():
         app.mount("/", StaticFiles(directory=str(static_dir)), name="static")
     else:

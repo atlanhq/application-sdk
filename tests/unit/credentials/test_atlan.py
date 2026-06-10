@@ -402,3 +402,84 @@ async def test_validate_does_not_leak_token_in_error_message(
     # The message itself is structured + redacted — uses type name only.
     assert secret not in exc.value.message
     assert "RuntimeError" in exc.value.message
+
+
+# ---------------------------------------------------------------------------
+# base_url scheme validation (https-only, http for loopback dev)
+# ---------------------------------------------------------------------------
+
+
+class TestBaseUrlSchemeValidation:
+    """Construction-time validation of base_url on both Atlan credentials."""
+
+    @pytest.mark.parametrize(
+        "base_url",
+        [
+            "https://tenant.atlan.com",
+            "https://tenant.atlan.com/",
+            "http://localhost:8000",
+            "http://127.0.0.1:8000",
+            "",  # empty stays allowed — fallback chains handle it
+        ],
+    )
+    def test_api_token_accepts_valid_base_url(self, base_url: str) -> None:
+        cred = AtlanApiToken(token="t", base_url=base_url)
+        assert cred.base_url == base_url
+
+    @pytest.mark.parametrize(
+        "base_url",
+        [
+            "http://tenant.atlan.com",
+            "http://10.0.0.5:8080",
+            "ftp://tenant.atlan.com",
+            "tenant.atlan.com",  # no scheme
+        ],
+    )
+    def test_api_token_rejects_invalid_base_url(self, base_url: str) -> None:
+        with pytest.raises(CredentialValidationError) as exc_info:
+            AtlanApiToken(token="t", base_url=base_url)
+        assert "https" in str(exc_info.value)
+        # Never echo the URL itself (may embed credentials).
+        assert base_url not in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        "base_url",
+        [
+            "https://tenant.atlan.com",
+            "http://localhost:8000",
+            "http://127.0.0.1",
+            "",
+        ],
+    )
+    def test_oauth_client_accepts_valid_base_url(self, base_url: str) -> None:
+        cred = AtlanOAuthClient(
+            client_id="c", client_secret="s", token_url="", base_url=base_url
+        )
+        assert cred.base_url == base_url
+
+    @pytest.mark.parametrize(
+        "base_url",
+        [
+            "http://tenant.atlan.com",
+            "ws://tenant.atlan.com",
+        ],
+    )
+    def test_oauth_client_rejects_invalid_base_url(self, base_url: str) -> None:
+        with pytest.raises(CredentialValidationError):
+            AtlanOAuthClient(
+                client_id="c", client_secret="s", token_url="", base_url=base_url
+            )
+
+    def test_parse_helpers_reject_plain_http(self) -> None:
+        with pytest.raises(CredentialValidationError):
+            _parse_atlan_api_token(
+                {"token": "t", "base_url": "http://tenant.atlan.com"}
+            )
+        with pytest.raises(CredentialValidationError):
+            _parse_atlan_oauth_client(
+                {
+                    "client_id": "c",
+                    "client_secret": "s",
+                    "base_url": "http://tenant.atlan.com",
+                }
+            )

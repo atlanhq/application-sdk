@@ -21,6 +21,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
 
 from application_sdk.constants import APPLICATION_NAME
 from application_sdk.observability.logger_adaptor import get_logger
@@ -36,6 +37,37 @@ if TYPE_CHECKING:
 _MIN_REFRESH_INTERVAL_SECONDS = 30
 _MAX_REFRESH_INTERVAL_SECONDS = 300
 _RETRY_INTERVAL_SECONDS = 30
+
+#: Hosts allowed to use plain http in token/base URLs (local development only).
+_HTTP_ALLOWED_HOSTS = frozenset({"localhost", "127.0.0.1"})
+
+
+def _ensure_https_url(url: str, *, field: str) -> str:
+    """Enforce https on an auth URL (http only for localhost/127.0.0.1).
+
+    Raises:
+        TemporalAuthConfigError: If the URL scheme is not https and the host
+            is not a local loopback.
+    """
+    parsed = urlparse(url)
+    scheme = (parsed.scheme or "").lower()
+    host = (parsed.hostname or "").lower()
+    if scheme == "https":
+        return url
+    if scheme == "http" and host in _HTTP_ALLOWED_HOSTS:
+        return url
+    from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
+        TemporalAuthConfigError,
+    )
+
+    # Don't echo the full URL — it may embed credentials.
+    raise TemporalAuthConfigError(
+        message=(
+            f"{field} must use https (http is allowed only for "
+            f"localhost/127.0.0.1); got scheme '{scheme or '<none>'}'"
+        ),
+        field=field,
+    )
 
 
 @dataclass
@@ -177,11 +209,16 @@ class TemporalAuthManager:
         return self._token_service
 
     def _resolve_token_url(self) -> str:
-        """Derive token URL from config."""
+        """Derive token URL from config.
+
+        Enforces https on whichever URL is used (http is allowed only for
+        localhost/127.0.0.1, for local development) — OAuth client
+        credentials must never travel over plaintext to a remote host.
+        """
         if self.config.token_url:
-            return self.config.token_url
+            return _ensure_https_url(self.config.token_url, field="token_url")
         if self.config.base_url:
-            base = self.config.base_url.rstrip("/")
+            base = _ensure_https_url(self.config.base_url, field="base_url").rstrip("/")
             return f"{base}/auth/realms/default/protocol/openid-connect/token"
         from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
             TemporalAuthConfigError,

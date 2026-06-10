@@ -4,13 +4,48 @@ from __future__ import annotations
 
 import os
 from typing import Any
+from urllib.parse import urlparse
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, field_validator
 
 from application_sdk.credentials.types import (
     BearerTokenCredential,
     OAuthClientCredential,
 )
+
+#: Hosts allowed to use plain http in base_url (local development only).
+_HTTP_ALLOWED_HOSTS = frozenset({"localhost", "127.0.0.1"})
+
+
+def _ensure_https_base_url(value: str, *, credential_name: str) -> str:
+    """Enforce https on a non-empty base_url (http only for localhost).
+
+    Empty values pass through unchanged — base_url is optional and the
+    existing fallback chains (env overrides, derived URLs) handle it.
+
+    Raises:
+        CredentialValidationError: If the URL scheme is not https and the
+            host is not a local loopback.
+    """
+    if not value:
+        return value
+    from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+        CredentialValidationError,
+    )
+
+    parsed = urlparse(value)
+    scheme = (parsed.scheme or "").lower()
+    host = (parsed.hostname or "").lower()
+    if scheme == "https":
+        return value
+    if scheme == "http" and host in _HTTP_ALLOWED_HOSTS:
+        return value
+    # Don't echo the full URL — it may embed credentials.
+    raise CredentialValidationError(
+        "base_url must use https (http is allowed only for localhost/127.0.0.1); "
+        f"got scheme '{scheme or '<none>'}'",
+        credential_name=credential_name,
+    )
 
 
 class AtlanApiToken(BearerTokenCredential, frozen=True):
@@ -23,6 +58,11 @@ class AtlanApiToken(BearerTokenCredential, frozen=True):
 
     base_url: str = ""
     """URL of the Atlan instance (e.g. ``https://tenant.atlan.com``)."""
+
+    @field_validator("base_url")
+    @classmethod
+    def _check_base_url_scheme(cls, value: str) -> str:
+        return _ensure_https_base_url(value, credential_name="atlan_api_token")
 
     @property
     def credential_type(self) -> str:
@@ -70,6 +110,11 @@ class AtlanOAuthClient(OAuthClientCredential, frozen=True):
 
     base_url: str = ""
     """URL of the Atlan instance (e.g. ``https://tenant.atlan.com``)."""
+
+    @field_validator("base_url")
+    @classmethod
+    def _check_base_url_scheme(cls, value: str) -> str:
+        return _ensure_https_base_url(value, credential_name="atlan_oauth_client")
 
     @property
     def credential_type(self) -> str:
@@ -126,7 +171,7 @@ class AtlanOAuthClient(OAuthClientCredential, frozen=True):
         access_token: str,
         expires_at: str = "",
         refresh_token: str = "",
-    ) -> "AtlanOAuthClient":
+    ) -> AtlanOAuthClient:
         """Return a new instance with updated token fields, preserving AtlanOAuthClient type."""
         return self.model_copy(
             update={

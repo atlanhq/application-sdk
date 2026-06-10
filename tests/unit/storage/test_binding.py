@@ -320,9 +320,10 @@ class TestS3BehaviorKnobs:
         assert client_options["allow_http"] is True
 
     @patch("obstore.store.S3Store")
-    def test_insecure_ssl_sets_allow_invalid_certs(
-        self, mock_s3_cls: MagicMock, tmp_path: Path
+    def test_insecure_ssl_sets_allow_invalid_certs_when_env_allows(
+        self, mock_s3_cls: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        monkeypatch.setenv("ATLAN_ALLOW_INSECURE_SSL", "true")
         components_dir = _write_component(
             tmp_path,
             "objectstore",
@@ -334,6 +335,22 @@ class TestS3BehaviorKnobs:
 
         client_options = mock_s3_cls.call_args.kwargs["client_options"]
         assert client_options["allow_invalid_certificates"] is True
+
+    def test_insecure_ssl_raises_without_env_opt_in(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """insecureSSL=true is rejected unless ATLAN_ALLOW_INSECURE_SSL=true."""
+        monkeypatch.delenv("ATLAN_ALLOW_INSECURE_SSL", raising=False)
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.aws.s3",
+            {"bucket": "b", "insecureSSL": "true"},
+        )
+        with pytest.raises(StorageConfigError) as exc_info:
+            create_store_from_binding("objectstore", components_dir=components_dir)
+        assert "objectstore" in str(exc_info.value)
+        assert "ATLAN_ALLOW_INSECURE_SSL" in str(exc_info.value)
 
     @patch("obstore.store.S3Store")
     def test_no_endpoint_no_path_style_no_user_agent(

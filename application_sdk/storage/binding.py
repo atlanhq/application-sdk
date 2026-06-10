@@ -254,9 +254,19 @@ def _build_s3_config(
     if _coerce_bool(meta.get("disableSSL", "")):
         client_options["allow_http"] = True
     if _coerce_bool(meta.get("insecureSSL", "")):
+        # Disabling TLS certificate verification is a deliberate operator
+        # decision — honoring the binding field alone would let any component
+        # YAML silently open the door to MITM. Require the env-var opt-in.
+        if os.getenv("ATLAN_ALLOW_INSECURE_SSL", "false").lower() != "true":
+            raise StorageConfigError(
+                f"[{name}] insecureSSL=true is set on the binding but disabled "
+                "by default; set ATLAN_ALLOW_INSECURE_SSL=true in the "
+                "environment to allow disabling TLS certificate verification"
+            )
         client_options["allow_invalid_certificates"] = True
         _get_logger().warning(
-            "insecureSSL=true disables certificate verification for S3 binding '%s'",
+            "insecureSSL=true disables certificate verification for S3 binding '%s' "
+            "(allowed by ATLAN_ALLOW_INSECURE_SSL)",
             name,
         )
 

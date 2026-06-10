@@ -297,6 +297,32 @@ class TestResolveTokenUrl:
         with pytest.raises(TemporalAuthConfigError):
             manager._resolve_token_url()
 
+    # -- https enforcement --------------------------------------------------
+
+    def test_plain_http_token_url_rejected(self) -> None:
+        manager = _make_manager(token_url="http://auth.example.com/token")
+        with pytest.raises(TemporalAuthConfigError) as exc_info:
+            manager._resolve_token_url()
+        assert "https" in str(exc_info.value)
+
+    def test_plain_http_base_url_rejected(self) -> None:
+        manager = _make_manager(token_url="", base_url="http://atlan.example.com")
+        with pytest.raises(TemporalAuthConfigError):
+            manager._resolve_token_url()
+
+    def test_http_localhost_token_url_allowed(self) -> None:
+        manager = _make_manager(token_url="http://localhost:8080/token")
+        assert manager._resolve_token_url() == "http://localhost:8080/token"
+
+    def test_http_loopback_base_url_allowed(self) -> None:
+        manager = _make_manager(token_url="", base_url="http://127.0.0.1:8080")
+        assert manager._resolve_token_url().startswith("http://127.0.0.1:8080/auth/")
+
+    def test_schemeless_token_url_rejected(self) -> None:
+        manager = _make_manager(token_url="auth.example.com/token")
+        with pytest.raises(TemporalAuthConfigError):
+            manager._resolve_token_url()
+
 
 # ---------------------------------------------------------------------------
 # _get_token_service

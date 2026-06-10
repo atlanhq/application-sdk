@@ -2743,6 +2743,28 @@ class TestProvisionLocalVault:
         finally:
             self._restore(restore)
 
+    def test_secrets_file_has_owner_only_permissions(self, tmp_path: Path) -> None:
+        """secrets.json must end up 0o600 (never group/world readable)."""
+        import os
+
+        client, restore = self._make_local_vault_client(storage=None)
+        try:
+            original_cwd = os.getcwd()
+            os.chdir(tmp_path)
+            try:
+                response = client.post(
+                    "/workflows/v1/dev/local-vault", json={"password": "p"}
+                )
+            finally:
+                os.chdir(original_cwd)
+            assert response.status_code == 200
+            secrets_file = tmp_path / "local" / "dapr" / "secrets" / "secrets.json"
+            assert secrets_file.exists()
+            assert (secrets_file.stat().st_mode & 0o777) == 0o600
+
+        finally:
+            self._restore(restore)
+
     def test_dev_only_gate_rejects_non_local(self) -> None:
         """When DEPLOYMENT_NAME != LOCAL_ENVIRONMENT, returns 403."""
         client, restore = self._make_local_vault_client(
@@ -5762,3 +5784,120 @@ class TestDefaultEntrypoint:
             assert resp.status_code == 200
         finally:
             patcher.stop()
+
+
+# ---------------------------------------------------------------------------
+# Server security posture (OpenAPI gating, bearer auth, security headers,
+# generic 500, dev-vault registration, MCP exposure warning)
+# ---------------------------------------------------------------------------
+
+
+class TestOpenApiDocsGating:
+    """OpenAPI surface is local-dev/opt-in only."""
+
+    _DOC_PATHS = ("/docs", "/redoc", "/openapi.json")
+
+    def test_docs_enabled_in_local_dev(self) -> None:
+        # Test env runs with DEPLOYMENT_NAME defaulting to "local".
+        client = _make_client()
+        for path in self._DOC_PATHS:
+            assert client.get(path).status_code == 200, path
+
+    def test_docs_disabled_in_deployed_environment(self) -> None:
+        from application_sdk.handler import service as svc_module
+
+        with patch.object(svc_module, "DEPLOYMENT_NAME", "production"):
+            client = _make_client()
+        for path in self._DOC_PATHS:
+            assert client.get(path).status_code == 404, path
+
+    def test_docs_enabled_in_deployed_environment_with_flag(self) -> None:
+        from application_sdk.handler import service as svc_module
+
+        with (
+            patch.object(svc_module, "DEPLOYMENT_NAME", "production"),
+            patch("application_sdk.constants.ENABLE_OPENAPI_DOCS", True),
+        ):
+            client = _make_client()
+        for path in self._DOC_PATHS:
+            assert client.get(path).status_code == 200, path
+
+
+class TestDevVaultRouteRegistration:
+    """/workflows/v1/dev/local-vault must not exist outside local dev."""
+
+    def test_route_absent_in_deployed_environment(self) -> None:
+        from application_sdk.handler import service as svc_module
+
+        with patch.object(svc_module, "DEPLOYMENT_NAME", "production"):
+            client = _make_client()
+        response = client.post("/workflows/v1/dev/local-vault", json={"username": "u"})
+        assert response.status_code == 404
+
+    def test_route_present_in_local_dev(self) -> None:
+        client = _make_client()
+        paths = {route.path for route in client.app.routes}  # type: ignore[attr-defined]
+        assert "/workflows/v1/dev/local-vault" in paths
+
+
+class TestSecurityHeadersIntegration:
+    """Hardening headers are present on every handler-service response."""
+
+    def test_headers_on_health(self) -> None:
+        client = _make_client()
+        response = client.get("/health")
+        assert response.headers["x-frame-options"] == "DENY"
+        assert response.headers["x-content-type-options"] == "nosniff"
+        assert response.headers["referrer-policy"] == "no-referrer"
+
+    def test_headers_on_404(self) -> None:
+        client = _make_client()
+        response = client.get("/definitely-not-a-route")
+        assert response.status_code == 404
+        assert response.headers["x-frame-options"] == "DENY"
+
+
+class TestGenericExceptionHandler:
+    """Unhandled exceptions return a generic 500 envelope."""
+
+    def test_unhandled_exception_returns_generic_500(self) -> None:
+        app = create_app_handler_service(_TestHandler(), app_name="exc-test")
+
+        @app.get("/boom")
+        async def boom() -> None:
+            raise RuntimeError("secret internal detail: db at 10.0.0.5")
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.get("/boom")
+        assert response.status_code == 500
+        assert response.json() == {
+            "success": False,
+            "message": "Internal server error",
+        }
+        # No internals leaked.
+        assert "10.0.0.5" not in response.text
+
+    def test_http_exceptions_not_intercepted(self) -> None:
+        client = _make_client()
+        response = client.get("/missing-route")
+        assert response.status_code == 404
+        assert response.json() == {"detail": "Not Found"}
+
+
+class TestMcpExposureWarning:
+    """Factory always warns that MCP relies on platform-level protection."""
+
+    def test_warns_when_mcp_enabled(self) -> None:
+        from application_sdk.handler import service as svc_module
+
+        with (
+            patch("application_sdk.constants.ENABLE_MCP", True),
+            patch("application_sdk.server.mcp.server.FastMCP"),
+            patch.object(svc_module.logger, "warning") as mock_warning,
+        ):
+            create_app_handler_service(_TestHandler(), app_name="mcp-warn-test")
+        warning_messages = [str(c.args[0]) for c in mock_warning.call_args_list]
+        assert any(
+            "MCP endpoints are exposed without SDK-level authentication" in m
+            for m in warning_messages
+        )

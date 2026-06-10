@@ -155,6 +155,40 @@ class TestAppContextStateStore:
         assert store.get_load_calls() == ["myapp:r1:foo"]
 
     @pytest.mark.asyncio
+    async def test_save_state_prefixes_deployment_name_when_set(self) -> None:
+        """In deployed environments keys are scoped by deployment identity."""
+        store = MockStateStore()
+        ctx = AppContext(
+            app_name="myapp", app_version="1", run_id="r1", _state_store=store
+        )
+        with patch("application_sdk.app.context.DEPLOYMENT_NAME", "myapp-dep-1"):
+            await ctx.save_state("foo", {"x": 1})
+        assert store.get_save_calls() == [("myapp-dep-1:r1:foo", {"x": 1})]
+
+    @pytest.mark.asyncio
+    async def test_save_and_load_keys_consistent_with_deployment_name(self) -> None:
+        """Reads and writes within one run use the same key shape."""
+        store = MockStateStore()
+        ctx = AppContext(
+            app_name="myapp", app_version="1", run_id="r1", _state_store=store
+        )
+        with patch("application_sdk.app.context.DEPLOYMENT_NAME", "myapp-dep-1"):
+            await ctx.save_state("foo", {"x": 1})
+            assert await ctx.load_state("foo") == {"x": 1}
+        assert store.get_load_calls() == ["myapp-dep-1:r1:foo"]
+
+    @pytest.mark.asyncio
+    async def test_state_key_falls_back_to_app_name_when_local(self) -> None:
+        """Unset/local deployment name keeps the pre-namespacing key shape."""
+        store = MockStateStore()
+        ctx = AppContext(
+            app_name="myapp", app_version="1", run_id="r1", _state_store=store
+        )
+        with patch("application_sdk.app.context.DEPLOYMENT_NAME", "local"):
+            await ctx.save_state("foo", {"x": 1})
+        assert store.get_save_calls() == [("myapp:r1:foo", {"x": 1})]
+
+    @pytest.mark.asyncio
     async def test_load_state_returns_none_when_missing(self) -> None:
         ctx = AppContext(app_name="a", app_version="1", _state_store=MockStateStore())
         assert await ctx.load_state("nope") is None
