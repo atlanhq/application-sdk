@@ -22,8 +22,17 @@ htmlcov/
 .venv/
 venv/
 env/
-.env
-.env.local
+
+# Credentials — Dockerfiles must never COPY env files or key material.
+# These patterns keep credential-shaped files out of the build context
+# entirely so a stray `COPY . .` cannot bake them into a layer.
+.env*
+*.pem
+*.key
+credentials*
+secrets*
+.aws/
+.gcp/
 
 # IDE files
 .vscode/

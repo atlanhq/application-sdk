@@ -1,8 +1,9 @@
 name: Check Dapr Version
 
 # Watches Dapr's GitHub releases for new stable versions and opens a PR to
-# bump ``__dapr_version`` in ``application_sdk/version.py`` whenever the
-# upstream latest drifts from our pin.
+# bump ``__dapr_version`` in ``application_sdk/version.py`` — and the
+# matching ``DAPR_RUNTIME_VERSION`` ARG in the ``Dockerfile`` — whenever
+# either pin drifts from the upstream latest.
 #
 # Runs on a schedule (Mondays at 09:00 UTC) and on manual dispatch.
 # Only the latest non-prerelease counts — ``releases/latest`` already
@@ -47,6 +48,17 @@ jobs:
           fi
           echo "version=$ver" >> "$GITHUB_OUTPUT"
 
+      - name: Read Dockerfile daprd pin
+        id: dockerfile
+        run: |
+          set -euo pipefail
+          ver=$(grep '^ARG DAPR_RUNTIME_VERSION=' Dockerfile | cut -d'=' -f2)
+          if [[ -z "$ver" ]]; then
+            echo "::error::Failed to parse ARG DAPR_RUNTIME_VERSION from Dockerfile"
+            exit 1
+          fi
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+
       - name: Fetch latest Dapr stable release
         id: upstream
         env:
@@ -68,18 +80,21 @@ jobs:
         run: |
           set -euo pipefail
           pinned="${{ steps.pinned.outputs.version }}"
+          dockerfile="${{ steps.dockerfile.outputs.version }}"
           latest="${{ steps.upstream.outputs.version }}"
           echo "pinned=$pinned" >> "$GITHUB_OUTPUT"
           echo "latest=$latest" >> "$GITHUB_OUTPUT"
-          if [[ "$pinned" == "$latest" ]]; then
+          # Drift in EITHER pin (version.py or Dockerfile ARG) triggers a
+          # bump PR — both must track the upstream latest in lockstep.
+          if [[ "$pinned" == "$latest" && "$dockerfile" == "$latest" ]]; then
             echo "match=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::daprd pin is up to date ($pinned)"
+            echo "::notice::daprd pins are up to date ($pinned)"
           else
             echo "match=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::daprd pin $pinned is behind upstream $latest"
+            echo "::notice::daprd pins (version.py=$pinned, Dockerfile=$dockerfile) drift from upstream $latest"
           fi
 
-      - name: Bump version.py
+      - name: Bump version.py and Dockerfile
         if: steps.compare.outputs.match == 'false'
         run: |
           set -euo pipefail
@@ -87,10 +102,17 @@ jobs:
           latest="${{ steps.compare.outputs.latest }}"
           sed -i "s/^__dapr_version: str = \"${pinned}\"$/__dapr_version: str = \"${latest}\"/" \
             application_sdk/version.py
-          # Confirm exactly one line changed; bail if sed missed.
+          sed -i "s/^ARG DAPR_RUNTIME_VERSION=.*$/ARG DAPR_RUNTIME_VERSION=${latest}/" \
+            Dockerfile
+          # Confirm both rewrites landed; bail if either sed missed.
           new=$(grep '^__dapr_version' application_sdk/version.py | cut -d'"' -f2)
           if [[ "$new" != "$latest" ]]; then
             echo "::error::sed did not rewrite version.py as expected (got '$new', want '$latest')"
+            exit 1
+          fi
+          new_docker=$(grep '^ARG DAPR_RUNTIME_VERSION=' Dockerfile | cut -d'=' -f2)
+          if [[ "$new_docker" != "$latest" ]]; then
+            echo "::error::sed did not rewrite Dockerfile as expected (got '$new_docker', want '$latest')"
             exit 1
           fi
 
@@ -117,7 +139,7 @@ jobs:
             git checkout -b "$branch"
           fi
 
-          git add application_sdk/version.py
+          git add application_sdk/version.py Dockerfile
           if git diff --cached --quiet; then
             echo "::notice::No actual change to commit; PR may already be up to date."
             exit 0
@@ -149,10 +171,11 @@ jobs:
           | Current pin | \`${pinned}\` |
           | Upstream latest | \`${latest}\` |
 
-          This PR bumps \`__dapr_version\` in [\`application_sdk/version.py\`](application_sdk/version.py) so:
+          This PR bumps \`__dapr_version\` in [\`application_sdk/version.py\`](application_sdk/version.py) and \`ARG DAPR_RUNTIME_VERSION\` in the [\`Dockerfile\`](Dockerfile) so:
 
           - The embedded local-dev daprd (via \`application_sdk.dev.embedded_dapr\`) downloads the new release on first use.
           - CI workflows (\`scale-tests.yaml\`, \`e2e-examples\`) pass the new version to \`dapr init --runtime-version\`.
+          - The base image installs the matching Chainguard APK patch release.
 
           Release notes: https://github.com/dapr/dapr/releases/tag/v${latest}
 

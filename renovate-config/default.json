@@ -59,6 +59,11 @@
       "automerge": true,
       "automergeType": "pr",
       "platformAutomerge": true
+    },
+    {
+      "description": "Docker base images: pin FROM lines to digests (tag@sha256:...) so builds are immutable even if a registry tag is repointed. Renovate resolves and refreshes the digest; registries that need auth (e.g. cgr.dev) must have hostRules credentials configured on the Renovate runner.",
+      "matchManagers": ["dockerfile"],
+      "pinDigests": true
     }
   ],
   "customManagers": [

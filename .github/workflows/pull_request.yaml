@@ -23,6 +23,7 @@ jobs:
     outputs:
       container: ${{ steps.filter.outputs.container }}
       code: ${{ steps.filter.outputs.code }}
+      deps: ${{ steps.filter.outputs.deps }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
@@ -40,6 +41,9 @@ jobs:
               - 'examples/**'
               - '.github/**'
               - '.security/**'
+            deps:
+              - 'pyproject.toml'
+              - 'uv.lock'
 
   # Conventional Commits (skipped on fork PRs — no org PAT available)
   commits:
@@ -79,6 +83,32 @@ jobs:
       - uses: "./.github/actions/trivy"
         with:
           add-report-comment-to-pr: "true"
+
+  # PR-time CVE gate for dependency changes. Post-merge/scheduled Trivy gates
+  # can miss a CVE published after Renovate's cooldown but before automerge —
+  # this scans the lockfile in fs mode (no image build, fast) and blocks the
+  # PR on CRITICAL/HIGH findings with an available fix.
+  deps-cve:
+    name: Dependency CVE Scan
+    needs: changes
+    if: needs.changes.outputs.deps == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Trivy filesystem scan (lockfile)
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          format: table
+          exit-code: '1'
+        env:
+          TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
+          TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
 
   trivy-container:
     name: Trivy Container Scan

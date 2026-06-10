@@ -80,9 +80,13 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: |
             ghcr.io/atlanhq/app-runtime-base-${{ needs.prepare.outputs.lowercase_branch }}:sha-${{ needs.prepare.outputs.sha }}
-          build-args: |
-            ACCESS_TOKEN_USR=$GITHUB_ACTOR
-            ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
+          # BuildKit secret mounts — never build-args, which leak into build
+          # logs and image/cache metadata. Consume in the Dockerfile via
+          # RUN --mount=type=secret,id=ACCESS_TOKEN_PWD ... (the SDK's own
+          # Dockerfile does not need them; passed for parity with app builds).
+          secrets: |
+            "ACCESS_TOKEN_USR=${{ github.actor }}"
+            "ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}"
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
         env:
           DOCKER_CLIENT_TIMEOUT: 600

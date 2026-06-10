@@ -19,6 +19,18 @@
 #       secrets: inherit   # template only reads: ORG_PAT_GITHUB, DOCKER_HUB_PAT_RW
 #                          # permissions are declared in this workflow — callers don't need to repeat them
 #
+# Private-dependency credentials are exposed as BuildKit secrets (NOT
+# build-args), so the PAT never lands in build logs, image history, or
+# cache metadata. Dockerfiles that need them must mount them per-RUN:
+#
+#   RUN --mount=type=secret,id=ACCESS_TOKEN_USR \
+#       --mount=type=secret,id=ACCESS_TOKEN_PWD \
+#       git config --global url."https://$(cat /run/secrets/ACCESS_TOKEN_USR):$(cat /run/secrets/ACCESS_TOKEN_PWD)@github.com/".insteadOf "https://github.com/" && \
+#       uv sync --locked && \
+#       rm -f "$HOME/.gitconfig"
+#
+# (ARG ACCESS_TOKEN_USR / ACCESS_TOKEN_PWD build-args are no longer passed.)
+#
 name: Build Atlan App Image
 
 on:
@@ -207,9 +219,12 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-          build-args: |
-            ACCESS_TOKEN_USR=${{ github.actor }}
-            ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
+          # BuildKit secret mounts — never build-args, which leak into build
+          # logs and image/cache metadata. See the header comment for the
+          # Dockerfile-side RUN --mount=type=secret pattern.
+          secrets: |
+            "ACCESS_TOKEN_USR=${{ github.actor }}"
+            "ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}"
 
   # ── Job 3: Merge arch digests into a single multi-arch manifest ───────────────
   merge:

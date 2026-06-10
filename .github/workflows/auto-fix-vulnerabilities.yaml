@@ -1,12 +1,21 @@
 # Auto-fix Vulnerabilities — reusable workflow triggered by PR comment.
 #
 # When a developer comments "/fix-vulnerabilities" on a PR, this workflow:
+#   0. Verifies the commenter is an org member/collaborator (authorize job —
+#      this workflow pushes commits with ORG_PAT_GITHUB, so it must never be
+#      triggerable by an arbitrary commenter)
 #   1. Downloads the latest scan results from the Vulnerability Scan workflow
 #   2. Identifies fixable Python app dependencies (skips base image CVEs)
 #   3. Pins minimum version in pyproject.toml (prevents regression on future uv lock)
 #   4. Runs `uv lock --upgrade-package` for each
 #   5. Commits updated pyproject.toml + uv.lock to the PR branch
 #   5. Scan re-runs automatically on the new commit
+#
+# Authorization: a reusable workflow runs with the caller's event payload, so
+# `github.event.comment.author_association` is available here when triggered
+# from an `issue_comment` event. The authorize job fails closed — including
+# when no comment payload is present (e.g. someone wires this up to a
+# different trigger) — unless the author is OWNER / MEMBER / COLLABORATOR.
 #
 # Usage in each app repo (.github/workflows/auto-fix.yml):
 #
@@ -33,8 +42,37 @@ permissions:
   actions: read
 
 jobs:
+  # Gate: only org members/collaborators may trigger a workflow that pushes
+  # commits to the PR branch with ORG_PAT_GITHUB. Fails closed when the
+  # comment payload is absent (non-issue_comment trigger).
+  authorize:
+    name: Authorize Commenter
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verify comment author association
+        env:
+          AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
+          AUTHOR_LOGIN: ${{ github.event.comment.user.login }}
+        run: |
+          set -euo pipefail
+          case "${AUTHOR_ASSOCIATION}" in
+            OWNER|MEMBER|COLLABORATOR)
+              echo "Comment author '${AUTHOR_LOGIN}' (${AUTHOR_ASSOCIATION}) is authorized."
+              ;;
+            "")
+              echo "::error::No comment payload available — this workflow must be triggered from an issue_comment event so the commenter can be validated. Refusing to run."
+              exit 1
+              ;;
+            *)
+              echo "::error::Comment author '${AUTHOR_LOGIN}' has association '${AUTHOR_ASSOCIATION}' — only OWNER, MEMBER, or COLLABORATOR may trigger /fix-vulnerabilities."
+              exit 1
+              ;;
+          esac
+
   auto-fix:
     name: Auto-fix Vulnerabilities
+    needs: authorize
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

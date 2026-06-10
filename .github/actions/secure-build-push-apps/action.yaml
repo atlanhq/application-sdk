@@ -96,6 +96,9 @@ inputs:
   secret-envs:
     description: 'List of secret environment variables to expose to the build (e.g., MY_SECRET=MY_SECRET_VAR).'
     required: false
+  secret-files:
+    description: 'List of secret files to expose to the build (e.g., MY_SECRET=./secret.txt).'
+    required: false
   shm-size:
     description: 'Size of /dev/shm (e.g., 2g).'
     required: false

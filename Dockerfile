@@ -1,13 +1,18 @@
 FROM cgr.dev/atlan.com/app-framework-golden:3.13
 
-# Dapr version argument
+# Dapr runtime package (Chainguard APK). The package stream tracks the
+# minor release (1.17); DAPR_RUNTIME_VERSION pins the exact patch release
+# and must match __dapr_version in application_sdk/version.py.
+# .github/workflows/check-dapr-version.yaml keeps both pins in sync.
 ARG DAPR_RUNTIME_PACKAGE=dapr-daprd-1.17
+ARG DAPR_RUNTIME_VERSION=1.17.9
 
 # Switch to root for installation
 USER root
 
-# Install Dapr runtime from Chainguard APK
-RUN apk add --no-cache ${DAPR_RUNTIME_PACKAGE}
+# Install Dapr runtime from Chainguard APK, pinned to the exact patch
+# release (=~ matches the version prefix, tolerating apk -rN revisions).
+RUN apk add --no-cache "${DAPR_RUNTIME_PACKAGE}=~${DAPR_RUNTIME_VERSION}"
 
 # Create appuser (standardized user for all apps)
 RUN addgroup -g 1000 appuser && adduser -D -u 1000 -G appuser appuser
