@@ -2126,7 +2126,7 @@ class TestCloudflareTimeoutFilter:
         )
 
         f = _CloudflareTimeoutFilter()
-        with mock.patch("application_sdk.observability.logger_adaptor.logger"):
+        with mock.patch("application_sdk.observability.logger_adaptor.get_logger"):
             assert f.filter(_make_temporalio_record()) is False
 
     def test_non_temporalio_record_passes_through(self):
@@ -2172,11 +2172,13 @@ class TestCloudflareTimeoutFilter:
         )
 
         f = _CloudflareTimeoutFilter()
+        mock_adapter = mock.MagicMock()
         with mock.patch(
-            "application_sdk.observability.logger_adaptor.logger"
-        ) as mock_log:
+            "application_sdk.observability.logger_adaptor.get_logger",
+            return_value=mock_adapter,
+        ):
             f.filter(_make_temporalio_record())
-        mock_log.info.assert_called_once()
+        mock_adapter.info.assert_called_once()
 
     def test_info_suppressed_within_interval(self):
         from application_sdk.observability.logger_adaptor import (
@@ -2184,16 +2186,20 @@ class TestCloudflareTimeoutFilter:
         )
 
         f = _CloudflareTimeoutFilter()
-        with mock.patch(
-            "application_sdk.observability.logger_adaptor.time"
-        ) as mock_time:
+        mock_adapter = mock.MagicMock()
+        with (
+            mock.patch(
+                "application_sdk.observability.logger_adaptor.time"
+            ) as mock_time,
+            mock.patch(
+                "application_sdk.observability.logger_adaptor.get_logger",
+                return_value=mock_adapter,
+            ),
+        ):
             mock_time.monotonic.return_value = 1000.0
-            with mock.patch(
-                "application_sdk.observability.logger_adaptor.logger"
-            ) as mock_log:
-                f.filter(_make_temporalio_record())  # first — emits
-                f.filter(_make_temporalio_record())  # within interval — suppressed
-                assert mock_log.info.call_count == 1
+            f.filter(_make_temporalio_record())  # first — emits
+            f.filter(_make_temporalio_record())  # within interval — suppressed
+            assert mock_adapter.info.call_count == 1
 
     def test_info_emitted_again_after_interval(self):
         from application_sdk.observability.logger_adaptor import (
@@ -2201,19 +2207,21 @@ class TestCloudflareTimeoutFilter:
         )
 
         f = _CloudflareTimeoutFilter()
+        mock_adapter = mock.MagicMock()
         with (
             mock.patch(
                 "application_sdk.observability.logger_adaptor.time"
             ) as mock_time,
             mock.patch(
-                "application_sdk.observability.logger_adaptor.logger"
-            ) as mock_log,
+                "application_sdk.observability.logger_adaptor.get_logger",
+                return_value=mock_adapter,
+            ),
         ):
             mock_time.monotonic.return_value = 1000.0
             f.filter(_make_temporalio_record())
             mock_time.monotonic.return_value = 1060.1  # past 60 s interval
             f.filter(_make_temporalio_record())
-            assert mock_log.info.call_count == 2
+            assert mock_adapter.info.call_count == 2
 
     def test_count_in_summary_message(self):
         """Cumulative occurrence count must appear in the INFO message."""
@@ -2222,17 +2230,19 @@ class TestCloudflareTimeoutFilter:
         )
 
         f = _CloudflareTimeoutFilter()
+        mock_adapter = mock.MagicMock()
         with (
             mock.patch(
                 "application_sdk.observability.logger_adaptor.time"
             ) as mock_time,
             mock.patch(
-                "application_sdk.observability.logger_adaptor.logger"
-            ) as mock_log,
+                "application_sdk.observability.logger_adaptor.get_logger",
+                return_value=mock_adapter,
+            ),
         ):
             mock_time.monotonic.return_value = 1000.0
             f.filter(_make_temporalio_record())
             mock_time.monotonic.return_value = 1060.1
             f.filter(_make_temporalio_record())
-            second_msg = mock_log.info.call_args_list[1][0][0]
+            second_msg = mock_adapter.info.call_args_list[1][0][0]
             assert "2" in second_msg

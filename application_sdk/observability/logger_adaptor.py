@@ -20,6 +20,7 @@ from application_sdk.constants import (
     ENABLE_OTLP_WORKFLOW_LOGS,
     LOG_BATCH_SIZE,
     LOG_CLEANUP_ENABLED,
+    LOG_CLOUDFLARE_504_SUMMARY_INTERVAL_SECONDS,
     LOG_FILE_NAME,
     LOG_FLUSH_INTERVAL_SECONDS,
     LOG_LEVEL,
@@ -394,7 +395,7 @@ class _CloudflareTimeoutFilter(logging.Filter):
     minute thereafter, so the pattern stays visible without flooding logs.
     """
 
-    _WARN_INTERVAL: ClassVar[float] = 60.0  # seconds between summary messages
+    _WARN_INTERVAL: ClassVar[float] = LOG_CLOUDFLARE_504_SUMMARY_INTERVAL_SECONDS
     _last_emitted: ClassVar[dict[str, float]] = {}
     _counts: ClassVar[dict[str, int]] = {}
     _lock: ClassVar[threading.Lock] = threading.Lock()
@@ -418,7 +419,7 @@ class _CloudflareTimeoutFilter(logging.Filter):
                 if should_emit:
                     self._last_emitted[record.name] = now
             if should_emit:
-                logger.info(
+                get_logger(__name__).info(
                     f"Cloudflare 504 timeout on poll_workflow_task_queue"
                     f" (occurrence {count} — expected, worker retrying normally,"
                     " TFKB ERROR-NET-001)"
