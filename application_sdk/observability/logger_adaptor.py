@@ -2,6 +2,7 @@ import asyncio
 import logging
 import sys
 import threading
+import time
 import traceback as tb_module
 from typing import Any, ClassVar
 
@@ -381,8 +382,56 @@ class InterceptHandler(logging.Handler):
         )
 
 
+class _CloudflareTimeoutFilter(logging.Filter):
+    """Suppress Cloudflare 504 long-poll noise from the Temporal gRPC bridge.
+
+    Cloudflare closes idle long-poll connections with an HTTP 504 whose HTML body
+    the Rust Temporal SDK misreads as an invalid gRPC compression flag (ASCII
+    '<' = 60).  The SDK logs this at ERROR and immediately retries — the worker
+    is unaffected.  See TFKB ERROR-NET-001.
+
+    An INFO summary is emitted on the first occurrence and at most once per
+    minute thereafter, so the pattern stays visible without flooding logs.
+    """
+
+    _WARN_INTERVAL: ClassVar[float] = 60.0  # seconds between summary messages
+    _last_emitted: ClassVar[dict[str, float]] = {}
+    _counts: ClassVar[dict[str, int]] = {}
+    _lock: ClassVar[threading.Lock] = threading.Lock()
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno != logging.ERROR or not record.name.startswith("temporalio"):
+            return True
+        msg = record.getMessage()
+        if (
+            "invalid compression flag: 60" in msg  # ASCII '<' = first byte of HTML 504
+            and "504 Gateway Timeout" in msg
+            and "poll_workflow_task_queue" in msg
+        ):
+            with self._lock:
+                self._counts[record.name] = self._counts.get(record.name, 0) + 1
+                count = self._counts[record.name]
+                now = time.monotonic()
+                # Seed with now - interval so the very first occurrence always fires
+                last = self._last_emitted.get(record.name, now - self._WARN_INTERVAL)
+                should_emit = (now - last) >= self._WARN_INTERVAL
+                if should_emit:
+                    self._last_emitted[record.name] = now
+            if should_emit:
+                logger.info(
+                    "Cloudflare 504 timeout on poll_workflow_task_queue"
+                    " (occurrence %d — expected, worker retrying normally,"
+                    " TFKB ERROR-NET-001)",
+                    count,
+                )
+            return False
+        return True
+
+
+_intercept_handler = InterceptHandler()
+_intercept_handler.addFilter(_CloudflareTimeoutFilter())
 logging.basicConfig(
-    level=logging.getLevelNamesMapping()[LOG_LEVEL], handlers=[InterceptHandler()]
+    level=logging.getLevelNamesMapping()[LOG_LEVEL], handlers=[_intercept_handler]
 )
 
 DEPENDENCY_LOGGERS = ["daft_io.stats", "tracing.span", "httpx"]
