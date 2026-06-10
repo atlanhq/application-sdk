@@ -54,8 +54,9 @@ def _normalize_tree_filter_value(v: dict[str, Any]) -> dict[str, Any]:
     APITree widgets can emit ``{"catalog": {"db": {}}}`` while the SDK
     filter contract is ``{"catalog": ["db"]}``. Preserve existing list and
     string values; only collapse immediate object children to their selected
-    keys. Deeper descendants are validated before flattening, but are not
-    represented because the SDK filter contract is catalog/schema-level.
+    keys. Callers must validate ``v`` before invoking; this helper does not
+    re-check deeper descendants because they are dropped during normalization
+    and the SDK filter contract is catalog/schema-level.
     """
     normalized: dict[str, Any] = {}
     changed = False

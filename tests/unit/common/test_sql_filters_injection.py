@@ -101,6 +101,10 @@ class TestValidateFilterNoSqlInjection:
         with pytest.raises(ValueError, match=r"Filter nesting exceeds maximum depth"):
             validate_filter_no_sql_injection(deeply_nested)
 
+    def test_max_nested_filter_depth_passes(self) -> None:
+        at_limit = {"a": {"b": {"c": {"d": {}}}}}
+        assert validate_filter_no_sql_injection(at_limit) == at_limit
+
 
 # ---------------------------------------------------------------------------
 # prepare_filters — string/dict inputs are gated before normalization

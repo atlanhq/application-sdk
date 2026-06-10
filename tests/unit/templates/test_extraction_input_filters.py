@@ -118,6 +118,19 @@ class TestAPITreeFilterCoercion:
         result = ExtractionTaskInput.model_validate(payload)
         assert result.exclude_filter == {"AwsDataCatalog": ["mswtest_2"]}
 
+    def test_deeper_apitree_filter_truncated_to_catalog_schema_level(self):
+        payload = {
+            "include_filter": {
+                "AwsDataCatalog": {
+                    "mswtest_2": {
+                        "nested_schema": {},
+                    },
+                }
+            }
+        }
+        result = ExtractionInput.model_validate(payload)
+        assert result.include_filter == {"AwsDataCatalog": ["mswtest_2"]}
+
 
 class TestFilterSQLInjectionGuard:
     """SQL-unsafe sequences blocked in filter values (BLDX-518 deny-list)."""
