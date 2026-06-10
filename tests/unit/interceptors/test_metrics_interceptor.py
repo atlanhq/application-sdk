@@ -364,6 +364,7 @@ class TestMetricsActivityInboundInterceptor:
     ):
         fake_start = ResourceSample(cpu_time_s=1.0, rss_bytes=100 * 1024 * 1024)
         fake_end = ResourceSample(cpu_time_s=1.5, rss_bytes=200 * 1024 * 1024)
+        # Pin monotonic clock: start=0ns, end=1_000_000_000ns → duration_s=1.0
         with (
             patch(
                 "application_sdk.execution._temporal.interceptors.metrics.activity"
@@ -371,6 +372,10 @@ class TestMetricsActivityInboundInterceptor:
             patch(
                 "application_sdk.execution._temporal.interceptors.metrics.resource_sampler.sample",
                 side_effect=[fake_start, fake_end],
+            ),
+            patch(
+                "application_sdk.execution._temporal.interceptors.metrics.time.monotonic_ns",
+                side_effect=[0, 1_000_000_000],
             ),
         ):
             mock_act.info.return_value = MockActivityInfo()
@@ -380,12 +385,12 @@ class TestMetricsActivityInboundInterceptor:
         # Three histograms recorded: duration, cpu_seconds, mem_gib_seconds.
         assert histogram.record.call_count == 3
         recorded_values = [call[0][0] for call in histogram.record.call_args_list]
-        # cpu_seconds delta should be ~0.5s
-        cpu_val = recorded_values[1]
-        assert 0.4 < cpu_val < 0.6
-        # mem_gib_seconds: avg RSS = 150 MiB = ~0.146 GiB; value depends on duration
-        mem_val = recorded_values[2]
-        assert mem_val >= 0
+        # duration = 1.0s (pinned)
+        assert recorded_values[0] == 1.0
+        # cpu_seconds: 1.5 - 1.0 = 0.5
+        assert recorded_values[1] == pytest.approx(0.5)
+        # mem_gib_seconds: avg RSS = 150 MiB = 150/1024 GiB ≈ 0.14648; × 1.0s
+        assert recorded_values[2] == pytest.approx(150 / 1024, rel=1e-4)
 
     async def test_no_cost_metrics_when_sampling_unavailable(
         self, interceptor, mock_meter

@@ -222,10 +222,10 @@ class _MetricsActivityInboundInterceptor(ActivityInboundInterceptor):
                             "exception.type": exception_class or "Unknown",
                         },
                     )
-                cpu_s, mem_gib_s = resource_sampler.compute_deltas(
-                    start_sample, end_sample, duration_s
-                )
-                if cpu_s > 0 or mem_gib_s > 0:
+                if start_sample is not None and end_sample is not None:
+                    cpu_s, mem_gib_s = resource_sampler.compute_deltas(
+                        start_sample, end_sample, duration_s
+                    )
                     _activity_cpu_seconds().record(cpu_s, attrs)
                     _activity_mem_gib_seconds().record(mem_gib_s, attrs)
             except Exception:  # noqa: S110 — best-effort observability; never block the activity on metric emission
