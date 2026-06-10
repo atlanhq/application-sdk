@@ -26,6 +26,7 @@ from temporalio.worker import (
 
 from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.execution._temporal.interceptors.log import _extract_failure_attrs
+from application_sdk.observability import resource_sampler
 
 _METER_NAME = "application_sdk.temporal"
 
@@ -105,6 +106,35 @@ def _activity_errors():
     return _INSTRUMENTS["act_err"]
 
 
+def _activity_cpu_seconds():
+    if "act_cpu" not in _INSTRUMENTS:
+        _INSTRUMENTS["act_cpu"] = _meter().create_histogram(
+            "temporal.activity.cpu_seconds",
+            unit="s",
+            description=(
+                "CPU time (user + system) consumed per activity execution. "
+                "Process-level delta between activity start and end — accurate "
+                "for workers running one activity at a time; over-attributes "
+                "per activity when activities run concurrently (sum is always correct)."
+            ),
+        )
+    return _INSTRUMENTS["act_cpu"]
+
+
+def _activity_mem_gib_seconds():
+    if "act_mem" not in _INSTRUMENTS:
+        _INSTRUMENTS["act_mem"] = _meter().create_histogram(
+            "temporal.activity.mem_gib_seconds",
+            unit="GiBy.s",
+            description=(
+                "Memory-time integral per activity execution: average RSS in GiB "
+                "multiplied by wall-clock duration in seconds. Same process-level "
+                "scope caveat as temporal.activity.cpu_seconds."
+            ),
+        )
+    return _INSTRUMENTS["act_mem"]
+
+
 def _classify_failure(exc: BaseException | None) -> dict[str, str]:
     """Extract bounded {category, audience} labels for the classified counter.
 
@@ -168,6 +198,7 @@ class _MetricsActivityInboundInterceptor(ActivityInboundInterceptor):
             "temporal.task_queue": info.task_queue or "",
         }
         start_ns = time.monotonic_ns()
+        start_sample = resource_sampler.sample()
         status = "OK"
         exception_class = ""
         try:
@@ -178,6 +209,7 @@ class _MetricsActivityInboundInterceptor(ActivityInboundInterceptor):
             raise
         finally:
             duration_s = (time.monotonic_ns() - start_ns) / 1_000_000_000
+            end_sample = resource_sampler.sample()
             tagged = {**attrs, "otel.status_code": status}
             try:
                 _activity_executions().add(1, tagged)
@@ -190,6 +222,12 @@ class _MetricsActivityInboundInterceptor(ActivityInboundInterceptor):
                             "exception.type": exception_class or "Unknown",
                         },
                     )
+                cpu_s, mem_gib_s = resource_sampler.compute_deltas(
+                    start_sample, end_sample, duration_s
+                )
+                if cpu_s > 0 or mem_gib_s > 0:
+                    _activity_cpu_seconds().record(cpu_s, attrs)
+                    _activity_mem_gib_seconds().record(mem_gib_s, attrs)
             except Exception:  # noqa: S110 — best-effort observability; never block the activity on metric emission
                 pass
 
@@ -207,6 +245,8 @@ class MetricsInterceptor(Interceptor):
       * ``temporal.activity.executions`` (counter)
       * ``temporal.activity.duration`` (histogram, seconds)
       * ``temporal.activity.errors`` (counter, partitioned by ``exception.type``)
+      * ``temporal.activity.cpu_seconds`` (histogram) — CPU time consumed per activity
+      * ``temporal.activity.mem_gib_seconds`` (histogram) — memory-time integral per activity
 
     Independent of, and complementary to, Temporal's Rust-core metrics —
     those measure scheduling / cache / poll latencies; these measure business
