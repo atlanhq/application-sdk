@@ -43,7 +43,7 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       with:
         ref: ${{ github.ref }}
 
@@ -63,7 +63,7 @@ runs:
         fi
 
     - name: Trigger E2E Integrations Tests
-      uses: codex-/return-dispatch@v3
+      uses: codex-/return-dispatch@16fa9d14771c4d56ae0196bbda1d3c17f7f3650f # v3
       id: return_dispatch
       with:
         token: "${{ inputs.github-token }}"
@@ -197,7 +197,7 @@ runs:
     # exists so re-pushes don't spam the PR thread.
     - name: Post dispatched-run status to SDK PR
       if: always() && github.event_name == 'pull_request'
-      uses: actions/github-script@v7
+      uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
       env:
         REPO_NAME: ${{ inputs.repo-name }}
         WORKFLOW: ${{ inputs.workflow }}
