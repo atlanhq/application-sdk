@@ -14,7 +14,12 @@ from typing import TYPE_CHECKING
 
 from temporalio.client import Client
 from temporalio.worker import Interceptor as TemporalInterceptor
-from temporalio.worker import Worker, WorkerDeploymentConfig, WorkerDeploymentVersion
+from temporalio.worker import (
+    Worker,
+    WorkerDeploymentConfig,
+    WorkerDeploymentVersion,
+    WorkerTuner,
+)
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 
 from application_sdk.app.registry import AppRegistry
@@ -187,7 +192,7 @@ async def _emit_worker_start_event(
     app_name: str,
     workflow_count: int,
     activity_count: int,
-    max_concurrent_activities: int,
+    max_concurrent_activities: int | None,
     max_concurrent_workflow_tasks: int | None = None,
     host: str = "",
     namespace: str = "",
@@ -294,7 +299,11 @@ def create_worker(
             ``handler`` is ``None``.
         passthrough_modules: Additional modules to pass through the sandbox.
         service_name: Service name for observability (traces/metrics).
-        max_concurrent_activities: Maximum number of concurrent activity executions.
+        max_concurrent_activities: Maximum number of concurrent activity
+            executions. Passing an explicit value forces fixed slot counts —
+            it overrides ``ATLAN_WORKER_TUNER_MODE=resource`` (Temporal
+            forbids combining a tuner with fixed ``max_concurrent_*`` limits;
+            see ADR-0017).
         max_concurrent_workflow_tasks: Maximum number of in-flight workflow task
             pollers, which bounds the number of workflow sandboxes the worker
             spins up concurrently. Leave ``None`` to use Temporal's default. Pin
@@ -436,12 +445,37 @@ def create_worker(
         restrictions=config.to_temporal_restrictions()
     )
 
-    if max_concurrent_activities is None:
-        max_concurrent_activities = load_execution_settings().max_concurrent_activities
+    execution_settings = load_execution_settings()
+
+    # Resource-based worker tuning (ADR-0017): when ATLAN_WORKER_TUNER_MODE=
+    # resource, Temporal sizes slot handout from observed CPU/memory usage
+    # instead of fixed slot counts. Temporal forbids combining ``tuner`` with
+    # the fixed ``max_concurrent_*`` arguments, so explicit caller-supplied
+    # slot counts take precedence and force fixed mode (with a warning).
+    tuner_mode = execution_settings.worker_tuner_mode
+    if tuner_mode == "resource" and (
+        max_concurrent_activities is not None
+        or max_concurrent_workflow_tasks is not None
+    ):
+        logger.warning(
+            "ATLAN_WORKER_TUNER_MODE=resource ignored: explicit "
+            "max_concurrent_activities/max_concurrent_workflow_tasks were "
+            "passed to create_worker(); using fixed slot counts."
+        )
+        tuner_mode = "fixed"
+
+    tuner: WorkerTuner | None = None
+    if tuner_mode == "resource":
+        tuner = WorkerTuner.create_resource_based(
+            target_memory_usage=execution_settings.tuner_target_memory_usage,
+            target_cpu_usage=execution_settings.tuner_target_cpu_usage,
+        )
+    elif max_concurrent_activities is None:
+        max_concurrent_activities = execution_settings.max_concurrent_activities
 
     if graceful_shutdown_timeout_seconds is None:
         graceful_shutdown_timeout_seconds = (
-            load_execution_settings().graceful_shutdown_timeout_seconds
+            execution_settings.graceful_shutdown_timeout_seconds
         )
 
     # Worker Deployment versioning — set by TWD controller via Kubernetes Downward API.
@@ -449,7 +483,7 @@ def create_worker(
     # ATLAN_APP_BUILD_ID + ATLAN_APP_DEPLOYMENT_NAME: full Worker Deployment versioning.
     # default_versioning_behavior defaults to PINNED; an app may opt into
     # AUTO_UPGRADE via TEMPORAL_DEFAULT_VERSIONING_BEHAVIOR in its own deployment.
-    versioning_behavior = load_execution_settings().default_versioning_behavior
+    versioning_behavior = execution_settings.default_versioning_behavior
     deployment_config: WorkerDeploymentConfig | None = None
     if APP_BUILD_ID and APP_DEPLOYMENT_NAME:
         deployment_config = WorkerDeploymentConfig(
@@ -487,16 +521,32 @@ def create_worker(
         activities=task_activities,
         workflow_runner=workflow_runner,
         interceptors=all_interceptors,
-        max_concurrent_activities=max_concurrent_activities,
         # Bypass Temporal's default 80% heartbeat throttle so heartbeats fire
         # at the configured interval (~10s) rather than at 80% of timeout.
         max_heartbeat_throttle_interval=timedelta(seconds=10),
         graceful_shutdown_timeout=timedelta(seconds=graceful_shutdown_timeout_seconds),
     )
-    # Only forward max_concurrent_workflow_tasks when explicitly set; passing
-    # None would override Temporal's default with None and crash the worker.
-    if max_concurrent_workflow_tasks is not None:
-        worker_kwargs["max_concurrent_workflow_tasks"] = max_concurrent_workflow_tasks
+    # Temporal raises ValueError when ``tuner`` is combined with the fixed
+    # ``max_concurrent_*`` slot counts — pass exactly one of the two.
+    if tuner is not None:
+        worker_kwargs["tuner"] = tuner
+        logger.info(
+            "Worker tuning mode: resource (target_memory_usage=%s, target_cpu_usage=%s)",
+            execution_settings.tuner_target_memory_usage,
+            execution_settings.tuner_target_cpu_usage,
+        )
+    else:
+        worker_kwargs["max_concurrent_activities"] = max_concurrent_activities
+        # Only forward max_concurrent_workflow_tasks when explicitly set; passing
+        # None would override Temporal's default with None and crash the worker.
+        if max_concurrent_workflow_tasks is not None:
+            worker_kwargs["max_concurrent_workflow_tasks"] = (
+                max_concurrent_workflow_tasks
+            )
+        logger.info(
+            "Worker tuning mode: fixed (max_concurrent_activities=%s)",
+            max_concurrent_activities,
+        )
     if deployment_config is not None:
         worker_kwargs["deployment_config"] = deployment_config
 
