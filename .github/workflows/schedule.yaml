@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Close Stale PRs
-        uses: actions/stale@v10
+        uses: actions/stale@eb5cf3af3ac0a1aa4c9c45633dd1ae542a27a899 # v10
         with:
           repo-token: ${{ secrets.ORG_PAT_GITHUB }}
           stale-issue-message: 'Stale Issue'
@@ -27,5 +27,5 @@ jobs:
     name: Trivy Code Scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: "./.github/actions/trivy"
