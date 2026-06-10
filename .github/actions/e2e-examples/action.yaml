@@ -79,7 +79,7 @@ runs:
         dapr init --runtime-version ${{ steps.dapr-version.outputs.version }} --slim
 
     - name: Install Temporal CLI
-      uses: temporalio/setup-temporal@6d04211d9dfbd5cb2493a4a6637b2ad784a60ccc # v0
+      uses: temporalio/setup-temporal@1059a504f87e7fa2f385e3fa40d1aa7e62f1c6ca # v0
       with:
         version: "v1.3.0"
 
