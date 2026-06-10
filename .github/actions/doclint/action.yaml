@@ -22,12 +22,12 @@ runs:
   using: "composite"
   steps:
     - name: Checkout Repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       with:
         fetch-depth: 2
 
     - name: Run Vale Linter
-      uses: errata-ai/vale-action@v2.1.1
+      uses: errata-ai/vale-action@85f9f7f2c5f449ac0ae5b66662961bae3f77ca6a # 2.1.2
       with:
         files: ${{ inputs.files }}
         filter_mode: ${{ inputs.filter_mode }}

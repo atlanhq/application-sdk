@@ -17,20 +17,20 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Log in to container registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: cgr.dev
           username: ${{ secrets.CHAINGUARD_USERNAME }}
           password: ${{ secrets.CHAINGUARD_PASSWORD }}
 
       - name: Build image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: '.'
           file: './Dockerfile'
@@ -38,69 +38,72 @@ jobs:
           load: true
           tags: 'application-sdk:trivy-scan'
 
+      - name: Install Trivy CLI
+        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          # Pin to a specific version so scan results don't drift between
+          # runs as Trivy's vuln DB schema and detection logic evolve. Bump
+          # this deliberately when a known scanner fix is needed.
+          version: v0.70.0
+          cache: true
+
       # ── Image scan ──
 
       - name: Trivy image scan (JSON)
-        uses: aquasecurity/trivy-action@0.35.0
-        with:
-          image-ref: 'application-sdk:trivy-scan'
-          scanners: 'vuln'
-          version: 'v0.69.0'
-          ignore-unfixed: true
-          format: 'json'
-          output: 'trivy-image.json'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '0'
         env:
           TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
           TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
+        run: |
+          trivy image \
+            --scanners vuln \
+            --ignore-unfixed \
+            --format json \
+            --output trivy-image.json \
+            --severity CRITICAL,HIGH \
+            --exit-code 0 \
+            'application-sdk:trivy-scan'
 
       - name: Trivy image scan (table)
-        uses: aquasecurity/trivy-action@0.35.0
-        with:
-          image-ref: 'application-sdk:trivy-scan'
-          scanners: 'vuln'
-          version: 'v0.69.0'
-          ignore-unfixed: true
-          format: 'table'
-          output: 'trivy-image.txt'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '0'
         env:
           TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
           TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
+        run: |
+          trivy image \
+            --scanners vuln \
+            --ignore-unfixed \
+            --format table \
+            --output trivy-image.txt \
+            --severity CRITICAL,HIGH \
+            --exit-code 0 \
+            'application-sdk:trivy-scan'
 
       # ── Dependency scan ──
 
       - name: Trivy dependency scan (JSON)
-        uses: aquasecurity/trivy-action@0.35.0
-        with:
-          scan-type: fs
-          input: 'uv.lock'
-          scanners: 'vuln'
-          version: 'v0.69.0'
-          ignore-unfixed: true
-          format: 'json'
-          output: 'trivy-deps.json'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '0'
         env:
           TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
+        run: |
+          trivy fs \
+            --scanners vuln \
+            --ignore-unfixed \
+            --format json \
+            --output trivy-deps.json \
+            --severity CRITICAL,HIGH \
+            --exit-code 0 \
+            uv.lock
 
       - name: Trivy dependency scan (table)
-        uses: aquasecurity/trivy-action@0.35.0
-        with:
-          scan-type: fs
-          input: 'uv.lock'
-          scanners: 'vuln'
-          version: 'v0.69.0'
-          ignore-unfixed: true
-          format: 'table'
-          output: 'trivy-deps.txt'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '0'
         env:
           TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
+        run: |
+          trivy fs \
+            --scanners vuln \
+            --ignore-unfixed \
+            --format table \
+            --output trivy-deps.txt \
+            --severity CRITICAL,HIGH \
+            --exit-code 0 \
+            uv.lock
 
       # ── Parse results ──
 
