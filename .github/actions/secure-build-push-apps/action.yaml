@@ -161,11 +161,11 @@ runs:
         echo "SEVERITY_THRESHOLD=$SEVERITY_THRESHOLD" >> $GITHUB_OUTPUT
 
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
     - name: Build single-platform image for scanning
       id: build_for_scan
-      uses: docker/build-push-action@v6
+      uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
       with:
         # Pass all inputs from the caller to the build action
         add-hosts: ${{ inputs.add-hosts }}
@@ -214,7 +214,7 @@ runs:
 
     - name: Run Trivy Scan
       id: trivy_scan
-      uses: aquasecurity/trivy-action@0.35.0
+      uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
       with:
         image-ref: ${{ steps.extract_tag.outputs.primary_tag }}
         format: 'json'
@@ -291,7 +291,7 @@ runs:
     - name: Build and Push multi-platform image
       id: docker_push
       if: ${{ steps.decision.outputs.result == 'true' }}
-      uses: docker/build-push-action@v6
+      uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
       with:
         # Pass all relevant inputs again for the final push
         add-hosts: ${{ inputs.add-hosts }}
