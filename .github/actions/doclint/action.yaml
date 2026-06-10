@@ -27,7 +27,7 @@ runs:
         fetch-depth: 2
 
     - name: Run Vale Linter
-      uses: errata-ai/vale-action@v2.1.1
+      uses: errata-ai/vale-action@2.1.2
       with:
         files: ${{ inputs.files }}
         filter_mode: ${{ inputs.filter_mode }}

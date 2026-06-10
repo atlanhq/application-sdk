@@ -42,7 +42,7 @@ description: |
   steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/mssql-native-deps   # connector-local action
-    - uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@v3.14.0
+    - uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@v3.16.0
       with:
         app-name: mssql
   ```

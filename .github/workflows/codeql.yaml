@@ -28,7 +28,7 @@ jobs:
         language: ["python"]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v6.0.3
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
@@ -114,6 +114,6 @@ jobs:
     name: Pre-commit Checks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v6.0.3
       - uses: "./.github/actions/setup-deps"
       - uses: pre-commit/action@v3.0.1

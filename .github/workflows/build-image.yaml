@@ -22,7 +22,7 @@ jobs:
       lowercase_branch: ${{ steps.get_lowercase_branch.outputs.lowercase_branch }}
       sha: ${{ steps.get_sha.outputs.sha }}
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v6.0.3
         with:
           fetch-depth: 0
 
@@ -47,7 +47,7 @@ jobs:
       cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v6.0.3
         with:
           fetch-depth: 0
 

@@ -82,12 +82,12 @@ jobs:
           echo "Checking v3 readiness for $repo @ ${{ inputs.branch }}"
 
       - name: Checkout application-sdk (this repo)
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           path: sdk
 
       - name: Checkout target app
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: ${{ steps.parse.outputs.repo }}
           ref: ${{ inputs.branch }}
@@ -102,7 +102,7 @@ jobs:
       - name: Set up Python 3.11
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: "3.14"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7

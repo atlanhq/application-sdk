@@ -73,7 +73,7 @@ runs:
 
     - name: Comment coverage on PR
       if: github.event_name == 'pull_request'
-      uses: orgoro/coverage@3f13a558c5af7376496aa4848bf0224aead366ac # v3.2
+      uses: orgoro/coverage@ca0c362dc1a4f100447309405e6dfea47e251495 # v3.3
       with:
         coverageFile: coverage.xml
         token: ${{ inputs.github-token }}
