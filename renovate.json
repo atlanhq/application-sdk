@@ -7,10 +7,12 @@
   "ignorePaths": [
     ".venv/**",
     "**/node_modules/**",
-    "contract-toolkit/examples/**"
+    "contract-toolkit/examples/**",
+    "requirements.txt"
   ],
   "ignoreDeps": [
     "cgr.dev/atlan.com/app-framework-golden",
-    "atlanhq/.github"
+    "atlanhq/.github",
+    "daft"
   ]
 }
