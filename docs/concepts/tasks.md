@@ -93,6 +93,46 @@ env:
 
 Explicit `@task(timeout_seconds=...)` values always take precedence over the env vars.
 
+## Local Tasks (`local=True`)
+
+Every `@task` is normally a full Temporal activity: it round-trips through the
+task queue, waits in schedule-to-start, and counts as a billable action. For
+small, fast steps that overhead dominates the actual work.
+
+`@task(local=True)` runs the task as a Temporal **local activity** on the
+workflow worker itself — no task-queue round-trip, no schedule-to-start
+latency, one fewer action per invocation:
+
+```python
+class MyConnector(App):
+    @task(local=True)
+    async def normalize_paths(self, input: PathsInput) -> PathsOutput:
+        return PathsOutput(paths=[p.strip().lower() for p in input.paths])
+```
+
+**Use local tasks for:** fast metadata operations, path/name normalization,
+small payload shaping — anything that completes in seconds.
+
+**Do NOT use local tasks for:** long-running work, anything that needs
+heartbeats or resume-on-retry progress, or steps that should run on a
+separately-scaled activity worker. Local tasks execute on the workflow
+worker's pod and cannot heartbeat.
+
+Constraints — enforced at class definition time (`LocalTaskConfigurationError`):
+
+| Option | Rule |
+|---|---|
+| `heartbeat_timeout_seconds` / `auto_heartbeat_seconds` | Must be unset (or explicitly `None`). Local activities cannot heartbeat; the env-var heartbeat defaults are not applied. |
+| `timeout_seconds` | Must be ≤ 300 s (the framework's short-task convention — the built-in cleanup tasks use the same bound). When unset, defaults to `min(ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS, 300)`. |
+
+Retry options (`retry_max_attempts`, `retry_policy`, ...) still apply — local
+activities retry on the workflow worker. No extra registration is needed: the
+combined worker already registers every `@task` activity, and Temporal uses
+the same definition for local execution.
+
+See [ADR-0019](../adr/0019-local-activities-and-batched-fanout.md) for the
+rationale.
+
 ## Manual Heartbeats with Progress
 
 For tasks that should resume from where they left off after a retry, send typed heartbeat details:
@@ -172,6 +212,61 @@ class MyConnector(App):
 interceptor). For hand-off to Atlan system apps (publish, lineage, quality), call
 `App.upload()` explicitly from `run()` — see [storage.md](storage.md) and
 [file-reference.md](file-reference.md) for the two-store routing details.
+
+## Batched Fan-Out with `map_batched`
+
+Connectors that fan out activity-per-item multiply both action count and
+schedule-to-start latency: 10,000 tables = 10,000 activities. Batching N items
+per activity divides the action count by N.
+
+`App.map_batched()` (call it from `run()`) chunks a list of items, invokes a
+`@task` once per chunk, runs chunks concurrently (bounded), and returns one
+`Output` per chunk **in chunk order**:
+
+```python
+from typing import Annotated
+from application_sdk.contracts import Input, Output, MaxItems
+
+class TableChunkInput(Input):
+    tables: Annotated[list[str], MaxItems(500)]
+
+class TableChunkOutput(Output):
+    results: Annotated[list[str], MaxItems(500)]
+
+class MyConnector(App):
+    @task(timeout_seconds=900)
+    async def process_tables(self, input: TableChunkInput) -> TableChunkOutput:
+        return TableChunkOutput(results=[process(t) for t in input.tables])
+
+    async def run(self, input: RunInput) -> RunOutput:
+        outputs = await self.map_batched(
+            self.process_tables,
+            input.tables,                      # 10k tables ...
+            batch_size=100,                    # ... become 100 activities
+            max_concurrency=5,                 # at most 5 chunks in flight
+            input_factory=lambda chunk: TableChunkInput(tables=chunk),
+        )
+        # Flatten per-item results from the ordered chunk outputs:
+        all_results = [r for out in outputs for r in out.results]
+        return RunOutput(count=len(all_results))
+```
+
+Things to keep in mind:
+
+- **Payload safety.** Each chunk travels as a workflow payload, so
+  `batch_size` × per-item size must stay well under Temporal's 2 MB limit.
+  Bound the chunk field with `MaxItems`, and pass `FileReference` objects
+  instead of inline data for large items (see
+  [ADR-0008](../adr/0008-payload-safe-bounded-types.md)).
+- **Retry granularity.** A chunk is the retry unit: the task's retry policy
+  applies per chunk, and a chunk retries *together*. A chunk that exhausts
+  its retries fails the whole `map_batched` call (first error propagates,
+  like `asyncio.gather`). Smaller batches = finer retry granularity but more
+  actions.
+- **Works with local tasks.** `map_batched` invokes whatever task you hand
+  it — remote or `local=True`.
+- `batch_size` and `max_concurrency` must be ≥ 1; invalid values raise
+  `MapBatchedInvalidArgumentError` at call time.
 
 ## Auto-Discovery
 
