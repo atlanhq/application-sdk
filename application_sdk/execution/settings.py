@@ -8,6 +8,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from temporalio.common import VersioningBehavior
+
 
 @dataclass(frozen=True)
 class ExecutionSettings:
@@ -27,6 +29,24 @@ class ExecutionSettings:
 
     graceful_shutdown_timeout_seconds: int = 3600
     """Seconds to wait for in-flight activities to complete during worker shutdown."""
+
+    default_versioning_behavior: VersioningBehavior = VersioningBehavior.PINNED
+    """Default Worker Deployment versioning behavior for workflows that do not
+    set one explicitly on ``@workflow.defn``.
+
+    ``PINNED`` (the default) keeps an in-flight workflow on the build it started
+    on until it finishes, so an incompatible release can never break a running
+    workflow mid-execution — the safe choice for the broad connector fleet.
+    ``AUTO_UPGRADE`` migrates in-flight workflows to the new ``CURRENT`` build at
+    their next workflow task, letting old builds drain and scale down sooner.
+
+    Opt into ``AUTO_UPGRADE`` per-app (set the env var in the app's own
+    deployment), and only when the app owner guarantees replay-determinism
+    across builds — reordering steps, parallelizing previously-sequential work,
+    or renaming activities is a *breaking change* for Temporal replay even when
+    the observable behavior is identical, and would fail in-flight workflows at
+    the migration boundary.
+    """
 
 
 @dataclass(frozen=True)
@@ -55,6 +75,18 @@ class InterceptorSettings:
     """
 
 
+def _load_versioning_behavior(env_var: str) -> VersioningBehavior:
+    """Parse a worker versioning behavior from ``env_var``.
+
+    Accepts ``PINNED`` / ``AUTO_UPGRADE`` (case-insensitive). Any unset, empty,
+    or unrecognized value falls back to the safe default, ``PINNED``.
+    """
+    val = os.environ.get(env_var, "").strip().upper()
+    if val == "AUTO_UPGRADE":
+        return VersioningBehavior.AUTO_UPGRADE
+    return VersioningBehavior.PINNED
+
+
 def load_execution_settings() -> ExecutionSettings:
     """Load execution settings from environment variables."""
     # v2-compat: remove ATLAN_WORKFLOW_HOST/PORT fallbacks when all deployments use TEMPORAL_HOST.
@@ -71,6 +103,9 @@ def load_execution_settings() -> ExecutionSettings:
         ),
         graceful_shutdown_timeout_seconds=int(
             os.environ.get("TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT", "3600")
+        ),
+        default_versioning_behavior=_load_versioning_behavior(
+            "TEMPORAL_DEFAULT_VERSIONING_BEHAVIOR"
         ),
     )
 
