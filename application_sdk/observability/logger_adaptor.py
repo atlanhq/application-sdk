@@ -419,10 +419,9 @@ class _CloudflareTimeoutFilter(logging.Filter):
                     self._last_emitted[record.name] = now
             if should_emit:
                 logger.info(
-                    "Cloudflare 504 timeout on poll_workflow_task_queue"
-                    " (occurrence %d — expected, worker retrying normally,"
-                    " TFKB ERROR-NET-001)",
-                    count,
+                    f"Cloudflare 504 timeout on poll_workflow_task_queue"
+                    f" (occurrence {count} — expected, worker retrying normally,"
+                    " TFKB ERROR-NET-001)"
                 )
             return False
         return True

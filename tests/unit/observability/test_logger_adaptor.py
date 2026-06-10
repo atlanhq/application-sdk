@@ -1,3 +1,4 @@
+import logging
 import sys
 import warnings
 from collections.abc import Generator
@@ -2074,3 +2075,164 @@ class TestSecondaryWorkflowLogsExporter:
         )
         endpoints = self._endpoints_passed_to_exporter(mock_exporter)
         assert "" not in endpoints
+
+
+# ---------------------------------------------------------------------------
+# _CloudflareTimeoutFilter
+# ---------------------------------------------------------------------------
+
+_CF504_MSG = (
+    "gRPC call poll_workflow_task_queue retried 60 times\n"
+    'error=Status { code: Internal, message: "protocol error: received message with '
+    "invalid compression flag: 60 (valid flags are 0 and 1) while receiving response "
+    'with status: 504 Gateway Timeout", metadata: ... }'
+)
+
+
+def _make_temporalio_record(
+    msg: str = _CF504_MSG,
+    level: int = logging.ERROR,
+    name: str = "temporalio.client.retry",
+) -> logging.LogRecord:
+    import logging
+
+    return logging.LogRecord(
+        name=name,
+        level=level,
+        pathname=__file__,
+        lineno=1,
+        msg=msg,
+        args=(),
+        exc_info=None,
+    )
+
+
+class TestCloudflareTimeoutFilter:
+    @pytest.fixture(autouse=True)
+    def _reset_state(self):
+        from application_sdk.observability.logger_adaptor import (
+            _CloudflareTimeoutFilter,
+        )
+
+        _CloudflareTimeoutFilter._counts.clear()
+        _CloudflareTimeoutFilter._last_emitted.clear()
+        yield
+        _CloudflareTimeoutFilter._counts.clear()
+        _CloudflareTimeoutFilter._last_emitted.clear()
+
+    def test_matching_record_suppressed(self):
+        from application_sdk.observability.logger_adaptor import (
+            _CloudflareTimeoutFilter,
+        )
+
+        f = _CloudflareTimeoutFilter()
+        with mock.patch("application_sdk.observability.logger_adaptor.logger"):
+            assert f.filter(_make_temporalio_record()) is False
+
+    def test_non_temporalio_record_passes_through(self):
+        from application_sdk.observability.logger_adaptor import (
+            _CloudflareTimeoutFilter,
+        )
+
+        f = _CloudflareTimeoutFilter()
+        assert f.filter(_make_temporalio_record(name="some.other.logger")) is True
+
+    def test_non_error_level_passes_through(self):
+        from application_sdk.observability.logger_adaptor import (
+            _CloudflareTimeoutFilter,
+        )
+
+        f = _CloudflareTimeoutFilter()
+        assert f.filter(_make_temporalio_record(level=logging.WARNING)) is True
+
+    def test_different_temporalio_error_passes_through(self):
+        from application_sdk.observability.logger_adaptor import (
+            _CloudflareTimeoutFilter,
+        )
+
+        f = _CloudflareTimeoutFilter()
+        assert (
+            f.filter(_make_temporalio_record(msg="auth failure: credentials rejected"))
+            is True
+        )
+
+    def test_partial_match_passes_through(self):
+        """All three anchors must be present — two out of three still passes through."""
+        from application_sdk.observability.logger_adaptor import (
+            _CloudflareTimeoutFilter,
+        )
+
+        f = _CloudflareTimeoutFilter()
+        partial = "poll_workflow_task_queue retried\ninvalid compression flag: 60"
+        assert f.filter(_make_temporalio_record(msg=partial)) is True
+
+    def test_info_emitted_on_first_occurrence(self):
+        from application_sdk.observability.logger_adaptor import (
+            _CloudflareTimeoutFilter,
+        )
+
+        f = _CloudflareTimeoutFilter()
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor.logger"
+        ) as mock_log:
+            f.filter(_make_temporalio_record())
+        mock_log.info.assert_called_once()
+
+    def test_info_suppressed_within_interval(self):
+        from application_sdk.observability.logger_adaptor import (
+            _CloudflareTimeoutFilter,
+        )
+
+        f = _CloudflareTimeoutFilter()
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor.time"
+        ) as mock_time:
+            mock_time.monotonic.return_value = 1000.0
+            with mock.patch(
+                "application_sdk.observability.logger_adaptor.logger"
+            ) as mock_log:
+                f.filter(_make_temporalio_record())  # first — emits
+                f.filter(_make_temporalio_record())  # within interval — suppressed
+                assert mock_log.info.call_count == 1
+
+    def test_info_emitted_again_after_interval(self):
+        from application_sdk.observability.logger_adaptor import (
+            _CloudflareTimeoutFilter,
+        )
+
+        f = _CloudflareTimeoutFilter()
+        with (
+            mock.patch(
+                "application_sdk.observability.logger_adaptor.time"
+            ) as mock_time,
+            mock.patch(
+                "application_sdk.observability.logger_adaptor.logger"
+            ) as mock_log,
+        ):
+            mock_time.monotonic.return_value = 1000.0
+            f.filter(_make_temporalio_record())
+            mock_time.monotonic.return_value = 1060.1  # past 60 s interval
+            f.filter(_make_temporalio_record())
+            assert mock_log.info.call_count == 2
+
+    def test_count_in_summary_message(self):
+        """Cumulative occurrence count must appear in the INFO message."""
+        from application_sdk.observability.logger_adaptor import (
+            _CloudflareTimeoutFilter,
+        )
+
+        f = _CloudflareTimeoutFilter()
+        with (
+            mock.patch(
+                "application_sdk.observability.logger_adaptor.time"
+            ) as mock_time,
+            mock.patch(
+                "application_sdk.observability.logger_adaptor.logger"
+            ) as mock_log,
+        ):
+            mock_time.monotonic.return_value = 1000.0
+            f.filter(_make_temporalio_record())
+            mock_time.monotonic.return_value = 1060.1
+            f.filter(_make_temporalio_record())
+            second_msg = mock_log.info.call_args_list[1][0][0]
+            assert "2" in second_msg
