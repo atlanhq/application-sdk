@@ -859,15 +859,15 @@ class App(ABC):
         """Fan out a @task over ``items`` in chunks of ``batch_size``.
 
         Instead of one activity per item (10k tables = 10k activities — 10k
-        billable actions and 10k schedule-to-start waits), ``map_batched``
-        invokes ``task`` once per chunk, dividing the action count by
-        ``batch_size``. Chunks run concurrently (bounded by
-        ``max_concurrency``) and results are returned **in chunk order** —
-        one ``Output`` per chunk.
+        schedule-to-start waits and ~40k history events), ``map_batched``
+        invokes ``task`` once per chunk, dividing the activity count (and the
+        history events it generates) by ``batch_size``. This keeps a large
+        fan-out's child-workflow history well under Temporal's 50k-event cap.
+        Chunks run concurrently (bounded by ``max_concurrency``) and results
+        are returned **in chunk order** — one ``Output`` per chunk.
 
-        Call from ``run()`` (workflow context). Works with both remote and
-        ``local=True`` tasks; only deterministic operations are used, so it is
-        replay-safe.
+        Call from ``run()`` (workflow context); only deterministic operations
+        are used, so it is replay-safe.
 
         Payload safety (ADR-0008): each chunk travels as a workflow payload —
         ``batch_size`` x per-item size must stay well under Temporal's 2 MB
@@ -1857,7 +1857,6 @@ def _wrap_instance_tasks(app_instance: Any, context_data: dict[str, Any]) -> Non
                     task_meta.heartbeat_timeout_seconds,
                     task_meta.auto_heartbeat_seconds,
                     task_meta.retry_policy,
-                    local=task_meta.local,
                 )
                 setattr(app_instance, attr_name, wrapper)
 
@@ -1873,8 +1872,6 @@ def _create_task_activity_wrapper(
     heartbeat_timeout_seconds: int | None = 60,
     auto_heartbeat_seconds: int | None = 10,
     retry_policy: Any = None,
-    *,
-    local: bool = False,
 ) -> Any:
     """Create a wrapper that executes a task as a Temporal activity.
 
@@ -1889,9 +1886,6 @@ def _create_task_activity_wrapper(
         heartbeat_timeout_seconds: Heartbeat timeout. None disables.
         auto_heartbeat_seconds: Auto-heartbeat interval. None disables.
         retry_policy: Full retry policy (overrides max_attempts/interval if set).
-        local: Execute via ``workflow.execute_local_activity`` on the workflow
-            worker (no task-queue round-trip). Heartbeat options must already
-            be None — the @task decorator enforces this at class definition.
 
     Returns:
         Async function that executes the task as an activity.
@@ -1932,32 +1926,15 @@ def _create_task_activity_wrapper(
             auto_heartbeat_seconds=auto_heartbeat_seconds,
         )
 
-        # Extract summary from input for Temporal UI display
-        summary = input_data.summary() if hasattr(input_data, "summary") else None
-
-        if local:
-            # Local tasks run on the workflow worker itself — no task-queue
-            # round-trip, no heartbeats (the decorator forces both heartbeat
-            # options to None). The eviction-retry loop is deliberately not
-            # used: a local activity dies with its workflow worker, and
-            # Temporal re-dispatches the whole workflow task to another
-            # worker — there is no orphaned activity attempt to re-drive.
-            local_result: Output = await workflow.execute_local_activity(
-                f"{app_name}:{task_name}",
-                args=[task_context, input_data],
-                start_to_close_timeout=timedelta(seconds=timeout_seconds),
-                retry_policy=temporal_retry_policy,
-                result_type=output_type,
-                summary=summary,
-            )
-            return local_result
-
         # Build heartbeat timeout if enabled
         heartbeat_timeout = (
             timedelta(seconds=heartbeat_timeout_seconds)
             if heartbeat_timeout_seconds is not None
             else None
         )
+
+        # Extract summary from input for Temporal UI display
+        summary = input_data.summary() if hasattr(input_data, "summary") else None
 
         # Execute as activity, routed through the SDK eviction-retry loop so
         # worker pod evictions (SIGTERM mid-activity) re-dispatch as fresh

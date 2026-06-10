@@ -93,46 +93,6 @@ env:
 
 Explicit `@task(timeout_seconds=...)` values always take precedence over the env vars.
 
-## Local Tasks (`local=True`)
-
-Every `@task` is normally a full Temporal activity: it round-trips through the
-task queue, waits in schedule-to-start, and counts as a billable action. For
-small, fast steps that overhead dominates the actual work.
-
-`@task(local=True)` runs the task as a Temporal **local activity** on the
-workflow worker itself — no task-queue round-trip, no schedule-to-start
-latency, one fewer action per invocation:
-
-```python
-class MyConnector(App):
-    @task(local=True)
-    async def normalize_paths(self, input: PathsInput) -> PathsOutput:
-        return PathsOutput(paths=[p.strip().lower() for p in input.paths])
-```
-
-**Use local tasks for:** fast metadata operations, path/name normalization,
-small payload shaping — anything that completes in seconds.
-
-**Do NOT use local tasks for:** long-running work, anything that needs
-heartbeats or resume-on-retry progress, or steps that should run on a
-separately-scaled activity worker. Local tasks execute on the workflow
-worker's pod and cannot heartbeat.
-
-Constraints — enforced at class definition time (`LocalTaskConfigurationError`):
-
-| Option | Rule |
-|---|---|
-| `heartbeat_timeout_seconds` / `auto_heartbeat_seconds` | Must be unset (or explicitly `None`). Local activities cannot heartbeat; the env-var heartbeat defaults are not applied. |
-| `timeout_seconds` | Must be ≤ 300 s (the framework's short-task convention — the built-in cleanup tasks use the same bound). When unset, defaults to `min(ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS, 300)`. |
-
-Retry options (`retry_max_attempts`, `retry_policy`, ...) still apply — local
-activities retry on the workflow worker. No extra registration is needed: the
-combined worker already registers every `@task` activity, and Temporal uses
-the same definition for local execution.
-
-See [ADR-0018](../adr/0018-local-activities-and-batched-fanout.md) for the
-rationale.
-
 ## Manual Heartbeats with Progress
 
 For tasks that should resume from where they left off after a retry, send typed heartbeat details:
@@ -215,9 +175,11 @@ interceptor). For hand-off to Atlan system apps (publish, lineage, quality), cal
 
 ## Batched Fan-Out with `map_batched`
 
-Connectors that fan out activity-per-item multiply both action count and
-schedule-to-start latency: 10,000 tables = 10,000 activities. Batching N items
-per activity divides the action count by N.
+Connectors that fan out activity-per-item multiply both the activity count and
+schedule-to-start latency: 10,000 tables = 10,000 activities (~40,000 history
+events). Batching N items per activity divides both by N — and keeps a large
+fan-out's child-workflow history under Temporal's 50,000-event cap, which has
+terminated real production workflows.
 
 `App.map_batched()` (call it from `run()`) chunks a list of items, invokes a
 `@task` once per chunk, runs chunks concurrently (bounded), and returns one
@@ -262,9 +224,7 @@ Things to keep in mind:
   applies per chunk, and a chunk retries *together*. A chunk that exhausts
   its retries fails the whole `map_batched` call (first error propagates,
   like `asyncio.gather`). Smaller batches = finer retry granularity but more
-  actions.
-- **Works with local tasks.** `map_batched` invokes whatever task you hand
-  it — remote or `local=True`.
+  activities (and more history events).
 - `batch_size` and `max_concurrency` must be ≥ 1; invalid values raise
   `MapBatchedInvalidArgumentError` at call time.
 
