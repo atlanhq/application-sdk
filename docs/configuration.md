@@ -13,7 +13,7 @@ Set variables in your shell environment, a `.env` file at the project root, or D
 | `ATLAN_APP_MODULE` | _(required)_ | App class to load: `module.path:ClassName` (e.g. `app.app:MyExtractor`). Startup fails without it. Set in your `Dockerfile` as `ENV ATLAN_APP_MODULE=…` or pass via `--app` CLI flag. |
 | `ATLAN_APP_MODE` | `combined` | Run mode: `worker`, `handler`, or `combined`. Determines which subsystems start; override via `--mode` CLI flag. **v2-compat fallback:** `APPLICATION_MODE` (deprecated; mapped at startup to the equivalent v3 mode). |
 | `ATLAN_APPLICATION_NAME` | `default` | Application name. Used in object-store paths, logging, and workflow identification. |
-| `ATLAN_DEPLOYMENT_NAME` | `local` | Deployment name. Distinguishes dev / staging / prod deployments of the same app. |
+| `ATLAN_DEPLOYMENT_NAME` | `local` | Deployment name. Distinguishes dev / staging / prod deployments of the same app. When set (non-`local`), it also namespaces state-store keys (`{deployment}:{run_id}:{key}`) so co-located deployments sharing a state store cannot collide; when unset, keys keep the `{app_name}:{run_id}:{key}` shape. |
 | `ATLAN_TENANT_ID` | `default` | Tenant identifier for multi-tenant deployments. |
 | `ATLAN_DOMAIN_NAME` | `atlan.com` | Tenant domain name. |
 | `ATLAN_TEMPORARY_PATH` | `./local/tmp/` | Path for intermediate files during processing. |
@@ -75,6 +75,16 @@ Used by the Temporal Worker Deployment controller (TWD). Leave empty unless your
 | `ATLAN_HEALTH_PORT` | `8081` | Port for the worker health endpoint. |
 | `ATLAN_HANDLER_MODULE` | _(empty)_ | Handler class to load (`module:ClassName`). Auto-discovered from the app module when unset. |
 | `ATLAN_SHUTDOWN_DRAIN_DELAY_SECONDS` | `5` | Event-loop yield (seconds) before tearing down the worker transport, giving in-flight activity completion RPCs a chance to flush. Distinct from `TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT`. |
+
+---
+
+## Server Security
+
+Platform ingress (edge auth) is the primary authentication layer; these knobs are opt-in defense-in-depth. See [Authentication & HTTP Security Posture](standards/authentication.md).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ATLAN_ENABLE_OPENAPI_DOCS` | `false` | Expose `/docs`, `/redoc`, `/openapi.json` in deployed environments. Always enabled in local development (`ATLAN_DEPLOYMENT_NAME` unset/`local`). |
 
 ---
 
@@ -151,6 +161,7 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 | `ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS` | `4` | Maximum concurrent object-store uploads/downloads. |
 | `ENABLE_ATLAN_UPLOAD` | `false` | Enable uploading processed artifacts to the Atlan platform object store. |
 | `SSL_CERT_DIR` | _(empty)_ | Directory of custom CA certificates (`.pem`, `.crt`, `.cer`, `.ca-bundle`). Used by `httpx` and `aiohttp` clients when set. |
+| `ATLAN_ALLOW_INSECURE_SSL` | `false` | Required to honor `insecureSSL: true` on an S3 Dapr binding (disables TLS certificate verification). Without it, store creation fails with a config error naming the binding. |
 
 ---
 
