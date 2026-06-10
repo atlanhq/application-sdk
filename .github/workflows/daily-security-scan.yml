@@ -34,7 +34,7 @@ jobs:
           # Pin to a specific version so scan results don't drift between
           # runs as Trivy's vuln DB schema and detection logic evolve. Bump
           # this deliberately when a known scanner fix is needed.
-          version: v0.71.0
+          version: v0.70.0
           cache: true
 
       # ── Trivy image scan ──────────────────────────────────────────────────

@@ -62,6 +62,12 @@
       "automerge": true,
       "automergeType": "pr",
       "platformAutomerge": true
+    },
+    {
+      "description": "Trivy CLI version (version: in with: blocks): disable auto-updates. The scanner version is pinned deliberately — scan results drift when Trivy's vuln DB schema or detection logic changes, so bumps must be a conscious decision.",
+      "matchPackageNames": ["aquasecurity/trivy"],
+      "matchManagers": ["github-actions"],
+      "enabled": false
     }
   ],
   "customManagers": [
