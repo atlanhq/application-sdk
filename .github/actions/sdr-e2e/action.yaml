@@ -873,7 +873,7 @@ runs:
     # mutating an old one, which makes "what's the latest run" obvious.
     - name: Render PR comment + post (when on a PR)
       if: always()
-      uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
       env:
         APP_NAME: ${{ inputs.app-name }}
         OUTCOME: ${{ steps.tests.outcome }}
