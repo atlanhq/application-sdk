@@ -64,7 +64,7 @@ _USER_AGENT = "atlan-sdk-full-dag-e2e/1.0 (+https://github.com/atlanhq/applicati
 # while-loops so the overall budget is driven by ``poll_native_status``
 # / ``poll_atlas_for_connection``; the per-request timeout just keeps
 # any one call from hanging the whole loop.
-_HTTP_TIMEOUT = 30
+_HTTP_TIMEOUT = 60
 
 # Cadence for "still polling" heartbeat log lines in
 # ``poll_native_status`` — lineage stages take 2-5 min on small
