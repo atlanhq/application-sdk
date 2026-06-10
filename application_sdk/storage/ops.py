@@ -795,7 +795,9 @@ async def download_file_chunked(
         )
 
     # Pre-allocate the file at the target size so lseek can address any offset.
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
+    # 0o600: owner-only — downloaded artifacts can contain extracted customer
+    # metadata; don't rely on the process umask to keep them private.
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
         os.ftruncate(fd, file_size)
     except Exception:

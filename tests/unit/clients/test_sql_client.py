@@ -1154,3 +1154,15 @@ async def test_async_run_query_requires_engine(
     with pytest.raises(EngineNotInitializedError):
         async for _ in async_sql_client_local.run_query("SELECT 1"):
             pass
+
+
+def test_add_connection_params_url_encodes_keys_and_values(sql_client_with_db_config):
+    """Param values containing &, =, or spaces must not inject extra params."""
+    conn_str = sql_client_with_db_config.add_connection_params(
+        "postgresql://u:p@h:5432/db",
+        {"options": "-c search_path=public", "evil": "x&sslmode=disable"},
+    )
+    # Injected separator characters are percent-encoded, not interpreted.
+    assert "sslmode=disable" not in conn_str
+    assert "options=-c+search_path%3Dpublic" in conn_str
+    assert "evil=x%26sslmode%3Ddisable" in conn_str

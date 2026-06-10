@@ -172,3 +172,27 @@ def test_base_fields_sentinel() -> None:
     assert "cause" in _BASE_FIELDS
     assert "app_name" in _BASE_FIELDS
     assert "run_id" in _BASE_FIELDS
+
+
+def test_sanitize_cause_repr_redacts_userinfo_for_any_url_scheme() -> None:
+    from application_sdk.errors.base import _sanitize_cause_repr
+
+    cases = {
+        "postgresql+psycopg://user:s3cret@db.internal:5432/prod": "postgresql+psycopg://***@db.internal:5432/prod",
+        "mysql://root:hunter2@10.0.0.5/app": "mysql://***@10.0.0.5/app",
+        "https://alice:tok3n@api.example.com/v1": "https://***@api.example.com/v1",
+        "snowflake://svc:pw@acct.snowflakecomputing.com": "snowflake://***@acct.snowflakecomputing.com",
+    }
+    for raw, expected in cases.items():
+        out = _sanitize_cause_repr(Exception(f"connect failed for {raw}"))
+        assert expected in out, out
+        assert "s3cret" not in out and "hunter2" not in out
+        assert "tok3n" not in out and ":pw@" not in out
+
+
+def test_sanitize_cause_repr_still_redacts_secret_params() -> None:
+    from application_sdk.errors.base import _sanitize_cause_repr
+
+    out = _sanitize_cause_repr(Exception("call failed: api_key=abc123&x=1"))
+    assert "api_key=***" in out
+    assert "abc123" not in out

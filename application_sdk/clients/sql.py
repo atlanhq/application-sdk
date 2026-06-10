@@ -34,6 +34,7 @@ from application_sdk.common.aws_utils import (
 from application_sdk.constants import AWS_SESSION_NAME, USE_SERVER_SIDE_CURSOR
 from application_sdk.credentials.utils import parse_credentials_extra
 from application_sdk.errors import AppError
+from application_sdk.errors.base import _sanitize_cause_repr
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -138,7 +139,10 @@ class BaseSQLClient(ClientInterface):
             self.connection = None
 
         except Exception as e:
-            logger.error("Error loading SQL client", exc_info=True)
+            # No exc_info here: SQLAlchemy errors embed the full connection
+            # string (including the password) in their message, and the
+            # traceback would print it verbatim into logs.
+            logger.error("Error loading SQL client: %s", _sanitize_cause_repr(e))
             if self.engine:
                 self.engine.dispose()
                 self.engine = None
@@ -286,7 +290,9 @@ class BaseSQLClient(ClientInterface):
                 connection_string += "?"
             else:
                 connection_string += "&"
-            connection_string += f"{key}={value}"
+            # URL-encode so values containing &, =, or spaces can't inject
+            # extra connection parameters (e.g. sslmode overrides).
+            connection_string += f"{quote_plus(str(key))}={quote_plus(str(value))}"
 
         return connection_string
 
@@ -624,7 +630,12 @@ class AsyncBaseSQLClient(BaseSQLClient):
             self.connection = None
 
         except Exception as e:
-            logger.error("Error establishing database connection", exc_info=True)
+            # No exc_info here: SQLAlchemy errors embed the full connection
+            # string (including the password) in their message, and the
+            # traceback would print it verbatim into logs.
+            logger.error(
+                "Error establishing database connection: %s", _sanitize_cause_repr(e)
+            )
             if self.engine:
                 await self.engine.dispose()
                 self.engine = None

@@ -18,8 +18,10 @@ _BASE_FIELDS: frozenset[str] = frozenset(
 )
 
 _CAUSE_MAX_LEN = 500
-# Matches userinfo in URLs: https://user:pass@host → https://***@host
-_URL_USERINFO_RE = re.compile(r"(https?://)[^@\s]+@", re.IGNORECASE)
+# Matches userinfo in URLs for any scheme: https://user:pass@host → https://***@host,
+# postgresql://user:pass@host → postgresql://***@host (SQLAlchemy/JDBC-style
+# connection strings embed credentials the same way http URLs do).
+_URL_USERINFO_RE = re.compile(r"([a-z][a-z0-9+.-]*://)[^@\s]+@", re.IGNORECASE)
 # Matches secret query params: api_key=value → api_key=***
 _SECRET_PARAM_RE = re.compile(
     r"(?i)((?:api_key|access_token|auth_token|password|passwd|secret|credential|private_key)=)[^\s&,;#]+",

@@ -41,6 +41,7 @@ consumable by any SQL, REST, NoSQL, or cloud-storage client whose
 
 from __future__ import annotations
 
+import hashlib
 from typing import TYPE_CHECKING, Any
 
 import orjson
@@ -82,8 +83,8 @@ _LITERAL_KEYS: frozenset[str] = frozenset(
 
 
 async def resolve_agent_credential(
-    spec: "AgentCredentialSpec",
-    secret_store: "SecretStore",
+    spec: AgentCredentialSpec,
+    secret_store: SecretStore,
 ) -> dict[str, Any]:
     """Resolve a typed agent credential spec to a flat dict.
 
@@ -138,7 +139,7 @@ async def resolve_agent_credential(
 # Keep backward-compatible alias for existing callers and tests
 async def resolve_agent_json(
     agent_json: str,
-    secret_store: "SecretStore",
+    secret_store: SecretStore,
 ) -> dict[str, Any]:
     """Resolve an agent-shape JSON string to a flat dict.
 
@@ -160,9 +161,7 @@ async def resolve_agent_json(
     return await resolve_agent_credential(spec, secret_store)
 
 
-async def _fetch_bundle(
-    secret_store: "SecretStore", secret_path: str
-) -> dict[str, Any]:
+async def _fetch_bundle(secret_store: SecretStore, secret_path: str) -> dict[str, Any]:
     """Fetch and JSON-parse the secret bundle at ``secret-path``."""
     try:
         raw = await secret_store.get(secret_path)
@@ -196,7 +195,7 @@ async def _fetch_bundle(
 
 
 async def _fetch_per_key_bundle(
-    secret_store: "SecretStore", raw: dict[str, Any]
+    secret_store: SecretStore, raw: dict[str, Any]
 ) -> dict[str, Any]:
     """Build a synthetic bundle by per-key lookups against the secret store.
 
@@ -225,12 +224,15 @@ async def _fetch_per_key_bundle(
             # below). A transient outage here on a real secret field
             # would otherwise auth-fail with the ref-key as the literal
             # username, so surface at WARNING with stack trace.
+            # Log a hash, not the ref-key itself: ref-key names encode secret
+            # store topology (purpose, environment) and enable enumeration if
+            # logs leak.
             logger.warning(
-                "single-key probe failed for ref-key %r — store error, "
+                "single-key probe failed for ref-key sha256:%s — store error, "
                 "treating as non-secret. If this was a real credential "
                 "key, the auth attempt will fail with the ref-key as the "
                 "literal value.",
-                value,
+                hashlib.sha256(value.encode()).hexdigest()[:8],
                 exc_info=True,
             )
             return
@@ -238,8 +240,8 @@ async def _fetch_per_key_bundle(
             # Key not in store — expected for non-secret fields probed
             # in single-key mode (host, port, region literals).
             logger.debug(
-                "single-key probe: %r not found in store (non-secret field)",
-                value,
+                "single-key probe: sha256:%s not found in store (non-secret field)",
+                hashlib.sha256(value.encode()).hexdigest()[:8],
             )
             return
         bundle[value] = secret
