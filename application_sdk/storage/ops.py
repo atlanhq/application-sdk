@@ -59,6 +59,7 @@ except ImportError:  # pragma: no cover
     _ObstoreBaseError = None  # type: ignore[assignment,misc]
     _ObstoreNotFoundError = None  # type: ignore[assignment,misc]
 
+
 if TYPE_CHECKING:
     from typing import Any
 
@@ -69,6 +70,37 @@ if TYPE_CHECKING:
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+
+class BoundStore:
+    """An :class:`~obstore.store.ObjectStore` paired with per-write put attributes.
+
+    Returned by :func:`~application_sdk.storage.binding.create_store_from_binding_with_put_attrs`
+    (and similar helpers) when the Dapr binding specifies a ``storageClass`` or other
+    per-write options.  Pass a ``BoundStore`` anywhere an ``ObjectStore`` is accepted:
+    :func:`upload_file`, :func:`_put`, and the SDK I/O helpers automatically extract
+    both the underlying store and its attributes without extra plumbing at the call site.
+    """
+
+    __slots__ = ("_put_attributes", "_store")
+
+    def __init__(
+        self,
+        store: ObjectStore,
+        put_attributes: dict[str, str] | None = None,
+    ) -> None:
+        self._store = store
+        self._put_attributes = put_attributes
+
+    @property
+    def store(self) -> ObjectStore:
+        """Underlying obstore instance."""
+        return self._store
+
+    @property
+    def put_attributes(self) -> dict[str, str] | None:
+        """Per-write put attributes (e.g. ``{"Storage-Class": "STANDARD_IA"}``)."""
+        return self._put_attributes
 
 
 def normalize_key(key: str) -> str:
@@ -160,14 +192,17 @@ def _normalize_listing_prefix(prefix: str, normalize: bool) -> str:
     return prefix
 
 
-def _resolve_store(store: ObjectStore | None) -> ObjectStore:
-    """Return *store* if provided, otherwise resolve from the infrastructure context.
+def _resolve_store(store: BoundStore | ObjectStore | None) -> ObjectStore:
+    """Return the underlying ObjectStore, resolving from infrastructure when None.
+
+    Accepts a :class:`BoundStore` (unwraps it), a raw ``ObjectStore``, or ``None``
+    (resolved from the infrastructure context).
 
     Raises:
         RuntimeError: If *store* is ``None`` and no infrastructure context is set.
     """
     if store is not None:
-        return store
+        return store.store if isinstance(store, BoundStore) else store
     from application_sdk.infrastructure.context import (  # noqa: PLC0415
         get_infrastructure,
     )
@@ -180,6 +215,69 @@ def _resolve_store(store: ObjectStore | None) -> ObjectStore:
 
         raise ObjectStoreNotProvidedError()
     return infra.storage
+
+
+def _resolve_put_attributes(
+    store: BoundStore | ObjectStore | None,
+) -> dict[str, str] | None:
+    """Return binding-level put attributes for *store*, or ``None``.
+
+    Resolution order:
+    1. ``BoundStore`` — return its embedded ``put_attributes`` directly.
+    2. ``store is None`` — return ``infra.storage_put_attributes``.
+    3. ``store is infra.storage`` — same as (2); handles callers that hold an
+       explicit reference to the infra deployment store.
+    4. ``store is infra.upstream_storage`` — return
+       ``infra.upstream_storage_put_attributes``; covers SDR-mode App.upload.
+    5. Any other explicit store (CloudStore, test stores, etc.) — ``None``.
+
+    Uses identity (``is``) rather than equality because obstore stores are unhashable.
+    """
+    if isinstance(store, BoundStore):
+        return store.put_attributes
+    from application_sdk.infrastructure.context import (  # noqa: PLC0415
+        get_infrastructure,
+    )
+
+    infra = get_infrastructure()
+    if infra is None:
+        return None
+    if store is None or store is infra.storage:
+        return infra.storage_put_attributes
+    if infra.upstream_storage is not None and store is infra.upstream_storage:
+        return infra.upstream_storage_put_attributes
+    return None
+
+
+def _is_azure_container_not_found(exc: BaseException) -> bool:
+    """Return True when *exc* indicates an Azure container does not exist.
+
+    Azure Blob Storage returns HTTP 404 with error code ``ContainerNotFound``
+    when a write targets a container that has never been created.  This is
+    distinct from a missing *blob* (``BlobNotFound``) and needs a separate,
+    actionable error message so operators know to pre-create the container.
+
+    Class-based detection runs first (obstore >=0.9 ``GenericError``); the
+    substring fallback catches older obstore versions and future wording drift
+    is caught by the recorded-error regression tests.
+    """
+    if _ObstoreBaseError is not None and isinstance(exc, _ObstoreBaseError):
+        msg = str(exc).lower()
+        return (
+            "containernotfound" in msg
+            or "the specified container does not exist" in msg
+        )
+    msg = str(exc).lower()
+    return "containernotfound" in msg or "the specified container does not exist" in msg
+
+
+def _azure_container_not_found_message(key: str) -> str:
+    """Return the standard user-facing message for a missing Azure container."""
+    return (
+        "Azure container does not exist — v3 does not auto-create "
+        "containers (v2 Dapr did); pre-create the container before "
+        f"running (failed key: '{key}')"
+    )
 
 
 def _is_not_found(exc: BaseException) -> bool:
@@ -329,7 +427,7 @@ def _compute_part_size(file_size: int, chunk_size: int) -> int:
 async def upload_file(
     key: str,
     local_path: str | Path,
-    store: ObjectStore | None = None,
+    store: BoundStore | ObjectStore | None = None,
     *,
     chunk_size: int = 8 * 1024 * 1024,
     normalize: bool = True,
@@ -377,6 +475,7 @@ async def upload_file(
         may not persist an empty object.  GCS and local stores handle them correctly.
     """
     resolved = _resolve_store(store)
+    put_attributes = _resolve_put_attributes(store)
     if normalize:
         key = normalize_key(key)
 
@@ -396,7 +495,7 @@ async def upload_file(
     started = time.monotonic()
     try:
         async with obstore.open_writer_async(
-            resolved, key, buffer_size=effective_chunk
+            resolved, key, buffer_size=effective_chunk, attributes=put_attributes
         ) as writer:
             with path.open("rb") as fh:
                 while True:
@@ -422,8 +521,15 @@ async def upload_file(
             error_class=_exc_class_name(exc),
         )
         if isinstance(exc, Exception):
-            from application_sdk.storage.errors import StorageError  # noqa: PLC0415
+            from application_sdk.storage.errors import (  # noqa: PLC0415
+                StorageConfigError,
+                StorageError,
+            )
 
+            if _is_azure_container_not_found(exc):
+                raise StorageConfigError(
+                    _azure_container_not_found_message(key)
+                ) from exc
             raise StorageError(
                 f"Failed to upload file to key '{key}'", key=key, cause=exc
             ) from exc
@@ -460,7 +566,7 @@ async def upload_file(
 async def download_file(
     key: str,
     local_path: str | Path,
-    store: ObjectStore | None = None,
+    store: BoundStore | ObjectStore | None = None,
     *,
     compute_hash: bool = False,
     min_chunk_size: int = 10 * 1024 * 1024,
@@ -574,7 +680,7 @@ async def download_file(
 
 async def get_file_size(
     key: str,
-    store: ObjectStore | None = None,
+    store: BoundStore | ObjectStore | None = None,
     *,
     normalize: bool = True,
 ) -> int | None:
@@ -616,7 +722,7 @@ async def get_file_size(
 async def download_file_chunked(
     key: str,
     local_path: str | Path,
-    store: ObjectStore | None = None,
+    store: BoundStore | ObjectStore | None = None,
     *,
     chunk_size_bytes: int = 16 * 1024 * 1024,
     max_concurrent_chunks: int = 4,
@@ -753,7 +859,7 @@ async def download_file_chunked(
 
 async def _get_bytes(
     key: str,
-    store: ObjectStore | None = None,
+    store: BoundStore | ObjectStore | None = None,
     *,
     normalize: bool = True,
 ) -> bytes | None:
@@ -799,7 +905,7 @@ async def _get_bytes(
 async def _put(
     key: str,
     data: bytes,
-    store: ObjectStore | None = None,
+    store: BoundStore | ObjectStore | None = None,
     *,
     normalize: bool = True,
 ) -> None:
@@ -824,20 +930,26 @@ async def _put(
         RuntimeError: If *store* is ``None`` and no infrastructure store is set.
     """
     resolved = _resolve_store(store)
+    put_attributes = _resolve_put_attributes(store)
     if normalize:
         key = normalize_key(key)
     try:
-        await obstore.put_async(resolved, key, data)
+        await obstore.put_async(resolved, key, data, attributes=put_attributes)
     except Exception as exc:
-        from application_sdk.storage.errors import StorageError  # noqa: PLC0415
+        from application_sdk.storage.errors import (  # noqa: PLC0415
+            StorageConfigError,
+            StorageError,
+        )
 
+        if _is_azure_container_not_found(exc):
+            raise StorageConfigError(_azure_container_not_found_message(key)) from exc
         raise StorageError(f"Failed to put key '{key}'", key=key, cause=exc) from exc
 
 
 async def put_json(
     key: str,
     obj: JsonValue,
-    store: ObjectStore | None = None,
+    store: BoundStore | ObjectStore | None = None,
     *,
     normalize: bool = True,
 ) -> None:
@@ -863,7 +975,7 @@ async def put_json(
 
 async def delete(
     key: str,
-    store: ObjectStore | None = None,
+    store: BoundStore | ObjectStore | None = None,
     *,
     normalize: bool = True,
 ) -> bool:
@@ -902,7 +1014,7 @@ async def delete(
 
 async def exists(
     key: str,
-    store: ObjectStore | None = None,
+    store: BoundStore | ObjectStore | None = None,
     *,
     normalize: bool = True,
 ) -> bool:

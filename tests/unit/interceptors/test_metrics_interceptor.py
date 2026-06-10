@@ -19,6 +19,7 @@ from application_sdk.execution._temporal.interceptors.metrics import (
     _workflow_executions,
     _workflow_failures_classified,
 )
+from application_sdk.observability.resource_sampler import ResourceSample
 
 _METER_TARGET = (
     "application_sdk.execution._temporal.interceptors.metrics._otel_metrics.get_meter"
@@ -339,9 +340,16 @@ class TestMetricsActivityInboundInterceptor:
         assert tags["temporal.task_queue"] == "default"
 
     async def test_success_records_activity_duration(self, interceptor, mock_meter):
-        with patch(
-            "application_sdk.execution._temporal.interceptors.metrics.activity"
-        ) as mock_act:
+        # Suppress cost metrics so only the duration histogram call is emitted.
+        with (
+            patch(
+                "application_sdk.execution._temporal.interceptors.metrics.activity"
+            ) as mock_act,
+            patch(
+                "application_sdk.execution._temporal.interceptors.metrics.resource_sampler.sample",
+                return_value=None,
+            ),
+        ):
             mock_act.info.return_value = MockActivityInfo()
             await interceptor.execute_activity(MockExecuteActivityInput())
 
@@ -350,6 +358,95 @@ class TestMetricsActivityInboundInterceptor:
         duration_arg = histogram.record.call_args[0][0]
         assert isinstance(duration_arg, float)
         assert duration_arg >= 0
+
+    async def test_success_records_cpu_and_mem_cost_metrics(
+        self, interceptor, mock_meter
+    ):
+        fake_start = ResourceSample(cpu_time_s=1.0, rss_bytes=100 * 1024 * 1024)
+        fake_end = ResourceSample(cpu_time_s=1.5, rss_bytes=200 * 1024 * 1024)
+        # Pin monotonic clock: start=0ns, end=1_000_000_000ns → duration_s=1.0
+        with (
+            patch(
+                "application_sdk.execution._temporal.interceptors.metrics.activity"
+            ) as mock_act,
+            patch(
+                "application_sdk.execution._temporal.interceptors.metrics.resource_sampler.sample",
+                side_effect=[fake_start, fake_end],
+            ),
+            patch(
+                "application_sdk.execution._temporal.interceptors.metrics.time.monotonic_ns",
+                side_effect=[0, 1_000_000_000],
+            ),
+        ):
+            mock_act.info.return_value = MockActivityInfo()
+            await interceptor.execute_activity(MockExecuteActivityInput())
+
+        histogram = mock_meter.create_histogram.return_value
+        # Three histograms recorded: duration, cpu_seconds, mem_gib_seconds.
+        assert histogram.record.call_count == 3
+        calls = histogram.record.call_args_list
+        recorded_values = [c[0][0] for c in calls]
+        recorded_tags = [c[0][1] for c in calls]
+        # duration = 1.0s (pinned)
+        assert recorded_values[0] == 1.0
+        # cpu_seconds: 1.5 - 1.0 = 0.5
+        assert recorded_values[1] == pytest.approx(0.5)
+        # mem_gib_seconds: avg RSS = 150 MiB = 150/1024 GiB ≈ 0.14648; × 1.0s
+        assert recorded_values[2] == pytest.approx(150 / 1024, rel=1e-4)
+        # cost metrics carry the same tags as duration (including otel.status_code)
+        for tags in recorded_tags[1:]:
+            assert tags["temporal.activity.type"] == "TestActivity"
+            assert tags["temporal.task_queue"] == "default"
+            assert tags["otel.status_code"] == "OK"
+
+    async def test_error_path_records_cost_metrics(self, mock_next, mock_meter):
+        fake_start = ResourceSample(cpu_time_s=1.0, rss_bytes=100 * 1024 * 1024)
+        fake_end = ResourceSample(cpu_time_s=1.5, rss_bytes=200 * 1024 * 1024)
+        mock_next.execute_activity = AsyncMock(side_effect=ValueError("bad"))
+        interceptor = _MetricsActivityInboundInterceptor(mock_next)
+
+        with (
+            patch(
+                "application_sdk.execution._temporal.interceptors.metrics.activity"
+            ) as mock_act,
+            patch(
+                "application_sdk.execution._temporal.interceptors.metrics.resource_sampler.sample",
+                side_effect=[fake_start, fake_end],
+            ),
+            patch(
+                "application_sdk.execution._temporal.interceptors.metrics.time.monotonic_ns",
+                side_effect=[0, 1_000_000_000],
+            ),
+        ):
+            mock_act.info.return_value = MockActivityInfo()
+            with pytest.raises(ValueError):
+                await interceptor.execute_activity(MockExecuteActivityInput())
+
+        histogram = mock_meter.create_histogram.return_value
+        # duration + cpu + mem all recorded even on error
+        assert histogram.record.call_count == 3
+        cost_tags = histogram.record.call_args_list[1][0][1]
+        assert cost_tags["otel.status_code"] == "ERROR"
+        assert cost_tags["temporal.activity.type"] == "TestActivity"
+
+    async def test_no_cost_metrics_when_sampling_unavailable(
+        self, interceptor, mock_meter
+    ):
+        with (
+            patch(
+                "application_sdk.execution._temporal.interceptors.metrics.activity"
+            ) as mock_act,
+            patch(
+                "application_sdk.execution._temporal.interceptors.metrics.resource_sampler.sample",
+                return_value=None,
+            ),
+        ):
+            mock_act.info.return_value = MockActivityInfo()
+            await interceptor.execute_activity(MockExecuteActivityInput())
+
+        histogram = mock_meter.create_histogram.return_value
+        # Only duration — cpu/mem skipped when sample() returns None.
+        histogram.record.assert_called_once()
 
     async def test_error_increments_counter_error_tag_and_reraises(
         self, mock_next, mock_meter

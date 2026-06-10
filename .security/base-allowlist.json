@@ -1,98 +1,10 @@
 {
   "_comment": "Central allowlist for SDK base image vulnerabilities. Shared across all connector repos. Updated by SDK team. CODEOWNERS: SDK/security team only.",
   "_base_image": "application-sdk-main",
-  "_updated": "2026-06-05",
+  "_updated": "2026-06-09",
   "_renewal_note": "Expiry dates staggered by severity. CRITICAL: 15 days. HIGH: 30 days. Review before expiry. Enforced by .github/scripts/validate_allowlist.py via _expiry_policy below.",
   "_expiry_policy": {
     "CRITICAL": 15,
     "HIGH": 30
-  },
-  "CVE-2026-33814": {
-    "package": "stdlib / dapr-daprd-1.17",
-    "severity": "HIGH",
-    "reason": "Base image - Dapr runtime dependency (Go stdlib used by daprd binary)",
-    "expires": "2026-06-13",
-    "added_by": "mananjain99",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
-  },
-  "CVE-2026-6846": {
-    "package": "binutils (Alpine/Wolfi)",
-    "severity": "HIGH",
-    "reason": "Base image - Chainguard Wolfi binutils@2.46-r1. Fix available in 2.46-r2; awaiting SDK base image rebuild.",
-    "expires": "2026-07-05",
-    "added_by": "mananjain99",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
-  },
-  "CVE-2025-66418": {
-    "package": "py3-pip-wheel (Alpine/Wolfi)",
-    "severity": "HIGH",
-    "reason": "Base image - Chainguard Wolfi py3-pip-wheel@26.0.1-r2. Fix available in 26.1.1-r0; awaiting SDK base image rebuild.",
-    "expires": "2026-06-08",
-    "added_by": "TechyMT",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
-  },
-  "CVE-2025-66471": {
-    "package": "py3-pip-wheel (Alpine/Wolfi)",
-    "severity": "HIGH",
-    "reason": "Base image - Chainguard Wolfi py3-pip-wheel@26.0.1-r2. Fix available in 26.1.1-r0; awaiting SDK base image rebuild.",
-    "expires": "2026-06-08",
-    "added_by": "TechyMT",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
-  },
-  "CVE-2026-21441": {
-    "package": "py3-pip-wheel (Alpine/Wolfi)",
-    "severity": "HIGH",
-    "reason": "Base image - Chainguard Wolfi py3-pip-wheel@26.0.1-r2. Fix available in 26.1.1-r0; awaiting SDK base image rebuild.",
-    "expires": "2026-06-08",
-    "added_by": "TechyMT",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
-  },
-  "CVE-2026-42304": {
-    "package": "Twisted",
-    "severity": "HIGH",
-    "reason": "Python transitive dependency. Fix available only in Twisted 26.4.0rc2 (pre-release); no stable fix yet. Review at expiry for stable release.",
-    "expires": "2026-06-08",
-    "added_by": "TechyMT",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
-  },
-  "GHSA-82j2-j2ch-gfr8": {
-    "package": "rustls-webpki",
-    "severity": "HIGH",
-    "reason": "Base image - Rust dependency in Dapr runtime. Fix available in 0.103.13; awaiting SDK base image rebuild with updated Dapr.",
-    "expires": "2026-06-08",
-    "added_by": "TechyMT",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
-  },
-  "CVE-2026-41889": {
-    "package": "github.com/jackc/pgx/v5",
-    "severity": "CRITICAL",
-    "reason": "Upstream fix available but need immediate unblock for v2.x.x releases for SDR locked app releases.",
-    "expires": "2026-06-09",
-    "added_by": "adityachoudhury-cloud",
-    "fix_available_date": null,
-    "compensating_controls": null,
-    "re_evaluation_trigger": "expiry",
-    "exposure_assessment": null
   }
 }

@@ -38,10 +38,12 @@ from application_sdk.storage.ops import (
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
 
+    from application_sdk.storage.ops import BoundStore
+
 
 async def list_keys(
     prefix: str = "",
-    store: ObjectStore | None = None,
+    store: BoundStore | ObjectStore | None = None,
     *,
     suffix: str = "",
     normalize: bool = True,

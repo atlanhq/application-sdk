@@ -8,8 +8,11 @@
 /// creates orphaned top-level entries with no ui metadata.
 amends "pkl:test"
 
+import "pkl:json"
 import "../src/App.pkl" as App
+import "../src/Config.pkl"
 import "../src/Connectors.pkl"
+import "../src/NativeApp.pkl"
 
 /// Minimal JDBC-URL app with two auth types — exercises the exact
 /// code path in `generateCredentialConfig()` that emits top-level
@@ -84,7 +87,135 @@ local jdbcApp = (App) {
   }
 }
 
+/// Single-auth JDBC-URL app that intentionally reveals the real auth pane.
+/// The top-level copy must remain hidden because it is only an agent merge target.
+local singleAuthJdbcApp = (App) {
+  name = "jdbc-single-auth-test"
+  displayName = "JDBC Single Auth Test"
+  connector = Connectors.TERADATA
+  icon = "https://example.com/icon.svg"
+
+  credentialUrlGroup = new App.AdvancedJDBCUrlGroup {
+    protocol = ""
+    urlAddonBefore = "driver://"
+    hostField = new App.FieldSpec {
+      name = "host"
+      displayName = "Host"
+      placeholder = "host.example.com"
+      feedback = true
+    }
+    portField = new App.FieldSpec {
+      name = "port"
+      fieldType = "number"
+      displayName = "Port"
+      placeholder = "1025"
+      defaultValue = "1025"
+      required = false
+    }
+  }
+
+  credentialAuthOptions {
+    ["basic"] = new App.JDBCUrlAuthOption {
+      label = "Basic"
+      nestedLabel = "Basic"
+      nestedHidden = false
+      urlPartMapping = new App.UrlPartMapping {
+        hostname = "host"
+        searchParams {
+          ["PORT"] = new App.UrlRef { field = "port" }
+        }
+      }
+      fields {
+        new App.FieldSpec { name = "username"; displayName = "Username" }
+        new App.FieldSpec { name = "password"; sensitive = true; displayName = "Password" }
+      }
+    }
+  }
+
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Credential"] {
+        inputs {
+          ["credential-guid"] = new App.CredentialInput {
+            credType = "atlan-connectors-jdbc-single-auth-test"
+          }
+        }
+      }
+    }
+  }
+}
+
+local nativeSingleAuthJdbcApp = (NativeApp) {
+  name = "native-jdbc-single-auth-test"
+  displayName = "Native JDBC Single Auth Test"
+  connector = Connectors.TERADATA
+  workflowType = "NativeJdbcSingleAuthTestWorkflow"
+  icon = "https://example.com/icon.svg"
+
+  credentialUrlGroup = new NativeApp.AdvancedJDBCUrlGroup {
+    protocol = ""
+    urlAddonBefore = "driver://"
+    hostField = new NativeApp.FieldSpec {
+      name = "host"
+      displayName = "Host"
+      placeholder = "host.example.com"
+      feedback = true
+    }
+    portField = new NativeApp.FieldSpec {
+      name = "port"
+      fieldType = "number"
+      displayName = "Port"
+      placeholder = "1025"
+      defaultValue = "1025"
+      required = false
+    }
+  }
+
+  credentialAuthOptions {
+    ["basic"] = new NativeApp.JDBCUrlAuthOption {
+      label = "Basic"
+      nestedLabel = "Basic"
+      nestedHidden = false
+      urlPartMapping = new NativeApp.UrlPartMapping {
+        hostname = "host"
+        searchParams {
+          ["PORT"] = new NativeApp.UrlRef { field = "port" }
+        }
+      }
+      fields {
+        new NativeApp.FieldSpec { name = "username"; displayName = "Username" }
+        new NativeApp.FieldSpec { name = "password"; sensitive = true; displayName = "Password" }
+      }
+    }
+  }
+
+  uiConfig = new Config.UIConfig {
+    tasks {
+      ["Credential"] {
+        inputs {
+          ["credential-guid"] = new Config.CredentialInput {
+            credType = "atlan-connectors-native-jdbc-single-auth-test"
+          }
+        }
+      }
+    }
+  }
+}
+
 local credentialJson: String = jdbcApp.output.files["app/generated/atlan-connectors-jdbc-auth-test.json"].text
+local credential = new json.Parser { useMapping = true }.parse(credentialJson)
+
+local singleAuthCredentialJson: String =
+  singleAuthJdbcApp.output.files["app/generated/atlan-connectors-jdbc-single-auth-test.json"].text
+local singleAuthCredential = new json.Parser { useMapping = true }.parse(singleAuthCredentialJson)
+
+local nativeSingleAuthCredentialJson: String =
+  nativeSingleAuthJdbcApp.output.files["atlan-connectors-native-jdbc-single-auth-test.json"].text
+local nativeSingleAuthCredential = new json.Parser { useMapping = true }.parse(nativeSingleAuthCredentialJson)
+
+local credentialProperties = credential["config"]["properties"]
+local singleAuthProperties = singleAuthCredential["config"]["properties"]
+local nativeSingleAuthProperties = nativeSingleAuthCredential["config"]["properties"]
 
 facts {
   ["JDBC-URL credential configmap contains AdvancedJDBCUrlGroup and connectBy"] {
@@ -94,19 +225,28 @@ facts {
   }
 
   ["Top-level auth panes emitted as hidden merge targets (HYP-1251)"] {
-    // Both auth panes must exist at the top level for agent widget merges
-    credentialJson.contains("\"basic\"")
-    credentialJson.contains("\"ldap\"")
-    // They must be hidden (visible versions live inside jdbcUrl.properties)
-    credentialJson.contains("\"hidden\": true")
-    credentialJson.contains("\"widget\": \"nested\"")
-    credentialJson.contains("\"nestedValue\": false")
+    credentialProperties["basic"]["ui"]["hidden"] == true
+    credentialProperties["ldap"]["ui"]["hidden"] == true
+    credentialProperties["basic"]["ui"]["widget"] == "nested"
+    credentialProperties["basic"]["ui"]["nestedValue"] == false
   }
 
   ["Auth panes also exist inside jdbcUrl.properties"] {
-    // The AdvancedJDBCUrlGroup widget renders from these nested versions
-    credentialJson.contains("\"auth-type\"")
-    credentialJson.contains("\"Username\"")
-    credentialJson.contains("\"Password\"")
+    credentialProperties["jdbcUrl"]["properties"]["basic"]["ui"]["hidden"] == true
+    credentialProperties["jdbcUrl"]["properties"]["ldap"]["ui"]["hidden"] == true
+    credentialProperties["jdbcUrl"]["properties"]["basic"]["properties"]["username"]["ui"]["label"] == "Username"
+    credentialProperties["jdbcUrl"]["properties"]["basic"]["properties"]["password"]["ui"]["label"] == "Password"
+  }
+
+  ["App.pkl single-auth JDBC exposes only the in-card auth pane"] {
+    singleAuthProperties["basic"]["ui"]["hidden"] == true
+    singleAuthProperties["jdbcUrl"]["properties"]["basic"]["ui"]["hidden"] == false
+    singleAuthProperties["jdbcUrl"]["properties"]["auth-type"]["ui"]["hidden"] == true
+  }
+
+  ["NativeApp.pkl single-auth JDBC exposes only the in-card auth pane"] {
+    nativeSingleAuthProperties["basic"]["ui"]["hidden"] == true
+    nativeSingleAuthProperties["jdbcUrl"]["properties"]["basic"]["ui"]["hidden"] == false
+    nativeSingleAuthProperties["jdbcUrl"]["properties"]["auth-type"]["ui"]["hidden"] == true
   }
 }

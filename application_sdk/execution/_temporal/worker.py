@@ -13,7 +13,6 @@ from datetime import timedelta
 from typing import TYPE_CHECKING
 
 from temporalio.client import Client
-from temporalio.common import VersioningBehavior
 from temporalio.worker import Interceptor as TemporalInterceptor
 from temporalio.worker import Worker, WorkerDeploymentConfig, WorkerDeploymentVersion
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
@@ -448,6 +447,9 @@ def create_worker(
     # Worker Deployment versioning — set by TWD controller via Kubernetes Downward API.
     # ATLAN_APP_BUILD_ID alone: legacy build-ID mode (build ID doubles as deployment name).
     # ATLAN_APP_BUILD_ID + ATLAN_APP_DEPLOYMENT_NAME: full Worker Deployment versioning.
+    # default_versioning_behavior defaults to PINNED; an app may opt into
+    # AUTO_UPGRADE via TEMPORAL_DEFAULT_VERSIONING_BEHAVIOR in its own deployment.
+    versioning_behavior = load_execution_settings().default_versioning_behavior
     deployment_config: WorkerDeploymentConfig | None = None
     if APP_BUILD_ID and APP_DEPLOYMENT_NAME:
         deployment_config = WorkerDeploymentConfig(
@@ -456,12 +458,13 @@ def create_worker(
                 build_id=APP_BUILD_ID,
             ),
             use_worker_versioning=True,
-            default_versioning_behavior=VersioningBehavior.PINNED,
+            default_versioning_behavior=versioning_behavior,
         )
         logger.info(
-            "Worker Deployment versioning enabled: deployment=%s build_id=%s",
+            "Worker Deployment versioning enabled: deployment=%s build_id=%s behavior=%s",
             APP_DEPLOYMENT_NAME,
             APP_BUILD_ID,
+            versioning_behavior.name,
         )
     elif APP_BUILD_ID:
         deployment_config = WorkerDeploymentConfig(
@@ -470,9 +473,13 @@ def create_worker(
                 build_id=APP_BUILD_ID,
             ),
             use_worker_versioning=True,
-            default_versioning_behavior=VersioningBehavior.PINNED,
+            default_versioning_behavior=versioning_behavior,
         )
-        logger.info("Worker versioning enabled: build_id=%s", APP_BUILD_ID)
+        logger.info(
+            "Worker versioning enabled: build_id=%s behavior=%s",
+            APP_BUILD_ID,
+            versioning_behavior.name,
+        )
 
     worker_kwargs: dict = dict(
         task_queue=task_queue,

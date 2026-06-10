@@ -6,6 +6,12 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.11.1] - 2026-06-08
+
+### Bug fixes
+
+- hide JDBC merge-target auth panes (#2014) ([c290a98](https://github.com/atlanhq/application-sdk/commit/c290a98))
+
 ## [0.11.0] - 2026-06-05
 
 ### Features

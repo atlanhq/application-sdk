@@ -1,0 +1,64 @@
+name: Sync PklProject.deps.json for Renovate (Reusable)
+
+# Reusable merge gate for Renovate (and Dependabot) upgrade PRs.
+# When Renovate bumps the @<version> URI in contract/PklProject, the committed
+# PklProject.deps.json lock file is stale. This workflow re-resolves it so the
+# PR is self-contained and CI passes without a manual `pkl project resolve` step.
+#
+# Consumer repos call this from their own .github/workflows/renovate-pkl-sync.yaml:
+#
+#   on:
+#     push:
+#       branches: ['renovate/**']
+#       paths: ['contract/PklProject']
+#   permissions:
+#     contents: write
+#   jobs:
+#     sync:
+#       uses: atlanhq/application-sdk/.github/workflows/renovate-pkl-sync.yaml@main
+#
+# The GITHUB_TOKEN in the called workflow inherits the caller's contents:write
+# permission, which is enough to commit and push to the renovate/** branch.
+
+on:
+  workflow_call:
+    inputs:
+      pkl-version:
+        description: Pkl toolchain version to use.
+        required: false
+        default: "0.27.2"
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  sync-pkl-deps:
+    name: Re-resolve PklProject.deps.json
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.ref }}
+
+      - name: Install pkl
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/pkl \
+            "https://github.com/apple/pkl/releases/download/${{ inputs.pkl-version }}/pkl-linux-amd64"
+          chmod +x /tmp/pkl
+          sudo mv /tmp/pkl /usr/local/bin/pkl
+
+      - name: Re-resolve PklProject.deps.json
+        run: pkl project resolve contract/
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet contract/PklProject.deps.json; then
+            git add contract/PklProject.deps.json
+            git commit -m "chore: sync PklProject.deps.json with updated app-contract-toolkit"
+            git push
+          fi

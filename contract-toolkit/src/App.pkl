@@ -1587,6 +1587,11 @@ local function renderJdbcAuthOption(opt: AuthOption): Mapping<String, Any> = new
   }
 }
 
+local function renderJdbcAuthMergeTargetOption(opt: AuthOption): Mapping<String, Any> =
+  let (auth = renderJdbcAuthOption(opt).toMap())
+  let (ui = (auth["ui"] as Mapping<String, Any>).toMap())
+  auth.put("ui", ui.put("hidden", true).toMapping()).toMapping()
+
 local extractionNamespaces: Map<String, String> = Map(
   "direct", "credential-guid",
   "agent", "agent-json"
@@ -1959,8 +1964,10 @@ local function generateCredentialConfig(): Mapping<String, Any> =
       when (credentialUrlGroup != null && credentialAuthOptions != null) {
         ["connectBy"] = renderConnectByRadio(credentialUrlGroup!!)
         ["jdbcUrl"] = renderJdbcUrlField(credentialUrlGroup!!, credentialAuthOptions!!)
+        // Top-level copies are agent merge targets only. The visible JDBC auth
+        // panes live inside jdbcUrl.properties.
         for (k, opt in credentialAuthOptions!!) {
-          [k] = renderJdbcAuthOption(opt)
+          [k] = renderJdbcAuthMergeTargetOption(opt)
         }
       }
       when (credentialUrlGroup == null && credentialAuthOptions != null) {
