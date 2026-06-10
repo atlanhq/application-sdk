@@ -504,8 +504,10 @@ async def _create_infrastructure(
             wait_for_dapr_sidecar,
         )
         from application_sdk.storage import (  # noqa: PLC0415 — cold path: storage init only when binding YAML present
-            create_store_from_binding,
-            create_store_from_binding_optional,
+            create_store_from_binding_with_put_attrs,
+        )
+        from application_sdk.storage.binding import (  # noqa: PLC0415 — cold path: private helper used only inside _create_infrastructure
+            _create_store_from_binding_optional_with_put_attrs,
         )
 
         await wait_for_dapr_sidecar()
@@ -514,26 +516,26 @@ async def _create_infrastructure(
         registered_components = await _log_dapr_components(dapr_client, components_dir)
         logger.info("Dapr sidecar detected — using Dapr infrastructure")
 
-        upstream_storage = create_store_from_binding_optional(
-            UPSTREAM_OBJECT_STORE_NAME,
-            components_dir=components_dir,
-        )
-        if upstream_storage is None:
-            logger.warning(
-                "No Dapr component named '%s' found; App.upload/download will use "
-                "the deployment store. Configure this binding in SDR deployments to "
-                "route to the upstream bucket.",
+        upstream_storage, upstream_put_attrs = (
+            _create_store_from_binding_optional_with_put_attrs(
                 UPSTREAM_OBJECT_STORE_NAME,
+                components_dir=components_dir,
             )
+        )
 
+        deployment_store, deployment_put_attrs = (
+            create_store_from_binding_with_put_attrs(
+                DEPLOYMENT_OBJECT_STORE_NAME,
+                components_dir=components_dir,
+            )
+        )
         return InfrastructureContext(
             state_store=DaprStateStore(dapr_client, store_name=STATE_STORE_NAME),
             secret_store=DaprSecretStore(dapr_client, store_name=SECRET_STORE_NAME),
-            storage=create_store_from_binding(
-                DEPLOYMENT_OBJECT_STORE_NAME,
-                components_dir=components_dir,
-            ),
+            storage=deployment_store,
+            storage_put_attributes=deployment_put_attrs,
             upstream_storage=upstream_storage,
+            upstream_storage_put_attributes=upstream_put_attrs,
             event_binding=(
                 DaprBinding(dapr_client, EVENT_STORE_NAME)
                 if EVENT_STORE_NAME in registered_components

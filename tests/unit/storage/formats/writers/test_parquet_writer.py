@@ -748,6 +748,49 @@ class TestParquetFileWriterWriteDaftDataframe:
         with pytest.raises(Exception, match="Count rows error"):
             await parquet_output._write_daft_dataframe(mock_df)
 
+    @pytest.mark.asyncio
+    async def test_write_empty_micropartition_swallowed(
+        self, base_output_path: str
+    ) -> None:
+        """count_rows() raising DaftCoreException with "MicroPartition" in the
+        message must be treated as an empty DataFrame — early return, no write."""
+        from daft.exceptions import DaftCoreException
+
+        mock_df = MagicMock()
+        mock_df.count_rows.side_effect = DaftCoreException(
+            "DaftError::ValueError Need at least 1 MicroPartition to perform concat"
+        )
+
+        parquet_output = ParquetFileWriter(
+            path=base_output_path,
+            dataframe_type=DataframeType.daft,
+        )
+
+        await parquet_output._write_daft_dataframe(mock_df)
+
+        mock_df.write_parquet.assert_not_called()
+        assert parquet_output.chunk_count == 0
+        assert parquet_output.total_record_count == 0
+
+    @pytest.mark.asyncio
+    async def test_write_non_micropartition_daft_exception_propagates(
+        self, base_output_path: str
+    ) -> None:
+        """A DaftCoreException whose message does NOT contain "MicroPartition"
+        must propagate — the writer only swallows the empty-concat variant."""
+        from daft.exceptions import DaftCoreException
+
+        mock_df = MagicMock()
+        mock_df.count_rows.side_effect = DaftCoreException("some other daft failure")
+
+        parquet_output = ParquetFileWriter(
+            path=base_output_path,
+            dataframe_type=DataframeType.daft,
+        )
+
+        with pytest.raises(DaftCoreException, match="some other daft failure"):
+            await parquet_output._write_daft_dataframe(mock_df)
+
 
 class TestParquetFileWriterMetrics:
     """Test ParquetFileWriter metrics recording."""

@@ -1,0 +1,85 @@
+# Prune Dashboard Repo — one-shot S3 cleanup for retired/renamed repos.
+#
+# Use when a repo is being removed from the central security dashboard
+# (k.atlan.dev/security-dashboard/). Triggered manually via workflow_dispatch
+# with the repo's dashboard slug (e.g. atlanhq_atlan-mongodb-app).
+#
+# Removes:
+#   s3://kryptonite-store/security-dashboard/repos/<slug>.json
+#   s3://kryptonite-store/security-dashboard/history/<slug>.jsonl
+# Then rebuilds repos.json (the manifest) from the live S3 listing so the
+# dashboard immediately stops surfacing the pruned repo.
+#
+# Usage:
+#   gh workflow run prune-dashboard-repo.yaml \
+#     -f repo_slug=atlanhq_atlan-mongodb-app
+#
+name: Prune Dashboard Repo
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo_slug:
+        description: "Dashboard slug to remove (e.g. atlanhq_atlan-mongodb-app)"
+        required: true
+        type: string
+      dashboard_path:
+        description: "S3 prefix under kryptonite-store"
+        required: false
+        type: string
+        default: "security-dashboard"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  prune:
+    name: Prune
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate slug
+        env:
+          SLUG: ${{ inputs.repo_slug }}
+        run: |
+          # Slug travels straight into an `aws s3 rm` URI, so reject anything
+          # outside [A-Za-z0-9._-] to prevent accidental path traversal /
+          # wildcards that could remove unintended objects.
+          if ! printf '%s' "$SLUG" | grep -Eq '^[A-Za-z0-9._-]+$'; then
+            echo "::error::Invalid slug: $SLUG (must be ^[A-Za-z0-9._-]+$)"
+            exit 1
+          fi
+          echo "Pruning slug: $SLUG"
+
+      - name: Setup AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ap-south-1
+          role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess
+
+      - name: Delete per-repo data + history
+        env:
+          SLUG: ${{ inputs.repo_slug }}
+          PREFIX: ${{ inputs.dashboard_path }}
+        run: |
+          REPO_KEY="s3://kryptonite-store/${PREFIX}/repos/${SLUG}.json"
+          HIST_KEY="s3://kryptonite-store/${PREFIX}/history/${SLUG}.jsonl"
+          echo "Removing: $REPO_KEY"
+          aws s3 rm "$REPO_KEY" || echo "(repo JSON was not present)"
+          echo "Removing: $HIST_KEY"
+          aws s3 rm "$HIST_KEY" || echo "(history JSONL was not present)"
+
+      - name: Rebuild repos.json manifest
+        env:
+          PREFIX: ${{ inputs.dashboard_path }}
+        run: |
+          # Mirrors the same manifest-regeneration step used by the regular
+          # Update Dashboard workflow — keeps the dashboard's repo list in
+          # sync with what's actually under S3.
+          aws s3 ls "s3://kryptonite-store/${PREFIX}/repos/" \
+            | grep '\.json$' | awk '{print $4}' \
+            | python3 -c "import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))" \
+            > /tmp/repos.json
+          aws s3 cp /tmp/repos.json "s3://kryptonite-store/${PREFIX}/repos.json"
+          echo "Manifest rebuilt — $(python3 -c 'import json; print(len(json.load(open("/tmp/repos.json"))))') repos remain"

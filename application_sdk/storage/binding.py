@@ -9,8 +9,15 @@ Supports the following Dapr binding types:
 
 Dapr metadata fields that have no obstore equivalent are silently ignored:
   decodeBase64, encodeBase64 (S3/GCS/Azure — Dapr-layer payload transforms)
-  storageClass (S3), contentType (GCS)
+  contentType (GCS)
   publicAccessLevel, disableEntityManagement, getBlobRetryCount (Azure)
+
+``storageClass`` is applied as a per-request put attribute on every write via
+the infrastructure context, for all supported cloud backends:
+
+  S3    → ``Storage-Class: <value>``         (e.g. STANDARD_IA, GLACIER_IR)
+  Azure → ``x-ms-access-tier: <value>``      (e.g. Hot, Cool, Cold, Archive)
+  GCS   → ``X-Goog-Storage-Class: <value>``  (e.g. NEARLINE, COLDLINE, ARCHIVE)
 """
 
 from __future__ import annotations
@@ -20,6 +27,7 @@ import os
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +103,29 @@ def _nonempty(meta: dict[str, str], *keys: str) -> str:
 def _coerce_bool(value: str) -> bool:
     """Coerce a Dapr metadata bool string to Python bool (case-insensitive)."""
     return value.strip().lower() in {"true", "1", "yes"}
+
+
+def _endpoint_is_aws(endpoint: str) -> bool:
+    """Return True when *endpoint* points to real AWS (or the empty string).
+
+    Handles every scheme form an endpoint may carry:
+    * ``https://s3.amazonaws.com`` — standard AWS public endpoint
+    * ``http://...`` — e.g. LocalStack over plain HTTP
+    * scheme-less ``host:port`` — e.g. ``minio.local:9000``
+    * SDK-internal URI forms: ``s3://``, ``objectstore://``, ``adls://``
+
+    Any endpoint whose hostname ends in ``.amazonaws.com`` or
+    ``.amazonaws.com.cn`` is treated as AWS. An absent/empty endpoint means
+    the caller is relying on the default AWS credential chain — also AWS.
+    Everything else (MinIO, Ceph, R2, B2, GCS-S3-interop, custom CNAMEs) is
+    treated as non-AWS and obstore's default object-tagging will be disabled.
+    """
+    if not endpoint:
+        return True  # no custom endpoint → real AWS
+    # Ensure urlparse can extract the hostname regardless of scheme.
+    normalised = endpoint if "//" in endpoint else f"//{endpoint}"
+    host = (urlparse(normalised).hostname or "").rstrip(".")
+    return host.endswith((".amazonaws.com", ".amazonaws.com.cn"))
 
 
 def _resolve_metadata_value(item: dict) -> str:
@@ -194,10 +225,16 @@ def _build_s3_config(
     name: str,
     meta: dict[str, str],
     sdk_client_options: dict[str, object],
-) -> tuple[str, dict[str, str], dict[str, object], object]:
+) -> tuple[str, dict[str, str], dict[str, object], object, dict[str, str] | None]:
     """Translate S3 Dapr binding metadata into obstore S3Store constructor args.
 
-    Returns *(bucket, config, client_options, credential_provider)*.
+    Returns *(bucket, config, client_options, credential_provider, put_attributes)*.
+
+    *put_attributes* is a ``{"Storage-Class": "<class>"}`` dict when
+    ``storageClass`` is set in the binding metadata, or ``None`` otherwise.
+    The caller should propagate it to the infrastructure context so every
+    write through that store automatically receives the correct storage class
+    as an obstore put attribute (requires obstore ≥ 0.10.0).
     """
     from application_sdk.storage.errors import StorageConfigError  # noqa: PLC0415
 
@@ -208,8 +245,9 @@ def _build_s3_config(
 
     if _nonempty(meta, "region"):
         config["aws_region"] = meta["region"]
-    if _nonempty(meta, "endpoint"):
-        config["aws_endpoint"] = meta["endpoint"]
+    endpoint = _nonempty(meta, "endpoint")
+    if endpoint:
+        config["aws_endpoint"] = endpoint
         client_options["user_agent"] = "aws-sdk-go-v2 atlan-application-sdk"
     if _coerce_bool(meta.get("forcePathStyle", "")):
         config["aws_virtual_hosted_style_request"] = "false"
@@ -221,6 +259,37 @@ def _build_s3_config(
             "insecureSSL=true disables certificate verification for S3 binding '%s'",
             name,
         )
+
+    # --- Object tagging ---------------------------------------------------
+    # obstore sends x-amz-tagging by default; many S3-compatible stores (B2,
+    # R2, GCS-S3-interop) hard-reject the header.  Auto-disable it for any
+    # non-AWS endpoint.  An explicit disableTagging field always takes precedence.
+    if _nonempty(meta, "disableTagging"):
+        if _coerce_bool(meta["disableTagging"]):
+            config["aws_disable_tagging"] = "true"
+        elif not _endpoint_is_aws(endpoint):
+            _get_logger().warning(
+                "disableTagging=false on non-AWS endpoint '%s' — obstore will send "
+                "x-amz-tagging which many S3-compatible stores (B2, R2, GCS-interop) "
+                "reject; set disableTagging=true to suppress the header",
+                endpoint or "(none)",
+            )
+    elif not _endpoint_is_aws(endpoint):
+        config["aws_disable_tagging"] = "true"
+
+    # --- Optional pass-through overrides ----------------------------------
+    # These fields are new additions; absent fields leave the obstore default
+    # unchanged so existing customer configs are unaffected.
+    if _nonempty(meta, "conditionalPut"):
+        config["aws_conditional_put"] = meta["conditionalPut"]
+    if _nonempty(meta, "copyIfNotExists"):
+        config["aws_copy_if_not_exists"] = meta["copyIfNotExists"]
+    if _nonempty(meta, "checksumAlgorithm"):
+        config["aws_checksum_algorithm"] = meta["checksumAlgorithm"]
+    if _nonempty(meta, "serverSideEncryption"):
+        config["aws_server_side_encryption"] = meta["serverSideEncryption"]
+    if _nonempty(meta, "sseKmsKeyId"):
+        config["aws_sse_kms_key_id"] = meta["sseKmsKeyId"]
 
     if _nonempty(meta, "trustAnchorArn"):
         raise StorageConfigError(
@@ -263,17 +332,26 @@ def _build_s3_config(
         if _nonempty(meta, "sessionToken"):
             config["aws_session_token"] = meta["sessionToken"]
 
-    return bucket, config, client_options, credential_provider
+    # --- Storage class (obstore ≥ 0.10.0 put attribute) -------------------
+    storage_class = _nonempty(meta, "storageClass")
+    put_attributes: dict[str, str] | None = (
+        {"Storage-Class": storage_class} if storage_class else None
+    )
+
+    return bucket, config, client_options, credential_provider, put_attributes
 
 
 def _build_azure_config(
     name: str,
     meta: dict[str, str],
     sdk_client_options: dict[str, object],
-) -> tuple[str, dict[str, str], dict[str, object], object]:
+) -> tuple[str, dict[str, str], dict[str, object], object, dict[str, str] | None]:
     """Translate Azure Blob Dapr binding metadata into obstore AzureStore constructor args.
 
-    Returns *(container, config, client_options, credential_provider)*.
+    Returns *(container, config, client_options, credential_provider, put_attributes)*.
+
+    *put_attributes* is ``{"x-ms-access-tier": "<tier>"}`` when ``storageClass``
+    is set in the binding metadata, or ``None`` otherwise.
     """
     from application_sdk.storage.errors import StorageConfigError  # noqa: PLC0415
 
@@ -380,15 +458,30 @@ def _build_azure_config(
     if _nonempty(meta, "msiResourceId"):
         az_config["azure_storage_msi_resource_id"] = meta["msiResourceId"]
 
-    return container, az_config, az_client_options, az_credential_provider
+    # --- Storage class (Azure access tier) ------------------------------------
+    storage_class = _nonempty(meta, "storageClass")
+    put_attributes: dict[str, str] | None = (
+        {"x-ms-access-tier": storage_class} if storage_class else None
+    )
+
+    return (
+        container,
+        az_config,
+        az_client_options,
+        az_credential_provider,
+        put_attributes,
+    )
 
 
 def _build_gcs_config(
     meta: dict[str, str],
-) -> tuple[str, dict[str, str]]:
+) -> tuple[str, dict[str, str], dict[str, str] | None]:
     """Translate GCS Dapr binding metadata into obstore GCSStore constructor args.
 
-    Returns *(bucket, config)*.
+    Returns *(bucket, config, put_attributes)*.
+
+    *put_attributes* is ``{"X-Goog-Storage-Class": "<class>"}`` when ``storageClass``
+    is set in the binding metadata, or ``None`` otherwise.
     """
     import orjson  # noqa: PLC0415 — defensive: keep inline
 
@@ -411,50 +504,45 @@ def _build_gcs_config(
             sa_data["private_key"] = sa_data["private_key"].replace("\\n", "\n")
         gcs_config["google_service_account_key"] = orjson.dumps(sa_data).decode()
 
-    return bucket, gcs_config
+    # --- Storage class --------------------------------------------------------
+    storage_class = _nonempty(meta, "storageClass")
+    put_attributes: dict[str, str] | None = (
+        {"X-Goog-Storage-Class": storage_class} if storage_class else None
+    )
+
+    return bucket, gcs_config, put_attributes
 
 
-def create_store_from_binding(
+def create_store_from_binding_with_put_attrs(
     name: str,
     *,
     components_dir: Path | str = Path("./components"),
-) -> ObjectStore:
-    """Create an obstore store from a Dapr component binding YAML file.
+) -> tuple[ObjectStore, dict[str, str] | None]:
+    """Create an obstore store and any associated put attributes from a Dapr binding.
 
-    Scans all ``*.yaml`` files in *components_dir* for a ``Component``
-    whose ``metadata.name`` matches *name*, then creates the appropriate
-    store based on ``spec.type``.
+    Like :func:`create_store_from_binding` but also returns a put-attributes
+    dict (e.g. ``{"Storage-Class": "STANDARD_IA"}``) that should be applied to
+    every write through the returned store.  Returns ``(store, None)`` when no
+    binding-level put attributes are configured.
 
-    Supported auth modes by store type:
+    Use this in infrastructure-setup code (``main.py``) when you want to
+    honour ``storageClass`` and similar per-write attributes without threading
+    them through every call site.
+    """
+    store, put_attrs = _create_store_core(name, components_dir=components_dir)
+    return store, put_attrs
 
-    **S3** (``bindings.aws.s3`` / ``bindings.s3``):
-    - Static access key: ``accessKey`` + ``secretKey`` (+ optional ``sessionToken``)
-    - AssumeRole via STS: ``assumeRoleArn`` (+ ``sessionName``)
-    - EC2 instance profile / IRSA / env vars: omit all credential fields
 
-    **Azure Blob** (``bindings.azure.blobstorage``):
-    - Account key: ``accountKey``
-    - SAS token: ``sasToken`` / ``sasKey``
-    - Service principal: ``azureTenantId`` + ``azureClientId`` + ``azureClientSecret``
-    - AKS Workload Identity: ``azureTenantId`` + ``azureClientId`` (AZURE_FEDERATED_TOKEN_FILE injected by webhook)
-    - User-assigned managed identity: ``azureClientId`` only
-    - Certificate-based SP: ``azureCertificateFile`` or ``azureCertificate`` + ``azureTenantId`` + ``azureClientId``
-    - System-assigned managed identity / DefaultAzureCredential: omit all credential fields
+def _create_store_core(
+    name: str,
+    *,
+    components_dir: Path | str = Path("./components"),
+) -> tuple[ObjectStore, dict[str, str] | None]:
+    """Core implementation shared by the public binding-creation functions.
 
-    **GCS** (``bindings.gcp.bucket`` / ``bindings.gcs``):
-    - Inline SA key: any of the SA JSON fields that include ``private_key`` or ``private_key_id``
-    - ADC / Workload Identity: ``bucket`` + ``project_id`` only (no private_key)
-
-    Args:
-        name: The Dapr component name (e.g. ``"objectstore"``).
-        components_dir: Directory containing Dapr component YAML files.
-
-    Returns:
-        A configured obstore store instance.
-
-    Raises:
-        StorageConfigError: If no matching component is found, the
-            binding type is not supported, or a required option is invalid.
+    Returns *(store, put_attributes)* where *put_attributes* is a dict of
+    obstore put-option overrides (e.g. ``{"Storage-Class": "STANDARD_IA"}``)
+    to apply on every write, or ``None`` when no overrides are needed.
     """
     import yaml  # noqa: PLC0415 — defensive: keep inline
 
@@ -522,7 +610,7 @@ def create_store_from_binding(
             create_local_store,
         )
 
-        return create_local_store(root_path)
+        return create_local_store(root_path), None
 
     # BLDX-1155: every store gets the SDK-default ClientConfig + RetryConfig so
     # timeouts and pool sizes are sized for GB-class transfers.  Store creation
@@ -538,37 +626,86 @@ def create_store_from_binding(
     sdk_client_options = obstore_client_options()
 
     if store_kind == "s3":
-        bucket, config, client_options, credential_provider = _build_s3_config(
-            name, meta, sdk_client_options
+        bucket, config, client_options, credential_provider, put_attrs = (
+            _build_s3_config(name, meta, sdk_client_options)
         )
-        return make_s3_store(
+        store = make_s3_store(
             bucket,
             config if config else None,
             client_options=client_options,
             credential_provider=credential_provider,
         )
+        return store, put_attrs
 
     if store_kind == "azure":
-        container, az_config, az_client_options, az_credential_provider = (
+        container, az_config, az_client_options, az_credential_provider, put_attrs = (
             _build_azure_config(name, meta, sdk_client_options)
         )
-        return make_azure_store(
+        store = make_azure_store(
             container,
             az_config if az_config else None,
             client_options=az_client_options,
             credential_provider=az_credential_provider,
         )
+        return store, put_attrs
 
     if store_kind == "gcs":
-        bucket, gcs_config = _build_gcs_config(meta)
-        return make_gcs_store(
+        bucket, gcs_config, put_attrs = _build_gcs_config(meta)
+        store = make_gcs_store(
             bucket,
             # Pass ``None`` (not {}) so obstore uses Application Default Credentials.
             gcs_config if gcs_config else None,
             client_options=sdk_client_options,
         )
+        return store, put_attrs
 
     raise StorageConfigError(f"Store kind not implemented: {store_kind!r}")
+
+
+def create_store_from_binding(
+    name: str,
+    *,
+    components_dir: Path | str = Path("./components"),
+) -> ObjectStore:
+    """Create an obstore store from a Dapr component binding YAML file.
+
+    Scans all ``*.yaml`` files in *components_dir* for a ``Component``
+    whose ``metadata.name`` matches *name*, then creates the appropriate
+    store based on ``spec.type``.
+
+    Supported auth modes by store type:
+
+    **S3** (``bindings.aws.s3`` / ``bindings.s3``):
+    - Static access key: ``accessKey`` + ``secretKey`` (+ optional ``sessionToken``)
+    - AssumeRole via STS: ``assumeRoleArn`` (+ ``sessionName``)
+    - EC2 instance profile / IRSA / env vars: omit all credential fields
+
+    **Azure Blob** (``bindings.azure.blobstorage``):
+    - Account key: ``accountKey``
+    - SAS token: ``sasToken`` / ``sasKey``
+    - Service principal: ``azureTenantId`` + ``azureClientId`` + ``azureClientSecret``
+    - AKS Workload Identity: ``azureTenantId`` + ``azureClientId`` (AZURE_FEDERATED_TOKEN_FILE injected by webhook)
+    - User-assigned managed identity: ``azureClientId`` only
+    - Certificate-based SP: ``azureCertificateFile`` or ``azureCertificate`` + ``azureTenantId`` + ``azureClientId``
+    - System-assigned managed identity / DefaultAzureCredential: omit all credential fields
+
+    **GCS** (``bindings.gcp.bucket`` / ``bindings.gcs``):
+    - Inline SA key: any of the SA JSON fields that include ``private_key`` or ``private_key_id``
+    - ADC / Workload Identity: ``bucket`` + ``project_id`` only (no private_key)
+
+    Args:
+        name: The Dapr component name (e.g. ``"objectstore"``).
+        components_dir: Directory containing Dapr component YAML files.
+
+    Returns:
+        A configured obstore store instance.
+
+    Raises:
+        StorageConfigError: If no matching component is found, the
+            binding type is not supported, or a required option is invalid.
+    """
+    store, _ = _create_store_core(name, components_dir=components_dir)
+    return store
 
 
 def create_store_from_binding_optional(
@@ -616,3 +753,57 @@ def create_store_from_binding_optional(
             ", ".join(exc.broken_fields or []),
         )
         return None
+
+
+def _create_store_from_binding_optional_with_put_attrs(
+    name: str,
+    *,
+    components_dir: Path | str = Path("./components"),
+) -> tuple[ObjectStore, dict[str, str] | None] | tuple[None, None]:
+    """Create an obstore store and put attributes from a Dapr binding, or ``(None, None)`` if absent.
+
+    Internal helper for infrastructure-wiring code (``main.py``).
+
+    A missing component logs at INFO (absent is the normal non-SDR path).
+    A broken component (template placeholders, unresolvable secretKeyRef) logs
+    at WARNING and is treated as absent.
+
+    Args:
+        name: The Dapr component name (e.g. ``"atlan-objectstore"``).
+        components_dir: Directory containing Dapr component YAML files.
+
+    Returns:
+        ``(store, put_attributes)`` on success, or ``(None, None)`` if the
+        component is absent or has unresolvable configuration.
+
+    Raises:
+        StorageConfigError: If the component exists but is genuinely
+            misconfigured (unsupported binding type, missing required options,
+            etc.).  Broken components are treated as absent and return
+            ``(None, None)`` with a warning instead of raising.
+    """
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        StorageBindingBrokenError,
+        StorageBindingNotFoundError,
+    )
+
+    try:
+        return create_store_from_binding_with_put_attrs(
+            name, components_dir=components_dir
+        )
+    except StorageBindingNotFoundError:
+        _get_logger().info(
+            "No Dapr component named '%s' found — App.upload/download will use "
+            "the deployment store. Configure this binding in SDR deployments to "
+            "route to the upstream bucket.",
+            name,
+        )
+        return None, None
+    except StorageBindingBrokenError as exc:
+        _get_logger().warning(
+            "Dapr component '%s' has unresolvable configuration "
+            "(broken fields: %s) — treating as absent",
+            name,
+            ", ".join(exc.broken_fields or []),
+        )
+        return None, None

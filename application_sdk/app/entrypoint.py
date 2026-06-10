@@ -127,6 +127,24 @@ def _method_name_to_kebab(name: str) -> str:
     return name.replace("_", "-")
 
 
+def entrypoint_module_segment(name: str) -> str:
+    """Convert a kebab-case entry-point name to its Python module segment.
+
+    Entry-point names are kebab-case on the wire and on disk (the
+    ``app/generated/<name>/`` contract dirs and the ``connector`` identifier),
+    but each entry point's hand-written code lives under a snake_case package
+    (``app.<segment>.core`` / ``app.<segment>.handler``). This is the single
+    canonical kebab→snake conversion for entry-point names — entry-point
+    registration here and the per-entry-point handler dispatch in
+    :mod:`application_sdk.handler.service` both route through it.
+
+    Example::
+
+        entrypoint_module_segment("asset-export-advanced") → "asset_export_advanced"
+    """
+    return name.replace("-", "_")
+
+
 def _validate_entrypoint_signature(
     fn: Callable[..., Any],
 ) -> tuple[type[Input], type[Output]]:
@@ -260,7 +278,7 @@ def entrypoint(
         ep_name = name or _method_name_to_kebab(fn_name)
         # Validate custom name is a safe identifier (defense-in-depth: it becomes
         # part of a dynamically generated class name and a Temporal workflow name).
-        if name is not None and not ep_name.replace("-", "_").isidentifier():
+        if name is not None and not entrypoint_module_segment(ep_name).isidentifier():
             raise EntryPointContractError(
                 f"Entry point name '{ep_name}' is not a valid identifier. "
                 "Use only letters, digits, hyphens, and underscores."

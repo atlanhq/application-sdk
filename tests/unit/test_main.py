@@ -551,7 +551,10 @@ class TestCreateInfrastructureEventBinding:
             patch(f"{self._DAPR_CLIENT_MOD}.AsyncDaprClient"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprStateStore"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprSecretStore"),
-            patch(f"{self._STORAGE_MOD}.create_store_from_binding"),
+            patch(
+                f"{self._STORAGE_MOD}.create_store_from_binding_with_put_attrs",
+                return_value=(MagicMock(), None),
+            ),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprBinding") as mock_binding,
         ):
             infra = await _create_infrastructure()
@@ -575,7 +578,10 @@ class TestCreateInfrastructureEventBinding:
             patch(f"{self._DAPR_CLIENT_MOD}.AsyncDaprClient"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprStateStore"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprSecretStore"),
-            patch(f"{self._STORAGE_MOD}.create_store_from_binding"),
+            patch(
+                f"{self._STORAGE_MOD}.create_store_from_binding_with_put_attrs",
+                return_value=(MagicMock(), None),
+            ),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprBinding") as mock_binding,
         ):
             infra = await _create_infrastructure()
@@ -593,12 +599,18 @@ class TestCreateInfrastructureUpstreamStore:
     def _make_dapr_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
 
-    async def test_upstream_storage_none_when_component_absent(
+    async def test_upstream_storage_none_when_optional_helper_returns_none(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """upstream_storage is None in non-SDR deployments (no atlan-objectstore component)."""
+        """upstream_storage is None when the optional helper returns (None, None).
+
+        Whether that happens because the component is absent or broken is tested
+        in TestCreateStoreFromBindingOptionalWithPutAttrs; here we only verify
+        that _create_infrastructure surfaces (None, None) correctly.
+        """
         self._make_dapr_env(monkeypatch)
+        deployment_store = MagicMock()
 
         with (
             patch(
@@ -609,16 +621,19 @@ class TestCreateInfrastructureUpstreamStore:
             patch(f"{self._DAPR_CLIENT_MOD}.AsyncDaprClient"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprStateStore"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprSecretStore"),
-            patch(f"{self._STORAGE_MOD}.create_store_from_binding"),
             patch(
-                f"{self._STORAGE_MOD}.create_store_from_binding_optional",
-                return_value=None,
-            ) as mock_optional,
+                "application_sdk.storage.binding._create_store_from_binding_optional_with_put_attrs",
+                return_value=(None, None),
+            ),
+            patch(
+                f"{self._STORAGE_MOD}.create_store_from_binding_with_put_attrs",
+                return_value=(deployment_store, None),
+            ),
         ):
             infra = await _create_infrastructure()
 
         assert infra.upstream_storage is None
-        mock_optional.assert_called_once()
+        assert infra.upstream_storage_put_attributes is None
 
     async def test_upstream_storage_set_when_component_present(
         self,
@@ -627,6 +642,7 @@ class TestCreateInfrastructureUpstreamStore:
         """upstream_storage is a live store in SDR deployments (component present)."""
         self._make_dapr_env(monkeypatch)
         upstream_store = MagicMock()
+        deployment_store = MagicMock()
 
         with (
             patch(
@@ -637,11 +653,14 @@ class TestCreateInfrastructureUpstreamStore:
             patch(f"{self._DAPR_CLIENT_MOD}.AsyncDaprClient"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprStateStore"),
             patch(f"{self._DAPR_CLIENT_MOD}.DaprSecretStore"),
-            patch(f"{self._STORAGE_MOD}.create_store_from_binding") as mock_required,
             patch(
-                f"{self._STORAGE_MOD}.create_store_from_binding_optional",
-                return_value=upstream_store,
+                "application_sdk.storage.binding._create_store_from_binding_optional_with_put_attrs",
+                return_value=(upstream_store, None),
             ) as mock_optional,
+            patch(
+                f"{self._STORAGE_MOD}.create_store_from_binding_with_put_attrs",
+                return_value=(deployment_store, None),
+            ) as mock_binding,
             patch(
                 "application_sdk.constants.DEPLOYMENT_OBJECT_STORE_NAME",
                 "objectstore",
@@ -654,8 +673,9 @@ class TestCreateInfrastructureUpstreamStore:
             infra = await _create_infrastructure()
 
         assert infra.upstream_storage is upstream_store
-        mock_required.assert_called_once_with("objectstore", components_dir=ANY)
+        assert infra.storage is deployment_store
         mock_optional.assert_called_once_with("atlan-objectstore", components_dir=ANY)
+        mock_binding.assert_called_once_with("objectstore", components_dir=ANY)
 
 
 class TestInstallGracefulSignalHandlers:
@@ -1635,7 +1655,7 @@ class TestInlineImportSymbols:
             ("application_sdk.app.base", "_pascal_to_kebab"),
             ("application_sdk.observability.observability", "AtlanObservability"),
             ("application_sdk.server.health", "WorkerHealthServer"),
-            ("application_sdk.storage", "create_store_from_binding"),
+            ("application_sdk.storage", "create_store_from_binding_with_put_attrs"),
             ("application_sdk.storage.binding", "_parse_dapr_metadata"),
             ("application_sdk.constants", "DEPLOYMENT_OBJECT_STORE_NAME"),
             ("application_sdk.constants", "EVENT_STORE_NAME"),
