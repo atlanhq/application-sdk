@@ -159,3 +159,21 @@ class TestRegisterToolsFromRegistry:
         call_kwargs = mcp_server.server.tool.call_args.kwargs  # type: ignore[union-attr]
         assert call_kwargs["name"] == "my_custom_tool"
         assert call_kwargs["description"] == "My custom description"
+
+
+class TestRealFastMCPConstruction:
+    """Construct MCPServer against the *real* FastMCP (no mocking).
+
+    Regression guard: every other test in this module patches FastMCP, which
+    let a constructor-signature rename in fastmcp 3.x (``on_duplicate_tools``
+    → ``on_duplicate``) break the ENABLE_MCP runtime path without any CI
+    signal. This test fails loudly if the locked fastmcp version stops
+    accepting our constructor arguments.
+    """
+
+    def test_mcp_server_constructs_against_real_fastmcp(self) -> None:
+        fastmcp = pytest.importorskip("fastmcp")
+
+        server = MCPServer("regression-app", instructions="real construction")
+
+        assert isinstance(server.server, fastmcp.FastMCP)

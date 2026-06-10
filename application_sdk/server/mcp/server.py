@@ -6,8 +6,6 @@ activities marked with @mcp_tool decorators and mounts them on FastAPI
 using streamable HTTP transport.
 """
 
-from typing import Optional
-
 from fastmcp import FastMCP
 from fastmcp.server.http import StarletteWithLifespan
 
@@ -24,7 +22,7 @@ class MCPServer:
     and creates a FastMCP server that can be mounted on FastAPI.
     """
 
-    def __init__(self, application_name: str, instructions: Optional[str] = None):
+    def __init__(self, application_name: str, instructions: str | None = None):
         """
         Initialize the MCP server.
 
@@ -36,11 +34,13 @@ class MCPServer:
 
         self.logger = get_logger(__name__)
 
-        # FastMCP Server
+        # FastMCP Server. ``on_duplicate`` (renamed from ``on_duplicate_tools``
+        # in fastmcp 3.x) errors on duplicate tool registration — a duplicate
+        # means two @mcp_tool tasks collided on a name.
         self.server = FastMCP(
             name=f"{application_name} MCP",
             instructions=instructions,
-            on_duplicate_tools="error",
+            on_duplicate="error",
         )
 
     async def register_tools_from_registry(self, app_name: str) -> None:
@@ -60,7 +60,7 @@ class MCPServer:
 
         tasks = TaskRegistry.get_instance().get_tasks_for_app(app_name)
         for task_meta in tasks:
-            mcp_metadata: Optional[MCPMetadata] = getattr(
+            mcp_metadata: MCPMetadata | None = getattr(
                 task_meta.func, MCP_METADATA_KEY, None
             )
             if not mcp_metadata:
