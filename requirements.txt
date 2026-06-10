@@ -260,7 +260,7 @@ pyatlan==9.7.4
     # via atlan-application-sdk
 pycparser==3.0 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy'
     # via cffi
-pydantic==2.12.5
+pydantic==2.13.4
     # via
     #   atlan-application-sdk
     #   fastapi
