@@ -2094,8 +2094,6 @@ def _make_temporalio_record(
     level: int = logging.ERROR,
     name: str = "temporalio.client.retry",
 ) -> logging.LogRecord:
-    import logging
-
     return logging.LogRecord(
         name=name,
         level=level,
