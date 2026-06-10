@@ -131,7 +131,7 @@ idna==3.18
     #   requests
     #   trustme
     #   yarl
-importlib-metadata==8.7.1
+importlib-metadata==8.9.0
     # via opentelemetry-api
 iniconfig==2.3.0
     # via pytest
