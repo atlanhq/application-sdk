@@ -15,7 +15,7 @@ The first classification fork is **"our dependency (bumpable) vs base image
 Mothership clones this repo into `/workspace/application-sdk` on `main` and
 runs you with a prompt that carries the run context (`TICKET`, `RUN_DATE`,
 `GHA_RUN_URL`). Follow `.mothership/vuln-triage/ORCHESTRATION.md` exactly. Do
-not skip stages. Print `[Stage N/7 complete]` after each stage.
+not skip stages. Print `[Stage N/6 complete]` after each stage.
 
 ## Critical Files to Read First
 

@@ -263,7 +263,7 @@ def build_description(
     visible_ids = "\n".join(f"- `{vid}`" for vid in new_ids)
     table = render_table(new_findings)
     marker = f"{VULN_MARKER_PREFIX}{','.join(all_today_ids)}{VULN_MARKER_SUFFIX}"
-    plural = "" if len(new_findings) == 1 else "ies"
+    plural = "y" if len(new_findings) == 1 else "ies"
     return f"""## Daily Security Scan — New Findings
 
 **Image:** `{target_image}`
