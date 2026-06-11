@@ -245,7 +245,7 @@ reportInvalidTypeForm = "warning"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-pythonpath = ["conformance"]
+pythonpath = [".", "conformance"]
 addopts = "-m 'not integration and not e2e and not s3_integration and not azure_integration and not gcs_integration'"
 markers = [
     "integration: tests requiring local Temporal server",
