@@ -190,6 +190,30 @@ class TestTaskMetadata:
         assert metadata is not None
         assert metadata.heartbeat_timeout_seconds is None
 
+    def test_task_schedule_to_start_disabled_by_default(self) -> None:
+        """schedule_to_start_timeout_seconds defaults to None (disabled)."""
+
+        class MyApp:
+            @task
+            async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.my_task)
+        assert metadata is not None
+        assert metadata.schedule_to_start_timeout_seconds is None
+
+    def test_task_custom_schedule_to_start(self) -> None:
+        """Explicit schedule_to_start_timeout_seconds is preserved."""
+
+        class MyApp:
+            @task(schedule_to_start_timeout_seconds=600)
+            async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.my_task)
+        assert metadata is not None
+        assert metadata.schedule_to_start_timeout_seconds == 600
+
 
 # =============================================================================
 # @task decorator - contract validation
@@ -413,3 +437,37 @@ class TestTaskEnvVarDefaults:
         monkeypatch.setenv("ATLAN_HEARTBEAT_TIMEOUT_SECONDS", "not-a-number")
         result = env_int("ATLAN_HEARTBEAT_TIMEOUT_SECONDS", 60)
         assert result == 60
+
+    def test_schedule_to_start_timeout_from_env_var(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ATLAN_SCHEDULE_TO_START_TIMEOUT_SECONDS sets the schedule-to-start default."""
+        monkeypatch.setattr(
+            self._task_module(), "_DEFAULT_SCHEDULE_TO_START_TIMEOUT_SECONDS", 600
+        )
+
+        class MyApp:
+            @task
+            async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.my_task)
+        assert metadata is not None
+        assert metadata.schedule_to_start_timeout_seconds == 600
+
+    def test_explicit_schedule_to_start_overrides_env_var(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Explicit schedule_to_start_timeout_seconds (incl. None) beats the env default."""
+        monkeypatch.setattr(
+            self._task_module(), "_DEFAULT_SCHEDULE_TO_START_TIMEOUT_SECONDS", 600
+        )
+
+        class MyApp:
+            @task(schedule_to_start_timeout_seconds=None)
+            async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.my_task)
+        assert metadata is not None
+        assert metadata.schedule_to_start_timeout_seconds is None

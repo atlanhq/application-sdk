@@ -922,6 +922,32 @@ class TestCreateTaskActivityWrapper:
             await wrapper(_BLDXInput())
         # When heartbeat is disabled the kwarg is None.
         assert exec_act.call_args.kwargs["heartbeat_timeout"] is None
+        # schedule_to_start is disabled by default.
+        assert exec_act.call_args.kwargs["schedule_to_start_timeout"] is None
+
+    @pytest.mark.asyncio
+    async def test_wrapper_passes_schedule_to_start_timeout(self) -> None:
+        from datetime import timedelta
+
+        wrapper = _create_task_activity_wrapper(
+            app_name="a",
+            task_name="t",
+            timeout_seconds=10,
+            retry_max_attempts=1,
+            retry_max_interval_seconds=1,
+            output_type=_BLDXOutput,
+            context_data={},
+            schedule_to_start_timeout_seconds=600,
+        )
+        with mock.patch(
+            "application_sdk.app.base.workflow.execute_activity",
+            new_callable=mock.AsyncMock,
+            return_value=_BLDXOutput(),
+        ) as exec_act:
+            await wrapper(_BLDXInput())
+        assert exec_act.call_args.kwargs["schedule_to_start_timeout"] == timedelta(
+            seconds=600
+        )
 
     @pytest.mark.asyncio
     async def test_wrapper_passes_explicit_retry_policy_through(self) -> None:
