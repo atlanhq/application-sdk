@@ -2545,7 +2545,10 @@ class AppInputContract(ExtractionInput):
   into generated connector contracts.
 - SDK-owned fields are skipped in the generated subclass so parent validators
   continue to apply. This includes `include_filter`, `exclude_filter`, and
-  `temp_table_regex`.
+  `temp_table_regex`. When `include-filter` or `exclude-filter` are object
+  widgets such as `APITree`, the SDK normalizes tree selections like
+  `{"catalog": {"db": {}}}` to the existing filter map shape
+  `{"catalog": ["db"]}` before validation.
 - Publish fields simplified: `publish_dry_run` replaces the loader-specific fields
 
 ---
