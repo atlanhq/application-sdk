@@ -42,6 +42,7 @@ consumable by any SQL, REST, NoSQL, or cloud-storage client whose
 from __future__ import annotations
 
 import hashlib
+import re
 import traceback
 from typing import TYPE_CHECKING, Any
 
@@ -236,9 +237,15 @@ async def _fetch_per_key_bundle(
             # Format the traceback ourselves, redact known secret patterns, and
             # additionally scrub the literal ref-key (which redact_secrets can't
             # know) so the topology stays hidden while diagnosis survives.
-            safe_traceback = redact_secrets(
-                "".join(traceback.format_exception(exc))
-            ).replace(value, f"sha256:{value_hash}")
+            # Bound the ref-key match to standalone tokens: a literal replace of
+            # a short key like "DB" would corrupt "DB_CONNECTION"; the
+            # lookarounds treat word chars and hyphens as identifier-continuation
+            # so only whole-token occurrences are scrubbed.
+            safe_traceback = re.sub(
+                rf"(?<![\w-]){re.escape(value)}(?![\w-])",
+                f"sha256:{value_hash}",
+                redact_secrets("".join(traceback.format_exception(exc))),
+            )
             logger.warning(
                 "single-key probe failed for ref-key sha256:%s — store error, "
                 "treating as non-secret. If this was a real credential "

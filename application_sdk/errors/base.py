@@ -34,11 +34,15 @@ _SECRET_PARAM_RE = re.compile(
 
 
 def redact_secrets(text: str) -> str:
-    """Redact URL userinfo and known secret query-params from arbitrary text.
+    """Redact URL userinfo and known secret query-params from a string.
 
     Use this when logging strings that may embed credentials but are not a
     single cause exception — e.g. a formatted traceback whose frames are worth
     keeping but whose driver messages embed connection-string passwords.
+
+    ``text`` must be a ``str`` — callers holding an exception or other object
+    should stringify first (the sibling :func:`sanitize_cause_repr` does this
+    for cause exceptions). Non-``str`` input raises ``TypeError`` via ``re``.
     """
     text = _URL_USERINFO_RE.sub(r"\1***@", text)
     text = _SECRET_PARAM_RE.sub(r"\1***", text)

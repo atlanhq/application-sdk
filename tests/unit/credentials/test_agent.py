@@ -582,6 +582,43 @@ class TestSingleKeyMode:
         assert "Traceback" in logged
         assert "PermissionError" in logged
 
+    async def test_short_ref_key_does_not_corrupt_unrelated_tokens(self) -> None:
+        """The ref-key scrub is token-bounded: a short key like ``DB`` must
+        hash its own standalone occurrences without mangling a larger
+        identifier (``DB_CONNECTION``) that merely contains it as a prefix.
+        """
+        from unittest.mock import patch
+
+        ref_key = "DB"
+
+        class OutageStore:
+            async def get_optional(self, name: str) -> str | None:
+                # Cause text mentions both the bare ref-key and an unrelated
+                # token that starts with it.
+                raise SecretStoreError(
+                    f"Failed to get secret: {name}",
+                    secret_name=name,
+                    cause=RuntimeError(
+                        f"timeout on {name} while reading DB_CONNECTION"
+                    ),
+                )
+
+        agent_json = json.dumps(
+            {
+                "agent-name": "test-agent",
+                "key-type": "single-key",
+                "auth-type": "basic",
+                "basic.username": ref_key,
+            }
+        )
+
+        with patch("application_sdk.credentials.agent.logger") as mock_logger:
+            await resolve_agent_json(agent_json, OutageStore())  # type: ignore[arg-type]
+
+        logged = " ".join(str(arg) for arg in mock_logger.warning.call_args.args)
+        # Unrelated identifier survives intact (not "sha256:..._CONNECTION").
+        assert "DB_CONNECTION" in logged
+
     async def test_walks_nested_extra_dict_one_level(self) -> None:
         """v2-style nested ``extra: {k: ref}`` is also probed."""
         store = _store_with(DB_NAME="real_db")
