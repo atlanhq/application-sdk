@@ -18,9 +18,12 @@ Deterministic rule-checking infrastructure for the Fleet Drift Remediator
 
 ## Not for production runtime
 
-This package is **conformance testing infrastructure**, not a production runtime
-dependency.  It ships with SDK releases so consumer apps automatically receive the
-latest rule set on upgrade, but it is never imported by `application_sdk`.
+This directory is **conformance testing infrastructure**, not a production runtime
+dependency, and is **not bundled into the published PyPI package** (`packages =
+["application_sdk"]` in `pyproject.toml`).  Consumer apps receive the latest rule
+set by sourcing this directory directly from the SDK repository — the reusable CI
+workflow sparse-checkouts `conformance/` at a given `sdk-ref` rather than
+installing the wheel.
 
 ## Quick start
 
