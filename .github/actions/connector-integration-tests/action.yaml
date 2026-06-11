@@ -135,7 +135,12 @@ runs:
     - name: Pin application-sdk to dispatched ref
       if: inputs.application-sdk-ref != ''
       shell: bash
-      run: uv add git+https://github.com/atlanhq/application-sdk --rev "${{ inputs.application-sdk-ref }}"
+      env:
+        SDK_REF: ${{ inputs.application-sdk-ref }}
+      run: |
+        chmod +x "${{ github.action_path }}/repin-application-sdk.sh"
+        "${{ github.action_path }}/repin-application-sdk.sh"
+        uv sync --all-extras --all-groups
 
     # SDK 3.13+ boots an embedded daprd + Temporal directly from
     # `python main.py` (application_sdk/dev/_dapr.py + _embedded.py), each
