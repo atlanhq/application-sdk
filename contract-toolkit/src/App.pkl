@@ -252,7 +252,7 @@ uiConfig: Widgets.UIConfig?
 /// Additional DAG nodes beyond the pipeline.
 /// If key "publish" is defined here, it replaces the auto-generated publish node.
 /// If key "notifications" is defined here, it replaces the auto-generated
-/// failure notification node.
+/// completion notification node.
 extraNodes: Mapping<String, DAGNode> = new Mapping {}
 
 /// Top-level on/off for app notifications.

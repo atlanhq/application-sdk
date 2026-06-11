@@ -368,7 +368,7 @@ to empty strings.
 
 To enable, set `notifications = true`. To retarget the alert (different
 `appName`/`taskQueue`/args), define `extraNodes["notifications"]`. See
-`tests/notify_on_failure_test.pkl` and `examples/full/app.pkl`.
+`tests/notifications_test.pkl` and `examples/full/app.pkl`.
 
 ---
 
