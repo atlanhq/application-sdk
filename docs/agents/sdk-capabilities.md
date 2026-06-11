@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.15.1
-source-sha:    0a490e9128563a2e1d1d688134bcc352ac800a87
-source-date:   2026-06-09T22:04:25+01:00
+sdk-version:   3.16.0
+source-sha:    ae6ede94d3fea98f2e5f3572ff03c897d29cfd56
+source-date:   2026-06-11T12:27:07+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -23,7 +23,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 9 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 51 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 53 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 10 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 34 |
@@ -1023,6 +1023,22 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Signature:** `class UnimplementedError(*, ...)`
 - **Summary:** Operation not supported or capability not yet built.
 - **Defined in:** `application_sdk/errors/leaves.py`
+
+### Functions
+
+#### `redact_secrets`
+
+- **Import:** `from application_sdk.errors import redact_secrets`
+- **Signature:** `redact_secrets(text: str)`
+- **Summary:** Redact URL userinfo and known secret query-params from arbitrary text.
+- **Defined in:** `application_sdk/errors/base.py`
+
+#### `sanitize_cause_repr`
+
+- **Import:** `from application_sdk.errors import sanitize_cause_repr`
+- **Signature:** `sanitize_cause_repr(exc: BaseException)`
+- **Summary:** Return a length-capped, secret-redacted string for a cause exception.
+- **Defined in:** `application_sdk/errors/base.py`
 
 ### Constants and Enums
 
