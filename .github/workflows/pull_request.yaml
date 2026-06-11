@@ -241,8 +241,14 @@ jobs:
       - name: Build matrix from PR labels
         id: set-matrix
         run: |
-          # Get the target branch of PR
+          # For pull_request, github.base_ref is the branch name (e.g. 'main').
+          # For merge_group, github.base_ref is empty; use the event's base_ref
+          # and strip the refs/heads/ prefix.
           TARGET_BRANCH="${{ github.base_ref }}"
+          if [[ -z "$TARGET_BRANCH" ]]; then
+            TARGET_BRANCH="${{ github.event.merge_group.base_ref }}"
+            TARGET_BRANCH="${TARGET_BRANCH#refs/heads/}"
+          fi
           # Default matrix if no label provided
           DEFAULT_MATRIX="{\"include\":[{\"repo_name\":\"atlan-openapi-app\",\"target_branch\":\"${TARGET_BRANCH}\"},{\"repo_name\":\"atlan-mysql-app\",\"target_branch\":\"${TARGET_BRANCH}\"},{\"repo_name\":\"atlan-metabase-app\",\"target_branch\":\"${TARGET_BRANCH}\"}]}"
 
@@ -328,7 +334,8 @@ jobs:
         (
           github.event_name == 'pull_request' &&
           contains(github.event.pull_request.labels.*.name, 'e2e') &&
-          github.event.pull_request.head.repo.fork != true
+          github.event.pull_request.head.repo.fork != true &&
+          github.event.pull_request.user.login != 'dependabot[bot]'
         )
       )
     runs-on: ubuntu-latest
