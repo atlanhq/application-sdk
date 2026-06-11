@@ -122,6 +122,19 @@ Is the package one of OUR dependencies (in uv.lock / pyproject.toml)?
           waiting on app-runtime-base being rebuilt.
 ```
 
+> **The two forks are orthogonal — "fix available" is NOT "we bump uv.lock".**
+> The `FixedVersion?` check lives only inside the *our-dependency* branch. The
+> base-image branch routes to **Case 4 regardless of fix availability**. A CVE
+> can have a fix *and* be a Case-4 base-image rebuild — e.g. **Dapr** ships in
+> `app-runtime-base:3`, not `uv.lock`, so a fixed Dapr CVE is Case 4 (rebuild),
+> never Case 1 (bump).
+>
+> The scan runs with `--ignore-unfixed` (daily-security-scan.yml), so today
+> **Cases 2/3 (our dep, no fix) do not fire** — those CVEs are filtered at scan
+> time. **Case 4 is fully reachable** and is the dominant non-Case-1 path. Keep
+> Cases 2/3 documented (they revive the moment `--ignore-unfixed` is dropped),
+> but do not mistake Case 4 for a dead branch and prune it.
+
 Print: `[Stage 3/6 complete] <c1> draft-PR, <c2> allowlist, <c3> alternative, <c4> base-image, <k> killed`
 
 ---
@@ -158,14 +171,14 @@ git checkout -b fix/bump-<pkg>-<version>-<cve-id> origin/main
 5. Link the draft PR on the ticket and tag Vaibhav/Chris to review + finalize.
    Do **not** comment `@sdk-review`, do **not** mark ready, do **not** merge.
 
-### 4b. Case 2 — recommend temporary allowlist (our dep, no fix, upstream alive)
+### 4b. Case 2 — recommend temporary allowlist (our dep, no fix, upstream alive) — _not reached while `--ignore-unfixed` is set_
 
 1. **Exposure analysis:** does the SDK actually exercise the vulnerable path?
    State the conclusion explicitly.
 2. Detail on the ticket: the proposed allowlist entry + the exposure analysis.
    **Do not commit it.** Tag Vaibhav/Chris for approval.
 
-### 4c. Case 3 — recommend an alternative (our dep, no fix, upstream dead)
+### 4c. Case 3 — recommend an alternative (our dep, no fix, upstream dead) — _not reached while `--ignore-unfixed` is set_
 
 Detail on the ticket: the package, why no bump is possible (upstream
 archived/unmaintained — link the evidence), and a proposed alternative
