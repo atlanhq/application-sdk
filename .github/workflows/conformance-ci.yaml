@@ -78,7 +78,14 @@ jobs:
             --series C \
             --output ci.sarif
 
-      - name: "Upload SARIF"
+      - name: "Upload SARIF artifact"
+        if: steps.changes.outputs.workflow == 'true' && !cancelled()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: conformance-ci-sarif
+          path: ci.sarif
+
+      - name: "Upload SARIF to Security tab"
         if: ${{ inputs.upload-sarif && steps.changes.outputs.workflow == 'true' }}
         uses: github/codeql-action/upload-sarif@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3
         with:
