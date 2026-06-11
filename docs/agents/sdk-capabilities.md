@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.15.1
-source-sha:    0a490e9128563a2e1d1d688134bcc352ac800a87
-source-date:   2026-06-09T22:04:25+01:00
+sdk-version:   3.16.0
+source-sha:    281849ccf28b0e9b3b6b458fe625a995c0759a9b
+source-date:   2026-06-10T11:48:16Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -25,7 +25,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 51 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 10 |
-| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
+| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 23 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 34 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
@@ -1453,6 +1453,13 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 - **Summary:** Output from the preflight_check handler operation.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
+#### `PreflightRuntimeContext`
+
+- **Import:** `from application_sdk.handler import PreflightRuntimeContext`
+- **Signature:** `class PreflightRuntimeContext`
+- **Summary:** Runtime context supplied by orchestrators for server-side preflight.
+- **Defined in:** `application_sdk/handler/contracts.py`
+
 #### `PreflightStatus`
 
 - **Import:** `from application_sdk.handler import PreflightStatus`
@@ -2512,6 +2519,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Summary:** Result of a single preflight check.
 - **Fields:**
   - `name: str` `= Field(..., min_length=1)` — Check name (e.g., 'connectivity', 'permissions').
+  - `title: str` `= ''` — Optional display title for the check.
   - `passed: bool` `= False` — Whether the check passed.
   - `message: str` `= ''` — Details about the check result.
   - `duration_ms: float` `= 0.0` — How long the check took in milliseconds.
@@ -2529,6 +2537,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `metadata: BaseMetadataConfig` `= Field(default_factory=BaseMetadataConfig)` — Form-level metadata forwarded by heracles alongside the credential.
   - `checks_to_run: list[str]` `= []` — Specific checks to run (empty = run all).
   - `timeout_seconds: int` `= 60` — Maximum seconds to wait for all checks.
+  - `runtime: PreflightRuntimeContext | None` — Optional runtime invocation context supplied by AE/Heracles.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `PreflightOutput`
@@ -2540,6 +2549,18 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `checks: list[PreflightCheck]` `= []` — Individual check results.
   - `message: str` `= ''` — Human-readable summary.
   - `total_duration_ms: float` `= 0.0` — Total time for all checks in milliseconds.
+- **Defined in:** `application_sdk/handler/contracts.py`
+
+#### `PreflightRuntimeContext`
+
+- **Import:** `from application_sdk.handler.contracts import PreflightRuntimeContext`
+- **Summary:** Runtime context supplied by orchestrators for server-side preflight.
+- **Fields:**
+  - `source: str` `= ''` — Caller surface, for example ``automation_engine_preflight``.
+  - `workflow_slug: str` `= ''` — Workflow slug for the current run.
+  - `workflow_run_guid: str` `= ''` — WorkflowRun GUID for the current run.
+  - `triggered_by: str` `= ''` — Trigger source such as manual, schedule, or event_watchdog.
+  - `entrypoint: str` `= ''` — App entrypoint being checked, when known.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `SqlMetadataObject`
