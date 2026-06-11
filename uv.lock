@@ -313,6 +313,11 @@ workflows = [
 ]
 
 [package.dev-dependencies]
+conformance = [
+    { name = "jsonschema" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
 dev = [
     { name = "boto3-stubs" },
     { name = "isort" },
@@ -396,6 +401,11 @@ requires-dist = [
 provides-extras = ["workflows", "sql", "daft", "storage", "incremental", "iam-auth", "azure", "distributed-lock", "mcp", "tests", "scale-data-generator", "sqlalchemy", "pandas"]
 
 [package.metadata.requires-dev]
+conformance = [
+    { name = "jsonschema", specifier = ">=4.23.0,<5.0.0" },
+    { name = "pytest", specifier = ">=8.3.3,<10.0.0" },
+    { name = "pytest-asyncio", specifier = ">=1.4.0,<2.0.0" },
+]
 dev = [
     { name = "boto3-stubs", specifier = ">=1.38.6,<2.0.0" },
     { name = "isort", specifier = ">=5.13.2,<6.0.0" },
