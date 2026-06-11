@@ -186,3 +186,6 @@ temporal.db
 
 # Claude Code runtime lock files
 .claude/scheduled_tasks.lock
+
+# Renovate setup
+renovate-config/README.md

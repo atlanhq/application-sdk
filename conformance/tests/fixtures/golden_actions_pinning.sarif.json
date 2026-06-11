@@ -1,0 +1,783 @@
+{
+  "version": "2.1.0",
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "atlan-conformance",
+          "version": "3.16.0",
+          "semanticVersion": "3.16.0",
+          "rules": [
+            {
+              "id": "P001",
+              "name": "BareExceptPass",
+              "shortDescription": {
+                "text": "Bare 'except: pass' silently discards every exception"
+              },
+              "fullDescription": {
+                "text": "A bare ``except: pass`` catches KeyboardInterrupt, SystemExit, and\nGeneratorExit and discards them with no trace.  This is the hardest class\nof bugs to debug.  Replace with a typed catch that at minimum logs the\nerror with ``exc_info=True``.  Never acceptable \u2014 even cleanup paths\nshould log at DEBUG.\n"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p001",
+              "defaultConfiguration": {
+                "level": "error",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "block",
+                "atlan/mechanism": "static",
+                "atlan/category": "silent-swallow",
+                "atlan/autofixable": false,
+                "atlan/orthogonalGate": "tests",
+                "atlan/since": "3.16.0"
+              }
+            },
+            {
+              "id": "P002",
+              "name": "TypedExceptPass",
+              "shortDescription": {
+                "text": "Typed 'except SomeError: pass' discards exception silently"
+              },
+              "fullDescription": {
+                "text": "A typed catch that still discards silently loses the stack trace entirely.\nAcceptable only for truly trivial best-effort operations where failure is\n100% expected AND the surrounding code handles the missing result, AND\nthere is a comment explaining the reasoning.\n"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p002",
+              "defaultConfiguration": {
+                "level": "error",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "block",
+                "atlan/mechanism": "static",
+                "atlan/category": "silent-swallow",
+                "atlan/autofixable": false,
+                "atlan/orthogonalGate": "tests",
+                "atlan/since": "3.16.0"
+              }
+            },
+            {
+              "id": "P003",
+              "name": "BroadContextlibSuppress",
+              "shortDescription": {
+                "text": "contextlib.suppress() \u2014 check whether scope is too broad"
+              },
+              "fullDescription": {
+                "text": "``contextlib.suppress(Exception)`` or ``suppress(BaseException)`` is HIGH\nseverity; narrow ``suppress(FileNotFoundError)`` on a cleanup path is\nacceptable.  The checker must inspect the suppressed exception type before\nclassifying.\n"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p003",
+              "defaultConfiguration": {
+                "level": "warning",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "warn",
+                "atlan/mechanism": "static",
+                "atlan/category": "silent-swallow",
+                "atlan/autofixable": false,
+                "atlan/orthogonalGate": "tests",
+                "atlan/since": "3.16.0"
+              }
+            },
+            {
+              "id": "P004",
+              "name": "BroadExceptClause",
+              "shortDescription": {
+                "text": "Overly broad 'except Exception/BaseException' without exc_info"
+              },
+              "fullDescription": {
+                "text": "Catches everything but the specific type is unknown.  HIGH severity when\nnot logged; MEDIUM when logged but missing ``exc_info=True``.  Acceptable\nonly at top-level handlers (worker loops, HTTP handlers) when properly\nlogged with ``exc_info=True``.\n"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p004",
+              "defaultConfiguration": {
+                "level": "warning",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "warn",
+                "atlan/mechanism": "static",
+                "atlan/category": "overly-broad-catch",
+                "atlan/autofixable": false,
+                "atlan/orthogonalGate": "tests",
+                "atlan/since": "3.16.0"
+              }
+            },
+            {
+              "id": "P005",
+              "name": "ExceptBlockMissingExcInfo",
+              "shortDescription": {
+                "text": "except block logs without exc_info=True \u2014 stack trace discarded"
+              },
+              "fullDescription": {
+                "text": "The message is logged but the stack trace is lost.  Add ``exc_info=True``\nto every ``logger.warning()`` / ``logger.error()`` call inside an except\nblock.  ``logger.exception()`` is exempt (it implies ``exc_info=True``).\n"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p005",
+              "defaultConfiguration": {
+                "level": "warning",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "warn",
+                "atlan/mechanism": "static",
+                "atlan/category": "missing-traceback",
+                "atlan/autofixable": true,
+                "atlan/orthogonalGate": "tests",
+                "atlan/since": "3.16.0"
+              }
+            },
+            {
+              "id": "P006",
+              "name": "BareExceptWithBody",
+              "shortDescription": {
+                "text": "Bare 'except:' (no type) \u2014 catches SystemExit and KeyboardInterrupt"
+              },
+              "fullDescription": {
+                "text": "Like P001 but the block may have a body.  Still catches KeyboardInterrupt\nand SystemExit.  Always specify at least ``except Exception:``.\n"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p006",
+              "defaultConfiguration": {
+                "level": "error",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "block",
+                "atlan/mechanism": "static",
+                "atlan/category": "silent-swallow",
+                "atlan/autofixable": false,
+                "atlan/orthogonalGate": "tests",
+                "atlan/since": "3.16.0"
+              }
+            },
+            {
+              "id": "P007",
+              "name": "ErrorToReturnValue",
+              "shortDescription": {
+                "text": "except block returns a value without logging \u2014 error hidden"
+              },
+              "fullDescription": {
+                "text": "Exception is converted to a return value (None, {}, [], False) with no\ntrace.  Callers see a wrong result with no idea why.  At minimum log\nbefore returning; prefer raising a domain-specific exception instead.\n"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p007",
+              "defaultConfiguration": {
+                "level": "warning",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "warn",
+                "atlan/mechanism": "static",
+                "atlan/category": "error-to-return-value",
+                "atlan/autofixable": false,
+                "atlan/orthogonalGate": "tests",
+                "atlan/since": "3.16.0"
+              }
+            },
+            {
+              "id": "P008",
+              "name": "ImportErrorWithoutLogging",
+              "shortDescription": {
+                "text": "except ImportError without logging \u2014 environment issues hidden"
+              },
+              "fullDescription": {
+                "text": "Optional-dependency guard.  Acceptable when the import is genuinely\noptional AND the fallback path is correct AND there is a comment.  Log at\nDEBUG if the module is preferred but not required.  Flag if the module is\nexpected to be present (will fail later with a confusing AttributeError).\n"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p008",
+              "defaultConfiguration": {
+                "level": "warning",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "warn",
+                "atlan/mechanism": "static",
+                "atlan/category": "optional-import",
+                "atlan/autofixable": false,
+                "atlan/orthogonalGate": "tests",
+                "atlan/since": "3.16.0"
+              }
+            },
+            {
+              "id": "P009",
+              "name": "ExceptBlockOnlyAssigns",
+              "shortDescription": {
+                "text": "except block only assigns a variable \u2014 error hidden with no log"
+              },
+              "fullDescription": {
+                "text": "Exception sets a flag or default value with no trace.  Combines P007's\nerror-hiding with no logging.  Add a ``logger.warning(..., exc_info=True)``\nbefore the assignment.\n"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p009",
+              "defaultConfiguration": {
+                "level": "warning",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "warn",
+                "atlan/mechanism": "static",
+                "atlan/category": "error-to-return-value",
+                "atlan/autofixable": false,
+                "atlan/orthogonalGate": "tests",
+                "atlan/since": "3.16.0"
+              }
+            },
+            {
+              "id": "P010",
+              "name": "AsyncioGatherExceptionsUnexamined",
+              "shortDescription": {
+                "text": "asyncio.gather(return_exceptions=True) results not checked for exceptions"
+              },
+              "fullDescription": {
+                "text": "``return_exceptions=True`` returns exception instances as values in the\nresult list.  If the list is not subsequently inspected for ``Exception``\ninstances, errors vanish silently.  The pattern is only a bug when results\nare not checked; ``return_exceptions=True`` itself is acceptable.\n"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p010",
+              "defaultConfiguration": {
+                "level": "warning",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "warn",
+                "atlan/mechanism": "static",
+                "atlan/category": "asyncio-unexamined",
+                "atlan/autofixable": false,
+                "atlan/orthogonalGate": "tests",
+                "atlan/since": "3.16.0"
+              }
+            },
+            {
+              "id": "P012",
+              "name": "UntypedBuiltinRaise",
+              "shortDescription": {
+                "text": "raise ValueError/RuntimeError/... where a typed AppError applies"
+              },
+              "fullDescription": {
+                "text": "SDK code raises a bare Python builtin.  The Automation Engine receives an\nopaque string \u2014 no category, code, audience, or retryable field.\nDashboards are blind; on-call routing is impossible.  Use the typed error\nleaf from ``application_sdk.errors``.  Acceptable only inside dataclass\n``__post_init__`` / stdlib validator methods where Python semantics require\n``TypeError``/``ValueError`` for stdlib interoperability.\n"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p012",
+              "defaultConfiguration": {
+                "level": "warning",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "warn",
+                "atlan/mechanism": "static",
+                "atlan/category": "untyped-raise",
+                "atlan/autofixable": false,
+                "atlan/orthogonalGate": "tests",
+                "atlan/since": "3.16.0"
+              }
+            },
+            {
+              "id": "P013",
+              "name": "LegacyAtlanErrorRaise",
+              "shortDescription": {
+                "text": "raise ClientError/ApiError/... (deprecated AtlanError stack)"
+              },
+              "fullDescription": {
+                "text": "``AtlanError`` and its subclasses emit a ``DeprecationWarning`` at\nconstruction time and reach AE as opaque strings.  They produce no typed\nwire envelope.  Scheduled for removal in v4.0.  Replace with the\nappropriate leaf from ``application_sdk.errors``.\n"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p013",
+              "defaultConfiguration": {
+                "level": "error",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "block",
+                "atlan/mechanism": "static",
+                "atlan/category": "legacy-raise",
+                "atlan/autofixable": false,
+                "atlan/orthogonalGate": "tests",
+                "atlan/since": "3.16.0"
+              }
+            },
+            {
+              "id": "L001",
+              "name": "FStringInLogMessage",
+              "shortDescription": {
+                "text": "f-string in log message \u2014 breaks log grouping and aggregation"
+              },
+              "fullDescription": {
+                "text": "Using an f-string creates a unique message string per call, breaking log\ngrouping and aggregation in Grafana/ClickHouse.  It also always evaluates\neagerly.  Rewrite as %-style message body: embed context directly in the\nformat string, do not move values to kwargs.\n"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l001",
+              "defaultConfiguration": {
+                "level": "error",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "block",
+                "atlan/mechanism": "static",
+                "atlan/category": "log-format",
+                "atlan/autofixable": true,
+                "atlan/orthogonalGate": "tests",
+                "atlan/since": "3.16.0"
+              }
+            },
+            {
+              "id": "L002",
+              "name": "InconsistentLoggerFactory",
+              "shortDescription": {
+                "text": "Logger factory inconsistent with project canonical factory"
+              },
+              "fullDescription": {
+                "text": "Mixing logger factories produces inconsistent log formats, loses structured\nfields, and breaks log correlation.  The checker discovers the canonical\nfactory (dominant by occurrence count) in Phase 1 and flags deviations.\n"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l002",
+              "defaultConfiguration": {
+                "level": "warning",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "warn",
+                "atlan/mechanism": "static",
+                "atlan/category": "log-format",
+                "atlan/autofixable": true,
+                "atlan/since": "3.16.0"
+              }
+            },
+            {
+              "id": "L003",
+              "name": "ExtraKwargsWrongFramework",
+              "shortDescription": {
+                "text": "extra={} used where framework expects direct kwargs (or vice versa)"
+              },
+              "fullDescription": {
+                "text": "Whether ``extra={}`` is correct depends on the logging framework.  For\nstructlog and loguru, ``extra={}`` is usually wrong \u2014 the data lands in an\nunindexed nested dict invisible to aggregation queries.  Framework-dependent\nclassification; the checker must detect the active framework first.\n"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l003",
+              "defaultConfiguration": {
+                "level": "warning",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "warn",
+                "atlan/mechanism": "static",
+                "atlan/category": "log-format",
+                "atlan/autofixable": false,
+                "atlan/since": "3.16.0"
+              }
+            },
+            {
+              "id": "L004",
+              "name": "ExceptBlockMissingExcInfoLog",
+              "shortDescription": {
+                "text": "logger.warning/error in except block without exc_info=True"
+              },
+              "fullDescription": {
+                "text": "Logging an exception without ``exc_info=True`` produces a message with no\nstack trace \u2014 the root cause is invisible.  Add ``exc_info=True`` to all\n``logger.warning()`` / ``logger.error()`` calls within an except block.\n``.exception()`` is exempt.\n"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l004",
+              "defaultConfiguration": {
+                "level": "error",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "block",
+                "atlan/mechanism": "static",
+                "atlan/category": "missing-traceback",
+                "atlan/autofixable": true,
+                "atlan/orthogonalGate": "tests",
+                "atlan/since": "3.16.0"
+              }
+            },
+            {
+              "id": "L005",
+              "name": "PrintInProductionCode",
+              "shortDescription": {
+                "text": "print() in production code \u2014 bypasses logging framework"
+              },
+              "fullDescription": {
+                "text": "``print()`` produces no level, no structured fields, no correlation IDs.\nIn production services, output may go to stdout unformatted, be lost, or\ninterleave with structured log lines.  Acceptable in CLI scripts, test/debug\nscripts, and ``if __name__ == \"__main__\":`` blocks.\n"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l005",
+              "defaultConfiguration": {
+                "level": "warning",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "warn",
+                "atlan/mechanism": "static",
+                "atlan/category": "log-format",
+                "atlan/autofixable": true,
+                "atlan/since": "3.16.0"
+              }
+            },
+            {
+              "id": "L006",
+              "name": "InfoInTightLoop",
+              "shortDescription": {
+                "text": "logger.info() inside a tight loop \u2014 generates excessive log volume"
+              },
+              "fullDescription": {
+                "text": "Per-item INFO logging in a large loop drowns meaningful signals and\ndegrades performance.  INFO is for lifecycle milestones, not per-item\nevents.  Use DEBUG per-item and INFO for the loop summary.  The checker\nshould inspect whether the loop is clearly bounded (\u226410 items) before\nflagging.\n"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l006",
+              "defaultConfiguration": {
+                "level": "warning",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "warn",
+                "atlan/mechanism": "static",
+                "atlan/category": "log-level",
+                "atlan/autofixable": false,
+                "atlan/since": "3.16.0"
+              }
+            },
+            {
+              "id": "L007",
+              "name": "LoggerCriticalUsage",
+              "shortDescription": {
+                "text": "logger.critical() \u2014 CRITICAL is not a meaningful level here"
+              },
+              "fullDescription": {
+                "text": "CRITICAL is not a meaningful level in distributed systems \u2014 every service\nfailure is \"critical\" from some perspective.  Use ERROR and handle severity\nthrough alerting rules on the observability platform.\n"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l007",
+              "defaultConfiguration": {
+                "level": "warning",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "warn",
+                "atlan/mechanism": "static",
+                "atlan/category": "log-level",
+                "atlan/autofixable": true,
+                "atlan/since": "3.16.0"
+              }
+            },
+            {
+              "id": "L008",
+              "name": "UnguardedExpensiveDebug",
+              "shortDescription": {
+                "text": "Expensive computation in logger.debug() argument \u2014 evaluates eagerly"
+              },
+              "fullDescription": {
+                "text": "Arguments to log calls are evaluated eagerly regardless of whether the\nlevel is enabled.  Guard expensive serialization / computation with\n``if logger.isEnabledFor(logging.DEBUG):``.\n"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l008",
+              "defaultConfiguration": {
+                "level": "warning",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "warn",
+                "atlan/mechanism": "static",
+                "atlan/category": "log-performance",
+                "atlan/autofixable": false,
+                "atlan/since": "3.16.0"
+              }
+            },
+            {
+              "id": "L009",
+              "name": "WarnThenRaiseDuplication",
+              "shortDescription": {
+                "text": "logger.warning/error immediately before raise \u2014 duplicate log records"
+              },
+              "fullDescription": {
+                "text": "Logging an error immediately before re-raising creates duplicate records in\nthe log stream, inflating error counts in dashboards.  Acceptable only\nwhen adding context not available to the caller.  Otherwise: just re-raise.\n"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l009",
+              "defaultConfiguration": {
+                "level": "warning",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "warn",
+                "atlan/mechanism": "static",
+                "atlan/category": "log-noise",
+                "atlan/autofixable": false,
+                "atlan/since": "3.16.0"
+              }
+            },
+            {
+              "id": "L010",
+              "name": "CredentialInLogOutput",
+              "shortDescription": {
+                "text": "Credential/secret value in log output \u2014 security vulnerability"
+              },
+              "fullDescription": {
+                "text": "Credentials in log output are a security vulnerability \u2014 logs are often\nstored in plaintext in log aggregation systems, accessible to more people\nthan the credential store.  Requires human security review before marking\nacceptable.  Logging a credential *name* is acceptable; logging a\ncredential *value* is CRITICAL.\n"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l010",
+              "defaultConfiguration": {
+                "level": "error",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "block",
+                "atlan/mechanism": "static",
+                "atlan/category": "security",
+                "atlan/autofixable": false,
+                "atlan/orthogonalGate": "tests",
+                "atlan/since": "3.16.0"
+              }
+            },
+            {
+              "id": "L011",
+              "name": "StringConcatenationInLog",
+              "shortDescription": {
+                "text": "String concatenation in log message \u2014 breaks log grouping"
+              },
+              "fullDescription": {
+                "text": "Like f-strings (L001), string concatenation embeds values into the message\nstring in a way that breaks log grouping.  Rewrite as %-style message body.\n"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l011",
+              "defaultConfiguration": {
+                "level": "error",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "block",
+                "atlan/mechanism": "static",
+                "atlan/category": "log-format",
+                "atlan/autofixable": true,
+                "atlan/since": "3.16.0"
+              }
+            },
+            {
+              "id": "L012",
+              "name": "PctStyleInNonStdlibLogger",
+              "shortDescription": {
+                "text": "%-style formatting in non-stdlib logger \u2014 silently produces wrong output"
+              },
+              "fullDescription": {
+                "text": "%-style is a stdlib feature.  In structlog, ``%s`` appears literally in\noutput.  In loguru (without a bridge adapter), the positional arg is\nsilently ignored.  Framework-dependent: ACCEPTABLE for stdlib, MEDIUM for\nstructlog, LOW-to-HIGH for loguru depending on whether a bridge adapter is\npresent.\n"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l012",
+              "defaultConfiguration": {
+                "level": "warning",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "warn",
+                "atlan/mechanism": "static",
+                "atlan/category": "log-format",
+                "atlan/autofixable": false,
+                "atlan/since": "3.16.0"
+              }
+            },
+            {
+              "id": "L013",
+              "name": "StdlibExtraReservedKeyCollision",
+              "shortDescription": {
+                "text": "extra={} key collides with stdlib LogRecord attribute \u2014 crashes caller"
+              },
+              "fullDescription": {
+                "text": "stdlib's ``Logger.makeRecord()`` raises ``KeyError`` if any key in\n``extra={}`` matches a ``LogRecord`` attribute.  This crash propagates\ndirectly to the caller \u2014 NOT caught by ``handleError()``.  The 22 forbidden\nkeys include: ``name``, ``message``, ``module``, ``args``, ``filename``,\n``process``, ``thread``.  Applies to stdlib only.\n"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l013",
+              "defaultConfiguration": {
+                "level": "error",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "block",
+                "atlan/mechanism": "static",
+                "atlan/category": "log-crash",
+                "atlan/autofixable": false,
+                "atlan/since": "3.16.0"
+              }
+            },
+            {
+              "id": "L014",
+              "name": "StdlibArbitraryKwargs",
+              "shortDescription": {
+                "text": "Arbitrary kwargs in stdlib logger \u2014 raises TypeError immediately"
+              },
+              "fullDescription": {
+                "text": "stdlib ``logger.info()`` only accepts ``exc_info``, ``extra``,\n``stack_info``, and ``stacklevel``.  Any other kwarg raises ``TypeError``\nand crashes the caller.  Very common when migrating from structlog/loguru.\nApplies to stdlib only.\n"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l014",
+              "defaultConfiguration": {
+                "level": "error",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "block",
+                "atlan/mechanism": "static",
+                "atlan/category": "log-crash",
+                "atlan/autofixable": true,
+                "atlan/since": "3.16.0"
+              }
+            },
+            {
+              "id": "L015",
+              "name": "StructlogEventKwargOverwrite",
+              "shortDescription": {
+                "text": "event= kwarg in structlog silently overwrites the log message"
+              },
+              "fullDescription": {
+                "text": "In structlog, the first positional argument is stored as the ``event`` key\n\u2014 it IS the log message.  Passing ``event=`` as a keyword argument silently\noverwrites the message with the domain value.  Rename the domain field to\navoid collision.  Applies to structlog only.\n"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l015",
+              "defaultConfiguration": {
+                "level": "warning",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "warn",
+                "atlan/mechanism": "static",
+                "atlan/category": "log-format",
+                "atlan/autofixable": false,
+                "atlan/since": "3.16.0"
+              }
+            },
+            {
+              "id": "L016",
+              "name": "DictConfigDisableExistingLoggers",
+              "shortDescription": {
+                "text": "dictConfig without disable_existing_loggers=False silently kills loggers"
+              },
+              "fullDescription": {
+                "text": "``logging.config.dictConfig()``'s ``disable_existing_loggers`` defaults to\n``True``, which silently disables all loggers created before the call.  This\nis the most common source of \"why is my logging not working?\".  Always set\n``\"disable_existing_loggers\": False``.  Applies to stdlib only.\n"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l016",
+              "defaultConfiguration": {
+                "level": "warning",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "warn",
+                "atlan/mechanism": "static",
+                "atlan/category": "log-config",
+                "atlan/autofixable": true,
+                "atlan/since": "3.16.0"
+              }
+            },
+            {
+              "id": "L017",
+              "name": "BasicConfigNoopAfterFirstCall",
+              "shortDescription": {
+                "text": "Multiple basicConfig() calls \u2014 second+ are silent no-ops"
+              },
+              "fullDescription": {
+                "text": "``logging.basicConfig()`` is silently ignored if the root logger already\nhas handlers.  Multiple calls across the codebase mean whichever runs first\nwins; the rest are dropped silently.  Flag any codebase with more than one\n``basicConfig()`` call outside ``if __name__ == \"__main__\":`` blocks.\nApplies to stdlib only.\n"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l017",
+              "defaultConfiguration": {
+                "level": "warning",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "warn",
+                "atlan/mechanism": "static",
+                "atlan/category": "log-config",
+                "atlan/autofixable": false,
+                "atlan/since": "3.16.0"
+              }
+            },
+            {
+              "id": "L018",
+              "name": "LoggerExceptionOutsideExcept",
+              "shortDescription": {
+                "text": "logger.exception() called outside an except block"
+              },
+              "fullDescription": {
+                "text": "``logger.exception()`` captures the current exception info via\n``sys.exc_info()``.  Called outside an except block, it captures nothing\n(or a stale exception from a previous except clause), producing a misleading\ntraceback or no traceback.  Use ``logger.error(..., exc_info=True)`` only\ninside except blocks.\n"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l018",
+              "defaultConfiguration": {
+                "level": "warning",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "warn",
+                "atlan/mechanism": "static",
+                "atlan/category": "log-level",
+                "atlan/autofixable": false,
+                "atlan/since": "3.16.0"
+              }
+            },
+            {
+              "id": "L024",
+              "name": "KwargsInApplicationLogCalls",
+              "shortDescription": {
+                "text": "kwargs in application log calls \u2014 use %-style message body instead"
+              },
+              "fullDescription": {
+                "text": "Arbitrary kwargs in log calls are an anti-pattern in this project.\nFramework context (Temporal fields, correlation IDs) is auto-injected by\nthe logging adapter; all other kwargs land in an unindexed JSON blob\ninvisible in the log stream.  Embed context directly in the message body\nusing %-style formatting.\n"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l024",
+              "defaultConfiguration": {
+                "level": "warning",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "warn",
+                "atlan/mechanism": "static",
+                "atlan/category": "log-format",
+                "atlan/autofixable": false,
+                "atlan/since": "3.16.0"
+              }
+            },
+            {
+              "id": "C001",
+              "name": "UnpinnedActionReference",
+              "shortDescription": {
+                "text": "External GitHub Action not pinned to a full commit digest"
+              },
+              "fullDescription": {
+                "text": "External actions reused via `uses:` must be pinned to a full-length commit SHA (digest), never a mutable tag (@v4) or branch (@main). A tag can be re-pointed to malicious code after review. Actions in the `atlanhq/` org are exempt (they intentionally track @main); local `./` composite-action refs are exempt (no version to pin)."
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#c001",
+              "defaultConfiguration": {
+                "level": "error",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "block",
+                "atlan/mechanism": "static",
+                "atlan/category": "supply-chain",
+                "atlan/autofixable": true,
+                "atlan/since": "3.16.0"
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "C001",
+          "ruleIndex": 31,
+          "kind": "fail",
+          "level": "error",
+          "message": {
+            "text": "Action 'actions/checkout' is pinned to mutable ref 'v4' \u2014 use a full commit digest (SHA). Exempt: atlanhq/ org actions, local ./ refs."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": ".github/workflows/example.yml"
+                },
+                "region": {
+                  "startLine": 5,
+                  "startColumn": 15
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "atlanConformance/v1": "41cacc180255c991"
+          },
+          "suppressions": [],
+          "fixes": [],
+          "properties": {}
+        }
+      ],
+      "invocations": [
+        {
+          "executionSuccessful": true,
+          "exitCode": 1,
+          "exitCodeDescription": "Gate failed: one or more blocking violations found."
+        }
+      ],
+      "versionControlProvenance": [],
+      "properties": {
+        "atlan/profileVersion": "v1",
+        "atlan/summary": {
+          "passing": 0,
+          "failing": 1,
+          "warning": 0,
+          "suppressed": 0
+        }
+      }
+    }
+  ]
+}
