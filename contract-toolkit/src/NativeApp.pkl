@@ -183,7 +183,13 @@ extractNodeErrorHandling: ErrorHandlingConfig?
 /// app replaces publish with `extraNodes["publish"] = new PublishNode { ... }`,
 /// set `errorHandling` on that `PublishNode` directly. The default publish node
 /// is also a workflow node, so `heartbeatTimeoutSeconds` is invalid.
-publishNodeErrorHandling: ErrorHandlingConfig?
+///
+/// Defaults to 72h `startToCloseTimeoutSeconds`. AE's source-code default for
+/// workflow nodes is 2h, which is too tight for any non-trivial publish on a
+/// large tenant. Override to a different value as needed.
+publishNodeErrorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
+  startToCloseTimeoutSeconds = 259200
+}
 
 /// Field name for the app's credential reference in the generated Input class.
 /// Set to null to omit. Defaults to "{name}_credential" when hasCredentialConfig.
@@ -922,6 +928,13 @@ class PublishNode extends DAGNode {
   ///
   /// Same default semantics as `connectionCacheEnabled` — set explicitly.
   connectionCacheViaAppEnabled: Boolean = false
+
+  /// Defaults to 72h `startToCloseTimeoutSeconds`. AE's source-code default for
+  /// workflow nodes is 2h, which is too tight for any non-trivial publish on a
+  /// large tenant. Override on the instance to use a different value.
+  errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
+    startToCloseTimeoutSeconds = 259200
+  }
 
   displayName = "Publish to Atlas"
   workflowType = "PublishWorkflow"
