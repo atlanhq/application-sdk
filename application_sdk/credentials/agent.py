@@ -42,6 +42,7 @@ consumable by any SQL, REST, NoSQL, or cloud-storage client whose
 from __future__ import annotations
 
 import hashlib
+import traceback
 from typing import TYPE_CHECKING, Any
 
 import orjson
@@ -52,6 +53,7 @@ from application_sdk.credentials.errors import (
     CredentialNotFoundError,
     CredentialParseError,
 )
+from application_sdk.errors import redact_secrets
 from application_sdk.infrastructure.secrets import SecretNotFoundError
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -219,21 +221,31 @@ async def _fetch_per_key_bundle(
         seen.add(value)
         try:
             secret = await secret_store.get_optional(value)
-        except Exception:
+        except Exception as exc:
             # Store-side error — distinct from "key not in store" (silent
             # below). A transient outage here on a real secret field
             # would otherwise auth-fail with the ref-key as the literal
-            # username, so surface at WARNING with stack trace.
+            # username, so surface at WARNING with the stack trace.
             # Log a hash, not the ref-key itself: ref-key names encode secret
             # store topology (purpose, environment) and enable enumeration if
             # logs leak.
+            value_hash = hashlib.sha256(value.encode()).hexdigest()[:8]
+            # NOT exc_info=True: SecretStoreError.__str__ renders `secret=<ref-key>`
+            # and its message embeds the backend cause, which can echo the raw
+            # ref-key — that would undo the hashing above in the same log record.
+            # Format the traceback ourselves, redact known secret patterns, and
+            # additionally scrub the literal ref-key (which redact_secrets can't
+            # know) so the topology stays hidden while diagnosis survives.
+            safe_traceback = redact_secrets(
+                "".join(traceback.format_exception(exc))
+            ).replace(value, f"sha256:{value_hash}")
             logger.warning(
                 "single-key probe failed for ref-key sha256:%s — store error, "
                 "treating as non-secret. If this was a real credential "
                 "key, the auth attempt will fail with the ref-key as the "
-                "literal value.",
-                hashlib.sha256(value.encode()).hexdigest()[:8],
-                exc_info=True,
+                "literal value.\n%s",
+                value_hash,
+                safe_traceback,
             )
             return
         if secret in (None, ""):

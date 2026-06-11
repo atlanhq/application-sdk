@@ -21,7 +21,12 @@ _CAUSE_MAX_LEN = 500
 # Matches userinfo in URLs for any scheme: https://user:pass@host → https://***@host,
 # postgresql://user:pass@host → postgresql://***@host (SQLAlchemy/JDBC-style
 # connection strings embed credentials the same way http URLs do).
-_URL_USERINFO_RE = re.compile(r"([a-z][a-z0-9+.-]*://)[^@\s]+@", re.IGNORECASE)
+# `(?:[^@\s]+@)+` consumes *all* userinfo segments greedily so a raw `@` inside
+# the password (postgresql://u:p@ss@host) doesn't leave the tail exposed. This
+# is greedy up to the last `@` in a whitespace-free run, so it can over-redact a
+# trailing `@` in a no-space query string — the safe failure direction for a
+# secret redactor.
+_URL_USERINFO_RE = re.compile(r"([a-z][a-z0-9+.-]*://)(?:[^@\s]+@)+", re.IGNORECASE)
 # Matches secret query params: api_key=value → api_key=***
 _SECRET_PARAM_RE = re.compile(
     r"(?i)((?:api_key|access_token|auth_token|password|passwd|secret|credential|private_key)=)[^\s&,;#]+",

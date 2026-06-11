@@ -279,7 +279,10 @@ class BaseSQLClient(ClientInterface):
         Args:
             connection_string (str): Base SQLAlchemy connection string.
             source_connection_params (Dict[str, Any]): Additional connection parameters
-                to append to the connection string.
+                to append to the connection string. Keys and values must be
+                **raw, not pre-encoded** — both are URL-encoded here (via
+                ``quote_plus``) to prevent ``&``/``=`` injection, so a
+                pre-encoded value would be double-encoded.
 
         Returns:
             str: Connection string with additional parameters appended.

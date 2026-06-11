@@ -10,6 +10,7 @@ for malformed input.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any
 
@@ -534,6 +535,52 @@ class TestSingleKeyMode:
         assert resolved["username"] == "real_user"
         # Lookup error on BOOM was swallowed; placeholder retained.
         assert resolved["password"] == "BOOM"
+
+    async def test_store_outage_does_not_leak_ref_key_in_logs(self) -> None:
+        """On a store outage during a single-key probe, the WARNING must not
+        leak the raw ref-key. The store error renders the ref-key both as
+        ``secret=<key>`` and echoed inside the message (mirroring real Dapr
+        backends), so a naive ``exc_info=True`` would undo the sha256 hashing.
+        """
+        from unittest.mock import patch
+
+        ref_key = "SNOWFLAKE_PROD_PASSWORD"
+        expected_hash = hashlib.sha256(ref_key.encode()).hexdigest()[:8]
+
+        class OutageStore:
+            async def get_optional(self, name: str) -> str | None:
+                # Mirror DaprSecretStore.get(): message embeds the backend
+                # cause (which echoes the key name) and secret_name=<key>.
+                raise SecretStoreError(
+                    f"Failed to get secret: access denied for key {name}",
+                    secret_name=name,
+                    cause=PermissionError(f"vault rejected {name}"),
+                )
+
+        agent_json = json.dumps(
+            {
+                "agent-name": "test-agent",
+                "key-type": "single-key",
+                "auth-type": "basic",
+                "basic.password": ref_key,
+            }
+        )
+
+        with patch("application_sdk.credentials.agent.logger") as mock_logger:
+            resolved = await resolve_agent_json(agent_json, OutageStore())  # type: ignore[arg-type]
+
+        # Outage swallowed; placeholder retained (ref-key falls through).
+        assert resolved["password"] == ref_key
+
+        mock_logger.warning.assert_called_once()
+        logged = " ".join(str(arg) for arg in mock_logger.warning.call_args.args)
+        # (1) raw ref-key never appears anywhere in the log record ...
+        assert ref_key not in logged
+        # (2) ... the hash prefix is what identifies it instead ...
+        assert f"sha256:{expected_hash}" in logged
+        # (3) ... and the store-failure diagnosis still survives.
+        assert "Traceback" in logged
+        assert "PermissionError" in logged
 
     async def test_walks_nested_extra_dict_one_level(self) -> None:
         """v2-style nested ``extra: {k: ref}`` is also probed."""
