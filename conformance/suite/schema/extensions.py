@@ -21,8 +21,7 @@ from __future__ import annotations
 from typing import Any
 
 from pydantic import BaseModel
-
-from conformance.schema.disposition import EnforcementTier, RuleMechanism
+from suite.schema.disposition import EnforcementTier, RuleMechanism
 
 # ---------------------------------------------------------------------------
 # Rule-level (reportingDescriptor.properties)

@@ -1,19 +1,23 @@
-"""Tests for the rule catalog loader and RuleDefinition model."""
+"""Tests for the rule catalog and RuleDefinition model."""
+
+from __future__ import annotations
+
+import re
 
 import pytest
+from suite.rules import CATALOG, _combine_rules, get_rule
+from suite.schema import load_catalog
+from suite.schema.catalog import RuleDefinition, validate_catalog
+from suite.schema.disposition import EnforcementTier, RuleMechanism
 
-from conformance.schema import load_catalog
-from conformance.schema.catalog import RuleDefinition
-from conformance.schema.disposition import EnforcementTier, RuleMechanism
 
-
-def test_catalog_loads_without_error():
-    """The bundled catalog.yaml loads and validates cleanly."""
+def test_catalog_loads_without_error() -> None:
+    """The catalog loads and validates cleanly."""
     rules = load_catalog()
     assert len(rules) > 0
 
 
-def test_catalog_no_duplicate_ids():
+def test_catalog_no_duplicate_ids() -> None:
     """Every rule ID in the catalog is unique."""
     rules = load_catalog()
     ids = [r.id for r in rules]
@@ -22,17 +26,15 @@ def test_catalog_no_duplicate_ids():
     ), f"Duplicate rule IDs: {[x for x in ids if ids.count(x) > 1]}"
 
 
-def test_catalog_ids_match_pattern():
+def test_catalog_ids_match_pattern() -> None:
     """All rule IDs match the expected namespace pattern (letter + 3 digits)."""
-    import re
-
     rules = load_catalog()
     pattern = re.compile(r"^[A-Z]\d{3}$")
     bad = [r.id for r in rules if not pattern.match(r.id)]
     assert not bad, f"Rule IDs with unexpected format: {bad}"
 
 
-def test_catalog_all_have_required_fields():
+def test_catalog_all_have_required_fields() -> None:
     """Every rule has a non-empty id, name, tier, mechanism, and category."""
     rules = load_catalog()
     for rule in rules:
@@ -47,7 +49,7 @@ def test_catalog_all_have_required_fields():
         assert rule.category, f"Rule {rule.id} missing category"
 
 
-def test_catalog_p_series_present():
+def test_catalog_p_series_present() -> None:
     """The P-series error-recovery rules are all present."""
     rules = load_catalog()
     p_ids = {r.id for r in rules if r.id.startswith("P")}
@@ -69,7 +71,7 @@ def test_catalog_p_series_present():
     assert not missing, f"Missing P-series rules: {missing}"
 
 
-def test_catalog_l_series_present():
+def test_catalog_l_series_present() -> None:
     """The L-series logging rules are all present."""
     rules = load_catalog()
     l_ids = {r.id for r in rules if r.id.startswith("L")}
@@ -98,10 +100,41 @@ def test_catalog_l_series_present():
     assert not missing, f"Missing L-series rules: {missing}"
 
 
-def test_to_reporting_descriptor_roundtrip():
-    """RuleDefinition → ReportingDescriptor preserves tier and mechanism in properties."""
+def test_catalog_c_series_present() -> None:
+    """The C-series CI/workflow supply-chain rules are all present."""
     rules = load_catalog()
-    p001 = next(r for r in rules if r.id == "P001")
+    c_ids = {r.id for r in rules if r.id.startswith("C")}
+    expected = {"C001"}
+    missing = expected - c_ids
+    assert not missing, f"Missing C-series rules: {missing}"
+
+
+def test_catalog_is_mapping_keyed_by_id() -> None:
+    """CATALOG is a Mapping whose keys equal each rule's id."""
+    from collections.abc import Mapping
+
+    assert isinstance(CATALOG, Mapping)
+    for rule_id, rule in CATALOG.items():
+        assert rule_id == rule.id
+
+
+def test_get_rule_c001() -> None:
+    """get_rule('C001') returns the C001 RuleDefinition."""
+    rule = get_rule("C001")
+    assert isinstance(rule, RuleDefinition)
+    assert rule.id == "C001"
+    assert rule.name == "UnpinnedActionReference"
+
+
+def test_get_rule_missing_raises_key_error() -> None:
+    """get_rule for an unknown ID raises KeyError."""
+    with pytest.raises(KeyError):
+        get_rule("NONEXISTENT")
+
+
+def test_to_reporting_descriptor_roundtrip() -> None:
+    """RuleDefinition → ReportingDescriptor preserves tier and mechanism in properties."""
+    p001 = get_rule("P001")
     descriptor = p001.to_reporting_descriptor()
 
     assert descriptor.id == "P001"
@@ -114,53 +147,42 @@ def test_to_reporting_descriptor_roundtrip():
     assert descriptor.properties["atlan/orthogonalGate"] == "tests"
 
 
-def test_warn_tier_maps_to_warning_level():
+def test_warn_tier_maps_to_warning_level() -> None:
     """A warn-tier rule produces defaultConfiguration.level='warning'."""
-    rules = load_catalog()
     # P003 (BroadContextlibSuppress) is tier=warn
-    p003 = next(r for r in rules if r.id == "P003")
+    p003 = get_rule("P003")
     descriptor = p003.to_reporting_descriptor()
     assert descriptor.default_configuration.level == "warning"
 
 
-def test_block_tier_maps_to_error_level():
+def test_block_tier_maps_to_error_level() -> None:
     """A block-tier rule produces defaultConfiguration.level='error'."""
-    rules = load_catalog()
-    p001 = next(r for r in rules if r.id == "P001")
+    p001 = get_rule("P001")
     descriptor = p001.to_reporting_descriptor()
     assert descriptor.default_configuration.level == "error"
 
 
-def test_duplicate_id_raises():
-    """Loading a catalog with duplicate rule IDs raises ValueError."""
-    import tempfile
-    from pathlib import Path
-
-    catalog_yaml = """
-- id: P001
-  name: Rule1
-  tier: block
-  mechanism: static
-  category: test
-  short_description: "first"
-- id: P001
-  name: Rule2Duplicate
-  tier: warn
-  mechanism: static
-  category: test
-  short_description: "duplicate"
-"""
-    with tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False) as f:
-        f.write(catalog_yaml)
-        tmp_path = Path(f.name)
-
-    with pytest.raises(ValueError, match="Duplicate rule ID"):
-        load_catalog(tmp_path)
-
-    tmp_path.unlink()
+def test_duplicate_id_raises() -> None:
+    """_combine_rules() raises ValueError on duplicate IDs."""
+    r1 = RuleDefinition(
+        id="P001",
+        name="R1",
+        tier=EnforcementTier.BLOCK,
+        mechanism=RuleMechanism.STATIC,
+        category="test",
+    )
+    r2 = RuleDefinition(
+        id="P001",
+        name="R2",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="test",
+    )
+    with pytest.raises(ValueError, match="duplicate rule ID"):
+        _combine_rules((r1,), (r2,))
 
 
-def test_invalid_rule_id_raises():
+def test_invalid_rule_id_raises() -> None:
     """A rule ID that doesn't match the pattern raises ValidationError."""
     with pytest.raises(Exception):
         RuleDefinition(
@@ -170,3 +192,23 @@ def test_invalid_rule_id_raises():
             mechanism=RuleMechanism.STATIC,
             category="test",
         )
+
+
+def test_validate_catalog_raises_on_duplicate() -> None:
+    """validate_catalog raises ValueError on duplicate IDs."""
+    r1 = RuleDefinition(
+        id="P001",
+        name="R1",
+        tier=EnforcementTier.BLOCK,
+        mechanism=RuleMechanism.STATIC,
+        category="test",
+    )
+    r2 = RuleDefinition(
+        id="P001",
+        name="R2",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="test",
+    )
+    with pytest.raises(ValueError, match="duplicate rule ID"):
+        validate_catalog([r1, r2])

@@ -1,0 +1,16 @@
+name: "Conformance"
+
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  ci-series:
+    name: "CI series (C)"
+    uses: ./.github/workflows/conformance-ci.yaml
+    with:
+      sdk-ref: ${{ github.event.pull_request.head.sha || github.sha }}

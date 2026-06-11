@@ -124,7 +124,7 @@ def derive_disposition(result: Result) -> Disposition | None:  # type: ignore[na
     regardless of the rule's enforcement tier.
     """
     # Import here to avoid circular imports at module load time.
-    from conformance.schema.sarif import Result
+    from suite.schema.sarif import Result
 
     if not isinstance(result, Result):
         raise TypeError(f"Expected Result, got {type(result)!r}")

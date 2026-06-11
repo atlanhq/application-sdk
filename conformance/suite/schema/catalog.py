@@ -1,44 +1,25 @@
-"""Rule catalog — load and validate the rules-as-data YAML.
+"""Rule catalog — typed Python rule definitions and validation helpers.
 
-The canonical rule definitions live in
-``conformance/src/conformance/rules/catalog.yaml``.  This module loads them,
-validates them, and exposes ``RuleDefinition`` (the typed Python form) and the
-SARIF ``ReportingDescriptor`` derived from each entry.
+``RuleDefinition`` is the source-of-truth form for every rule the
+conformance suite knows about.  Concrete rule instances live in the
+per-series modules under ``suite.rules``; this module only provides the
+model and a validation helper.
 
-Rule IDs are allocated per category:
+Rule ID namespaces:
 
 * ``P###``  — error-recovery patterns (P001–P099)
 * ``L###``  — logging patterns (L001–L099)
+* ``C###``  — CI/workflow supply-chain patterns (C001–C099)
 * (reserved) ``T###`` — test-quality patterns
 * (reserved) ``D###`` — dependency patterns
-
-Catalog file format (YAML list of rule objects)::
-
-    - id: P001
-      name: BareExceptPass
-      tier: block
-      mechanism: static
-      category: silent-swallow
-      autofixable: false
-      short_description: "Bare 'except: pass' — never acceptable"
-      full_description: |
-        A bare ``except: pass`` silently discards every exception including
-        KeyboardInterrupt and SystemExit.  Replace with a typed catch that
-        at minimum logs the error with ``exc_info=True``.
-      help_uri: "https://example.atlan.com/conformance/rules/P001"
-      orthogonal_gate: "tests"
-      since: "3.16.0"
 """
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
-import yaml
 from pydantic import BaseModel, Field, model_validator
-
-from conformance.schema.disposition import EnforcementTier, RuleMechanism
+from suite.schema.disposition import EnforcementTier, RuleMechanism
 
 # ---------------------------------------------------------------------------
 # Typed rule definition
@@ -46,14 +27,14 @@ from conformance.schema.disposition import EnforcementTier, RuleMechanism
 
 
 class RuleDefinition(BaseModel):
-    """A single rule entry from ``catalog.yaml``.
+    """A single rule definition.
 
     This is the *source-of-truth* form — ``to_reporting_descriptor()`` converts
     it to the SARIF wire form.
     """
 
     id: str = Field(..., pattern=r"^[A-Z]\d{3}$")
-    """Stable rule ID, e.g. ``"P001"``, ``"L001"``."""
+    """Stable rule ID, e.g. ``"P001"``, ``"L001"``, ``"C001"``."""
 
     name: str
     """CamelCase name, e.g. ``"BareExceptPass"``."""
@@ -77,7 +58,7 @@ class RuleDefinition(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _normalise_enums(cls, data: Any) -> Any:
-        """Accept string values for enum fields (from YAML)."""
+        """Accept string values for enum fields."""
         if isinstance(data, dict):
             if "tier" in data and isinstance(data["tier"], str):
                 data["tier"] = EnforcementTier(data["tier"].lower())
@@ -87,8 +68,8 @@ class RuleDefinition(BaseModel):
 
     def to_reporting_descriptor(self) -> ReportingDescriptor:  # type: ignore[name-defined]  # noqa: F821
         """Return the SARIF ``ReportingDescriptor`` wire form for this rule."""
-        from conformance.schema.extensions import AtlanRuleProperties
-        from conformance.schema.sarif import ReportingConfiguration, ReportingDescriptor
+        from suite.schema.extensions import AtlanRuleProperties
+        from suite.schema.sarif import ReportingConfiguration, ReportingDescriptor
 
         rule_props = AtlanRuleProperties(
             tier=self.tier,
@@ -117,48 +98,20 @@ class RuleDefinition(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Catalog loader
+# Catalog validation helper
 # ---------------------------------------------------------------------------
 
-_CATALOG_PATH = Path(__file__).parent.parent / "rules" / "catalog.yaml"
 
-
-def load_catalog(path: Path | None = None) -> list[RuleDefinition]:
-    """Load and validate all rule definitions from the catalog YAML.
-
-    Parameters
-    ----------
-    path:
-        Override the catalog file path.  Defaults to the bundled
-        ``conformance/src/conformance/rules/catalog.yaml``.
-
-    Returns
-    -------
-    list[RuleDefinition]
-        Parsed, validated rule definitions in catalog order.
+def validate_catalog(rules: list[RuleDefinition]) -> None:
+    """Validate a list of rule definitions for uniqueness.
 
     Raises
     ------
     ValueError
-        If any rule entry fails validation or duplicate IDs are found.
-    FileNotFoundError
-        If the catalog file does not exist at the resolved path.
+        If any rule ID is duplicated.
     """
-    resolved = path or _CATALOG_PATH
-    raw = yaml.safe_load(resolved.read_text(encoding="utf-8"))
-
-    if not isinstance(raw, list):
-        raise ValueError(
-            f"Catalog at {resolved} must be a YAML list of rule objects, got {type(raw)}"
-        )
-
-    rules: list[RuleDefinition] = []
-    seen_ids: set[str] = set()
-    for i, entry in enumerate(raw):
-        rule = RuleDefinition.model_validate(entry)
-        if rule.id in seen_ids:
-            raise ValueError(f"Duplicate rule ID {rule.id!r} at catalog index {i}")
-        seen_ids.add(rule.id)
-        rules.append(rule)
-
-    return rules
+    seen: set[str] = set()
+    for rule in rules:
+        if rule.id in seen:
+            raise ValueError(f"duplicate rule ID: {rule.id!r}")
+        seen.add(rule.id)

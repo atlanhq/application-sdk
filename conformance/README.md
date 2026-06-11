@@ -8,11 +8,13 @@ Deterministic rule-checking infrastructure for the Fleet Drift Remediator
 
 | Path | Purpose |
 |---|---|
-| `src/conformance/schema/` | Typed Pydantic models for the SARIF 2.1.0 profile, `Disposition` engine, rule-catalog loader, `ReportBuilder`, and schema validator |
-| `src/conformance/schema/sarif-schema-2.1.0.json` | Vendored official SARIF schema — the validation contract for all emitted reports |
-| `src/conformance/rules/catalog.yaml` | Rules-as-data: every rule the suite knows about, expressed as SARIF `reportingDescriptor` records with `atlan/*` governance fields |
+| `suite/schema/` | Typed Pydantic models for the SARIF 2.1.0 profile, `Disposition` engine, `RuleDefinition` model, `Finding` contract, `ReportBuilder`, and schema validator |
+| `suite/schema/sarif-schema-2.1.0.json` | Vendored official SARIF schema — the validation contract for all emitted reports |
+| `suite/rules/` | Typed Python rule definitions, one module per ID series (`ci.py`, `error_recovery.py`, `logging.py`); auto-combined into an immutable dict-keyed `CATALOG` at import time |
+| `suite/checks/` | Deterministic check modules — one per rule family; each exposes `scan_text`, `scan_path`, `discover`, and a `main(argv)` CLI |
+| `suite/runner.py` | Suite dispatcher: runs all registered checks, merges findings into one SARIF report |
 | `docs/schema-contract.md` | Concept-to-SARIF mapping, the three-state disposition table, `properties` extension reference, evolution rules, and a golden four-disposition example |
-| `tests/` | Schema round-trip, disposition coverage, and golden-example validation tests |
+| `tests/` | Schema round-trip, disposition coverage, golden-example validation, and per-check tests |
 
 ## Not for production runtime
 
@@ -23,17 +25,26 @@ latest rule set on upgrade, but it is never imported by `application_sdk`.
 ## Quick start
 
 ```python
-from conformance.schema import ReportBuilder, Disposition, derive_disposition
+from suite.schema import ReportBuilder, Disposition, derive_disposition
 
 builder = ReportBuilder(tool_name="atlan-conformance", tool_version="3.16.0")
-builder.add_result("LOG001", "src/foo.py", 42)
+builder.add_result("P001", "src/foo.py", 42)
 report = builder.build()
 
 # Derive gate decision
-from conformance.schema import derive_disposition, SarifReport
 dispositions = [derive_disposition(r) for r in report.runs[0].results]
 failing = [d for d in dispositions if d == Disposition.FAILING]
 exit_code = 1 if failing else 0
+```
+
+## Running checks
+
+```sh
+# Full suite (all registered checks → one merged SARIF):
+PYTHONPATH=conformance python -m suite.runner --repo . --output report.sarif
+
+# C001 only (action-pinning check):
+PYTHONPATH=conformance python -m suite.checks.actions_pinning --root . .github
 ```
 
 See `docs/schema-contract.md` for full field reference.

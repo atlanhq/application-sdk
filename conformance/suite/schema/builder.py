@@ -47,10 +47,10 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
-from conformance.schema.catalog import RuleDefinition
-from conformance.schema.disposition import Disposition, derive_disposition
-from conformance.schema.extensions import AtlanRunProperties, DispositionSummary
-from conformance.schema.sarif import (
+from suite.schema.catalog import RuleDefinition
+from suite.schema.disposition import Disposition, derive_disposition
+from suite.schema.extensions import AtlanRunProperties, DispositionSummary
+from suite.schema.sarif import (
     ArtifactLocation,
     Invocation,
     Location,
@@ -185,7 +185,7 @@ class ReportBuilder:
         extra_properties:
             Additional ``atlan/*`` properties to merge into ``result.properties``.
         """
-        from conformance.schema.extensions import AtlanResultProperties
+        from suite.schema.extensions import AtlanResultProperties
 
         region = Region(
             startLine=start_line,

@@ -4,9 +4,9 @@ This package is **testing and conformance infrastructure only** — it is never 
 by production runtime code (``application_sdk``).  It ships alongside SDK releases so
 that each SDK upgrade automatically carries the latest rule set to every consumer app.
 
-Public API (import from ``conformance.schema``)::
+Public API (import from ``suite.schema``)::
 
-    from conformance.schema import (
+    from suite.schema import (
         # Disposition: the three-state outcome model
         Disposition,
         derive_disposition,

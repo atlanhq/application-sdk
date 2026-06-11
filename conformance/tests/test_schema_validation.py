@@ -11,10 +11,8 @@ from pathlib import Path
 
 import jsonschema
 import pytest
-
-from conformance.schema import ReportBuilder, validate_sarif
-from conformance.schema.catalog import load_catalog
-from conformance.schema.sarif import Suppression
+from suite.schema import ReportBuilder, load_catalog, validate_sarif
+from suite.schema.sarif import Suppression
 
 _FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -24,7 +22,7 @@ _FIXTURES = Path(__file__).parent / "fixtures"
 # ---------------------------------------------------------------------------
 
 
-def test_golden_example_validates():
+def test_golden_example_validates() -> None:
     """The committed golden fixture must pass SARIF 2.1.0 schema validation."""
     golden = json.loads(
         (_FIXTURES / "golden_four_dispositions.sarif.json").read_text(encoding="utf-8")
@@ -33,9 +31,9 @@ def test_golden_example_validates():
     validate_sarif(golden)
 
 
-def test_golden_example_has_four_dispositions():
+def test_golden_example_has_four_dispositions() -> None:
     """The golden fixture must contain exactly the four expected dispositions."""
-    from conformance.schema import Disposition, SarifReport, derive_disposition
+    from suite.schema import Disposition, SarifReport, derive_disposition
 
     data = json.loads(
         (_FIXTURES / "golden_four_dispositions.sarif.json").read_text(encoding="utf-8")
@@ -50,7 +48,7 @@ def test_golden_example_has_four_dispositions():
     assert Disposition.SUPPRESSED in dispositions
 
 
-def test_golden_example_exit_code():
+def test_golden_example_exit_code() -> None:
     """The golden fixture has exitCode=1 because it contains a FAILING result."""
     data = json.loads(
         (_FIXTURES / "golden_four_dispositions.sarif.json").read_text(encoding="utf-8")
@@ -59,7 +57,7 @@ def test_golden_example_exit_code():
     assert invocations[0]["exitCode"] == 1
 
 
-def test_golden_example_summary():
+def test_golden_example_summary() -> None:
     """The golden fixture summary counts match the four dispositions."""
     data = json.loads(
         (_FIXTURES / "golden_four_dispositions.sarif.json").read_text(encoding="utf-8")
@@ -76,14 +74,14 @@ def test_golden_example_summary():
 # ---------------------------------------------------------------------------
 
 
-def test_report_builder_empty_validates():
+def test_report_builder_empty_validates() -> None:
     """An empty report (no results) is still valid SARIF."""
     builder = ReportBuilder(tool_name="atlan-conformance", tool_version="3.16.0")
     report = builder.build()
     validate_sarif(report)
 
 
-def test_report_builder_with_results_validates():
+def test_report_builder_with_results_validates() -> None:
     """A report with one failing result validates and has exitCode=1."""
     catalog = load_catalog()
     builder = ReportBuilder.from_catalog(
@@ -108,7 +106,7 @@ def test_report_builder_with_results_validates():
     assert doc["runs"][0]["invocations"][0]["exitCode"] == 1
 
 
-def test_report_builder_suppressed_result_validates():
+def test_report_builder_suppressed_result_validates() -> None:
     """A report with only a suppressed result validates and has exitCode=0."""
     catalog = load_catalog()
     builder = ReportBuilder.from_catalog(
@@ -133,7 +131,7 @@ def test_report_builder_suppressed_result_validates():
     assert doc["runs"][0]["invocations"][0]["exitCode"] == 0
 
 
-def test_report_builder_pass_only_validates():
+def test_report_builder_pass_only_validates() -> None:
     """A report with only a pass result validates and has exitCode=0."""
     builder = ReportBuilder(tool_name="atlan-conformance", tool_version="3.16.0")
     builder.add_pass(rule_id="L001", file_uri="src/connector/loader.py")
@@ -144,7 +142,7 @@ def test_report_builder_pass_only_validates():
     assert doc["runs"][0]["invocations"][0]["exitCode"] == 0
 
 
-def test_report_builder_warning_only_exit_code():
+def test_report_builder_warning_only_exit_code() -> None:
     """A report with only warning-tier (warn) results has exitCode=0."""
     catalog = load_catalog()
     builder = ReportBuilder.from_catalog(
@@ -170,7 +168,7 @@ def test_report_builder_warning_only_exit_code():
 # ---------------------------------------------------------------------------
 
 
-def test_validation_catches_missing_version():
+def test_validation_catches_missing_version() -> None:
     """A document missing the required 'version' field fails validation."""
     bad_doc = {
         "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
@@ -181,7 +179,7 @@ def test_validation_catches_missing_version():
         validate_sarif(bad_doc)
 
 
-def test_validation_catches_invalid_level():
+def test_validation_catches_invalid_level() -> None:
     """A result with an invalid level value fails validation."""
     bad_doc = {
         "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",

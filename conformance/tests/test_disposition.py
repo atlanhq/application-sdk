@@ -6,9 +6,8 @@ gate exit-code derivation.
 """
 
 import pytest
-
-from conformance.schema.disposition import Disposition, derive_disposition
-from conformance.schema.sarif import (
+from suite.schema.disposition import Disposition, derive_disposition
+from suite.schema.sarif import (
     ArtifactLocation,
     Location,
     PhysicalLocation,
@@ -52,37 +51,37 @@ def _suppression() -> Suppression:
 # ---------------------------------------------------------------------------
 
 
-def test_pass_disposition():
+def test_pass_disposition() -> None:
     """kind='pass' → PASS regardless of level."""
     result = _result(kind="pass", level="error")
     assert derive_disposition(result) == Disposition.PASS
 
 
-def test_pass_disposition_no_level():
+def test_pass_disposition_no_level() -> None:
     """kind='pass' with no level → PASS."""
     result = _result(kind="pass", level=None)
     assert derive_disposition(result) == Disposition.PASS
 
 
-def test_failing_disposition():
+def test_failing_disposition() -> None:
     """kind='fail', level='error', no suppressions → FAILING (blocks gate)."""
     result = _result(kind="fail", level="error", suppressions=[])
     assert derive_disposition(result) == Disposition.FAILING
 
 
-def test_warning_disposition():
+def test_warning_disposition() -> None:
     """kind='fail', level='warning', no suppressions → WARNING (non-blocking)."""
     result = _result(kind="fail", level="warning", suppressions=[])
     assert derive_disposition(result) == Disposition.WARNING
 
 
-def test_suppressed_disposition_insource():
+def test_suppressed_disposition_insource() -> None:
     """kind='fail', inSource suppression → SUPPRESSED (own category)."""
     result = _result(kind="fail", level="error", suppressions=[_suppression()])
     assert derive_disposition(result) == Disposition.SUPPRESSED
 
 
-def test_suppressed_disposition_external():
+def test_suppressed_disposition_external() -> None:
     """kind='fail', external suppression → SUPPRESSED."""
     suppression = Suppression(kind="external", justification="central allowlist entry")
     result = _result(kind="fail", level="error", suppressions=[suppression])
@@ -94,7 +93,7 @@ def test_suppressed_disposition_external():
 # ---------------------------------------------------------------------------
 
 
-def test_suppression_over_level_block_tier():
+def test_suppression_over_level_block_tier() -> None:
     """A block-tier (error) result with inSource suppression → SUPPRESSED, not FAILING.
 
     This is the critical invariant: inline justified suppressions are always
@@ -106,7 +105,7 @@ def test_suppression_over_level_block_tier():
     assert disposition != Disposition.FAILING
 
 
-def test_suppression_over_level_warn_tier():
+def test_suppression_over_level_warn_tier() -> None:
     """A warn-tier (warning) result with inSource suppression → SUPPRESSED, not WARNING."""
     result = _result(kind="fail", level="warning", suppressions=[_suppression()])
     assert derive_disposition(result) == Disposition.SUPPRESSED
@@ -117,7 +116,7 @@ def test_suppression_over_level_warn_tier():
 # ---------------------------------------------------------------------------
 
 
-def test_no_level_defaults_to_warning():
+def test_no_level_defaults_to_warning() -> None:
     """level=None with no suppressions → WARNING (inherits 'warning' default)."""
     result = _result(kind="fail", level=None, suppressions=[])
     assert derive_disposition(result) == Disposition.WARNING
@@ -129,7 +128,7 @@ def test_no_level_defaults_to_warning():
 
 
 @pytest.mark.parametrize("kind", ["open", "review", "notApplicable"])
-def test_unknown_kind_returns_none(kind: str):
+def test_unknown_kind_returns_none(kind: str) -> None:
     """Non-pass/fail kinds return None — consumers treat as non-blocking."""
     result = _result(kind=kind)
     assert derive_disposition(result) is None
@@ -140,7 +139,7 @@ def test_unknown_kind_returns_none(kind: str):
 # ---------------------------------------------------------------------------
 
 
-def test_gate_exit_code_failing():
+def test_gate_exit_code_failing() -> None:
     """≥1 FAILING result → exit_code = 1."""
     results = [
         _result(kind="fail", level="error"),  # FAILING
@@ -153,7 +152,7 @@ def test_gate_exit_code_failing():
     assert exit_code == 1
 
 
-def test_gate_exit_code_clean():
+def test_gate_exit_code_clean() -> None:
     """No FAILING results → exit_code = 0 (warnings and suppressed don't block)."""
     results = [
         _result(kind="pass"),  # PASS
@@ -173,7 +172,7 @@ def test_gate_exit_code_clean():
 # ---------------------------------------------------------------------------
 
 
-def test_type_error_on_non_result():
+def test_type_error_on_non_result() -> None:
     """Passing a non-Result raises TypeError."""
     with pytest.raises(TypeError):
         derive_disposition({"ruleId": "P001"})  # type: ignore[arg-type]

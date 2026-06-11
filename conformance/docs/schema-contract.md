@@ -106,21 +106,48 @@ Results that are SUPPRESSED or WARNING never fail the gate.
 
 ---
 
-## 5. Rule catalog (`rules/catalog.yaml`)
+## 5. Rule catalog (`suite/rules/`)
 
-Rules are **data**, not code.  Each entry maps to a `reportingDescriptor` and carries the
-`atlan/*` governance fields.  Rule ID namespaces:
+Rules are **typed Python**, not YAML.  Each series module (`ci.py`, `error_recovery.py`,
+`logging.py`) exposes a `RULES: tuple[RuleDefinition, ...]`; `suite/rules/__init__.py`
+combines them into an immutable `CATALOG: Mapping[str, RuleDefinition]` (O(1) lookup).
+Each entry maps to a `reportingDescriptor` and carries the `atlan/*` governance fields.
+Rule ID namespaces:
 
 | Prefix | Domain |
 |---|---|
 | `P001–P099` | Error-recovery patterns (from `signal-over-noise` surface phase) |
 | `L001–L099` | Logging patterns (from `signal-over-noise` tune phase) |
+| `C001–C099` | CI/workflow supply-chain (action-pinning, permissions, trigger hygiene) |
 | `T001–T099` | Test-quality patterns (reserved) |
 | `D001–D099` | Dependency patterns (reserved) |
 
-**A new rule is just a new catalog entry in the next SDK release** — it automatically fans
+**A new rule is just a new entry in the appropriate series module** — it automatically fans
 out to every consumer app on the next upgrade, and the suite invalidates every app's
 conformance verdict on the next reconcile.  No per-app authoring needed (§4.1 of the design doc).
+
+---
+
+## 5a. C001 — `UnpinnedActionReference` {#c001}
+
+**Tier:** `block` (gate-failing) | **Mechanism:** `static` | **Autofixable:** yes
+
+External actions reused via `uses:` must be pinned to a full-length commit SHA (digest),
+never a mutable tag (`@v4`) or branch (`@main`).  A tag can be re-pointed to malicious
+code after review.
+
+**Exempt:**
+- Actions in the `atlanhq/` org — they intentionally track `@main` or branches.
+- Local `./` composite-action refs — no version to pin.
+- `docker://` image refs — out of scope for this rule.
+- Template expressions `${{ ... }}` — can't be evaluated statically.
+
+**Fix guidance:** replace `@v4` (or any mutable ref) with the full 40-hex commit SHA,
+e.g. `actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3`.
+
+**Known pre-existing violation (deferred):** `.github/workflows/vuln-triage-cron.yml:43`
+— left as-is intentionally to demonstrate the gate detecting it; fix is a follow-up once
+the gate is proven in CI.
 
 ---
 
@@ -195,16 +222,19 @@ remediation.  Evolution rules:
 ### CI / Renovate gate
 
 ```sh
-# Run the suite; exit code drives the gate.
-python -m conformance.runner --repo . --output report.sarif
+# Run the full suite; exit code drives the gate.
+PYTHONPATH=conformance python -m suite.runner --repo . --output report.sarif
 echo "Exit code: $?"
+
+# Run only the C001 action-pinning check:
+PYTHONPATH=conformance python -m suite.checks.actions_pinning --root . .github
 ```
 
 ### Parsing for dashboards
 
 ```python
 import json
-from conformance.schema import derive_disposition, Disposition, SarifReport
+from suite.schema import derive_disposition, Disposition, SarifReport
 
 report = SarifReport.model_validate(json.loads(open("report.sarif").read()))
 for result in report.runs[0].results:
