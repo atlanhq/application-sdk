@@ -28,6 +28,7 @@ local publishControlsManifestJson: String = publishControlsApp.output.files["app
 local publishControlsInputPy: String = publishControlsApp.output.files["app/generated/_input.py"].text
 local bundleCrawlerInputPy: String = bundleApp.output.files["app/generated/crawler/_input.py"].text
 local bundleMinerInputPy: String = bundleApp.output.files["app/generated/miner/_input.py"].text
+local bundleCrawlerManifestJson: String = bundleApp.output.files["app/generated/crawler/manifest.json"].text
 local importTokenHelpText: String =
   "Any prose mentioning ConnectionRef FileReference MaxItems Field( must not affect imports."
 local helpTextOnlyApp = (App) {
@@ -226,6 +227,8 @@ facts {
     bundleApp.output.files.containsKey("app/generated/miner/miner.json")
     bundleApp.output.files.containsKey("app/generated/miner/manifest.json")
     bundleApp.output.files.containsKey("app/generated/miner/_input.py")
+    // Multi-entrypoint publish nodes also carry the 72h default timeout.
+    bundleCrawlerManifestJson.contains("\"start_to_close_timeout_seconds\": 259200")
   }
 
   ["Bundle example emits isort-compatible per-entrypoint SDK input imports"] {
