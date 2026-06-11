@@ -116,6 +116,13 @@ inputs:
       connector's main.py has NOT been migrated to the embedded runtime path yet
       and still expects external daprd at localhost:3500 + temporal at localhost:7233.
     default: "false"
+  application-sdk-ref:
+    required: false
+    description: |
+      Branch/SHA of atlanhq/application-sdk to pin before running tests.
+      Empty = use the lockfile version. Used by cross-repo dispatch from
+      application-sdk PRs to exercise the SDK branch under review.
+    default: ""
 
 runs:
   using: "composite"
@@ -124,6 +131,11 @@ runs:
       uses: atlanhq/application-sdk/.github/actions/setup-deps@main
       with:
         python-version: ${{ inputs.python-version }}
+
+    - name: Pin application-sdk to dispatched ref
+      if: inputs.application-sdk-ref != ''
+      shell: bash
+      run: uv add git+https://github.com/atlanhq/application-sdk --rev "${{ inputs.application-sdk-ref }}"
 
     # SDK 3.13+ boots an embedded daprd + Temporal directly from
     # `python main.py` (application_sdk/dev/_dapr.py + _embedded.py), each
