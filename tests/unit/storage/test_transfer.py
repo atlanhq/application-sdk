@@ -236,14 +236,14 @@ class TestUploadExplicitFiles:
         assert out.ref.file_count == 1
         assert out.synced is True
 
-    async def test_explicit_empty_list_is_empty_directory(self, store, tmp_path) -> None:
+    async def test_explicit_empty_list_is_empty_directory(
+        self, store, tmp_path
+    ) -> None:
         """``explicit_files=[]`` produces the same result as a genuinely empty
         directory — preserves backwards-compat ``skipped:hash_match`` reason."""
         (tmp_path / "ignored.txt").write_bytes(b"would-be-uploaded")
 
-        out = await upload(
-            str(tmp_path), "p", store=store, explicit_files=[]
-        )
+        out = await upload(str(tmp_path), "p", store=store, explicit_files=[])
 
         assert out.ref.file_count == 0
         assert out.synced is False
