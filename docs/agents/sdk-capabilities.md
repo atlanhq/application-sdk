@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.15.1
-source-sha:    8a5ef783f8d557300fb734b5e87a8dd67d2c03bc
-source-date:   2026-06-10T11:02:29+00:00
+source-sha:    0a490e9128563a2e1d1d688134bcc352ac800a87
+source-date:   2026-06-09T22:04:25+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -32,7 +32,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 24 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 5 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 16 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 15 |
 
 ## Subpackage Details
 
@@ -2104,13 +2104,6 @@ SQL metadata extractor templates and their contracts
 Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers
 
 ### Classes
-
-#### `AppTestHarness`
-
-- **Import:** `from application_sdk.testing import AppTestHarness`
-- **Signature:** `class AppTestHarness(app_cls: type[App], *, secrets: dict[str, str] | None = None, store_root: str | Path | None = None)`
-- **Summary:** In-process execution environment for an App under test.
-- **Defined in:** `application_sdk/testing/harness.py`
 
 #### `MockBinding`
 
