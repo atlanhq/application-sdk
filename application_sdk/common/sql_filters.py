@@ -89,8 +89,7 @@ _FORBIDDEN_FILTER_SEQUENCES: tuple[str, ...] = (
 SAFE_FILTER_PATTERN: str = r"^[^'\";\x00]*$"
 _SAFE_FILTER_PATTERN = SAFE_FILTER_PATTERN  # backward-compat alias
 
-FilterTreeNode: TypeAlias = dict[str, "FilterTreeNode"]
-FilterValue: TypeAlias = list[str] | str | FilterTreeNode
+FilterValue: TypeAlias = list[str] | str | dict[str, dict[str, Any]]
 
 _MAX_FILTER_NESTING_DEPTH = 4
 
