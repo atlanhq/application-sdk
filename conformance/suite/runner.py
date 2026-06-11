@@ -44,26 +44,42 @@ _CHECKS: list[CheckRegistration] = [
 ]
 
 
+def _tier(f: Finding) -> EnforcementTier:
+    return get_rule(f.rule_id).tier
+
+
 def _print_human_summary(findings: list[Finding], series: str | None) -> None:
-    """Print a human-readable violation summary to stdout."""
+    """Print a human-readable violation/warning summary to stdout."""
     label = f"{series}-series" if series else "conformance suite"
-    n = len(findings)
-    if not n:
+    if not findings:
         print(f"conformance ({label}): no violations found.")
         return
-    print(f"conformance ({label}): {n} violation{'s' if n != 1 else ''} found.\n")
+    blocking = [f for f in findings if _tier(f) == EnforcementTier.BLOCK]
+    warnings = [f for f in findings if _tier(f) == EnforcementTier.WARN]
+    parts = []
+    if blocking:
+        parts.append(f"{len(blocking)} violation{'s' if len(blocking) != 1 else ''}")
+    if warnings:
+        parts.append(f"{len(warnings)} warning{'s' if len(warnings) != 1 else ''}")
+    print(f"conformance ({label}): {', '.join(parts)} found.\n")
     for f in findings:
-        print(f"  [{f.rule_id}] {f.file}:{f.line}:{f.column}")
+        level = "FAIL" if _tier(f) == EnforcementTier.BLOCK else "WARN"
+        print(f"  [{f.rule_id}] [{level}] {f.file}:{f.line}:{f.column}")
         print(f"  {f.message}\n")
 
 
 def _emit_github_annotations(findings: list[Finding]) -> None:
-    """Emit GitHub Actions ::error workflow commands for inline PR annotations."""
+    """Emit GitHub Actions workflow commands for inline PR annotations.
+
+    Block-tier findings emit ``::error``; warn-tier findings emit ``::warning``.
+    Both appear as inline comments on the PR's Files Changed view.
+    """
     for f in findings:
         # Percent-encode special characters per the GitHub Actions docs.
         msg = f.message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+        level = "error" if _tier(f) == EnforcementTier.BLOCK else "warning"
         print(
-            f"::error file={f.file},line={f.line},col={f.column},"
+            f"::{level} file={f.file},line={f.line},col={f.column},"
             f"title={f.rule_id}::{msg}"
         )
 
