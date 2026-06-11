@@ -126,7 +126,7 @@ The typed `pipeline` block replaces per-flag properties. Each step is nullable t
 | `pipeline.parseQueries` | ParseQueriesStep? | null | Query Intelligence node (default-off). |
 | `pipeline.popularity` | PopularityStep? | null | Popularity node (default-off). |
 | `pipeline.lineage` | LineageStep? | null | Lineage app node (default-off). |
-| `pipeline.publish` | PublishStep? | `new PublishStep {}` | Publish node (default-on). `errorHandling` defaults to 24h `startToCloseTimeoutSeconds`. Set null for utility apps. |
+| `pipeline.publish` | PublishStep? | `new PublishStep {}` | Publish node (default-on). `errorHandling` defaults to 72h `startToCloseTimeoutSeconds`. Set null for utility apps. |
 | `extraNodes` | Mapping<String, DAGNode> | `{}` | Custom nodes outside the typed pipeline. `"publish"` key replaces auto-generated publish. |
 
 **Pipeline step classes:**
@@ -170,7 +170,7 @@ class PublishStep {
   includeInputFields: Boolean = true     // generates output_dir/load_to_atlan/publish_dry_run in _input.py
   lineagePublish: LineagePublishStep?    // opt-in lineage publish (default-off)
   errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
-    startToCloseTimeoutSeconds = 86400  // 24h default — AE's 2h is too tight for large tenants
+    startToCloseTimeoutSeconds = 259200  // 72h default — AE's 2h is too tight for large tenants
   }
 }
 
@@ -402,7 +402,7 @@ Developers amend this module. It defines the app's identity, credentials, workfl
 | `extractActivityDisplayName` | String? | null | Optional override for the built-in extract node's `activity_display_name`. Defaults to `"Extract {displayName} Metadata"`. Use this for long app display names that need compact AE step labels. Only changes the human-readable step label; node id, workflow type, task queue, app name, and args are unchanged. |
 | `publishActivityDisplayName` | String? | null | Optional override for the built-in default publish node's `activity_display_name`. Defaults to `"Publish to Atlas"`. Applies only when the toolkit generates the default publish node; for `extraNodes["publish"]`, set `displayName` on that `PublishNode`. |
 | `extractNodeErrorHandling` | ErrorHandlingConfig? | null | Optional workflow-safe retry / timeout policy for the built-in extract node. Use `startToCloseTimeoutSeconds` to raise AE's child workflow execution timeout. `heartbeatTimeoutSeconds` is invalid because the built-in extract node renders `activity_name = "execute_workflow"` and AE treats it as a workflow node. |
-| `publishNodeErrorHandling` | ErrorHandlingConfig? | `startToCloseTimeoutSeconds = 86400` (24h) | Workflow-safe retry / timeout policy for the toolkit-generated default publish node. Defaults to 24h so connectors don't silently inherit AE's 2h default. Override as needed. For `extraNodes["publish"]`, set `errorHandling` on that `PublishNode` directly (it also defaults to 24h). `heartbeatTimeoutSeconds` is invalid for the default publish node. |
+| `publishNodeErrorHandling` | ErrorHandlingConfig? | `startToCloseTimeoutSeconds = 259200` (72h) | Workflow-safe retry / timeout policy for the toolkit-generated default publish node. Defaults to 72h so connectors don't silently inherit AE's 2h default. Override as needed. For `extraNodes["publish"]`, set `errorHandling` on that `PublishNode` directly (it also defaults to 72h). `heartbeatTimeoutSeconds` is invalid for the default publish node. |
 | `credentialFieldName` | String? | `"{name}_credential"` | Credential ref field in Input class. Null to omit. |
 | `workflowConfigName` | String | `name` | Workflow configmap name / output filename. |
 | `additionalOutputFiles` | Mapping<String, FileOutput> | `{}` | Explicit opt-in files to emit with this contract, for example a customized `AgentConfig.pkl` output. |
