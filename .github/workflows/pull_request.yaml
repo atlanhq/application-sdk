@@ -214,7 +214,7 @@ jobs:
 
   matrix-builder:
     name: Build Test Matrix
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -224,6 +224,7 @@ jobs:
 
       - name: Get PR Labels
         id: get-labels
+        if: github.event_name == 'pull_request'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -310,13 +311,26 @@ jobs:
           snowflake-user: ${{ secrets.SNOWFLAKE_USER }}
           snowflake-password: ${{ secrets.SNOWFLAKE_PASSWORD }}
 
-  # Connector tests: runs on every code-changing PR against both connector
-  # repos. Always dispatches tests.yaml (unit + integration); adds e2e when
-  # the 'e2e' label is present on the SDK PR.
+  # Connector tests: dispatches tests.yaml to each connector repo.
+  # Triggers:
+  #   merge_group — always runs on code-changing merge queue entries (the
+  #     primary gate). Each entry has a unique SHA so runs are parallel.
+  #   pull_request + 'e2e' label — opt-in during PR development; also used
+  #     to release-gate the release PR before merging. The connector-side
+  #     e2e job serialises itself via its own concurrency group, so
+  #     simultaneous e2e-labelled PRs queue safely on the connector side.
   connector-tests:
     name: Connector Tests (${{ matrix.repo_name }})
     needs: [changes, matrix-builder]
-    if: needs.changes.outputs.code == 'true' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true && github.event.pull_request.user.login != 'dependabot[bot]'
+    if: |
+      needs.changes.outputs.code == 'true' && (
+        github.event_name == 'merge_group' ||
+        (
+          github.event_name == 'pull_request' &&
+          contains(github.event.pull_request.labels.*.name, 'e2e') &&
+          github.event.pull_request.head.repo.fork != true
+        )
+      )
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -329,7 +343,7 @@ jobs:
           repo-name: ${{ matrix.repo_name }}
           target-branch: "refs/heads/${{ matrix.target_branch }}"
           workflow: tests.yaml
-          workflow-inputs: ${{ contains(github.event.pull_request.labels.*.name, 'e2e') && format('{{"application_sdk_ref":"{0}","run_e2e":"true"}}', github.event.pull_request.head.sha) || format('{{"application_sdk_ref":"{0}"}}', github.event.pull_request.head.sha) }}
+          workflow-inputs: ${{ github.event_name == 'merge_group' && format('{{"application_sdk_ref":"{0}"}}', github.sha) || format('{{"application_sdk_ref":"{0}","run_e2e":"true"}}', github.event.pull_request.head.sha) }}
 
   # (sdr-matrix-builder, sdr-e2e-apps, and e2e-full-mysql removed —
   # superseded by connector-tests + the 'e2e' label on tests.yaml)
