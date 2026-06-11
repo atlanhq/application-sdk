@@ -251,20 +251,26 @@ uiConfig: Widgets.UIConfig?
 
 /// Additional DAG nodes beyond the pipeline.
 /// If key "publish" is defined here, it replaces the auto-generated publish node.
-/// If key "notify-on-failure" is defined here, it replaces the auto-generated
-/// failure notification node.
+/// If key "notifications" is defined here, it replaces the auto-generated
+/// completion notification node.
 extraNodes: Mapping<String, DAGNode> = new Mapping {}
 
-/// Append a run-level failure-notification node (`NotificationNode`, key
-/// `notify-on-failure`) that fires once when the workflow run terminates in
-/// failure and dispatches the notification app to fan alerts out to the
-/// tenant's enabled integrations (Teams, etc.).
+/// Top-level on/off for app notifications.
 ///
-/// Default `false`, so apps must explicitly opt in with `notifyOnFailure = true`
+/// When `true`, appends a run-level notification node (`NotificationNode`, key
+/// `notifications`) that fires once when the workflow run reaches any
+/// terminal state (success or failure) and dispatches the notification app to
+/// fan alerts out to the tenant's enabled integrations (Teams, etc.). The
+/// notification app decides delivery per integration via its
+/// `alertsWorkflowChannel.failureOnly` config (failure-only vs. all runs) — so
+/// this flag is purely the broad app-level switch; *which* runs and *which*
+/// channels are the customer's call.
+///
+/// Default `false`, so apps must explicitly opt in with `notifications = true`
 /// before the generated manifest includes the notification node. Override the
-/// node by defining `extraNodes["notify-on-failure"]`, which suppresses the
+/// node by defining `extraNodes["notifications"]`, which suppresses the
 /// toolkit-generated node.
-notifyOnFailure: Boolean = false
+notifications: Boolean = false
 
 /// Mapping of manifest arg name → form field name for top-level extract args.
 manifestTopLevelArgs: Mapping<String, String> = new Mapping {
@@ -516,8 +522,8 @@ class DependencyCondition {
   /// Tag required on the direct dependency. AE reserves `success` and `failure`;
   /// any other value is treated as a custom tag emitted by the node.
   ///
-  /// `workflow_failure` is a reserved *run-level* tag: with no `nodeId`, it marks
-  /// a finalizer that AE runs last and only when the run fails (any node failed).
+  /// `workflow_complete` is a reserved *run-level* tag: with no `nodeId`, it marks
+  /// a finalizer that AE runs last on any terminal state (success or failure).
   /// Used by the default `NotificationNode`.
   tag: String?
 
@@ -530,10 +536,10 @@ class DependencyCondition {
       throw("DependencyCondition cannot combine nodeId with andConditions/orConditions.")
     else if (andConditions != null && orConditions != null)
       throw("DependencyCondition cannot set both andConditions and orConditions.")
-    else if (tag == "workflow_failure" && nodeId == null)
-      null // run-level finalizer trigger: a node-less tag is valid
+    else if (tag == "workflow_complete" && nodeId == null)
+      null // run-level finalizer trigger: a node-less reserved tag is valid
     else if (tag != null && nodeId == null)
-      throw("DependencyCondition.tag requires nodeId (except the reserved run-level \"workflow_failure\" tag).")
+      throw("DependencyCondition.tag requires nodeId (except the reserved run-level \"workflow_complete\" tag).")
     else if (nodeId == null && andConditions == null && orConditions == null)
       throw("DependencyCondition requires nodeId, andConditions, or orConditions.")
     else if (andConditions != null && andConditions.length == 0)
@@ -601,11 +607,11 @@ open class PublishNode extends DAGNode {
   executorEnabled: Boolean|String = true
   tagPipelineEnabled: Boolean|String? = null
   tagAttachmentsPrefix: String? = null
-  /// Defaults to 24h `startToCloseTimeoutSeconds`. AE's source-code default for
+  /// Defaults to 72h `startToCloseTimeoutSeconds`. AE's source-code default for
   /// workflow nodes is 2h, which is too tight for any non-trivial publish on a
   /// large tenant. Override on the instance to use a different value.
   errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
-    startToCloseTimeoutSeconds = 86400
+    startToCloseTimeoutSeconds = 259200
   }
 
   /// Whether publish should build and upload the connection-cache index after writing assets.
@@ -670,25 +676,29 @@ open class PublishNode extends DAGNode {
   dependsOn { upstream }
 }
 
-/// Pre-built run-failure notification node (a system app, like PublishNode).
+/// Pre-built run-completion notification node (a system app, like PublishNode).
 ///
 /// Dispatches a `NotificationWorkflow` to the notification app, which fans the
 /// alert out to the tenant's enabled integrations (Teams, etc.). It is a
-/// run-level finalizer: `dependsOnCondition = {tag: "workflow_failure"}` makes
-/// Automation Engine run it last and only when the run fails (any node failed).
+/// run-level finalizer: `dependsOnCondition = {tag: "workflow_complete"}` makes
+/// Automation Engine run it last on ANY terminal state (success or failure),
+/// carrying the real `$.workflow.status`. The notification app then decides
+/// delivery per integration via its `alertsWorkflowChannel.failureOnly` config
+/// (failure-only vs. all runs) — so the trigger is "on completion" and the
+/// failure-vs-all policy lives entirely in the customer's integration config.
 ///
 /// The args template AE's run/failure context (`$.workflow.*`, `$.failure.*`),
 /// which AE injects into node input resolution — so the node is self-contained
-/// (no app-specific wiring). Gated by the app-level `notifyOnFailure` toggle;
-/// override per app via `extraNodes["notify-on-failure"]`.
+/// (no app-specific wiring). Gated by the app-level `notifications` toggle;
+/// override per app via `extraNodes["notifications"]`.
 open class NotificationNode extends DAGNode {
-  displayName = "Notify on workflow failure"
+  displayName = "Notify on workflow completion"
   workflowType = "NotificationWorkflow"
   appName = "notification-app"
-  dependsOnCondition = new DependencyCondition { tag = "workflow_failure" }
+  dependsOnCondition = new DependencyCondition { tag = "workflow_complete" }
   args {
     ["metadata"] = new Mapping {
-      ["notification_type"] = "workflow_failure_alert"
+      ["notification_type"] = "workflow_completion_alert"
       ["workflow_name"] = "$.workflow.name"
       ["workflow_qualified_name"] = "$.workflow.qualified_name"
       ["workflow_slug"] = "$.workflow.slug"
@@ -1247,13 +1257,13 @@ class PublishStep {
   /// Display name for the AE step.
   displayName: String = "Publish to Atlas"
 
-  /// Error handling for the publish node. Defaults to 24h
+  /// Error handling for the publish node. Defaults to 72h
   /// `startToCloseTimeoutSeconds`. AE's source-code default for workflow nodes
   /// is 2h — too tight for any non-trivial publish on a large tenant (Cosmos
   /// APP-1235, Fabric HYP-1189). Override to a different value as needed.
   /// `heartbeatTimeoutSeconds` is invalid for the publish workflow node.
   errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
-    startToCloseTimeoutSeconds = 86400
+    startToCloseTimeoutSeconds = 259200
   }
 
   /// Whether the asset publish node should build and upload the connection-cache index.
@@ -2093,8 +2103,8 @@ local function generateDAG(): Mapping<String, Any> = new Mapping {
       [nodeId] = renderNode(node)
     }
   }
-  when (notifyOnFailure && !extraNodes.toMap().containsKey("notify-on-failure")) {
-    ["notify-on-failure"] = renderNode(new NotificationNode {})
+  when (notifications && !extraNodes.toMap().containsKey("notifications")) {
+    ["notifications"] = renderNode(new NotificationNode {})
   }
 }
 

@@ -41,7 +41,7 @@ jobs:
     steps:
       - name: Get PR metadata
         id: pr
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const pr = await github.rest.pulls.get({
@@ -56,7 +56,7 @@ jobs:
 
       - name: Reject on fork
         if: steps.pr.outputs.is_fork == 'true'
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             await github.rest.issues.createComment({
@@ -69,7 +69,7 @@ jobs:
 
       - name: Skip on bump-version branch
         if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version == 'true'
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             await github.rest.issues.createComment({
@@ -81,7 +81,7 @@ jobs:
 
       - name: React to comment
         if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             await github.rest.reactions.createForIssueComment({
@@ -91,14 +91,14 @@ jobs:
               content: 'rocket',
             });
 
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
         with:
           ref: ${{ steps.pr.outputs.branch }}
           token: ${{ secrets.ORG_PAT_GITHUB }}
           fetch-depth: 0
 
-      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
         if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
 
       - name: Regenerate capability manifest
@@ -125,7 +125,7 @@ jobs:
 
       - name: Reply on PR
         if: always() && steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const status = '${{ steps.commit.outputs.status }}';

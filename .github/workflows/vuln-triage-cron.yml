@@ -1,42 +1,33 @@
-# SDK Evolution — nightly codebase scan
+# Vuln Triage — autonomous CVE remediation rover
 #
 # Dispatches a Cloudflare sandbox via mothership's Rover Direct API
-# (POST /api/sandbox/execute, mode=direct, snapshot=_base) to scan this
-# repo for bugs, architecture violations, security issues, performance
-# problems, and SDK improvement opportunities.
+# (POST /api/sandbox/execute, mode=direct, snapshot=_base) to triage a
+# security-scan Linear ticket created by daily-security-scan.yml.
 #
 # The sandbox clones the repo into /workspace/application-sdk and then
-# reads .mothership/sdk-evolution/ORCHESTRATION.md from disk — all the
-# discovery + gating + ticketing logic lives there, not on mothership.
+# reads .mothership/vuln-triage/ORCHESTRATION.md from disk — all the
+# per-CVE classification + remediation logic lives there, not on mothership.
 #
-# Runs nightly at 2am UTC. Sunday runs are full scans (entire codebase).
-# Weekday runs are incremental (changed files + dependency cone only).
+# Triggered (1) automatically by daily-security-scan.yml right after it
+# files a new "vulnerabilities" ticket, passing that ticket's identifier,
+# and (2) manually via workflow_dispatch for re-runs / backfill.
 #
-# Required configuration:
+# Required configuration (shared with sdk-evolution-cron.yml):
 #   secrets.HARNESS_TOKEN           Bearer token for /api/sandbox/execute.
 #   secrets.GLOBALPROTECT_USERNAME  VPN auth.
 #   secrets.GLOBALPROTECT_PASSWORD  VPN auth.
 #   vars.GLOBALPROTECT_PORTAL_URL   VPN portal URL.
 #   vars.MOTHERSHIP_URL             e.g. https://mothership.atlan.dev
 
-name: SDK Evolution (Nightly)
+name: Vuln Triage (Rover)
 
 on:
-  # Nightly schedule disabled — re-enable once the run produces a visible
-  # summary (Linear ticket link / GHA job summary) instead of an opaque log.
-  # schedule:
-  #   - cron: '0 2 * * *'     # 2am UTC daily
   workflow_dispatch:
     inputs:
-      scan_mode:
-        description: 'Scan mode: auto (Sunday=full), full, or incremental'
-        required: false
-        default: 'auto'
-        type: choice
-        options:
-          - auto
-          - full
-          - incremental
+      ticket:
+        description: 'Linear ticket identifier to triage (e.g. BLDX-1234)'
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -49,7 +40,7 @@ jobs:
     timeout-minutes: 130
     steps:
       - name: Checkout repo (for local globalprotect-connect action)
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@v4
 
       - name: Connect to VPN (attempt 1/3)
         id: vpn1
@@ -78,11 +69,11 @@ jobs:
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
           password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
 
-      - name: Dispatch SDK Evolution to mothership Rover Direct API
+      - name: Dispatch Vuln Triage to mothership Rover Direct API
         env:
           MOTHERSHIP_URL: ${{ vars.MOTHERSHIP_URL }}
           HARNESS_TOKEN: ${{ secrets.HARNESS_TOKEN }}
-          SCAN_MODE: ${{ inputs.scan_mode || 'auto' }}
+          TICKET: ${{ inputs.ticket }}
           GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -106,28 +97,32 @@ jobs:
           RUN_DATE=$(date -u +%Y-%m-%d)
 
           PROMPT=$(cat <<PROMPT_END
-          You are running the nightly SDK Evolution scan in a Cloudflare sandbox.
+          You are running the vuln-triage rover in a Cloudflare sandbox.
 
           Repository cloned at: /workspace/application-sdk (on main).
           Working directory: cd /workspace/application-sdk
 
           Read and follow the orchestration:
-            .mothership/sdk-evolution/ORCHESTRATION.md
-            .mothership/sdk-evolution/CLAUDE.md
-            .mothership/sdk-evolution/tools.md
+            .mothership/vuln-triage/ORCHESTRATION.md
+            .mothership/vuln-triage/CLAUDE.md
+            .mothership/vuln-triage/tools.md
 
           Run metadata (use these verbatim):
+            TICKET:       ${TICKET}        # the Linear ticket to triage
             RUN_DATE:     ${RUN_DATE}
-            SCAN_MODE:    ${SCAN_MODE}    # auto = full on Sunday, incremental otherwise
             GHA_RUN_URL:  ${GHA_RUN_URL}
 
           GITHUB_TOKEN is pre-injected by the sandbox. Use \`gh\` for all
           GitHub operations.
 
-          When you create the parent Linear ticket in Stage 4b and the
-          summary post in Stage 8, include a link to GHA_RUN_URL in the
-          ticket description / summary so the reader can jump to the
-          workflow run that produced the work (cost, timing, logs).
+          Triage every CVE listed on ticket ${TICKET}. For each, classify per
+          ORCHESTRATION.md, then either:
+            - Case 1 (our dependency, scan-confirmed fix) → open a DRAFT PR with
+              the bump (never ready, never merged); or
+            - Case 2/3/4 (allowlist / alternative / base-image rebuild) → detail
+              the recommended remediation on the ticket.
+          Tag Vaibhav or Chris to act. Include a link to GHA_RUN_URL in the
+          ticket summary. Never merge, never push to main.
 
           Linear / GPT proxy access: use the \$PROXY_BASE and \$PROXY_JWT
           env vars injected by mothership (see tools.md).
@@ -135,10 +130,10 @@ jobs:
           )
 
           PAYLOAD=$(jq -n \
-            --arg source_id "sdk-evolution-${RUN_DATE}" \
+            --arg source_id "vuln-triage-${TICKET}-${RUN_DATE}" \
             --arg prompt "${PROMPT}" \
+            --arg ticket "${TICKET}" \
             --arg run_date "${RUN_DATE}" \
-            --arg scan_mode "${SCAN_MODE}" \
             '{
               mode: "direct",
               stream: true,
@@ -151,8 +146,8 @@ jobs:
               max_timeout_seconds: 7200,
               idle_timeout_seconds: 1800,
               metadata: {
-                run_date: $run_date,
-                scan_mode: $scan_mode
+                ticket: $ticket,
+                run_date: $run_date
               }
             }')
 
@@ -238,4 +233,4 @@ jobs:
             exit 1
           fi
 
-          echo "SDK Evolution completed successfully (cost=${FINAL_COST})."
+          echo "Vuln triage completed successfully (cost=${FINAL_COST})."
