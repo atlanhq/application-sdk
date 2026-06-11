@@ -265,7 +265,7 @@ def _build_s3_config(
         # client is https-only by default and rejects http at request-build time
         # ("HTTP error: builder error") otherwise. An explicit disableSSL below
         # still works and is now redundant for http endpoints.
-        if endpoint.startswith("http://"):
+        if endpoint.lower().startswith("http://"):
             client_options["allow_http"] = True
     if _coerce_bool(meta.get("forcePathStyle", "")):
         config["aws_virtual_hosted_style_request"] = "false"

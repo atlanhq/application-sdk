@@ -224,6 +224,11 @@ class TestS3StaticCredentials:
 
 
 class TestS3EmptyConfigHardening:
+    @pytest.fixture(autouse=True)
+    def _isolate_aws_region_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+
     @patch("obstore.store.S3Store")
     def test_bucket_only_passes_config_none(
         self, mock_s3_cls: MagicMock, tmp_path: Path
@@ -261,6 +266,11 @@ class TestS3EmptyConfigHardening:
 
 
 class TestS3BehaviorKnobs:
+    @pytest.fixture(autouse=True)
+    def _isolate_aws_region_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+
     @patch("obstore.store.S3Store")
     def test_endpoint_and_force_path_style(
         self, mock_s3_cls: MagicMock, tmp_path: Path
@@ -397,6 +407,24 @@ class TestS3BehaviorKnobs:
     ) -> None:
         # No region in metadata → use AWS_REGION (as Dapr's LoadDefaultConfig
         # would) instead of letting obstore silently default to us-east-1.
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.aws.s3",
+            {"bucket": "b"},
+        )
+        mock_s3_cls.return_value = MagicMock()
+        create_store_from_binding("objectstore", components_dir=components_dir)
+
+        config = mock_s3_cls.call_args.kwargs["config"]
+        assert config["aws_region"] == "ap-south-1"
+
+    @patch.dict(os.environ, {"AWS_DEFAULT_REGION": "ap-south-1"}, clear=False)
+    @patch("obstore.store.S3Store")
+    def test_region_falls_back_to_aws_default_region_env(
+        self, mock_s3_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        # AWS_REGION absent; AWS_DEFAULT_REGION is the second fallback arm.
         components_dir = _write_component(
             tmp_path,
             "objectstore",
