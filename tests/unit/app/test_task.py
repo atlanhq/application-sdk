@@ -190,11 +190,23 @@ class TestTaskMetadata:
         assert metadata is not None
         assert metadata.heartbeat_timeout_seconds is None
 
-    def test_task_schedule_to_start_disabled_by_default(self) -> None:
-        """schedule_to_start_timeout_seconds defaults to None (disabled)."""
+    def test_task_default_schedule_to_start_is_five_minutes(self) -> None:
+        """schedule_to_start_timeout_seconds defaults to 300 s (5 minutes)."""
 
         class MyApp:
             @task
+            async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.my_task)
+        assert metadata is not None
+        assert metadata.schedule_to_start_timeout_seconds == 300
+
+    def test_task_disable_schedule_to_start(self) -> None:
+        """Setting schedule_to_start_timeout_seconds=None disables it."""
+
+        class MyApp:
+            @task(schedule_to_start_timeout_seconds=None)
             async def my_task(self, input: SimpleInput) -> SimpleOutput:
                 return SimpleOutput()
 

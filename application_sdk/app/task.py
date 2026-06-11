@@ -39,10 +39,15 @@ _USE_DEFAULT = object()
 # Apps that need a different per-task value pass it explicitly to @task().
 _DEFAULT_HEARTBEAT_TIMEOUT_SECONDS: int = env_int("ATLAN_HEARTBEAT_TIMEOUT_SECONDS", 60)
 _DEFAULT_TIMEOUT_SECONDS: int = env_int("ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS", 600)
-# 0 / unset means disabled (None) — schedule-to-start stays opt-in because it is
-# non-retryable by Temporal semantics: when it fires the activity fails outright.
+# Default 5 minutes: a task sitting unpolled in the queue that long means the
+# worker is dead, scaled to zero, or saturated — fail fast instead of stalling
+# until the workflow execution timeout. Explicit 0 disables (None). Note this
+# timeout is non-retryable by Temporal semantics: when it fires the activity
+# fails outright. Tasks that fan out wider than the worker's concurrent-slot
+# capacity should raise or disable it per @task, since queued-behind-busy-slots
+# waits also count against it.
 _DEFAULT_SCHEDULE_TO_START_TIMEOUT_SECONDS: int | None = (
-    env_int("ATLAN_SCHEDULE_TO_START_TIMEOUT_SECONDS", 0) or None
+    env_int("ATLAN_SCHEDULE_TO_START_TIMEOUT_SECONDS", 300) or None
 )
 
 # Type alias for methods with single Input param returning Output
@@ -143,8 +148,11 @@ class TaskMetadata:
     (Temporal does not retry schedule-to-start timeouts — re-queuing would land
     in the same unpolled queue), surfacing a dead/scaled-down/non-polling worker
     in minutes instead of stalling silently until the workflow execution
-    timeout. None (the default) disables it. Defaults to the
-    ATLAN_SCHEDULE_TO_START_TIMEOUT_SECONDS env var; 0/unset means disabled."""
+    timeout. Defaults to the ATLAN_SCHEDULE_TO_START_TIMEOUT_SECONDS env var,
+    or 300 s (5 minutes) if unset; set the env var to 0 or pass None to
+    disable. Queue waits behind a saturated worker also count — tasks that fan
+    out wider than the worker's concurrent-slot capacity should set a larger
+    value or None."""
 
 
 def _validate_task_signature(
@@ -356,9 +364,12 @@ def task(
             fires the activity fails immediately (schedule-to-start timeouts are
             not retryable by Temporal design), so a dead, scaled-down, or
             non-polling worker surfaces in minutes instead of stalling the
-            workflow until its execution timeout. None disables it. Defaults to
-            the ``ATLAN_SCHEDULE_TO_START_TIMEOUT_SECONDS`` env var; 0/unset
-            means disabled.
+            workflow until its execution timeout. Defaults to the
+            ``ATLAN_SCHEDULE_TO_START_TIMEOUT_SECONDS`` env var, or 300 s
+            (5 minutes) if unset. Set to None (or the env var to 0) to disable.
+            Queue waits behind a saturated worker also count against it — tasks
+            that fan out wider than the worker's concurrent-slot capacity
+            should set a larger value or None.
 
     Returns:
         The decorated function with task metadata attached.
