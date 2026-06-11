@@ -99,9 +99,9 @@
         "node_id": "publish"
       }
     },
-    "notify-on-failure": {
+    "notifications": {
       "activity_name": "execute_workflow",
-      "activity_display_name": "Notify on workflow failure",
+      "activity_display_name": "Notify on workflow completion",
       "app_name": "notification-app",
       "inputs": {
         "workflow_type": "NotificationWorkflow",
@@ -109,7 +109,7 @@
         "task_queue": "atlan-notification-app-{deployment_name}",
         "args": {
           "metadata": {
-            "notification_type": "workflow_failure_alert",
+            "notification_type": "workflow_completion_alert",
             "workflow_name": "$.workflow.name",
             "workflow_qualified_name": "$.workflow.qualified_name",
             "workflow_slug": "$.workflow.slug",
@@ -134,7 +134,7 @@
         }
       },
       "depends_on": {
-        "tag": "workflow_failure"
+        "tag": "workflow_complete"
       }
     }
   }

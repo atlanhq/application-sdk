@@ -1,6 +1,6 @@
-/// Fixture: app that explicitly leaves the run-level failure-notification node disabled.
+/// Fixture: app that explicitly leaves the run-level notification node disabled.
 ///
-/// Exercises `notifyOnFailure = false`, which is also the default.
+/// Exercises `notifications = false`, which is also the default.
 amends "../../src/App.pkl"
 
 name = "notify-disabled"
@@ -8,7 +8,7 @@ displayName = "Notify Disabled"
 icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
 hasCredentialConfig = false
 
-notifyOnFailure = false
+notifications = false
 
 uiConfig = new UIConfig {
   tasks {

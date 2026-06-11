@@ -1,14 +1,15 @@
-// Tests for the built-in run-level failure-notification node (NotificationNode)
-// and the `notifyOnFailure` app-level toggle.
+// Tests for the built-in run-level notification node (NotificationNode) and the
+// `notifications` app-level on/off toggle.
 //
-// Background: apps can opt in to workflow-run failure alerts by setting
-// `notifyOnFailure = true`. The toolkit then appends a `notify-on-failure`
-// finalizer node that depends on the reserved run-level `workflow_failure` tag
-// (a node-less DependencyCondition) so Automation Engine runs it once per failed
-// run and dispatches the notification app, which fans the alert out to the
-// tenant's enabled integrations. AE owns the finalizer behavior and resolves the
-// `$.workflow.*` / `$.failure.*` placeholders; the toolkit owns the manifest
-// shape and the templated arg set.
+// Background: apps can opt in to workflow-run alerts by setting
+// `notifications = true`. The toolkit then appends a `notifications`
+// finalizer node that depends on the reserved run-level `workflow_complete` tag
+// (a node-less DependencyCondition) so Automation Engine runs it once per run on
+// any terminal state (success or failure), carrying the real status, and
+// dispatches the notification app — which fans the alert out to the tenant's
+// enabled integrations and decides delivery per integration (failure-only vs.
+// all). AE owns the finalizer behavior and resolves the `$.workflow.*` /
+// `$.failure.*` placeholders; the toolkit owns the manifest shape and arg set.
 
 amends "pkl:test"
 
@@ -38,7 +39,7 @@ local overrideApp = (App) {
   }
 
   extraNodes {
-    ["notify-on-failure"] = new App.NotificationNode {
+    ["notifications"] = new App.NotificationNode {
       displayName = "Custom notify on failure"
       appName = "custom-notification-app"
       taskQueue = "custom-notification-queue"
@@ -46,21 +47,21 @@ local overrideApp = (App) {
   }
 }
 
-// Default app (no pipeline block, notifyOnFailure defaults false).
+// Default app (no pipeline block, notifications defaults false).
 local defaultManifest = new json.Parser { useMapping = true }.parse(
   defaultApp.output.files["app/generated/manifest.json"].text
 )
 local defaultDag = defaultManifest["dag"]
 
-// Existing full example opts in (notifyOnFailure = true).
+// Existing full example opts in (notifications = true).
 local enabledManifest = new json.Parser { useMapping = true }.parse(
   enabledApp.output.files["app/generated/manifest.json"].text
 )
 local enabledDag = enabledManifest["dag"]
-local notifyNode = enabledDag["notify-on-failure"]
+local notifyNode = enabledDag["notifications"]
 local notifyArgs = notifyNode["inputs"]["args"]["metadata"]
 
-// App that opts out (notifyOnFailure = false).
+// App that opts out (notifications = false).
 local disabledManifest = new json.Parser { useMapping = true }.parse(
   disabledApp.output.files["app/generated/manifest.json"].text
 )
@@ -69,24 +70,24 @@ local disabledDag = disabledManifest["dag"]
 local overrideManifest = new json.Parser { useMapping = true }.parse(
   overrideApp.output.files["app/generated/manifest.json"].text
 )
-local overrideNode = overrideManifest["dag"]["notify-on-failure"]
+local overrideNode = overrideManifest["dag"]["notifications"]
 
 facts {
   // -----------------------------------------------------------------------
   // Default: the node is absent unless the app opts in.
   // -----------------------------------------------------------------------
 
-  ["App with no pipeline declaration does not get a notify-on-failure node by default"] {
-    !defaultDag.containsKey("notify-on-failure")
+  ["App with no pipeline declaration does not get a notifications node by default"] {
+    !defaultDag.containsKey("notifications")
   }
 
-  ["App with notifyOnFailure=true gets a notify-on-failure node"] {
+  ["App with notifications=true gets a notifications node"] {
     notifyNode != null
   }
 
   ["Notify node dispatches the notification app workflow"] {
     notifyNode["activity_name"] == "execute_workflow"
-    notifyNode["activity_display_name"] == "Notify on workflow failure"
+    notifyNode["activity_display_name"] == "Notify on workflow completion"
     notifyNode["app_name"] == "notification-app"
     notifyNode["inputs"]["workflow_type"] == "NotificationWorkflow"
     notifyNode["inputs"]["app_name"] == "notification-app"
@@ -96,10 +97,10 @@ facts {
     notifyNode["inputs"]["task_queue"] == "atlan-notification-app-{deployment_name}"
   }
 
-  // Run-level finalizer: a node-less workflow_failure tag, NOT a per-node
-  // success/failure dependency. AE runs it once when the whole run fails.
-  ["Notify node depends on the run-level workflow_failure tag with no node_id"] {
-    notifyNode["depends_on"]["tag"] == "workflow_failure"
+  // Run-level finalizer: a node-less workflow_complete tag, NOT a per-node
+  // success/failure dependency. AE runs it once on any terminal state.
+  ["Notify node depends on the run-level workflow_complete tag with no node_id"] {
+    notifyNode["depends_on"]["tag"] == "workflow_complete"
     !notifyNode["depends_on"].containsKey("node_id")
   }
 
@@ -107,8 +108,8 @@ facts {
   // The args templating wires AE's run/failure context into the dispatch.
   // -----------------------------------------------------------------------
 
-  ["Notify node marks the dispatch as a workflow_failure_alert"] {
-    notifyArgs["notification_type"] == "workflow_failure_alert"
+  ["Notify node marks the dispatch as a workflow_completion_alert"] {
+    notifyArgs["notification_type"] == "workflow_completion_alert"
   }
 
   ["Notify node templates run-level workflow context"] {
@@ -138,11 +139,11 @@ facts {
   }
 
   // -----------------------------------------------------------------------
-  // Disabled path: notifyOnFailure = false suppresses the node entirely.
+  // Disabled path: notifications = false suppresses the node entirely.
   // -----------------------------------------------------------------------
 
-  ["App with notifyOnFailure=false has no notify-on-failure node"] {
-    !disabledDag.containsKey("notify-on-failure")
+  ["App with notifications=false has no notifications node"] {
+    !disabledDag.containsKey("notifications")
   }
 
   // The toggle must not disturb the rest of the DAG.
@@ -150,8 +151,8 @@ facts {
     disabledDag["publish"] != null
   }
 
-  // extraNodes["notify-on-failure"] replaces the auto-generated node.
-  ["extraNodes can replace the notify-on-failure node"] {
+  // extraNodes["notifications"] replaces the auto-generated node.
+  ["extraNodes can replace the notifications node"] {
     overrideNode["activity_display_name"] == "Custom notify on failure"
     overrideNode["app_name"] == "custom-notification-app"
     overrideNode["inputs"]["app_name"] == "custom-notification-app"
@@ -166,19 +167,19 @@ facts {
     local n = new App.NotificationNode {}
     n.workflowType == "NotificationWorkflow"
     n.appName == "notification-app"
-    n.displayName == "Notify on workflow failure"
+    n.displayName == "Notify on workflow completion"
   }
 
-  ["NotificationNode depends on the workflow_failure tag with no nodeId"] {
+  ["NotificationNode depends on the workflow_complete tag with no nodeId"] {
     local n = new App.NotificationNode {}
-    n.dependsOnCondition.tag == "workflow_failure"
+    n.dependsOnCondition.tag == "workflow_complete"
     n.dependsOnCondition.nodeId == null
     n.dependsOnCondition._conditionShapeCheck == null
   }
 
-  // The reserved tag is the one node-less DependencyCondition the shape check
-  // permits; every other tag still requires a nodeId.
-  ["Node-less workflow_failure DependencyCondition passes the shape check"] {
-    new App.DependencyCondition { tag = "workflow_failure" }._conditionShapeCheck == null
+  // `workflow_complete` is the only reserved node-less DependencyCondition the
+  // shape check permits; every other tag still requires a nodeId.
+  ["Node-less workflow_complete DependencyCondition passes the shape check"] {
+    new App.DependencyCondition { tag = "workflow_complete" }._conditionShapeCheck == null
   }
 }

@@ -135,14 +135,14 @@ dev = [
     "pre-commit>=4.2.0,<5.0.0",
     "isort>=5.13.2,<6.0.0",
     "boto3-stubs>=1.38.6,<2.0.0",
-    "poethepoet>=0.34.0,<0.40.0",
+    "poethepoet>=0.46.0,<0.47.0",
     "libcst>=1.4.0,<2.0.0",
 ]
 test = [
     "mock>=5.1.0,<6.0.0",
     "pytest>=8.3.3,<10.0.0",
     "coverage>=7.6.1,<8.0.0",
-    "pytest-asyncio>=0.26.0,<1.4.0",
+    "pytest-asyncio>=1.4.0,<2.0.0",
     "pytest-timeout>=2.3.0,<3.0.0",
     "hypothesis>=6.114.0,<7.0.0",
     "trustme>=1.2.1,<2.0.0",
