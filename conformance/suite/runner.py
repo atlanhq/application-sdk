@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from suite.checks import actions_pinning
+from suite.rules import get_rule
+from suite.schema.disposition import EnforcementTier
 from suite.schema.findings import Finding, findings_to_report
 
 
