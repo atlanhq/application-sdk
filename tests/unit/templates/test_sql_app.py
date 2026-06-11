@@ -1769,6 +1769,34 @@ class TestPrimeSqlAuth:
         assert len(result.error_message) == 501  # 500 chars + ellipsis
         assert result.error_message.endswith("…")
 
+    async def test_prime_sql_auth_redacts_secrets_in_logged_traceback(self, app):
+        """The failure log keeps traceback frames for diagnosis but must
+        redact connection-string credentials. ``exc_info=True`` would render
+        the SQLAlchemy cause message verbatim and leak the URL password into
+        worker logs; we format + redact the traceback instead."""
+
+        class _LeakyClient(FakeSQLClient):
+            async def get_results(self, query):
+                raise RuntimeError(
+                    "auth failed for postgresql://admin:s3cr3t@db.host:5432/prod"
+                )
+
+        fake = _LeakyClient()
+        with (
+            patch.object(SqlApp, "_init_sql_client", new=AsyncMock(return_value=fake)),
+            patch("application_sdk.templates.sql_app.logger") as mock_logger,
+        ):
+            result = await app.prime_sql_auth(self._build_input())
+
+        assert result.success is False
+        mock_logger.error.assert_called_once()
+        logged = " ".join(str(arg) for arg in mock_logger.error.call_args.args)
+        # Traceback frames preserved for the long-tail diagnosis ...
+        assert "Traceback" in logged
+        # ... but the password is gone and userinfo is collapsed to ***@.
+        assert "s3cr3t" not in logged
+        assert "postgresql://***@db.host" in logged
+
     # ── Bug-reproduction via call ordering ──────────────────────────────
 
     async def test_reproduces_parallel_auth_burst_when_prime_skipped(self):

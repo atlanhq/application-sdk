@@ -28,11 +28,21 @@ _SECRET_PARAM_RE = re.compile(
 )
 
 
-def sanitize_cause_repr(exc: BaseException) -> str:
-    """Return a length-capped, secret-redacted string for a cause exception."""
-    text = str(exc)
+def redact_secrets(text: str) -> str:
+    """Redact URL userinfo and known secret query-params from arbitrary text.
+
+    Use this when logging strings that may embed credentials but are not a
+    single cause exception — e.g. a formatted traceback whose frames are worth
+    keeping but whose driver messages embed connection-string passwords.
+    """
     text = _URL_USERINFO_RE.sub(r"\1***@", text)
     text = _SECRET_PARAM_RE.sub(r"\1***", text)
+    return text
+
+
+def sanitize_cause_repr(exc: BaseException) -> str:
+    """Return a length-capped, secret-redacted string for a cause exception."""
+    text = redact_secrets(str(exc))
     if len(text) > _CAUSE_MAX_LEN:
         text = text[:_CAUSE_MAX_LEN] + "…"
     return f"{type(exc).__name__}: {text}"

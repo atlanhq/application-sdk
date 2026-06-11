@@ -62,6 +62,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+import traceback
 from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
@@ -84,6 +85,7 @@ from application_sdk.constants import (
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.credentials import CredentialResolver, legacy_credential_ref
 from application_sdk.credentials.ref import CredentialRef
+from application_sdk.errors import redact_secrets
 from application_sdk.errors.leaves import (
     AppTimeoutError,
     AuthError,
@@ -328,18 +330,21 @@ class SqlApp(App):
             error_message = str(exc)
             if len(error_message) > 500:
                 error_message = error_message[:500] + "…"
-            # exc_info=True preserves the traceback in worker logs even
-            # though the exception is being converted to structured return
-            # data. For most failures the class+message is sufficient, but
-            # the long-tail (TLS negotiation, driver bugs, version skew)
-            # is only diagnosable from the original frames.
+            # We want the traceback frames in worker logs — the long-tail
+            # (TLS negotiation, driver bugs, version skew) is only diagnosable
+            # from the original frames. But exc_info=True would render the
+            # SQLAlchemy cause's message verbatim, and that embeds the full
+            # connection string incl. password. So we format the traceback
+            # ourselves and redact secrets before logging — frames preserved,
+            # credentials stripped.
+            safe_traceback = redact_secrets("".join(traceback.format_exception(exc)))
             logger.error(
                 "SQL auth cache prime FAILED after %.1fms (%s) — short-circuiting "
                 "before parallel extract burst to avoid stacking failed_login_attempts "
-                "on the source.",
+                "on the source.\n%s",
                 duration_ms,
                 type(exc).__name__,
-                exc_info=True,
+                safe_traceback,
             )
             return PrimeAuthOutput(
                 duration_ms=duration_ms,
