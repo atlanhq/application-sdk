@@ -17,6 +17,7 @@ from application_sdk.handler.contracts import (
     PreflightCheck,
     PreflightInput,
     PreflightOutput,
+    PreflightRuntimeContext,
     PreflightStatus,
     SqlMetadataObject,
     SqlMetadataOutput,
@@ -77,18 +78,38 @@ class TestPreflightStatus:
         assert PreflightStatus.READY == "ready"
         assert PreflightStatus.NOT_READY == "not_ready"
         assert PreflightStatus.PARTIAL == "partial"
+        assert PreflightStatus.SUCCESS == "success"
+        assert PreflightStatus.FAILED == "failed"
+        assert PreflightStatus.SKIPPED == "skipped"
+        assert PreflightStatus.ERROR == "error"
+
+    def test_legacy_statuses_normalize_to_runtime_success(self):
+        assert PreflightStatus.READY.canonical() == PreflightStatus.SUCCESS
+        assert PreflightStatus.NOT_READY.canonical() == PreflightStatus.SUCCESS
+        assert PreflightStatus.PARTIAL.canonical() == PreflightStatus.SUCCESS
+
+    def test_canonical_statuses_stay_canonical(self):
+        assert PreflightStatus.FAILED.canonical() == PreflightStatus.FAILED
+        assert PreflightStatus.SKIPPED.canonical() == PreflightStatus.SKIPPED
 
 
 class TestPreflightCheck:
     def test_defaults(self):
         check = PreflightCheck(name="connectivity")
         assert check.name == "connectivity"
+        assert check.title == ""
         assert check.passed is False
         assert check.message == ""
         assert check.duration_ms == 0.0
 
     def test_passed(self):
-        check = PreflightCheck(name="connectivity", passed=True, duration_ms=50.0)
+        check = PreflightCheck(
+            name="connectivity",
+            title="Connectivity",
+            passed=True,
+            duration_ms=50.0,
+        )
+        assert check.title == "Connectivity"
         assert check.passed is True
         assert check.duration_ms == 50.0
 
@@ -101,6 +122,7 @@ class TestPreflightOutput:
     def test_required_status(self):
         out = PreflightOutput(status=PreflightStatus.READY)
         assert out.status == PreflightStatus.READY
+        assert out.canonical_status() == PreflightStatus.SUCCESS
         assert out.checks == []
 
     def test_with_checks(self):
@@ -110,6 +132,12 @@ class TestPreflightOutput:
         ]
         out = PreflightOutput(status=PreflightStatus.PARTIAL, checks=checks)
         assert len(out.checks) == 2
+
+    def test_helper_constructors(self):
+        assert PreflightOutput.success().status == PreflightStatus.SUCCESS
+        assert PreflightOutput.failed().status == PreflightStatus.FAILED
+        assert PreflightOutput.skipped().status == PreflightStatus.SKIPPED
+        assert PreflightOutput.error().status == PreflightStatus.ERROR
 
 
 class TestMetadataOutput:
@@ -451,6 +479,25 @@ class TestPreflightInputFieldTypes:
         assert isinstance(inp.metadata, BaseMetadataConfig)
         assert inp.connection_config.model_extra == {}
         assert inp.metadata.model_extra == {}
+        assert inp.runtime is None
+
+    def test_runtime_context_accepts_known_and_extra_fields(self):
+        inp = PreflightInput.model_validate(
+            {
+                "credentials": [],
+                "runtime": {
+                    "source": "automation_engine_preflight",
+                    "workflow_slug": "daily-sync",
+                    "workflow_run_guid": "run-1",
+                    "triggered_by": "schedule",
+                    "entrypoint": "crawler",
+                    "tenant": "default",
+                },
+            }
+        )
+        assert isinstance(inp.runtime, PreflightRuntimeContext)
+        assert inp.runtime.source == "automation_engine_preflight"
+        assert inp.runtime.model_extra == {"tenant": "default"}
 
 
 class TestMetadataInputFieldTypes:

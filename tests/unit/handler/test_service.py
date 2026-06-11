@@ -12,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from application_sdk.contracts.base import Input, Output
-from application_sdk.handler.base import Handler, HandlerError
+from application_sdk.handler.base import DefaultHandler, Handler, HandlerError
 from application_sdk.handler.contracts import (
     ApiMetadataObject,
     ApiMetadataOutput,
@@ -357,9 +357,9 @@ class TestAuthEndpoint:
         """If someone adds a new AuthStatus without updating the map, this
         test catches it."""
         for status in AuthStatus:
-            assert isinstance(
-                status.http_status, int
-            ), f"{status} missing from _AUTH_STATUS_HTTP_CODES"
+            assert isinstance(status.http_status, int), (
+                f"{status} missing from _AUTH_STATUS_HTTP_CODES"
+            )
 
 
 class TestPreflightEndpoint:
@@ -381,6 +381,25 @@ class TestPreflightEndpoint:
         # v2 format: data is a dict of check results keyed by camelCase name.
         assert body["data"] == {}
         assert body["message"] == "ready"
+        assert body["preflight"]["status"] == "success"
+        assert body["preflight"]["app_status"] == "ready"
+        assert body["preflight"]["checks"] == []
+
+    def test_default_handler_skipped_is_benign_for_sage_v2(self) -> None:
+        client = _make_client(handler=DefaultHandler())
+        response = client.post(
+            "/workflows/v1/check",
+            json={"credentials": []},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is True
+        assert body["data"] == {}
+        assert body["message"] == "No preflight handler registered"
+        assert body["preflight"]["status"] == "skipped"
+        assert body["preflight"]["app_status"] == "skipped"
+        assert body["preflight"]["checks"] == []
 
     def test_preflight_handler_error_returns_500(self) -> None:
         client = _make_client(handler=_FailingHandler())
@@ -425,6 +444,97 @@ class TestPreflightEndpoint:
                 "extraction-type": "objectstore",
                 "manifest-source": "atlan",
                 "core-extract-output-prefix": "artifacts/dbt/prod",
+            }
+        ]
+
+    def test_preflight_metadata_only_mirrors_to_connection_config(self) -> None:
+        received: list[dict[str, dict]] = []
+
+        class _ConfigCapture(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                received.append(
+                    {
+                        "metadata": dict(input.metadata),
+                        "connection_config": dict(input.connection_config),
+                    }
+                )
+                return PreflightOutput(status=PreflightStatus.READY, message="ready")
+
+        client = _make_client(handler=_ConfigCapture())
+        response = client.post(
+            "/workflows/v1/check",
+            json={
+                "credentials": [],
+                "metadata": {"warehouse": "COMPUTE_WH"},
+            },
+        )
+
+        assert response.status_code == 200
+        assert received == [
+            {
+                "metadata": {"warehouse": "COMPUTE_WH"},
+                "connection_config": {"warehouse": "COMPUTE_WH"},
+            }
+        ]
+
+    def test_preflight_connection_config_only_mirrors_to_metadata(self) -> None:
+        received: list[dict[str, dict]] = []
+
+        class _ConfigCapture(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                received.append(
+                    {
+                        "metadata": dict(input.metadata),
+                        "connection_config": dict(input.connection_config),
+                    }
+                )
+                return PreflightOutput(status=PreflightStatus.READY, message="ready")
+
+        client = _make_client(handler=_ConfigCapture())
+        response = client.post(
+            "/workflows/v1/check",
+            json={
+                "credentials": [],
+                "connection_config": {"warehouse": "COMPUTE_WH"},
+            },
+        )
+
+        assert response.status_code == 200
+        assert received == [
+            {
+                "metadata": {"warehouse": "COMPUTE_WH"},
+                "connection_config": {"warehouse": "COMPUTE_WH"},
+            }
+        ]
+
+    def test_preflight_connection_config_and_metadata_are_preserved(self) -> None:
+        received: list[dict[str, dict]] = []
+
+        class _ConfigCapture(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                received.append(
+                    {
+                        "metadata": dict(input.metadata),
+                        "connection_config": dict(input.connection_config),
+                    }
+                )
+                return PreflightOutput(status=PreflightStatus.READY, message="ready")
+
+        client = _make_client(handler=_ConfigCapture())
+        response = client.post(
+            "/workflows/v1/check",
+            json={
+                "credentials": [],
+                "metadata": {"legacy": "kept"},
+                "connection_config": {"canonical": "kept"},
+            },
+        )
+
+        assert response.status_code == 200
+        assert received == [
+            {
+                "metadata": {"legacy": "kept"},
+                "connection_config": {"canonical": "kept"},
             }
         ]
 
@@ -512,6 +622,38 @@ class TestPreflightEndpoint:
         assert entry["message"] == "Metadata GraphQL API returned no sites"
         assert entry["failureMessage"] == "Metadata GraphQL API returned no sites"
         assert entry["successMessage"] == ""
+        assert body["preflight"]["status"] == "success"
+        assert body["preflight"]["app_status"] == "not_ready"
+        assert "status" not in body["data"]
+
+    def test_preflight_canonical_failed_stays_outside_v2_data(self) -> None:
+        class _OneCheck(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                from application_sdk.handler.contracts import PreflightCheck
+
+                return PreflightOutput.failed(
+                    message="Credentials are invalid",
+                    checks=[
+                        PreflightCheck(
+                            name="loginCheck",
+                            title="Validate credentials",
+                            passed=False,
+                            message="Credentials are invalid",
+                        )
+                    ],
+                )
+
+        client = _make_client(handler=_OneCheck())
+        body = client.post("/workflows/v1/check", json={"credentials": []}).json()
+
+        assert body["success"] is True
+        assert list(body["data"]) == ["loginCheck"]
+        assert body["data"]["loginCheck"]["success"] is False
+        assert body["preflight"]["status"] == "failed"
+        assert body["preflight"]["app_status"] == "failed"
+        assert body["preflight"]["checks"][0]["title"] == "Validate credentials"
+        assert "status" not in body["data"]
+        assert "checks" not in body["data"]
 
     def test_preflight_check_multiple_checks_v2_fields_per_check(self) -> None:
         """Mixed pass/fail set — each check entry carries its own v2 fields."""
@@ -703,6 +845,8 @@ class TestPreflightEndpoint:
         )
         assert body["success"] is False
         assert body["data"] == {}
+        assert body["preflight"]["status"] == "success"
+        assert body["preflight"]["app_status"] == "not_ready"
 
 
 class TestMetadataEndpoint:
@@ -1103,9 +1247,9 @@ class TestStartWorkflowRouting:
             # The started workflow name must end in ':extract', not ':load'
             started_name = mock_client.start_workflow.call_args[0][0]
             assert ":load" not in started_name, f"load was dispatched: {started_name!r}"
-            assert started_name.endswith(
-                ":extract"
-            ), f"Expected :extract, got {started_name!r}"
+            assert started_name.endswith(":extract"), (
+                f"Expected :extract, got {started_name!r}"
+            )
             assert not any(
                 issubclass(w.category, DeprecationWarning) for w in caught
             ), "Canonical ?entrypoint= path must not emit DeprecationWarning"
@@ -1512,18 +1656,18 @@ class TestStartWorkflowInvocability:
                 resp = client.post(
                     f"/workflows/v1/start?entrypoint={ep_name}", json={"name": "x"}
                 )
-                assert (
-                    resp.status_code == 200
-                ), f"?entrypoint={ep_name} returned {resp.status_code}"
+                assert resp.status_code == 200, (
+                    f"?entrypoint={ep_name} returned {resp.status_code}"
+                )
                 wf_name = self._started_workflow_name(mock_client)
                 if ep_suffix is None:
-                    assert (
-                        ":" not in wf_name
-                    ), f"?entrypoint={ep_name}: expected bare name (no colon), got {wf_name!r}"
+                    assert ":" not in wf_name, (
+                        f"?entrypoint={ep_name}: expected bare name (no colon), got {wf_name!r}"
+                    )
                 else:
-                    assert wf_name.endswith(
-                        ep_suffix
-                    ), f"?entrypoint={ep_name}: expected suffix {ep_suffix!r}, got {wf_name!r}"
+                    assert wf_name.endswith(ep_suffix), (
+                        f"?entrypoint={ep_name}: expected suffix {ep_suffix!r}, got {wf_name!r}"
+                    )
             finally:
                 patcher.stop()
 
@@ -1709,9 +1853,9 @@ class TestWorkflowConfigValidation:
             "/workflows/v1/config/valid-id",
             params={"type": type_param},
         )
-        assert (
-            response.status_code == 422
-        ), f"Expected 422 from FastAPI pattern validator for type={type_param!r}, got {response.status_code}"
+        assert response.status_code == 422, (
+            f"Expected 422 from FastAPI pattern validator for type={type_param!r}, got {response.status_code}"
+        )
 
     @pytest.mark.parametrize(
         "type_param",
@@ -1724,9 +1868,9 @@ class TestWorkflowConfigValidation:
             params={"type": type_param},
             json={"key": "value"},
         )
-        assert (
-            response.status_code == 422
-        ), f"Expected 422 from FastAPI pattern validator for type={type_param!r}, got {response.status_code}"
+        assert response.status_code == 422, (
+            f"Expected 422 from FastAPI pattern validator for type={type_param!r}, got {response.status_code}"
+        )
 
     @pytest.mark.parametrize(
         "config_id",
@@ -1736,9 +1880,9 @@ class TestWorkflowConfigValidation:
         """Valid config_ids pass the regex check (result is 503/404 without a store, not 400)."""
         client = _make_client()
         response = client.get(f"/workflows/v1/config/{config_id}")
-        assert (
-            response.status_code != 400
-        ), f"Valid config_id {config_id!r} was wrongly rejected"
+        assert response.status_code != 400, (
+            f"Valid config_id {config_id!r} was wrongly rejected"
+        )
 
 
 class TestDaprSubscribeEndpoint:

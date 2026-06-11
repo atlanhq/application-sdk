@@ -255,11 +255,31 @@ class AuthOutput(BaseModel):
 
 
 class PreflightStatus(SerializableEnum):
-    """Overall result of a preflight check."""
+    """Overall result of a preflight check.
+
+    ``READY`` / ``NOT_READY`` / ``PARTIAL`` are the legacy Sage/SageV2 statuses.
+    ``SUCCESS`` / ``FAILED`` / ``SKIPPED`` / ``ERROR`` are canonical runtime
+    statuses for Automation Engine preflight. Legacy failure-like statuses remain
+    non-blocking unless an orchestrator explicitly opts an app into hard mapping.
+    """
 
     READY = "ready"
     NOT_READY = "not_ready"
     PARTIAL = "partial"
+    SUCCESS = "success"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    ERROR = "error"
+
+    def canonical(self) -> PreflightStatus:
+        """Normalize legacy statuses to their runtime aggregate equivalent."""
+        if self in (
+            PreflightStatus.READY,
+            PreflightStatus.NOT_READY,
+            PreflightStatus.PARTIAL,
+        ):
+            return PreflightStatus.SUCCESS
+        return self
 
 
 class PreflightCheck(BaseModel):
@@ -267,6 +287,9 @@ class PreflightCheck(BaseModel):
 
     name: str = Field(..., min_length=1)
     """Check name (e.g., 'connectivity', 'permissions')."""
+
+    title: str = ""
+    """Optional display title for the check."""
 
     passed: bool = False
     """Whether the check passed."""
@@ -276,6 +299,27 @@ class PreflightCheck(BaseModel):
 
     duration_ms: float = 0.0
     """How long the check took in milliseconds."""
+
+
+class PreflightRuntimeContext(BaseModel):
+    """Runtime context supplied by orchestrators for server-side preflight."""
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    source: str = ""
+    """Caller surface, for example ``automation_engine_preflight``."""
+
+    workflow_slug: str = ""
+    """Workflow slug for the current run."""
+
+    workflow_run_guid: str = ""
+    """WorkflowRun GUID for the current run."""
+
+    triggered_by: str = ""
+    """Trigger source such as manual, schedule, or event_watchdog."""
+
+    entrypoint: str = ""
+    """App entrypoint being checked, when known."""
 
 
 class PreflightInput(BaseModel):
@@ -331,6 +375,9 @@ class PreflightInput(BaseModel):
     timeout_seconds: int = 60
     """Maximum seconds to wait for all checks."""
 
+    runtime: PreflightRuntimeContext | None = None
+    """Optional runtime invocation context supplied by AE/Heracles."""
+
 
 class PreflightOutput(BaseModel):
     """Output from the preflight_check handler operation."""
@@ -346,6 +393,70 @@ class PreflightOutput(BaseModel):
 
     total_duration_ms: float = 0.0
     """Total time for all checks in milliseconds."""
+
+    def canonical_status(self) -> PreflightStatus:
+        """Return the runtime aggregate status for this output."""
+        return self.status.canonical()
+
+    @classmethod
+    def success(
+        cls,
+        *,
+        message: str = "",
+        checks: list[PreflightCheck] | None = None,
+        total_duration_ms: float = 0.0,
+    ) -> PreflightOutput:
+        return cls(
+            status=PreflightStatus.SUCCESS,
+            message=message,
+            checks=checks or [],
+            total_duration_ms=total_duration_ms,
+        )
+
+    @classmethod
+    def failed(
+        cls,
+        *,
+        message: str = "",
+        checks: list[PreflightCheck] | None = None,
+        total_duration_ms: float = 0.0,
+    ) -> PreflightOutput:
+        return cls(
+            status=PreflightStatus.FAILED,
+            message=message,
+            checks=checks or [],
+            total_duration_ms=total_duration_ms,
+        )
+
+    @classmethod
+    def skipped(
+        cls,
+        *,
+        message: str = "",
+        checks: list[PreflightCheck] | None = None,
+        total_duration_ms: float = 0.0,
+    ) -> PreflightOutput:
+        return cls(
+            status=PreflightStatus.SKIPPED,
+            message=message,
+            checks=checks or [],
+            total_duration_ms=total_duration_ms,
+        )
+
+    @classmethod
+    def error(
+        cls,
+        *,
+        message: str = "",
+        checks: list[PreflightCheck] | None = None,
+        total_duration_ms: float = 0.0,
+    ) -> PreflightOutput:
+        return cls(
+            status=PreflightStatus.ERROR,
+            message=message,
+            checks=checks or [],
+            total_duration_ms=total_duration_ms,
+        )
 
 
 # ---------------------------------------------------------------------------

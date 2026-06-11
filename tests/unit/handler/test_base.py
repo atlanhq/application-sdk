@@ -96,11 +96,11 @@ class TestDefaultHandler:
         assert isinstance(result, AuthOutput)
         assert result.status == AuthStatus.SUCCESS
 
-    async def test_preflight_check_returns_ready(self, handler):
+    async def test_preflight_check_returns_skipped(self, handler):
         inp = PreflightInput()
         result = await handler.preflight_check(inp)
         assert isinstance(result, PreflightOutput)
-        assert result.status == PreflightStatus.READY
+        assert result.status == PreflightStatus.SKIPPED
 
     async def test_fetch_metadata_returns_empty(self, handler):
         inp = MetadataInput()

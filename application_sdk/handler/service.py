@@ -47,9 +47,8 @@ from uuid import uuid4
 
 import orjson
 import temporalio.service
-from fastapi import FastAPI, File, Form, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi import Path as PathParam
-from fastapi import Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
@@ -68,6 +67,8 @@ from application_sdk.handler.contracts import (
     HandlerCredential,
     MetadataInput,
     PreflightInput,
+    PreflightOutput,
+    PreflightStatus,
     SubscriptionConfig,
 )
 from application_sdk.handler.manifest import AppManifest
@@ -208,6 +209,42 @@ def _normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
         return {**body, "credentials": _flatten_to_pairs(flat_creds)}
 
     return body
+
+
+def _normalize_preflight_request(body: dict[str, Any]) -> dict[str, Any]:
+    """Normalize preflight-specific compatibility fields before validation."""
+    normalized = _normalize_credentials(body)
+    has_metadata = "metadata" in normalized and normalized["metadata"] is not None
+    has_connection_config = (
+        "connection_config" in normalized
+        and normalized["connection_config"] is not None
+    )
+
+    if has_metadata and not has_connection_config:
+        return {**normalized, "connection_config": normalized["metadata"]}
+    if has_connection_config and not has_metadata:
+        return {**normalized, "metadata": normalized["connection_config"]}
+    return normalized
+
+
+def _preflight_runtime_summary(result: PreflightOutput) -> dict[str, Any]:
+    """Canonical runtime metadata kept outside the SageV2 ``data`` map."""
+    return {
+        "status": result.canonical_status().value,
+        "app_status": result.status.value,
+        "message": result.message,
+        "total_duration_ms": result.total_duration_ms,
+        "checks": [
+            check.model_dump(mode="json", exclude_none=True) for check in result.checks
+        ],
+    }
+
+
+def _preflight_envelope_success(result: PreflightOutput) -> bool:
+    """Whether the legacy SageV2 envelope should be treated as successful."""
+    if result.status == PreflightStatus.SKIPPED:
+        return True
+    return len(result.checks) > 0
 
 
 if TYPE_CHECKING:
@@ -2151,7 +2188,7 @@ def create_app_handler_service(
 
     @app.post("/workflows/v1/check")
     async def preflight_check(request: Request) -> JSONResponse:
-        body = _normalize_credentials(await request.json())
+        body = _normalize_preflight_request(await request.json())
         preflight_input = PreflightInput.model_validate(body)
         credentials = [
             HandlerCredential(key=c.key, value=c.value)
@@ -2219,17 +2256,18 @@ def create_app_handler_service(
                 # behaviour) made every PARTIAL/NOT_READY response surface
                 # as "Check failed" with a blank "Hide details" panel
                 # (DBBI-665). Tying envelope success to "any check ran"
-                # keeps it false when the handler produced no checks (a
-                # genuine preflight-system failure) and lets the widget
-                # render per-check rows otherwise.
-                return JSONResponse(
-                    content=_wrap_response(
-                        v2_data,
-                        message=result.message
-                        or f"Preflight check {result.status.value}",
-                        success=len(result.checks) > 0,
-                    )
+                # keeps it false when a real handler produced no checks (a
+                # preflight-system failure) and lets the widget render
+                # per-check rows otherwise. Canonical SKIPPED is the explicit
+                # no-op/default-handler path, so keep that benign for SageV2
+                # while exposing the skipped status under ``preflight``.
+                response = _wrap_response(
+                    v2_data,
+                    message=result.message or f"Preflight check {result.status.value}",
+                    success=_preflight_envelope_success(result),
                 )
+                response["preflight"] = _preflight_runtime_summary(result)
+                return JSONResponse(content=response)
             except HandlerError as e:
                 # TODO(signal-over-noise): [P13] Deprecated path — HandlerError is an
                 # AppError subclass caught here first so http_status is preserved.
