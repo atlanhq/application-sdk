@@ -346,14 +346,12 @@ renders `app_name = "notification-app"` and
 `task_queue = "atlan-notification-app-{deployment_name}"`, and depends on the
 reserved run-level `workflow_complete` tag.
 
-That tag is one of two `DependencyCondition`s permitted without a `nodeId`
-(`workflow_failure` and `workflow_complete`): AE treats a node-less
-`workflow_complete` condition as a finalizer that evaluates true once the run
-reaches **any** terminal state — success or failure — so the node dispatches once
-per run carrying the real `$.workflow.status`. The notification app then decides
+That tag is the only `DependencyCondition` permitted without a `nodeId`: AE treats
+a node-less `workflow_complete` condition as a finalizer that evaluates true once
+the run reaches **any** terminal state — success or failure — so the node dispatches
+once per run carrying the real `$.workflow.status`. The notification app then decides
 delivery per integration (`alertsWorkflowChannel.failureOnly`: failure-only vs.
-all runs). Use `workflow_failure` instead to fire only on failure. Any other tag
-without a `nodeId` is a contract error.
+all runs). Any other tag without a `nodeId` is a contract error.
 
 Its `args.metadata` is templated from the run-level context AE injects at
 dispatch (`$.workflow.*` and `$.failure.*`): `notification_type`,
@@ -1328,12 +1326,10 @@ condition trees. It is mutually exclusive with `dependsOn`. For pre-built nodes
 that define a default `dependsOn`, set `dependsOn = null` before setting
 `dependsOnCondition`.
 
-The reserved `workflow_failure` and `workflow_complete` tags are the only
-node-less tag conditions the toolkit permits. They are run-level, not node-level:
-Automation Engine evaluates them for finalizer nodes once the run settles —
-`workflow_failure` fires only on failure, `workflow_complete` on any terminal
-state (success or failure). `NotificationNode` uses `workflow_complete`; other
-tags still require `nodeId`.
+The reserved `workflow_complete` tag is the only node-less tag condition the
+toolkit permits. It is run-level, not node-level: Automation Engine evaluates it
+for finalizer nodes once the run settles, on any terminal state (success or
+failure). `NotificationNode` uses it; every other tag still requires `nodeId`.
 
 ```pkl
 class DependencyCondition {

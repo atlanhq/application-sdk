@@ -522,10 +522,9 @@ class DependencyCondition {
   /// Tag required on the direct dependency. AE reserves `success` and `failure`;
   /// any other value is treated as a custom tag emitted by the node.
   ///
-  /// `workflow_failure` and `workflow_complete` are reserved *run-level* tags:
-  /// with no `nodeId`, they mark a finalizer that AE runs last — `workflow_failure`
-  /// only when the run fails, `workflow_complete` on any terminal state (success
-  /// or failure). The default `NotificationNode` uses `workflow_complete`.
+  /// `workflow_complete` is a reserved *run-level* tag: with no `nodeId`, it marks
+  /// a finalizer that AE runs last on any terminal state (success or failure).
+  /// Used by the default `NotificationNode`.
   tag: String?
 
   andConditions: Listing<DependencyCondition>?
@@ -537,10 +536,10 @@ class DependencyCondition {
       throw("DependencyCondition cannot combine nodeId with andConditions/orConditions.")
     else if (andConditions != null && orConditions != null)
       throw("DependencyCondition cannot set both andConditions and orConditions.")
-    else if ((tag == "workflow_failure" || tag == "workflow_complete") && nodeId == null)
+    else if (tag == "workflow_complete" && nodeId == null)
       null // run-level finalizer trigger: a node-less reserved tag is valid
     else if (tag != null && nodeId == null)
-      throw("DependencyCondition.tag requires nodeId (except the reserved run-level \"workflow_failure\"/\"workflow_complete\" tags).")
+      throw("DependencyCondition.tag requires nodeId (except the reserved run-level \"workflow_complete\" tag).")
     else if (nodeId == null && andConditions == null && orConditions == null)
       throw("DependencyCondition requires nodeId, andConditions, or orConditions.")
     else if (andConditions != null && andConditions.length == 0)

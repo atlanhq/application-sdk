@@ -177,13 +177,9 @@ facts {
     n.dependsOnCondition._conditionShapeCheck == null
   }
 
-  // Both reserved run-level tags are the node-less DependencyConditions the
+  // `workflow_complete` is the only reserved node-less DependencyCondition the
   // shape check permits; every other tag still requires a nodeId.
   ["Node-less workflow_complete DependencyCondition passes the shape check"] {
     new App.DependencyCondition { tag = "workflow_complete" }._conditionShapeCheck == null
-  }
-
-  ["Node-less workflow_failure DependencyCondition still passes the shape check"] {
-    new App.DependencyCondition { tag = "workflow_failure" }._conditionShapeCheck == null
   }
 }
