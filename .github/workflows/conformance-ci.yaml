@@ -29,7 +29,7 @@ on:
       upload-sarif:
         description: "Upload SARIF report to GitHub Security tab (requires security-events: write)"
         required: false
-        default: false
+        default: true
         type: boolean
 
 permissions:
