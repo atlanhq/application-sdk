@@ -15,7 +15,7 @@ from suite.schema.findings import Finding, findings_to_report
 SERIES = "C"
 RULE_ID = "C001"
 EXEMPT_OWNERS: frozenset[str] = frozenset({"atlanhq"})
-_DIGEST_RE = re.compile(r"^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$")
+_DIGEST_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 _USES_RE = re.compile(r"^(?P<indent>\s*)(?:-\s*)?uses:\s*(?P<val>\S.*?)\s*$")
 
 
@@ -93,8 +93,9 @@ def scan_text(text: str, file: str) -> list[Finding]:
                     column=use.column,
                     message=(
                         f"Action '{owner_action}' is pinned to mutable ref '{ref}' — "
-                        f"use a full commit digest (SHA). "
-                        f"Exempt: atlanhq/ org actions, local ./ refs."
+                        f"use a full 40-hex commit SHA. "
+                        f"Exempt: atlanhq/ org (any ref), local ./ refs, "
+                        f"docker:// refs, and ${{{{...}}}} templated refs."
                     ),
                     snippet=None,
                 )

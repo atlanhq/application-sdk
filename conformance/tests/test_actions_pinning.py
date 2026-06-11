@@ -16,10 +16,10 @@ from suite.schema.disposition import Disposition
 @pytest.mark.parametrize(
     "ref,expected",
     [
-        # digest pins — not violations
+        # digest pins — not violations (40-hex git commit SHA only)
         ("actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10", False),
-        # 64-char SHA-256 digest — not a violation
-        ("some/action@" + "a" * 64, False),
+        # 64-hex is NOT a valid Actions pin — treated as a violation
+        ("some/action@" + "a" * 64, True),
         # version tags — violations
         ("actions/checkout@v4", True),
         ("actions/checkout@v4.1.2", True),

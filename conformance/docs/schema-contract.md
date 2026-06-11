@@ -24,7 +24,7 @@ schema, for three reasons:
 
 The vendored **`sarif-schema-2.1.0.json`** (from SchemaStore, OASIS provenance) is the
 validation contract.  Every produced document must validate against it via
-`conformance.schema.validate_sarif()`.
+`suite.schema.validate_sarif()`.
 
 ---
 

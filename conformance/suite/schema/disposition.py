@@ -107,7 +107,7 @@ def derive_disposition(result: Result) -> Disposition | None:  # type: ignore[na
     Parameters
     ----------
     result:
-        A :class:`~conformance.schema.sarif.Result` instance.
+        A :class:`~suite.schema.sarif.Result` instance.
 
     Returns
     -------

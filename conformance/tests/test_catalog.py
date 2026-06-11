@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 import pytest
+from pydantic import ValidationError
 from suite.rules import CATALOG, _combine_rules, get_rule
 from suite.schema import load_catalog
 from suite.schema.catalog import RuleDefinition, validate_catalog
@@ -184,7 +185,7 @@ def test_duplicate_id_raises() -> None:
 
 def test_invalid_rule_id_raises() -> None:
     """A rule ID that doesn't match the pattern raises ValidationError."""
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         RuleDefinition(
             id="BADID",  # should be letter + 3 digits
             name="BadRule",

@@ -2,7 +2,7 @@
 
 Typical usage in a rule-checker::
 
-    from conformance.schema import ReportBuilder, load_catalog
+    from suite.schema import ReportBuilder, load_catalog
 
     rules = load_catalog()
     builder = ReportBuilder.from_catalog(
@@ -22,7 +22,7 @@ Typical usage in a rule-checker::
     )
 
     # Record a violation with inline suppression:
-    from conformance.schema.sarif import Suppression, Location, PhysicalLocation, ArtifactLocation, Region
+    from suite.schema.sarif import Suppression, Location, PhysicalLocation, ArtifactLocation, Region
     suppression = Suppression(
         kind="inSource",
         justification="optional-dep guard: PIL is never available in CI but is fine",

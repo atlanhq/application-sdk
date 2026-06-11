@@ -6,7 +6,7 @@ test contexts (``uv sync --group conformance``).
 
 Example::
 
-    from conformance.schema import ReportBuilder, validate_sarif
+    from suite.schema import ReportBuilder, validate_sarif
     report = ReportBuilder("my-tool", "1.0.0").build()
     validate_sarif(report)   # raises jsonschema.ValidationError on mismatch
 """
@@ -18,9 +18,9 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-# jsonschema is imported lazily so that importing conformance.schema in a
-# context without the conformance dep-group installed does not hard-fail
-# at import time.  A clear error is raised when validate_sarif() is called.
+# jsonschema is imported lazily so that importing suite.schema in a context
+# without the conformance dep-group installed does not hard-fail at import
+# time.  A clear error is raised when validate_sarif() is called.
 _SCHEMA_PATH = Path(__file__).parent / "sarif-schema-2.1.0.json"
 
 
@@ -35,7 +35,7 @@ def validate_sarif(report_or_dict: Any) -> None:  # type: ignore[misc]
     Parameters
     ----------
     report_or_dict:
-        Either a :class:`~conformance.schema.sarif.SarifReport` instance or a
+        Either a :class:`~suite.schema.sarif.SarifReport` instance or a
         plain ``dict`` (e.g. the result of
         ``report.model_dump(by_alias=True, exclude_none=True)``).
 
