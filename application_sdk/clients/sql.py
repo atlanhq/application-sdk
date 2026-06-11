@@ -33,8 +33,7 @@ from application_sdk.common.aws_utils import (
 )
 from application_sdk.constants import AWS_SESSION_NAME, USE_SERVER_SIDE_CURSOR
 from application_sdk.credentials.utils import parse_credentials_extra
-from application_sdk.errors import AppError
-from application_sdk.errors.base import _sanitize_cause_repr
+from application_sdk.errors import AppError, sanitize_cause_repr
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -142,7 +141,7 @@ class BaseSQLClient(ClientInterface):
             # No exc_info here: SQLAlchemy errors embed the full connection
             # string (including the password) in their message, and the
             # traceback would print it verbatim into logs.
-            logger.error("Error loading SQL client: %s", _sanitize_cause_repr(e))
+            logger.error("Error loading SQL client: %s", sanitize_cause_repr(e))
             if self.engine:
                 self.engine.dispose()
                 self.engine = None
@@ -634,7 +633,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
             # string (including the password) in their message, and the
             # traceback would print it verbatim into logs.
             logger.error(
-                "Error establishing database connection: %s", _sanitize_cause_repr(e)
+                "Error establishing database connection: %s", sanitize_cause_repr(e)
             )
             if self.engine:
                 await self.engine.dispose()

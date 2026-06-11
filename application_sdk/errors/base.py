@@ -28,7 +28,7 @@ _SECRET_PARAM_RE = re.compile(
 )
 
 
-def _sanitize_cause_repr(exc: BaseException) -> str:
+def sanitize_cause_repr(exc: BaseException) -> str:
     """Return a length-capped, secret-redacted string for a cause exception."""
     text = str(exc)
     text = _URL_USERINFO_RE.sub(r"\1***@", text)
@@ -36,6 +36,11 @@ def _sanitize_cause_repr(exc: BaseException) -> str:
     if len(text) > _CAUSE_MAX_LEN:
         text = text[:_CAUSE_MAX_LEN] + "…"
     return f"{type(exc).__name__}: {text}"
+
+
+# Backward-compat alias: the helper is load-bearing across clients/sql.py and
+# credentials/errors.py, so it is public. Kept for existing internal/test imports.
+_sanitize_cause_repr = sanitize_cause_repr
 
 
 @dataclass(kw_only=True)
@@ -106,5 +111,5 @@ class AppError(Exception):
             evidence=evidence,
             app_name=self.app_name,
             run_id=self.run_id,
-            cause_repr=_sanitize_cause_repr(self.cause) if self.cause else None,
+            cause_repr=sanitize_cause_repr(self.cause) if self.cause else None,
         )

@@ -1166,3 +1166,9 @@ def test_add_connection_params_url_encodes_keys_and_values(sql_client_with_db_co
     assert "sslmode=disable" not in conn_str
     assert "options=-c+search_path%3Dpublic" in conn_str
     assert "evil=x%26sslmode%3Ddisable" in conn_str
+
+
+def test_add_connection_params_empty_dict_is_noop(sql_client_with_db_config):
+    """An empty params dict must return the connection string unchanged."""
+    base = "postgresql://u:p@h:5432/db"
+    assert sql_client_with_db_config.add_connection_params(base, {}) == base

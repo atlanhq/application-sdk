@@ -18,7 +18,7 @@ from application_sdk.errors import (
     CREDENTIAL_VALIDATION_ERROR,
     ErrorCode,
 )
-from application_sdk.errors.base import _sanitize_cause_repr
+from application_sdk.errors.base import sanitize_cause_repr
 from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import AuthError, InvalidInputError, NotFoundError
 
@@ -100,7 +100,7 @@ class CredentialError(AuthError):
             # Sanitized: cause messages can embed connection strings or
             # secret values (e.g. SQLAlchemy URLs), and __str__ flows into
             # HTTP error responses via `detail=str(e)`.
-            parts.append(f"caused_by={_sanitize_cause_repr(self.cause)}")
+            parts.append(f"caused_by={sanitize_cause_repr(self.cause)}")
         return " | ".join(parts)
 
 
@@ -178,7 +178,7 @@ class CredentialParseError(InvalidInputError, CredentialError):
             # Sanitized: cause messages can embed connection strings or
             # secret values (e.g. SQLAlchemy URLs), and __str__ flows into
             # HTTP error responses via `detail=str(e)`.
-            parts.append(f"caused_by={_sanitize_cause_repr(self.cause)}")
+            parts.append(f"caused_by={sanitize_cause_repr(self.cause)}")
         return " | ".join(parts)
 
 
@@ -224,5 +224,5 @@ class CredentialValidationError(InvalidInputError, CredentialError):
             # Sanitized: cause messages can embed connection strings or
             # secret values (e.g. SQLAlchemy URLs), and __str__ flows into
             # HTTP error responses via `detail=str(e)`.
-            parts.append(f"caused_by={_sanitize_cause_repr(self.cause)}")
+            parts.append(f"caused_by={sanitize_cause_repr(self.cause)}")
         return " | ".join(parts)

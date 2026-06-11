@@ -324,7 +324,7 @@ class SqlApp(App):
             duration_ms = (time.perf_counter() - start) * 1000.0
             # Truncate driver messages so the contract field stays bounded;
             # secret-sanitisation happens later when run() wraps this into
-            # an AuthError (errors.base._sanitize_cause_repr).
+            # an AuthError (errors.base.sanitize_cause_repr).
             error_message = str(exc)
             if len(error_message) > 500:
                 error_message = error_message[:500] + "…"
