@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.15.1
-source-sha:    0a490e9128563a2e1d1d688134bcc352ac800a87
-source-date:   2026-06-09T22:04:25+01:00
+sdk-version:   3.16.0
+source-sha:    8d1f0a5dfc5ccd4c5356e86d5157d120a3ca68b0
+source-date:   2026-06-10T17:45:19+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -359,7 +359,7 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 #### `normalize_filters`
 
 - **Import:** `from application_sdk.common import normalize_filters`
-- **Signature:** `normalize_filters(filter_dict: dict[str, list[str] | str], is_include: bool)`
+- **Signature:** `normalize_filters(filter_dict: dict[str, FilterValue], is_include: bool)`
 - **Summary:** Normalize filter dict to fully-anchored ``db.schema`` regex patterns.
 - **Defined in:** `application_sdk/common/sql_filters.py`
 
@@ -2610,8 +2610,8 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `agent_json: AgentCredentialSpec | None` — Typed agent credential spec. Non-None when extraction_method is agent.
   - `output_prefix: str` `= ''` — Object store prefix for all output artifacts.
   - `output_path: str` `= ''` — Local or object store path for output files.
-  - `exclude_filter: FilterMap | str` `= Field(default='')` — Filter for excluding schemas/tables.
-  - `include_filter: FilterMap | str` `= Field(default='')` — Filter for including schemas/tables.
+  - `exclude_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)` — Filter for excluding schemas/tables.
+  - `include_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)` — Filter for including schemas/tables.
   - `temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''` — Regex pattern identifying temporary tables.
   - `source_tag_prefix: str` `= ''` — Tag prefix for source-level metadata.
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
@@ -2646,8 +2646,8 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `credential_ref: CredentialRef | None`
   - `output_prefix: str` `= ''`
   - `output_path: str` `= ''`
-  - `exclude_filter: FilterMap | str` `= Field(default='')`
-  - `include_filter: FilterMap | str` `= Field(default='')`
+  - `exclude_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)`
+  - `include_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)`
   - `temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''`
   - `source_tag_prefix: str` `= ''`
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
