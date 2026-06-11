@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 import orjson
-from pydantic import Field, JsonValue, field_validator, model_validator
+from pydantic import Field, JsonValue, ValidationInfo, field_validator, model_validator
 
 from application_sdk.common.sql_filters import (
     SAFE_FILTER_PATTERN,
@@ -95,6 +95,16 @@ def _coerce_filter_value(v: Any) -> Any:
         validate_filter_no_sql_injection(v)
         return _normalize_tree_filter_value(v)
     return v
+
+
+def _is_sdk_sql_filter_field(cls: type, field_name: str | None) -> bool:
+    """Return True when a subclass still uses the SDK-owned SQL filter field."""
+    if field_name is None:
+        return False
+    field = cls.model_fields.get(field_name)
+    return (
+        field is not None and field.json_schema_extra == _FILTER_FIELD_JSON_SCHEMA_EXTRA
+    )
 
 
 class ExtractionInput(Input):
@@ -227,7 +237,9 @@ class ExtractionInput(Input):
 
     @field_validator("include_filter", "exclude_filter", mode="before")
     @classmethod
-    def _coerce_filter(cls, v: Any) -> Any:
+    def _coerce_filter(cls, v: Any, info: ValidationInfo) -> Any:
+        if not _is_sdk_sql_filter_field(cls, info.field_name):
+            return v
         return _coerce_filter_value(v)
 
     @field_validator("temp_table_regex", mode="before")
@@ -296,7 +308,9 @@ class ExtractionTaskInput(Input):
 
     @field_validator("include_filter", "exclude_filter", mode="before")
     @classmethod
-    def _coerce_filter(cls, v: Any) -> Any:
+    def _coerce_filter(cls, v: Any, info: ValidationInfo) -> Any:
+        if not _is_sdk_sql_filter_field(cls, info.field_name):
+            return v
         return _coerce_filter_value(v)
 
     @field_validator("temp_table_regex", mode="before")

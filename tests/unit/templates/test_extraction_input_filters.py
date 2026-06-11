@@ -4,8 +4,12 @@ Filters accept dict (structured from AE), JSON string, raw regex string,
 list, and None. SQL injection is guarded by rejecting single quotes.
 """
 
-import pytest
+from typing import Annotated
 
+import pytest
+from pydantic import Field
+
+from application_sdk.contracts.types import MaxItems
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionTaskInput,
@@ -130,6 +134,37 @@ class TestAPITreeFilterCoercion:
         }
         result = ExtractionInput.model_validate(payload)
         assert result.include_filter == {"AwsDataCatalog": ["mswtest_2"]}
+
+    def test_overridden_filter_fields_keep_app_specific_tree_shape(self):
+        class AppSpecificInput(ExtractionInput, allow_unbounded_fields=True):
+            include_filter: Annotated[dict[str, object], MaxItems(1000)] = Field(  # type: ignore[assignment]
+                default_factory=dict
+            )
+            exclude_filter: Annotated[dict[str, object], MaxItems(1000)] = Field(  # type: ignore[assignment]
+                default_factory=dict
+            )
+
+        payload = {
+            "include_filter": {
+                "warehouse_1": {
+                    "project_1": {
+                        "dataset_1": {},
+                    },
+                }
+            },
+            "exclude_filter": {
+                "warehouse_2": {},
+            },
+        }
+        result = AppSpecificInput.model_validate(payload)
+        assert result.include_filter == {
+            "warehouse_1": {
+                "project_1": {
+                    "dataset_1": {},
+                },
+            }
+        }
+        assert result.exclude_filter == {"warehouse_2": {}}
 
 
 class TestFilterSQLInjectionGuard:
