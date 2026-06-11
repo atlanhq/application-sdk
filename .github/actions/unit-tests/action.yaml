@@ -28,7 +28,7 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
     - uses: "./.github/actions/setup-deps"
       with:
@@ -59,14 +59,14 @@ runs:
         $UV_RUN coverage report --fail-under=${{ inputs.fail-under }}
 
     - name: Comment Coverage Report on PR
-      uses: orgoro/coverage@v3.2
+      uses: orgoro/coverage@ca0c362dc1a4f100447309405e6dfea47e251495 # v3.3.1
       continue-on-error: true
       with:
         coverageFile: coverage.xml
         token: ${{ inputs.github-token }}
 
     - name: Setup AWS Credentials
-      uses: aws-actions/configure-aws-credentials@v4
+      uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
       continue-on-error: true
       id: aws-creds
       with:
@@ -81,7 +81,7 @@ runs:
         aws s3 sync ./htmlcov s3://kryptonite-store/coverage/application-sdk/pr/${{ github.event.number }} --delete
 
     - name: Comment Coverage Report URL on PR
-      uses: mshick/add-pr-comment@v2
+      uses: mshick/add-pr-comment@b8f338c590a895d50bcbfa6c5859251edc8952fc # v2
       if: ${{ github.event_name == 'pull_request' }}
       with:
         message-id: "coverage"
