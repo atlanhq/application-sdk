@@ -147,7 +147,7 @@ Default pipeline: `extract → publish`. Opt out of publish with
 setting the corresponding `pipeline.*` field. Opt in to notifications
 with `notifications = true`.
 
-A run-level **notification node** (`notify-on-failure`) is appended when `notifications = true`. It depends on the reserved run-level `workflow_complete` tag — Automation Engine runs it once when the workflow run reaches any terminal state (success or failure) — and dispatches the `notification-app`, which fans alerts out to the tenant's enabled integrations (Teams, etc.) and decides delivery per integration (`failureOnly`: failure-only vs. all runs). By default the node is not emitted.
+A run-level **notification node** (`notifications`) is appended when `notifications = true`. It depends on the reserved run-level `workflow_complete` tag — Automation Engine runs it once when the workflow run reaches any terminal state (success or failure) — and dispatches the `notification-app`, which fans alerts out to the tenant's enabled integrations (Teams, etc.) and decides delivery per integration (`failureOnly`: failure-only vs. all runs). By default the node is not emitted.
 
 ### `_input.py` (`app/generated/_input.py`)
 
@@ -252,7 +252,7 @@ The toolkit can append a run-level notification node when an app opts in:
 notifications = true
 ```
 
-When enabled, the generated manifest includes `notify-on-failure`, a
+When enabled, the generated manifest includes `notifications`, a
 `NotificationNode` that dispatches `NotificationWorkflow` in `notification-app`.
 It depends on the reserved run-level `workflow_complete` tag, so Automation
 Engine runs it once after the workflow run reaches any terminal state (success
@@ -261,7 +261,7 @@ context (carrying the real status). The notification app then fans the alert out
 to the tenant's enabled integrations and decides delivery per integration
 (`failureOnly`: failure-only vs. all runs).
 
-To replace the generated node, define `extraNodes["notify-on-failure"]`.
+To replace the generated node, define `extraNodes["notifications"]`.
 
 **Mapping from old API:**
 

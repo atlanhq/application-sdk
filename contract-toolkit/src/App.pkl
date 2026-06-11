@@ -251,14 +251,14 @@ uiConfig: Widgets.UIConfig?
 
 /// Additional DAG nodes beyond the pipeline.
 /// If key "publish" is defined here, it replaces the auto-generated publish node.
-/// If key "notify-on-failure" is defined here, it replaces the auto-generated
+/// If key "notifications" is defined here, it replaces the auto-generated
 /// failure notification node.
 extraNodes: Mapping<String, DAGNode> = new Mapping {}
 
 /// Top-level on/off for app notifications.
 ///
 /// When `true`, appends a run-level notification node (`NotificationNode`, key
-/// `notify-on-failure`) that fires once when the workflow run reaches any
+/// `notifications`) that fires once when the workflow run reaches any
 /// terminal state (success or failure) and dispatches the notification app to
 /// fan alerts out to the tenant's enabled integrations (Teams, etc.). The
 /// notification app decides delivery per integration via its
@@ -268,7 +268,7 @@ extraNodes: Mapping<String, DAGNode> = new Mapping {}
 ///
 /// Default `false`, so apps must explicitly opt in with `notifications = true`
 /// before the generated manifest includes the notification node. Override the
-/// node by defining `extraNodes["notify-on-failure"]`, which suppresses the
+/// node by defining `extraNodes["notifications"]`, which suppresses the
 /// toolkit-generated node.
 notifications: Boolean = false
 
@@ -691,7 +691,7 @@ open class PublishNode extends DAGNode {
 /// The args template AE's run/failure context (`$.workflow.*`, `$.failure.*`),
 /// which AE injects into node input resolution — so the node is self-contained
 /// (no app-specific wiring). Gated by the app-level `notifications` toggle;
-/// override per app via `extraNodes["notify-on-failure"]`.
+/// override per app via `extraNodes["notifications"]`.
 open class NotificationNode extends DAGNode {
   displayName = "Notify on workflow completion"
   workflowType = "NotificationWorkflow"
@@ -699,7 +699,7 @@ open class NotificationNode extends DAGNode {
   dependsOnCondition = new DependencyCondition { tag = "workflow_complete" }
   args {
     ["metadata"] = new Mapping {
-      ["notification_type"] = "workflow_failure_alert"
+      ["notification_type"] = "workflow_completion_alert"
       ["workflow_name"] = "$.workflow.name"
       ["workflow_qualified_name"] = "$.workflow.qualified_name"
       ["workflow_slug"] = "$.workflow.slug"
@@ -2104,8 +2104,8 @@ local function generateDAG(): Mapping<String, Any> = new Mapping {
       [nodeId] = renderNode(node)
     }
   }
-  when (notifications && !extraNodes.toMap().containsKey("notify-on-failure")) {
-    ["notify-on-failure"] = renderNode(new NotificationNode {})
+  when (notifications && !extraNodes.toMap().containsKey("notifications")) {
+    ["notifications"] = renderNode(new NotificationNode {})
   }
 }
 

@@ -324,7 +324,7 @@ Credential files are hoisted by matching `connectorConfigName`. If two entrypoin
 | `manifestTopLevelArgs` | Mapping<String, String> | `{"credential_guid": "credential-guid", "connection": "connection"}` | Explicit top-level extract args. |
 | `publishTagPipelineEnabled` | Boolean\|String? | auto | Value for `PublishNode`'s `tag_pipeline_enabled`. Auto-wired when `enable-tags` or `enable-tag-sync` is in the form. |
 | `publishTagAttachmentsPrefix` | String? | auto | Value for `PublishNode`'s `tag_attachments_prefix`. |
-| `notifications` | Boolean | `false` | Top-level app on/off. When set to `true`, appends a run-level notification node (`NotificationNode`, key `notify-on-failure`) that fires when the workflow run reaches any terminal state (success or failure). The node depends on the reserved run-level `workflow_complete` tag (a `DependencyCondition` with no `nodeId`), so AE runs it once per run as a finalizer and dispatches the `notification-app`, which fans alerts to the tenant's enabled integrations and decides delivery per integration (`failureOnly`: failure-only vs. all runs). Also skipped when `extraNodes` defines a `notify-on-failure` key. See [NotificationNode](#notificationnode). |
+| `notifications` | Boolean | `false` | Top-level app on/off. When set to `true`, appends a run-level notification node (`NotificationNode`, key `notifications`) that fires when the workflow run reaches any terminal state (success or failure). The node depends on the reserved run-level `workflow_complete` tag (a `DependencyCondition` with no `nodeId`), so AE runs it once per run as a finalizer and dispatches the `notification-app`, which fans alerts to the tenant's enabled integrations and decides delivery per integration (`failureOnly`: failure-only vs. all runs). Also skipped when `extraNodes` defines a `notifications` key. See [NotificationNode](#notificationnode). |
 
 ---
 
@@ -341,7 +341,7 @@ class NotificationNode extends DAGNode {
 ```
 
 Pre-built run-completion notification node. The toolkit appends it automatically
-as `notify-on-failure` when an app opts in with `notifications = true`. It
+as `notifications` when an app opts in with `notifications = true`. It
 renders `app_name = "notification-app"` and
 `task_queue = "atlan-notification-app-{deployment_name}"`, and depends on the
 reserved run-level `workflow_complete` tag.
@@ -369,7 +369,7 @@ enrichment activity populates `connector`, `schedule`, `creator_name`, and
 to empty strings.
 
 To enable, set `notifications = true`. To retarget the alert (different
-`appName`/`taskQueue`/args), define `extraNodes["notify-on-failure"]`. See
+`appName`/`taskQueue`/args), define `extraNodes["notifications"]`. See
 `tests/notify_on_failure_test.pkl` and `examples/full/app.pkl`.
 
 ---
@@ -1521,7 +1521,7 @@ workflow-safe `ErrorHandlingConfig` values. See `examples/publish-controls/`.
 ### NotificationNode
 
 Pre-built run-completion notification system node. The toolkit appends it
-automatically as `notify-on-failure` when `notifications = true`:
+automatically as `notifications` when `notifications = true`:
 
 ```pkl
 class NotificationNode extends DAGNode {
@@ -1531,7 +1531,7 @@ class NotificationNode extends DAGNode {
   dependsOnCondition = new DependencyCondition { tag = "workflow_complete" }
   args {
     ["metadata"] {
-      ["notification_type"] = "workflow_failure_alert"
+      ["notification_type"] = "workflow_completion_alert"
       ["workflow_name"] = "$.workflow.name"
       ["workflow_qualified_name"] = "$.workflow.qualified_name"
       ["workflow_slug"] = "$.workflow.slug"
@@ -1556,11 +1556,11 @@ integrations and decides delivery per integration (`failureOnly`). The finalizer
 uses `$.workflow.status`; AE exposes the real terminal status for this run-level
 completion node (`Succeeded` or `Failed`), and `$.failure.*` resolves to empty
 strings on a successful run. (`notification_type` keeps the
-`workflow_failure_alert` value for routing back-compat.)
+`workflow_completion_alert` value for routing back-compat.)
 
 Set `notifications = true` for apps that should self-notify on workflow-run
 completion. To replace the default target or payload, define
-`extraNodes["notify-on-failure"]`.
+`extraNodes["notifications"]`.
 
 ### QueryIntelligenceNode
 
