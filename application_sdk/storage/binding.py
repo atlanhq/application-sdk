@@ -243,12 +243,30 @@ def _build_s3_config(
     client_options: dict[str, object] = dict(sdk_client_options)
     credential_provider = None
 
-    if _nonempty(meta, "region"):
-        config["aws_region"] = meta["region"]
+    # Region: explicit metadata wins; otherwise fall back to the standard AWS
+    # env vars. Dapr's Go binding leaves region resolution to the AWS SDK
+    # (LoadDefaultConfig → AWS_REGION / AWS_DEFAULT_REGION / shared config /
+    # instance metadata), so ambient region (IRSA / EKS injection) worked in v2.
+    # obstore reads neither env var with an explicit config and silently defaults
+    # to us-east-1 → 301 PermanentRedirect for buckets in other regions.
+    resolved_region = (
+        _nonempty(meta, "region")
+        or os.environ.get("AWS_REGION", "")
+        or os.environ.get("AWS_DEFAULT_REGION", "")
+    )
+    if resolved_region:
+        config["aws_region"] = resolved_region
     endpoint = _nonempty(meta, "endpoint")
     if endpoint:
         config["aws_endpoint"] = endpoint
         client_options["user_agent"] = "aws-sdk-go-v2 atlan-application-sdk"
+        # Match Dapr (and the Azure branch below): an http:// endpoint means
+        # plaintext, so infer allow_http from the scheme. obstore's reqwest
+        # client is https-only by default and rejects http at request-build time
+        # ("HTTP error: builder error") otherwise. An explicit disableSSL below
+        # still works and is now redundant for http endpoints.
+        if endpoint.startswith("http://"):
+            client_options["allow_http"] = True
     if _coerce_bool(meta.get("forcePathStyle", "")):
         config["aws_virtual_hosted_style_request"] = "false"
     if _coerce_bool(meta.get("disableSSL", "")):
@@ -319,7 +337,7 @@ def _build_s3_config(
         credential_provider = make_s3_assume_role_provider(
             role_arn=meta["assumeRoleArn"],
             session_name=_nonempty(meta, "sessionName") or "atlan-application-sdk",
-            region=_nonempty(meta, "region") or None,
+            region=resolved_region or None,
             base_access_key=base_access_key,
             base_secret_key=base_secret_key,
             base_session_token=base_session_token,

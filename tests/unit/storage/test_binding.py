@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -354,6 +355,76 @@ class TestS3BehaviorKnobs:
         client_options = mock_s3_cls.call_args.kwargs["client_options"]
         assert client_options.get("timeout") == "90s"
         assert client_options.get("user_agent", "").startswith("atlan-application-sdk")
+
+    @patch("obstore.store.S3Store")
+    def test_http_endpoint_infers_allow_http_without_disable_ssl(
+        self, mock_s3_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        # Dapr derives plaintext from the http:// endpoint scheme; mirror that
+        # (and the Azure branch) so an http endpoint works without disableSSL.
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.aws.s3",
+            {"bucket": "b", "endpoint": "http://minio:9000"},
+        )
+        mock_s3_cls.return_value = MagicMock()
+        create_store_from_binding("objectstore", components_dir=components_dir)
+
+        client_options = mock_s3_cls.call_args.kwargs["client_options"]
+        assert client_options["allow_http"] is True
+
+    @patch("obstore.store.S3Store")
+    def test_https_endpoint_does_not_set_allow_http(
+        self, mock_s3_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.aws.s3",
+            {"bucket": "b", "endpoint": "https://s3.example.com"},
+        )
+        mock_s3_cls.return_value = MagicMock()
+        create_store_from_binding("objectstore", components_dir=components_dir)
+
+        client_options = mock_s3_cls.call_args.kwargs["client_options"]
+        assert "allow_http" not in client_options
+
+    @patch.dict(os.environ, {"AWS_REGION": "ap-south-1"}, clear=False)
+    @patch("obstore.store.S3Store")
+    def test_region_falls_back_to_aws_region_env(
+        self, mock_s3_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        # No region in metadata → use AWS_REGION (as Dapr's LoadDefaultConfig
+        # would) instead of letting obstore silently default to us-east-1.
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.aws.s3",
+            {"bucket": "b"},
+        )
+        mock_s3_cls.return_value = MagicMock()
+        create_store_from_binding("objectstore", components_dir=components_dir)
+
+        config = mock_s3_cls.call_args.kwargs["config"]
+        assert config["aws_region"] == "ap-south-1"
+
+    @patch.dict(os.environ, {"AWS_REGION": "ap-south-1"}, clear=False)
+    @patch("obstore.store.S3Store")
+    def test_metadata_region_takes_precedence_over_env(
+        self, mock_s3_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.aws.s3",
+            {"bucket": "b", "region": "eu-west-1"},
+        )
+        mock_s3_cls.return_value = MagicMock()
+        create_store_from_binding("objectstore", components_dir=components_dir)
+
+        config = mock_s3_cls.call_args.kwargs["config"]
+        assert config["aws_region"] == "eu-west-1"
 
 
 class TestS3AssumeRole:
