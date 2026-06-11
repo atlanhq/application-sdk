@@ -98,11 +98,11 @@ jobs:
       cancel-in-progress: true
     steps:
       - name: Checkout repo (for local globalprotect-connect action)
-        uses: actions/checkout@v4
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Parse comment intent
         id: parse
-        uses: actions/github-script@v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const isDispatch = context.eventName === 'workflow_dispatch';
@@ -132,7 +132,7 @@ jobs:
             core.setOutput('commenter_intent', intent);
 
       - name: React to comment + ensure labels exist
-        uses: actions/github-script@v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             // Only react when triggered by a real comment (workflow_dispatch
@@ -165,7 +165,7 @@ jobs:
         id: pr
         env:
           PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
-        uses: actions/github-script@v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const { data: pr } = await github.rest.pulls.get({
@@ -185,7 +185,7 @@ jobs:
           PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
           COMMENTER: ${{ steps.parse.outputs.commenter }}
           GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        uses: actions/github-script@v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             // Post a fresh "starting" notice per @sdk-review trigger so the
@@ -262,7 +262,7 @@ jobs:
       - name: Set sdk-review status to pending
         env:
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
-        uses: actions/github-script@v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             await github.rest.repos.createCommitStatus({
@@ -331,7 +331,7 @@ jobs:
           PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
           GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           PORTAL_URL: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
-        uses: actions/github-script@v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const prNumber = parseInt(process.env.PR_NUMBER, 10);
@@ -730,7 +730,7 @@ jobs:
       # because the latter has shaky multi-line handling.
       - name: Stamp cost + status onto starter comment
         if: always() && steps.starter.outputs.comment_id != ''
-        uses: actions/github-script@v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
           STARTER_COMMENT_ID: ${{ steps.starter.outputs.comment_id }}
           STARTER_STARTED_AT: ${{ steps.starter.outputs.started_at }}
@@ -954,7 +954,7 @@ jobs:
         if: failure() && steps.pr.outputs.head_sha != ''
         env:
           HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
-        uses: actions/github-script@v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             // Only fires when an earlier step failed AND the orchestration

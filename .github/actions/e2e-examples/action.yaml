@@ -39,7 +39,7 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
     # Read the pinned daprd version from the SDK's single source of truth
     # (application_sdk/version.py — ``__dapr_version``). Keeps CI in lockstep
@@ -79,19 +79,19 @@ runs:
         dapr init --runtime-version ${{ steps.dapr-version.outputs.version }} --slim
 
     - name: Install Temporal CLI
-      uses: temporalio/setup-temporal@6d04211d9dfbd5cb2493a4a6637b2ad784a60ccc # v0
+      uses: temporalio/setup-temporal@1059a504f87e7fa2f385e3fa40d1aa7e62f1c6ca # v0
       with:
         version: "v1.3.0"
 
     - name: Set up Python 3.11
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
       with:
-        python-version: "3.11"
+        python-version: "3.14"
 
     - name: Install uv
-      uses: astral-sh/setup-uv@v5
+      uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
       with:
-        version: "0.7.3"
+        version: "0.11.19"
 
     - name: Install dependencies
       shell: bash
@@ -173,7 +173,7 @@ runs:
 
     - name: Comment test results on Pull Request
       if: ${{ !cancelled() && github.event_name == 'pull_request' }}
-      uses: mshick/add-pr-comment@v2
+      uses: mshick/add-pr-comment@b8f338c590a895d50bcbfa6c5859251edc8952fc # v2
       with:
         message-id: "workflow_status_${{ inputs.operating-system }}"
         message-path: "examples/workflow_status.md"

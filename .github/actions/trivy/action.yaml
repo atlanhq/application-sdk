@@ -14,11 +14,11 @@ inputs:
 runs:
   using: 'composite'
   steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
 
     - name: Trivy Vulnerability Scan (SARIF)
-      uses: aquasecurity/trivy-action@0.35.0
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
       with:
         scan-type: 'fs'
         format: 'sarif'
@@ -31,7 +31,7 @@ runs:
         TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
 
     - name: Trivy Vulnerability Scan (JSON)
-      uses: aquasecurity/trivy-action@0.35.0
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
       with:
         scan-type: 'fs'
         format: 'json'
@@ -44,7 +44,7 @@ runs:
         TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
 
     - name: Trivy Secret Scan (SARIF)
-      uses: aquasecurity/trivy-action@0.35.0
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
       with:
         scan-type: 'fs'
         format: 'sarif'
@@ -57,7 +57,7 @@ runs:
         TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
 
     - name: Trivy Secret Scan (JSON)
-      uses: aquasecurity/trivy-action@0.35.0
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
       with:
         scan-type: 'fs'
         format: 'json'
@@ -70,22 +70,22 @@ runs:
         TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
 
     - name: Upload Vulnerability Scan Results
-      uses: github/codeql-action/upload-sarif@v3
+      uses: github/codeql-action/upload-sarif@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3
       with:
         sarif_file: 'trivy-vuln-results.sarif'
         category: 'trivy-vulnerability'
 
     - name: Upload Secret Scan Results
-      uses: github/codeql-action/upload-sarif@v3
+      uses: github/codeql-action/upload-sarif@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3
       with:
         sarif_file: 'trivy-secret-results.sarif'
         category: 'trivy-secret'
 
     - name: Set up Python
       if: inputs.add-report-comment-to-pr == 'true'
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
       with:
-        python-version: '3.11'
+        python-version: '3.14'
 
     - name: Install Dependencies
       if: inputs.add-report-comment-to-pr == 'true'
@@ -107,21 +107,21 @@ runs:
 
     - name: Comment on PR with Vulnerability Scan Results
       if: inputs.add-report-comment-to-pr == 'true'
-      uses: mshick/add-pr-comment@v2
+      uses: mshick/add-pr-comment@b8f338c590a895d50bcbfa6c5859251edc8952fc # v2
       with:
         message-id: trivy-vuln
         message-path: trivy-vuln-results.md
 
     - name: Comment on PR with Secret Scan Results
       if: inputs.add-report-comment-to-pr == 'true'
-      uses: mshick/add-pr-comment@v2
+      uses: mshick/add-pr-comment@b8f338c590a895d50bcbfa6c5859251edc8952fc # v2
       with:
         message-id: trivy-secret
         message-path: trivy-secret-results.md
 
     - name: Fail on High/Critical Vulnerabilities (with fix available)
       if: inputs.add-report-comment-to-pr == 'true'
-      uses: aquasecurity/trivy-action@0.35.0
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
       with:
         scan-type: 'fs'
         format: 'table'
@@ -135,7 +135,7 @@ runs:
 
     - name: Fail on Any Secrets Found
       if: inputs.add-report-comment-to-pr == 'true'
-      uses: aquasecurity/trivy-action@0.35.0
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
       with:
         scan-type: 'fs'
         format: 'table'
