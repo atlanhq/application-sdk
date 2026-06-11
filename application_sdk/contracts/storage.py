@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from pathlib import PurePosixPath
+from typing import Annotated
 
 from pydantic import Field, field_validator
 
 from application_sdk.contracts.base import Input, Output
-from application_sdk.contracts.types import FileReference, StorageTier
+from application_sdk.contracts.types import FileReference, MaxItems, StorageTier
 
 
 class UploadInput(Input):
@@ -64,6 +65,16 @@ class UploadInput(Input):
             patterns in dbt / databricks / coalesce connectors. Will flip
             to ``True`` default in v4.0 alongside ``BaseMetadataExtractor``
             removal.
+        explicit_files: Optional pre-enumerated list of files to upload.
+            When supplied, the directory branch skips ``rglob`` discovery
+            entirely and uses this list as the authoritative file set —
+            closes the filesystem-listing-transient race deterministically
+            (PART-1148). The canonical producer is
+            ``pyarrow.dataset.write_dataset(file_visitor=lambda f:
+            out.append(Path(f.path)))``, which captures every written file
+            synchronously at write time. When ``None`` (default),
+            discovery falls back to ``rglob`` — byte-identical to existing
+            behavior. All paths must be under ``local_path``.
     """
 
     local_path: str = ""
@@ -73,6 +84,7 @@ class UploadInput(Input):
     tier: StorageTier = StorageTier.RETAINED
     skip_if_exists: bool = False
     raise_on_empty: bool = False
+    explicit_files: Annotated[list[str], MaxItems(10000)] | None = None
 
     @field_validator("storage_subdir")
     @classmethod
