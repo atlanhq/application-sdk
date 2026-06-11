@@ -51,6 +51,24 @@ def _write_component(
 
 
 # ---------------------------------------------------------------------------
+# Module-level env isolation
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _isolate_aws_region_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Clear AWS_REGION / AWS_DEFAULT_REGION before every test in this module.
+
+    _build_s3_config now reads these env vars as a fallback, so any test that
+    asserts on the absence of aws_region would fail on machines (or CI pods)
+    that have either var exported.  Per-test @patch.dict decorators still work
+    because they run after this fixture clears the slate.
+    """
+    monkeypatch.delenv("AWS_REGION", raising=False)
+    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+
+
+# ---------------------------------------------------------------------------
 # Helper unit tests
 # ---------------------------------------------------------------------------
 
@@ -224,11 +242,6 @@ class TestS3StaticCredentials:
 
 
 class TestS3EmptyConfigHardening:
-    @pytest.fixture(autouse=True)
-    def _isolate_aws_region_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("AWS_REGION", raising=False)
-        monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
-
     @patch("obstore.store.S3Store")
     def test_bucket_only_passes_config_none(
         self, mock_s3_cls: MagicMock, tmp_path: Path
@@ -266,11 +279,6 @@ class TestS3EmptyConfigHardening:
 
 
 class TestS3BehaviorKnobs:
-    @pytest.fixture(autouse=True)
-    def _isolate_aws_region_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("AWS_REGION", raising=False)
-        monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
-
     @patch("obstore.store.S3Store")
     def test_endpoint_and_force_path_style(
         self, mock_s3_cls: MagicMock, tmp_path: Path
@@ -366,17 +374,20 @@ class TestS3BehaviorKnobs:
         assert client_options.get("timeout") == "90s"
         assert client_options.get("user_agent", "").startswith("atlan-application-sdk")
 
+    @pytest.mark.parametrize(
+        "endpoint", ["http://minio:9000", "HTTP://minio:9000", "Http://minio:9000"]
+    )
     @patch("obstore.store.S3Store")
     def test_http_endpoint_infers_allow_http_without_disable_ssl(
-        self, mock_s3_cls: MagicMock, tmp_path: Path
+        self, mock_s3_cls: MagicMock, tmp_path: Path, endpoint: str
     ) -> None:
-        # Dapr derives plaintext from the http:// endpoint scheme; mirror that
-        # (and the Azure branch) so an http endpoint works without disableSSL.
+        # endpoint.lower().startswith("http://") — RFC 3986 schemes are
+        # case-insensitive; test all three casing variants.
         components_dir = _write_component(
-            tmp_path,
+            tmp_path / endpoint[:4],
             "objectstore",
             "bindings.aws.s3",
-            {"bucket": "b", "endpoint": "http://minio:9000"},
+            {"bucket": "b", "endpoint": endpoint},
         )
         mock_s3_cls.return_value = MagicMock()
         create_store_from_binding("objectstore", components_dir=components_dir)
@@ -544,6 +555,35 @@ class TestS3AssumeRole:
         assert "aws_access_key_id" not in session_kwargs
         assert "aws_secret_access_key" not in session_kwargs
         assert "aws_session_token" not in session_kwargs
+
+    @patch.dict(os.environ, {"AWS_REGION": "ap-south-1"}, clear=False)
+    @patch("application_sdk.storage._credential_providers.StsCredentialProvider")
+    @patch("boto3.Session")
+    @patch("obstore.store.S3Store")
+    def test_assume_role_region_falls_back_to_env(
+        self,
+        mock_s3_cls: MagicMock,
+        mock_session_cls: MagicMock,
+        mock_sts_cls: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        # resolved_region (binding.py L340) must flow into boto3.Session so
+        # the STS call targets the correct regional endpoint when metadata.region
+        # is absent but AWS_REGION is set (IRSA / EKS injection).
+        mock_s3_cls.return_value = MagicMock()
+        mock_sts_cls.return_value = MagicMock()
+        mock_session_cls.return_value = MagicMock()
+
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.aws.s3",
+            {"bucket": "b", "assumeRoleArn": "arn:aws:iam::123:role/MyRole"},
+        )
+        create_store_from_binding("objectstore", components_dir=components_dir)
+
+        session_kwargs = mock_session_cls.call_args.kwargs
+        assert session_kwargs.get("region_name") == "ap-south-1"
 
 
 class TestS3SecretKeyRef:
@@ -856,6 +896,72 @@ class TestAzureEndpointAndEmulator:
 
         config = mock_az_cls.call_args.kwargs["config"]
         assert config["azure_storage_endpoint"] == "http://127.0.0.1:10000"
+
+    @patch("obstore.store.AzureStore")
+    def test_http_endpoint_infers_allow_http(
+        self, mock_az_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.azure.blobstorage",
+            {
+                "accountName": "devstoreaccount1",
+                "containerName": "ctr",
+                "accountKey": "KEY==",
+                "endpoint": "http://127.0.0.1:10000",
+            },
+        )
+        mock_az_cls.return_value = MagicMock()
+        create_store_from_binding("objectstore", components_dir=components_dir)
+
+        client_options = mock_az_cls.call_args.kwargs["client_options"]
+        assert client_options["allow_http"] is True
+
+    @pytest.mark.parametrize(
+        "endpoint", ["HTTP://127.0.0.1:10000", "Http://127.0.0.1:10000"]
+    )
+    @patch("obstore.store.AzureStore")
+    def test_http_endpoint_infers_allow_http_case_insensitive(
+        self, mock_az_cls: MagicMock, tmp_path: Path, endpoint: str
+    ) -> None:
+        components_dir = _write_component(
+            tmp_path / endpoint[:4],
+            "objectstore",
+            "bindings.azure.blobstorage",
+            {
+                "accountName": "devstoreaccount1",
+                "containerName": "ctr",
+                "accountKey": "KEY==",
+                "endpoint": endpoint,
+            },
+        )
+        mock_az_cls.return_value = MagicMock()
+        create_store_from_binding("objectstore", components_dir=components_dir)
+
+        client_options = mock_az_cls.call_args.kwargs["client_options"]
+        assert client_options["allow_http"] is True
+
+    @patch("obstore.store.AzureStore")
+    def test_https_endpoint_does_not_set_allow_http(
+        self, mock_az_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.azure.blobstorage",
+            {
+                "accountName": "acct",
+                "containerName": "ctr",
+                "accountKey": "KEY==",
+                "endpoint": "https://acct.blob.core.windows.net",
+            },
+        )
+        mock_az_cls.return_value = MagicMock()
+        create_store_from_binding("objectstore", components_dir=components_dir)
+
+        client_options = mock_az_cls.call_args.kwargs["client_options"]
+        assert "allow_http" not in client_options
 
     @patch("obstore.store.AzureStore")
     def test_use_emulator_flag(self, mock_az_cls: MagicMock, tmp_path: Path) -> None:

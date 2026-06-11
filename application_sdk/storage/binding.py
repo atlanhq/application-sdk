@@ -383,7 +383,7 @@ def _build_azure_config(
         az_config["azure_storage_account_name"] = account
     if _nonempty(meta, "endpoint"):
         az_config["azure_storage_endpoint"] = meta["endpoint"]
-        if meta["endpoint"].startswith("http://"):
+        if meta["endpoint"].lower().startswith("http://"):
             az_client_options["allow_http"] = True
     if _coerce_bool(meta.get("useEmulator", "")):
         az_config["azure_storage_use_emulator"] = "true"
