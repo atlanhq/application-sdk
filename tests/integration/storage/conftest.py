@@ -1,8 +1,14 @@
 """Shared fixtures and helpers for storage integration tests.
 
-All integration tests run against real cloud services and require credentials
-passed via environment variables. All markers are deselected by default via
-``pyproject.toml``'s ``addopts``.
+Local-filesystem tests (``integration`` marker):
+    Run against a real obstore ``LocalStore`` rooted in a pytest temp
+    directory — no cloud credentials and no Temporal server needed:
+
+    uv run pytest tests/integration/storage -m integration -v
+
+Cloud-binding integration tests run against real cloud services and require
+credentials passed via environment variables. All markers are deselected by
+default via ``pyproject.toml``'s ``addopts``.
 
 S3 tests (``s3_integration`` marker):
     export AWS_ACCESS_KEY_ID=<key>
@@ -30,6 +36,36 @@ from __future__ import annotations
 import os
 
 import pytest
+
+from application_sdk import constants
+from application_sdk.storage.factory import create_local_store
+
+# ---------------------------------------------------------------------------
+# Local-filesystem fixtures (no cloud credentials needed)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def local_store(tmp_path):
+    """Real obstore ``LocalStore`` rooted in an isolated temp directory."""
+    return create_local_store(tmp_path / "objectstore")
+
+
+@pytest.fixture
+def staging(tmp_path, monkeypatch):
+    """Staging directory wired up as the SDK's ``TEMPORARY_PATH``.
+
+    v2-era callers pass workflow staging paths (``./local/tmp/...``) as
+    object-store keys; ``normalize_key`` strips the staging root.  This
+    fixture redirects the staging root to a temp directory so v2-style path
+    inputs can be exercised hermetically.
+    """
+    staging_dir = tmp_path / "staging"
+    staging_dir.mkdir()
+    monkeypatch.setenv("ATLAN_TEMPORARY_PATH", str(staging_dir))
+    monkeypatch.setattr(constants, "TEMPORARY_PATH", str(staging_dir))
+    return staging_dir
+
 
 # ---------------------------------------------------------------------------
 # Real AWS S3 connection settings (env-var driven)

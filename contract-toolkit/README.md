@@ -144,14 +144,14 @@ Automation Engine DAG template. Auto-derived from the declared workflow params a
 
 Default pipeline: `extract → publish`. Opt out of publish with
 `pipeline.publish = null`. Add parseQueries, popularity, or lineage steps by
-setting the corresponding `pipeline.*` field. Opt in to failure notifications
-with `notifyOnFailure = true`.
+setting the corresponding `pipeline.*` field. Opt in to notifications
+with `notifications = true`.
 
-A run-level **failure-notification node** (`notify-on-failure`) is appended when `notifyOnFailure = true`. It depends on the reserved run-level `workflow_failure` tag — Automation Engine runs it once when the workflow run terminates in failure — and dispatches the `notification-app` to fan alerts out to the tenant's enabled integrations (Teams, etc.). By default the node is not emitted.
+A run-level **notification node** (`notifications`) is appended when `notifications = true`. It depends on the reserved run-level `workflow_complete` tag — Automation Engine runs it once when the workflow run reaches any terminal state (success or failure) — and dispatches the `notification-app`, which fans alerts out to the tenant's enabled integrations (Teams, etc.) and decides delivery per integration (`failureOnly`: failure-only vs. all runs). By default the node is not emitted.
 
 ### `_input.py` (`app/generated/_input.py`)
 
-Typed Python `AppInputContract` dataclass. SDK-owned fields inherited from `ExtractionInput`; app-specific fields generated from `uiConfig.properties`.
+Typed Python `AppInputContract` dataclass. SDK-owned fields inherited from `ExtractionInput`; app-specific fields generated from `uiConfig.properties`. Inherited `include_filter` and `exclude_filter` fields accept APITree object selections by normalizing them to the SDK filter-map shape before validation.
 
 ## Modules
 
@@ -246,20 +246,22 @@ pipeline {
 
 Dependencies between pipeline steps are **auto-wired** based on position — you do not write `dependsOn` for pipeline steps. Use `extraNodes` for custom nodes outside the typed pipeline.
 
-The toolkit can append a run-level failure notification node when an app opts in:
+The toolkit can append a run-level notification node when an app opts in:
 
 ```pkl
-notifyOnFailure = true
+notifications = true
 ```
 
-When enabled, the generated manifest includes `notify-on-failure`, a
+When enabled, the generated manifest includes `notifications`, a
 `NotificationNode` that dispatches `NotificationWorkflow` in `notification-app`.
-It depends on the reserved run-level `workflow_failure` tag, so Automation
-Engine runs it once after the workflow run fails and resolves the payload from
-`$.workflow.*` and `$.failure.*` context. The notification app then fans the
-alert out to the tenant's enabled integrations.
+It depends on the reserved run-level `workflow_complete` tag, so Automation
+Engine runs it once after the workflow run reaches any terminal state (success
+or failure) and resolves the payload from `$.workflow.*` and `$.failure.*`
+context (carrying the real status). The notification app then fans the alert out
+to the tenant's enabled integrations and decides delivery per integration
+(`failureOnly`: failure-only vs. all runs).
 
-To replace the generated node, define `extraNodes["notify-on-failure"]`.
+To replace the generated node, define `extraNodes["notifications"]`.
 
 **Mapping from old API:**
 

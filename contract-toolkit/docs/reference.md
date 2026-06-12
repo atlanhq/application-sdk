@@ -324,33 +324,34 @@ Credential files are hoisted by matching `connectorConfigName`. If two entrypoin
 | `manifestTopLevelArgs` | Mapping<String, String> | `{"credential_guid": "credential-guid", "connection": "connection"}` | Explicit top-level extract args. |
 | `publishTagPipelineEnabled` | Boolean\|String? | auto | Value for `PublishNode`'s `tag_pipeline_enabled`. Auto-wired when `enable-tags` or `enable-tag-sync` is in the form. |
 | `publishTagAttachmentsPrefix` | String? | auto | Value for `PublishNode`'s `tag_attachments_prefix`. |
-| `notifyOnFailure` | Boolean | `false` | When set to `true`, appends a run-level failure-notification node (`NotificationNode`, key `notify-on-failure`) that fires when the workflow run terminates in failure. The node depends on the reserved run-level `workflow_failure` tag (a `DependencyCondition` with no `nodeId`), so AE runs it once per failed run as a finalizer and dispatches the `notification-app` to fan alerts out to the tenant's enabled integrations. Also skipped when `extraNodes` defines a `notify-on-failure` key. See [NotificationNode](#notificationnode). |
+| `notifications` | Boolean | `false` | Top-level app on/off. When set to `true`, appends a run-level notification node (`NotificationNode`, key `notifications`) that fires when the workflow run reaches any terminal state (success or failure). The node depends on the reserved run-level `workflow_complete` tag (a `DependencyCondition` with no `nodeId`), so AE runs it once per run as a finalizer and dispatches the `notification-app`, which fans alerts to the tenant's enabled integrations and decides delivery per integration (`failureOnly`: failure-only vs. all runs). Also skipped when `extraNodes` defines a `notifications` key. See [NotificationNode](#notificationnode). |
 
 ---
 
-### Failure Notification Overview
+### Notification Overview
 
 ```pkl
 class NotificationNode extends DAGNode {
-  displayName = "Notify on workflow failure"
+  displayName = "Notify on workflow completion"
   workflowType = "NotificationWorkflow"
   appName = "notification-app"
-  dependsOnCondition = new DependencyCondition { tag = "workflow_failure" }
+  dependsOnCondition = new DependencyCondition { tag = "workflow_complete" }
   args { ["metadata"] { /* run-level templated fields */ } }
 }
 ```
 
-Pre-built failure-notification node. The toolkit appends it automatically as
-`notify-on-failure` when an app opts in with `notifyOnFailure = true`. It
+Pre-built run-completion notification node. The toolkit appends it automatically
+as `notifications` when an app opts in with `notifications = true`. It
 renders `app_name = "notification-app"` and
 `task_queue = "atlan-notification-app-{deployment_name}"`, and depends on the
-reserved run-level `workflow_failure` tag.
+reserved run-level `workflow_complete` tag.
 
-That tag is the one `DependencyCondition` permitted without a `nodeId`: AE treats
-a node-less `workflow_failure` condition as a finalizer that evaluates true once
-the run terminates in failure (any non-finalizer node failed), so the alert
-fires once per failed run rather than per node. Any other tag without a `nodeId`
-is a contract error.
+That tag is the only `DependencyCondition` permitted without a `nodeId`: AE treats
+a node-less `workflow_complete` condition as a finalizer that evaluates true once
+the run reaches **any** terminal state — success or failure — so the node dispatches
+once per run carrying the real `$.workflow.status`. The notification app then decides
+delivery per integration (`alertsWorkflowChannel.failureOnly`: failure-only vs.
+all runs). Any other tag without a `nodeId` is a contract error.
 
 Its `args.metadata` is templated from the run-level context AE injects at
 dispatch (`$.workflow.*` and `$.failure.*`): `notification_type`,
@@ -358,14 +359,16 @@ dispatch (`$.workflow.*` and `$.failure.*`): `notification_type`,
 `started_at`, `completed_at`, `duration_ms`, `connector`, `schedule`,
 `next_run_time`, `last_runs`, `creator_name`, `modified_by_name`,
 `run_details_url`, `workflow_run_guid`, `error_message`, `error_category`,
-`suggested_action`, `failed_node_id`, and `failed_activity`. The richer
-fields (`connector`, `schedule`, `next_run_time`, `last_runs`, `creator_name`,
-`modified_by_name`) are populated best-effort by AE's failure-alert enrichment
-activity for the finalizer node only; any that can't be resolved arrive empty.
+`suggested_action`, `failed_node_id`, and `failed_activity`. AE provides every
+`$.workflow.*` field as an empty default so templates always resolve; the
+enrichment activity populates `connector`, `schedule`, `creator_name`, and
+`modified_by_name` best-effort for the finalizer node (`next_run_time` /
+`last_runs` are wired by a follow-up). On a successful run `$.failure.*` resolves
+to empty strings.
 
-To enable, set `notifyOnFailure = true`. To retarget the alert (different
-`appName`/`taskQueue`/args), define `extraNodes["notify-on-failure"]`. See
-`tests/notify_on_failure_test.pkl` and `examples/full/app.pkl`.
+To enable, set `notifications = true`. To retarget the alert (different
+`appName`/`taskQueue`/args), define `extraNodes["notifications"]`. See
+`tests/notifications_test.pkl` and `examples/full/app.pkl`.
 
 ---
 
@@ -1323,10 +1326,10 @@ condition trees. It is mutually exclusive with `dependsOn`. For pre-built nodes
 that define a default `dependsOn`, set `dependsOn = null` before setting
 `dependsOnCondition`.
 
-The reserved `workflow_failure` tag is the only node-less tag condition the
+The reserved `workflow_complete` tag is the only node-less tag condition the
 toolkit permits. It is run-level, not node-level: Automation Engine evaluates it
-for finalizer nodes once the workflow run fails. This is used by
-`NotificationNode`; other tags still require `nodeId`.
+for finalizer nodes once the run settles, on any terminal state (success or
+failure). `NotificationNode` uses it; every other tag still requires `nodeId`.
 
 ```pkl
 class DependencyCondition {
@@ -1346,11 +1349,11 @@ dependsOnCondition = new DependencyCondition {
 }
 ```
 
-Run-level failure finalizer condition:
+Run-level completion finalizer condition (runs on success or failure):
 
 ```pkl
 dependsOnCondition = new DependencyCondition {
-  tag = "workflow_failure"
+  tag = "workflow_complete"
 }
 ```
 
@@ -1513,18 +1516,18 @@ workflow-safe `ErrorHandlingConfig` values. See `examples/publish-controls/`.
 
 ### NotificationNode
 
-Pre-built run-failure notification system node. The toolkit appends it
-automatically as `notify-on-failure` when `notifyOnFailure = true`:
+Pre-built run-completion notification system node. The toolkit appends it
+automatically as `notifications` when `notifications = true`:
 
 ```pkl
 class NotificationNode extends DAGNode {
-  displayName = "Notify on workflow failure"
+  displayName = "Notify on workflow completion"
   workflowType = "NotificationWorkflow"
   appName = "notification-app"
-  dependsOnCondition = new DependencyCondition { tag = "workflow_failure" }
+  dependsOnCondition = new DependencyCondition { tag = "workflow_complete" }
   args {
     ["metadata"] {
-      ["notification_type"] = "workflow_failure_alert"
+      ["notification_type"] = "workflow_completion_alert"
       ["workflow_name"] = "$.workflow.name"
       ["workflow_qualified_name"] = "$.workflow.qualified_name"
       ["workflow_slug"] = "$.workflow.slug"
@@ -1545,12 +1548,15 @@ It renders `app_name = "notification-app"` and
 `task_queue = "atlan-notification-app-{deployment_name}"`. Automation Engine
 resolves the `$.workflow.*` and `$.failure.*` placeholders when the finalizer
 runs, then the notification app fans the alert out to the tenant's enabled
-integrations. The finalizer uses `$.workflow.status`; Automation Engine exposes
-the effective terminal workflow status for this run-level failure node.
+integrations and decides delivery per integration (`failureOnly`). The finalizer
+uses `$.workflow.status`; AE exposes the real terminal status for this run-level
+completion node (`Succeeded` or `Failed`), and `$.failure.*` resolves to empty
+strings on a successful run. (`notification_type` keeps the
+`workflow_completion_alert` value for routing back-compat.)
 
-Set `notifyOnFailure = true` for apps that should self-notify on workflow-run
-failure. To replace the default target or payload, define
-`extraNodes["notify-on-failure"]`.
+Set `notifications = true` for apps that should self-notify on workflow-run
+completion. To replace the default target or payload, define
+`extraNodes["notifications"]`.
 
 ### QueryIntelligenceNode
 
@@ -2539,7 +2545,10 @@ class AppInputContract(ExtractionInput):
   into generated connector contracts.
 - SDK-owned fields are skipped in the generated subclass so parent validators
   continue to apply. This includes `include_filter`, `exclude_filter`, and
-  `temp_table_regex`.
+  `temp_table_regex`. When `include-filter` or `exclude-filter` are object
+  widgets such as `APITree`, the SDK normalizes tree selections like
+  `{"catalog": {"db": {}}}` to the existing filter map shape
+  `{"catalog": ["db"]}` before validation.
 - Publish fields simplified: `publish_dry_run` replaces the loader-specific fields
 
 ---

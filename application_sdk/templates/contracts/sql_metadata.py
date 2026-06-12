@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 import orjson
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, JsonValue, ValidationInfo, field_validator, model_validator
 
 from application_sdk.common.sql_filters import (
     SAFE_FILTER_PATTERN,
@@ -37,11 +37,44 @@ FilterMap = Annotated[
 # any in-tree import path remains valid.
 _validate_filter_no_sql_injection = validate_filter_no_sql_injection
 
+_FILTER_FIELD_JSON_SCHEMA_EXTRA: dict[str, JsonValue] = {
+    "x-accepted-before-validation": [
+        "dict[str, list[str]]",
+        "APITree-style dict[str, dict]",
+        "list[str]",
+        "str",
+        "None",
+    ]
+}
 
-def _coerce_filter_value(v: Any) -> FilterMap | str:
+
+def _normalize_tree_filter_value(v: dict[str, Any]) -> dict[str, Any]:
+    """Normalize APITree-style selections to the existing FilterMap shape.
+
+    APITree widgets can emit ``{"catalog": {"db": {}}}`` while the SDK
+    filter contract is ``{"catalog": ["db"]}``. Preserve existing list and
+    string values; only collapse immediate object children to their selected
+    keys. Callers must validate ``v`` before invoking; this helper does not
+    re-check deeper descendants because they are dropped during normalization
+    and the SDK filter contract is catalog/schema-level.
+    """
+    normalized: dict[str, Any] = {}
+    changed = False
+    for key, value in v.items():
+        if isinstance(value, dict):
+            normalized[key] = list(value.keys())
+            changed = True
+        else:
+            normalized[key] = value
+    return normalized if changed else v
+
+
+def _coerce_filter_value(v: Any) -> Any:
     """Coerce filter input to FilterMap | str.
 
     - ``dict`` → pass through (structured filter map from AE)
+    - ``dict[str, dict]`` → normalize APITree selections to
+      ``dict[str, list[str]]``
     - ``list`` → wrap as ``{".*": <list>}``
     - ``str`` → normalise the legacy quoted-CSV shape (``'"A","B"'`` →
       ``'A|B'``) so migrated workflow specs from the pre-v3 SaaS-agent
@@ -56,7 +89,22 @@ def _coerce_filter_value(v: Any) -> FilterMap | str:
         return {".*": v}
     if isinstance(v, str):
         return normalize_legacy_filter_value(v)
+    if isinstance(v, dict):
+        # Validate before flattening so deeper APITree descendants that are not
+        # represented in FilterMap cannot hide unsafe strings.
+        validate_filter_no_sql_injection(v)
+        return _normalize_tree_filter_value(v)
     return v
+
+
+def _is_sdk_sql_filter_field(cls: type, field_name: str | None) -> bool:
+    """Return True when a subclass still uses the SDK-owned SQL filter field."""
+    if field_name is None:
+        return False
+    field = cls.model_fields.get(field_name)
+    return (
+        field is not None and field.json_schema_extra == _FILTER_FIELD_JSON_SCHEMA_EXTRA
+    )
 
 
 class ExtractionInput(Input):
@@ -151,22 +199,34 @@ class ExtractionInput(Input):
     output_path: str = ""
     """Local or object store path for output files."""
 
-    exclude_filter: FilterMap | str = Field(default="")
+    exclude_filter: FilterMap | str = Field(
+        default="", json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA
+    )
     """Filter for excluding schemas/tables.
 
     Accepts:
     - ``dict[str, list[str]]`` — structured filter map from AE
+    - APITree-style ``dict[str, dict]`` — normalized to ``dict[str, list[str]]``
     - ``str`` — JSON string or raw regex (backward compat)
     - ``None`` → empty string
+
+    APITree inputs are accepted in the before-validator and stored as the
+    normalized ``dict[str, list[str]]`` shape.
     """
 
-    include_filter: FilterMap | str = Field(default="")
+    include_filter: FilterMap | str = Field(
+        default="", json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA
+    )
     """Filter for including schemas/tables.
 
     Accepts:
     - ``dict[str, list[str]]`` — structured filter map from AE
+    - APITree-style ``dict[str, dict]`` — normalized to ``dict[str, list[str]]``
     - ``str`` — JSON string or raw regex (backward compat)
     - ``None`` → empty string
+
+    APITree inputs are accepted in the before-validator and stored as the
+    normalized ``dict[str, list[str]]`` shape.
     """
 
     temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)] = ""
@@ -177,7 +237,9 @@ class ExtractionInput(Input):
 
     @field_validator("include_filter", "exclude_filter", mode="before")
     @classmethod
-    def _coerce_filter(cls, v: Any) -> FilterMap | str:
+    def _coerce_filter(cls, v: Any, info: ValidationInfo) -> Any:
+        if not _is_sdk_sql_filter_field(cls, info.field_name):
+            return v
         return _coerce_filter_value(v)
 
     @field_validator("temp_table_regex", mode="before")
@@ -235,14 +297,20 @@ class ExtractionTaskInput(Input):
     credential_ref: CredentialRef | None = None
     output_prefix: str = ""
     output_path: str = ""
-    exclude_filter: FilterMap | str = Field(default="")
-    include_filter: FilterMap | str = Field(default="")
+    exclude_filter: FilterMap | str = Field(
+        default="", json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA
+    )
+    include_filter: FilterMap | str = Field(
+        default="", json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA
+    )
     temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)] = ""
     source_tag_prefix: str = ""
 
     @field_validator("include_filter", "exclude_filter", mode="before")
     @classmethod
-    def _coerce_filter(cls, v: Any) -> FilterMap | str:
+    def _coerce_filter(cls, v: Any, info: ValidationInfo) -> Any:
+        if not _is_sdk_sql_filter_field(cls, info.field_name):
+            return v
         return _coerce_filter_value(v)
 
     @field_validator("temp_table_regex", mode="before")
