@@ -9,7 +9,7 @@ Usage::
     python -m suite.runner --repo . --series C --output ci.sarif
 
     # Run multiple series
-    python -m suite.runner --repo . --series P,L --output code.sarif
+    python -m suite.runner --repo . --series E,L --output code.sarif
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from suite.checks import actions_pinning, error_recovery
+from suite.checks import actions_pinning, error_handling
 from suite.rules import get_rule
 from suite.schema.disposition import EnforcementTier
 from suite.schema.findings import Finding, findings_to_report
@@ -44,9 +44,9 @@ _CHECKS: list[CheckRegistration] = [
         scan_path=actions_pinning.scan_path,
     ),
     CheckRegistration(
-        series=error_recovery.SERIES,
-        discover=error_recovery.discover,
-        scan_path=error_recovery.scan_path,
+        series=error_handling.SERIES,
+        discover=error_handling.discover,
+        scan_path=error_handling.scan_path,
     ),
 ]
 

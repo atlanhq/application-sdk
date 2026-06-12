@@ -1,18 +1,18 @@
-"""P-series error-recovery checks — AST-based.
+"""E-series error-handling checks — AST-based.
 
 Scans Python source files for error-handling anti-patterns defined in the
-P001–P018 rule catalog.  Every check is purely deterministic: the same
+E001–E018 rule catalog.  Every check is purely deterministic: the same
 source text always produces the same set of findings.
 
 Inline suppression
 ------------------
-Add a ``# conformance: ignore[PXXX] <reason>`` comment on the offending line
+Add a ``# conformance: ignore[EXXX] <reason>`` comment on the offending line
 or on the line immediately above it to acknowledge a finding with justification::
 
-    except ImportError:  # conformance: ignore[P008] third-party optional dep
+    except ImportError:  # conformance: ignore[E008] third-party optional dep
         pass
 
-    # conformance: ignore[P002] StopIteration expected in manual iterator
+    # conformance: ignore[E002] StopIteration expected in manual iterator
     except StopIteration:
         pass
 """
@@ -32,7 +32,7 @@ from pathlib import Path
 
 from suite.schema.findings import Finding, findings_to_report
 
-SERIES = "P"
+SERIES = "E"
 
 # P012 — builtin exception types that should be replaced by typed AppError leaves
 BUILTIN_RAISES: frozenset[str] = frozenset(
@@ -121,7 +121,7 @@ _LOG_METHODS: frozenset[str] = frozenset(
     {"debug", "info", "warning", "warn", "error", "critical", "exception"}
 )
 
-# Directive regex: "conformance: ignore[P001,P002] some reason"
+# Directive regex: "conformance: ignore[E001,P002] some reason"
 _SUPPRESS_RE = re.compile(
     r"conformance\s*:\s*ignore\s*(?:\[([^\]]*)\])?\s*(.*)",
     re.IGNORECASE,
@@ -407,7 +407,7 @@ def _iter_shallow(root: ast.AST) -> Iterator[ast.AST]:
 
 
 class Checker(ast.NodeVisitor):
-    """Walk a module AST and emit P-series findings."""
+    """Walk a module AST and emit E-series findings."""
 
     def __init__(
         self,
@@ -528,7 +528,7 @@ class Checker(ast.NodeVisitor):
         if is_bare:
             if is_pass_only:
                 self._add(
-                    "P001",
+                    "E001",
                     node,
                     "Bare 'except: pass' silently discards every exception including "
                     "SystemExit and KeyboardInterrupt — the hardest class of bugs to debug. "
@@ -536,7 +536,7 @@ class Checker(ast.NodeVisitor):
                 )
             else:
                 self._add(
-                    "P006",
+                    "E006",
                     node,
                     "Bare 'except:' (no type) catches SystemExit and KeyboardInterrupt. "
                     "Use 'except Exception:' at minimum.",
@@ -544,7 +544,7 @@ class Checker(ast.NodeVisitor):
         elif is_pass_only:
             exc_type = _get_name(node.type) or "Exception"
             self._add(
-                "P002",
+                "E002",
                 node,
                 f"'except {exc_type}: pass' silently discards the exception with no trace. "
                 "Acceptable only for genuinely trivial best-effort operations — "
@@ -561,7 +561,7 @@ class Checker(ast.NodeVisitor):
             arg_name = _get_name(arg)
             if arg_name in _BROAD_EXCEPT_TYPES:
                 self._add(
-                    "P003",
+                    "E003",
                     node,
                     f"contextlib.suppress({arg_name}) — scope is too broad; "
                     f"suppresses every exception. Use a specific exception type "
@@ -594,7 +594,7 @@ class Checker(ast.NodeVisitor):
             if func.attr in ("warning", "error", "critical") and _has_exc_info(call):
                 return
         self._add(
-            "P004",
+            "E004",
             node,
             f"'except {exc_type}' catches everything. Acceptable only at top-level handlers "
             f"(worker loops, HTTP handlers) when logged with exc_info=True. "
@@ -621,7 +621,7 @@ class Checker(ast.NodeVisitor):
                 continue  # logger.exception() implies exc_info — skip
             if func.attr in ("warning", "error", "critical") and not _has_exc_info(call):
                 self._add(
-                    "P005",
+                    "E005",
                     n,
                     f"logger.{func.attr}() inside except block is missing exc_info=True — "
                     f"the stack trace is silently discarded. Add exc_info=True.",
@@ -636,7 +636,7 @@ class Checker(ast.NodeVisitor):
             if _any_logging_in(node.body[:i]):
                 continue
             self._add(
-                "P007",
+                "E007",
                 stmt,
                 "except block returns a value without logging — the error is hidden. "
                 "Log before returning or raise a domain-specific exception.",
@@ -653,7 +653,7 @@ class Checker(ast.NodeVisitor):
         if _any_logging_in(node.body):
             return
         self._add(
-            "P008",
+            "E008",
             node,
             f"'except {exc_type}' with no logging — import failures are silently hidden. "
             f"Log at DEBUG if the module is preferred but not required, or add a comment "
@@ -679,7 +679,7 @@ class Checker(ast.NodeVisitor):
         if _any_logging_in(node.body):
             return
         self._add(
-            "P009",
+            "E009",
             node,
             "except block only assigns a variable — the exception is silently hidden. "
             "Add logger.warning(..., exc_info=True) before the assignment.",
@@ -727,7 +727,7 @@ class Checker(ast.NodeVisitor):
 
         for node in bare_gathers:
             self._add(
-                "P010",
+                "E010",
                 node,
                 "asyncio.gather(return_exceptions=True) result is discarded — exception "
                 "instances in the result list are silently ignored. "
@@ -752,7 +752,7 @@ class Checker(ast.NodeVisitor):
                         break
             if not inspected:
                 self._add(
-                    "P010",
+                    "E010",
                     assign_node,
                     f"asyncio.gather(return_exceptions=True) result '{var_name}' is not "
                     f"inspected for exception instances — errors vanish silently. "
@@ -769,7 +769,7 @@ class Checker(ast.NodeVisitor):
             return
         if not _filter_body_wrapped(method):
             self._add(
-                "P011",
+                "E011",
                 method,
                 f"logging.Filter.filter() body in '{cls.name}' is not fully wrapped in "
                 f"try/except — an unguarded exception crashes the logging caller "
@@ -807,7 +807,7 @@ class Checker(ast.NodeVisitor):
             else ""
         )
         self._add(
-            "P012",
+            "E012",
             node,
             f"raise {exc_name} where a typed AppError leaf should be used{activity_note}. "
             f"Replace with a domain-specific subclass from application_sdk.errors.",
@@ -826,7 +826,7 @@ class Checker(ast.NodeVisitor):
         if exc_name == "IOError" and not self._atlan_ioerror_imported:
             return
         self._add(
-            "P013",
+            "E013",
             node,
             f"raise {exc_name} uses the deprecated AtlanError stack "
             f"(emits DeprecationWarning; produces no typed wire envelope; "
@@ -843,7 +843,7 @@ class Checker(ast.NodeVisitor):
             return
         exc_type = _get_name(node.type) if node.type else "(bare)"
         self._add(
-            "P014",
+            "E014",
             node,
             f"except {exc_type}: [continue/break/pass] inside a loop — exception is "
             f"silently swallowed. Log at DEBUG before the loop control statement.",
@@ -861,7 +861,7 @@ class Checker(ast.NodeVisitor):
             if kw.arg == "message" and _message_kw_has_exc_text(kw.value, exc_binding):
                 exc_type = _get_name(node.exc.func) or "Error"
                 self._add(
-                    "P015",
+                    "E015",
                     node,
                     f"message= on {exc_type} contains interpolated exception text "
                     f"(f-string/str(exc)/repr(exc)) — leaks unsanitised text and breaks "
@@ -884,7 +884,7 @@ class Checker(ast.NodeVisitor):
         exc_binding = handler.name
         exc_name = _get_name(node.exc) or "NewError"
         self._add(
-            "P016",
+            "E016",
             node,
             f"raise {exc_name} inside 'except ... as {exc_binding}:' is missing "
             f"'from {exc_binding}'. The original exception is lost in AE dashboards. "
@@ -899,7 +899,7 @@ class Checker(ast.NodeVisitor):
         for kw in node.exc.keywords:
             if kw.arg and any(kw.arg.endswith(s) for s in _SECRET_SUFFIXES):
                 self._add(
-                    "P017",
+                    "E017",
                     node,
                     f"Evidence key '{kw.arg}' ends in a secret suffix — "
                     f"the wire layer rejects this at runtime (ValueError). "
@@ -929,7 +929,7 @@ class Checker(ast.NodeVisitor):
                         return
 
         self._add(
-            "P018",
+            "E018",
             node,
             f"raise {exc_name} uses a bare parent leaf without a domain-specific subclass "
             f"that overrides 'code' — collapses all failures of this category into one "
@@ -944,7 +944,7 @@ class Checker(ast.NodeVisitor):
 
 
 def scan_text(text: str, file: str) -> list[Finding]:
-    """Scan Python source *text* and return all P-series findings."""
+    """Scan Python source *text* and return all E-series findings."""
     try:
         tree = ast.parse(text, filename=file)
     except SyntaxError:
@@ -989,9 +989,9 @@ def discover(root: Path) -> list[Path]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI entry point for P-series error-recovery checks."""
+    """CLI entry point for E-series error-handling checks."""
     parser = argparse.ArgumentParser(
-        description="P-series: scan Python files for error-handling anti-patterns."
+        description="E-series: scan Python files for error-handling anti-patterns."
     )
     parser.add_argument(
         "scan_paths",

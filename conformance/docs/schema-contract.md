@@ -108,7 +108,7 @@ Results that are SUPPRESSED or WARNING never fail the gate.
 
 ## 5. Rule catalog (`suite/rules/`)
 
-Rules are **typed Python**, not YAML.  Each series module (`ci.py`, `error_recovery.py`,
+Rules are **typed Python**, not YAML.  Each series module (`ci.py`, `error_handling.py`,
 `logging.py`) exposes a `RULES: tuple[RuleDefinition, ...]`; `suite/rules/__init__.py`
 combines them into an immutable `CATALOG: Mapping[str, RuleDefinition]` (O(1) lookup).
 Each entry maps to a `reportingDescriptor` and carries the `atlan/*` governance fields.
@@ -116,7 +116,7 @@ Rule ID namespaces:
 
 | Prefix | Domain |
 |---|---|
-| `P001–P099` | Error-recovery patterns (from `signal-over-noise` surface phase) |
+| `E001–E099` | Error-handling patterns (from `signal-over-noise` surface phase) |
 | `L001–L099` | Logging patterns (from `signal-over-noise` tune phase) |
 | `C001–C099` | CI/workflow supply-chain (action-pinning, permissions, trigger hygiene) |
 | `T001–T099` | Test-quality patterns (reserved) |
@@ -151,15 +151,15 @@ the gate is proven in CI.
 
 ---
 
-## 5b. P-series — error-recovery rules {#p-series}
+## 5b. E-series — error-handling rules {#p-series}
 
-All P-series rules use `mechanism: static` and are discovered by
-`suite.checks.error_recovery` (AST-based).  Suppression directive:
+All E-series rules use `mechanism: static` and are discovered by
+`suite.checks.error_handling` (AST-based).  Suppression directive:
 `# conformance: ignore[Pxxx] <reason>` on the offending line or the line directly above it.
 
 ---
 
-### P001 — `BareExceptPass` {#p001}
+### E001 — `BareExceptPass` {#e001}
 
 **Tier:** `block` | **Category:** `silent-swallow`
 
@@ -172,7 +172,7 @@ at minimum logs at DEBUG.
 
 ---
 
-### P002 — `TypedExceptPass` {#p002}
+### E002 — `TypedExceptPass` {#e002}
 
 **Tier:** `block` | **Category:** `silent-swallow`
 
@@ -184,7 +184,7 @@ explanatory comment; use the suppression directive in those cases.
 
 ---
 
-### P003 — `BroadContextlibSuppress` {#p003}
+### E003 — `BroadContextlibSuppress` {#e003}
 
 **Tier:** `warn` | **Category:** `silent-swallow`
 
@@ -196,7 +196,7 @@ every exception including those the caller did not intend to hide.  Use a specif
 
 ---
 
-### P004 — `BroadExceptClause` {#p004}
+### E004 — `BroadExceptClause` {#e004}
 
 **Tier:** `warn` | **Category:** `overly-broad-catch`
 
@@ -209,7 +209,7 @@ that log with full traceback capture.
 
 ---
 
-### P005 — `ExceptBlockMissingExcInfo` {#p005}
+### E005 — `ExceptBlockMissingExcInfo` {#e005}
 
 **Tier:** `warn` | **Category:** `missing-traceback`
 
@@ -220,7 +220,7 @@ stack trace is silently discarded.  Add `exc_info=True`.
 
 ---
 
-### P006 — `BareExceptWithBody` {#p006}
+### E006 — `BareExceptWithBody` {#e006}
 
 **Tier:** `block` | **Category:** `silent-swallow`
 
@@ -231,7 +231,7 @@ Use `except Exception:` at minimum.
 
 ---
 
-### P007 — `ErrorToReturnValue` {#p007}
+### E007 — `ErrorToReturnValue` {#e007}
 
 **Tier:** `warn` | **Category:** `error-to-return-value`
 
@@ -243,7 +243,7 @@ Log call anywhere before the return statement → no finding.
 
 ---
 
-### P008 — `ImportErrorWithoutLogging` {#p008}
+### E008 — `ImportErrorWithoutLogging` {#e008}
 
 **Tier:** `warn` | **Category:** `optional-import`
 
@@ -255,7 +255,7 @@ directive with justification.
 
 ---
 
-### P009 — `ExceptBlockOnlyAssigns` {#p009}
+### E009 — `ExceptBlockOnlyAssigns` {#e009}
 
 **Tier:** `warn` | **Category:** `silent-swallow`
 
@@ -267,7 +267,7 @@ assignment.
 
 ---
 
-### P010 — `AsyncioGatherExceptionsUnexamined` {#p010}
+### E010 — `AsyncioGatherExceptionsUnexamined` {#e010}
 
 **Tier:** `warn` | **Category:** `asyncio-unexamined`
 
@@ -281,7 +281,7 @@ residue.
 
 ---
 
-### P011 — `LoggingFilterUnsafeBody` {#p011}
+### E011 — `LoggingFilterUnsafeBody` {#e011}
 
 **Tier:** `warn` | **Category:** `filter-safety`
 
@@ -293,7 +293,7 @@ no try/except around filter invocations.  Wrap the entire body and return a safe
 
 ---
 
-### P012 — `UntypedBuiltinRaise` {#p012}
+### E012 — `UntypedBuiltinRaise` {#e012}
 
 **Tier:** `warn` | **Category:** `untyped-raise`
 
@@ -308,7 +308,7 @@ where a typed `AppError` leaf should be used.  Replace with a domain-specific su
 
 ---
 
-### P013 — `LegacyAtlanErrorRaise` {#p013}
+### E013 — `LegacyAtlanErrorRaise` {#e013}
 
 **Tier:** `block` | **Category:** `legacy-raise`
 
@@ -321,7 +321,7 @@ when `IOError` is explicitly imported from `application_sdk.common.error_codes`.
 
 ---
 
-### P014 — `ExceptLoopControlSwallow` {#p014}
+### E014 — `ExceptLoopControlSwallow` {#e014}
 
 **Tier:** `warn` | **Category:** `silent-swallow`
 
@@ -333,7 +333,7 @@ finding (no loop context).
 
 ---
 
-### P015 — `ExceptionTextInErrorMessage` {#p015}
+### E015 — `ExceptionTextInErrorMessage` {#e015}
 
 **Tier:** `warn` | **Category:** `error-message-hygiene`
 
@@ -347,7 +347,7 @@ finding.  No `as binding` on the handler → no finding.
 
 ---
 
-### P016 — `MissingExceptionChaining` {#p016}
+### E016 — `MissingExceptionChaining` {#e016}
 
 **Tier:** `warn` | **Category:** `exception-chaining`
 
@@ -361,7 +361,7 @@ exception is lost in AE dashboards.  Use `raise NewError(...) from e`.
 
 ---
 
-### P017 — `SecretNamedEvidenceKey` {#p017}
+### E017 — `SecretNamedEvidenceKey` {#e017}
 
 **Tier:** `block` | **Category:** `security`
 
@@ -373,7 +373,7 @@ Evidence kwarg on an error construction whose name ends in `_secret`, `_password
 
 ---
 
-### P018 — `BareParentLeafRaise` {#p018}
+### E018 — `BareParentLeafRaise` {#e018}
 
 **Tier:** `warn` | **Category:** `untyped-raise`
 

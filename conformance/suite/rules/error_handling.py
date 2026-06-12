@@ -1,4 +1,4 @@
-"""Error-recovery rule definitions (P-series)."""
+"""Error-handling rule definitions (E-series)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from suite.schema.disposition import EnforcementTier, RuleMechanism
 
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
-        id="P001",
+        id="E001",
         name="BareExceptPass",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
@@ -26,7 +26,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p001",
     ),
     RuleDefinition(
-        id="P002",
+        id="E002",
         name="TypedExceptPass",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
@@ -44,7 +44,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p002",
     ),
     RuleDefinition(
-        id="P003",
+        id="E003",
         name="BroadContextlibSuppress",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -62,7 +62,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p003",
     ),
     RuleDefinition(
-        id="P004",
+        id="E004",
         name="BroadExceptClause",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -80,7 +80,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p004",
     ),
     RuleDefinition(
-        id="P005",
+        id="E005",
         name="ExceptBlockMissingExcInfo",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -97,7 +97,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p005",
     ),
     RuleDefinition(
-        id="P006",
+        id="E006",
         name="BareExceptWithBody",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
@@ -113,7 +113,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p006",
     ),
     RuleDefinition(
-        id="P007",
+        id="E007",
         name="ErrorToReturnValue",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -130,7 +130,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p007",
     ),
     RuleDefinition(
-        id="P008",
+        id="E008",
         name="ImportErrorWithoutLogging",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -148,7 +148,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p008",
     ),
     RuleDefinition(
-        id="P009",
+        id="E009",
         name="ExceptBlockOnlyAssigns",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -165,7 +165,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p009",
     ),
     RuleDefinition(
-        id="P010",
+        id="E010",
         name="AsyncioGatherExceptionsUnexamined",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -183,7 +183,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p010",
     ),
     RuleDefinition(
-        id="P012",
+        id="E012",
         name="UntypedBuiltinRaise",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -203,7 +203,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p012",
     ),
     RuleDefinition(
-        id="P013",
+        id="E013",
         name="LegacyAtlanErrorRaise",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
@@ -221,7 +221,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p013",
     ),
     RuleDefinition(
-        id="P011",
+        id="E011",
         name="LoggingFilterUnsafeBody",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -244,7 +244,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p011",
     ),
     RuleDefinition(
-        id="P014",
+        id="E014",
         name="ExceptLoopControlSwallow",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -264,7 +264,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p014",
     ),
     RuleDefinition(
-        id="P015",
+        id="E015",
         name="ExceptionTextInErrorMessage",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -287,7 +287,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p015",
     ),
     RuleDefinition(
-        id="P016",
+        id="E016",
         name="MissingExceptionChaining",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -310,7 +310,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p016",
     ),
     RuleDefinition(
-        id="P017",
+        id="E017",
         name="SecretNamedEvidenceKey",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
@@ -331,7 +331,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p017",
     ),
     RuleDefinition(
-        id="P018",
+        id="E018",
         name="BareParentLeafRaise",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
