@@ -180,7 +180,7 @@ runs:
     # Buildx is required for the GHA cache backend below. Set up once
     # per run, before the image build that uses `cache-from/cache-to`.
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
 
     # Image build runs before setup-deps so the workspace is still pristine —
     # no host .venv yet, so the Dockerfile's COPY . . won't pull in a
@@ -1033,7 +1033,7 @@ runs:
     # the same rendered report.
     - name: Upload test results
       if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
       with:
         name: sdr-integration-tests-${{ inputs.app-name }}-results
         path: results/
