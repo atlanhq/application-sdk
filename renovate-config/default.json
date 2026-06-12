@@ -55,9 +55,9 @@
       "platformAutomerge": true
     },
     {
-      "description": "GitHub Actions: group minor+patch; auto-merge on green.",
+      "description": "GitHub Actions: group all update types (including major) in one PR; auto-merge on green. Major action bumps are safe to auto-merge because the auto-approval workflow gates on green CI, which validates behaviour. Unlike Python deps, action majors are frequent and low-risk compared to library API changes.",
       "matchManagers": ["github-actions"],
-      "matchUpdateTypes": ["minor", "patch", "digest"],
+      "matchUpdateTypes": ["major", "minor", "patch", "digest"],
       "groupName": "github-actions",
       "automerge": true,
       "automergeType": "pr",

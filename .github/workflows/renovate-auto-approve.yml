@@ -1,0 +1,224 @@
+# Automatically post an atlan-ci code-owner approval on Renovate
+# dependency-only PRs once all required CI checks are green on the current HEAD.
+#
+# Why this exists:
+#   The `main` ruleset requires require_code_owner_review + 1 approving review.
+#   Renovate PRs for dependency bumps (`.github/`, `uv.lock`, `requirements.txt`,
+#   `pyproject.toml`) stall waiting for a human code owner even though CI fully
+#   validates the change. This workflow provides that approval automatically,
+#   enabling Renovate's platformAutomerge for minor/patch PRs and removing the
+#   manual approval step for all other dependency-only Renovate PRs.
+#
+# Why atlan-ci:
+#   atlan-ci is a regular GitHub User account listed in CODEOWNERS (the `*` rule).
+#   Running `gh pr review --approve` with GH_TOKEN set to ORG_PAT_GITHUB (a PAT
+#   owned by atlan-ci) posts the review as atlan-ci, satisfying
+#   require_code_owner_review. This is the same mechanism used by sdk-review.yml.
+#
+# Trigger: workflow_run (not check_suite):
+#   GitHub explicitly blocks check_suite: completed events from GitHub Actions-
+#   owned check suites from triggering other Actions workflows (anti-recursion
+#   guard baked into the platform). All required-check providers for this repo
+#   are GitHub Actions workflows, so check_suite: completed never fires for the
+#   events we care about. workflow_run: completed crosses that boundary and is
+#   designed for exactly this use case. We listen to PR Checks (provides most
+#   required contexts: Integration Tests, Unit Tests Gate, Pre-commit Checks,
+#   Trivy Code Scan, Full suite) and Conformance (Conventional Commits,
+#   Authorized Approver Check). Capability Manifest Check is informational (not
+#   a required status check per its own header), but including it means we
+#   re-evaluate promptly if it ever becomes required without a config change.
+#
+# Relationship to @sdk-review:
+#   Fully decoupled. This workflow uses the approval signature
+#   "**Renovate auto-approval:**". The sdk-review companion workflows
+#   (sdk-review-dismiss-on-human.yml, sdk-review-downgrade-on-ci-failure.yml)
+#   only act on reviews starting with "**SDK reviewer's verdict:**" and will
+#   never touch approvals posted here. Human comments do NOT auto-dismiss this
+#   approval; freshness is guaranteed by the ruleset's dismiss_stale_reviews_on_push
+#   (new commit → approval auto-dismissed → re-posted when CI is green again).
+#
+# Approval conditions (ALL must hold):
+#   1. PR author is renovate[bot]
+#   2. PR is open and not a draft
+#   3. Current HEAD SHA matches the evaluated SHA (race guard)
+#   4. Every changed file is under one of: .github/, uv.lock, requirements.txt,
+#      pyproject.toml
+#   5. All ruleset-required checks are green on the current HEAD
+#      (gh pr checks --required exits 0; non-required failures don't block)
+#   6. atlan-ci has not already posted an APPROVED review with this signature
+#      (idempotency; push-dismissed reviews are DISMISSED state, so they won't
+#      block a fresh approval after the next green run)
+
+name: Renovate — auto-approve dependency-only PRs
+
+on:
+  workflow_run:
+    # PR Checks provides most required contexts; Conformance provides the rest.
+    # Capability Manifest Check is informational (see its own header) but
+    # included so we re-evaluate promptly if it is later added to the ruleset.
+    workflows: [PR Checks, Conformance, Capability Manifest Check]
+    types: [completed]
+    # Limit to Renovate branches at trigger level — avoids spending a runner on
+    # every workflow completion across the repo.
+    branches: ['renovate/**']
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number to evaluate (for manual testing / re-approval)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  renovate-auto-approve:
+    # Skip failed/cancelled upstream runs — step (e) would no-op them anyway,
+    # but filtering here avoids consuming a runner at all. workflow_dispatch
+    # always runs (used for manual testing / back-approvals).
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Serialize concurrent runs for the same SHA so the idempotency check
+    # in step (f) is reliable — two workflow completions for the same HEAD
+    # can't both pass the "no approval yet" guard in parallel.
+    concurrency:
+      group: renovate-auto-approve-${{ github.event.workflow_run.head_sha || inputs.pr_number }}
+      cancel-in-progress: false
+    steps:
+      - name: Auto-approve if Renovate dep-only PR and all required checks are green
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          DISPATCH_PR: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+
+          # ── 1. Resolve candidate PR number(s) and the SHA to evaluate ────────
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            EVAL_SHA=$(gh api "repos/${REPO}/pulls/${DISPATCH_PR}" --jq '.head.sha')
+            PR_NUMBERS="$DISPATCH_PR"
+          else
+            EVAL_SHA="$RUN_SHA"
+            # A single commit can be the HEAD of multiple PRs in rare cases;
+            # handle them all. Mirror the pattern from
+            # sdk-review-downgrade-on-ci-failure.yml.
+            #
+            # Gate the assignment on exit code — a non-2xx gh api response
+            # writes the JSON error body to stdout, which would otherwise
+            # populate PR_NUMBERS with garbage tokens.
+            if ! PR_NUMBERS=$(gh api "repos/${REPO}/commits/${EVAL_SHA}/pulls" \
+                --jq '.[] | select(.state == "open") | .number' 2>/dev/null); then
+              PR_NUMBERS=""
+            fi
+          fi
+
+          if [ -z "$PR_NUMBERS" ]; then
+            echo "No open PRs found for SHA ${EVAL_SHA} — nothing to do."
+            exit 0
+          fi
+
+          # ── 2. Evaluate each candidate PR ────────────────────────────────────
+          for PR_NUM in $PR_NUMBERS; do
+            echo "--- Evaluating PR #${PR_NUM} ---"
+
+            # Fetch all relevant PR metadata in one API call.
+            PR_META=$(gh api "repos/${REPO}/pulls/${PR_NUM}" \
+              --jq '{author: .user.login, state: .state, draft: .draft, head_sha: .head.sha}')
+            AUTHOR=$(printf '%s' "$PR_META"   | jq -r .author)
+            STATE=$(printf '%s'  "$PR_META"   | jq -r .state)
+            DRAFT=$(printf '%s'  "$PR_META"   | jq -r .draft)
+            HEAD_SHA=$(printf '%s' "$PR_META" | jq -r .head_sha)
+
+            # a. Author must be renovate[bot].
+            #    Note: `gh pr view --json author` returns the GraphQL form
+            #    "app/renovate", but the REST API returns "renovate[bot]". Use
+            #    the REST form (above) for consistency with other guard checks.
+            if [ "$AUTHOR" != "renovate[bot]" ]; then
+              echo "PR #${PR_NUM}: author is '${AUTHOR}', not renovate[bot] — skipping."
+              continue
+            fi
+
+            # b. PR must be open and not a draft.
+            if [ "$STATE" != "open" ] || [ "$DRAFT" = "true" ]; then
+              echo "PR #${PR_NUM}: state='${STATE}' draft='${DRAFT}' — skipping."
+              continue
+            fi
+
+            # c. Race guard: bail if HEAD moved since this event fired.
+            #    For workflow_dispatch, EVAL_SHA was read from the PR itself so
+            #    HEAD_SHA == EVAL_SHA by construction; the guard is still
+            #    load-bearing for the workflow_run path where a push between
+            #    workflow-queued and now would invalidate the check results.
+            if [ "$HEAD_SHA" != "$EVAL_SHA" ]; then
+              echo "PR #${PR_NUM}: HEAD moved (${EVAL_SHA} → ${HEAD_SHA}). Skipping — a later run will re-evaluate."
+              continue
+            fi
+
+            # d. All changed files must be dependency-related.
+            #    Allowed: anything under .github/, or the file roots uv.lock,
+            #    requirements.txt, pyproject.toml.
+            FILENAMES=$(gh api "repos/${REPO}/pulls/${PR_NUM}/files" \
+              --paginate --jq '.[].filename')
+            if [ -z "$FILENAMES" ]; then
+              echo "PR #${PR_NUM}: no changed files found — skipping."
+              continue
+            fi
+
+            NON_DEP_FILES=$(echo "$FILENAMES" \
+              | grep -v '^\.github/' \
+              | grep -vxE 'uv\.lock|requirements\.txt|pyproject\.toml' \
+              || true)
+            if [ -n "$NON_DEP_FILES" ]; then
+              echo "PR #${PR_NUM}: contains non-dependency files:"
+              echo "$NON_DEP_FILES" | sed 's/^/  /'
+              echo "Skipping."
+              continue
+            fi
+            echo "PR #${PR_NUM}: all changed files are dependency-related."
+
+            # e. All ruleset-required checks must be green.
+            #    `gh pr checks --required` exits 0 iff every required check is
+            #    passing or skipping. Non-required failures (e.g. connector
+            #    tests, dep-cooldown) are correctly excluded. Pending required
+            #    checks produce a non-zero exit; a later workflow_run completion
+            #    will re-fire.
+            echo "PR #${PR_NUM}: checking required CI status..."
+            if ! gh pr checks "${PR_NUM}" --repo "${REPO}" --required; then
+              echo "PR #${PR_NUM}: required checks not yet all green — skipping."
+              continue
+            fi
+            echo "PR #${PR_NUM}: all required checks are green."
+
+            # f. Idempotency: skip if atlan-ci already has an APPROVED review
+            #    bearing our signature. Push-dismissed reviews have state
+            #    DISMISSED (not APPROVED) so they won't match here — a fresh
+            #    approval is correctly posted on the next green run.
+            EXISTING=$(gh api "repos/${REPO}/pulls/${PR_NUM}/reviews" --paginate \
+              --jq '[.[] | select(.user.login == "atlan-ci"
+                                   and .state == "APPROVED"
+                                   and ((.body // "") | startswith("**Renovate auto-approval:**")))] | length')
+            if [ "$EXISTING" != "0" ]; then
+              echo "PR #${PR_NUM}: atlan-ci has already approved with the Renovate signature — skipping."
+              continue
+            fi
+
+            # ── 3. Post the atlan-ci code-owner approval ──────────────────────
+            # NOTE: the leading line is a STABLE SIGNATURE used by the idempotency
+            # guard above. Keep it in sync with that check if it ever changes.
+            APPROVE_BODY=$(printf '%s\n' \
+              "**Renovate auto-approval:** all required CI checks passed." \
+              "" \
+              "This is an automated code-owner approval posted by \`atlan-ci\` for a" \
+              "dependency-only Renovate PR. It is automatically dismissed on any new" \
+              "push (\`dismiss_stale_reviews_on_push\`) and re-posted once the new" \
+              "HEAD's required checks are green." \
+              "")
+            gh pr review "${PR_NUM}" --repo "${REPO}" --approve --body "$APPROVE_BODY"
+            echo "✅ Approved PR #${PR_NUM} as atlan-ci (Renovate auto-approval)."
+          done
