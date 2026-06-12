@@ -116,14 +116,16 @@ EXCLUDE_DIRS: frozenset[str] = frozenset(
 
 _SECRET_SUFFIXES: tuple[str, ...] = ("_secret", "_password", "_token")
 _BROAD_EXCEPT_TYPES: frozenset[str] = frozenset({"Exception", "BaseException"})
-_OPTIONAL_IMPORT_TYPES: frozenset[str] = frozenset({"ImportError", "ModuleNotFoundError"})
+_OPTIONAL_IMPORT_TYPES: frozenset[str] = frozenset(
+    {"ImportError", "ModuleNotFoundError"}
+)
 _LOG_METHODS: frozenset[str] = frozenset(
     {"debug", "info", "warning", "warn", "error", "critical", "exception"}
 )
 
-# Directive regex: "conformance: ignore[E001,P002] some reason"
+# Directive regex: "# conformance: ignore[E001,P002] some reason"
 _SUPPRESS_RE = re.compile(
-    r"conformance\s*:\s*ignore\s*(?:\[([^\]]*)\])?\s*(.*)",
+    r"^#\s*conformance\s*:\s*ignore\s*(?:\[([^\]]*)\])?\s*(.*)",
     re.IGNORECASE,
 )
 
@@ -157,10 +159,14 @@ def _parse_directives(source: str) -> dict[int, _IgnoreDirective]:
         raw_ids, justification = m.group(1), (m.group(2) or "").strip()
         rule_ids: frozenset[str] | None
         if raw_ids:
-            rule_ids = frozenset(r.strip().upper() for r in raw_ids.split(",") if r.strip())
+            rule_ids = frozenset(
+                r.strip().upper() for r in raw_ids.split(",") if r.strip()
+            )
         else:
             rule_ids = None
-        directives[srow] = _IgnoreDirective(rule_ids=rule_ids, justification=justification)
+        directives[srow] = _IgnoreDirective(
+            rule_ids=rule_ids, justification=justification
+        )
     return directives
 
 
@@ -186,7 +192,7 @@ def parse_ignore_directive(comment: str) -> _IgnoreDirective | None:
 def _collect_imports(tree: ast.Module) -> dict[str, str]:
     """Return ``{imported_name: source_module}`` for top-level imports."""
     imports: dict[str, str] = {}
-    for node in ast.walk(tree):
+    for node in ast.iter_child_nodes(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 name = alias.asname if alias.asname else alias.name.split(".")[0]
@@ -242,7 +248,9 @@ def _is_log_call_stmt(stmt: ast.stmt) -> bool:
 def _any_logging_in(stmts: list[ast.stmt]) -> bool:
     """True if any logging call appears anywhere within *stmts*."""
     for stmt in stmts:
-        for node in ast.walk(stmt):
+        if _is_log_call_stmt(stmt):
+            return True
+        for node in _iter_shallow(stmt):
             if isinstance(node, ast.stmt) and _is_log_call_stmt(node):
                 return True
     return False
@@ -292,8 +300,16 @@ def _body_is_only_loop_control_no_logging(stmts: list[ast.stmt]) -> bool:
 
 def _is_gather_call(call: ast.Call) -> bool:
     """True if *call* is ``asyncio.gather(...)`` or bare ``gather(...)``."""
-    name = _get_name(call.func)
-    return name == "gather"
+    func = call.func
+    if isinstance(func, ast.Attribute):
+        return (
+            func.attr == "gather"
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "asyncio"
+        )
+    if isinstance(func, ast.Name):
+        return func.id == "gather"
+    return False
 
 
 def is_broad_suppress(node: ast.Call) -> bool:
@@ -314,7 +330,9 @@ def is_builtin_raise(raise_node: ast.Raise) -> bool:
     return _raise_exc_name(raise_node.exc) in BUILTIN_RAISES
 
 
-def _get_decorator_names(func: ast.FunctionDef | ast.AsyncFunctionDef) -> frozenset[str]:
+def _get_decorator_names(
+    func: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> frozenset[str]:
     names: set[str] = set()
     for dec in func.decorator_list:
         # @decorator → Name; @decorator("arg") → Call whose func is Name/Attribute
@@ -339,7 +357,10 @@ def _find_filter_method(
     cls: ast.ClassDef,
 ) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
     for item in cls.body:
-        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == "filter":
+        if (
+            isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and item.name == "filter"
+        ):
             return item
     return None
 
@@ -381,7 +402,10 @@ def _message_kw_has_exc_text(kw_value: ast.expr, exc_binding: str | None) -> boo
     # str(exc) / repr(exc) directly
     if isinstance(kw_value, ast.Call):
         if _get_name(kw_value.func) in ("str", "repr") and kw_value.args:
-            if isinstance(kw_value.args[0], ast.Name) and kw_value.args[0].id == exc_binding:
+            if (
+                isinstance(kw_value.args[0], ast.Name)
+                and kw_value.args[0].id == exc_binding
+            ):
                 return True
     # BinOp concat referencing the binding
     if isinstance(kw_value, ast.BinOp) and isinstance(kw_value.op, ast.Add):
@@ -454,24 +478,30 @@ class Checker(ast.NodeVisitor):
     # ── Context management ────────────────────────────────────────────────────
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # type: ignore[override]
-        # Reset loop context: ExceptHandlers in a nested function are not
-        # "inside" the outer function's loop.
+        # Reset loop/except context: handlers in a nested function are not
+        # "inside" the outer function's loop or except block.
         saved_loops = self._loop_stack
+        saved_excepts = self._except_stack
         self._loop_stack = []
+        self._except_stack = []
         self._function_stack.append(node)
         self._check_p010_in_function(node)
         self.generic_visit(node)
         self._function_stack.pop()
         self._loop_stack = saved_loops
+        self._except_stack = saved_excepts
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:  # type: ignore[override]
         saved_loops = self._loop_stack
+        saved_excepts = self._except_stack
         self._loop_stack = []
+        self._except_stack = []
         self._function_stack.append(node)  # type: ignore[arg-type]
         self._check_p010_in_function(node)  # type: ignore[arg-type]
         self.generic_visit(node)
         self._function_stack.pop()
         self._loop_stack = saved_loops
+        self._except_stack = saved_excepts
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         self._class_stack.append(node)
@@ -578,7 +608,7 @@ class Checker(ast.NodeVisitor):
         if exc_type not in _BROAD_EXCEPT_TYPES:
             return
         # Pass if body has logger.exception() or any log call with exc_info=True
-        for n in ast.walk(node):
+        for n in _iter_shallow(node):
             if not isinstance(n, ast.Expr):
                 continue
             call = n.value
@@ -604,7 +634,7 @@ class Checker(ast.NodeVisitor):
     # ── P005 ─────────────────────────────────────────────────────────────────
 
     def _check_p005(self, node: ast.ExceptHandler) -> None:
-        for n in ast.walk(node):
+        for n in _iter_shallow(node):
             if n is node:
                 continue
             if not isinstance(n, ast.Expr):
@@ -619,7 +649,9 @@ class Checker(ast.NodeVisitor):
                 continue
             if func.attr == "exception":
                 continue  # logger.exception() implies exc_info — skip
-            if func.attr in ("warning", "error", "critical") and not _has_exc_info(call):
+            if func.attr in ("warning", "error", "critical") and not _has_exc_info(
+                call
+            ):
                 self._add(
                     "E005",
                     n,
@@ -674,7 +706,10 @@ class Checker(ast.NodeVisitor):
         ]
         if not real_stmts:
             return
-        if not all(isinstance(s, (ast.Assign, ast.AugAssign, ast.AnnAssign)) for s in real_stmts):
+        if not all(
+            isinstance(s, (ast.Assign, ast.AugAssign, ast.AnnAssign))
+            for s in real_stmts
+        ):
             return
         if _any_logging_in(node.body):
             return
@@ -954,7 +989,9 @@ def scan_text(text: str, file: str) -> list[Finding]:
     atlan_ioerror = imports.get("IOError") == _ATLAN_LEGACY_MODULE
 
     directives = _parse_directives(text)
-    checker = Checker(filename=file, directives=directives, atlan_ioerror_imported=atlan_ioerror)
+    checker = Checker(
+        filename=file, directives=directives, atlan_ioerror_imported=atlan_ioerror
+    )
     checker.visit(tree)
     return checker._findings
 
@@ -1032,9 +1069,8 @@ def main(argv: list[str] | None = None) -> int:
                 rel = p
             findings.extend(scan_text(p.read_text(encoding="utf-8"), str(rel)))
         elif p.is_dir():
-            for py_file in sorted(p.rglob("*.py")):
-                if py_file.is_file():
-                    findings.extend(scan_path(py_file, root))
+            for py_file in discover(p):
+                findings.extend(scan_path(py_file, root))
 
     report = findings_to_report(findings, tool_version=args.tool_version)
 
