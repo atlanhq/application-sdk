@@ -17,8 +17,28 @@
 #   In a reusable workflow, github.repository refers to the *calling* repository,
 #   not application-sdk. So REPO picks up the consumer's repo automatically.
 #
-# See renovate-auto-approve.yml for the full rationale on trigger choice,
-# approval conditions, and relationship to @sdk-review.
+# Why atlan-ci:
+#   atlan-ci is a regular GitHub User account listed in CODEOWNERS (the `*` rule).
+#   Running `gh pr review --approve` with GH_TOKEN set to the org_pat secret
+#   posts the review as atlan-ci, satisfying require_code_owner_review.
+#
+# Relationship to @sdk-review:
+#   Fully decoupled. This workflow uses the approval signature
+#   "**Renovate auto-approval:**". The sdk-review companion workflows only act
+#   on reviews starting with "**SDK reviewer's verdict:**" and will never touch
+#   approvals posted here. Human comments do not auto-dismiss this approval;
+#   freshness is guaranteed by the ruleset's dismiss_stale_reviews_on_push.
+#
+# Approval conditions (ALL must hold — see step comments in the bash below):
+#   1. PR author is renovate[bot]
+#   2. PR is open and not a draft
+#   3. Current HEAD SHA matches the evaluated SHA (race guard)
+#   4. Every changed file is under .github/, uv.lock, requirements.txt, or pyproject.toml
+#   5. All ruleset-required checks are green (gh pr checks --required exits 0)
+#   6. atlan-ci has not already posted an APPROVED review with this signature
+#
+# Trigger rationale lives in the caller — each consumer lists the workflow names
+# that produce its required status checks, which differ per repo.
 
 name: "Renovate auto-approve (reusable)"
 
