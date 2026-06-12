@@ -317,6 +317,121 @@ class TestCreateWorker:
 
         assert app_worker._start_event_params["max_concurrent_workflow_tasks"] == 3
 
+    # ── worker tuner mode (ADR-0016) ──────────────────────────────────────
+
+    def _capture_worker_kwargs(self, **create_kwargs) -> dict:
+        """Run create_worker with a mocked Temporal Worker; return its kwargs."""
+
+        client = _make_mock_client()
+        captured: dict = {}
+
+        def capture_worker(*args, **kwargs):
+            captured.update(kwargs)
+            return mock.MagicMock()
+
+        with mock.patch(
+            "application_sdk.execution._temporal.worker.Worker",
+            side_effect=capture_worker,
+        ):
+            create_worker(client, **create_kwargs)
+
+        return captured
+
+    def test_resource_mode_passes_tuner_and_omits_fixed_slots(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """resource mode: Worker(...) gets tuner=, never the fixed slot args
+        (Temporal raises ValueError when both are supplied)."""
+        from temporalio.worker import WorkerTuner
+
+        monkeypatch.setenv("ATLAN_WORKER_TUNER_MODE", "resource")
+
+        class _TunerApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        captured = self._capture_worker_kwargs()
+
+        assert isinstance(captured["tuner"], WorkerTuner)
+        assert "max_concurrent_activities" not in captured
+        assert "max_concurrent_workflow_tasks" not in captured
+
+    def test_resource_mode_uses_target_env_vars(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The tuner is built from ATLAN_WORKER_TUNER_TARGET_MEMORY/CPU."""
+        monkeypatch.setenv("ATLAN_WORKER_TUNER_MODE", "resource")
+        monkeypatch.setenv("ATLAN_WORKER_TUNER_TARGET_MEMORY", "0.7")
+        monkeypatch.setenv("ATLAN_WORKER_TUNER_TARGET_CPU", "0.6")
+
+        class _TunerTargetsApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        with mock.patch(
+            "application_sdk.execution._temporal.worker.WorkerTuner"
+        ) as MockTuner:
+            self._capture_worker_kwargs()
+
+        MockTuner.create_resource_based.assert_called_once_with(
+            target_memory_usage=0.7,
+            target_cpu_usage=0.6,
+        )
+
+    def test_fixed_mode_passes_slot_args_and_omits_tuner(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """fixed mode (default): byte-for-byte unchanged — fixed slot args
+        reach Worker(...) and no tuner is supplied."""
+        monkeypatch.delenv("ATLAN_WORKER_TUNER_MODE", raising=False)
+
+        class _FixedApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        captured = self._capture_worker_kwargs()
+
+        assert "tuner" not in captured
+        assert captured["max_concurrent_activities"] == 100
+
+    def test_explicit_slot_args_override_resource_mode(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Explicit caller-supplied slot counts win over the env flag —
+        the worker falls back to fixed mode instead of crashing on
+        Temporal's tuner/max_concurrent_* mutual exclusion."""
+        monkeypatch.setenv("ATLAN_WORKER_TUNER_MODE", "resource")
+
+        class _ExplicitSlotsApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        captured = self._capture_worker_kwargs(max_concurrent_activities=7)
+
+        assert "tuner" not in captured
+        assert captured["max_concurrent_activities"] == 7
+
+    def test_resource_mode_start_event_reports_no_fixed_limit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """In resource mode there is no fixed activity limit, so worker_start
+        observability params carry None instead of a misleading number."""
+        monkeypatch.setenv("ATLAN_WORKER_TUNER_MODE", "resource")
+
+        class _TunerObsApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        client = _make_mock_client()
+
+        with mock.patch(
+            "application_sdk.execution._temporal.worker.Worker",
+            return_value=mock.MagicMock(),
+        ):
+            app_worker = create_worker(client)
+
+        assert app_worker._start_event_params["max_concurrent_activities"] is None
+
     def test_sdr_workflows_skipped_when_no_handler(self) -> None:
         """SDR registration is silently skipped when no Handler is provided."""
 
