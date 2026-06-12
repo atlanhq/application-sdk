@@ -22,7 +22,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from suite.checks import actions_pinning
+from suite.checks import actions_pinning, error_recovery
 from suite.rules import get_rule
 from suite.schema.disposition import EnforcementTier
 from suite.schema.findings import Finding, findings_to_report
@@ -43,6 +43,11 @@ _CHECKS: list[CheckRegistration] = [
         discover=actions_pinning.discover,
         scan_path=actions_pinning.scan_path,
     ),
+    CheckRegistration(
+        series=error_recovery.SERIES,
+        discover=error_recovery.discover,
+        scan_path=error_recovery.scan_path,
+    ),
 ]
 
 
@@ -53,18 +58,25 @@ def _tier(f: Finding) -> EnforcementTier:
 def _print_human_summary(findings: list[Finding], series: str | None) -> None:
     """Print a human-readable violation/warning summary to stdout."""
     label = f"{series}-series" if series else "conformance suite"
-    if not findings:
+    active = [f for f in findings if not f.suppressed]
+    suppressed = [f for f in findings if f.suppressed]
+    if not active and not suppressed:
         print(f"conformance ({label}): no violations found.")
         return
-    blocking = [f for f in findings if _tier(f) == EnforcementTier.BLOCK]
-    warnings = [f for f in findings if _tier(f) == EnforcementTier.WARN]
+    blocking = [f for f in active if _tier(f) == EnforcementTier.BLOCK]
+    warnings = [f for f in active if _tier(f) == EnforcementTier.WARN]
     parts = []
     if blocking:
         parts.append(f"{len(blocking)} violation{'s' if len(blocking) != 1 else ''}")
     if warnings:
         parts.append(f"{len(warnings)} warning{'s' if len(warnings) != 1 else ''}")
+    if suppressed:
+        parts.append(f"{len(suppressed)} suppressed")
+    if not parts:
+        print(f"conformance ({label}): no violations found.")
+        return
     print(f"conformance ({label}): {', '.join(parts)} found.\n")
-    for f in findings:
+    for f in active:
         level = "FAIL" if _tier(f) == EnforcementTier.BLOCK else "WARN"
         print(f"  [{f.rule_id}] [{level}] {f.file}:{f.line}:{f.column}")
         print(f"  {f.message}\n")
@@ -75,8 +87,9 @@ def _emit_github_annotations(findings: list[Finding]) -> None:
 
     Block-tier findings emit ``::error``; warn-tier findings emit ``::warning``.
     Both appear as inline comments on the PR's Files Changed view.
+    Suppressed findings are silently skipped — they are not actionable.
     """
-    for f in findings:
+    for f in [x for x in findings if not x.suppressed]:
         # Percent-encode special characters per the GitHub Actions docs.
         msg = f.message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
         level = "error" if _tier(f) == EnforcementTier.BLOCK else "warning"

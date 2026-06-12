@@ -1,17 +1,24 @@
 # .github/workflows/conformance-ci.yaml
 #
-# Reusable workflow: runs all CI/workflow supply-chain checks (C-series) via
-# `suite.runner --series C`. Currently enforces:
+# Reusable workflow: runs CI/workflow supply-chain checks (C-series) and
+# Python error-recovery checks (P-series) via `suite.runner --series C,P`.
+# Currently enforces:
 #   C001  UnpinnedActionReference — every external action must use a digest pin
+#   P001  BareExceptPass            — bare except: pass
+#   P002  TypedExceptPass           — except T: pass
+#   P006  BareExceptWithBody        — bare except: with body
+#   P013  LegacyAtlanErrorRaise     — deprecated AtlanError stack
+#   P017  SecretNamedEvidenceKey    — _secret/_password/_token evidence keys
+#   (+ P003–P005, P007–P012, P014–P016, P018 at WARN tier)
 #
-# New C-series checks added to suite/checks/ are picked up automatically.
+# New checks added to suite/checks/ are picked up automatically.
 #
 # Usage from a connector app:
 #   uses: atlanhq/application-sdk/.github/workflows/conformance-ci.yaml@main
 #   with:
 #     sdk-ref: main
 
-name: "Conformance — CI series (C)"
+name: "Conformance — CI + error-recovery series (C, P)"
 
 on:
   workflow_call:
@@ -22,7 +29,7 @@ on:
         default: main
         type: string
       scan-path:
-        description: "Path to watch for change detection (default: .github)"
+        description: "Path to watch for workflow/action change detection (default: .github)"
         required: false
         default: .github
         type: string
@@ -38,7 +45,7 @@ permissions:
 
 jobs:
   conformance-ci:
-    name: "C-series checks"
+    name: "C-series + P-series checks"
     runs-on: ubuntu-latest
     steps:
       - name: "Checkout caller repo"
@@ -49,15 +56,16 @@ jobs:
         uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4
         with:
           filters: |
-            workflow:
+            relevant:
               - '${{ inputs.scan-path }}/**'
+              - '**/*.py'
 
-      - name: "No CI changes — gate passes"
-        if: steps.changes.outputs.workflow == 'false'
-        run: echo "No changes under ${{ inputs.scan-path }}; C-series gate passes."
+      - name: "No relevant changes — gate passes"
+        if: steps.changes.outputs.relevant == 'false'
+        run: echo "No .github or .py changes; C+P-series gate passes."
 
       - name: "Sparse-checkout conformance suite"
-        if: steps.changes.outputs.workflow == 'true'
+        if: steps.changes.outputs.relevant == 'true'
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: atlanhq/application-sdk
@@ -66,28 +74,28 @@ jobs:
           path: _sdk
 
       - name: "Set up uv"
-        if: steps.changes.outputs.workflow == 'true'
+        if: steps.changes.outputs.relevant == 'true'
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
 
-      - name: "Run C-series checks"
-        if: steps.changes.outputs.workflow == 'true'
+      - name: "Run C-series and P-series checks"
+        if: steps.changes.outputs.relevant == 'true'
         env:
           PYTHONPATH: _sdk/conformance
         run: |
           uv run --with pydantic python -m suite.runner \
             --repo . \
-            --series C \
+            --series C,P \
             --output ci.sarif
 
       - name: "Upload SARIF artifact"
-        if: steps.changes.outputs.workflow == 'true' && !cancelled()
+        if: steps.changes.outputs.relevant == 'true' && !cancelled()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: conformance-ci-sarif
           path: ci.sarif
 
       - name: "Upload SARIF to Security tab"
-        if: ${{ inputs.upload-sarif && steps.changes.outputs.workflow == 'true' && github.event_name != 'merge_group' }}
+        if: ${{ inputs.upload-sarif && steps.changes.outputs.relevant == 'true' && github.event_name != 'merge_group' }}
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
         with:
           sarif_file: ci.sarif

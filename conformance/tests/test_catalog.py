@@ -65,8 +65,14 @@ def test_catalog_p_series_present() -> None:
         "P008",
         "P009",
         "P010",
+        "P011",
         "P012",
         "P013",
+        "P014",
+        "P015",
+        "P016",
+        "P017",
+        "P018",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"

@@ -32,7 +32,7 @@ permissions:
 
 jobs:
   ci-series:
-    name: "CI series (C)"
+    name: "CI + error-recovery series (C, P)"
     uses: ./.github/workflows/conformance-ci.yaml
     with:
       sdk-ref: ${{ inputs.sdk-ref }}
