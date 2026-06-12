@@ -38,6 +38,7 @@ def findings_to_report(
     repo_uri: str | None = None,
     commit_sha: str | None = None,
     branch: str | None = None,
+    excluded_paths: list[str] | None = None,
 ) -> SarifReport:
     """Convert a list of Findings to a SARIF SarifReport via ReportBuilder."""
     from suite.rules import load_catalog
@@ -69,4 +70,4 @@ def findings_to_report(
             snippet=f.snippet,
             suppressions=suppressions,
         )
-    return builder.build()
+    return builder.build(excluded_paths=excluded_paths)

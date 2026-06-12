@@ -55,13 +55,22 @@ def _tier(f: Finding) -> EnforcementTier:
     return get_rule(f.rule_id).tier
 
 
-def _print_human_summary(findings: list[Finding], series: str | None) -> None:
+def _print_human_summary(
+    findings: list[Finding],
+    series: str | None,
+    excluded_prefixes: tuple[str, ...] = (),
+) -> None:
     """Print a human-readable violation/warning summary to stdout."""
     label = f"{series}-series" if series else "conformance suite"
     active = [f for f in findings if not f.suppressed]
     suppressed = [f for f in findings if f.suppressed]
+    excluded_note = (
+        f" (excluded: {', '.join(sorted(excluded_prefixes))})"
+        if excluded_prefixes
+        else ""
+    )
     if not active and not suppressed:
-        print(f"conformance ({label}): no violations found.")
+        print(f"conformance ({label}): no violations found.{excluded_note}")
         return
     blocking = [f for f in active if _tier(f) == EnforcementTier.BLOCK]
     warnings = [f for f in active if _tier(f) == EnforcementTier.WARN]
@@ -73,9 +82,9 @@ def _print_human_summary(findings: list[Finding], series: str | None) -> None:
     if suppressed:
         parts.append(f"{len(suppressed)} suppressed")
     if not parts:
-        print(f"conformance ({label}): no violations found.")
+        print(f"conformance ({label}): no violations found.{excluded_note}")
         return
-    print(f"conformance ({label}): {', '.join(parts)} found.\n")
+    print(f"conformance ({label}): {', '.join(parts)} found.{excluded_note}\n")
     for f in active:
         level = "FAIL" if _tier(f) == EnforcementTier.BLOCK else "WARN"
         print(f"  [{f.rule_id}] [{level}] {f.file}:{f.line}:{f.column}")
@@ -88,9 +97,11 @@ def _pct(msg: str) -> str:
 
 
 def _emit_github_summary_annotations(
-    findings: list[Finding], series: str | None
+    findings: list[Finding],
+    series: str | None,
+    excluded_prefixes: tuple[str, ...] = (),
 ) -> None:
-    """Emit at most three summary annotations to the GitHub Actions log.
+    """Emit at most four summary annotations to the GitHub Actions log.
 
     Per-finding annotations are capped at 10 per type by GitHub without any
     visible indication of truncation, making it impossible to track overall
@@ -98,7 +109,10 @@ def _emit_github_summary_annotations(
     category (blocking / warning / suppressing), each carrying the full count
     and a link to the workflow run where the SARIF artifact can be downloaded.
 
-    Emits nothing when there are no findings in any category.
+    A fourth ``::notice`` is emitted when paths were excluded from scanning,
+    so the reduced scope is always visible alongside the finding counts.
+
+    Emits nothing when there are no findings and no exclusions.
     """
     blocking = [
         f for f in findings if not f.suppressed and _tier(f) == EnforcementTier.BLOCK
@@ -108,7 +122,7 @@ def _emit_github_summary_annotations(
     ]
     suppressed = [f for f in findings if f.suppressed]
 
-    if not blocking and not warns and not suppressed:
+    if not blocking and not warns and not suppressed and not excluded_prefixes:
         return
 
     server = os.getenv("GITHUB_SERVER_URL", "https://github.com")
@@ -143,6 +157,14 @@ def _emit_github_summary_annotations(
             f"{n} suppressed finding{'s' if n != 1 else ''} in {label}. {detail}"
         )
         print(f"::notice title=Conformance: {n} suppressed ({label})::{msg}")
+
+    if excluded_prefixes:
+        paths_str = ", ".join(sorted(excluded_prefixes))
+        msg = _pct(
+            f"{label} excluded from scanning: {paths_str}. "
+            f"Findings in these paths are not counted. {detail}"
+        )
+        print(f"::notice title=Conformance: excluded paths ({label})::{msg}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -194,12 +216,16 @@ def main(argv: list[str] | None = None) -> int:
             all_findings.extend(check.scan_path(p, root))
 
     # Always surface violations in a human-readable form so CI logs are actionable.
-    _print_human_summary(all_findings, args.series)
+    _print_human_summary(all_findings, args.series, excluded_prefixes)
 
     if os.getenv("GITHUB_ACTIONS") == "true":
-        _emit_github_summary_annotations(all_findings, args.series)
+        _emit_github_summary_annotations(all_findings, args.series, excluded_prefixes)
 
-    report = findings_to_report(all_findings, tool_version=args.tool_version)
+    report = findings_to_report(
+        all_findings,
+        tool_version=args.tool_version,
+        excluded_paths=list(excluded_prefixes),
+    )
     payload = json.dumps(report.model_dump(by_alias=True, exclude_none=True), indent=2)
 
     if args.output:

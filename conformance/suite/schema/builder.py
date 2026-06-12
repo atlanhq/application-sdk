@@ -253,7 +253,9 @@ class ReportBuilder:
         self._results.append(result)
         return self
 
-    def build(self, *, exit_code: int | None = None) -> SarifReport:
+    def build(
+        self, *, exit_code: int | None = None, excluded_paths: list[str] | None = None
+    ) -> SarifReport:
         """Finalise and return the :class:`SarifReport`.
 
         Computes the ``atlan/summary`` disposition counts and sets the
@@ -293,7 +295,10 @@ class ReportBuilder:
                 )
             )
 
-        run_props = AtlanRunProperties(summary=summary)
+        run_props = AtlanRunProperties(
+            summary=summary,
+            excluded_paths=excluded_paths or [],
+        )
 
         run = SarifRun(
             tool=Tool(

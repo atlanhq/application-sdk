@@ -12,10 +12,31 @@
 # reports them at the correct depth — one level of workflow_call from the
 # caller produces three-level check paths, not four.
 #
-# Usage from a connector app:
+# Usage from a connector SDK/app:
 #   uses: atlanhq/application-sdk/.github/workflows/conformance-reusable.yaml@main
 #   with:
 #     sdk-ref: main
+#
+# ── Suppression vs path exclusion ─────────────────────────────────────────────
+#
+# There are two ways to reduce the set of findings a check reports.  They serve
+# different purposes and carry different audit properties:
+#
+#   # conformance: ignore[Exxx] <reason>   (or  # noqa: S110 — <reason>)
+#     A per-site, in-source suppression for a specific finding.  The finding is
+#     still emitted to the SARIF report as a suppressed result with the
+#     justification text preserved — it is counted in atlan/summary.suppressing
+#     and reviewable in the Security tab.  Use this for production code in the
+#     SDK/app that has a legitimate, site-specific carve-out.
+#
+#   exclude-paths-c / exclude-paths-e
+#     A path prefix removed from scanning entirely.  Nothing from that path
+#     appears in the SARIF report.  Use this only for code that is categorically
+#     outside the SDK/app surface — tooling, migration scripts, generated files,
+#     or other paths that will never run in production.  Excluded paths are
+#     recorded in atlan/excludedPaths in the SARIF run properties and surfaced
+#     as a ::notice annotation so the reduced scope is always visible.
+#     Extending this list to cover production code defeats the gate.
 
 name: "Conformance (reusable)"
 
