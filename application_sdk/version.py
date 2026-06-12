@@ -18,5 +18,5 @@ version by reading it from this file via a small shell step::
 Bump deliberately — older Dapr releases drop off the CDN.
 """
 
-__version__ = "3.16.0"
+__version__ = "3.17.0"
 __dapr_version: str = "1.17.9"

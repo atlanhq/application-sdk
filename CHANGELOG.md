@@ -1,5 +1,20 @@
 # Changelog
 
+## v3.17.0 (June 12, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.16.0...v3.17.0
+
+### Bug Fixes
+
+- include digest updates in github-actions automerge rule (#2051) (by @cmgrote in [11bf971](https://github.com/atlanhq/application-sdk/commit/11bf971))
+- add requirements.txt to ignorePaths in repo config (#2062) (by @cmgrote in [0cb81cf](https://github.com/atlanhq/application-sdk/commit/0cb81cf))
+- set rangeStrategy update-lockfile for uv manager (#2070) (by @cmgrote in [ad1b376](https://github.com/atlanhq/application-sdk/commit/ad1b376))
+- ignore github-actions[bot] commits as external edits (#2071) (by @cmgrote in [1254358](https://github.com/atlanhq/application-sdk/commit/1254358))
+- match Dapr S3 defaults — infer allow_http from http scheme + AWS_REGION fallback (#2085) (by @Lalit3716-atlan in [da425ec](https://github.com/atlanhq/application-sdk/commit/da425ec))
+- normalize APITree filters in extraction inputs (#2024) (by @fyzanshaik-atlan in [cbc7777](https://github.com/atlanhq/application-sdk/commit/cbc7777))
+- skip SARIF Security-tab upload in merge queue (#2097) (by @cmgrote in [c15fab0](https://github.com/atlanhq/application-sdk/commit/c15fab0))
+
+
 ## v3.16.0 (June 10, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.15.1...v3.16.0
