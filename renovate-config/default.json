@@ -16,10 +16,11 @@
   "postUpdateOptions": ["uvLock"],
   "packageRules": [
     {
-      "description": "SDK: minor+patch in one PR; auto-merge on green gate. Major bumps are manual (consumers pin >=3.0.0,<4.0.0; DeprecationWarnings precede removal by one major).",
+      "description": "SDK: minor+patch in one PR; auto-merge on green gate. Major bumps are manual (consumers pin >=3.0.0,<4.0.0; DeprecationWarnings precede removal by one major). rangeStrategy update-lockfile bumps uv.lock without touching the pyproject.toml range constraint (which already covers the new version).",
       "matchPackageNames": ["atlan-application-sdk"],
       "matchUpdateTypes": ["minor", "patch"],
       "groupName": "atlan-application-sdk",
+      "rangeStrategy": "update-lockfile",
       "automerge": true,
       "automergeType": "pr",
       "platformAutomerge": true,
@@ -48,8 +49,8 @@
       "enabled": false
     },
     {
-      "description": "Python transitive deps (all except atlan-application-sdk): group minor+patch; auto-merge on green. rangeStrategy update-lockfile keeps pyproject.toml untouched when the new version satisfies the existing constraint.",
-      "matchManagers": ["uv"],
+      "description": "Python transitive deps (all except atlan-application-sdk): group minor+patch; auto-merge on green. rangeStrategy update-lockfile keeps pyproject.toml untouched when the new version satisfies the existing constraint. Both pep621 and uv managers are listed: pep621 extracts pyproject.toml constraints + locked versions in Renovate v43+; uv is kept for forward-compatibility.",
+      "matchManagers": ["pep621", "uv"],
       "matchPackageNames": ["!atlan-application-sdk"],
       "matchUpdateTypes": ["minor", "patch"],
       "groupName": "python-transitive-deps",
