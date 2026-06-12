@@ -15,6 +15,16 @@
 #   owned by atlan-ci) posts the review as atlan-ci, satisfying
 #   require_code_owner_review. This is the same mechanism used by sdk-review.yml.
 #
+# Trigger: workflow_run (not check_suite):
+#   GitHub explicitly blocks check_suite: completed events from GitHub Actions-
+#   owned check suites from triggering other Actions workflows (anti-recursion
+#   guard baked into the platform). All required-check providers for this repo
+#   are GitHub Actions workflows (PR Checks, Conformance, Capability Manifest
+#   Check), so check_suite: completed never fires for the events we care about.
+#   workflow_run: completed crosses that boundary and is designed for exactly
+#   this use case. The three listed workflows together cover all 8 required
+#   status check contexts.
+#
 # Relationship to @sdk-review:
 #   Fully decoupled. This workflow uses the approval signature
 #   "**Renovate auto-approval:**". The sdk-review companion workflows
@@ -34,13 +44,20 @@
 #      (gh pr checks --required exits 0; non-required failures don't block)
 #   6. atlan-ci has not already posted an APPROVED review with this signature
 #      (idempotency; push-dismissed reviews are DISMISSED state, so they won't
-#      block a fresh approval after the next green suite)
+#      block a fresh approval after the next green run)
 
 name: Renovate — auto-approve dependency-only PRs
 
 on:
-  check_suite:
+  workflow_run:
+    # All three workflows together provide the 8 required status check contexts
+    # enforced by the main ruleset. Listening to each means we re-evaluate as
+    # soon as any required-check provider finishes, regardless of ordering.
+    workflows: [PR Checks, Conformance, Capability Manifest Check]
     types: [completed]
+    # Limit to Renovate branches at trigger level — avoids spending a runner on
+    # every workflow completion across the repo.
+    branches: ['renovate/**']
   workflow_dispatch:
     inputs:
       pr_number:
@@ -54,21 +71,13 @@ permissions:
 
 jobs:
   renovate-auto-approve:
-    # For check_suite events, only fire on branches that Renovate creates.
-    # This avoids spinning up a runner for every completed suite across the
-    # entire repo — most are irrelevant to Renovate PRs. workflow_dispatch
-    # always runs (used for manual testing before this lands on main, since
-    # check_suite events only use the workflow version on the default branch).
-    if: >-
-      github.event_name == 'workflow_dispatch'
-      || startsWith(github.event.check_suite.head_branch, 'renovate/')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     # Serialize concurrent runs for the same SHA so the idempotency check
-    # in step (f) is reliable — two check_suite completions for the same HEAD
+    # in step (f) is reliable — two workflow completions for the same HEAD
     # can't both pass the "no approval yet" guard in parallel.
     concurrency:
-      group: renovate-auto-approve-${{ github.event.check_suite.head_sha || inputs.pr_number }}
+      group: renovate-auto-approve-${{ github.event.workflow_run.head_sha || inputs.pr_number }}
       cancel-in-progress: false
     steps:
       - name: Auto-approve if Renovate dep-only PR and all required checks are green
@@ -76,34 +85,17 @@ jobs:
           GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
           REPO: ${{ github.repository }}
           EVENT_NAME: ${{ github.event_name }}
-          SUITE_SHA: ${{ github.event.check_suite.head_sha }}
-          SUITE_ID: ${{ github.event.check_suite.id }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
           DISPATCH_PR: ${{ inputs.pr_number }}
         run: |
           set -euo pipefail
-
-          # ── 0. Recursion guard (check_suite path only) ────────────────────────
-          # When this workflow run completes, it emits its own check_suite:
-          # completed event on the same SHA, which would re-trigger this workflow
-          # indefinitely (each no-op run fires the next). Short-circuit if the
-          # completing suite's check runs are exclusively from this workflow's own
-          # job. Mirror the guard in sdk-review-downgrade-on-ci-failure.yml.
-          if [ "$EVENT_NAME" != "workflow_dispatch" ] && [ -n "$SUITE_ID" ]; then
-            NON_OWN_RUNS=$(gh api "repos/${REPO}/check-suites/${SUITE_ID}/check-runs" \
-              --paginate \
-              --jq '[.check_runs[] | select(.name != "renovate-auto-approve")] | length')
-            if [ "$NON_OWN_RUNS" = "0" ]; then
-              echo "Completing suite ${SUITE_ID} contains only self-owned check runs — exiting to prevent recursion."
-              exit 0
-            fi
-          fi
 
           # ── 1. Resolve candidate PR number(s) and the SHA to evaluate ────────
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             EVAL_SHA=$(gh api "repos/${REPO}/pulls/${DISPATCH_PR}" --jq '.head.sha')
             PR_NUMBERS="$DISPATCH_PR"
           else
-            EVAL_SHA="$SUITE_SHA"
+            EVAL_SHA="$RUN_SHA"
             # A single commit can be the HEAD of multiple PRs in rare cases;
             # handle them all. Mirror the pattern from
             # sdk-review-downgrade-on-ci-failure.yml.
@@ -152,10 +144,10 @@ jobs:
             # c. Race guard: bail if HEAD moved since this event fired.
             #    For workflow_dispatch, EVAL_SHA was read from the PR itself so
             #    HEAD_SHA == EVAL_SHA by construction; the guard is still
-            #    load-bearing for the check_suite path where a push between
-            #    suite-queued and now would invalidate the check results.
+            #    load-bearing for the workflow_run path where a push between
+            #    workflow-queued and now would invalidate the check results.
             if [ "$HEAD_SHA" != "$EVAL_SHA" ]; then
-              echo "PR #${PR_NUM}: HEAD moved (${EVAL_SHA} → ${HEAD_SHA}). Skipping — a later suite will re-evaluate."
+              echo "PR #${PR_NUM}: HEAD moved (${EVAL_SHA} → ${HEAD_SHA}). Skipping — a later run will re-evaluate."
               continue
             fi
 
@@ -184,8 +176,9 @@ jobs:
             # e. All ruleset-required checks must be green.
             #    `gh pr checks --required` exits 0 iff every required check is
             #    passing or skipping. Non-required failures (e.g. connector
-            #    tests) are correctly excluded. Pending required checks produce
-            #    a non-zero exit; a later check_suite completion will re-fire.
+            #    tests, dep-cooldown) are correctly excluded. Pending required
+            #    checks produce a non-zero exit; a later workflow_run completion
+            #    will re-fire.
             echo "PR #${PR_NUM}: checking required CI status..."
             if ! gh pr checks "${PR_NUM}" --repo "${REPO}" --required; then
               echo "PR #${PR_NUM}: required checks not yet all green — skipping."
@@ -196,7 +189,7 @@ jobs:
             # f. Idempotency: skip if atlan-ci already has an APPROVED review
             #    bearing our signature. Push-dismissed reviews have state
             #    DISMISSED (not APPROVED) so they won't match here — a fresh
-            #    approval is correctly posted on the next green suite.
+            #    approval is correctly posted on the next green run.
             EXISTING=$(gh api "repos/${REPO}/pulls/${PR_NUM}/reviews" --paginate \
               --jq '[.[] | select(.user.login == "atlan-ci"
                                    and .state == "APPROVED"
