@@ -82,21 +82,67 @@ def _print_human_summary(findings: list[Finding], series: str | None) -> None:
         print(f"  {f.message}\n")
 
 
-def _emit_github_annotations(findings: list[Finding]) -> None:
-    """Emit GitHub Actions workflow commands for inline PR annotations.
+def _pct(msg: str) -> str:
+    """Percent-encode special characters per the GitHub Actions workflow-command spec."""
+    return msg.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
-    Block-tier findings emit ``::error``; warn-tier findings emit ``::warning``.
-    Both appear as inline comments on the PR's Files Changed view.
-    Suppressed findings are silently skipped — they are not actionable.
+
+def _emit_github_summary_annotations(
+    findings: list[Finding], series: str | None
+) -> None:
+    """Emit at most three summary annotations to the GitHub Actions log.
+
+    Per-finding annotations are capped at 10 per type by GitHub without any
+    visible indication of truncation, making it impossible to track overall
+    progress from the PR view.  Instead we emit one annotation per non-zero
+    category (blocking / warning / suppressing), each carrying the full count
+    and a link to the workflow run where the SARIF artifact can be downloaded.
+
+    Emits nothing when there are no findings in any category.
     """
-    for f in [x for x in findings if not x.suppressed]:
-        # Percent-encode special characters per the GitHub Actions docs.
-        msg = f.message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-        level = "error" if _tier(f) == EnforcementTier.BLOCK else "warning"
-        print(
-            f"::{level} file={f.file},line={f.line},col={f.column},"
-            f"title={f.rule_id}::{msg}"
+    blocking = [
+        f for f in findings if not f.suppressed and _tier(f) == EnforcementTier.BLOCK
+    ]
+    warns = [
+        f for f in findings if not f.suppressed and _tier(f) == EnforcementTier.WARN
+    ]
+    suppressed = [f for f in findings if f.suppressed]
+
+    if not blocking and not warns and not suppressed:
+        return
+
+    server = os.getenv("GITHUB_SERVER_URL", "https://github.com")
+    repo = os.getenv("GITHUB_REPOSITORY", "")
+    run_id = os.getenv("GITHUB_RUN_ID", "")
+    if repo and run_id:
+        detail = f"Full report: {server}/{repo}/actions/runs/{run_id} (download the SARIF artifact)."
+    else:
+        detail = "Download the SARIF artifact from this workflow run for full details."
+
+    label = f"{series}-series" if series else "conformance suite"
+
+    if blocking:
+        n = len(blocking)
+        msg = _pct(
+            f"{n} blocking violation{'s' if n != 1 else ''} found by {label}. {detail}"
         )
+        print(
+            f"::error title=Conformance: {n} blocking violation{'s' if n != 1 else ''} ({label})::{msg}"
+        )
+
+    if warns:
+        n = len(warns)
+        msg = _pct(f"{n} warning{'s' if n != 1 else ''} found by {label}. {detail}")
+        print(
+            f"::warning title=Conformance: {n} warning{'s' if n != 1 else ''} ({label})::{msg}"
+        )
+
+    if suppressed:
+        n = len(suppressed)
+        msg = _pct(
+            f"{n} suppressed finding{'s' if n != 1 else ''} in {label}. {detail}"
+        )
+        print(f"::notice title=Conformance: {n} suppressed ({label})::{msg}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -131,10 +177,8 @@ def main(argv: list[str] | None = None) -> int:
     # Always surface violations in a human-readable form so CI logs are actionable.
     _print_human_summary(all_findings, args.series)
 
-    # In GitHub Actions, also emit ::error annotations so violations appear
-    # as inline comments on the PR's Files Changed view.
     if os.getenv("GITHUB_ACTIONS") == "true":
-        _emit_github_annotations(all_findings)
+        _emit_github_summary_annotations(all_findings, args.series)
 
     report = findings_to_report(all_findings, tool_version=args.tool_version)
     payload = json.dumps(report.model_dump(by_alias=True, exclude_none=True), indent=2)
