@@ -90,8 +90,8 @@ jobs:
           # job. Mirror the guard in sdk-review-downgrade-on-ci-failure.yml.
           if [ "$EVENT_NAME" != "workflow_dispatch" ] && [ -n "$SUITE_ID" ]; then
             NON_OWN_RUNS=$(gh api "repos/${REPO}/check-suites/${SUITE_ID}/check-runs" \
-              --jq '[.check_runs[] | select(.name != "renovate-auto-approve")] | length' \
-              2>/dev/null || echo "0")
+              --paginate \
+              --jq '[.check_runs[] | select(.name != "renovate-auto-approve")] | length')
             if [ "$NON_OWN_RUNS" = "0" ]; then
               echo "Completing suite ${SUITE_ID} contains only self-owned check runs — exiting to prevent recursion."
               exit 0
