@@ -45,7 +45,7 @@ jobs:
 
       - name: "Detect changed files"
         id: changes
-        uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
+        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4
         with:
           filters: |
             workflow:
@@ -80,13 +80,13 @@ jobs:
 
       - name: "Upload SARIF artifact"
         if: steps.changes.outputs.workflow == 'true' && !cancelled()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: conformance-ci-sarif
           path: ci.sarif
 
       - name: "Upload SARIF to Security tab"
         if: ${{ inputs.upload-sarif && steps.changes.outputs.workflow == 'true' && github.event_name != 'merge_group' }}
-        uses: github/codeql-action/upload-sarif@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
         with:
           sarif_file: ci.sarif
