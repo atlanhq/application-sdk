@@ -8,6 +8,10 @@
   "labels": ["dependencies"],
   "dependencyDashboard": true,
   "ignorePaths": ["requirements.txt"],
+  "ignoreDeps": [
+    "atlanhq/.github",
+    "atlanhq/mothership"
+  ],
   "gitIgnoredAuthors": ["github-actions[bot]@users.noreply.github.com"],
   "postUpdateOptions": ["uvLock"],
   "packageRules": [
