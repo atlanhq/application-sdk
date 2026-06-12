@@ -1289,3 +1289,136 @@ except:
         if derive_disposition(r) == Disposition.FAILING
     ]
     assert any(r.rule_id == "E001" for r in failing)
+
+
+# ── discover() — dot-dir exclusion ───────────────────────────────────────────
+
+
+def test_discover_excludes_dot_prefixed_dirs(tmp_path: Path) -> None:
+    """discover() must skip any .py file whose path includes a dot-prefixed dir."""
+    from suite.checks.error_handling import discover
+
+    # Normal application code — should be discovered
+    app_dir = tmp_path / "application_sdk" / "utils"
+    app_dir.mkdir(parents=True)
+    app_file = app_dir / "helpers.py"
+    app_file.write_text("x = 1\n")
+
+    # Files under dot-prefixed dirs — must be excluded
+    for dotdir in [".github/scripts", ".claude/skills/foo", ".mothership/scripts"]:
+        d = tmp_path / Path(dotdir)
+        d.mkdir(parents=True)
+        (d / "script.py").write_text("x = 1\n")
+
+    found = discover(tmp_path)
+    uris = {p.relative_to(tmp_path).as_posix() for p in found}
+    assert "application_sdk/utils/helpers.py" in uris
+    assert not any(
+        u.startswith(".") for p in found for u in [p.relative_to(tmp_path).as_posix()]
+    )
+
+
+def test_discover_includes_nested_non_dot_dirs(tmp_path: Path) -> None:
+    """discover() still finds files in deeply nested non-dot dirs."""
+    from suite.checks.error_handling import discover
+
+    deep = tmp_path / "application_sdk" / "a" / "b" / "c"
+    deep.mkdir(parents=True)
+    f = deep / "module.py"
+    f.write_text("x = 1\n")
+
+    found = discover(tmp_path)
+    assert f in found
+
+
+# ── runner --exclude option ───────────────────────────────────────────────────
+
+
+def test_runner_exclude_drops_prefixed_paths(tmp_path: Path) -> None:
+    """runner main() --exclude silently skips files under excluded prefixes."""
+    from suite.runner import main as runner_main
+
+    # A violating file under tools/ (excluded)
+    tools_dir = tmp_path / "tools" / "migrate"
+    tools_dir.mkdir(parents=True)
+    (tools_dir / "script.py").write_text("try:\n    x = 1\nexcept:\n    pass\n")
+
+    # A violating file under application_sdk/ (NOT excluded)
+    app_dir = tmp_path / "application_sdk"
+    app_dir.mkdir(parents=True)
+    (app_dir / "module.py").write_text("try:\n    x = 1\nexcept:\n    pass\n")
+
+    sarif_file = tmp_path / "out.sarif"
+    exit_code = runner_main(
+        [
+            "--repo",
+            str(tmp_path),
+            "--series",
+            "E",
+            "--exclude",
+            "tools/",
+            "--output",
+            str(sarif_file),
+        ]
+    )
+
+    report = SarifReport.model_validate(json.loads(sarif_file.read_text()))
+    uris = {
+        r.locations[0].physical_location.artifact_location.uri
+        for r in report.runs[0].results
+        if r.locations
+    }
+    # tools/migrate/script.py must not appear
+    assert not any("tools/" in u for u in uris)
+    # application_sdk/module.py must appear
+    assert any("application_sdk/" in u for u in uris)
+    # Gate is still 1 because application_sdk violation is BLOCK
+    assert exit_code == 1
+
+
+def test_runner_exclude_all_paths_exits_0(tmp_path: Path) -> None:
+    """Excluding all paths with violations produces exit code 0."""
+    from suite.runner import main as runner_main
+
+    tools_dir = tmp_path / "tools"
+    tools_dir.mkdir()
+    (tools_dir / "script.py").write_text("try:\n    x = 1\nexcept:\n    pass\n")
+
+    sarif_file = tmp_path / "out.sarif"
+    exit_code = runner_main(
+        [
+            "--repo",
+            str(tmp_path),
+            "--series",
+            "E",
+            "--exclude",
+            "tools/",
+            "--output",
+            str(sarif_file),
+        ]
+    )
+    assert exit_code == 0
+
+
+def test_runner_exclude_empty_string_is_noop(tmp_path: Path) -> None:
+    """--exclude '' (empty) does not drop any paths."""
+    from suite.runner import main as runner_main
+
+    app_dir = tmp_path / "application_sdk"
+    app_dir.mkdir()
+    (app_dir / "module.py").write_text("try:\n    x = 1\nexcept:\n    pass\n")
+
+    sarif_file = tmp_path / "out.sarif"
+    exit_code = runner_main(
+        [
+            "--repo",
+            str(tmp_path),
+            "--series",
+            "E",
+            "--exclude",
+            "",
+            "--output",
+            str(sarif_file),
+        ]
+    )
+    assert exit_code == 1  # violation still found

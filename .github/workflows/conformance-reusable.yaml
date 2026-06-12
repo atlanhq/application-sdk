@@ -32,6 +32,20 @@ on:
         required: false
         default: true
         type: boolean
+      exclude-paths-c:
+        description: >
+          Comma-separated repo-root-relative path prefixes to exclude from C-series
+          checks only, e.g. 'tools/'.  Default: nothing excluded.
+        required: false
+        default: ""
+        type: string
+      exclude-paths-e:
+        description: >
+          Comma-separated repo-root-relative path prefixes to exclude from E-series
+          checks only, e.g. 'tools/,contract-toolkit/'.  Default: nothing excluded.
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -79,7 +93,8 @@ jobs:
           uv run --with pydantic python -m suite.runner \
             --repo . \
             --series C \
-            --output ci.sarif
+            --output ci.sarif \
+            ${{ inputs.exclude-paths-c != '' && format('--exclude "{0}"', inputs.exclude-paths-c) || '' }}
 
       - name: "Upload SARIF artifact"
         if: steps.changes.outputs.relevant == 'true' && !cancelled()
@@ -135,7 +150,8 @@ jobs:
           uv run --with pydantic python -m suite.runner \
             --repo . \
             --series E \
-            --output error-handling.sarif
+            --output error-handling.sarif \
+            ${{ inputs.exclude-paths-e != '' && format('--exclude "{0}"', inputs.exclude-paths-e) || '' }}
 
       - name: "Upload SARIF artifact"
         if: steps.changes.outputs.relevant == 'true' && !cancelled()

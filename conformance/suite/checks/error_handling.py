@@ -439,16 +439,15 @@ def _message_kw_has_exc_text(kw_value: ast.expr, exc_binding: str | None) -> boo
                     return True
         return False
     # str(exc) / repr(exc) directly
-    if isinstance(kw_value, ast.Call):
-        if (
-            _get_name(kw_value.func) in ("str", "repr")
-            and kw_value.args
-            and (
-                isinstance(kw_value.args[0], ast.Name)
-                and kw_value.args[0].id == exc_binding
-            )
-        ):
-            return True
+    if isinstance(kw_value, ast.Call) and (
+        _get_name(kw_value.func) in ("str", "repr")
+        and kw_value.args
+        and (
+            isinstance(kw_value.args[0], ast.Name)
+            and kw_value.args[0].id == exc_binding
+        )
+    ):
+        return True
     # BinOp concat referencing the binding
     if isinstance(kw_value, ast.BinOp) and isinstance(kw_value.op, ast.Add):
         for node in ast.walk(kw_value):
@@ -1052,12 +1051,26 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
 
 
 def discover(root: Path) -> list[Path]:
-    """Discover Python source files under *root*, excluding test and infra dirs."""
+    """Discover Python source files under *root*, excluding test and infra dirs.
+
+    Two exclusion layers apply universally (not configurable per-repo):
+
+    * **Named infra dirs** — any path component in ``EXCLUDE_DIRS`` (e.g. ``tests``,
+      ``build``, ``.venv``).
+    * **Dot-prefixed dirs** — any path component that starts with ``"."`` (e.g.
+      ``.github``, ``.claude``, ``.mothership``).  These are CI/dev/skill
+      scaffolding — never shipped application code — and this rule holds for every
+      app repo that reuses the conformance suite.
+    """
     paths: list[Path] = []
     for path in root.rglob("*.py"):
-        # Exclude any path whose components include an excluded directory
+        # Exclude named infra / virtualenv dirs
         parts = set(path.parts)
         if parts & EXCLUDE_DIRS:
+            continue
+        # Exclude any dot-prefixed directory component (.github, .claude, …)
+        rel_parts = path.relative_to(root).parts
+        if any(p.startswith(".") for p in rel_parts[:-1]):
             continue
         # Exclude test files by name convention
         name = path.name

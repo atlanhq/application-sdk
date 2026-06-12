@@ -160,6 +160,16 @@ def main(argv: list[str] | None = None) -> int:
             "Default: all registered checks."
         ),
     )
+    parser.add_argument(
+        "--exclude",
+        metavar="PATHS",
+        default="",
+        help=(
+            "Comma-separated repo-root-relative path prefixes to exclude from all "
+            "checks, e.g. 'tools/,contract-toolkit/'.  Applies after discovery, so "
+            "it works uniformly across every registered series."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.series:
@@ -168,10 +178,19 @@ def main(argv: list[str] | None = None) -> int:
     else:
         active = list(_CHECKS)
 
+    # Build the set of excluded prefixes once (normalised, non-empty only).
+    excluded_prefixes = tuple(
+        p.strip().lstrip("/") for p in args.exclude.split(",") if p.strip()
+    )
+
     root = Path(args.repo).resolve()
     all_findings: list[Finding] = []
     for check in active:
         for p in check.discover(root):
+            if excluded_prefixes:
+                rel = p.relative_to(root).as_posix()
+                if any(rel.startswith(prefix) for prefix in excluded_prefixes):
+                    continue
             all_findings.extend(check.scan_path(p, root))
 
     # Always surface violations in a human-readable form so CI logs are actionable.
