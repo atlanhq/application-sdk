@@ -52,8 +52,8 @@ brew install temporal
 DAPR (Distributed Application Runtime) simplifies microservice development:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/dapr/cli/master/install/install.sh | /bin/bash -s 1.17.1
-dapr init --runtime-version 1.17.3 --slim
+curl -fsSL https://raw.githubusercontent.com/dapr/cli/master/install/install.sh | /bin/bash -s 1.18.0
+dapr init --runtime-version 1.18.0 --slim
 ```
 
 > [!NOTE]
