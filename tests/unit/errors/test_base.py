@@ -172,3 +172,64 @@ def test_base_fields_sentinel() -> None:
     assert "cause" in _BASE_FIELDS
     assert "app_name" in _BASE_FIELDS
     assert "run_id" in _BASE_FIELDS
+
+
+def test_sanitize_cause_repr_redacts_userinfo_for_any_url_scheme() -> None:
+    from application_sdk.errors import sanitize_cause_repr
+
+    cases = {
+        "postgresql+psycopg://user:s3cret@db.internal:5432/prod": "postgresql+psycopg://***@db.internal:5432/prod",
+        "mysql://root:hunter2@10.0.0.5/app": "mysql://***@10.0.0.5/app",
+        "https://alice:tok3n@api.example.com/v1": "https://***@api.example.com/v1",
+        "snowflake://svc:pw@acct.snowflakecomputing.com": "snowflake://***@acct.snowflakecomputing.com",
+    }
+    for raw, expected in cases.items():
+        out = sanitize_cause_repr(Exception(f"connect failed for {raw}"))
+        assert expected in out, out
+        assert "s3cret" not in out and "hunter2" not in out
+        assert "tok3n" not in out and ":pw@" not in out
+
+
+def test_sanitize_cause_repr_still_redacts_secret_params() -> None:
+    from application_sdk.errors import sanitize_cause_repr
+
+    out = sanitize_cause_repr(Exception("call failed: api_key=abc123&x=1"))
+    assert "api_key=***" in out
+    assert "abc123" not in out
+
+
+def test_redact_secrets_userinfo_and_params() -> None:
+    """redact_secrets() on plain strings: URL userinfo + known secret params."""
+    from application_sdk.errors import redact_secrets
+
+    assert (
+        redact_secrets("postgresql://user:s3cret@db.internal/prod")
+        == "postgresql://***@db.internal/prod"
+    )
+    out = redact_secrets("boom api_key=abc123&password=hunter2")
+    assert "api_key=***" in out and "password=***" in out
+    assert "abc123" not in out and "hunter2" not in out
+
+
+def test_redact_secrets_consumes_at_in_password() -> None:
+    """A raw `@` inside the password must not leave the tail exposed."""
+    from application_sdk.errors import redact_secrets
+
+    out = redact_secrets("connect failed for postgresql://u:p@ssw0rd@host:5432/db")
+    assert "p@ssw0rd" not in out
+    assert "ssw0rd" not in out
+    assert out == "connect failed for postgresql://***@host:5432/db"
+
+
+def test_redact_secrets_over_redacts_trailing_at_in_no_space_run() -> None:
+    """Deliberate: the greedy userinfo match consumes to the last `@` in a
+    whitespace-free run, so a trailing `@` after the host over-redacts. This
+    is the safe failure direction for a secret redactor — pinned so the
+    behavior is understood as intentional, not a regression."""
+    from application_sdk.errors import redact_secrets
+
+    # The `@b` later in the same no-space run is swallowed up to the last `@`.
+    assert redact_secrets("postgresql://u:p@host/db?to=a@b") == "postgresql://***@b"
+    # A whitespace boundary protects the common "URL then prose" case.
+    out = redact_secrets("postgresql://u:p@host/db connected as a@b")
+    assert out == "postgresql://***@host/db connected as a@b"
