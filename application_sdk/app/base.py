@@ -934,6 +934,7 @@ class App(ABC):
             storage_subdir=input.storage_subdir,
             skip_if_exists=input.skip_if_exists,
             raise_on_empty=input.raise_on_empty,
+            explicit_files=input.explicit_files,
             store=store,
             _source_ref=source_ref,
             _source_store=self.context.storage,

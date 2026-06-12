@@ -355,6 +355,7 @@ async def upload(
     storage_subdir: str | None = None,
     skip_if_exists: bool = False,
     raise_on_empty: bool = False,
+    explicit_files: list[Path] | list[str] | None = None,
     store: ObjectStore | None = None,
     _source_ref: FileReference | None = None,
     _source_store: ObjectStore | None = None,
@@ -404,6 +405,17 @@ async def upload(
             *local_path* is a directory that contains zero files. Opt-in
             fail-loud for connectors where empty output indicates a bug
             (see BLDX-1255). Applies to the local-directory branch only.
+        explicit_files: Optional pre-enumerated list of files to upload.
+            When supplied, the directory branch skips ``src.rglob("*")``
+            discovery entirely and uses this list as the authoritative file
+            set — fully deterministic, no filesystem-listing race surface.
+            The canonical producer is
+            ``pyarrow.dataset.write_dataset(file_visitor=lambda f: out.append(Path(f.path)))``,
+            which captures every written file synchronously at write time
+            (see PART-1148 for the bug this closes). When ``None``
+            (default), discovery falls back to ``rglob`` — byte-identical
+            to pre-PART-1148 behavior, no change for existing callers.
+            All paths must be under *local_path*.
         store: Target object store (upstream in SDR, deployment otherwise), or
             ``None`` to resolve from infrastructure.
         _source_ref: Internal — pre-computed ``FileReference`` carrying both
@@ -491,8 +503,18 @@ async def upload(
             normalize_key,
             append_leaf=False,
         )
-        files = [p for p in src.rglob("*") if p.is_file()]
-        if raise_on_empty and not files:
+        # ``files`` (when supplied by the caller) bypasses rglob entirely —
+        # closes the listing-transient race deterministically for callers
+        # that already know the exact file set (typically captured via
+        # ``pyarrow.dataset.write_dataset(file_visitor=...)``). When the
+        # caller doesn't supply one, fall back to rglob discovery —
+        # byte-identical to pre-PART-1148 behavior so existing callers see
+        # no change.
+        if explicit_files is not None:
+            discovered = [Path(f) for f in explicit_files]
+        else:
+            discovered = [p for p in src.rglob("*") if p.is_file()]
+        if raise_on_empty and not discovered:
             from application_sdk.storage.errors import (  # noqa: PLC0415
                 StorageEmptyUploadError,
             )
@@ -514,7 +536,7 @@ async def upload(
             f"{prefix}/{str(fp.relative_to(src)).replace(os.sep, '/')}"
             if prefix
             else str(fp.relative_to(src)).replace(os.sep, "/")
-            for fp in files
+            for fp in discovered
         ]
 
         async def _bounded_upload(file_path: Path, fkey: str) -> bool:
@@ -525,7 +547,7 @@ async def upload(
                 return ok
 
         results = await asyncio.gather(
-            *[_bounded_upload(fp, k) for fp, k in zip(files, keys)],
+            *[_bounded_upload(fp, k) for fp, k in zip(discovered, keys)],
             return_exceptions=True,
         )
         errs = [r for r in results if isinstance(r, BaseException)]
@@ -536,7 +558,7 @@ async def upload(
         n = sum(1 for ok in results if ok)
         reason = "uploaded" if n > 0 else "skipped:hash_match"
         return _make_upload_output(
-            str(src), prefix, len(files), _tier, n, reason, is_dir=True
+            str(src), prefix, len(discovered), _tier, n, reason, is_dir=True
         )
 
     elif (

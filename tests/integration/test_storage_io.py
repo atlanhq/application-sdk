@@ -340,3 +340,94 @@ async def test_transfer_upload_directory_max_concurrency(store, tmp_path):
 
     assert out.ref.file_count == 8
     assert out.synced is True
+
+
+# ------------------------------------------------------------------
+# PART-1148: explicit_files (deterministic file enumeration via
+# pyarrow.dataset.write_dataset(file_visitor=...))
+# ------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_explicit_files_end_to_end_with_pyarrow_file_visitor(store, tmp_path):
+    """Canonical PART-1148 flow exercised against a real store.
+
+    Demonstrates the full pattern the SDK contract documents:
+
+      1. ``pa_ds.write_dataset(file_visitor=lambda f: written.append(Path(f.path)))``
+         writes parquet chunks AND captures the authoritative file list
+         synchronously at write time.
+      2. The captured list is passed as ``explicit_files`` to ``upload``.
+      3. ``upload`` skips ``rglob`` discovery entirely, uploads every
+         captured file via the real local store backend.
+      4. ``download_prefix`` returns the same bytes the parquet writer
+         produced — closing the read-after-write loop deterministically.
+
+    This is the canonical bug-closure scenario from PART-1148: when the
+    rglob-side race could have returned an empty list under load, the
+    explicit-files path is unaffected because no listing happens.
+    """
+    import pyarrow as pa  # noqa: PLC0415 — integration-only; not a runtime dep of the SDK
+    import pyarrow.dataset as pa_ds  # noqa: PLC0415
+    import pyarrow.parquet as pq  # noqa: PLC0415
+
+    from application_sdk.storage.transfer import upload
+
+    src_dir = tmp_path / "parquet_out"
+
+    # Build a small but multi-chunk dataset so write_dataset produces
+    # multiple files (exercises the per-file file_visitor callback).
+    table = pa.table(
+        {
+            "id": list(range(1200)),
+            "name": [f"row-{i}" for i in range(1200)],
+        }
+    )
+
+    written: list[str] = []
+    pa_ds.write_dataset(
+        table,
+        base_dir=str(src_dir),
+        format="parquet",
+        basename_template="chunk_{i}.parquet",
+        max_rows_per_file=500,
+        min_rows_per_group=500,
+        max_rows_per_group=500,
+        file_visitor=lambda f: written.append(f.path),
+    )
+
+    # write_dataset wrote three chunks (500 + 500 + 200). file_visitor
+    # captured the authoritative paths synchronously.
+    assert len(written) == 3, f"expected 3 chunks from write_dataset, got {written}"
+    assert all(p.endswith(".parquet") for p in written)
+
+    # Pass the captured list directly. rglob is not called.
+    out = await upload(
+        str(src_dir),
+        "deterministic/",
+        store=store,
+        explicit_files=written,
+    )
+
+    assert out.ref.file_count == 3
+    assert out.synced is True
+    assert out.reason == "uploaded"
+
+    # Read back through the store — the bytes survived the round trip,
+    # proving the explicit_files path uploaded the same files
+    # write_dataset produced.
+    keys = await list_keys("deterministic/", store)
+    parquet_keys = [k for k in keys if k.endswith(".parquet")]
+    assert len(parquet_keys) == 3
+    # Each parquet has a sibling .sha256 sidecar written by the store.
+    sidecar_keys = [k for k in keys if k.endswith(".sha256")]
+    assert len(sidecar_keys) == 3
+
+    dest_dir = tmp_path / "downloaded"
+    paths = await download_prefix("deterministic/", dest_dir, store)
+    parquet_paths = [p for p in paths if str(p).endswith(".parquet")]
+    assert len(parquet_paths) == 3
+    # Each downloaded parquet is a valid file with the expected schema.
+    for downloaded in parquet_paths:
+        rt = pq.read_table(downloaded)
+        assert rt.schema.names == ["id", "name"]

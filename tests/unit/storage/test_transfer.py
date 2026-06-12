@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -180,6 +182,130 @@ class TestUploadRaiseOnEmpty:
         out = await upload(str(tmp_path), "myprefix", store=store, raise_on_empty=True)
         assert out.ref.file_count == 2
         assert out.synced is True
+
+
+class TestUploadExplicitFiles:
+    """PART-1148: ``explicit_files`` bypasses ``rglob`` discovery deterministically.
+
+    The directory branch of :func:`upload` accepts an optional pre-enumerated
+    file list. When supplied, ``rglob`` is not called — closes the
+    filesystem-listing-transient race for callers that already know the
+    exact written file set (canonical producer is
+    ``pyarrow.dataset.write_dataset(file_visitor=...)``). When ``None``,
+    discovery falls back to ``rglob``, byte-identical to pre-PART-1148.
+    """
+
+    async def test_explicit_files_bypasses_rglob(self, store, tmp_path) -> None:
+        """rglob is never called when explicit_files is supplied."""
+        (tmp_path / "a.txt").write_bytes(b"alpha")
+        (tmp_path / "b.txt").write_bytes(b"beta")
+        rglob_calls = 0
+
+        def patched_rglob(self, pattern):  # noqa: ARG001
+            nonlocal rglob_calls
+            rglob_calls += 1
+            return iter([])
+
+        with patch.object(Path, "rglob", patched_rglob):
+            out = await upload(
+                str(tmp_path),
+                "myprefix",
+                store=store,
+                explicit_files=[
+                    str(tmp_path / "a.txt"),
+                    str(tmp_path / "b.txt"),
+                ],
+            )
+
+        assert rglob_calls == 0
+        assert out.ref.file_count == 2
+        assert out.synced is True
+        assert out.reason == "uploaded"
+
+    async def test_explicit_files_single_file(self, store, tmp_path) -> None:
+        """Single-file list works — same path as the rglob branch."""
+        (tmp_path / "x.parquet").write_bytes(b"data")
+
+        out = await upload(
+            str(tmp_path),
+            "p",
+            store=store,
+            explicit_files=[str(tmp_path / "x.parquet")],
+        )
+
+        assert out.ref.file_count == 1
+        assert out.synced is True
+
+    async def test_explicit_empty_list_is_empty_directory(
+        self, store, tmp_path
+    ) -> None:
+        """``explicit_files=[]`` produces the same result as a genuinely empty
+        directory — preserves backwards-compat ``skipped:hash_match`` reason."""
+        (tmp_path / "ignored.txt").write_bytes(b"would-be-uploaded")
+
+        out = await upload(str(tmp_path), "p", store=store, explicit_files=[])
+
+        assert out.ref.file_count == 0
+        assert out.synced is False
+
+    async def test_explicit_empty_list_raises_when_raise_on_empty_true(
+        self, store, tmp_path
+    ) -> None:
+        """``raise_on_empty`` applies to ``explicit_files=[]`` the same way it
+        applies to a discovered-empty directory."""
+        from application_sdk.storage.errors import StorageEmptyUploadError
+
+        with pytest.raises(StorageEmptyUploadError):
+            await upload(
+                str(tmp_path),
+                "p",
+                store=store,
+                explicit_files=[],
+                raise_on_empty=True,
+            )
+
+    async def test_explicit_files_with_listing_transient_still_succeeds(
+        self, store, tmp_path
+    ) -> None:
+        """Even when rglob would return empty (the PART-1148 listing-transient
+        condition), an opt-in caller using explicit_files succeeds
+        deterministically. This is the canonical bug-closure scenario."""
+        (tmp_path / "chunk_0.parquet").write_bytes(b"data" * 100)
+        (tmp_path / "chunk_1.parquet").write_bytes(b"data" * 100)
+
+        # Inject the APFS-style transient: rglob returns empty even though
+        # the directory has two files.
+        with patch.object(Path, "rglob", lambda self, pat: iter([])):
+            out = await upload(
+                str(tmp_path),
+                "transient-resistant",
+                store=store,
+                explicit_files=[
+                    str(tmp_path / "chunk_0.parquet"),
+                    str(tmp_path / "chunk_1.parquet"),
+                ],
+            )
+
+        # Without explicit_files this would have been file_count=0,
+        # reason="skipped:hash_match" (the bug). With it: deterministic.
+        assert out.ref.file_count == 2
+        assert out.reason == "uploaded"
+        assert out.synced is True
+
+    async def test_rglob_fallback_unchanged_when_explicit_files_none(
+        self, store, tmp_path
+    ) -> None:
+        """Non-opt-in callers (no explicit_files) hit the rglob path —
+        byte-identical to pre-PART-1148 behavior. Guards against accidental
+        coupling between the two paths."""
+        (tmp_path / "a.txt").write_bytes(b"x")
+        (tmp_path / "b.txt").write_bytes(b"y")
+
+        out = await upload(str(tmp_path), "p", store=store)
+
+        assert out.ref.file_count == 2
+        assert out.synced is True
+        assert out.reason == "uploaded"
 
 
 class TestUploadStorageSubdir:
