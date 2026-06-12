@@ -1,0 +1,57 @@
+# .github/workflows/conformance-reusable.yaml
+#
+# Reusable workflow: Conformance full suite gate.
+#
+# Wraps conformance-ci.yaml (C-series checks) plus the aggregating "Full suite"
+# gate job so that consumers (atlan-*-app repos) never copy gate logic — they
+# carry only a thin caller that sets triggers and passes sdk-ref.
+#
+# The gate job uses if: always() so it reports a concrete pass/fail rather than
+# "skipped", which is what allows it to be marked a required status check without
+# ever blocking the merge queue.
+#
+# Usage from a connector app:
+#   uses: atlanhq/application-sdk/.github/workflows/conformance-reusable.yaml@main
+#   with:
+#     sdk-ref: main
+
+name: "Conformance (reusable)"
+
+on:
+  workflow_call:
+    inputs:
+      sdk-ref:
+        description: "Ref of atlanhq/application-sdk to source the conformance suite from"
+        required: false
+        default: main
+        type: string
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  ci-series:
+    name: "CI series (C)"
+    uses: ./.github/workflows/conformance-ci.yaml
+    with:
+      sdk-ref: ${{ inputs.sdk-ref }}
+
+  # ── Required gate ─────────────────────────────────────────────────────────
+  # This job always runs (if: always()) so it can be marked a required check
+  # without ever becoming "skipped" and blocking the merge queue.  It
+  # aggregates every series job above: if any series returned "failure" the
+  # gate exits 1; otherwise it exits 0 (pass or no-op).
+  gate:
+    name: "Full suite"
+    runs-on: ubuntu-latest
+    needs: [ci-series]
+    if: always()
+    steps:
+      - name: "Evaluate conformance results"
+        run: |
+          if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" ]]; then
+            echo "::error::Conformance gate FAILED — one or more series found violations."
+            exit 1
+          fi
+          echo "Conformance gate passed (series: ${{ join(needs.*.result, ', ') }})."

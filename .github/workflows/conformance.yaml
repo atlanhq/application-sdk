@@ -11,27 +11,7 @@ permissions:
   security-events: write
 
 jobs:
-  ci-series:
-    name: "CI series (C)"
-    uses: ./.github/workflows/conformance-ci.yaml
+  conformance:
+    uses: ./.github/workflows/conformance-reusable.yaml
     with:
       sdk-ref: ${{ github.event.pull_request.head.sha || github.sha }}
-
-  # ── Required gate ─────────────────────────────────────────────────────────
-  # This job always runs (if: always()) so it can be marked a required check
-  # without ever becoming "skipped" and blocking the merge queue.  It
-  # aggregates every series job above: if any series returned "failure" the
-  # gate exits 1; otherwise it exits 0 (pass or no-op).
-  gate:
-    name: "Full suite"
-    runs-on: ubuntu-latest
-    needs: [ci-series]
-    if: always()
-    steps:
-      - name: "Evaluate conformance results"
-        run: |
-          if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" ]]; then
-            echo "::error::Conformance gate FAILED — one or more series found violations."
-            exit 1
-          fi
-          echo "Conformance gate passed (series: ${{ join(needs.*.result, ', ') }})."
