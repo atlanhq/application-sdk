@@ -13,7 +13,6 @@
     "atlanhq/mothership"
   ],
   "gitIgnoredAuthors": ["github-actions[bot]@users.noreply.github.com"],
-  "postUpdateOptions": ["uvLock"],
   "lockFileMaintenance": {
     "description": "Python in-range deps: refresh uv.lock without touching pyproject.toml; auto-merge on green.",
     "enabled": true,
@@ -31,7 +30,7 @@
     },
     {
       "description": "app-contract-toolkit (Pkl): minor+patch in one PR; auto-merge on green. Matched by the regex customManager below.",
-      "matchManagers": ["regex"],
+      "matchManagers": ["custom.regex"],
       "matchUpdateTypes": ["minor", "patch"],
       "groupName": "app-contract-toolkit",
       "automerge": true,
@@ -41,7 +40,7 @@
     },
     {
       "description": "app-contract-toolkit: disable major bumps.",
-      "matchManagers": ["regex"],
+      "matchManagers": ["custom.regex"],
       "matchUpdateTypes": ["major"],
       "enabled": false
     },
