@@ -64,6 +64,12 @@ jobs:
       || startsWith(github.event.check_suite.head_branch, 'renovate/')
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Serialize concurrent runs for the same SHA so the idempotency check
+    # in step (f) is reliable — two check_suite completions for the same HEAD
+    # can't both pass the "no approval yet" guard in parallel.
+    concurrency:
+      group: renovate-auto-approve-${{ github.event.check_suite.head_sha || inputs.pr_number }}
+      cancel-in-progress: false
     steps:
       - name: Auto-approve if Renovate dep-only PR and all required checks are green
         env:
@@ -71,9 +77,26 @@ jobs:
           REPO: ${{ github.repository }}
           EVENT_NAME: ${{ github.event_name }}
           SUITE_SHA: ${{ github.event.check_suite.head_sha }}
+          SUITE_ID: ${{ github.event.check_suite.id }}
           DISPATCH_PR: ${{ inputs.pr_number }}
         run: |
           set -euo pipefail
+
+          # ── 0. Recursion guard (check_suite path only) ────────────────────────
+          # When this workflow run completes, it emits its own check_suite:
+          # completed event on the same SHA, which would re-trigger this workflow
+          # indefinitely (each no-op run fires the next). Short-circuit if the
+          # completing suite's check runs are exclusively from this workflow's own
+          # job. Mirror the guard in sdk-review-downgrade-on-ci-failure.yml.
+          if [ "$EVENT_NAME" != "workflow_dispatch" ] && [ -n "$SUITE_ID" ]; then
+            NON_OWN_RUNS=$(gh api "repos/${REPO}/check-suites/${SUITE_ID}/check-runs" \
+              --jq '[.check_runs[] | select(.name != "renovate-auto-approve")] | length' \
+              2>/dev/null || echo "0")
+            if [ "$NON_OWN_RUNS" = "0" ]; then
+              echo "Completing suite ${SUITE_ID} contains only self-owned check runs — exiting to prevent recursion."
+              exit 0
+            fi
+          fi
 
           # ── 1. Resolve candidate PR number(s) and the SHA to evaluate ────────
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
@@ -84,8 +107,14 @@ jobs:
             # A single commit can be the HEAD of multiple PRs in rare cases;
             # handle them all. Mirror the pattern from
             # sdk-review-downgrade-on-ci-failure.yml.
-            PR_NUMBERS=$(gh api "repos/${REPO}/commits/${EVAL_SHA}/pulls" \
-              --jq '.[] | select(.state == "open") | .number' 2>/dev/null || echo "")
+            #
+            # Gate the assignment on exit code — a non-2xx gh api response
+            # writes the JSON error body to stdout, which would otherwise
+            # populate PR_NUMBERS with garbage tokens.
+            if ! PR_NUMBERS=$(gh api "repos/${REPO}/commits/${EVAL_SHA}/pulls" \
+                --jq '.[] | select(.state == "open") | .number' 2>/dev/null); then
+              PR_NUMBERS=""
+            fi
           fi
 
           if [ -z "$PR_NUMBERS" ]; then
