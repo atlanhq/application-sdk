@@ -271,14 +271,12 @@ class ReportBuilder:
         summary = DispositionSummary()
         for result in self._results:
             disposition = derive_disposition(result)
-            if disposition == Disposition.PASS:
-                summary.passing += 1
-            elif disposition == Disposition.FAILING:
+            if disposition == Disposition.FAILING:
                 summary.failing += 1
             elif disposition == Disposition.WARNING:
                 summary.warning += 1
             elif disposition == Disposition.SUPPRESSED:
-                summary.suppressed += 1
+                summary.suppressing += 1
 
         # Gate decision
         derived_exit_code = 1 if summary.failing > 0 else 0

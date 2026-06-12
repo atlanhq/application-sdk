@@ -196,10 +196,9 @@
       "properties": {
         "atlan/profileVersion": "v1",
         "atlan/summary": {
-          "passing": 1,
           "failing": 1,
           "warning": 1,
-          "suppressed": 1
+          "suppressing": 1
         }
       }
     }

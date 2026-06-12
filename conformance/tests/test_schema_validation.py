@@ -63,10 +63,9 @@ def test_golden_example_summary() -> None:
         (_FIXTURES / "golden_four_dispositions.sarif.json").read_text(encoding="utf-8")
     )
     summary = data["runs"][0]["properties"]["atlan/summary"]
-    assert summary["passing"] == 1
     assert summary["failing"] == 1
     assert summary["warning"] == 1
-    assert summary["suppressed"] == 1
+    assert summary["suppressing"] == 1
 
 
 # ---------------------------------------------------------------------------

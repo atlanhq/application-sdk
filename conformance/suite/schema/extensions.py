@@ -131,18 +131,16 @@ class AtlanResultProperties(BaseModel):
 class DispositionSummary(BaseModel):
     """Per-disposition counts for cheap dashboarding."""
 
-    passing: int = 0
     failing: int = 0
     warning: int = 0
-    suppressed: int = 0
+    suppressing: int = 0
 
     def to_properties(self) -> dict[str, Any]:
         return {
             "atlan/summary": {
-                "passing": self.passing,
                 "failing": self.failing,
                 "warning": self.warning,
-                "suppressed": self.suppressed,
+                "suppressing": self.suppressing,
             }
         }
 
