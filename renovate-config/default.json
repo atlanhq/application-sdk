@@ -13,18 +13,15 @@
     "atlanhq/mothership"
   ],
   "gitIgnoredAuthors": ["github-actions[bot]@users.noreply.github.com"],
-  "postUpdateOptions": ["uvLock"],
+  "lockFileMaintenance": {
+    "description": "Python in-range deps: refresh uv.lock without touching pyproject.toml; auto-merge on green.",
+    "enabled": true,
+    "schedule": ["at any time"],
+    "automerge": true,
+    "automergeType": "pr",
+    "platformAutomerge": true
+  },
   "packageRules": [
-    {
-      "description": "SDK: minor+patch in one PR; auto-merge on green gate. Major bumps are manual (consumers pin >=3.0.0,<4.0.0; DeprecationWarnings precede removal by one major).",
-      "matchPackageNames": ["atlan-application-sdk"],
-      "matchUpdateTypes": ["minor", "patch"],
-      "groupName": "atlan-application-sdk",
-      "automerge": true,
-      "automergeType": "pr",
-      "platformAutomerge": true,
-      "addLabels": ["sdk-update"]
-    },
     {
       "description": "SDK: disable major bumps — these are opt-in manual migrations.",
       "matchPackageNames": ["atlan-application-sdk"],
@@ -33,7 +30,7 @@
     },
     {
       "description": "app-contract-toolkit (Pkl): minor+patch in one PR; auto-merge on green. Matched by the regex customManager below.",
-      "matchManagers": ["regex"],
+      "matchManagers": ["custom.regex"],
       "matchUpdateTypes": ["minor", "patch"],
       "groupName": "app-contract-toolkit",
       "automerge": true,
@@ -43,20 +40,9 @@
     },
     {
       "description": "app-contract-toolkit: disable major bumps.",
-      "matchManagers": ["regex"],
+      "matchManagers": ["custom.regex"],
       "matchUpdateTypes": ["major"],
       "enabled": false
-    },
-    {
-      "description": "Python transitive deps (all except atlan-application-sdk): group minor+patch; auto-merge on green. rangeStrategy update-lockfile keeps pyproject.toml untouched when the new version satisfies the existing constraint.",
-      "matchManagers": ["uv"],
-      "matchPackageNames": ["!atlan-application-sdk"],
-      "matchUpdateTypes": ["minor", "patch"],
-      "groupName": "python-transitive-deps",
-      "rangeStrategy": "update-lockfile",
-      "automerge": true,
-      "automergeType": "pr",
-      "platformAutomerge": true
     },
     {
       "description": "GitHub Actions: group all update types (including major) in one PR; auto-merge on green. Major action bumps are safe to auto-merge because the auto-approval workflow gates on green CI, which validates behaviour. Unlike Python deps, action majors are frequent and low-risk compared to library API changes.",
