@@ -123,11 +123,25 @@ _LOG_METHODS: frozenset[str] = frozenset(
     {"debug", "info", "warning", "warn", "error", "critical", "exception"}
 )
 
-# Directive regex: "# conformance: ignore[E001,P002] some reason"
+# Directive regex: "# conformance: ignore[E001,E002] some reason"
 _SUPPRESS_RE = re.compile(
     r"^#\s*conformance\s*:\s*ignore\s*(?:\[([^\]]*)\])?\s*(.*)",
     re.IGNORECASE,
 )
+
+
+# A noqa comment is accepted ONLY when it names at least one mapped code AND
+# supplies non-empty justification text after a visual separator (—, –, or -).
+# Bare "# noqa" and "# noqa: CODE" with no justification are rejected.
+_NOQA_RE = re.compile(
+    r"^#\s*noqa\s*:\s*([A-Z][A-Z0-9]*(?:\s*,\s*[A-Z][A-Z0-9]*)*)\s*[—–\-]+\s*(.+)$",
+    re.IGNORECASE,
+)
+_NOQA_TO_RULES: dict[str, frozenset[str]] = {
+    "S110": frozenset({"E001", "E002"}),  # try-except-pass (bare or typed)
+    "BLE001": frozenset({"E004"}),  # blind/broad exception catch
+    "S112": frozenset({"E014"}),  # try-except-continue (loop swallow)
+}
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +158,15 @@ class _IgnoreDirective:
 
 
 def _parse_directives(source: str) -> dict[int, _IgnoreDirective]:
-    """Return ``{lineno: directive}`` for all conformance-ignore comments."""
+    """Return ``{lineno: directive}`` for all suppression comments.
+
+    Recognises two forms:
+
+    * ``# conformance: ignore[E001,E002] reason`` — explicit conformance directive
+    * ``# noqa: S110 — reason`` — noqa shorthand when a mapped code + justification
+      text are both present (bare ``# noqa`` and ``# noqa: CODE`` without text are
+      rejected; unknown codes produce no suppression)
+    """
     directives: dict[int, _IgnoreDirective] = {}
     try:
         tokens = list(tokenize.generate_tokens(io.StringIO(source).readline))
@@ -153,19 +175,36 @@ def _parse_directives(source: str) -> dict[int, _IgnoreDirective]:
     for tok_type, tok_string, (srow, _), *_ in tokens:
         if tok_type != tokenize.COMMENT:
             continue
+
+        # ── conformance: ignore[...] ──────────────────────────────────────────
         m = _SUPPRESS_RE.search(tok_string)
+        if m:
+            raw_ids, justification = m.group(1), (m.group(2) or "").strip()
+            rule_ids: frozenset[str] | None
+            if raw_ids:
+                rule_ids = frozenset(
+                    r.strip().upper() for r in raw_ids.split(",") if r.strip()
+                )
+            else:
+                rule_ids = None
+            directives[srow] = _IgnoreDirective(
+                rule_ids=rule_ids, justification=justification
+            )
+            continue
+
+        # ── # noqa: CODE — justification ─────────────────────────────────────
+        m = _NOQA_RE.search(tok_string)
         if not m:
             continue
-        raw_ids, justification = m.group(1), (m.group(2) or "").strip()
-        rule_ids: frozenset[str] | None
-        if raw_ids:
-            rule_ids = frozenset(
-                r.strip().upper() for r in raw_ids.split(",") if r.strip()
-            )
-        else:
-            rule_ids = None
+        justification = m.group(2).strip()
+        mapped: set[str] = set()
+        for code in (c.strip().upper() for c in m.group(1).split(",")):
+            if code in _NOQA_TO_RULES:
+                mapped.update(_NOQA_TO_RULES[code])
+        if not mapped:
+            continue  # all codes unknown — no suppression
         directives[srow] = _IgnoreDirective(
-            rule_ids=rule_ids, justification=justification
+            rule_ids=frozenset(mapped), justification=justification
         )
     return directives
 
@@ -401,12 +440,15 @@ def _message_kw_has_exc_text(kw_value: ast.expr, exc_binding: str | None) -> boo
         return False
     # str(exc) / repr(exc) directly
     if isinstance(kw_value, ast.Call):
-        if _get_name(kw_value.func) in ("str", "repr") and kw_value.args:
-            if (
+        if (
+            _get_name(kw_value.func) in ("str", "repr")
+            and kw_value.args
+            and (
                 isinstance(kw_value.args[0], ast.Name)
                 and kw_value.args[0].id == exc_binding
-            ):
-                return True
+            )
+        ):
+            return True
     # BinOp concat referencing the binding
     if isinstance(kw_value, ast.BinOp) and isinstance(kw_value.op, ast.Add):
         for node in ast.walk(kw_value):

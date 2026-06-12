@@ -38,9 +38,9 @@ def _single(src: str, rule_id: str) -> None:
 def _none(src: str) -> None:
     """Assert no active (non-suppressed) findings."""
     active = [f for f in scan_text(src, "fake.py") if not f.suppressed]
-    assert not active, (
-        f"Expected no findings, got {[f.rule_id for f in active]!r}\nSource:\n{src}"
-    )
+    assert (
+        not active
+    ), f"Expected no findings, got {[f.rule_id for f in active]!r}\nSource:\n{src}"
 
 
 def _suppressed(src: str, rule_id: str) -> None:
@@ -1007,6 +1007,139 @@ except:  # conformance: ignore[E001] best-effort cleanup path
     p001 = [f for f in fs if f.rule_id == "E001" and f.suppressed]
     assert p001
     assert p001[0].suppression_justification == "best-effort cleanup path"
+
+
+# ── noqa mapping ─────────────────────────────────────────────────────────────
+
+
+def test_noqa_s110_suppresses_e001() -> None:
+    src = """\
+try:
+    do_something()
+except:  # noqa: S110 — best-effort cleanup, never block shutdown
+    pass
+"""
+    _suppressed(src, "E001")
+
+
+def test_noqa_s110_suppresses_e002() -> None:
+    src = """\
+try:
+    do_something()
+except StopIteration:  # noqa: S110 — manual iterator sentinel, not an error
+    pass
+"""
+    _suppressed(src, "E002")
+
+
+def test_noqa_ble001_suppresses_e004() -> None:
+    src = """\
+def handler():
+    try:
+        work()
+    except Exception:  # noqa: BLE001 — top-level worker loop, logged by framework
+        pass
+"""
+    fs = scan_text(src, "fake.py")
+    e004 = [f for f in fs if f.rule_id == "E004"]
+    assert e004, "no E004 finding"
+    assert all(f.suppressed for f in e004)
+
+
+def test_noqa_s112_suppresses_e014() -> None:
+    src = """\
+for item in items:
+    try:
+        process(item)
+    except ValueError:  # noqa: S112 — skip malformed items, caller logs summary
+        continue
+"""
+    _suppressed(src, "E014")
+
+
+def test_noqa_multiple_codes_suppresses_all_mapped() -> None:
+    # BLE001 → E004, S110 → E002; both should be suppressed
+    src = """\
+def handler():
+    try:
+        work()
+    except Exception:  # noqa: BLE001, S110 — readiness probe loop, silence is intentional
+        pass
+"""
+    fs = scan_text(src, "fake.py")
+    suppressed_ids = {f.rule_id for f in fs if f.suppressed}
+    assert "E002" in suppressed_ids
+    assert "E004" in suppressed_ids
+
+
+def test_noqa_uses_trailing_text_as_justification() -> None:
+    src = """\
+try:
+    do_something()
+except:  # noqa: S110 — best-effort observability; never block the workflow
+    pass
+"""
+    fs = scan_text(src, "fake.py")
+    e001 = [f for f in fs if f.rule_id == "E001" and f.suppressed]
+    assert e001
+    assert (
+        e001[0].suppression_justification
+        == "best-effort observability; never block the workflow"
+    )
+
+
+def test_noqa_without_justification_not_accepted() -> None:
+    src = """\
+try:
+    do_something()
+except:  # noqa: S110
+    pass
+"""
+    fs = scan_text(src, "fake.py")
+    e001 = [f for f in fs if f.rule_id == "E001"]
+    assert e001, "no E001 finding"
+    assert not any(f.suppressed for f in e001)
+
+
+def test_noqa_bare_not_accepted() -> None:
+    src = """\
+try:
+    do_something()
+except:  # noqa
+    pass
+"""
+    fs = scan_text(src, "fake.py")
+    e001 = [f for f in fs if f.rule_id == "E001"]
+    assert e001, "no E001 finding"
+    assert not any(f.suppressed for f in e001)
+
+
+def test_noqa_unknown_code_not_accepted() -> None:
+    src = """\
+try:
+    do_something()
+except:  # noqa: B001 — some other tool's code, not in our mapping
+    pass
+"""
+    fs = scan_text(src, "fake.py")
+    e001 = [f for f in fs if f.rule_id == "E001"]
+    assert e001, "no E001 finding"
+    assert not any(f.suppressed for f in e001)
+
+
+def test_noqa_wrong_code_does_not_suppress_unmapped_rule() -> None:
+    # S110 maps to E001/E002, not E004 — broad catch should still fire
+    src = """\
+def handler():
+    try:
+        work()
+    except Exception:  # noqa: S110 — only suppresses the pass, not the broad catch
+        pass
+"""
+    fs = scan_text(src, "fake.py")
+    e004 = [f for f in fs if f.rule_id == "E004"]
+    assert e004, "no E004 finding"
+    assert not any(f.suppressed for f in e004)
 
 
 def test_suppressed_finding_has_sarif_suppression_record(tmp_path: Path) -> None:
