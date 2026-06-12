@@ -363,7 +363,7 @@ requires-dist = [
     { name = "duckdb", marker = "extra == 'sql'", specifier = ">=1.1.3,<1.6.0" },
     { name = "duckdb-engine", marker = "extra == 'incremental'", specifier = ">=0.17.0,<0.18.0" },
     { name = "duckdb-engine", marker = "extra == 'sql'", specifier = ">=0.17.0,<0.18.0" },
-    { name = "faker", marker = "extra == 'scale-data-generator'", specifier = ">=37.1.0,<40.0.0" },
+    { name = "faker", marker = "extra == 'scale-data-generator'", specifier = ">=40.23.0,<40.24.0" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.136.1,<0.140.0" },
     { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=3.2.0,<4.0.0" },
     { name = "httpx", marker = "extra == 'tests'", specifier = ">=0.27.0,<0.29.0" },
@@ -1275,14 +1275,14 @@ wheels = [
 
 [[package]]
 name = "faker"
-version = "39.1.0"
+version = "40.23.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "tzdata" },
+    { name = "tzdata", marker = "sys_platform == 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/73/5e/f30b61314d3cbfdb48a631a1aa859bbff8a1945436d52981d5afc6ee87c6/faker-39.1.0.tar.gz", hash = "sha256:35d40738093a62158f349f4996115680ca591d9789f24c99a4afa522a1dd4018", size = 1948026, upload-time = "2025-12-29T16:19:56.343Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f3/d6/fc071e5754815d9058e12ab549cc88e90f8f4ecf4dc33b6b750cdf4b622d/faker-40.23.0.tar.gz", hash = "sha256:f135e563f1f95f19346bb680bc2e43570bc43b7893e566023746f51f32c69dfc", size = 1972975, upload-time = "2026-06-10T20:53:21.611Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/cf/d6/f5a9fbd529968757bdcd6d57e1f52ddb2cb66327564e83b05081eb525af9/faker-39.1.0-py3-none-any.whl", hash = "sha256:c86673bb06a1244b9555f1a773465e553a9be44e2d14a8fa6a834ce95f5f7b46", size = 1984865, upload-time = "2025-12-29T16:19:54.511Z" },
+    { url = "https://files.pythonhosted.org/packages/64/5f/824e6fb3e9d63408151dc9173994fa65bde620a67dde3a59354f5aecd497/faker-40.23.0-py3-none-any.whl", hash = "sha256:775922453e54afa42eaf60eac478fa3a969357f224d09a8022b93e3ad88f18ae", size = 2013046, upload-time = "2026-06-10T20:53:19.226Z" },
 ]
 
 [[package]]
