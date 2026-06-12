@@ -19,11 +19,14 @@
 #   GitHub explicitly blocks check_suite: completed events from GitHub Actions-
 #   owned check suites from triggering other Actions workflows (anti-recursion
 #   guard baked into the platform). All required-check providers for this repo
-#   are GitHub Actions workflows (PR Checks, Conformance, Capability Manifest
-#   Check), so check_suite: completed never fires for the events we care about.
-#   workflow_run: completed crosses that boundary and is designed for exactly
-#   this use case. The three listed workflows together cover all 8 required
-#   status check contexts.
+#   are GitHub Actions workflows, so check_suite: completed never fires for the
+#   events we care about. workflow_run: completed crosses that boundary and is
+#   designed for exactly this use case. We listen to PR Checks (provides most
+#   required contexts: Integration Tests, Unit Tests Gate, Pre-commit Checks,
+#   Trivy Code Scan, Full suite) and Conformance (Conventional Commits,
+#   Authorized Approver Check). Capability Manifest Check is informational (not
+#   a required status check per its own header), but including it means we
+#   re-evaluate promptly if it ever becomes required without a config change.
 #
 # Relationship to @sdk-review:
 #   Fully decoupled. This workflow uses the approval signature
@@ -50,9 +53,9 @@ name: Renovate — auto-approve dependency-only PRs
 
 on:
   workflow_run:
-    # All three workflows together provide the 8 required status check contexts
-    # enforced by the main ruleset. Listening to each means we re-evaluate as
-    # soon as any required-check provider finishes, regardless of ordering.
+    # PR Checks provides most required contexts; Conformance provides the rest.
+    # Capability Manifest Check is informational (see its own header) but
+    # included so we re-evaluate promptly if it is later added to the ruleset.
     workflows: [PR Checks, Conformance, Capability Manifest Check]
     types: [completed]
     # Limit to Renovate branches at trigger level — avoids spending a runner on
@@ -71,6 +74,12 @@ permissions:
 
 jobs:
   renovate-auto-approve:
+    # Skip failed/cancelled upstream runs — step (e) would no-op them anyway,
+    # but filtering here avoids consuming a runner at all. workflow_dispatch
+    # always runs (used for manual testing / back-approvals).
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     # Serialize concurrent runs for the same SHA so the idempotency check
