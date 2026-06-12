@@ -66,7 +66,7 @@ runs:
         token: ${{ inputs.github-token }}
 
     - name: Setup AWS Credentials
-      uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+      uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6
       continue-on-error: true
       id: aws-creds
       with:
