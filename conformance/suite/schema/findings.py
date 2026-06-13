@@ -68,6 +68,7 @@ def findings_to_report(
             start_column=f.column,
             message=f.message,
             snippet=f.snippet,
+            level="none" if f.suppressed else None,
             suppressions=suppressions,
         )
     return builder.build(excluded_paths=excluded_paths)

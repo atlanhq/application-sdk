@@ -33,7 +33,7 @@
               "id": "L001",
               "name": "FStringInLogMessage",
               "shortDescription": {
-                "text": "f-string in log message — breaks log grouping and aggregation"
+                "text": "f-string in log message \u2014 breaks log grouping and aggregation"
               },
               "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l001",
               "defaultConfiguration": {
@@ -137,9 +137,9 @@
           "ruleId": "P001",
           "ruleIndex": 0,
           "kind": "fail",
-          "level": "error",
+          "level": "none",
           "message": {
-            "text": "Bare 'except: pass' suppressed: optional-dep guard — PIL is never available in CI"
+            "text": "Bare 'except: pass' suppressed: optional-dep guard \u2014 PIL is never available in CI"
           },
           "locations": [
             {
