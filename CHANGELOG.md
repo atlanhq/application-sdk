@@ -1,5 +1,16 @@
 # Changelog
 
+## v3.17.1 (June 13, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.17.0...v3.17.1
+
+### Bug Fixes
+
+- redact secrets in logs and errors, encode connection params, owner-only download perms (#2073) (by @vaibhavatlan in [10ace2d](https://github.com/atlanhq/application-sdk/commit/10ace2d))
+- update dependency faker to v40 (#2108) (by @renovate[bot] in [f28a057](https://github.com/atlanhq/application-sdk/commit/f28a057))
+- grant security-events: write to conformance-ci.yaml (#2111) (by @cmgrote in [be651b5](https://github.com/atlanhq/application-sdk/commit/be651b5))
+
+
 ## v3.17.0 (June 12, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.16.0...v3.17.0
