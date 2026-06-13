@@ -39,6 +39,16 @@ _USE_DEFAULT = object()
 # Apps that need a different per-task value pass it explicitly to @task().
 _DEFAULT_HEARTBEAT_TIMEOUT_SECONDS: int = env_int("ATLAN_HEARTBEAT_TIMEOUT_SECONDS", 60)
 _DEFAULT_TIMEOUT_SECONDS: int = env_int("ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS", 600)
+# Default 5 minutes: a task sitting unpolled in the queue that long means the
+# worker is dead, scaled to zero, or saturated — fail fast instead of stalling
+# until the workflow execution timeout. Explicit 0 disables (None). Note this
+# timeout is non-retryable by Temporal semantics: when it fires the activity
+# fails outright. Tasks that fan out wider than the worker's concurrent-slot
+# capacity should raise or disable it per @task, since queued-behind-busy-slots
+# waits also count against it.
+_DEFAULT_SCHEDULE_TO_START_TIMEOUT_SECONDS: int | None = (
+    env_int("ATLAN_SCHEDULE_TO_START_TIMEOUT_SECONDS", 300) or None
+)
 
 # Type alias for methods with single Input param returning Output
 TaskMethod = Callable[..., Any]
@@ -129,6 +139,20 @@ class TaskMetadata:
     Set to None to disable auto-heartbeating (use manual heartbeats only).
     Should be less than heartbeat_timeout_seconds (recommended: 1/6 of timeout).
     Default: 10 seconds."""
+
+    schedule_to_start_timeout_seconds: int | None = (
+        _DEFAULT_SCHEDULE_TO_START_TIMEOUT_SECONDS
+    )
+    """Maximum time in seconds an activity task may wait in the task queue
+    before a worker picks it up. When it fires, the activity fails immediately
+    (Temporal does not retry schedule-to-start timeouts — re-queuing would land
+    in the same unpolled queue), surfacing a dead/scaled-down/non-polling worker
+    in minutes instead of stalling silently until the workflow execution
+    timeout. Defaults to the ATLAN_SCHEDULE_TO_START_TIMEOUT_SECONDS env var,
+    or 300 s (5 minutes) if unset; set the env var to 0 or pass None to
+    disable. Queue waits behind a saturated worker also count — tasks that fan
+    out wider than the worker's concurrent-slot capacity should set a larger
+    value or None."""
 
 
 def _validate_task_signature(
@@ -242,6 +266,7 @@ def task(
     retry_max_interval_seconds: int = 30,
     heartbeat_timeout_seconds: int | None | object = _USE_DEFAULT,
     auto_heartbeat_seconds: int | None | object = _USE_DEFAULT,
+    schedule_to_start_timeout_seconds: int | None | object = _USE_DEFAULT,
 ) -> Callable[[F], F]: ...
 
 
@@ -256,6 +281,7 @@ def task(
     retry_max_interval_seconds: int = 30,
     heartbeat_timeout_seconds: int | None | object = _USE_DEFAULT,
     auto_heartbeat_seconds: int | None | object = _USE_DEFAULT,
+    schedule_to_start_timeout_seconds: int | None | object = _USE_DEFAULT,
 ) -> F | Callable[[F], F]:
     """Decorator to mark a method as a task (Temporal activity).
 
@@ -333,6 +359,17 @@ def task(
         auto_heartbeat_seconds: Auto-heartbeat interval - framework sends
             heartbeats at this rate in a background task. Set to None to disable
             auto-heartbeating (manual only). Default: 10 seconds (~1/6 of timeout).
+        schedule_to_start_timeout_seconds: Maximum time in seconds the activity
+            task may sit in the task queue before a worker picks it up. When it
+            fires the activity fails immediately (schedule-to-start timeouts are
+            not retryable by Temporal design), so a dead, scaled-down, or
+            non-polling worker surfaces in minutes instead of stalling the
+            workflow until its execution timeout. Defaults to the
+            ``ATLAN_SCHEDULE_TO_START_TIMEOUT_SECONDS`` env var, or 300 s
+            (5 minutes) if unset. Set to None (or the env var to 0) to disable.
+            Queue waits behind a saturated worker also count against it — tasks
+            that fan out wider than the worker's concurrent-slot capacity
+            should set a larger value or None.
 
     Returns:
         The decorated function with task metadata attached.
@@ -358,6 +395,11 @@ def task(
         if auto_heartbeat_seconds is _USE_DEFAULT
         else cast("int | None", auto_heartbeat_seconds)
     )
+    resolved_schedule_to_start: int | None = (
+        _DEFAULT_SCHEDULE_TO_START_TIMEOUT_SECONDS
+        if schedule_to_start_timeout_seconds is _USE_DEFAULT
+        else cast("int | None", schedule_to_start_timeout_seconds)
+    )
 
     def decorator(fn: F) -> F:
         task_name = name or getattr(fn, "__name__", repr(fn))
@@ -379,6 +421,7 @@ def task(
             retry_max_interval_seconds=retry_max_interval_seconds,
             heartbeat_timeout_seconds=resolved_heartbeat_timeout,
             auto_heartbeat_seconds=resolved_auto_heartbeat,
+            schedule_to_start_timeout_seconds=resolved_schedule_to_start,
         )
 
         return fn

@@ -1732,6 +1732,7 @@ def _wrap_instance_tasks(app_instance: Any, context_data: dict[str, Any]) -> Non
                     task_meta.heartbeat_timeout_seconds,
                     task_meta.auto_heartbeat_seconds,
                     task_meta.retry_policy,
+                    schedule_to_start_timeout_seconds=task_meta.schedule_to_start_timeout_seconds,
                 )
                 setattr(app_instance, attr_name, wrapper)
 
@@ -1747,6 +1748,7 @@ def _create_task_activity_wrapper(
     heartbeat_timeout_seconds: int | None = 60,
     auto_heartbeat_seconds: int | None = 10,
     retry_policy: Any = None,
+    schedule_to_start_timeout_seconds: int | None = None,
 ) -> Any:
     """Create a wrapper that executes a task as a Temporal activity.
 
@@ -1761,6 +1763,8 @@ def _create_task_activity_wrapper(
         heartbeat_timeout_seconds: Heartbeat timeout. None disables.
         auto_heartbeat_seconds: Auto-heartbeat interval. None disables.
         retry_policy: Full retry policy (overrides max_attempts/interval if set).
+        schedule_to_start_timeout_seconds: Max queue-wait before a worker picks
+            the task up; fails fast on dead/non-polling workers. None disables.
 
     Returns:
         Async function that executes the task as an activity.
@@ -1808,6 +1812,14 @@ def _create_task_activity_wrapper(
             else None
         )
 
+        # Build schedule-to-start timeout if enabled (fail fast when no worker
+        # is polling the queue instead of waiting out the workflow timeout)
+        schedule_to_start_timeout = (
+            timedelta(seconds=schedule_to_start_timeout_seconds)
+            if schedule_to_start_timeout_seconds is not None
+            else None
+        )
+
         # Extract summary from input for Temporal UI display
         summary = input_data.summary() if hasattr(input_data, "summary") else None
 
@@ -1818,6 +1830,7 @@ def _create_task_activity_wrapper(
             f"{app_name}:{task_name}",
             args=[task_context, input_data],
             start_to_close_timeout=timedelta(seconds=timeout_seconds),
+            schedule_to_start_timeout=schedule_to_start_timeout,
             heartbeat_timeout=heartbeat_timeout,
             retry_policy=temporal_retry_policy,
             result_type=output_type,
