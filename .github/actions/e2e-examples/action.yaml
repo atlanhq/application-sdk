@@ -59,7 +59,7 @@ runs:
       if: runner.os != 'Windows'
       shell: bash
       run: |
-        wget -q https://raw.githubusercontent.com/dapr/cli/master/install/install.sh -O - | /bin/bash -s 1.17.1
+        wget -q https://raw.githubusercontent.com/dapr/cli/master/install/install.sh -O - | /bin/bash -s 1.18.0
         dapr init --runtime-version ${{ steps.dapr-version.outputs.version }} --slim
 
     - name: Install Dapr CLI (Windows)
@@ -68,7 +68,7 @@ runs:
       run: |
         # Direct download — avoids install.ps1's GitHub API lookup, which hits the
         # 60 req/hr unauthenticated rate limit on shared runner IPs.
-        $CliVersion = "1.17.1"
+        $CliVersion = "1.18.0"
         $CliZip = "$env:TEMP\dapr_cli.zip"
         Invoke-WebRequest -Uri "https://github.com/dapr/cli/releases/download/v$CliVersion/dapr_windows_amd64.zip" -OutFile $CliZip
         $InstallDir = "$env:USERPROFILE\.dapr\bin"
