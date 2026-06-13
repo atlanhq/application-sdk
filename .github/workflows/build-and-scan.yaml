@@ -181,7 +181,11 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: atlanhq/application-sdk
-          ref: main
+          # TEMP (revert when PR #2125 merges): read the allowlist from this
+          # branch so atlan-bigquery-app#153 is unblocked by GHSA-36hh-v3qg-5jq4
+          # before the entry lands on main. This branch is throwaway — do NOT
+          # merge it; main keeps `ref: main`.
+          ref: temp/bq-gate-unblock-pyo3
           sparse-checkout: |
             .security
             .github/scripts
