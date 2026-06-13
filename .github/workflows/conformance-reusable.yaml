@@ -26,10 +26,12 @@
 #     A per-site, in-source suppression for a specific finding.  The finding is
 #     still emitted to the SARIF artifact as a suppressed result with the
 #     justification text preserved — it is counted in atlan/summary.suppressing
-#     and downloadable as a build artifact.  Suppressed results are stripped
-#     from the Security tab upload so they do not create alerts or PR
-#     annotations.  Use this for production code in the SDK/app that has a
-#     legitimate, site-specific carve-out.
+#     and downloadable as a build artifact.  Suppressed results, and all
+#     WARN-tier findings, are stripped from the Security tab upload — only
+#     BLOCK-tier (level=error) active violations are uploaded, so PR
+#     annotations only fire for genuine gate violations.  Use this for
+#     production code in the SDK/app that has a legitimate, site-specific
+#     carve-out.
 #
 #   exclude-paths-c / exclude-paths-e
 #     A path prefix removed from scanning entirely.  Nothing from that path
@@ -129,11 +131,12 @@ jobs:
           name: conformance-ci-sarif
           path: ci.sarif
 
-      - name: "Strip suppressed results for Security tab"
+      - name: "Strip suppressed/warn results for Security tab"
         if: ${{ inputs.upload-sarif && steps.changes.outputs.relevant == 'true' && github.event_name != 'merge_group' }}
         run: |
-          jq '.runs[] |= (.results |= map(select(.suppressions == null or (.suppressions | length == 0))))' \
-            ci.sarif > ci-upload.sarif
+          jq '.runs[] |= (.results |= map(select(
+            (.suppressions == null or (.suppressions | length == 0)) and .level == "error"
+          )))' ci.sarif > ci-upload.sarif
 
       - name: "Upload SARIF to Security tab"
         if: ${{ inputs.upload-sarif && github.event_name != 'merge_group' }}
@@ -195,11 +198,12 @@ jobs:
           name: conformance-error-handling-sarif
           path: error-handling.sarif
 
-      - name: "Strip suppressed results for Security tab"
+      - name: "Strip suppressed/warn results for Security tab"
         if: ${{ inputs.upload-sarif && steps.changes.outputs.relevant == 'true' && github.event_name != 'merge_group' }}
         run: |
-          jq '.runs[] |= (.results |= map(select(.suppressions == null or (.suppressions | length == 0))))' \
-            error-handling.sarif > error-handling-upload.sarif
+          jq '.runs[] |= (.results |= map(select(
+            (.suppressions == null or (.suppressions | length == 0)) and .level == "error"
+          )))' error-handling.sarif > error-handling-upload.sarif
 
       - name: "Upload SARIF to Security tab"
         if: ${{ inputs.upload-sarif && github.event_name != 'merge_group' }}
