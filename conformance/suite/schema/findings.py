@@ -59,6 +59,7 @@ def findings_to_report(
                 Suppression(
                     kind="inSource",
                     justification=f.suppression_justification or "",
+                    status="accepted",
                 )
             ]
         builder.add_result(
