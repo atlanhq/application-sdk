@@ -270,7 +270,7 @@ class BaseIntegrationTest:
             from dotenv import load_dotenv  # noqa: PLC0415 — optional dep: dotenv
 
             load_dotenv(override=False)
-        except ImportError:  # conformance: ignore[E002] python-dotenv not installed; env vars supplied by the environment
+        except ImportError:  # conformance: ignore[E002,E008] python-dotenv not installed; env vars supplied by the environment
             pass
 
         # Auto-discover server URL if not explicitly set

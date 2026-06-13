@@ -205,6 +205,7 @@ def _kill(proc: subprocess.Popen) -> None:
             time.sleep(2)
         proc.kill()
         proc.wait(timeout=15)
+    # conformance: ignore[E004] best-effort process cleanup; kill may fail silently on normal exit
     except Exception:  # noqa: S110 — best-effort kill; process may already have exited
         pass
 

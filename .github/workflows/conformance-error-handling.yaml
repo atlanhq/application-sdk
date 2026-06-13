@@ -89,12 +89,11 @@ jobs:
           name: conformance-error-handling-sarif
           path: error-handling.sarif
 
-      - name: "Strip suppressed/warn results for Security tab"
+      - name: "Strip suppressed results for Security tab"
         if: ${{ inputs.upload-sarif && steps.changes.outputs.relevant == 'true' && github.event_name != 'merge_group' }}
         run: |
-          jq '.runs[] |= (.results |= map(select(
-            (.suppressions == null or (.suppressions | length == 0)) and .level == "error"
-          )))' error-handling.sarif > error-handling-upload.sarif
+          jq '.runs[] |= (.results |= map(select(.suppressions == null or (.suppressions | length == 0))))' \
+            error-handling.sarif > error-handling-upload.sarif
 
       - name: "Upload SARIF to Security tab"
         if: ${{ inputs.upload-sarif && github.event_name != 'merge_group' }}
