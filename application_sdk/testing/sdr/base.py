@@ -104,6 +104,7 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
         ):
             try:
                 self._ensure_workflow_completed(scenario, result.response)
+            # conformance: ignore[E004] re-raises immediately; only mutates result object before propagation so caller boundary handles logging
             except Exception as exc:
                 # The parent's try/except/finally already appended `result`
                 # to cls._results with success=True. Mutate the same object

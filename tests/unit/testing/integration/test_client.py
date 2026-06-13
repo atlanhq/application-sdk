@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
+from application_sdk.errors.leaves import DependencyUnavailableError, InternalError
 from application_sdk.testing.integration.client import (
     IntegrationTestClient,
     _from_v3_credentials,
@@ -149,7 +150,7 @@ class TestProvisionAndStartWorkflow:
                 "_post",
                 return_value={"_http_status": 200, "success": False, "error": "boom"},
             ),
-            pytest.raises(RuntimeError, match="credential_guid"),
+            pytest.raises(InternalError, match="credential_guid"),
         ):
             client._provision_credentials({"host": "db"})
 
@@ -166,7 +167,7 @@ class TestProvisionAndStartWorkflow:
         }
         with (
             patch.object(client, "_post", return_value=err_response),
-            pytest.raises(RuntimeError, match="Could not reach"),
+            pytest.raises(DependencyUnavailableError, match="Could not reach"),
         ):
             client._provision_credentials({"host": "db"})
 
@@ -183,7 +184,7 @@ class TestProvisionAndStartWorkflow:
         }
         with (
             patch.object(client, "_post", return_value=err_response),
-            pytest.raises(RuntimeError, match="Could not reach"),
+            pytest.raises(DependencyUnavailableError, match="Could not reach"),
         ):
             client._provision_credentials({"host": "db"})
 
@@ -196,7 +197,7 @@ class TestProvisionAndStartWorkflow:
                 "_post",
                 return_value={"_http_status": 500, "error": "internal"},
             ),
-            pytest.raises(RuntimeError, match="status=500"),
+            pytest.raises(InternalError, match="status=500"),
         ):
             client._provision_credentials({"host": "db"})
 
@@ -213,7 +214,7 @@ class TestProvisionAndStartWorkflow:
                     "detail": [{"loc": ["body"], "msg": "secret-looking-value"}],
                 },
             ),
-            pytest.raises(RuntimeError) as exc_info,
+            pytest.raises(InternalError) as exc_info,
         ):
             client._provision_credentials({"host": "db"})
         assert "secret-looking-value" not in str(exc_info.value)

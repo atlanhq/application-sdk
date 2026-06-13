@@ -39,6 +39,7 @@ from application_sdk.common.sql_filters import (
 from application_sdk.contracts.storage import UploadInput
 from application_sdk.contracts.types import StorageTier
 from application_sdk.credentials import CredentialResolver, legacy_credential_ref
+from application_sdk.errors.leaves import InvalidInputError, UnimplementedError
 from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates.base_metadata_extractor import BaseMetadataExtractor
@@ -167,11 +168,15 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
             legacy_credential_ref(cred_guid) if cred_guid else None
         )
         if ref is None:
-            raise ValueError("No credential reference or GUID available in task input")
+            raise InvalidInputError(
+                message="No credential reference or GUID available in task input"
+            )
 
         secret_store = infra.secret_store if infra else None
         if secret_store is None:
-            raise ValueError("No secret store available for credential resolution")
+            raise InvalidInputError(
+                message="No secret store available for credential resolution"
+            )
 
         resolver = CredentialResolver(secret_store)
         return await resolver.resolve_raw(ref)
@@ -180,12 +185,15 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         """Create and load a SQL client using resolved credentials.
 
         Raises:
-            NotImplementedError: If ``sql_client_class`` is not set.
+            UnimplementedError: If ``sql_client_class`` is not set.
         """
         if self.sql_client_class is None:
-            raise NotImplementedError(
-                f"{type(self).__name__} must set sql_client_class to use "
-                "default SQL execution from super()."
+            raise UnimplementedError(
+                message=(
+                    f"{type(self).__name__} must set sql_client_class to use "
+                    "default SQL execution from super()."
+                ),
+                operation="sql_client_class",
             )
         credentials = await self._get_credentials(input)
         client = self.sql_client_class()
@@ -270,10 +278,13 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         two class attributes and call ``super()`` — to use this default.
         """
         if not self.fetch_database_sql:
-            raise NotImplementedError(
-                f"{type(self).__name__} must implement fetch_databases() "
-                "or set fetch_database_sql. "
-                "See application_sdk.templates.sql_metadata_extractor for examples."
+            raise UnimplementedError(
+                message=(
+                    f"{type(self).__name__} must implement fetch_databases() "
+                    "or set fetch_database_sql. "
+                    "See application_sdk.templates.sql_metadata_extractor for examples."
+                ),
+                operation="fetch_databases",
             )
         client = await self._load_sql_client(input)
         try:
@@ -300,9 +311,12 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         Default implementation executes ``self.fetch_schema_sql``.
         """
         if not self.fetch_schema_sql:
-            raise NotImplementedError(
-                f"{type(self).__name__} must implement fetch_schemas() "
-                "or set fetch_schema_sql."
+            raise UnimplementedError(
+                message=(
+                    f"{type(self).__name__} must implement fetch_schemas() "
+                    "or set fetch_schema_sql."
+                ),
+                operation="fetch_schemas",
             )
         client = await self._load_sql_client(input)
         try:
@@ -329,9 +343,12 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         Default implementation executes ``self.fetch_table_sql``.
         """
         if not self.fetch_table_sql:
-            raise NotImplementedError(
-                f"{type(self).__name__} must implement fetch_tables() "
-                "or set fetch_table_sql."
+            raise UnimplementedError(
+                message=(
+                    f"{type(self).__name__} must implement fetch_tables() "
+                    "or set fetch_table_sql."
+                ),
+                operation="fetch_tables",
             )
         client = await self._load_sql_client(input)
         try:
@@ -358,9 +375,12 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         Default implementation executes ``self.fetch_column_sql``.
         """
         if not self.fetch_column_sql:
-            raise NotImplementedError(
-                f"{type(self).__name__} must implement fetch_columns() "
-                "or set fetch_column_sql."
+            raise UnimplementedError(
+                message=(
+                    f"{type(self).__name__} must implement fetch_columns() "
+                    "or set fetch_column_sql."
+                ),
+                operation="fetch_columns",
             )
         client = await self._load_sql_client(input)
         try:
@@ -390,17 +410,21 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         Override this method in your connector subclass if procedure extraction
         is required.
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} must implement fetch_procedures(), "
-            "or return FetchProceduresOutput() with zero counts for connectors "
-            "that do not support stored procedures."
+        raise UnimplementedError(
+            message=(
+                f"{type(self).__name__} must implement fetch_procedures(), "
+                "or return FetchProceduresOutput() with zero counts for connectors "
+                "that do not support stored procedures."
+            ),
+            operation="fetch_procedures",
         )
 
     @task(timeout_seconds=1800)
     async def transform_data(self, input: TransformInput) -> TransformOutput:
         """Transform raw extracted data into the target format."""
-        raise NotImplementedError(
-            f"{type(self).__name__} must implement transform_data()."
+        raise UnimplementedError(
+            message=f"{type(self).__name__} must implement transform_data().",
+            operation="transform_data",
         )
 
     async def run(self, input: ExtractionInput) -> ExtractionOutput:  # type: ignore[override]
@@ -482,6 +506,7 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
                 output_prefix=input.output_prefix,
             )
 
+        # conformance: ignore[E004] re-raises immediately as typed SqlMetadataExtractionError; no information lost
         except Exception as e:
             from application_sdk.templates._template_errors import (  # noqa: PLC0415
                 SqlMetadataExtractionError,

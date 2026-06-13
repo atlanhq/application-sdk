@@ -11,6 +11,7 @@ import pytest
 from application_sdk.app.task import is_task, task
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import ConnectionAttributes, ConnectionRef
+from application_sdk.errors.leaves import UnimplementedError
 from application_sdk.templates.contracts.incremental_sql import (
     ExecuteColumnBatchInput,
     ExecuteColumnBatchOutput,
@@ -202,23 +203,23 @@ class TestFetchColumnsSkip:
         assert result.chunk_count == 0
 
     def test_raises_not_implemented_when_full_extraction(self) -> None:
-        """fetch_columns must raise NotImplementedError on full extraction."""
+        """fetch_columns must raise UnimplementedError on full extraction."""
         extractor = self._make_extractor()
         inp = FetchColumnsIncrementalInput(
             marker_timestamp="",
             current_state_available=False,
         )
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(UnimplementedError):
             asyncio.run(extractor.fetch_columns(inp))
 
     def test_raises_not_implemented_when_marker_but_no_state(self) -> None:
-        """fetch_columns must raise NotImplementedError if state not available."""
+        """fetch_columns must raise UnimplementedError if state not available."""
         extractor = self._make_extractor()
         inp = FetchColumnsIncrementalInput(
             marker_timestamp="2025-01-01T00:00:00Z",
             current_state_available=False,
         )
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(UnimplementedError):
             asyncio.run(extractor.fetch_columns(inp))
 
 
@@ -552,7 +553,7 @@ class TestExecuteSingleColumnBatchInlineImports:
     async def test_default_execute_column_sql_raises_not_implemented(
         self, tmp_path
     ) -> None:
-        """Default execute_column_sql raises NotImplementedError; batch propagates."""
+        """Default execute_column_sql raises UnimplementedError; batch propagates."""
         extractor = _make_extractor()
         # Don't override execute_column_sql — use default
         batches_dir = tmp_path / "batches" / "column-table-ids"
@@ -568,7 +569,7 @@ class TestExecuteSingleColumnBatchInlineImports:
                 "application_sdk.storage.ops.download_file",
                 new=AsyncMock(return_value=None),
             ),
-            pytest.raises(NotImplementedError, match="execute_column_sql"),
+            pytest.raises(UnimplementedError, match="execute_column_sql"),
         ):
             await extractor.execute_single_column_batch(
                 ExecuteColumnBatchInput(

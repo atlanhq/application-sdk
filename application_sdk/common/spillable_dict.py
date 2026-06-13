@@ -171,6 +171,7 @@ class SpillableDict(MutableMapping):  # type: ignore[type-arg]
             bbo.set_bloom_filter(bits_per_key=10, block_based=False)
             options.set_block_based_table_factory(bbo)
             self._db = Rdict(self._temp_dir, options=options)
+        # conformance: ignore[E004] init cleanup guard; cleans temp dir then re-raises so no swallowing occurs
         except BaseException:
             shutil.rmtree(self._temp_dir, ignore_errors=True)
             raise
@@ -195,6 +196,7 @@ class SpillableDict(MutableMapping):  # type: ignore[type-arg]
         # Reminder: value is pickled. See class docstring's "Caveat on
         # untrusted data" — don't store attacker-controllable bytes here.
         if not isinstance(key, ROCKSDB_KEY_TYPES):
+            # conformance: ignore[E012] MutableMapping protocol requires TypeError; changing would break the public key-validation contract
             raise TypeError(
                 f"SpillableDict keys must be one of "
                 f"(str, int, float, bool, bytes); "
@@ -207,6 +209,7 @@ class SpillableDict(MutableMapping):  # type: ignore[type-arg]
         # (couldn't have been stored, since __setitem__ rejects them).
         # Match standard dict semantics for misses: KeyError.
         if not isinstance(key, ROCKSDB_KEY_TYPES):
+            # conformance: ignore[E012] MutableMapping ABC requires KeyError for missing keys; changing would break the MutableMapping protocol
             raise KeyError(key)
         return self._db[key]
 
@@ -219,8 +222,10 @@ class SpillableDict(MutableMapping):  # type: ignore[type-arg]
         # The isinstance guard prevents key_may_exist from raising on
         # unsupported types — those just KeyError, like dict.
         if not isinstance(key, ROCKSDB_KEY_TYPES):
+            # conformance: ignore[E012] MutableMapping ABC requires KeyError for missing keys; changing would break the MutableMapping protocol
             raise KeyError(key)
         if not self._db.key_may_exist(key) or key not in self._db:
+            # conformance: ignore[E012] MutableMapping ABC requires KeyError for missing keys; changing would break the MutableMapping protocol
             raise KeyError(key)
         del self._db[key]
 
@@ -310,6 +315,7 @@ class SpillableDict(MutableMapping):  # type: ignore[type-arg]
             value: Value to append to the list at ``key``.
         """
         if not isinstance(key, ROCKSDB_KEY_TYPES):
+            # conformance: ignore[E012] MutableMapping protocol requires TypeError; changing would break the public key-validation contract
             raise TypeError(
                 f"SpillableDict keys must be one of "
                 f"(str, int, float, bool, bytes); "

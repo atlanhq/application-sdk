@@ -24,8 +24,13 @@ Example:
     ... )
 """
 
+import logging
 import re
-from typing import Any, Callable, List, Optional, Pattern, Union
+from collections.abc import Callable
+from re import Pattern
+from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # Type alias for predicate functions
 Predicate = Callable[[Any], bool]
@@ -36,7 +41,7 @@ Predicate = Callable[[Any], bool]
 # =============================================================================
 
 
-def equals(expected: Any, *, description: Optional[str] = None) -> Predicate:
+def equals(expected: Any, *, description: str | None = None) -> Predicate:
     """Assert that the actual value equals the expected value.
 
     Args:
@@ -62,7 +67,7 @@ def equals(expected: Any, *, description: Optional[str] = None) -> Predicate:
     return predicate
 
 
-def not_equals(unexpected: Any, *, description: Optional[str] = None) -> Predicate:
+def not_equals(unexpected: Any, *, description: str | None = None) -> Predicate:
     """Assert that the actual value does not equal the unexpected value.
 
     Args:
@@ -87,7 +92,7 @@ def not_equals(unexpected: Any, *, description: Optional[str] = None) -> Predica
     return predicate
 
 
-def exists(*, description: Optional[str] = None) -> Predicate:
+def exists(*, description: str | None = None) -> Predicate:
     """Assert that the actual value is not None.
 
     Args:
@@ -111,7 +116,7 @@ def exists(*, description: Optional[str] = None) -> Predicate:
     return predicate
 
 
-def is_none(*, description: Optional[str] = None) -> Predicate:
+def is_none(*, description: str | None = None) -> Predicate:
     """Assert that the actual value is None.
 
     Args:
@@ -135,7 +140,7 @@ def is_none(*, description: Optional[str] = None) -> Predicate:
     return predicate
 
 
-def is_true(*, description: Optional[str] = None) -> Predicate:
+def is_true(*, description: str | None = None) -> Predicate:
     """Assert that the actual value is truthy.
 
     Args:
@@ -160,7 +165,7 @@ def is_true(*, description: Optional[str] = None) -> Predicate:
     return predicate
 
 
-def is_false(*, description: Optional[str] = None) -> Predicate:
+def is_false(*, description: str | None = None) -> Predicate:
     """Assert that the actual value is falsy.
 
     Args:
@@ -190,7 +195,7 @@ def is_false(*, description: Optional[str] = None) -> Predicate:
 # =============================================================================
 
 
-def one_of(options: List[Any], *, description: Optional[str] = None) -> Predicate:
+def one_of(options: list[Any], *, description: str | None = None) -> Predicate:
     """Assert that the actual value is one of the given options.
 
     Args:
@@ -215,7 +220,7 @@ def one_of(options: List[Any], *, description: Optional[str] = None) -> Predicat
     return predicate
 
 
-def not_one_of(excluded: List[Any], *, description: Optional[str] = None) -> Predicate:
+def not_one_of(excluded: list[Any], *, description: str | None = None) -> Predicate:
     """Assert that the actual value is not one of the given values.
 
     Args:
@@ -240,7 +245,7 @@ def not_one_of(excluded: List[Any], *, description: Optional[str] = None) -> Pre
     return predicate
 
 
-def contains(item: Any, *, description: Optional[str] = None) -> Predicate:
+def contains(item: Any, *, description: str | None = None) -> Predicate:
     """Assert that the actual value contains the given item.
 
     Works for strings (substring check) and collections (membership check).
@@ -265,6 +270,7 @@ def contains(item: Any, *, description: Optional[str] = None) -> Predicate:
         try:
             return item in actual
         except TypeError:
+            logger.warning("contains check failed; returning False", exc_info=True)
             return False
 
     predicate.__doc__ = f"contains({item!r})"
@@ -273,7 +279,7 @@ def contains(item: Any, *, description: Optional[str] = None) -> Predicate:
     return predicate
 
 
-def not_contains(item: Any, *, description: Optional[str] = None) -> Predicate:
+def not_contains(item: Any, *, description: str | None = None) -> Predicate:
     """Assert that the actual value does not contain the given item.
 
     Args:
@@ -293,6 +299,7 @@ def not_contains(item: Any, *, description: Optional[str] = None) -> Predicate:
         try:
             return item not in actual
         except TypeError:
+            logger.warning("not_contains check failed; returning True", exc_info=True)
             return True
 
     predicate.__doc__ = f"not_contains({item!r})"
@@ -301,7 +308,7 @@ def not_contains(item: Any, *, description: Optional[str] = None) -> Predicate:
     return predicate
 
 
-def has_length(expected_length: int, *, description: Optional[str] = None) -> Predicate:
+def has_length(expected_length: int, *, description: str | None = None) -> Predicate:
     """Assert that the actual value has the expected length.
 
     Args:
@@ -322,6 +329,7 @@ def has_length(expected_length: int, *, description: Optional[str] = None) -> Pr
         try:
             return len(actual) == expected_length
         except TypeError:
+            logger.warning("has_length check failed; returning False", exc_info=True)
             return False
 
     predicate.__doc__ = f"has_length({expected_length})"
@@ -330,7 +338,7 @@ def has_length(expected_length: int, *, description: Optional[str] = None) -> Pr
     return predicate
 
 
-def is_empty(*, description: Optional[str] = None) -> Predicate:
+def is_empty(*, description: str | None = None) -> Predicate:
     """Assert that the actual value is empty.
 
     Args:
@@ -350,6 +358,7 @@ def is_empty(*, description: Optional[str] = None) -> Predicate:
         try:
             return len(actual) == 0
         except TypeError:
+            logger.warning("is_empty check failed; returning False", exc_info=True)
             return False
 
     predicate.__doc__ = "is_empty()"
@@ -358,7 +367,7 @@ def is_empty(*, description: Optional[str] = None) -> Predicate:
     return predicate
 
 
-def is_not_empty(*, description: Optional[str] = None) -> Predicate:
+def is_not_empty(*, description: str | None = None) -> Predicate:
     """Assert that the actual value is not empty.
 
     Args:
@@ -378,6 +387,7 @@ def is_not_empty(*, description: Optional[str] = None) -> Predicate:
         try:
             return len(actual) > 0
         except TypeError:
+            logger.warning("is_not_empty check failed; returning False", exc_info=True)
             return False
 
     predicate.__doc__ = "is_not_empty()"
@@ -391,9 +401,7 @@ def is_not_empty(*, description: Optional[str] = None) -> Predicate:
 # =============================================================================
 
 
-def greater_than(
-    value: Union[int, float], *, description: Optional[str] = None
-) -> Predicate:
+def greater_than(value: float, *, description: str | None = None) -> Predicate:
     """Assert that the actual value is greater than the given value.
 
     Args:
@@ -414,6 +422,7 @@ def greater_than(
         try:
             return actual > value
         except TypeError:
+            logger.warning("greater_than check failed; returning False", exc_info=True)
             return False
 
     predicate.__doc__ = f"greater_than({value})"
@@ -422,9 +431,7 @@ def greater_than(
     return predicate
 
 
-def greater_than_or_equal(
-    value: Union[int, float], *, description: Optional[str] = None
-) -> Predicate:
+def greater_than_or_equal(value: float, *, description: str | None = None) -> Predicate:
     """Assert that the actual value is greater than or equal to the given value.
 
     Args:
@@ -445,6 +452,9 @@ def greater_than_or_equal(
         try:
             return actual >= value
         except TypeError:
+            logger.warning(
+                "greater_than_or_equal check failed; returning False", exc_info=True
+            )
             return False
 
     predicate.__doc__ = f"greater_than_or_equal({value})"
@@ -453,9 +463,7 @@ def greater_than_or_equal(
     return predicate
 
 
-def less_than(
-    value: Union[int, float], *, description: Optional[str] = None
-) -> Predicate:
+def less_than(value: float, *, description: str | None = None) -> Predicate:
     """Assert that the actual value is less than the given value.
 
     Args:
@@ -475,6 +483,7 @@ def less_than(
         try:
             return actual < value
         except TypeError:
+            logger.warning("less_than check failed; returning False", exc_info=True)
             return False
 
     predicate.__doc__ = f"less_than({value})"
@@ -483,9 +492,7 @@ def less_than(
     return predicate
 
 
-def less_than_or_equal(
-    value: Union[int, float], *, description: Optional[str] = None
-) -> Predicate:
+def less_than_or_equal(value: float, *, description: str | None = None) -> Predicate:
     """Assert that the actual value is less than or equal to the given value.
 
     Args:
@@ -506,6 +513,9 @@ def less_than_or_equal(
         try:
             return actual <= value
         except TypeError:
+            logger.warning(
+                "less_than_or_equal check failed; returning False", exc_info=True
+            )
             return False
 
     predicate.__doc__ = f"less_than_or_equal({value})"
@@ -515,10 +525,10 @@ def less_than_or_equal(
 
 
 def between(
-    min_value: Union[int, float],
-    max_value: Union[int, float],
+    min_value: float,
+    max_value: float,
     *,
-    description: Optional[str] = None,
+    description: str | None = None,
 ) -> Predicate:
     """Assert that the actual value is between min and max (inclusive).
 
@@ -541,6 +551,7 @@ def between(
         try:
             return min_value <= actual <= max_value
         except TypeError:
+            logger.warning("between check failed; returning False", exc_info=True)
             return False
 
     predicate.__doc__ = f"between({min_value}, {max_value})"
@@ -554,9 +565,7 @@ def between(
 # =============================================================================
 
 
-def matches(
-    pattern: Union[str, Pattern], *, description: Optional[str] = None
-) -> Predicate:
+def matches(pattern: str | Pattern, *, description: str | None = None) -> Predicate:
     """Assert that the actual value matches the given regex pattern.
 
     Args:
@@ -585,7 +594,7 @@ def matches(
     return predicate
 
 
-def starts_with(prefix: str, *, description: Optional[str] = None) -> Predicate:
+def starts_with(prefix: str, *, description: str | None = None) -> Predicate:
     """Assert that the actual value starts with the given prefix.
 
     Args:
@@ -605,6 +614,7 @@ def starts_with(prefix: str, *, description: Optional[str] = None) -> Predicate:
         try:
             return str(actual).startswith(prefix)
         except (TypeError, AttributeError):
+            logger.warning("starts_with check failed; returning False", exc_info=True)
             return False
 
     predicate.__doc__ = f"starts_with({prefix!r})"
@@ -613,7 +623,7 @@ def starts_with(prefix: str, *, description: Optional[str] = None) -> Predicate:
     return predicate
 
 
-def ends_with(suffix: str, *, description: Optional[str] = None) -> Predicate:
+def ends_with(suffix: str, *, description: str | None = None) -> Predicate:
     """Assert that the actual value ends with the given suffix.
 
     Args:
@@ -633,6 +643,7 @@ def ends_with(suffix: str, *, description: Optional[str] = None) -> Predicate:
         try:
             return str(actual).endswith(suffix)
         except (TypeError, AttributeError):
+            logger.warning("ends_with check failed; returning False", exc_info=True)
             return False
 
     predicate.__doc__ = f"ends_with({suffix!r})"
@@ -646,7 +657,7 @@ def ends_with(suffix: str, *, description: Optional[str] = None) -> Predicate:
 # =============================================================================
 
 
-def is_type(expected_type: type, *, description: Optional[str] = None) -> Predicate:
+def is_type(expected_type: type, *, description: str | None = None) -> Predicate:
     """Assert that the actual value is an instance of the given type.
 
     Args:
@@ -671,7 +682,7 @@ def is_type(expected_type: type, *, description: Optional[str] = None) -> Predic
     return predicate
 
 
-def is_dict(*, description: Optional[str] = None) -> Predicate:
+def is_dict(*, description: str | None = None) -> Predicate:
     """Assert that the actual value is a dictionary.
 
     Args:
@@ -691,7 +702,7 @@ def is_dict(*, description: Optional[str] = None) -> Predicate:
     return p
 
 
-def is_list(*, description: Optional[str] = None) -> Predicate:
+def is_list(*, description: str | None = None) -> Predicate:
     """Assert that the actual value is a list.
 
     Args:
@@ -711,7 +722,7 @@ def is_list(*, description: Optional[str] = None) -> Predicate:
     return p
 
 
-def is_string(*, description: Optional[str] = None) -> Predicate:
+def is_string(*, description: str | None = None) -> Predicate:
     """Assert that the actual value is a string.
 
     Args:
@@ -736,7 +747,7 @@ def is_string(*, description: Optional[str] = None) -> Predicate:
 # =============================================================================
 
 
-def all_of(*predicates: Predicate, description: Optional[str] = None) -> Predicate:
+def all_of(*predicates: Predicate, description: str | None = None) -> Predicate:
     """Assert that all predicates pass.
 
     Args:
@@ -761,7 +772,7 @@ def all_of(*predicates: Predicate, description: Optional[str] = None) -> Predica
     return predicate
 
 
-def any_of(*predicates: Predicate, description: Optional[str] = None) -> Predicate:
+def any_of(*predicates: Predicate, description: str | None = None) -> Predicate:
     """Assert that at least one predicate passes.
 
     Args:
@@ -787,7 +798,7 @@ def any_of(*predicates: Predicate, description: Optional[str] = None) -> Predica
     return predicate
 
 
-def none_of(*predicates: Predicate, description: Optional[str] = None) -> Predicate:
+def none_of(*predicates: Predicate, description: str | None = None) -> Predicate:
     """Assert that none of the predicates pass.
 
     Args:

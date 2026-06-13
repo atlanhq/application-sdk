@@ -247,6 +247,7 @@ def create_activity_from_task(
                 ) from e
             raise
 
+        # conformance: ignore[E004] exception translator: both branches re-raise; nothing is swallowed
         except Exception as e:
             from application_sdk.errors.base import (  # noqa: PLC0415 — circular
                 AppError as _AppError,
@@ -274,6 +275,7 @@ def create_activity_from_task(
                     heartbeat_task.cancel()
                     try:
                         await heartbeat_task
+                    # conformance: ignore[E004] heartbeat cancel cleanup in finally; debug-logged with exc_info; swallow is intentional
                     except Exception:
                         logger.debug(
                             "Heartbeat task did not cancel cleanly", exc_info=True

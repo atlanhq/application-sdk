@@ -5,7 +5,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
-from application_sdk.errors.leaves import InternalError
+from application_sdk.errors.leaves import InternalError, UnimplementedError
+
+
+@dataclass(kw_only=True)
+class SqlQueryExtractorNotImplementedError(UnimplementedError):
+    """Abstract SqlQueryExtractor method was not overridden by a subclass."""
+
+    code: ClassVar[str] = "UNIMPLEMENTED_SQL_QUERY_EXTRACTOR_METHOD"
+    message: str = "SqlQueryExtractor subclass did not implement required method"
+    component: str | None = "sql_query_extractor"
 
 
 @dataclass(kw_only=True)

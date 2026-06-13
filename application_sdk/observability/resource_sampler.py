@@ -42,6 +42,7 @@ def _read_proc_rss() -> int | None:
         rss_pages = int(parts[23])
         page_size = os.sysconf("SC_PAGE_SIZE")
         return rss_pages * page_size
+    # conformance: ignore[E004] probe reads /proc/self/stat to detect Linux RSS; failure is expected on non-Linux
     except Exception:
         _logger.debug("Failed to read /proc/self/stat for RSS", exc_info=True)
         return None
@@ -55,8 +56,12 @@ def sample() -> ResourceSample | None:
     """
     try:
         import resource  # noqa: PLC0415 — stdlib resource; not available on Windows (try/except wraps)
+    # conformance: ignore[E004] stdlib resource unavailable on Windows; ImportError is expected; None signals caller
     except ImportError:  # conformance: ignore[E008] stdlib resource not available on Windows; None signals unavailable
         # resource module not available on Windows
+        _logger.debug(
+            "stdlib resource module unavailable; returning None", exc_info=True
+        )
         return None
 
     try:
@@ -73,7 +78,7 @@ def sample() -> ResourceSample | None:
 
         return ResourceSample(cpu_time_s=cpu_time, rss_bytes=rss)
     except Exception:
-        _logger.debug("Resource sampling unavailable", exc_info=True)
+        _logger.warning("Resource sampling failed; returning None", exc_info=True)
         return None
 
 

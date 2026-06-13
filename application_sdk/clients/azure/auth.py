@@ -174,6 +174,7 @@ class AzureAuthProvider:
             raise AzureCredentialTypeError(cause=e) from e
         except AppError:
             raise
+        # conformance: ignore[E004] exception re-raised as typed AzureCredentialParseError with cause preserved; no swallow
         except Exception as e:
             raise AzureCredentialParseError(message="Unexpected error", cause=e) from e
 
@@ -238,6 +239,7 @@ class AzureAuthProvider:
             raise AzureCredentialError(cause=e) from e
         except AppError:
             raise
+        # conformance: ignore[E004] exception re-raised as typed AzureCredentialParseError with cause preserved; no swallow
         except Exception as e:
             raise AzureCredentialParseError(message="Unexpected error", cause=e) from e
 

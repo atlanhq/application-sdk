@@ -372,6 +372,11 @@ async def _prefer_v4_target(target_host: str) -> tuple[str, str | None]:
             flags=socket.AI_ADDRCONFIG,
         )
     except (socket.gaierror, ValueError):
+        logger.warning(
+            "DNS resolution failed for %s; returning unresolved host",
+            host,
+            exc_info=True,
+        )
         return target_host, None
     if not results:
         return target_host, None

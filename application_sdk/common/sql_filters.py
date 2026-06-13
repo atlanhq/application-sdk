@@ -127,12 +127,14 @@ def validate_filter_no_sql_injection(v: Any) -> Any:
     def _check_str(label: str, value: str) -> None:
         for seq in _FORBIDDEN_FILTER_SEQUENCES:
             if seq in value:
+                # conformance: ignore[E012] Pydantic @field_validator requires ValueError to collect validation errors; any other type bypasses Pydantic's error collection and propagates raw, breaking model instantiation for all callers
                 raise ValueError(
                     f"SQL-unsafe sequence {seq!r} not allowed in filter {label}: {value!r}"
                 )
 
     def _check_value(label: str, value: Any, depth: int = 0) -> None:
         if depth > _MAX_FILTER_NESTING_DEPTH:
+            # conformance: ignore[E012] Pydantic @field_validator requires ValueError to collect validation errors; any other type bypasses Pydantic's error collection and propagates raw, breaking model instantiation for all callers
             raise ValueError(
                 f"Filter nesting exceeds maximum depth {_MAX_FILTER_NESTING_DEPTH}"
             )

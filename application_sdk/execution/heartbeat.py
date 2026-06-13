@@ -171,6 +171,7 @@ async def auto_heartbeat_loop(
                 e,
                 exc_info=True,
             )
+        # conformance: ignore[E004] catch-and-reraise for Temporal CancelledError; logged at debug then immediately re-raised
         except BaseException:
             logger.debug(
                 "Auto-heartbeat loop stopping: activity cancelled for task '%s'",
