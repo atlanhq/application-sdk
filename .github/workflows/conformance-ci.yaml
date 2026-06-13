@@ -52,9 +52,12 @@ jobs:
             relevant:
               - '${{ inputs.scan-path }}/**'
 
-      - name: "No relevant changes — gate passes"
+      - name: "No relevant changes — emit empty SARIF"
         if: steps.changes.outputs.relevant == 'false'
-        run: echo "No .github changes; C-series gate passes."
+        run: |
+          printf '{"$schema":"https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json","version":"2.1.0","runs":[{"tool":{"driver":{"name":"atlan-conformance","version":"0.0.0"}},"results":[]}]}\n' \
+            > ci-upload.sarif
+          echo "No .github changes; C-series gate passes."
 
       - name: "Sparse-checkout conformance suite"
         if: steps.changes.outputs.relevant == 'true'
@@ -93,7 +96,7 @@ jobs:
             ci.sarif > ci-upload.sarif
 
       - name: "Upload SARIF to Security tab"
-        if: ${{ inputs.upload-sarif && steps.changes.outputs.relevant == 'true' && github.event_name != 'merge_group' }}
+        if: ${{ inputs.upload-sarif && github.event_name != 'merge_group' }}
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
         with:
           sarif_file: ci-upload.sarif
