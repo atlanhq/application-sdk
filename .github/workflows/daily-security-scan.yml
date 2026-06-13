@@ -45,9 +45,13 @@ jobs:
           TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
           TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
         run: |
+          # NOTE: intentionally NO --ignore-unfixed. This is a report-only /
+          # ticket-filing scan, so we want visibility into no-fix ("won't fix",
+          # disputed, awaiting-patch) CVEs too — they still need tracking and an
+          # operational mitigation. Keep --ignore-unfixed only on build/CI
+          # gating steps, where un-actionable findings would just wedge the build.
           trivy image \
             --scanners vuln \
-            --ignore-unfixed \
             --severity CRITICAL,HIGH,MEDIUM,LOW \
             --format json \
             --output trivy-image-results.json \
@@ -60,9 +64,10 @@ jobs:
           TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
           TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
         run: |
+          # See note on the image scan above: report-only pass, so no
+          # --ignore-unfixed — no-fix CVEs are surfaced and ticketed.
           trivy fs \
             --scanners vuln \
-            --ignore-unfixed \
             --severity CRITICAL,HIGH,MEDIUM,LOW \
             --format json \
             --output trivy-fs-results.json \

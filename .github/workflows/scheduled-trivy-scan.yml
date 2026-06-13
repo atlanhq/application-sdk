@@ -56,7 +56,6 @@ jobs:
         run: |
           trivy image \
             --scanners vuln \
-            --ignore-unfixed \
             --format json \
             --output trivy-image.json \
             --severity CRITICAL,HIGH \
@@ -70,7 +69,6 @@ jobs:
         run: |
           trivy image \
             --scanners vuln \
-            --ignore-unfixed \
             --format table \
             --output trivy-image.txt \
             --severity CRITICAL,HIGH \
@@ -85,7 +83,6 @@ jobs:
         run: |
           trivy fs \
             --scanners vuln \
-            --ignore-unfixed \
             --format json \
             --output trivy-deps.json \
             --severity CRITICAL,HIGH \
@@ -98,7 +95,6 @@ jobs:
         run: |
           trivy fs \
             --scanners vuln \
-            --ignore-unfixed \
             --format table \
             --output trivy-deps.txt \
             --severity CRITICAL,HIGH \
