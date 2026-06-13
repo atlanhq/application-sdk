@@ -24,10 +24,12 @@
 #
 #   # conformance: ignore[Exxx] <reason>   (or  # noqa: S110 — <reason>)
 #     A per-site, in-source suppression for a specific finding.  The finding is
-#     still emitted to the SARIF report as a suppressed result with the
+#     still emitted to the SARIF artifact as a suppressed result with the
 #     justification text preserved — it is counted in atlan/summary.suppressing
-#     and reviewable in the Security tab.  Use this for production code in the
-#     SDK/app that has a legitimate, site-specific carve-out.
+#     and downloadable as a build artifact.  Suppressed results are stripped
+#     from the Security tab upload so they do not create alerts or PR
+#     annotations.  Use this for production code in the SDK/app that has a
+#     legitimate, site-specific carve-out.
 #
 #   exclude-paths-c / exclude-paths-e
 #     A path prefix removed from scanning entirely.  Nothing from that path
@@ -124,11 +126,17 @@ jobs:
           name: conformance-ci-sarif
           path: ci.sarif
 
+      - name: "Strip suppressed results for Security tab"
+        if: ${{ inputs.upload-sarif && steps.changes.outputs.relevant == 'true' && github.event_name != 'merge_group' }}
+        run: |
+          jq '.runs[] |= (.results |= map(select(.suppressions == null or (.suppressions | length == 0))))' \
+            ci.sarif > ci-upload.sarif
+
       - name: "Upload SARIF to Security tab"
         if: ${{ inputs.upload-sarif && steps.changes.outputs.relevant == 'true' && github.event_name != 'merge_group' }}
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
         with:
-          sarif_file: ci.sarif
+          sarif_file: ci-upload.sarif
 
   # ── Error-handling series (E-series: error patterns, exception hygiene) ─────
   error-handling:
@@ -181,11 +189,17 @@ jobs:
           name: conformance-error-handling-sarif
           path: error-handling.sarif
 
+      - name: "Strip suppressed results for Security tab"
+        if: ${{ inputs.upload-sarif && steps.changes.outputs.relevant == 'true' && github.event_name != 'merge_group' }}
+        run: |
+          jq '.runs[] |= (.results |= map(select(.suppressions == null or (.suppressions | length == 0))))' \
+            error-handling.sarif > error-handling-upload.sarif
+
       - name: "Upload SARIF to Security tab"
         if: ${{ inputs.upload-sarif && steps.changes.outputs.relevant == 'true' && github.event_name != 'merge_group' }}
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
         with:
-          sarif_file: error-handling.sarif
+          sarif_file: error-handling-upload.sarif
 
   # ── Required gate ─────────────────────────────────────────────────────────
   # Always runs so it can be marked a required check without ever becoming
