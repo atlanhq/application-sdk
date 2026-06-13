@@ -137,7 +137,7 @@
           "ruleId": "P001",
           "ruleIndex": 0,
           "kind": "fail",
-          "level": "none",
+          "level": "error",
           "message": {
             "text": "Bare 'except: pass' suppressed: optional-dep guard \u2014 PIL is never available in CI"
           },
