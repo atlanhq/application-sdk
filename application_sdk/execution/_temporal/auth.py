@@ -209,7 +209,7 @@ class TemporalAuthManager:
                     timeout=sleep_seconds,
                 )
                 break
-            except TimeoutError:  # conformance: ignore[E002] wait_for timeout = sleep interval elapsed; loop continues
+            except TimeoutError:  # conformance: ignore[E002,E014] wait_for timeout = sleep interval elapsed; loop continues
                 pass
 
             try:
@@ -226,7 +226,7 @@ class TemporalAuthManager:
                         timeout=float(_RETRY_INTERVAL_SECONDS),
                     )
                     break
-                except TimeoutError:  # conformance: ignore[E002] wait_for timeout = retry duration elapsed; loop continues
+                except TimeoutError:  # conformance: ignore[E002,E014] wait_for timeout = retry duration elapsed; loop continues
                     pass
 
         logger.info("Token refresh loop exiting")

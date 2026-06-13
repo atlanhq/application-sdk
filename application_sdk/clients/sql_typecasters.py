@@ -61,9 +61,7 @@ def _decode_tolerant_utf8(data: Any) -> str:
     """
     if data is None:
         return None  # type: ignore[return-value]  # mirrors driver semantics for SQL NULL
-    if isinstance(data, memoryview):
-        data = bytes(data)
-    elif isinstance(data, bytearray):
+    if isinstance(data, memoryview) or isinstance(data, bytearray):
         data = bytes(data)
     return data.decode("utf-8", errors="replace")
 
@@ -75,7 +73,7 @@ def _attach_psycopg2(dbapi_connection: Any) -> bool:
     """
     try:
         import psycopg2.extensions as ext  # type: ignore[import-not-found]  # noqa: PLC0415
-    except ImportError:
+    except ImportError:  # conformance: ignore[E008] optional dep psycopg2 not installed; driver-detection probe
         return False
 
     def _cast(value: Any, _cur: Any) -> Any:
@@ -109,7 +107,7 @@ def _attach_psycopg3(dbapi_connection: Any) -> bool:
         from psycopg.adapt import (  # type: ignore[import-not-found]  # noqa: PLC0415
             Loader,
         )
-    except ImportError:
+    except ImportError:  # conformance: ignore[E008] optional dep psycopg not installed; driver-detection probe
         return False
 
     class _TolerantTextLoader(Loader):

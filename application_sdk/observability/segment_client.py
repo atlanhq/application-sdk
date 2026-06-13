@@ -301,7 +301,7 @@ class SegmentClient:
                     )
                     batch.append(metric_record)
                     self._queue.task_done()
-                except TimeoutError:  # conformance: ignore[E002] queue.get timeout = flush the partial batch now
+                except TimeoutError:  # conformance: ignore[E002,E014] queue.get timeout = flush the partial batch now
                     pass
 
                 current_time = asyncio.get_running_loop().time()
@@ -342,7 +342,7 @@ class SegmentClient:
                 metric_record = self._queue.get_nowait()
                 batch.append(metric_record)
                 self._queue.task_done()
-            except asyncio.QueueEmpty:
+            except asyncio.QueueEmpty:  # conformance: ignore[E014] QueueEmpty on get_nowait terminates drain loop; not an error
                 break
         if batch:
             await self._send_batch_to_segment(batch)

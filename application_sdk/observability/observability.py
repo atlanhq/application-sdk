@@ -299,7 +299,7 @@ class AtlanObservability(Generic[T], ABC):
 
             if _wf_unsafe.in_sandbox():
                 return
-        except ImportError:  # conformance: ignore[E002] Temporal sandbox check unavailable outside a worker; normal flush
+        except ImportError:  # conformance: ignore[E002,E008] Temporal sandbox check unavailable outside a worker; normal flush
             pass
         try:
             # Group records by partition using record's own timestamp

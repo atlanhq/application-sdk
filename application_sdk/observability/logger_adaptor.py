@@ -346,7 +346,7 @@ class InterceptHandler(logging.Handler):
         # Get corresponding Loguru level if it exists
         try:
             level = logger.level(record.levelname).name
-        except ValueError:
+        except ValueError:  # conformance: ignore[E009] unknown log level; numeric levelno fallback is benign
             level = record.levelno
 
         # Find caller from where originated the logged message

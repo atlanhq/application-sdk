@@ -769,6 +769,7 @@ def create_store_from_binding_optional(
             "(broken fields: %s) — treating as absent",
             name,
             ", ".join(exc.broken_fields or []),
+            exc_info=True,
         )
         return None
 
@@ -823,5 +824,6 @@ def _create_store_from_binding_optional_with_put_attrs(
             "(broken fields: %s) — treating as absent",
             name,
             ", ".join(exc.broken_fields or []),
+            exc_info=True,
         )
         return None, None

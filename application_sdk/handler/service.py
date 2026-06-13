@@ -419,7 +419,7 @@ def _import_optional_app_module(dotted: str) -> ModuleType | None:
 
     try:
         return importlib.import_module(dotted)
-    except ModuleNotFoundError as exc:
+    except ModuleNotFoundError as exc:  # conformance: ignore[E008] re-raises if missing dep is not the target module itself
         missing = exc.name or ""
         # Swallow only if what's missing is the target or one of its parents
         # (e.g. ``app``, ``app.<segment>``, ``app.<segment>.core``).
@@ -796,7 +796,7 @@ def _published_input_contract(ep: Any) -> Any:
     ):
         try:
             module = importlib.import_module(module_path)
-        except ImportError:
+        except ImportError:  # conformance: ignore[E008,E014] optional generated module; continue to next candidate
             continue
         contract = getattr(module, "AppInputContract", None)
         if contract is not None and hasattr(contract, "model_json_schema"):

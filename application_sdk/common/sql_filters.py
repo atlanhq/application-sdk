@@ -159,7 +159,7 @@ def validate_filter_no_sql_injection(v: Any) -> Any:
         if stripped.startswith("{") and stripped.endswith("}"):
             try:
                 parsed = json.loads(stripped)
-            except json.JSONDecodeError:
+            except json.JSONDecodeError:  # conformance: ignore[E009] JSON parse probe; None signals "not a dict filter", handled below
                 parsed = None
             if isinstance(parsed, dict):
                 # Validate the parsed shape; ignore the returned value

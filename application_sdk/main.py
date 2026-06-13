@@ -737,7 +737,7 @@ def _install_graceful_signal_handlers(
             # continues to work.
             try:
                 signal.signal(sig, lambda *_: mark_worker_shutting_down())
-            # conformance: ignore[E002] no add_signal_handler / not main thread; WARNING already logged below
+            # conformance: ignore[E002,E014] no add_signal_handler / not main thread; WARNING already logged below
             except (ValueError, OSError):
                 pass
             logger.warning(
@@ -1391,6 +1391,7 @@ async def _run_dev_combined_inner(
                         resp = await client.get(f"{base}/health", timeout=2)
                         if resp.status_code == 200:
                             break
+                    # conformance: ignore[E014] startup readiness poll; transient errors expected during startup
                     except Exception:  # noqa: S110 — handler not ready yet; /health poll retries up to 30×
                         pass  # transient errors expected during startup
                     await asyncio.sleep(1)

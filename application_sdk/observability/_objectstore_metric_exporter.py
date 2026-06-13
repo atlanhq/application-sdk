@@ -240,6 +240,7 @@ class ObjectStoreMetricExporter(MetricExporter):
             logger.warning(
                 "Object store '%s' not configured; metric upload disabled",
                 name,
+                exc_info=True,
             )
             return None
         except Exception:

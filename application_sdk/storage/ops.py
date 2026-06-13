@@ -55,7 +55,7 @@ import orjson
 try:  # pragma: no cover — defensive import
     from obstore.exceptions import BaseError as _ObstoreBaseError
     from obstore.exceptions import NotFoundError as _ObstoreNotFoundError
-except ImportError:  # pragma: no cover
+except ImportError:  # conformance: ignore[E008,E009] optional dep obstore.exceptions; sentinel fallback for older versions  # pragma: no cover
     _ObstoreBaseError = None  # type: ignore[assignment,misc]
     _ObstoreNotFoundError = None  # type: ignore[assignment,misc]
 
@@ -139,7 +139,7 @@ def normalize_key(key: str) -> str:
             normalized = os.path.relpath(abs_path, abs_temp_path).replace(os.sep, "/")
         else:
             normalized = key.strip("/")
-    except ValueError:
+    except ValueError:  # conformance: ignore[E009] os.path.commonpath raises on mixed Windows drives; simple-strip fallback
         # os.path.commonpath raises on mixed Windows drives; fall back to simple strip.
         normalized = key.strip("/")
 

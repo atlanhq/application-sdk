@@ -69,7 +69,7 @@ _task_logger = get_logger(__name__)
 
 try:
     _FRAMEWORK_VERSION = importlib.metadata.version("application-sdk")
-except importlib.metadata.PackageNotFoundError:
+except importlib.metadata.PackageNotFoundError:  # conformance: ignore[E009] package not installed (e.g. editable dev install); "unknown" sentinel is benign
     _FRAMEWORK_VERSION = "unknown"
 
 
@@ -1292,7 +1292,7 @@ def _validate_interaction_signature(
 
     try:
         hints: dict[str, Any] = get_type_hints(fn)
-    except Exception:
+    except Exception:  # conformance: ignore[E009] get_type_hints can fail in unusual contexts (e.g. forward refs); __annotations__ fallback
         hints = getattr(fn, "__annotations__", {})
 
     if kind == "signal":

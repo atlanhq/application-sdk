@@ -318,7 +318,7 @@ class Writer(ABC):
                     import daft  # noqa: PLC0415 — optional dep: daft
 
                     return daft.from_pandas(data)
-                except ImportError:
+                except ImportError:  # conformance: ignore[E008] re-raising as DaftNotInstalledError; optional dep daft not installed
                     from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                         DaftNotInstalledError,
                     )
@@ -332,7 +332,7 @@ class Writer(ABC):
 
             if isinstance(data, daft.DataFrame):
                 return data
-        except ImportError:  # conformance: ignore[E002] optional dep daft not installed; fall through to dict/list handling
+        except ImportError:  # conformance: ignore[E002,E008] optional dep daft not installed; fall through to dict/list handling
             pass
 
         # Convert dict or list of dicts to DataFrame
@@ -357,7 +357,7 @@ class Writer(ABC):
                                     columnar_data[key] = []
                                 columnar_data[key].append(value)
                     return daft.from_pydict(columnar_data)
-                except ImportError:
+                except ImportError:  # conformance: ignore[E008] re-raising as DaftNotInstalledError; optional dep daft not installed
                     from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                         DaftNotInstalledError,
                     )

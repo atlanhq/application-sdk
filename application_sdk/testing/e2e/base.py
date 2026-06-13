@@ -260,6 +260,7 @@ class BaseE2ETest:
                     "Set connection_admin_roles on the test class to avoid "
                     "ATLAS-400-00-114 errors.",
                     _exc,
+                    exc_info=True,
                 )
 
     def teardown_method(self, method: Any) -> None:

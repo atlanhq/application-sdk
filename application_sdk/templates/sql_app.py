@@ -338,7 +338,7 @@ class SqlApp(App):
             # ourselves and redact secrets before logging — frames preserved,
             # credentials stripped.
             safe_traceback = redact_secrets("".join(traceback.format_exception(exc)))
-            logger.error(
+            logger.error(  # conformance: ignore[E005] exc_info would expose SQLAlchemy password in traceback; safe_traceback built above with secrets redacted
                 "SQL auth cache prime FAILED after %.1fms (%s) — short-circuiting "
                 "before parallel extract burst to avoid stacking failed_login_attempts "
                 "on the source.\n%s",

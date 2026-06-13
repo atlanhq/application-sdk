@@ -256,7 +256,7 @@ class PushGatewayClient:
                     await asyncio.wait_for(
                         self._stopped.wait(), timeout=self._interval_s
                     )
-                except TimeoutError:  # conformance: ignore[E002] wait_for timeout = push interval elapsed; loop continues
+                except TimeoutError:  # conformance: ignore[E002,E014] wait_for timeout = push interval elapsed; loop continues
                     pass
                 if self._stopped.is_set():
                     return
@@ -344,6 +344,7 @@ class PushGatewayClient:
         for match in _PUSH_TIME_LINE.finditer(text):
             try:
                 last_push = float(match.group("ts"))
+            # conformance: ignore[E014] malformed timestamp line; skip to next match
             except ValueError:
                 continue
             labels = dict(_LABEL_PAIR.findall(match.group("labels")))
