@@ -865,8 +865,8 @@ class PublishInputMixin(BaseModel):
                     workflow_id=_wf.info().workflow_id,
                     run_id=_wf.info().run_id,
                 )
-            except Exception:  # noqa: S110
-                pass  # Not in Temporal context — output_path stays empty
+            except Exception:  # noqa: S110 — not in a Temporal workflow context; output_path stays empty by design
+                pass
 
         # Derive transformed_data_prefix from output_path
         if not self.transformed_data_prefix and self.output_path:

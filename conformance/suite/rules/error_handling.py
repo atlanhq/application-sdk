@@ -1,4 +1,4 @@
-"""Error-recovery rule definitions (P-series)."""
+"""Error-handling rule definitions (E-series)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from suite.schema.disposition import EnforcementTier, RuleMechanism
 
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
-        id="P001",
+        id="E001",
         name="BareExceptPass",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
@@ -26,7 +26,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p001",
     ),
     RuleDefinition(
-        id="P002",
+        id="E002",
         name="TypedExceptPass",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
@@ -44,7 +44,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p002",
     ),
     RuleDefinition(
-        id="P003",
+        id="E003",
         name="BroadContextlibSuppress",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -62,7 +62,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p003",
     ),
     RuleDefinition(
-        id="P004",
+        id="E004",
         name="BroadExceptClause",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -80,7 +80,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p004",
     ),
     RuleDefinition(
-        id="P005",
+        id="E005",
         name="ExceptBlockMissingExcInfo",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -97,7 +97,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p005",
     ),
     RuleDefinition(
-        id="P006",
+        id="E006",
         name="BareExceptWithBody",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
@@ -113,7 +113,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p006",
     ),
     RuleDefinition(
-        id="P007",
+        id="E007",
         name="ErrorToReturnValue",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -130,7 +130,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p007",
     ),
     RuleDefinition(
-        id="P008",
+        id="E008",
         name="ImportErrorWithoutLogging",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -148,7 +148,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p008",
     ),
     RuleDefinition(
-        id="P009",
+        id="E009",
         name="ExceptBlockOnlyAssigns",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -165,7 +165,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p009",
     ),
     RuleDefinition(
-        id="P010",
+        id="E010",
         name="AsyncioGatherExceptionsUnexamined",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -183,7 +183,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p010",
     ),
     RuleDefinition(
-        id="P012",
+        id="E012",
         name="UntypedBuiltinRaise",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -203,7 +203,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p012",
     ),
     RuleDefinition(
-        id="P013",
+        id="E013",
         name="LegacyAtlanErrorRaise",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
@@ -219,5 +219,142 @@ RULES: tuple[RuleDefinition, ...] = (
             "appropriate leaf from ``application_sdk.errors``.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p013",
+    ),
+    RuleDefinition(
+        id="E011",
+        name="LoggingFilterUnsafeBody",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="filter-safety",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="3.17.0",
+        short_description="logging.Filter.filter() body not wrapped in try/except — can crash caller",
+        full_description=(
+            "``Logger.handle()`` calls ``self.filter(record)`` with no surrounding\n"
+            "try/except — unlike handler errors, filter exceptions are NOT caught by\n"
+            "``handleError()``.  An unguarded attribute access\n"
+            "(``record.custom_field``) or any external call that can raise will\n"
+            "propagate directly to the code that called ``logger.info()`` (or similar),\n"
+            "crashing the caller.  Wrap the entire ``filter()`` body in try/except with\n"
+            "a safe fallback (return True to pass-through, False to drop).  Use\n"
+            "``getattr(record, 'field', default)`` for optional record attributes.\n"
+            "Never acceptable — filter methods must never let exceptions propagate.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p011",
+    ),
+    RuleDefinition(
+        id="E014",
+        name="ExceptLoopControlSwallow",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="silent-swallow",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="3.17.0",
+        short_description="except block exits loop silently (continue/break) without logging",
+        full_description=(
+            "An ``except`` block inside a loop whose body is only ``continue``,\n"
+            "``break``, or ``pass`` — with no logging call — silently swallows the\n"
+            "exception and resumes or exits the iteration.  This is the loop-body twin\n"
+            "of P001/P002 (ruff S112 family).  At minimum log at DEBUG before the loop\n"
+            "control statement; if the exception signals a genuine error, re-raise or\n"
+            "log at WARNING/ERROR with ``exc_info=True``.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p014",
+    ),
+    RuleDefinition(
+        id="E015",
+        name="ExceptionTextInErrorMessage",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="error-message-hygiene",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="3.17.0",
+        short_description="Caught exception text interpolated into typed error message= — leaks unsanitised text",
+        full_description=(
+            "A typed ``AppError`` raise whose ``message=`` keyword value embeds the\n"
+            "caught exception via an f-string (``f'…{exc}…'``), ``str(exc)``, or\n"
+            "``repr(exc)`` — see typed-error-prescription.md §6.  This leaks\n"
+            "unsanitised, potentially user-facing text from an upstream library into a\n"
+            "field that is displayed to operators and indexed in dashboards.  It also\n"
+            "breaks aggregation by collapsing distinct failure modes into one\n"
+            "variable-text bucket.  Place the exception context in a typed evidence\n"
+            "field (``cause=exc``, ``network_error=str(exc)``) and keep ``message=`` a\n"
+            "stable human summary.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p015",
+    ),
+    RuleDefinition(
+        id="E016",
+        name="MissingExceptionChaining",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="exception-chaining",
+        autofixable=True,
+        orthogonal_gate="tests",
+        since="3.17.0",
+        short_description="raise inside except block missing 'from exc' cause — breaks exception chain",
+        full_description=(
+            "A non-bare ``raise`` inside an ``except … as e:`` block that does not\n"
+            "include ``from e`` (or ``from None``).  Without explicit chaining, Python\n"
+            "attaches the original as ``__context__`` with ``__suppress_context__=False``\n"
+            "— the chain is preserved at the interpreter level but AE's wire serialiser\n"
+            "only follows the ``__cause__`` chain, so the original exception is lost in\n"
+            "dashboards.  Fix: ``raise NewError(...) from e``.  Use ``from None`` only\n"
+            "when intentionally hiding the original (requires a comment explaining why).\n"
+            "Acceptable patterns: bare ``raise`` (re-raise), ``raise X() from e`` (already\n"
+            "chained), ``raise X() from None`` (intentional suppression).\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p016",
+    ),
+    RuleDefinition(
+        id="E017",
+        name="SecretNamedEvidenceKey",
+        tier=EnforcementTier.BLOCK,
+        mechanism=RuleMechanism.STATIC,
+        category="security",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="3.17.0",
+        short_description="Error evidence kwarg ending in _secret/_password/_token — rejected by wire layer at runtime",
+        full_description=(
+            "An error construction call that passes a keyword argument whose name ends\n"
+            "in ``_secret``, ``_password``, or ``_token`` — see\n"
+            "``application_sdk.errors.wire`` §6.  The wire layer actively rejects these\n"
+            "suffixes at runtime (``ValueError``) to prevent credential leakage into\n"
+            "logs, dashboards, and SARIF reports.  Static detection means the bug is\n"
+            "caught before any code runs.  Rename the evidence field to a safe key (e.g.\n"
+            "``credential_name``, ``token_type``) or pass the value via ``cause=exc``.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p017",
+    ),
+    RuleDefinition(
+        id="E018",
+        name="BareParentLeafRaise",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="untyped-raise",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="3.17.0",
+        short_description="Raising a bare AppError leaf class without a domain subclass overriding code",
+        full_description=(
+            "Raising a parent leaf directly (``InternalError(...)``,\n"
+            "``InvalidInputError(...)``) without a domain-specific subclass that\n"
+            "overrides ``code`` collapses all failure modes for a given category into\n"
+            "one dashboard bucket — impossible to route, alert on, or triage\n"
+            "individually.  See typed-error-prescription.md §4.  Only sanctioned\n"
+            "bare-parent form: ``InternalError(classification_pending=True)`` — used\n"
+            "exclusively as a temporary placeholder during migration, never in\n"
+            "production-stable code.  For all other sites: define a domain subclass\n"
+            "that overrides ``code`` with a specific constant\n"
+            "(e.g. ``ENGINE_NOT_INITIALIZED``).\n"
+            "Note: this rule is WARN tier because some bare-parent raises may be\n"
+            "legitimate in small apps or during active migration.  Review findings\n"
+            "before suppressing.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p018",
     ),
 )

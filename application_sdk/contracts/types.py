@@ -278,7 +278,7 @@ class FileReference(BaseModel, frozen=True):
         try:
             if p.is_dir():
                 file_count = sum(1 for child in p.rglob("*") if child.is_file())
-        except OSError:
+        except OSError:  # conformance: ignore[E009] best-effort file_count; OSError in sandboxed contexts; safe fallback to 1
             file_count = 1
         return FileReference(
             local_path=str(p),

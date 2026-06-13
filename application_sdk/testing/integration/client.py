@@ -540,7 +540,7 @@ class IntegrationTestClient:
         """
         try:
             result = response.json()
-        except ValueError:
+        except ValueError:  # conformance: ignore[E009] non-JSON response; synthetic error result dict is the explicit fallback
             # Response is not JSON
             result = {
                 "success": False,

@@ -317,7 +317,7 @@ class SarifRun(BaseModel):
 
     ``properties["atlan/summary"]`` carries per-disposition counts for cheap
     dashboarding without parsing every result:
-    ``{passing, failing, warning, suppressed}``.
+    ``{failing, warning, suppressing}``.
     """
 
     tool: Tool

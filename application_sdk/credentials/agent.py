@@ -246,7 +246,7 @@ async def _fetch_per_key_bundle(
                 f"sha256:{value_hash}",
                 redact_secrets("".join(traceback.format_exception(exc))),
             )
-            logger.warning(
+            logger.warning(  # conformance: ignore[E005] exc_info would bypass the secret-redacted traceback built above; safe_traceback included inline
                 "single-key probe failed for ref-key sha256:%s — store error, "
                 "treating as non-secret. If this was a real credential "
                 "key, the auth attempt will fail with the ref-key as the "

@@ -253,7 +253,9 @@ class ReportBuilder:
         self._results.append(result)
         return self
 
-    def build(self, *, exit_code: int | None = None) -> SarifReport:
+    def build(
+        self, *, exit_code: int | None = None, excluded_paths: list[str] | None = None
+    ) -> SarifReport:
         """Finalise and return the :class:`SarifReport`.
 
         Computes the ``atlan/summary`` disposition counts and sets the
@@ -271,14 +273,12 @@ class ReportBuilder:
         summary = DispositionSummary()
         for result in self._results:
             disposition = derive_disposition(result)
-            if disposition == Disposition.PASS:
-                summary.passing += 1
-            elif disposition == Disposition.FAILING:
+            if disposition == Disposition.FAILING:
                 summary.failing += 1
             elif disposition == Disposition.WARNING:
                 summary.warning += 1
             elif disposition == Disposition.SUPPRESSED:
-                summary.suppressed += 1
+                summary.suppressing += 1
 
         # Gate decision
         derived_exit_code = 1 if summary.failing > 0 else 0
@@ -295,7 +295,10 @@ class ReportBuilder:
                 )
             )
 
-        run_props = AtlanRunProperties(summary=summary)
+        run_props = AtlanRunProperties(
+            summary=summary,
+            excluded_paths=excluded_paths or [],
+        )
 
         run = SarifRun(
             tool=Tool(

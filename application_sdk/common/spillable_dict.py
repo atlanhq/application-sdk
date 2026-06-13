@@ -43,7 +43,7 @@ if TYPE_CHECKING:
 else:
     try:
         from rocksdict import BlockBasedOptions, Options, Rdict
-    except ImportError:
+    except ImportError:  # conformance: ignore[E008,E009] optional dep rocksdict not installed; sentinel fallback
         Rdict = None
         Options = None
         BlockBasedOptions = None
