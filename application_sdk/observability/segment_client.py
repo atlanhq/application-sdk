@@ -301,8 +301,7 @@ class SegmentClient:
                     )
                     batch.append(metric_record)
                     self._queue.task_done()
-                except TimeoutError:
-                    # Timeout - send batch if we have any events
+                except TimeoutError:  # conformance: ignore[E002] queue.get timeout = flush the partial batch now
                     pass
 
                 current_time = asyncio.get_running_loop().time()

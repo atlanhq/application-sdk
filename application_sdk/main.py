@@ -697,8 +697,8 @@ def _install_excepthook() -> None:
         )
         try:
             asyncio.run(_flush_observability())
-        except Exception:  # noqa: S110
-            pass  # best-effort; never mask the original crash
+        except Exception:  # noqa: S110 — best-effort flush; must never mask the original crash
+            pass
         _orig(exc_type, exc_value, exc_traceback)
 
     sys.excepthook = _hook
@@ -737,8 +737,9 @@ def _install_graceful_signal_handlers(
             # continues to work.
             try:
                 signal.signal(sig, lambda *_: mark_worker_shutting_down())
+            # conformance: ignore[E002] no add_signal_handler / not main thread; WARNING already logged below
             except (ValueError, OSError):
-                pass  # not on the main thread or signal is reserved
+                pass
             logger.warning(
                 "loop.add_signal_handler() not supported on this platform "
                 "(signal=%s); graceful shutdown via signals is unavailable",
@@ -1390,8 +1391,8 @@ async def _run_dev_combined_inner(
                         resp = await client.get(f"{base}/health", timeout=2)
                         if resp.status_code == 200:
                             break
-                    except Exception:  # noqa: S110
-                        pass
+                    except Exception:  # noqa: S110 — handler not ready yet; /health poll retries up to 30×
+                        pass  # transient errors expected during startup
                     await asyncio.sleep(1)
 
                 # Step 1: Provision credentials (mimics Heracles)
@@ -1589,7 +1590,7 @@ def main() -> NoReturn:
         logger.error("Fatal error", exc_info=True)
         try:
             asyncio.run(_flush_observability())
-        except Exception:  # noqa: S110
+        except Exception:  # noqa: S110 — best-effort flush on fatal exit; error already logged above
             pass
         sys.exit(1)
 

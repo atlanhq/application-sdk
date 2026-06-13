@@ -205,7 +205,7 @@ def _kill(proc: subprocess.Popen) -> None:
             time.sleep(2)
         proc.kill()
         proc.wait(timeout=15)
-    except Exception:  # noqa: S110  # best-effort kill; process may already have exited
+    except Exception:  # noqa: S110 — best-effort kill; process may already have exited
         pass
 
 

@@ -256,8 +256,8 @@ class PushGatewayClient:
                     await asyncio.wait_for(
                         self._stopped.wait(), timeout=self._interval_s
                     )
-                except TimeoutError:
-                    pass  # wait_for timeout means push interval elapsed; continue loop
+                except TimeoutError:  # conformance: ignore[E002] wait_for timeout = push interval elapsed; loop continues
+                    pass
                 if self._stopped.is_set():
                     return
                 try:

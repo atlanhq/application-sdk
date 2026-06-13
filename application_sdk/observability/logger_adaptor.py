@@ -235,8 +235,9 @@ def _format_printf_args(msg: str, args: tuple[Any, ...]) -> tuple[str, tuple[Any
     if args:
         try:
             return msg % args, ()
+        # conformance: ignore[E002] %-substitution mismatch; loguru handles {}-style — logging adapter, would recurse
         except (TypeError, ValueError):
-            pass  # {} style or mismatch — let loguru handle it
+            pass
     return msg, args
 
 

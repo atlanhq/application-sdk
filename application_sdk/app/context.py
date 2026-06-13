@@ -102,8 +102,9 @@ class _WorkflowSafeLogger:
             try:
                 message = message % args
                 args = ()
+            # conformance: ignore[E002] %-substitution mismatch; loguru handles {}-style — logging adapter, would recurse
             except (TypeError, ValueError):
-                pass  # {} style or mismatch — loguru will handle it
+                pass
 
         if _is_in_workflow():
             wf_logger = _workflow.logger

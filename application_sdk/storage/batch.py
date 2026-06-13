@@ -342,5 +342,6 @@ async def upload_file_from_bytes(
     finally:
         try:
             os.unlink(tmp_path)
+        # conformance: ignore[E002] best-effort temp-file cleanup; not fatal
         except OSError:
-            pass  # tmp file unlink failed; best-effort cleanup, not fatal
+            pass
