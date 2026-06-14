@@ -15,9 +15,11 @@ from urllib.parse import urljoin
 
 import requests
 
-from application_sdk.errors.leaves import InternalError
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.testing.integration._errors import LocalVaultUnavailableError
+from application_sdk.testing.integration._errors import (
+    LocalVaultResponseInvariantError,
+    LocalVaultUnavailableError,
+)
 
 logger = get_logger(__name__)
 
@@ -347,13 +349,11 @@ class IntegrationTestClient:
             "credential_guid"
         )
         if not guid:
-            raise InternalError(
+            raise LocalVaultResponseInvariantError(
                 message=(
                     "Local-vault did not return a credential_guid "
                     f"(status={response.get('_http_status')})."
                 ),
-                component="local-vault",
-                classification_pending=True,
             )
         logger.debug("Provisioned credentials via local-vault: guid=%s", guid)
         return guid

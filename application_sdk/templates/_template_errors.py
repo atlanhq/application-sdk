@@ -86,3 +86,12 @@ class SqlSecretStoreMissingError(InvalidInputError):
     code: ClassVar[str] = "INVALID_INPUT_SQL_SECRET_STORE_MISSING"
     message: str = "No secret store available for credential resolution"
     field: str | None = "secret_store"
+
+
+@dataclass(kw_only=True)
+class SqlOutputPathMissingError(InvalidInputError):
+    """Required output_path field is absent in the column batch input."""
+
+    code: ClassVar[str] = "INVALID_INPUT_SQL_OUTPUT_PATH_MISSING"
+    message: str = "output_path is required in ExecuteColumnBatchInput"
+    field: str | None = "output_path"

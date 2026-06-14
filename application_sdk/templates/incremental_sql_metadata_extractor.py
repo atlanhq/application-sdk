@@ -59,6 +59,7 @@ from application_sdk.app.task import task
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates._template_errors import (
     IncrementalSqlMetadataExtractorNotImplementedError,
+    SqlOutputPathMissingError,
 )
 from application_sdk.templates.contracts.incremental_sql import (
     ExecuteColumnBatchInput,
@@ -618,8 +619,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         )
 
         if not input.output_path:
-            # conformance: ignore[E012] template validation raises ValueError matching documented API contract
-            raise ValueError("output_path is required in ExecuteColumnBatchInput")
+            raise SqlOutputPathMissingError()
 
         # Reconstruct IncrementalRunContext from input fields for SQL building
         ctx = IncrementalRunContext(

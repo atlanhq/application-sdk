@@ -5,7 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
-from application_sdk.errors.leaves import DependencyUnavailableError, InvalidInputError
+from application_sdk.errors.leaves import (
+    DataIntegrityError,
+    DependencyUnavailableError,
+    InvalidInputError,
+)
 
 
 @dataclass(kw_only=True)
@@ -36,3 +40,11 @@ class LocalVaultUnavailableError(DependencyUnavailableError):
 
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_LOCAL_VAULT"
     service: str | None = "local-vault"
+
+
+@dataclass(kw_only=True)
+class LocalVaultResponseInvariantError(DataIntegrityError):
+    """Local-vault returned 2xx but the expected credential_guid field was absent."""
+
+    code: ClassVar[str] = "DATA_INTEGRITY_LOCAL_VAULT_RESPONSE"
+    location: str | None = "local-vault"

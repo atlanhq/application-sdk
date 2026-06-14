@@ -12,6 +12,7 @@ from application_sdk.app.task import is_task, task
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import ConnectionAttributes, ConnectionRef
 from application_sdk.errors.leaves import UnimplementedError
+from application_sdk.templates._template_errors import SqlOutputPathMissingError
 from application_sdk.templates.contracts.incremental_sql import (
     ExecuteColumnBatchInput,
     ExecuteColumnBatchOutput,
@@ -478,7 +479,7 @@ class TestExecuteSingleColumnBatchInlineImports:
 
     async def test_raises_when_output_path_missing(self) -> None:
         extractor = _make_extractor()
-        with pytest.raises(ValueError, match="output_path"):
+        with pytest.raises(SqlOutputPathMissingError):
             await extractor.execute_single_column_batch(
                 ExecuteColumnBatchInput(output_path="", batch_index=0, total_batches=1)
             )
