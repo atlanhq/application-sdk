@@ -246,6 +246,10 @@ reportInvalidTypeForm = "warning"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# WARNING: "conformance" is a namespace package (no __init__.py at its root).
+# Adding an __init__.py inside conformance/tools/ would make it a regular package
+# and shadow the root tools/ namespace package, breaking all tools.migrate_v3.*
+# imports with ModuleNotFoundError. Keep conformance/tools/ __init__.py-free.
 pythonpath = [".", "conformance"]
 addopts = "-m 'not integration and not e2e and not s3_integration and not azure_integration and not gcs_integration'"
 markers = [
