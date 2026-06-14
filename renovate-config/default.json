@@ -14,9 +14,9 @@
   ],
   "gitIgnoredAuthors": ["github-actions[bot]@users.noreply.github.com"],
   "lockFileMaintenance": {
-    "description": "Python in-range deps: refresh uv.lock without touching pyproject.toml; auto-merge on green.",
+    "description": "Python in-range deps: refresh uv.lock without touching pyproject.toml; auto-merge on green. Runs at most twice per hour (at :00 and :30) to avoid a continuous-merge feedback loop.",
     "enabled": true,
-    "schedule": ["at any time"],
+    "schedule": ["every 30 minutes"],
     "automerge": true,
     "automergeType": "pr",
     "platformAutomerge": true
