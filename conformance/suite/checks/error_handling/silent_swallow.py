@@ -4,10 +4,7 @@ from __future__ import annotations
 
 import ast
 
-from ._constants import (
-    _BROAD_EXCEPT_TYPES,
-    _OPTIONAL_IMPORT_TYPES,
-)
+from ._constants import _BROAD_EXCEPT_TYPES, _OPTIONAL_IMPORT_TYPES
 from ._helpers import (
     _any_logging_in,
     _body_is_only_loop_control_no_logging,

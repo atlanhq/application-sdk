@@ -5,11 +5,7 @@ from __future__ import annotations
 import ast
 from collections.abc import Iterator
 
-from ._constants import (
-    _BROAD_EXCEPT_TYPES,
-    _LOG_METHODS,
-    BUILTIN_RAISES,
-)
+from ._constants import _BROAD_EXCEPT_TYPES, _LOG_METHODS, BUILTIN_RAISES
 
 
 def _get_name(node: ast.expr | ast.AST | None) -> str | None:

@@ -12,10 +12,7 @@ from ._constants import (
     LEAF_CLASSES,
     LEGACY_ATLAN_ERRORS,
 )
-from ._helpers import (
-    _get_decorator_names,
-    _raise_exc_name,
-)
+from ._helpers import _get_decorator_names, _raise_exc_name
 
 
 class UntypedRaiseMixin:
