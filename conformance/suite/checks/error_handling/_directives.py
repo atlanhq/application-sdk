@@ -36,6 +36,13 @@ def _parse_directives(source: str) -> dict[int, _IgnoreDirective]:
     try:
         tokens = list(tokenize.generate_tokens(io.StringIO(source).readline))
     except tokenize.TokenError:
+        # Tokenisation fails on source with unclosed string literals or other
+        # lexical errors.  All suppression directives in the file are silently
+        # lost, which means findings that would have been suppressed will be
+        # reported.  This is intentionally conservative: false positives are
+        # preferable to silently dropping findings on malformed source.  In
+        # practice scan_text() returns early on SyntaxError before this path
+        # is reached, so the window is narrow.
         return directives
 
     # Identify lines that carry non-comment code tokens so we can mark inline

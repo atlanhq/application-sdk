@@ -299,6 +299,31 @@ except BaseException:
     assert "E004" in findings or "E002" in findings  # E002 wins for pass-only body
 
 
+def test_p004_tuple_containing_broad_type_flagged() -> None:
+    # except (KeyError, Exception): body — the tuple contains a broad type, fires E004.
+    findings = _findings(
+        """\
+try:
+    run()
+except (KeyError, Exception):
+    x = 1
+"""
+    )
+    assert "E004" in findings
+
+
+def test_p004_tuple_all_narrow_types_no_finding() -> None:
+    # except (KeyError, ValueError): — all narrow, must not fire E004.
+    assert "E004" not in _findings(
+        """\
+try:
+    run()
+except (KeyError, ValueError):
+    logger.error("failed", exc_info=True)
+"""
+    )
+
+
 # ── P005 — ExceptBlockMissingExcInfo ─────────────────────────────────────────
 
 
@@ -714,6 +739,32 @@ def test_p013_ioerror_not_flagged_when_builtin() -> None:
         """\
 def do_it():
     raise IOError("file error")
+"""
+    )
+
+
+def test_p013_alias_from_error_codes_flagged() -> None:
+    # from application_sdk.common.error_codes import IOError as AtlanIO
+    # raise AtlanIO() — the alias must be tracked and E013 must fire.
+    _single(
+        """\
+from application_sdk.common.error_codes import IOError as AtlanIO
+
+def do_it():
+    raise AtlanIO("IO_ERR", "failed")
+""",
+        "E013",
+    )
+
+
+def test_p013_alias_from_other_module_not_flagged() -> None:
+    # import IOError as IOE from an unrelated module — must NOT fire E013.
+    assert "E013" not in _findings(
+        """\
+from some_other_lib import IOError as IOE
+
+def do_it():
+    raise IOE("file error")
 """
     )
 
