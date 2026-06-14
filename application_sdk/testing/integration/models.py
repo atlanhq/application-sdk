@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-from application_sdk.errors.leaves import InvalidInputError
+from application_sdk.testing.integration._errors import HttpClientInputError
 
 
 class APIType(Enum):
@@ -41,8 +41,7 @@ class APIType(Enum):
             return cls(value.lower())
         except ValueError:
             valid_values = [e.value for e in cls]
-            # conformance: ignore[E018] testing helper; domain-specific error code not required in test infrastructure
-            raise InvalidInputError(
+            raise HttpClientInputError(
                 message=f"Invalid API type: '{value}'. Must be one of: {valid_values}",
                 field="api_type",
                 value_summary=value,

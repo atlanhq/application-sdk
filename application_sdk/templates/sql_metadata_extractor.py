@@ -39,9 +39,13 @@ from application_sdk.common.sql_filters import (
 from application_sdk.contracts.storage import UploadInput
 from application_sdk.contracts.types import StorageTier
 from application_sdk.credentials import CredentialResolver, legacy_credential_ref
-from application_sdk.errors.leaves import InvalidInputError, UnimplementedError
 from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.templates._template_errors import (
+    SqlCredentialRefMissingError,
+    SqlMetadataExtractorNotImplementedError,
+    SqlSecretStoreMissingError,
+)
 from application_sdk.templates.base_metadata_extractor import BaseMetadataExtractor
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
@@ -168,17 +172,11 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
             legacy_credential_ref(cred_guid) if cred_guid else None
         )
         if ref is None:
-            # conformance: ignore[E018] infrastructure precondition check; InvalidInputError subclass deferred pending error-code design
-            raise InvalidInputError(
-                message="No credential reference or GUID available in task input"
-            )
+            raise SqlCredentialRefMissingError()
 
         secret_store = infra.secret_store if infra else None
         if secret_store is None:
-            # conformance: ignore[E018] infrastructure precondition check; InvalidInputError subclass deferred pending error-code design
-            raise InvalidInputError(
-                message="No secret store available for credential resolution"
-            )
+            raise SqlSecretStoreMissingError()
 
         resolver = CredentialResolver(secret_store)
         return await resolver.resolve_raw(ref)
@@ -187,11 +185,10 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         """Create and load a SQL client using resolved credentials.
 
         Raises:
-            UnimplementedError: If ``sql_client_class`` is not set.
+            SqlMetadataExtractorNotImplementedError: If ``sql_client_class`` is not set.
         """
         if self.sql_client_class is None:
-            # conformance: ignore[E018] abstract method stub; operation= kwarg discriminates per-method in dashboards; subclass design deferred
-            raise UnimplementedError(
+            raise SqlMetadataExtractorNotImplementedError(
                 message=(
                     f"{type(self).__name__} must set sql_client_class to use "
                     "default SQL execution from super()."
@@ -281,8 +278,7 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         two class attributes and call ``super()`` — to use this default.
         """
         if not self.fetch_database_sql:
-            # conformance: ignore[E018] abstract method stub; operation= kwarg discriminates per-method in dashboards; subclass design deferred
-            raise UnimplementedError(
+            raise SqlMetadataExtractorNotImplementedError(
                 message=(
                     f"{type(self).__name__} must implement fetch_databases() "
                     "or set fetch_database_sql. "
@@ -315,8 +311,7 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         Default implementation executes ``self.fetch_schema_sql``.
         """
         if not self.fetch_schema_sql:
-            # conformance: ignore[E018] abstract method stub; operation= kwarg discriminates per-method in dashboards; subclass design deferred
-            raise UnimplementedError(
+            raise SqlMetadataExtractorNotImplementedError(
                 message=(
                     f"{type(self).__name__} must implement fetch_schemas() "
                     "or set fetch_schema_sql."
@@ -348,8 +343,7 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         Default implementation executes ``self.fetch_table_sql``.
         """
         if not self.fetch_table_sql:
-            # conformance: ignore[E018] abstract method stub; operation= kwarg discriminates per-method in dashboards; subclass design deferred
-            raise UnimplementedError(
+            raise SqlMetadataExtractorNotImplementedError(
                 message=(
                     f"{type(self).__name__} must implement fetch_tables() "
                     "or set fetch_table_sql."
@@ -381,8 +375,7 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         Default implementation executes ``self.fetch_column_sql``.
         """
         if not self.fetch_column_sql:
-            # conformance: ignore[E018] abstract method stub; operation= kwarg discriminates per-method in dashboards; subclass design deferred
-            raise UnimplementedError(
+            raise SqlMetadataExtractorNotImplementedError(
                 message=(
                     f"{type(self).__name__} must implement fetch_columns() "
                     "or set fetch_column_sql."
@@ -417,8 +410,7 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         Override this method in your connector subclass if procedure extraction
         is required.
         """
-        # conformance: ignore[E018] abstract method stub; operation= kwarg discriminates per-method in dashboards; subclass design deferred
-        raise UnimplementedError(
+        raise SqlMetadataExtractorNotImplementedError(
             message=(
                 f"{type(self).__name__} must implement fetch_procedures(), "
                 "or return FetchProceduresOutput() with zero counts for connectors "
@@ -430,8 +422,7 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
     @task(timeout_seconds=1800)
     async def transform_data(self, input: TransformInput) -> TransformOutput:
         """Transform raw extracted data into the target format."""
-        # conformance: ignore[E018] abstract method stub; operation= kwarg discriminates per-method in dashboards; subclass design deferred
-        raise UnimplementedError(
+        raise SqlMetadataExtractorNotImplementedError(
             message=f"{type(self).__name__} must implement transform_data().",
             operation="transform_data",
         )

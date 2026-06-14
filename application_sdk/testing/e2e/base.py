@@ -40,9 +40,9 @@ from typing import Any, ClassVar
 import orjson
 
 from application_sdk.contracts.types import ConnectionRef
-from application_sdk.errors.leaves import UnimplementedError
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.e2e._errors import (
+    HarnessMethodNotImplementedError,
     ManifestDagMissingError,
     ManifestFileNotFoundError,
     MissingHarnessClassAttrError,
@@ -344,8 +344,7 @@ class BaseE2ETest:
         """Agent identity (tier 4 only). Return None for direct mode."""
         if self.mode is RunMode.DIRECT:
             return None
-        # conformance: ignore[E018] testing helper; domain-specific error code not required in test infrastructure
-        raise UnimplementedError(
+        raise HarnessMethodNotImplementedError(
             message="subclass must override agent_spec() for AGENT mode",
             operation="agent_spec",
         )
@@ -431,8 +430,7 @@ class BaseE2ETest:
         knowledge needed). Non-SQL connectors must always ship a
         manifest.json and set ``manifest_path``.
         """
-        # conformance: ignore[E018] testing helper; domain-specific error code not required in test infrastructure
-        raise UnimplementedError(
+        raise HarnessMethodNotImplementedError(
             message="non-SQL connectors must set manifest_path; SQL connectors must override _build_legacy_seed_dag()",
             operation="_build_legacy_seed_dag",
         )

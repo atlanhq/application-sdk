@@ -15,8 +15,9 @@ from urllib.parse import urljoin
 
 import requests
 
-from application_sdk.errors.leaves import DependencyUnavailableError, InternalError
+from application_sdk.errors.leaves import InternalError
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.testing.integration._errors import LocalVaultUnavailableError
 
 logger = get_logger(__name__)
 
@@ -334,13 +335,11 @@ class IntegrationTestClient:
         # Surface the actual cause instead of the generic missing-guid raise.
         if "_http_status" not in response and isinstance(response.get("error"), dict):
             err = response["error"]
-            # conformance: ignore[E018] service reachability error; no DependencyUnavailableError subclass hierarchy defined for test-infra errors yet
-            raise DependencyUnavailableError(
+            raise LocalVaultUnavailableError(
                 message=(
                     f"Could not reach /dev/local-vault at {self.host}: "
                     f"{err.get('message')}. Is the application server running?"
                 ),
-                service="local-vault",
                 target=self.host,
             )
 

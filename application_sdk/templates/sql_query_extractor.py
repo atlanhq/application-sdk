@@ -24,8 +24,10 @@ from typing import Any, ClassVar
 
 from application_sdk.app.task import task
 from application_sdk.credentials import legacy_credential_ref
-from application_sdk.errors.leaves import UnimplementedError
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.templates._template_errors import (
+    SqlQueryExtractorNotImplementedError,
+)
 from application_sdk.templates.base_metadata_extractor import BaseMetadataExtractor
 from application_sdk.templates.contracts.sql_query import (
     QueryBatchInput,
@@ -78,8 +80,7 @@ class SqlQueryExtractor(BaseMetadataExtractor):
 
         Override in your subclass to implement connector-specific batch counting.
         """
-        # conformance: ignore[E018] abstract method stub; operation= kwarg discriminates per-method in dashboards; subclass design deferred
-        raise UnimplementedError(
+        raise SqlQueryExtractorNotImplementedError(
             message=f"{type(self).__name__} must implement get_query_batches().",
             operation="get_query_batches",
         )
@@ -90,8 +91,7 @@ class SqlQueryExtractor(BaseMetadataExtractor):
 
         Override this method in your connector subclass.
         """
-        # conformance: ignore[E018] abstract method stub; operation= kwarg discriminates per-method in dashboards; subclass design deferred
-        raise UnimplementedError(
+        raise SqlQueryExtractorNotImplementedError(
             message=f"{type(self).__name__} must implement fetch_queries().",
             operation="fetch_queries",
         )

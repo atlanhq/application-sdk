@@ -54,9 +54,9 @@ import time
 from dataclasses import dataclass, field
 from typing import ClassVar
 
-from application_sdk.errors.leaves import UnimplementedError
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.full_dag._errors import (
+    HarnessMethodNotImplementedError,
     ManifestDagMissingError,
     ManifestFileNotFoundError,
     MissingHarnessClassAttrError,
@@ -331,8 +331,7 @@ class BaseFullDAGE2ETest:
         Tier 5 (direct mode): values are sent verbatim to the prod pod
         as credential overrides; must work as-is.
         """
-        # conformance: ignore[E018] testing helper; domain-specific error code not required in test infrastructure
-        raise UnimplementedError(
+        raise HarnessMethodNotImplementedError(
             message="subclass must override database_spec()", operation="database_spec"
         )
 
@@ -340,8 +339,7 @@ class BaseFullDAGE2ETest:
         """Agent identity (tier 4 only). Return None for direct mode."""
         if self.mode is RunMode.DIRECT:
             return None
-        # conformance: ignore[E018] testing helper; domain-specific error code not required in test infrastructure
-        raise UnimplementedError(
+        raise HarnessMethodNotImplementedError(
             message="subclass must override agent_spec() for AGENT mode",
             operation="agent_spec",
         )

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
-from application_sdk.errors.leaves import InvalidInputError
+from application_sdk.errors.leaves import DependencyUnavailableError, InvalidInputError
 
 
 @dataclass(kw_only=True)
@@ -28,3 +28,11 @@ class HttpClientInputError(InvalidInputError):
 
     code: ClassVar[str] = "INVALID_INPUT_HTTP_CLIENT"
     field: str | None = "api_type"
+
+
+@dataclass(kw_only=True)
+class LocalVaultUnavailableError(DependencyUnavailableError):
+    """Could not reach the local-vault service during integration testing."""
+
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_LOCAL_VAULT"
+    service: str | None = "local-vault"
