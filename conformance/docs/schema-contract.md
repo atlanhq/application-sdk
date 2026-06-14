@@ -151,11 +151,11 @@ the gate is proven in CI.
 
 ---
 
-## 5b. E-series — error-handling rules {#p-series}
+## 5b. E-series — error-handling rules {#e-series}
 
 All E-series rules use `mechanism: static` and are discovered by
 `suite.checks.error_handling` (AST-based).  Suppression directive:
-`# conformance: ignore[Pxxx] <reason>` on the offending line or the line directly above it.
+`# conformance: ignore[Exxx] <reason>` on the offending line or the line directly above it.
 
 ---
 
@@ -168,7 +168,7 @@ All E-series rules use `mechanism: static` and are discovered by
 at minimum logs at DEBUG.
 
 **Baked carve-outs:** none (all occurrences are violations).
-**Precedence:** takes priority over P006 when body is pass-only.
+**Precedence:** takes priority over E006 when body is pass-only.
 
 ---
 
@@ -180,7 +180,7 @@ at minimum logs at DEBUG.
 with no trace.  Acceptable only for genuinely trivial best-effort operations with an
 explanatory comment; use the suppression directive in those cases.
 
-**Baked carve-outs:** none at AST level; use `# conformance: ignore[P002] <reason>`.
+**Baked carve-outs:** none at AST level; use `# conformance: ignore[E002] <reason>`.
 
 ---
 
@@ -325,7 +325,7 @@ when `IOError` is explicitly imported from `application_sdk.common.error_codes`.
 
 **Tier:** `warn` | **Category:** `silent-swallow`
 
-`except ...: continue/break/pass` inside a loop with no logging.  The loop-body twin of P001/P002.
+`except ...: continue/break/pass` inside a loop with no logging.  The loop-body twin of E001/E002.
 Log at DEBUG before the loop control statement.
 
 **Baked carve-outs:** any log call in the body → no finding.  `except` outside a loop → no

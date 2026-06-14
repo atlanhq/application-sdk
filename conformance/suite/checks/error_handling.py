@@ -244,6 +244,20 @@ def _collect_imports(tree: ast.Module) -> dict[str, str]:
     return imports
 
 
+def _collect_legacy_aliases(tree: ast.Module) -> frozenset[str]:
+    """Return names bound to LEGACY_ATLAN_ERRORS via aliased imports from the legacy module."""
+    aliases: set[str] = set()
+    for node in ast.iter_child_nodes(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if (node.module or "") != _ATLAN_LEGACY_MODULE:
+            continue
+        for alias in node.names:
+            if alias.name in LEGACY_ATLAN_ERRORS and alias.asname:
+                aliases.add(alias.asname)
+    return frozenset(aliases)
+
+
 # ---------------------------------------------------------------------------
 # AST helpers
 # ---------------------------------------------------------------------------
@@ -479,10 +493,12 @@ class Checker(ast.NodeVisitor):
         filename: str,
         directives: dict[int, _IgnoreDirective],
         atlan_ioerror_imported: bool,
+        legacy_aliases: frozenset[str] = frozenset(),
     ) -> None:
         self._filename = filename
         self._directives = directives
         self._atlan_ioerror_imported = atlan_ioerror_imported
+        self._legacy_aliases = legacy_aliases
         self._findings: list[Finding] = []
         # Context stacks — managed by visit_* methods
         self._function_stack: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
@@ -588,6 +604,7 @@ class Checker(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         self._check_p003(node)
+        self._check_p017_call(node)
         self.generic_visit(node)
 
     # ── P001 / P002 / P006 ───────────────────────────────────────────────────
@@ -645,9 +662,14 @@ class Checker(ast.NodeVisitor):
     def _check_p004(self, node: ast.ExceptHandler) -> None:
         if node.type is None:
             return  # bare except handled by P006
-        exc_type = _get_name(node.type)
-        if exc_type not in _BROAD_EXCEPT_TYPES:
+        if isinstance(node.type, ast.Tuple):
+            broad = {_get_name(e) for e in node.type.elts} & _BROAD_EXCEPT_TYPES
+        else:
+            name = _get_name(node.type)
+            broad = {name} & _BROAD_EXCEPT_TYPES if name else set()
+        if not broad:
             return
+        exc_type = next(iter(broad))
         # Pass if body has logger.exception() or any log call with exc_info=True
         for n in _iter_shallow(node):
             if not isinstance(n, ast.Expr):
@@ -796,10 +818,14 @@ class Checker(ast.NodeVisitor):
                         for kw in val.keywords
                     )
                     if has_re:
-                        for target in node.targets:
-                            name = _get_name(target)
-                            if name:
-                                gather_vars[name] = node
+                        # Only track single Name targets: chained assignments
+                        # (a = b = ...) would emit one finding per target, and
+                        # attribute targets (self.x = ...) produce false positives
+                        # because the inspection-side check only matches ast.Name.
+                        if len(node.targets) == 1 and isinstance(
+                            node.targets[0], ast.Name
+                        ):
+                            gather_vars[node.targets[0].id] = node
 
         for node in bare_gathers:
             self._add(
@@ -895,10 +921,12 @@ class Checker(ast.NodeVisitor):
         if node.exc is None:
             return
         exc_name = _raise_exc_name(node.exc)
-        if exc_name not in LEGACY_ATLAN_ERRORS:
+        # Also flag names aliased from the legacy module (e.g. `import IOError as IOE`)
+        if exc_name not in LEGACY_ATLAN_ERRORS and exc_name not in self._legacy_aliases:
             return
-        # IOError is also the Python builtin alias for OSError — only flag when
-        # it was imported from application_sdk.common.error_codes
+        # IOError is also the Python builtin alias for OSError — only flag the literal
+        # name when it was imported from application_sdk.common.error_codes; aliased
+        # imports (tracked in _legacy_aliases) are always from the legacy module.
         if exc_name == "IOError" and not self._atlan_ioerror_imported:
             return
         self._add(
@@ -983,6 +1011,22 @@ class Checker(ast.NodeVisitor):
                 )
                 return
 
+    def _check_p017_call(self, node: ast.Call) -> None:
+        """Catch construct-then-raise: ``err = SomeError(api_secret=...); raise err``."""
+        func_name = _get_name(node.func)
+        if func_name not in LEAF_CLASSES:
+            return
+        for kw in node.keywords:
+            if kw.arg and any(kw.arg.endswith(s) for s in _SECRET_SUFFIXES):
+                self._add(
+                    "E017",
+                    node,
+                    f"Evidence key '{kw.arg}' ends in a secret suffix — "
+                    f"the wire layer rejects this at runtime (ValueError). "
+                    f"Rename to a safe key (e.g. credential_name, token_type).",
+                )
+                return
+
     # ── P018 ─────────────────────────────────────────────────────────────────
 
     def _check_p018(self, node: ast.Raise) -> None:
@@ -1028,10 +1072,14 @@ def scan_text(text: str, file: str) -> list[Finding]:
 
     imports = _collect_imports(tree)
     atlan_ioerror = imports.get("IOError") == _ATLAN_LEGACY_MODULE
+    legacy_aliases = _collect_legacy_aliases(tree)
 
     directives = _parse_directives(text)
     checker = Checker(
-        filename=file, directives=directives, atlan_ioerror_imported=atlan_ioerror
+        filename=file,
+        directives=directives,
+        atlan_ioerror_imported=atlan_ioerror,
+        legacy_aliases=legacy_aliases,
     )
     checker.visit(tree)
     return checker._findings

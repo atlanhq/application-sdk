@@ -667,6 +667,18 @@ def do_it():
     assert "E012" not in findings
 
 
+@pytest.mark.parametrize("decorator", ["task", "defn"])
+def test_p012_activity_context_note(decorator: str) -> None:
+    src = f"""\
+@{decorator}
+async def run():
+    raise ValueError("something went wrong")
+"""
+    findings = [f for f in scan_text(src, "fake.py") if f.rule_id == "E012"]
+    assert findings, "Expected E012 finding inside activity"
+    assert "inside activity/task" in findings[0].message
+
+
 # ── P013 — LegacyAtlanErrorRaise ─────────────────────────────────────────────
 
 
@@ -807,6 +819,30 @@ try:
     fetch()
 except ValueError as e:
     raise InternalError(cause=e) from e
+"""
+    )
+
+
+def test_p015_repr_exc_in_message() -> None:
+    # repr(e) in message= should trigger E015.
+    assert "E015" in _findings(
+        """\
+try:
+    fetch()
+except ValueError as e:
+    raise InternalError(message=repr(e))
+"""
+    )
+
+
+def test_p015_binop_concat_in_message() -> None:
+    # String concatenation with str(e) in message= should trigger E015.
+    assert "E015" in _findings(
+        """\
+try:
+    fetch()
+except ValueError as e:
+    raise InternalError(message="upstream failed: " + str(e))
 """
     )
 
