@@ -188,6 +188,7 @@ test-integration.shell = "temporal server start-dev --db-filename /tmp/temporal-
 # API docs — must be before any sub-table header ([tool.poe.tasks.*])
 # or TOML nests it inside the sub-table rather than the parent tasks namespace
 generate-apidocs.shell = "mkdocs build && pydoctor --html-output=site/api application_sdk --docformat=google"
+generate-rule-docs.shell = "PYTHONPATH=conformance uv run python conformance/tools/generate_rule_docs.py"
 
 # Local credential provisioning
 [tool.poe.tasks.provision-credentials]
@@ -324,6 +325,8 @@ extend-select = [
 "application_sdk/testing/integration/models.py" = ["E402"]
 # Post-importorskip imports required so the test module skips cleanly when rocksdict is absent.
 "tests/unit/common/test_spillable_dict.py" = ["E402"]
+# sys.path is mutated before suite imports to make the conformance package importable standalone.
+"conformance/tools/generate_rule_docs.py" = ["E402"]
 
 [tool.uv]
 default-groups = ["dev", "test"]

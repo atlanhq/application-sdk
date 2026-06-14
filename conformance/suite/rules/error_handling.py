@@ -23,7 +23,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "error with ``exc_info=True``.  Never acceptable — even cleanup paths\n"
             "should log at DEBUG.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#e001",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e001",
     ),
     RuleDefinition(
         id="E002",
@@ -41,7 +41,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "100% expected AND the surrounding code handles the missing result, AND\n"
             "there is a comment explaining the reasoning.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#e002",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e002",
     ),
     RuleDefinition(
         id="E003",
@@ -59,7 +59,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "acceptable.  The checker must inspect the suppressed exception type before\n"
             "classifying.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#e003",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e003",
     ),
     RuleDefinition(
         id="E004",
@@ -77,7 +77,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "only at top-level handlers (worker loops, HTTP handlers) when properly\n"
             "logged with ``exc_info=True``.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#e004",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e004",
     ),
     RuleDefinition(
         id="E005",
@@ -94,7 +94,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "to every ``logger.warning()`` / ``logger.error()`` call inside an except\n"
             "block.  ``logger.exception()`` is exempt (it implies ``exc_info=True``).\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#e005",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e005",
     ),
     RuleDefinition(
         id="E006",
@@ -110,7 +110,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "Like P001 but the block may have a body.  Still catches KeyboardInterrupt\n"
             "and SystemExit.  Always specify at least ``except Exception:``.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#e006",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e006",
     ),
     RuleDefinition(
         id="E007",
@@ -127,7 +127,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "trace.  Callers see a wrong result with no idea why.  At minimum log\n"
             "before returning; prefer raising a domain-specific exception instead.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#e007",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e007",
     ),
     RuleDefinition(
         id="E008",
@@ -145,7 +145,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "DEBUG if the module is preferred but not required.  Flag if the module is\n"
             "expected to be present (will fail later with a confusing AttributeError).\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#e008",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e008",
     ),
     RuleDefinition(
         id="E009",
@@ -162,7 +162,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "error-hiding with no logging.  Add a ``logger.warning(..., exc_info=True)``\n"
             "before the assignment.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#e009",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e009",
     ),
     RuleDefinition(
         id="E010",
@@ -180,7 +180,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "instances, errors vanish silently.  The pattern is only a bug when results\n"
             "are not checked; ``return_exceptions=True`` itself is acceptable.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#e010",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e010",
     ),
     RuleDefinition(
         id="E012",
@@ -200,7 +200,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "``__post_init__`` / stdlib validator methods where Python semantics require\n"
             "``TypeError``/``ValueError`` for stdlib interoperability.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#e012",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e012",
     ),
     RuleDefinition(
         id="E013",
@@ -218,7 +218,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "wire envelope.  Scheduled for removal in v4.0.  Replace with the\n"
             "appropriate leaf from ``application_sdk.errors``.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#e013",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e013",
     ),
     RuleDefinition(
         id="E011",
@@ -241,7 +241,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "``getattr(record, 'field', default)`` for optional record attributes.\n"
             "Never acceptable — filter methods must never let exceptions propagate.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#e011",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e011",
     ),
     RuleDefinition(
         id="E014",
@@ -261,7 +261,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "control statement; if the exception signals a genuine error, re-raise or\n"
             "log at WARNING/ERROR with ``exc_info=True``.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#e014",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e014",
     ),
     RuleDefinition(
         id="E015",
@@ -284,7 +284,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "field (``cause=exc``, ``network_error=str(exc)``) and keep ``message=`` a\n"
             "stable human summary.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#e015",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e015",
     ),
     RuleDefinition(
         id="E016",
@@ -307,7 +307,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "Acceptable patterns: bare ``raise`` (re-raise), ``raise X() from e`` (already\n"
             "chained), ``raise X() from None`` (intentional suppression).\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#e016",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e016",
     ),
     RuleDefinition(
         id="E017",
@@ -328,7 +328,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "caught before any code runs.  Rename the evidence field to a safe key (e.g.\n"
             "``credential_name``, ``token_type``) or pass the value via ``cause=exc``.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#e017",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e017",
     ),
     RuleDefinition(
         id="E018",
@@ -355,6 +355,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "legitimate in small apps or during active migration.  Review findings\n"
             "before suppressing.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#e018",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e018",
     ),
 )
