@@ -9,7 +9,7 @@ Usage::
     python -m suite.runner --repo . --series C --output ci.sarif
 
     # Run multiple series
-    python -m suite.runner --repo . --series E,L --output code.sarif
+    python -m suite.runner --repo . --series C,E --output code.sarif
 """
 
 from __future__ import annotations
@@ -178,7 +178,7 @@ def main(argv: list[str] | None = None) -> int:
         "--series",
         metavar="LETTERS",
         help=(
-            "Comma-separated series letters to run, e.g. 'C' or 'P,L'. "
+            "Comma-separated series letters to run, e.g. 'C' or 'C,E'. "
             "Default: all registered checks."
         ),
     )

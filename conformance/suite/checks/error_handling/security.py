@@ -29,6 +29,11 @@ class SecurityMixin:
 
     def _check_p017_call(self, node: ast.Call) -> None:
         """Catch construct-then-raise: ``err = SomeError(api_secret=...); raise err``."""
+        # Skip when we are already inside a Raise node — _check_p017_raise
+        # covers that case on the outer Raise and firing again on the inner
+        # Call would double-report the same site.
+        if self._in_raise_call:
+            return
         func_name = _get_name(node.func)
         if func_name not in LEAF_CLASSES:
             return

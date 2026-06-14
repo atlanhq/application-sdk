@@ -183,6 +183,29 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e010",
     ),
     RuleDefinition(
+        id="E011",
+        name="LoggingFilterUnsafeBody",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="filter-safety",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="3.17.0",
+        short_description="logging.Filter.filter() body not wrapped in try/except — can crash caller",
+        full_description=(
+            "``Logger.handle()`` calls ``self.filter(record)`` with no surrounding\n"
+            "try/except — unlike handler errors, filter exceptions are NOT caught by\n"
+            "``handleError()``.  An unguarded attribute access\n"
+            "(``record.custom_field``) or any external call that can raise will\n"
+            "propagate directly to the code that called ``logger.info()`` (or similar),\n"
+            "crashing the caller.  Wrap the entire ``filter()`` body in try/except with\n"
+            "a safe fallback (return True to pass-through, False to drop).  Use\n"
+            "``getattr(record, 'field', default)`` for optional record attributes.\n"
+            "Never acceptable — filter methods must never let exceptions propagate.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e011",
+    ),
+    RuleDefinition(
         id="E012",
         name="UntypedBuiltinRaise",
         tier=EnforcementTier.WARN,
@@ -219,29 +242,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "appropriate leaf from ``application_sdk.errors``.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e013",
-    ),
-    RuleDefinition(
-        id="E011",
-        name="LoggingFilterUnsafeBody",
-        tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
-        category="filter-safety",
-        autofixable=False,
-        orthogonal_gate="tests",
-        since="3.17.0",
-        short_description="logging.Filter.filter() body not wrapped in try/except — can crash caller",
-        full_description=(
-            "``Logger.handle()`` calls ``self.filter(record)`` with no surrounding\n"
-            "try/except — unlike handler errors, filter exceptions are NOT caught by\n"
-            "``handleError()``.  An unguarded attribute access\n"
-            "(``record.custom_field``) or any external call that can raise will\n"
-            "propagate directly to the code that called ``logger.info()`` (or similar),\n"
-            "crashing the caller.  Wrap the entire ``filter()`` body in try/except with\n"
-            "a safe fallback (return True to pass-through, False to drop).  Use\n"
-            "``getattr(record, 'field', default)`` for optional record attributes.\n"
-            "Never acceptable — filter methods must never let exceptions propagate.\n"
-        ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e011",
     ),
     RuleDefinition(
         id="E014",

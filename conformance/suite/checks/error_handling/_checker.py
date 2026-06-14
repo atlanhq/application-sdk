@@ -39,6 +39,10 @@ class Checker(
         self._except_stack: list[ast.ExceptHandler] = []
         self._loop_stack: list[ast.For | ast.AsyncFor | ast.While] = []
         self._class_stack: list[ast.ClassDef] = []
+        # Set True while generic_visit walks the children of a Raise node so
+        # _check_p017_call can skip the inline Call (already covered by
+        # _check_p017_raise on the outer Raise).
+        self._in_raise_call: bool = False
 
     # ── Finding creation ──────────────────────────────────────────────────────
 
@@ -50,6 +54,12 @@ class Checker(
         for check_line in (line, line - 1):
             if check_line in self._directives:
                 d = self._directives[check_line]
+                # Only honour a directive on the line *above* when that line is
+                # comment-only.  A trailing inline directive on a code line
+                # (e.g. ``do_it()  # conformance: ignore[E001]``) must NOT
+                # absorb a finding on the following statement.
+                if check_line == line - 1 and not d.comment_only:
+                    continue
                 if d.rule_ids is None or rule_id in d.rule_ids:
                     suppressed = True
                     justification = d.justification
@@ -134,7 +144,9 @@ class Checker(
         self._check_p016(node)
         self._check_p017_raise(node)
         self._check_p018(node)
+        self._in_raise_call = True
         self.generic_visit(node)
+        self._in_raise_call = False
 
     def visit_Call(self, node: ast.Call) -> None:
         self._check_p003(node)

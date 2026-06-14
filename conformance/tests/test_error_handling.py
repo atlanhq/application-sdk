@@ -922,6 +922,14 @@ raise InternalError(message="auth failed", api{suffix}="hunter2")
     assert "E017" in _findings(src)
 
 
+def test_p017_direct_raise_fires_exactly_once() -> None:
+    # raise InternalError(api_secret=...) must produce exactly one E017 finding.
+    # Previously _check_p017_call re-fired on the inner Call after visit_Raise
+    # had already fired via _check_p017_raise, doubling the count.
+    findings = _findings('raise InternalError(message="x", api_secret="hunter2")\n')
+    assert findings.count("E017") == 1
+
+
 def test_p017_no_finding_safe_key() -> None:
     # Safe key → P017 must not fire; P018 may fire.
     assert "E017" not in _findings(

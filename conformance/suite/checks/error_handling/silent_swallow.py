@@ -45,7 +45,11 @@ class SilentSwallowMixin:
                     "Use 'except Exception:' at minimum.",
                 )
         elif is_pass_only:
-            exc_type = _get_name(node.type) or "Exception"
+            if isinstance(node.type, ast.Tuple):
+                names = [_get_name(e) or "?" for e in node.type.elts]
+                exc_type = "(" + ", ".join(names) + ")"
+            else:
+                exc_type = _get_name(node.type) or "Exception"
             self._add(
                 "E002",
                 node,
@@ -113,8 +117,6 @@ class SilentSwallowMixin:
 
     def _check_p005(self, node: ast.ExceptHandler) -> None:
         for n in _iter_shallow(node):
-            if n is node:
-                continue
             if not isinstance(n, ast.Expr):
                 continue
             call = n.value

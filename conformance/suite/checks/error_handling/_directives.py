@@ -15,6 +15,11 @@ class _IgnoreDirective:
 
     rule_ids: frozenset[str] | None  # None = suppress every rule on this line
     justification: str
+    # True when the directive appears on a comment-only line (no preceding code
+    # token on the same row).  Used by Checker._add to decide whether a
+    # "line above" directive is applicable: trailing inline directives on code
+    # lines must not absorb findings on the *next* statement.
+    comment_only: bool = True
 
 
 def _parse_directives(source: str) -> dict[int, _IgnoreDirective]:
@@ -32,6 +37,25 @@ def _parse_directives(source: str) -> dict[int, _IgnoreDirective]:
         tokens = list(tokenize.generate_tokens(io.StringIO(source).readline))
     except tokenize.TokenError:
         return directives
+
+    # Identify lines that carry non-comment code tokens so we can mark inline
+    # trailing directives (e.g. ``do_it()  # conformance: ignore[E001]``) as
+    # not comment-only.  These tokens are not meaningful on their own.
+    _SKIP_TYPES = frozenset(
+        {
+            tokenize.COMMENT,
+            tokenize.NEWLINE,
+            tokenize.NL,
+            tokenize.INDENT,
+            tokenize.DEDENT,
+            tokenize.ENDMARKER,
+            tokenize.ENCODING,
+        }
+    )
+    code_lines: set[int] = {
+        srow for tok_type, _, (srow, _scol), *_ in tokens if tok_type not in _SKIP_TYPES
+    }
+
     for tok_type, tok_string, (srow, _), *_ in tokens:
         if tok_type != tokenize.COMMENT:
             continue
@@ -48,7 +72,9 @@ def _parse_directives(source: str) -> dict[int, _IgnoreDirective]:
             else:
                 rule_ids = None
             directives[srow] = _IgnoreDirective(
-                rule_ids=rule_ids, justification=justification
+                rule_ids=rule_ids,
+                justification=justification,
+                comment_only=srow not in code_lines,
             )
             continue
 
@@ -64,7 +90,9 @@ def _parse_directives(source: str) -> dict[int, _IgnoreDirective]:
         if not mapped:
             continue  # all codes unknown — no suppression
         directives[srow] = _IgnoreDirective(
-            rule_ids=frozenset(mapped), justification=justification
+            rule_ids=frozenset(mapped),
+            justification=justification,
+            comment_only=srow not in code_lines,
         )
     return directives
 
