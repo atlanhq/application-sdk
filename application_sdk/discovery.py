@@ -113,7 +113,7 @@ def _import_class(module_name: str, class_name: str) -> type[Any]:
     module_path = f"{module_name}:{class_name}"
     try:
         module = importlib.import_module(module_name)
-    except ImportError as e:
+    except ImportError as e:  # conformance: ignore[E008] re-raising as typed DiscoveryModuleImportError; caller logs
         raise DiscoveryModuleImportError(
             message=f"Cannot import module '{module_name}'",
             module_path=module_path,
@@ -237,7 +237,7 @@ def load_handler_class(
 
     try:
         module = importlib.import_module(module_name)
-    except ImportError:
+    except ImportError:  # conformance: ignore[E008] convention-based handler discovery; None = module not found
         return None
 
     if hasattr(module, handler_class_name):

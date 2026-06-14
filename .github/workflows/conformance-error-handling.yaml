@@ -1,0 +1,102 @@
+# .github/workflows/conformance-error-handling.yaml
+#
+# Reusable workflow: Python error-handling checks (E-series) via
+# `suite.runner --series E`.  Currently enforces:
+#   E001  BareExceptPass            — bare except: pass
+#   E002  TypedExceptPass           — except T: pass
+#   E006  BareExceptWithBody        — bare except: with body
+#   E013  LegacyAtlanErrorRaise     — deprecated AtlanError stack
+#   E017  SecretNamedEvidenceKey    — _secret/_password/_token evidence keys
+#   (+ E003–E005, E007–E012, E014–E016, E018 at WARN tier)
+#
+# New E-series checks added to suite/checks/ are picked up automatically.
+#
+# Usage from a connector app:
+#   uses: atlanhq/application-sdk/.github/workflows/conformance-error-handling.yaml@main
+#   with:
+#     sdk-ref: main
+
+name: "Conformance — Error-handling series (E)"
+
+on:
+  workflow_call:
+    inputs:
+      sdk-ref:
+        description: "Ref of atlanhq/application-sdk to source the conformance suite from"
+        required: false
+        default: main
+        type: string
+      upload-sarif:
+        description: "Upload SARIF report to GitHub Security tab (requires security-events: write)"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  error-handling:
+    name: "Error-handling"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout caller repo"
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: "Detect changed files"
+        id: changes
+        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4
+        with:
+          filters: |
+            relevant:
+              - '**/*.py'
+
+      - name: "No relevant changes — emit empty SARIF"
+        if: steps.changes.outputs.relevant == 'false'
+        run: |
+          printf '{"$schema":"https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json","version":"2.1.0","runs":[{"tool":{"driver":{"name":"atlan-conformance","version":"0.0.0"}},"results":[]}]}\n' \
+            > error-handling-upload.sarif
+          echo "No .py changes; E-series gate passes."
+
+      - name: "Sparse-checkout conformance suite"
+        if: steps.changes.outputs.relevant == 'true'
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ inputs.sdk-ref }}
+          sparse-checkout: conformance
+          path: _sdk
+
+      - name: "Set up uv"
+        if: steps.changes.outputs.relevant == 'true'
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+      - name: "Run E-series checks"
+        if: steps.changes.outputs.relevant == 'true'
+        env:
+          PYTHONPATH: _sdk/conformance
+        run: |
+          uv run --with pydantic python -m suite.runner \
+            --repo . \
+            --series E \
+            --output error-handling.sarif
+
+      - name: "Upload SARIF artifact"
+        if: steps.changes.outputs.relevant == 'true' && !cancelled()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-error-handling-sarif
+          path: error-handling.sarif
+
+      - name: "Strip suppressed results for Security tab"
+        if: ${{ inputs.upload-sarif && steps.changes.outputs.relevant == 'true' && github.event_name != 'merge_group' }}
+        run: |
+          jq '.runs[] |= (.results |= map(select(.suppressions == null or (.suppressions | length == 0))))' \
+            error-handling.sarif > error-handling-upload.sarif
+
+      - name: "Upload SARIF to Security tab"
+        if: ${{ inputs.upload-sarif && github.event_name != 'merge_group' }}
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        with:
+          sarif_file: error-handling-upload.sarif

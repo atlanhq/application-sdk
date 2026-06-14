@@ -50,7 +50,7 @@ from __future__ import annotations
 
 import os
 import shutil
-from typing import Any, ClassVar, Dict, Optional
+from typing import Any, ClassVar
 
 from application_sdk.testing.integration import (
     BaseIntegrationTest,
@@ -76,10 +76,10 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
             single-entrypoint apps.
     """
 
-    agent_spec_template: ClassVar[Dict[str, Any]] = {}
-    workflow_type: ClassVar[Optional[str]] = None
+    agent_spec_template: ClassVar[dict[str, Any]] = {}
+    workflow_type: ClassVar[str | None] = None
 
-    def _build_scenario_args(self, scenario: Scenario) -> Dict[str, Any]:
+    def _build_scenario_args(self, scenario: Scenario) -> dict[str, Any]:
         args = super()._build_scenario_args(scenario)
         if scenario.api.lower() == "workflow" and self.agent_spec_template:
             args["extraction_method"] = "agent"
@@ -116,7 +116,7 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
         return result
 
     @classmethod
-    def _write_summary(cls) -> Optional[str]:
+    def _write_summary(cls) -> str | None:
         """Multi-class-safe variant of :meth:`BaseIntegrationTest._write_summary`.
 
         The parent writes the run summary to a fixed path
@@ -137,8 +137,6 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
         per_class_path = f"{base}-{cls.__name__}{ext}"
         try:
             shutil.copyfile(written, per_class_path)
-        except OSError:
-            # Best-effort: the shared file was already written; per-class
-            # copy failure shouldn't fail the test session.
+        except OSError:  # conformance: ignore[E002] best-effort per-class copy; shared summary already written
             pass
         return written

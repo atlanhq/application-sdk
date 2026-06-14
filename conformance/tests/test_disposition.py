@@ -24,14 +24,14 @@ def _result(
     suppressions: list[Suppression] | None = None,
 ) -> Result:
     return Result(
-        ruleId=rule_id,
+        rule_id=rule_id,
         kind=kind,
         level=level,
         locations=[
             Location(
-                physicalLocation=PhysicalLocation(
-                    artifactLocation=ArtifactLocation(uri="src/foo.py"),
-                    region=Region(startLine=1),
+                physical_location=PhysicalLocation(
+                    artifact_location=ArtifactLocation(uri="src/foo.py"),
+                    region=Region(start_line=1, start_column=1),
                 )
             )
         ],

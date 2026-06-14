@@ -587,8 +587,14 @@ async def materialize_file_reference(
                             is_cache_hit=True,
                         )
                         return True
-                except Exception:  # noqa: S110,BLE001
-                    pass  # sidecar check failed — fall through to re-download
+                except Exception:
+                    logger.debug(
+                        "file_ref.materialize.sidecar_check_failed",
+                        storage_path=key,
+                        local_path=dest,
+                        exc_info=True,
+                    )
+                    # fall through to re-download
 
             sha256 = await download_file(
                 key, dest, store, compute_hash=True, normalize=False

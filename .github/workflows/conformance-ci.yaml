@@ -1,7 +1,7 @@
 # .github/workflows/conformance-ci.yaml
 #
-# Reusable workflow: runs all CI/workflow supply-chain checks (C-series) via
-# `suite.runner --series C`. Currently enforces:
+# Reusable workflow: CI/workflow supply-chain checks (C-series) via
+# `suite.runner --series C`.  Currently enforces:
 #   C001  UnpinnedActionReference — every external action must use a digest pin
 #
 # New C-series checks added to suite/checks/ are picked up automatically.
@@ -22,7 +22,7 @@ on:
         default: main
         type: string
       scan-path:
-        description: "Path to watch for change detection (default: .github)"
+        description: "Path to watch for workflow/action change detection (default: .github)"
         required: false
         default: .github
         type: string
@@ -37,8 +37,8 @@ permissions:
   security-events: write
 
 jobs:
-  conformance-ci:
-    name: "C-series checks"
+  ci:
+    name: "CI"
     runs-on: ubuntu-latest
     steps:
       - name: "Checkout caller repo"
@@ -49,15 +49,18 @@ jobs:
         uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4
         with:
           filters: |
-            workflow:
+            relevant:
               - '${{ inputs.scan-path }}/**'
 
-      - name: "No CI changes — gate passes"
-        if: steps.changes.outputs.workflow == 'false'
-        run: echo "No changes under ${{ inputs.scan-path }}; C-series gate passes."
+      - name: "No relevant changes — emit empty SARIF"
+        if: steps.changes.outputs.relevant == 'false'
+        run: |
+          printf '{"$schema":"https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json","version":"2.1.0","runs":[{"tool":{"driver":{"name":"atlan-conformance","version":"0.0.0"}},"results":[]}]}\n' \
+            > ci-upload.sarif
+          echo "No .github changes; C-series gate passes."
 
       - name: "Sparse-checkout conformance suite"
-        if: steps.changes.outputs.workflow == 'true'
+        if: steps.changes.outputs.relevant == 'true'
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: atlanhq/application-sdk
@@ -66,11 +69,11 @@ jobs:
           path: _sdk
 
       - name: "Set up uv"
-        if: steps.changes.outputs.workflow == 'true'
+        if: steps.changes.outputs.relevant == 'true'
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
 
       - name: "Run C-series checks"
-        if: steps.changes.outputs.workflow == 'true'
+        if: steps.changes.outputs.relevant == 'true'
         env:
           PYTHONPATH: _sdk/conformance
         run: |
@@ -80,14 +83,20 @@ jobs:
             --output ci.sarif
 
       - name: "Upload SARIF artifact"
-        if: steps.changes.outputs.workflow == 'true' && !cancelled()
+        if: steps.changes.outputs.relevant == 'true' && !cancelled()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: conformance-ci-sarif
           path: ci.sarif
 
+      - name: "Strip suppressed results for Security tab"
+        if: ${{ inputs.upload-sarif && steps.changes.outputs.relevant == 'true' && github.event_name != 'merge_group' }}
+        run: |
+          jq '.runs[] |= (.results |= map(select(.suppressions == null or (.suppressions | length == 0))))' \
+            ci.sarif > ci-upload.sarif
+
       - name: "Upload SARIF to Security tab"
-        if: ${{ inputs.upload-sarif && steps.changes.outputs.workflow == 'true' && github.event_name != 'merge_group' }}
+        if: ${{ inputs.upload-sarif && github.event_name != 'merge_group' }}
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
         with:
-          sarif_file: ci.sarif
+          sarif_file: ci-upload.sarif

@@ -710,8 +710,8 @@ async def download(
             if owns_temp:
                 try:
                     dest.unlink(missing_ok=True)
-                except OSError:
-                    pass  # best-effort cleanup of partial download; re-raise follows
+                except OSError:  # conformance: ignore[E002] best-effort cleanup of partial download; original error re-raised below
+                    pass
             raise
         ref = FileReference(
             local_path=str(dest),

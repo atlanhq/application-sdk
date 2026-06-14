@@ -230,6 +230,7 @@ async def _wait_for_dapr_ready(http_port: int, timeout_s: float = 30.0) -> None:
                 )
                 if resp.status_code == 200:
                     return
+            # conformance: ignore[E014] Dapr readiness poll; transient connection errors expected
             except Exception:  # noqa: BLE001, S110 — readiness loop
                 pass
             await asyncio.sleep(0.25)

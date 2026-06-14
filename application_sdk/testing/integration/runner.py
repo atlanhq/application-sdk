@@ -31,8 +31,8 @@ Example (simplified - no helper functions needed):
 
 import os
 import time
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Type
+from datetime import UTC, datetime
+from typing import Any
 
 import orjson
 import pytest
@@ -49,7 +49,7 @@ from .validation import format_validation_report, validate_with_pandera
 logger = get_logger(__name__)
 
 
-def _auto_discover_credentials(scenario_name: str = "") -> Dict[str, Any]:
+def _auto_discover_credentials(scenario_name: str = "") -> dict[str, Any]:
     """Auto-discover credentials from E2E_* environment variables.
 
     Checks for scenario-specific env vars first, then falls back to
@@ -122,7 +122,7 @@ def _auto_discover_credentials(scenario_name: str = "") -> Dict[str, Any]:
     return app_credentials
 
 
-def _collect_env_credentials(prefix: str) -> Dict[str, Any]:
+def _collect_env_credentials(prefix: str) -> dict[str, Any]:
     """Collect credentials from environment variables matching a prefix.
 
     Args:
@@ -131,7 +131,7 @@ def _collect_env_credentials(prefix: str) -> Dict[str, Any]:
     Returns:
         Dict[str, Any]: Credentials extracted from matching env vars.
     """
-    credentials: Dict[str, Any] = {}
+    credentials: dict[str, Any] = {}
 
     for key, value in os.environ.items():
         if key.startswith(prefix):
@@ -216,7 +216,7 @@ class BaseIntegrationTest:
     """
 
     # Scenario definitions - subclasses should override
-    scenarios: List[Scenario] = []
+    scenarios: list[Scenario] = []
 
     # Server configuration (auto-discovered from env if not set)
     server_host: str = ""
@@ -225,9 +225,9 @@ class BaseIntegrationTest:
     timeout: int = 30
 
     # Default values merged with auto-discovered credentials
-    default_credentials: Dict[str, Any] = {}
-    default_metadata: Dict[str, Any] = {}
-    default_connection: Dict[str, Any] = {}
+    default_credentials: dict[str, Any] = {}
+    default_metadata: dict[str, Any] = {}
+    default_connection: dict[str, Any] = {}
 
     # Skip server health check (useful for debugging)
     skip_server_check: bool = False
@@ -240,7 +240,7 @@ class BaseIntegrationTest:
 
     # Internal state
     client: IntegrationTestClient
-    _results: List[ScenarioResult]
+    _results: list[ScenarioResult]
 
     def __init_subclass__(cls, **kwargs):
         """Auto-generate individual test methods for each scenario.
@@ -270,8 +270,8 @@ class BaseIntegrationTest:
             from dotenv import load_dotenv  # noqa: PLC0415 — optional dep: dotenv
 
             load_dotenv(override=False)
-        except ImportError:
-            pass  # python-dotenv not installed; env vars must be set manually
+        except ImportError:  # conformance: ignore[E002,E008] python-dotenv not installed; env vars supplied by the environment
+            pass
 
         # Auto-discover server URL if not explicitly set
         if not cls.server_host:
@@ -327,7 +327,7 @@ class BaseIntegrationTest:
             summary_msg = f"Integration test summary: {passed}/{total} passed"
             if failed:
                 summary_msg += f", {failed} failed"
-            logger.info(summary_msg)  # noqa: G004
+            logger.info(summary_msg)
 
             # Write machine-readable summary for CI
             try:
@@ -336,7 +336,7 @@ class BaseIntegrationTest:
                 logger.warning("Failed to write test summary: %s", e, exc_info=True)
 
     @classmethod
-    def _write_summary(cls) -> Optional[str]:
+    def _write_summary(cls) -> str | None:
         """Write a machine-readable JSON summary of all test results.
 
         Writes to the path specified by INTEGRATION_TEST_SUMMARY_PATH env var,
@@ -370,7 +370,7 @@ class BaseIntegrationTest:
 
         scenarios_data = []
         for result in cls._results:
-            scenario_entry: Dict[str, Any] = {
+            scenario_entry: dict[str, Any] = {
                 "name": result.scenario.name,
                 "api": result.scenario.api,
                 "status": "passed"
@@ -400,7 +400,7 @@ class BaseIntegrationTest:
 
         summary = {
             "app_name": os.getenv("ATLAN_APPLICATION_NAME", "unknown"),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "server_url": cls.server_host,
             "test_class": cls.__name__,
             "total": total,
@@ -419,7 +419,7 @@ class BaseIntegrationTest:
         logger.info("Integration test summary written to %s", summary_path)
         return summary_path
 
-    def _build_scenario_args(self, scenario: Scenario) -> Dict[str, Any]:
+    def _build_scenario_args(self, scenario: Scenario) -> dict[str, Any]:
         """Build the API args for a scenario.
 
         Priority order for credentials:
@@ -600,9 +600,9 @@ class BaseIntegrationTest:
 
     def _validate_assertions(
         self,
-        response: Dict[str, Any],
-        assertions: Dict[str, Any],
-    ) -> Dict[str, Dict[str, Any]]:
+        response: dict[str, Any],
+        assertions: dict[str, Any],
+    ) -> dict[str, dict[str, Any]]:
         """Validate all assertions against the response.
 
         Returns rich results with actual/expected values for error messages.
@@ -653,7 +653,7 @@ class BaseIntegrationTest:
         return results
 
     def _ensure_workflow_completed(
-        self, scenario: Scenario, response: Dict[str, Any]
+        self, scenario: Scenario, response: dict[str, Any]
     ) -> None:
         """Poll for workflow completion. Called before any output validation.
 
@@ -694,7 +694,7 @@ class BaseIntegrationTest:
             )
 
     def _validate_workflow_output(
-        self, scenario: Scenario, response: Dict[str, Any]
+        self, scenario: Scenario, response: dict[str, Any]
     ) -> None:
         """Validate workflow output against expected metadata baseline.
 
@@ -760,7 +760,7 @@ class BaseIntegrationTest:
     def _validate_pandera_schemas(
         self,
         scenario: Scenario,
-        response: Dict[str, Any],
+        response: dict[str, Any],
         schema_base_path: str,
     ) -> None:
         """Validate extracted workflow output against pandera YAML schemas.
@@ -873,7 +873,7 @@ class BaseIntegrationTest:
 
             time.sleep(interval)
 
-    def _get_nested_value(self, data: Dict[str, Any], path: str) -> Any:
+    def _get_nested_value(self, data: dict[str, Any], path: str) -> Any:
         """Get a value from a nested dictionary using dot notation.
 
         Args:
@@ -916,7 +916,7 @@ class BaseIntegrationTest:
             self._execute_scenario(scenario)
 
 
-def _generate_individual_tests(test_class: Type[BaseIntegrationTest]) -> None:
+def _generate_individual_tests(test_class: type[BaseIntegrationTest]) -> None:
     """Generate individual test methods for each scenario on the class.
 
     Each scenario becomes test_<scenario_name> so pytest shows them separately.
@@ -942,7 +942,7 @@ def _generate_individual_tests(test_class: Type[BaseIntegrationTest]) -> None:
 # =============================================================================
 
 
-def generate_test_methods(test_class: Type[BaseIntegrationTest]) -> None:
+def generate_test_methods(test_class: type[BaseIntegrationTest]) -> None:
     """Generate individual test methods for each scenario.
 
     NOTE: This is now done automatically via __init_subclass__ when you
@@ -954,7 +954,7 @@ def generate_test_methods(test_class: Type[BaseIntegrationTest]) -> None:
     _generate_individual_tests(test_class)
 
 
-def parametrize_scenarios(scenarios: List[Scenario]):
+def parametrize_scenarios(scenarios: list[Scenario]):
     """Create a pytest parametrize decorator for scenarios.
 
     Args:

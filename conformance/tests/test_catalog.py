@@ -50,26 +50,32 @@ def test_catalog_all_have_required_fields() -> None:
         assert rule.category, f"Rule {rule.id} missing category"
 
 
-def test_catalog_p_series_present() -> None:
-    """The P-series error-recovery rules are all present."""
+def test_catalog_e_series_present() -> None:
+    """The E-series error-handling rules are all present."""
     rules = load_catalog()
-    p_ids = {r.id for r in rules if r.id.startswith("P")}
+    e_ids = {r.id for r in rules if r.id.startswith("E")}
     expected = {
-        "P001",
-        "P002",
-        "P003",
-        "P004",
-        "P005",
-        "P006",
-        "P007",
-        "P008",
-        "P009",
-        "P010",
-        "P012",
-        "P013",
+        "E001",
+        "E002",
+        "E003",
+        "E004",
+        "E005",
+        "E006",
+        "E007",
+        "E008",
+        "E009",
+        "E010",
+        "E011",
+        "E012",
+        "E013",
+        "E014",
+        "E015",
+        "E016",
+        "E017",
+        "E018",
     }
-    missing = expected - p_ids
-    assert not missing, f"Missing P-series rules: {missing}"
+    missing = expected - e_ids
+    assert not missing, f"Missing E-series rules: {missing}"
 
 
 def test_catalog_l_series_present() -> None:
@@ -135,10 +141,10 @@ def test_get_rule_missing_raises_key_error() -> None:
 
 def test_to_reporting_descriptor_roundtrip() -> None:
     """RuleDefinition → ReportingDescriptor preserves tier and mechanism in properties."""
-    p001 = get_rule("P001")
+    p001 = get_rule("E001")
     descriptor = p001.to_reporting_descriptor()
 
-    assert descriptor.id == "P001"
+    assert descriptor.id == "E001"
     assert descriptor.name == "BareExceptPass"
     assert descriptor.default_configuration.level == "error"  # block → error
     assert descriptor.properties["atlan/tier"] == "block"
@@ -151,14 +157,14 @@ def test_to_reporting_descriptor_roundtrip() -> None:
 def test_warn_tier_maps_to_warning_level() -> None:
     """A warn-tier rule produces defaultConfiguration.level='warning'."""
     # P003 (BroadContextlibSuppress) is tier=warn
-    p003 = get_rule("P003")
+    p003 = get_rule("E003")
     descriptor = p003.to_reporting_descriptor()
     assert descriptor.default_configuration.level == "warning"
 
 
 def test_block_tier_maps_to_error_level() -> None:
     """A block-tier rule produces defaultConfiguration.level='error'."""
-    p001 = get_rule("P001")
+    p001 = get_rule("E001")
     descriptor = p001.to_reporting_descriptor()
     assert descriptor.default_configuration.level == "error"
 
@@ -166,14 +172,14 @@ def test_block_tier_maps_to_error_level() -> None:
 def test_duplicate_id_raises() -> None:
     """_combine_rules() raises ValueError on duplicate IDs."""
     r1 = RuleDefinition(
-        id="P001",
+        id="E001",
         name="R1",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="test",
     )
     r2 = RuleDefinition(
-        id="P001",
+        id="E001",
         name="R2",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -198,14 +204,14 @@ def test_invalid_rule_id_raises() -> None:
 def test_validate_catalog_raises_on_duplicate() -> None:
     """validate_catalog raises ValueError on duplicate IDs."""
     r1 = RuleDefinition(
-        id="P001",
+        id="E001",
         name="R1",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="test",
     )
     r2 = RuleDefinition(
-        id="P001",
+        id="E001",
         name="R2",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
