@@ -1403,6 +1403,8 @@ def test_runner_exclude_drops_prefixed_paths(tmp_path: Path) -> None:
         r.locations[0].physical_location.artifact_location.uri
         for r in report.runs[0].results
         if r.locations
+        and r.locations[0].physical_location is not None
+        and r.locations[0].physical_location.artifact_location is not None
     }
     # tools/migrate/script.py must not appear
     assert not any("tools/" in u for u in uris)

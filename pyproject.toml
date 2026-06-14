@@ -226,12 +226,12 @@ packages = ["application_sdk"]
 venvPath = "."
 venv = ".venv"
 typeCheckingMode = "standard"
+extraPaths = ["conformance"]
 exclude = [
     "application_sdk/test_utils/**",
     "application_sdk/testing/scale_data_generator/**",
     ".github/**",
     "tests",
-    "conformance/**",
 ]
 reportUnknownMemberType = "warning"
 reportAttributeAccessIssue = "warning"
