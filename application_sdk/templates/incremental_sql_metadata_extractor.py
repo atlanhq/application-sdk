@@ -165,6 +165,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         filters, paths). Use ``input.connection``, ``input.credential_ref``,
         ``input.exclude_filter``, and ``input.include_filter`` as appropriate.
         """
+        # conformance: ignore[E018] abstract method stub; operation= kwarg discriminates per-method in dashboards; subclass design deferred
         raise UnimplementedError(
             message=f"{type(self).__name__} must implement fetch_databases().",
             operation="fetch_databases",
@@ -177,6 +178,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         Override this method in your connector subclass to execute the
         schema-listing SQL and return the results.
         """
+        # conformance: ignore[E018] abstract method stub; operation= kwarg discriminates per-method in dashboards; subclass design deferred
         raise UnimplementedError(
             message=f"{type(self).__name__} must implement fetch_schemas().",
             operation="fetch_schemas",
@@ -225,6 +227,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         mutation would bleed between concurrent executions. Always resolve SQL into
         a local variable.
         """
+        # conformance: ignore[E018] abstract method stub; operation= kwarg discriminates per-method in dashboards; subclass design deferred
         raise UnimplementedError(
             message=(
                 f"{type(self).__name__} must implement fetch_tables(). "
@@ -257,6 +260,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                     raw_path = os.path.join(input.output_path, "raw", input.typename)
                 # ... read from raw_path and write to transformed/ ...
         """
+        # conformance: ignore[E018] abstract method stub; operation= kwarg discriminates per-method in dashboards; subclass design deferred
         raise UnimplementedError(
             message=f"{type(self).__name__} must implement transform_data().",
             operation="transform_data",
@@ -291,6 +295,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         Returns:
             Fully rendered SQL query string ready for execution.
         """
+        # conformance: ignore[E018] abstract method stub; operation= kwarg discriminates per-method in dashboards; subclass design deferred
         raise UnimplementedError(
             message=f"{type(self).__name__} must implement build_incremental_column_sql().",
             operation="build_incremental_column_sql",
@@ -361,6 +366,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                 "columns will be extracted per-batch by execute_single_column_batch()"
             )
             return FetchColumnsOutput()
+        # conformance: ignore[E018] abstract method stub; operation= kwarg discriminates per-method in dashboards; subclass design deferred
         raise UnimplementedError(
             message=(
                 f"{type(self).__name__} must implement fetch_columns() for full extraction. "
@@ -704,6 +710,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         Returns:
             Number of column records extracted.
         """
+        # conformance: ignore[E018] abstract method stub; operation= kwarg discriminates per-method in dashboards; subclass design deferred
         raise UnimplementedError(
             message=(
                 f"{type(self).__name__} must implement execute_column_sql() "

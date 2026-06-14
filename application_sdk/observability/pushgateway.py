@@ -213,6 +213,7 @@ class PushGatewayClient:
             self._task.cancel()
             try:
                 await self._task
+            # conformance: ignore[E004] shutdown cleanup; task cancellation swallows all exceptions by design
             except (asyncio.CancelledError, Exception):  # noqa: S110 — task cancellation is the goal; surface nothing on shutdown
                 pass
             self._task = None

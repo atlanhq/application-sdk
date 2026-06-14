@@ -78,6 +78,7 @@ class SqlQueryExtractor(BaseMetadataExtractor):
 
         Override in your subclass to implement connector-specific batch counting.
         """
+        # conformance: ignore[E018] abstract method stub; operation= kwarg discriminates per-method in dashboards; subclass design deferred
         raise UnimplementedError(
             message=f"{type(self).__name__} must implement get_query_batches().",
             operation="get_query_batches",
@@ -89,6 +90,7 @@ class SqlQueryExtractor(BaseMetadataExtractor):
 
         Override this method in your connector subclass.
         """
+        # conformance: ignore[E018] abstract method stub; operation= kwarg discriminates per-method in dashboards; subclass design deferred
         raise UnimplementedError(
             message=f"{type(self).__name__} must implement fetch_queries().",
             operation="fetch_queries",

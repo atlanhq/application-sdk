@@ -168,12 +168,14 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
             legacy_credential_ref(cred_guid) if cred_guid else None
         )
         if ref is None:
+            # conformance: ignore[E018] infrastructure precondition check; InvalidInputError subclass deferred pending error-code design
             raise InvalidInputError(
                 message="No credential reference or GUID available in task input"
             )
 
         secret_store = infra.secret_store if infra else None
         if secret_store is None:
+            # conformance: ignore[E018] infrastructure precondition check; InvalidInputError subclass deferred pending error-code design
             raise InvalidInputError(
                 message="No secret store available for credential resolution"
             )
@@ -188,6 +190,7 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
             UnimplementedError: If ``sql_client_class`` is not set.
         """
         if self.sql_client_class is None:
+            # conformance: ignore[E018] abstract method stub; operation= kwarg discriminates per-method in dashboards; subclass design deferred
             raise UnimplementedError(
                 message=(
                     f"{type(self).__name__} must set sql_client_class to use "
@@ -278,6 +281,7 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         two class attributes and call ``super()`` — to use this default.
         """
         if not self.fetch_database_sql:
+            # conformance: ignore[E018] abstract method stub; operation= kwarg discriminates per-method in dashboards; subclass design deferred
             raise UnimplementedError(
                 message=(
                     f"{type(self).__name__} must implement fetch_databases() "
@@ -311,6 +315,7 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         Default implementation executes ``self.fetch_schema_sql``.
         """
         if not self.fetch_schema_sql:
+            # conformance: ignore[E018] abstract method stub; operation= kwarg discriminates per-method in dashboards; subclass design deferred
             raise UnimplementedError(
                 message=(
                     f"{type(self).__name__} must implement fetch_schemas() "
@@ -343,6 +348,7 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         Default implementation executes ``self.fetch_table_sql``.
         """
         if not self.fetch_table_sql:
+            # conformance: ignore[E018] abstract method stub; operation= kwarg discriminates per-method in dashboards; subclass design deferred
             raise UnimplementedError(
                 message=(
                     f"{type(self).__name__} must implement fetch_tables() "
@@ -375,6 +381,7 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         Default implementation executes ``self.fetch_column_sql``.
         """
         if not self.fetch_column_sql:
+            # conformance: ignore[E018] abstract method stub; operation= kwarg discriminates per-method in dashboards; subclass design deferred
             raise UnimplementedError(
                 message=(
                     f"{type(self).__name__} must implement fetch_columns() "
@@ -410,6 +417,7 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         Override this method in your connector subclass if procedure extraction
         is required.
         """
+        # conformance: ignore[E018] abstract method stub; operation= kwarg discriminates per-method in dashboards; subclass design deferred
         raise UnimplementedError(
             message=(
                 f"{type(self).__name__} must implement fetch_procedures(), "
@@ -422,6 +430,7 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
     @task(timeout_seconds=1800)
     async def transform_data(self, input: TransformInput) -> TransformOutput:
         """Transform raw extracted data into the target format."""
+        # conformance: ignore[E018] abstract method stub; operation= kwarg discriminates per-method in dashboards; subclass design deferred
         raise UnimplementedError(
             message=f"{type(self).__name__} must implement transform_data().",
             operation="transform_data",

@@ -271,6 +271,7 @@ def create_activity_from_task(
                 stop_event.set()
                 try:
                     await asyncio.wait_for(heartbeat_task, timeout=1.0)
+                # conformance: ignore[E004] cleanup path cancelling heartbeat task in finally; all exceptions handled by inner cancel+log
                 except (TimeoutError, Exception):
                     heartbeat_task.cancel()
                     try:

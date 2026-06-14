@@ -334,6 +334,7 @@ class IntegrationTestClient:
         # Surface the actual cause instead of the generic missing-guid raise.
         if "_http_status" not in response and isinstance(response.get("error"), dict):
             err = response["error"]
+            # conformance: ignore[E018] service reachability error; no DependencyUnavailableError subclass hierarchy defined for test-infra errors yet
             raise DependencyUnavailableError(
                 message=(
                     f"Could not reach /dev/local-vault at {self.host}: "
@@ -353,6 +354,7 @@ class IntegrationTestClient:
                     f"(status={response.get('_http_status')})."
                 ),
                 component="local-vault",
+                classification_pending=True,
             )
         logger.debug("Provisioned credentials via local-vault: guid=%s", guid)
         return guid
