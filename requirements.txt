@@ -28,10 +28,10 @@ azure-core==1.41.0
     # via azure-identity
 azure-identity==1.25.3
     # via atlan-application-sdk
-boto3==1.43.28
+boto3==1.43.29
     # via atlan-application-sdk
 boto3-stubs==1.43.28
-botocore==1.43.28
+botocore==1.43.29
     # via
     #   boto3
     #   s3transfer
@@ -61,7 +61,7 @@ colorama==0.4.6 ; sys_platform == 'win32'
     #   typer
     #   uvicorn
 coverage==7.14.1
-cryptography==48.0.1
+cryptography==49.0.0
     # via
     #   authlib
     #   azure-identity
