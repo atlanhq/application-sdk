@@ -163,7 +163,7 @@ class IntegrationTestClient:
             Dict[str, Any]: The API response as a dictionary.
 
         Raises:
-            ValueError: If the API type is not supported.
+            HttpClientInputError: If the API type is not supported.
             requests.RequestException: If the HTTP request fails.
         """
         api_lower = api.lower()
