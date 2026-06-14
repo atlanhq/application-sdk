@@ -45,24 +45,55 @@ jobs:
           TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
           TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
         run: |
+          # NOTE: intentionally NO --ignore-unfixed. This is a report-only /
+          # ticket-filing scan, so we want visibility into no-fix ("won't fix",
+          # disputed, awaiting-patch) CVEs too — they still need tracking and an
+          # operational mitigation. Keep --ignore-unfixed only on build/CI
+          # gating steps, where un-actionable findings would just wedge the build.
           trivy image \
             --scanners vuln \
-            --ignore-unfixed \
             --severity CRITICAL,HIGH,MEDIUM,LOW \
             --format json \
             --output trivy-image-results.json \
             "$TARGET_IMAGE"
 
-      # ── Trivy filesystem scan (uv.lock / pyproject.toml) ─────────────────
+      # ── Install SDK dependencies so vendored native lockfiles materialize ──
+      #
+      # Rust/Go/native crates bundled inside Python wheels only exist on disk
+      # once the wheel is INSTALLED. e.g. temporalio ships a compiled bridge
+      # whose temporalio/bridge/Cargo.lock pins pyo3 — a transitive Rust CVE
+      # (GHSA-36hh-v3qg-5jq4). The source tree names `temporalio` as a Python
+      # dep in uv.lock but never contains that Cargo.lock, so a source-only
+      # `trivy fs` cannot see it — which is why pyo3 first surfaced on a
+      # downstream connector image, not in this SDK scan. Syncing into .venv
+      # lays those vendored manifests on disk so the filesystem scan below
+      # reaches them. Verified locally with Trivy v0.70.0: `trivy fs .` reports
+      # pyo3/GHSA-36hh-v3qg-5jq4 from .venv/.../temporalio/bridge/Cargo.lock.
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+      - name: Sync SDK dependencies into .venv
+        run: uv sync --all-extras --all-groups
 
-      - name: Trivy filesystem scan (uv.lock / pyproject.toml)
+      # ── Trivy filesystem scan (source lockfiles + installed .venv wheels) ──
+
+      - name: Trivy filesystem scan (lockfiles + installed wheel artifacts)
         env:
           TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
           TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
         run: |
+          # See note on the image scan above: report-only pass, so no
+          # --ignore-unfixed — no-fix CVEs are surfaced and ticketed.
+          #
+          # Scans the repo root, which now includes the synced .venv — so
+          # native lockfiles vendored inside installed wheels (Rust Cargo.lock,
+          # etc.) are covered, not just the Python uv.lock. This is what lets
+          # the SDK scan catch transitive Rust CVEs like pyo3
+          # (GHSA-36hh-v3qg-5jq4) at the source instead of only in downstream
+          # connector images.
           trivy fs \
             --scanners vuln \
-            --ignore-unfixed \
             --severity CRITICAL,HIGH,MEDIUM,LOW \
             --format json \
             --output trivy-fs-results.json \
@@ -143,7 +174,7 @@ jobs:
               fi
 
               if [ "$((TF_CRIT + TF_HIGH + TF_MED + TF_LOW))" -gt 0 ]; then
-                echo "### Trivy — Python Deps (uv.lock / pyproject.toml)"
+                echo "### Trivy — SDK Deps (lockfiles + installed wheel artifacts)"
                 echo ""
                 echo "| Severity | Package | Installed | Fixed | CVE |"
                 echo "|----------|---------|-----------|-------|-----|"
@@ -171,7 +202,7 @@ jobs:
             echo ""
             echo "### Vulnerability Summary"
             echo ""
-            echo "| Severity | Trivy (Image) | Trivy (Python) | Total |"
+            echo "| Severity | Trivy (Image) | Trivy (Deps) | Total |"
             echo "|----------|:-------------:|:--------------:|------:|"
             echo "| 🔴 Critical | ${{ steps.parse.outputs.ti_crit || 0 }} | ${{ steps.parse.outputs.tf_crit || 0 }} | **${{ steps.parse.outputs.total_crit || 0 }}** |"
             echo "| 🟠 High     | ${{ steps.parse.outputs.ti_high || 0 }} | ${{ steps.parse.outputs.tf_high || 0 }} | **${{ steps.parse.outputs.total_high || 0 }}** |"

@@ -126,28 +126,17 @@ Rule ID namespaces:
 out to every consumer app on the next upgrade, and the suite invalidates every app's
 conformance verdict on the next reconcile.  No per-app authoring needed (§4.1 of the design doc).
 
----
+The per-series rule catalogs below are **auto-generated** from the Python source and live in
+`conformance/docs/rules/`.  Regenerate with `uv run poe generate-rule-docs`; CI verifies
+they are up-to-date with `uv run poe generate-rule-docs --check`.
 
-## 5a. C001 — `UnpinnedActionReference` {#c001}
-
-**Tier:** `block` (gate-failing) | **Mechanism:** `static` | **Autofixable:** yes
-
-External actions reused via `uses:` must be pinned to a full-length commit SHA (digest),
-never a mutable tag (`@v4`) or branch (`@main`).  A tag can be re-pointed to malicious
-code after review.
-
-**Exempt:**
-- Actions in the `atlanhq/` org — they intentionally track `@main` or branches.
-- Local `./` composite-action refs — no version to pin.
-- `docker://` image refs — out of scope for this rule.
-- Template expressions `${{ ... }}` — can't be evaluated statically.
-
-**Fix guidance:** replace `@v4` (or any mutable ref) with the full 40-hex commit SHA,
-e.g. `actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3`.
-
-**Known pre-existing violation (deferred):** `.github/workflows/vuln-triage-cron.yml:43`
-— left as-is intentionally to demonstrate the gate detecting it; fix is a follow-up once
-the gate is proven in CI.
+| Prefix | Domain | Catalog |
+|---|---|---|
+| `E001–E099` | Error-handling patterns | [rules/error-handling.md](rules/error-handling.md) |
+| `L001–L099` | Logging patterns | [rules/logging.md](rules/logging.md) |
+| `C001–C099` | CI/workflow supply-chain | [rules/ci.md](rules/ci.md) |
+| `T001–T099` | Test-quality patterns (reserved) | — |
+| `D001–D099` | Dependency patterns (reserved) | — |
 
 ---
 

@@ -299,6 +299,31 @@ except BaseException:
     assert "E004" in findings or "E002" in findings  # E002 wins for pass-only body
 
 
+def test_p004_tuple_containing_broad_type_flagged() -> None:
+    # except (KeyError, Exception): body — the tuple contains a broad type, fires E004.
+    findings = _findings(
+        """\
+try:
+    run()
+except (KeyError, Exception):
+    x = 1
+"""
+    )
+    assert "E004" in findings
+
+
+def test_p004_tuple_all_narrow_types_no_finding() -> None:
+    # except (KeyError, ValueError): — all narrow, must not fire E004.
+    assert "E004" not in _findings(
+        """\
+try:
+    run()
+except (KeyError, ValueError):
+    logger.error("failed", exc_info=True)
+"""
+    )
+
+
 # ── P005 — ExceptBlockMissingExcInfo ─────────────────────────────────────────
 
 
@@ -667,6 +692,18 @@ def do_it():
     assert "E012" not in findings
 
 
+@pytest.mark.parametrize("decorator", ["task", "defn"])
+def test_p012_activity_context_note(decorator: str) -> None:
+    src = f"""\
+@{decorator}
+async def run():
+    raise ValueError("something went wrong")
+"""
+    findings = [f for f in scan_text(src, "fake.py") if f.rule_id == "E012"]
+    assert findings, "Expected E012 finding inside activity"
+    assert "inside activity/task" in findings[0].message
+
+
 # ── P013 — LegacyAtlanErrorRaise ─────────────────────────────────────────────
 
 
@@ -702,6 +739,32 @@ def test_p013_ioerror_not_flagged_when_builtin() -> None:
         """\
 def do_it():
     raise IOError("file error")
+"""
+    )
+
+
+def test_p013_alias_from_error_codes_flagged() -> None:
+    # from application_sdk.common.error_codes import IOError as AtlanIO
+    # raise AtlanIO() — the alias must be tracked and E013 must fire.
+    _single(
+        """\
+from application_sdk.common.error_codes import IOError as AtlanIO
+
+def do_it():
+    raise AtlanIO("IO_ERR", "failed")
+""",
+        "E013",
+    )
+
+
+def test_p013_alias_from_other_module_not_flagged() -> None:
+    # import IOError as IOE from an unrelated module — must NOT fire E013.
+    assert "E013" not in _findings(
+        """\
+from some_other_lib import IOError as IOE
+
+def do_it():
+    raise IOE("file error")
 """
     )
 
@@ -811,6 +874,30 @@ except ValueError as e:
     )
 
 
+def test_p015_repr_exc_in_message() -> None:
+    # repr(e) in message= should trigger E015.
+    assert "E015" in _findings(
+        """\
+try:
+    fetch()
+except ValueError as e:
+    raise InternalError(message=repr(e))
+"""
+    )
+
+
+def test_p015_binop_concat_in_message() -> None:
+    # String concatenation with str(e) in message= should trigger E015.
+    assert "E015" in _findings(
+        """\
+try:
+    fetch()
+except ValueError as e:
+    raise InternalError(message="upstream failed: " + str(e))
+"""
+    )
+
+
 # ── P016 — MissingExceptionChaining ──────────────────────────────────────────
 
 
@@ -884,6 +971,14 @@ def test_p017_secret_suffix(suffix: str) -> None:
 raise InternalError(message="auth failed", api{suffix}="hunter2")
 """
     assert "E017" in _findings(src)
+
+
+def test_p017_direct_raise_fires_exactly_once() -> None:
+    # raise InternalError(api_secret=...) must produce exactly one E017 finding.
+    # Previously _check_p017_call re-fired on the inner Call after visit_Raise
+    # had already fired via _check_p017_raise, doubling the count.
+    findings = _findings('raise InternalError(message="x", api_secret="hunter2")\n')
+    assert findings.count("E017") == 1
 
 
 def test_p017_no_finding_safe_key() -> None:
@@ -1367,6 +1462,8 @@ def test_runner_exclude_drops_prefixed_paths(tmp_path: Path) -> None:
         r.locations[0].physical_location.artifact_location.uri
         for r in report.runs[0].results
         if r.locations
+        and r.locations[0].physical_location is not None
+        and r.locations[0].physical_location.artifact_location is not None
     }
     # tools/migrate/script.py must not appear
     assert not any("tools/" in u for u in uris)

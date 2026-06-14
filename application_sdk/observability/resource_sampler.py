@@ -56,7 +56,6 @@ def sample() -> ResourceSample | None:
     """
     try:
         import resource  # noqa: PLC0415 — stdlib resource; not available on Windows (try/except wraps)
-    # conformance: ignore[E004] stdlib resource unavailable on Windows; ImportError is expected; None signals caller
     except ImportError:  # conformance: ignore[E008] stdlib resource not available on Windows; None signals unavailable
         # resource module not available on Windows
         _logger.debug(

@@ -239,11 +239,6 @@ def load_handler_class(
     try:
         module = importlib.import_module(module_name)
     except ImportError:  # conformance: ignore[E008] convention-based handler discovery; None = module not found
-        logger.warning(
-            "Module '%s' not importable during handler discovery; no handler found",
-            module_name,
-            exc_info=True,
-        )
         return None
 
     if hasattr(module, handler_class_name):
