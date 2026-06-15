@@ -131,18 +131,16 @@ class AtlanResultProperties(BaseModel):
 class DispositionSummary(BaseModel):
     """Per-disposition counts for cheap dashboarding."""
 
-    passing: int = 0
     failing: int = 0
     warning: int = 0
-    suppressed: int = 0
+    suppressing: int = 0
 
     def to_properties(self) -> dict[str, Any]:
         return {
             "atlan/summary": {
-                "passing": self.passing,
                 "failing": self.failing,
                 "warning": self.warning,
-                "suppressed": self.suppressed,
+                "suppressing": self.suppressing,
             }
         }
 
@@ -156,10 +154,20 @@ class AtlanRunProperties(BaseModel):
     summary: DispositionSummary | None = None
     """Disposition counts; populated by ``ReportBuilder.build()``."""
 
+    excluded_paths: list[str] = []
+    """Repo-root-relative path prefixes that were excluded from scanning entirely.
+
+    Populated from the runner's ``--exclude`` option.  Recorded here so every
+    SARIF artifact documents the effective scan scope — a non-empty list is an
+    intentional reduction of coverage and should be reviewed as such.
+    """
+
     def to_properties(self) -> dict[str, Any]:
         out: dict[str, Any] = {"atlan/profileVersion": self.profile_version}
         if self.summary is not None:
             out.update(self.summary.to_properties())
+        if self.excluded_paths:
+            out["atlan/excludedPaths"] = sorted(self.excluded_paths)
         return out
 
     @classmethod
@@ -169,6 +177,7 @@ class AtlanRunProperties(BaseModel):
         return cls(
             profile_version=props.get("atlan/profileVersion", "v1"),
             summary=summary,
+            excluded_paths=props.get("atlan/excludedPaths", []),
         )
 
 

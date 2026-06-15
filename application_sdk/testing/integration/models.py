@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from application_sdk.testing.integration._errors import HttpClientInputError
+
 
 class APIType(Enum):
     """Supported API types for integration testing.
@@ -33,14 +35,16 @@ class APIType(Enum):
             APIType: The corresponding enum value.
 
         Raises:
-            ValueError: If the value is not a valid API type.
+            InvalidInputError: If the value is not a valid API type.
         """
         try:
             return cls(value.lower())
         except ValueError:
             valid_values = [e.value for e in cls]
-            raise ValueError(  # stdlib-interop: classmethod re-raises ValueError for enum-style stdlib interop
-                f"Invalid API type: '{value}'. Must be one of: {valid_values}"
+            raise HttpClientInputError(
+                message=f"Invalid API type: '{value}'. Must be one of: {valid_values}",
+                field="api_type",
+                value_summary=value,
             )
 
 

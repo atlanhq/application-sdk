@@ -129,6 +129,7 @@ class AgentCredentialSpec(BaseModel):
                 return {"agent-name": ""}
             try:
                 parsed = orjson.loads(data)
+            # conformance: ignore[E004] convert-and-rethrow: orjson parse failure is immediately re-raised as typed CredentialParseError
             except Exception as exc:
                 from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
                     CredentialParseError,

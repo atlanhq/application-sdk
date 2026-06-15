@@ -55,7 +55,7 @@ import orjson
 try:  # pragma: no cover — defensive import
     from obstore.exceptions import BaseError as _ObstoreBaseError
     from obstore.exceptions import NotFoundError as _ObstoreNotFoundError
-except ImportError:  # pragma: no cover
+except ImportError:  # conformance: ignore[E008,E009] optional dep obstore.exceptions; sentinel fallback for older versions  # pragma: no cover
     _ObstoreBaseError = None  # type: ignore[assignment,misc]
     _ObstoreNotFoundError = None  # type: ignore[assignment,misc]
 
@@ -139,7 +139,7 @@ def normalize_key(key: str) -> str:
             normalized = os.path.relpath(abs_path, abs_temp_path).replace(os.sep, "/")
         else:
             normalized = key.strip("/")
-    except ValueError:
+    except ValueError:  # conformance: ignore[E009] os.path.commonpath raises on mixed Windows drives; simple-strip fallback
         # os.path.commonpath raises on mixed Windows drives; fall back to simple strip.
         normalized = key.strip("/")
 
@@ -505,6 +505,7 @@ async def upload_file(
                     if h is not None:
                         h.update(chunk)
                     await writer.write(chunk)
+    # conformance: ignore[E004] upload error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
     except BaseException as exc:
         # BaseException is the umbrella for Exception and its siblings
         # (CancelledError, KeyboardInterrupt, SystemExit). Catching it here
@@ -608,6 +609,7 @@ async def download_file(
 
     try:
         result = await obstore.get_async(resolved, key)
+    # conformance: ignore[E004] download error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
     except Exception as exc:
         elapsed_ms = (time.monotonic() - started) * 1000.0
         if _is_not_found(exc):
@@ -654,6 +656,7 @@ async def download_file(
                 bytes_written += len(raw)
                 if h is not None:
                     h.update(raw)
+    # conformance: ignore[E004] file-write error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
     except Exception as exc:
         elapsed_ms = (time.monotonic() - started) * 1000.0
         _log_storage_event(
@@ -714,6 +717,7 @@ async def get_file_size(
     try:
         meta = await obstore.head_async(resolved, key)
         return int(meta["size"])
+    # conformance: ignore[E004] not-found returns None as documented API contract; other exceptions re-raised via StorageError chain
     except Exception as exc:
         if _is_not_found(exc):
             return None
@@ -777,6 +781,7 @@ async def download_file_chunked(
     try:
         meta = await obstore.head_async(resolved, key)
         file_size = int(meta["size"])
+    # conformance: ignore[E004] not-found and errors both re-raised via StorageError chain; no silent swallow
     except Exception as exc:
         if _is_not_found(exc):
             from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
@@ -805,6 +810,7 @@ async def download_file_chunked(
     fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
         os.ftruncate(fd, file_size)
+    # conformance: ignore[E004] cleanup-on-error guard; closes fd then re-raises immediately with no swallow
     except Exception:
         os.close(fd)
         raise
@@ -833,6 +839,7 @@ async def download_file_chunked(
         await asyncio.gather(
             *(_fetch_chunk(off) for off in range(0, file_size, chunk_size_bytes))
         )
+    # conformance: ignore[E004] chunked-download error handler; closes fd and cleans up file, then re-raises via StorageError chain
     except Exception as exc:
         os.close(fd)
         path.unlink(missing_ok=True)
@@ -901,6 +908,7 @@ async def _get_bytes(
         # over Rust Bytes chunks and yields bytes objects, not ints.
         raw = result.bytes()
         return bytes(raw)
+    # conformance: ignore[E004] not-found returns None as documented API contract; other exceptions re-raised via StorageError chain
     except Exception as exc:
         if _is_not_found(exc):
             return None
@@ -942,6 +950,7 @@ async def _put(
         key = normalize_key(key)
     try:
         await obstore.put_async(resolved, key, data, attributes=put_attributes)
+    # conformance: ignore[E004] put error handler; all exceptions re-raised via StorageConfigError or StorageError chain
     except Exception as exc:
         from application_sdk.storage.errors import (  # noqa: PLC0415
             StorageConfigError,
@@ -1011,6 +1020,7 @@ async def delete(
     try:
         await obstore.delete_async(resolved, key)
         return True
+    # conformance: ignore[E004] not-found returns False as documented API contract; other exceptions re-raised via StorageError chain
     except Exception as exc:
         if _is_not_found(exc):
             return False
@@ -1052,6 +1062,7 @@ async def exists(
     try:
         await obstore.head_async(resolved, key)
         return True
+    # conformance: ignore[E004] not-found returns False as documented API contract; other exceptions re-raised via StorageError chain
     except Exception as exc:
         if _is_not_found(exc):
             return False

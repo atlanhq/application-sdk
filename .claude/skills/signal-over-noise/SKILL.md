@@ -84,6 +84,13 @@ Both modes follow the same two-stage structure:
 Finds every pattern where exceptions are caught and silently discarded, converting failures
 into invisible state.
 
+> **Detection is now delegated to the conformance suite (E-series).** The E001–E018 checks
+> run deterministically via `PYTHONPATH=conformance python -m suite.runner --repo . --series E`
+> and produce SARIF output with one finding per rule violation. This skill retains its value
+> for the **remediation / fix-authoring** pass (Stage 2) — the suite deliberately does not
+> apply fixes. For a quick detection-only scan, prefer the suite runner; use this skill when
+> you want a plan-mode review and automated fix application.
+
 Pattern catalogue, severity criteria, fix templates, and linting rules are in:
 
 `.claude/skills/signal-over-noise/references/error-recovery-patterns.md`

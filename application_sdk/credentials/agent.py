@@ -170,6 +170,7 @@ async def _fetch_bundle(secret_store: SecretStore, secret_path: str) -> dict[str
         raw = await secret_store.get(secret_path)
     except SecretNotFoundError as exc:
         raise CredentialNotFoundError(secret_path) from exc
+    # conformance: ignore[E004] re-raises immediately as typed CredentialError with chained cause; logging deferred to caller boundary
     except Exception as exc:
         raise CredentialError(
             f"Failed to fetch agent secret bundle at '{secret_path}': {exc}",
@@ -222,6 +223,7 @@ async def _fetch_per_key_bundle(
         seen.add(value)
         try:
             secret = await secret_store.get_optional(value)
+        # conformance: ignore[E004] logger.warning with redacted traceback is emitted below; exc_info omitted intentionally to prevent secret ref-key leaking through stdlib traceback formatting
         except Exception as exc:
             # Store-side error — distinct from "key not in store" (silent
             # below). A transient outage here on a real secret field
@@ -246,7 +248,7 @@ async def _fetch_per_key_bundle(
                 f"sha256:{value_hash}",
                 redact_secrets("".join(traceback.format_exception(exc))),
             )
-            logger.warning(
+            logger.warning(  # conformance: ignore[E005] exc_info would bypass the secret-redacted traceback built above; safe_traceback included inline
                 "single-key probe failed for ref-key sha256:%s — store error, "
                 "treating as non-secret. If this was a real credential "
                 "key, the auth attempt will fail with the ref-key as the "

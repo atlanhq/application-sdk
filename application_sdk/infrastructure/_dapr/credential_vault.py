@@ -178,6 +178,7 @@ class DaprCredentialVault:
 
         except CredentialVaultError:
             raise
+        # conformance: ignore[E004] outer re-raise wraps all failures into CredentialVaultError; no logging needed here
         except Exception as e:
             raise CredentialVaultError(
                 f"Failed to resolve credentials for {credential_guid}: {e}",
@@ -263,6 +264,7 @@ class DaprCredentialVault:
         try:
             result = await self._client.get_secret(store_name=store, key=secret_key)
             return process_secret_data(result)
+        # conformance: ignore[E004] re-raises as typed SecretFetchError; caller logs or propagates the typed error
         except Exception as e:
             from application_sdk.infrastructure._dapr._dapr_errors import (  # noqa: PLC0415
                 SecretFetchError,
@@ -288,6 +290,7 @@ class DaprCredentialVault:
             if not secret:
                 logger.debug("No local secret for key %s", secret_key)
             return secret
+        # conformance: ignore[E004] exc_info=True already present on the logger.debug call below
         except Exception:
             logger.debug(
                 "Failed to read local secret file for key %s",
@@ -314,6 +317,7 @@ class DaprCredentialVault:
                         if v is None or v == "":
                             continue
                         collected[k] = v
+            # conformance: ignore[E004] exc_info=True already present on the logger.debug call below
             except Exception as e:
                 logger.debug(
                     "Secret resolution failed for '%s' (value=%s)",
