@@ -225,7 +225,7 @@ uv run python -m conformance.suite.checks.actions_pinning --root . .github
 
 ```python
 import json
-from suite.schema import derive_disposition, Disposition, SarifReport
+from conformance.suite.schema import derive_disposition, Disposition, SarifReport
 
 report = SarifReport.model_validate(json.loads(open("report.sarif").read()))
 for result in report.runs[0].results:

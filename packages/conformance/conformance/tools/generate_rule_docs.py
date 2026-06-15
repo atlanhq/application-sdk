@@ -224,7 +224,7 @@ def _group_by_prefix(
 # ---------------------------------------------------------------------------
 
 
-def _parse_args() -> argparse.Namespace:
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Generate per-series rule catalog Markdown from Python source.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -244,11 +244,11 @@ def _parse_args() -> argparse.Namespace:
             "Exits 1 if any file is stale or missing."
         ),
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-def main() -> None:
-    args = _parse_args()
+def main(argv: list[str] | None = None) -> None:
+    args = _parse_args(argv)
     outdir: Path = args.outdir
     check_mode: bool = args.check
 

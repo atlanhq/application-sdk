@@ -12,21 +12,18 @@ def _cmd_detect(argv: list[str]) -> int:
 
 
 def _cmd_programs_dir(_argv: list[str]) -> int:
-    from importlib.resources import files
+    import importlib.resources as _ir
+    import pathlib
 
-    programs = files("conformance") / "programs"
+    programs = _ir.files("conformance") / "programs"
     # Resolve to a real filesystem path (works for both installed wheels and
     # editable installs where the files are already on disk).
-    import importlib.resources as _ir
-
     try:
         ctx = _ir.as_file(programs)
         with ctx as p:
             print(str(p))
-    except Exception:
+    except (FileNotFoundError, ModuleNotFoundError):
         # Fallback: direct path (editable installs)
-        import pathlib
-
         here = pathlib.Path(__file__).parent
         print(str(here / "programs"))
     return 0
@@ -35,10 +32,8 @@ def _cmd_programs_dir(_argv: list[str]) -> int:
 def _cmd_gen_rule_docs(argv: list[str]) -> int:
     from conformance.tools.generate_rule_docs import main
 
-    # generate_rule_docs.main() parses sys.argv; splice our sub-argv in.
-    sys.argv = ["atlan-application-sdk-conformance gen-rule-docs", *argv]
     try:
-        main()
+        main(argv)
         return 0
     except SystemExit as e:
         return int(e.code) if e.code is not None else 0
