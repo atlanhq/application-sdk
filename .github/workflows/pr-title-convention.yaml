@@ -23,7 +23,7 @@
 #      contract-toolkit ships its own package and changelog, so its source
 #      changes carry that exact scope.
 #
-#   3. Everything else (docs, examples, tests, conformance, components,
+#   3. Everything else (docs, tests, conformance, components,
 #      remediation, renovate-config, tools, .github, .claude, .security, root
 #      config files, dependency manifests, contract-toolkit's own docs/tests,
 #      ...)  ->  title must be `chore:`/`chore(...):` or `ci:`/`ci(...):`.
