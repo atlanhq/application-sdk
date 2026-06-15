@@ -24,12 +24,11 @@
     "github-actions[bot]@users.noreply.github.com"
   ],
   "lockFileMaintenance": {
-    "description": "Python in-range deps: refresh uv.lock without touching pyproject.toml; auto-merge on green. rebaseWhen=conflicted prevents the merge-queue feedback loop: without it, Renovate rebases the branch the moment the PR enters the queue (branch appears behind main), closes the old PR, and immediately opens an identical one against unchanged main.",
+    "description": "Python in-range deps: refresh uv.lock without touching pyproject.toml; auto-merge on green.",
     "enabled": true,
     "schedule": [
       "at any time"
     ],
-    "rebaseWhen": "conflicted",
     "automerge": true,
     "automergeType": "pr",
     "platformAutomerge": true
