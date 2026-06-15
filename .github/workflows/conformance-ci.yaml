@@ -31,6 +31,11 @@ on:
         required: false
         default: true
         type: boolean
+      event_name:
+        description: "Caller's github.event_name (push / pull_request / merge_group); reusable workflows always see 'workflow_call' internally"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -53,7 +58,7 @@ jobs:
               - '${{ inputs.scan-path }}/**'
 
       - name: "Sparse-checkout conformance suite"
-        if: steps.changes.outputs.relevant == 'true' || github.event_name == 'push'
+        if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push'
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: atlanhq/application-sdk
@@ -62,11 +67,11 @@ jobs:
           path: _sdk
 
       - name: "Set up uv"
-        if: steps.changes.outputs.relevant == 'true' || github.event_name == 'push'
+        if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push'
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
 
       - name: "Run C-series checks"
-        if: steps.changes.outputs.relevant == 'true' || github.event_name == 'push'
+        if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push'
         env:
           PYTHONPATH: _sdk/conformance
         run: |
@@ -76,20 +81,20 @@ jobs:
             --output ci.sarif
 
       - name: "Upload SARIF artifact"
-        if: (steps.changes.outputs.relevant == 'true' || github.event_name == 'push') && !cancelled()
+        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push') && !cancelled()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: conformance-ci-sarif
           path: ci.sarif
 
       - name: "Strip suppressed results for Security tab"
-        if: ${{ inputs.upload-sarif && github.event_name == 'push' }}
+        if: ${{ inputs.upload-sarif && inputs.event_name == 'push' }}
         run: |
           jq '.runs[] |= (.results |= map(select(.suppressions == null or (.suppressions | length == 0))))' \
             ci.sarif > ci-upload.sarif
 
       - name: "Upload SARIF to Security tab"
-        if: ${{ inputs.upload-sarif && github.event_name == 'push' }}
+        if: ${{ inputs.upload-sarif && inputs.event_name == 'push' }}
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
         with:
           sarif_file: ci-upload.sarif
