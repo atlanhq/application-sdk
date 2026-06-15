@@ -16,6 +16,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
   pull-requests: read
 
 jobs:
@@ -57,12 +58,10 @@ jobs:
           echo "Publishing conformance ${tag} from $(git rev-parse HEAD)"
 
       - name: Build and publish to PyPI
-        env:
-          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         run: |
           cd packages/conformance
           uv build
-          uv publish
+          uv publish --trusted-publishing automatic
 
       - name: Create source tag
         run: |
