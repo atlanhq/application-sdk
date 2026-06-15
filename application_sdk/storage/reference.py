@@ -587,6 +587,7 @@ async def materialize_file_reference(
                             is_cache_hit=True,
                         )
                         return True
+                # conformance: ignore[E004] sidecar integrity probe; failure is benign and logged at debug before falling through to re-download
                 except Exception:
                     logger.debug(
                         "file_ref.materialize.sidecar_check_failed",

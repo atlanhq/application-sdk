@@ -306,6 +306,9 @@ def _resolve_output_type_for_workflow(workflow_type_name: str) -> type | None:
     try:
         app_meta = AppRegistry.get_instance().get(app_cls_name)
     except AppNotFoundError:
+        logger.warning(
+            "App %r not found in registry; returning None", app_cls_name, exc_info=True
+        )
         return None
 
     if ":" in workflow_type_name:

@@ -174,9 +174,17 @@ def _check_server_health(server_url: str, timeout: int = 5) -> bool:
         response = http_requests.get(f"{server_url}/server/health", timeout=timeout)
         return response.status_code == 200
     except http_requests.ConnectionError:
+        logger.warning(
+            "Server health check failed with connection error; returning False",
+            exc_info=True,
+        )
         return False
     except http_requests.RequestException:
         # Network error (timeout, too many redirects, etc.) — not healthy
+        logger.warning(
+            "Server health check failed with request error; returning False",
+            exc_info=True,
+        )
         return False
 
 

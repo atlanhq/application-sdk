@@ -73,6 +73,27 @@ def test_parse_directive_no_match() -> None:
     assert parse_ignore_directive("# type: ignore") is None
 
 
+def test_parse_directive_bare_no_justification_rejected() -> None:
+    # Bare directive with no justification text must NOT suppress — returns None.
+    assert parse_ignore_directive("# conformance: ignore[E018]") is None
+    assert parse_ignore_directive("# conformance: ignore[E001,E002]") is None
+    assert parse_ignore_directive("# conformance: ignore") is None
+
+
+def test_bare_directive_does_not_suppress() -> None:
+    # A bare # conformance: ignore[E001] with no text leaves the finding active.
+    src = """\
+try:
+    do_something()
+except:  # conformance: ignore[E001]
+    pass
+"""
+    active = [f for f in scan_text(src, "fake.py") if not f.suppressed]
+    assert any(
+        f.rule_id == "E001" for f in active
+    ), "E001 should be active — bare directive without justification must not suppress"
+
+
 def test_parse_directive_case_insensitive() -> None:
     d = parse_ignore_directive("# CONFORMANCE: IGNORE[E003] ok")
     assert d is not None

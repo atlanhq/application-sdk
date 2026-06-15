@@ -16,6 +16,10 @@ from urllib.parse import urljoin
 import requests
 
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.testing.integration._errors import (
+    LocalVaultResponseInvariantError,
+    LocalVaultUnavailableError,
+)
 
 logger = get_logger(__name__)
 
@@ -159,7 +163,7 @@ class IntegrationTestClient:
             Dict[str, Any]: The API response as a dictionary.
 
         Raises:
-            ValueError: If the API type is not supported.
+            HttpClientInputError: If the API type is not supported.
             requests.RequestException: If the HTTP request fails.
         """
         api_lower = api.lower()
@@ -313,7 +317,7 @@ class IntegrationTestClient:
             endpoint is gated off in this deployment.
 
         Raises:
-            RuntimeError: If local-vault cannot be reached, or is reachable but
+            DependencyUnavailableError / InternalError: If local-vault cannot be reached, or is reachable but
                 returns no guid.
         """
         flat = _from_v3_credentials(credentials)
@@ -333,18 +337,23 @@ class IntegrationTestClient:
         # Surface the actual cause instead of the generic missing-guid raise.
         if "_http_status" not in response and isinstance(response.get("error"), dict):
             err = response["error"]
-            raise RuntimeError(
-                f"Could not reach /dev/local-vault at {self.host}: "
-                f"{err.get('message')}. Is the application server running?"
+            raise LocalVaultUnavailableError(
+                message=(
+                    f"Could not reach /dev/local-vault at {self.host}: "
+                    f"{err.get('message')}. Is the application server running?"
+                ),
+                target=self.host,
             )
 
         guid = (response.get("data") or {}).get("credential_guid") or response.get(
             "credential_guid"
         )
         if not guid:
-            raise RuntimeError(
-                "Local-vault did not return a credential_guid "
-                f"(status={response.get('_http_status')})."
+            raise LocalVaultResponseInvariantError(
+                message=(
+                    "Local-vault did not return a credential_guid "
+                    f"(status={response.get('_http_status')})."
+                ),
             )
         logger.debug("Provisioned credentials via local-vault: guid=%s", guid)
         return guid

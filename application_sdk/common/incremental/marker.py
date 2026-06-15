@@ -217,6 +217,7 @@ async def persist_marker_to_storage(
         logger.info(
             "Marker uploaded to S3: key=%s value=%s", marker_s3_key, marker_value
         )
+    # conformance: ignore[E004] broad catch wraps upload failure into typed MarkerUploadError and re-raises; no swallowing occurs
     except Exception as e:
         from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415
             MarkerUploadError,

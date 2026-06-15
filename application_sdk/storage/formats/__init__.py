@@ -475,6 +475,7 @@ class Writer(ABC):
                 for dataframe in sync_generator:
                     if not is_empty_dataframe(dataframe):
                         await self._write_dataframe(dataframe)
+        # conformance: ignore[E004] re-raises as typed FormatWriteError; no information is discarded
         except Exception as e:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 FormatWriteError,
@@ -549,6 +550,7 @@ class Writer(ABC):
             if self.chunk_start is None:
                 self.chunk_count += 1
             self.partitions.append(self.chunk_part)
+        # conformance: ignore[E004] records error metrics then re-raises; caller receives the original exception
         except Exception as e:
             # Record metrics for failed write
             self.metrics.record_metric(
@@ -593,6 +595,7 @@ class Writer(ABC):
                 for dataframe in sync_generator:
                     if not is_empty_dataframe(dataframe):
                         await self._write_daft_dataframe(dataframe)
+        # conformance: ignore[E004] re-raises as typed FormatWriteError; no information is discarded
         except Exception as e:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 FormatWriteError,
@@ -722,6 +725,7 @@ class Writer(ABC):
             )
             return self._result
 
+        # conformance: ignore[E004] re-raises as typed FormatCloseError; no information is discarded
         except Exception as e:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 FormatCloseError,
@@ -774,6 +778,7 @@ class Writer(ABC):
                     description="Number of chunks written to files",
                 )
 
+        # conformance: ignore[E004] records error metrics then re-raises; caller receives the original exception
         except Exception as e:
             # Record metrics for failed write
             self.metrics.record_metric(
@@ -845,6 +850,7 @@ class Writer(ABC):
             await self._upload_file(output_file_name)
 
             return statistics
+        # conformance: ignore[E004] re-raises as typed FormatStatisticsWriteError; no information is discarded
         except Exception as e:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 FormatStatisticsWriteError,

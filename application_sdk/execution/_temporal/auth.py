@@ -101,6 +101,7 @@ class TemporalAuthManager:
 
         try:
             access_token = await self._get_token_service().get_token(force_refresh=True)
+        # conformance: ignore[E004] re-raises immediately as typed TemporalAuthTokenAcquireError; no swallowing occurs
         except Exception as exc:
             from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
                 TemporalAuthTokenAcquireError,

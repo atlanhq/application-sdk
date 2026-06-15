@@ -697,6 +697,7 @@ def _install_excepthook() -> None:
         )
         try:
             asyncio.run(_flush_observability())
+        # conformance: ignore[E002,E004] best-effort flush in unhandled-exception hook; must never mask the original crash
         except Exception:  # noqa: S110 — best-effort flush; must never mask the original crash
             pass
         _orig(exc_type, exc_value, exc_traceback)
@@ -1391,9 +1392,13 @@ async def _run_dev_combined_inner(
                         resp = await client.get(f"{base}/health", timeout=2)
                         if resp.status_code == 200:
                             break
-                    # conformance: ignore[E014] startup readiness poll; transient errors expected during startup
-                    except Exception:  # noqa: S110 — handler not ready yet; /health poll retries up to 30×
-                        pass  # transient errors expected during startup
+                    # conformance: ignore[E004] startup readiness poll; /health transient errors expected and retried
+                    except Exception as exc:
+                        logger.debug(
+                            "Skipping /health poll iteration due to transient error: %s",
+                            exc,
+                            exc_info=True,
+                        )
                     await asyncio.sleep(1)
 
                 # Step 1: Provision credentials (mimics Heracles)
@@ -1591,6 +1596,7 @@ def main() -> NoReturn:
         logger.error("Fatal error", exc_info=True)
         try:
             asyncio.run(_flush_observability())
+        # conformance: ignore[E002,E004] best-effort flush on fatal exit; fatal error already logged above
         except Exception:  # noqa: S110 — best-effort flush on fatal exit; error already logged above
             pass
         sys.exit(1)

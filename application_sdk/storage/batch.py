@@ -97,6 +97,7 @@ async def list_keys(
         return sorted(
             path for path, _ in items if not lsuffix or path.lower().endswith(lsuffix)
         )
+    # conformance: ignore[E004] always re-raises as StorageError; no logging needed at this layer
     except Exception as exc:
         from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
             StorageError,
@@ -148,6 +149,7 @@ async def delete_prefix(
     # separately below via a best-effort delete of the bare root key.
     try:
         items = await _list_items(resolved, prefix or None, include_markers=True)
+    # conformance: ignore[E004] always re-raises as StorageError; no logging needed at this layer
     except Exception as exc:
         from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
             StorageError,
@@ -171,6 +173,7 @@ async def delete_prefix(
         try:
             await obstore.head_async(resolved, root_marker)
             paths.append(root_marker)
+        # conformance: ignore[E004] probe for directory marker existence; not-found is expected and swallowed intentionally
         except Exception as exc:
             if not _is_not_found(exc):
                 from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
@@ -187,6 +190,7 @@ async def delete_prefix(
 
     try:
         await obstore.delete_async(resolved, paths)
+    # conformance: ignore[E004] always re-raises as StorageError; no logging needed at this layer
     except Exception as exc:
         from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
             StorageError,

@@ -306,6 +306,7 @@ def _get_execution_id_from_task() -> str:
     """
     try:
         wid = activity.info().workflow_id
+    # conformance: ignore[E004] probe for Temporal activity context; broad catch is intentional, exception re-raised as typed AppContextError
     except Exception as e:
         raise AppContextError("Cannot access app state outside of task context") from e
     if not wid:
@@ -1224,6 +1225,7 @@ class App(ABC):
             async def _local_cleanup() -> None:
                 try:
                     await self.cleanup_files(CleanupInput())
+                # conformance: ignore[E004] logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
                 except Exception:
                     _safe_log(
                         "warning",
@@ -1234,6 +1236,7 @@ class App(ABC):
             async def _storage_cleanup() -> None:
                 try:
                     await self.cleanup_storage(StorageCleanupInput())
+                # conformance: ignore[E004] logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
                 except Exception:
                     _safe_log(
                         "warning",
@@ -1245,6 +1248,7 @@ class App(ABC):
 
         try:
             await AtlanObservability.flush_all()
+        # conformance: ignore[E004] logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
         except Exception:
             _safe_log("warning", "flush_all() failed during on_complete", exc_info=True)
 
@@ -1292,7 +1296,8 @@ def _validate_interaction_signature(
 
     try:
         hints: dict[str, Any] = get_type_hints(fn)
-    except Exception:  # conformance: ignore[E009] get_type_hints can fail in unusual contexts (e.g. forward refs); __annotations__ fallback
+    # conformance: ignore[E004,E009] get_type_hints probe; broad catch intentional — falls back to __annotations__ when forward refs are unresolvable
+    except Exception:
         hints = getattr(fn, "__annotations__", {})
 
     if kind == "signal":
@@ -1516,6 +1521,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
 
             _corr_ctx = get_correlation_context()
             correlation_id = _corr_ctx.correlation_id if _corr_ctx else run_id
+        # conformance: ignore[E004] logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
         except Exception:
             _safe_log(
                 "warning",
@@ -1570,6 +1576,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
                         correlation_id=context.correlation_id,
                         input=input_summary,
                     )
+        # conformance: ignore[E004] logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
         except Exception:
             _safe_log("warning", "Failed to log input summary", exc_info=True)
 
@@ -1578,6 +1585,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
             result = await entry_method(input_data)
             return cast("Output", result)
 
+        # conformance: ignore[E004] top-level entrypoint handler; logged via _safe_log with exc_info=True and re-raised as typed ApplicationError
         except Exception as e:
             _safe_log(
                 "error",
@@ -1625,6 +1633,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
         finally:
             try:
                 await app_instance.on_complete()
+            # conformance: ignore[E004] finally-block cleanup handler; logged via _safe_log with exc_info=True; must not re-raise from finally
             except Exception:
                 _safe_log(
                     "warning",

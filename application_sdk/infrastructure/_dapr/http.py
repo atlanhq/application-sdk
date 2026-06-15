@@ -86,6 +86,7 @@ async def wait_for_dapr_sidecar(
                 r = await client.get(url)
                 if r.status_code == 204:
                     return
+            # conformance: ignore[E004] sidecar health probe; network errors are expected during startup and logged at debug
             except Exception:
                 logger.debug("Dapr sidecar poll failed", exc_info=True)
             if loop.time() >= deadline:
