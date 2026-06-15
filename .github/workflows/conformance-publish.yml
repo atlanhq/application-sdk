@@ -55,15 +55,6 @@ jobs:
           echo "merge_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "Publishing conformance ${tag} from $(git rev-parse HEAD)"
 
-      # TODO: Uncomment for TestPyPI dry-run (config in packages/conformance/pyproject.toml)
-      # - name: Build and publish to TestPyPI
-      #   env:
-      #     UV_PUBLISH_TOKEN: ${{ secrets.TEST_PYPI_API_TOKEN }}
-      #   run: |
-      #     cd packages/conformance
-      #     uv build
-      #     uv publish --index testpypi
-
       - name: Build and publish to PyPI
         env:
           UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
