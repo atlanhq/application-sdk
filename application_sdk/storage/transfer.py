@@ -40,6 +40,7 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from application_sdk.common._listing import safe_list_directory
 from application_sdk.constants import MAX_CONCURRENT_STORAGE_TRANSFERS
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.observability.logger_adaptor import get_logger
@@ -491,7 +492,8 @@ async def upload(
             normalize_key,
             append_leaf=False,
         )
-        files = [p for p in src.rglob("*") if p.is_file()]
+        # to_thread keeps the blocking fsync + scandir off the event loop.
+        files = await asyncio.to_thread(safe_list_directory, src)
         if raise_on_empty and not files:
             from application_sdk.storage.errors import (  # noqa: PLC0415
                 StorageEmptyUploadError,

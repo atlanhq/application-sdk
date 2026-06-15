@@ -636,3 +636,35 @@ class TestDirectoryPersistConcurrent:
 
         assert result.file_count == 6
         assert max_active <= 2, f"Expected max 2 concurrent uploads, got {max_active}"
+
+
+class TestPersistFileReferenceListingRace:
+    """Inject the rglob listing transient (cpython#146646) and assert
+    ``persist_file_reference`` still uploads every file.
+    """
+
+    async def test_directory_upload_finds_files_when_rglob_returns_empty(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        (tmp_path / "a.txt").write_bytes(b"a")
+        (tmp_path / "b.txt").write_bytes(b"b")
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        (sub / "c.txt").write_bytes(b"c")
+
+        ref = FileReference(local_path=str(tmp_path), tier=StorageTier.TRANSIENT)
+
+        # Inject the listing race.
+        # Regression guard: a future revert to Path.rglob would re-trigger this mock.
+        monkeypatch.setattr(Path, "rglob", lambda self, pat: iter([]))
+
+        result = await persist_file_reference(store, ref)
+
+        # On main: file_count == 0 (the bug). After fix: 3.
+        assert result.file_count == 3
+        # And the bytes actually made it to storage
+        prefix = result.storage_path
+        assert prefix is not None
+        assert await _get_bytes(f"{prefix}a.txt", store, normalize=False) == b"a"
+        assert await _get_bytes(f"{prefix}b.txt", store, normalize=False) == b"b"
+        assert await _get_bytes(f"{prefix}sub/c.txt", store, normalize=False) == b"c"

@@ -16,19 +16,20 @@ Deterministic rule-checking infrastructure for the Fleet Drift Remediator
 | `docs/schema-contract.md` | Concept-to-SARIF mapping, the three-state disposition table, `properties` extension reference, evolution rules, and a golden four-disposition example |
 | `tests/` | Schema round-trip, disposition coverage, golden-example validation, and per-check tests |
 
-## Not for production runtime
+## Moved to `packages/conformance/`
 
-This directory is **conformance testing infrastructure**, not a production runtime
-dependency, and is **not bundled into the published PyPI package** (`packages =
-["application_sdk"]` in `pyproject.toml`).  Consumer apps receive the latest rule
-set by sourcing this directory directly from the SDK repository — the reusable CI
-workflow sparse-checkouts `conformance/` at a given `sdk-ref` rather than
-installing the wheel.
+The conformance suite has been extracted into a standalone published Python package:
+**`atlan-application-sdk-conformance`** (`packages/conformance/` in this repo).
+
+Install it as a dev dependency:
+```sh
+uv add --dev atlan-application-sdk-conformance
+```
 
 ## Quick start
 
 ```python
-from suite.schema import ReportBuilder, Disposition, derive_disposition
+from conformance.suite.schema import ReportBuilder, Disposition, derive_disposition
 
 builder = ReportBuilder(tool_name="atlan-conformance", tool_version="3.16.0")
 builder.add_result("P001", "src/foo.py", 42)
@@ -44,10 +45,10 @@ exit_code = 1 if failing else 0
 
 ```sh
 # Full suite (all registered checks → one merged SARIF):
-PYTHONPATH=conformance python -m suite.runner --repo . --output report.sarif
+uv run atlan-application-sdk-conformance detect --repo . --output report.sarif
 
-# C001 only (action-pinning check):
-PYTHONPATH=conformance python -m suite.checks.actions_pinning --root . .github
+# Print bundled programs directory:
+uv run atlan-application-sdk-conformance programs-dir
 ```
 
-See `docs/schema-contract.md` for full field reference.
+See `packages/conformance/conformance/docs/schema-contract.md` for full field reference.
