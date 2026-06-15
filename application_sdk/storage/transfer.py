@@ -40,6 +40,7 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from application_sdk.common._listing import safe_list_directory
 from application_sdk.constants import MAX_CONCURRENT_STORAGE_TRANSFERS
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.observability.logger_adaptor import get_logger
@@ -496,12 +497,12 @@ async def upload(
         # that surfaces OSError instead of swallowing it like pathlib's
         # Path.rglob does (cpython#146646). Closes the silent
         # file_count=0 silent-failure mode observed under concurrent
-        # write-then-list load on macOS APFS.
-        from application_sdk.storage._listing import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-            safe_list_directory,
-        )
-
-        files = safe_list_directory(src)
+        # write-then-list load on macOS APFS. See ADR-0015.
+        #
+        # asyncio.to_thread offloads the blocking I/O (open, fsync,
+        # scandir) off the event loop — SDK convention for sync syscalls
+        # inside async paths.
+        files = await asyncio.to_thread(safe_list_directory, src)
         if raise_on_empty and not files:
             from application_sdk.storage.errors import (  # noqa: PLC0415
                 StorageEmptyUploadError,

@@ -21,6 +21,7 @@ from typing import Annotated, Any, TypeVar
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
+from application_sdk.common._listing import safe_list_directory
 from application_sdk.contracts.types_errors import RunPrefixRequiredError
 from application_sdk.credentials.ref import CredentialRef
 
@@ -273,20 +274,13 @@ class FileReference(BaseModel, frozen=True):
         p = Path(path) if not isinstance(path, Path) else path
         # Best-effort file_count computation. We swallow OSError so the
         # constructor is still usable from inside Temporal sandbox where
-        # filesystem inspection may not be desirable.
+        # filesystem inspection may not be desirable. PART-1148:
+        # safe_list_directory bypasses pathlib.rglob (cpython#146646)
+        # via os.scandir, with a Darwin F_FULLFSYNC barrier for APFS
+        # metadata visibility. See ADR-0015.
         file_count = 1
         try:
             if p.is_dir():
-                # Lazy import — avoids application_sdk.contracts → storage
-                # dependency at module load time. PART-1148: bypasses
-                # pathlib.rglob (cpython#146646) by using os.scandir, with
-                # a Darwin F_FULLFSYNC barrier for APFS metadata
-                # visibility. Returns the correct count even when
-                # rglob would silently return empty.
-                from application_sdk.storage._listing import (  # noqa: PLC0415
-                    safe_list_directory,
-                )
-
                 file_count = len(safe_list_directory(p))
         except OSError:  # conformance: ignore[E009] best-effort file_count; OSError in sandboxed contexts; safe fallback to 1
             file_count = 1
