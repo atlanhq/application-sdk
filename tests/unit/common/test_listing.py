@@ -1,17 +1,9 @@
 """Direct tests for ``application_sdk.common._listing.safe_list_directory``.
 
-The primitive is exercised indirectly via the three callers
-(``storage.transfer.upload``, ``storage.reference.persist_file_reference``,
-``contracts.types.FileReference.from_local``); these tests pin its
-contract directly so a future regression in ``_listing.py`` cannot
-slip through unless one of those caller tests happens to catch it.
-
-Coverage (per the SDK review of PR #2137):
-  - Happy paths: flat directory, recursive listing, empty directory
-  - Symlink behavior: links to files/dirs are NOT followed
-  - Error surfacing: missing path / non-directory raise ``OSError``
-  - Platform barrier: F_FULLFSYNC on Darwin, fallback to fsync,
-    no-op on Windows, best-effort swallow on OSError
+Pin the primitive's contract directly so a future regression cannot
+slip through unless one of the three caller test files happens to
+catch it. Covers happy paths, symlink exclusion, OSError surfacing,
+the platform-specific fsync barrier, and iterative-descent invariants.
 """
 
 from __future__ import annotations
@@ -229,25 +221,18 @@ class TestFlushDirectoryMetadataWindows:
 
 
 # =============================================================================
-# Iterative-descent invariants (PART-1148 review finding #5)
+# Iterative-descent invariants
 # =============================================================================
-#
-# The walk uses an explicit stack, not a recursive generator. Two invariants
-# that distinguish the iterative form from the prior recursive one — both
-# tested here so a future refactor cannot silently regress them.
+# The walk uses an explicit stack. These pin invariants that a future refactor
+# to a recursive form would silently regress (one-FD-at-a-time, no recursion
+# limit, order-agnostic).
 
 
 class TestSafeListDirectoryIterativeInvariants:
     def test_walks_substantial_depth(self, tmp_path: Path) -> None:
-        """A directory tree deeper than any real SDK output tree must
-        still complete. The iterative descent has no recursion-limit
-        ceiling — depth is bounded only by available memory and the
-        platform's PATH_MAX, not by Python's default ~1000-frame
-        stack.
-
-        We use single-character directory names so the cumulative
-        path stays well below PATH_MAX (~1024 on macOS) even at the
-        depth tested here.
+        """Depth far beyond any real SDK output tree must still
+        complete — iterative descent has no recursion-limit ceiling.
+        Single-char dir names keep the cumulative path under PATH_MAX.
         """
         # 100 levels of /d/d/d/... — far beyond any SDK tree, and
         # past the point where small bugs in the iterative form
@@ -266,12 +251,10 @@ class TestSafeListDirectoryIterativeInvariants:
         assert result[0].name == "deep.txt"
 
     def test_holds_at_most_one_scandir_context_at_a_time(self, tmp_path: Path) -> None:
-        """The iterative form pops one directory, opens scandir, drains
-        it (yielding files / pushing subdirs), and closes — only then
-        does it pop the next. So the peak concurrent ``os.scandir``
-        context count must be 1. A regression to recursive ``yield from``
-        would push the peak to ``depth`` (each enclosing context stays
-        open while inner generators run).
+        """Peak concurrent ``os.scandir`` contexts must be 1. A
+        regression to recursive ``yield from`` would push peak to the
+        tree depth (each enclosing context stays open while inner
+        generators run).
         """
         # Tree with a few levels of nesting and several siblings per
         # level, so we have multiple opportunities for FDs to pile up
@@ -327,13 +310,9 @@ class TestSafeListDirectoryIterativeInvariants:
         )
 
     def test_listing_does_not_depend_on_sibling_order(self, tmp_path: Path) -> None:
-        """The iterative descent visits siblings in LIFO order (last
-        pushed, first popped) — different from the recursive form's
-        natural ``os.scandir`` order. Callers should never depend on
-        order; this test pins that contract.
-
-        We verify the *set* of returned files matches what's on disk,
-        regardless of the order they arrive in.
+        """Iterative descent visits siblings in LIFO order. Callers
+        must not depend on order — this pins that contract via set
+        equality.
         """
         # Names chosen so alphabetical order would clash with LIFO
         # order if the filesystem iteration ordering happens to be

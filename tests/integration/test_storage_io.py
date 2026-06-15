@@ -343,7 +343,7 @@ async def test_transfer_upload_directory_max_concurrency(store, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# PART-1148 — rglob listing-race integration coverage
+# rglob listing-race integration coverage
 # ---------------------------------------------------------------------------
 
 
@@ -351,20 +351,10 @@ async def test_transfer_upload_directory_max_concurrency(store, tmp_path):
 async def test_transfer_upload_survives_rglob_listing_transient(
     store, tmp_path, monkeypatch
 ):
-    """End-to-end integration test for the rglob listing race.
-
-    Reproduces the production-observed silent-failure mode with a real
-    local obstore (not the in-memory mock used in unit tests). Mocks
-    ``Path.rglob`` to return empty for a non-empty directory — the
-    same symptom seen on macOS APFS under concurrent I/O load
-    (cpython#146646 pathlib OSError-swallow + APFS metadata visibility).
-
-    Pre-fix: upload silently completes with ``file_count=0`` and zero
-    files uploaded to the local obstore. Post-fix (safe_list_directory
-    using os.scandir): files are found and uploaded as expected.
-
-    Importantly this exercises the real disk path — open(O_DIRECTORY),
-    fsync barrier, scandir recursion — not the in-memory mock surface.
+    """End-to-end on a real local obstore: mock ``Path.rglob`` to
+    return empty (cpython#146646) and assert ``upload`` still finds
+    and persists every file. Exercises the real disk path —
+    O_DIRECTORY + fsync barrier + scandir — not the in-memory mock.
     """
     from pathlib import Path
 

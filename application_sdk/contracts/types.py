@@ -272,17 +272,14 @@ class FileReference(BaseModel, frozen=True):
             ``local_path`` and ``tier`` set.
         """
         p = Path(path) if not isinstance(path, Path) else path
-        # Best-effort file_count computation. We swallow OSError so the
-        # constructor is still usable from inside Temporal sandbox where
-        # filesystem inspection may not be desirable. PART-1148:
-        # safe_list_directory bypasses pathlib.rglob (cpython#146646)
-        # via os.scandir, with a Darwin F_FULLFSYNC barrier for APFS
-        # metadata visibility. See ADR-0015.
+        # Best-effort file_count. We swallow OSError so the constructor
+        # stays usable from inside Temporal sandbox where filesystem
+        # inspection may not be permitted.
         file_count = 1
         try:
             if p.is_dir():
                 file_count = len(safe_list_directory(p))
-        except OSError:  # conformance: ignore[E009] best-effort file_count; OSError in sandboxed contexts; safe fallback to 1
+        except OSError:  # conformance: ignore[E009] sandbox-safe fallback to 1
             file_count = 1
         return FileReference(
             local_path=str(p),

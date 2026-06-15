@@ -205,9 +205,7 @@ async def persist_file_reference(
     if local.is_dir():
         # ── Directory upload ───────────────────────────────────────────────
         prefix = _make_storage_prefix(ref, output_path=output_path)
-        # PART-1148: see common/_listing.safe_list_directory for rationale.
-        # asyncio.to_thread keeps the blocking fsync + scandir off the
-        # event loop — SDK convention for sync I/O in async paths.
+        # to_thread keeps the blocking fsync + scandir off the event loop.
         files = await asyncio.to_thread(safe_list_directory, local)
         _t0 = time.monotonic()
         logger.info(

@@ -419,21 +419,10 @@ class TestDownloadDirectory:
 
 
 class TestUploadDirectoryListingRace:
-    """Reproduces the rglob listing race observed in production.
-
-    When ``Path.rglob("*")`` returns empty (or partial) for a directory
-    that actually contains files — caused by CPython's pathlib silently
-    swallowing ``OSError`` mid-walk (cpython#146646) and/or APFS
-    directory-metadata visibility lag on macOS under concurrent load —
-    the directory branch of ``upload()`` silently returns
-    ``file_count=0`` with no error signal. Downstream consumers
-    branching on ``file_count == 0`` then drop entire pipeline stages.
-
-    These tests inject the rglob transient via monkeypatch and assert
-    the upload still finds the files. They FAIL on the current code
-    (which uses ``pathlib.rglob`` directly) and PASS after the
-    migration to ``safe_list_directory`` (which walks via
-    ``os.scandir`` internally and is unaffected by the rglob mock).
+    """Inject the rglob listing transient (cpython#146646) and assert
+    ``upload`` still returns the correct file_count. Mocking
+    ``Path.rglob`` to return empty/partial proves the upload path is
+    independent of pathlib's silent-swallow bug.
     """
 
     async def test_upload_finds_files_when_rglob_returns_empty(
@@ -461,9 +450,8 @@ class TestUploadDirectoryListingRace:
     async def test_upload_finds_all_files_when_rglob_returns_partial(
         self, store, tmp_path, monkeypatch
     ) -> None:
-        """The subtler form of the bug: pathlib swallows OSError on one
-        subdir mid-walk and returns a partial result. The caller sees
-        an undercount that looks like a successful upload."""
+        """Partial-result variant: rglob silently truncates after a
+        mid-walk OSError. The caller would see an undercount."""
         from pathlib import Path
 
         (tmp_path / "a.txt").write_bytes(b"a")
@@ -484,10 +472,8 @@ class TestUploadDirectoryListingRace:
     async def test_upload_with_raise_on_empty_unaffected_by_rglob_transient(
         self, store, tmp_path, monkeypatch
     ) -> None:
-        """When a caller opts into raise_on_empty=True, a transient
-        rglob result must not look like a quiet-day empty run.
-        Pre-fix this would either raise StorageEmptyUploadError (wrong
-        signal — there ARE files) or silently zero-count."""
+        """raise_on_empty=True must not misfire on a transient empty
+        rglob when the directory actually has files."""
         from pathlib import Path
 
         (tmp_path / "a.txt").write_bytes(b"a")

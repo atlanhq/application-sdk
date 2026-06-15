@@ -639,16 +639,8 @@ class TestDirectoryPersistConcurrent:
 
 
 class TestPersistFileReferenceListingRace:
-    """Reproduces the rglob listing race observed in production.
-
-    When ``Path.rglob("*")`` returns empty for a non-empty directory
-    (cpython#146646 — pathlib silently swallows ``OSError`` mid-walk —
-    and APFS directory-metadata visibility on macOS under concurrent
-    load), ``persist_file_reference`` logs a successful completion
-    with ``file_count=0`` and zero files actually uploaded. After
-    migration to ``safe_list_directory``, ``os.scandir`` is used
-    instead and all files are uploaded regardless of the rglob
-    transient.
+    """Inject the rglob listing transient (cpython#146646) and assert
+    ``persist_file_reference`` still uploads every file.
     """
 
     async def test_directory_upload_finds_files_when_rglob_returns_empty(

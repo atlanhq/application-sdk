@@ -156,21 +156,13 @@ class TestFileReference:
         ref = FileReference.from_local("/does/not/exist")
         assert ref.file_count == 1
 
-    # ---- rglob listing race (PART-1148) ----------------------------------
+    # ---- rglob listing race ---------------------------------------------
 
     def test_from_local_finds_files_when_rglob_returns_empty(
         self, tmp_path: Path, monkeypatch
     ) -> None:
-        """Reproduces the rglob listing race in FileReference.from_local.
-
-        When ``Path.rglob`` returns empty for a non-empty dir
-        (cpython#146646 — pathlib silently swallows OSError mid-walk —
-        and APFS directory-metadata visibility on macOS under
-        concurrent load), ``file_count`` comes out as 0 on the current
-        code. After migration to ``safe_list_directory``, ``os.scandir``
-        is used internally and the correct count is returned regardless
-        of the rglob transient.
-        """
+        """Mock ``Path.rglob`` to return empty (cpython#146646 silent-
+        swallow); ``file_count`` must still reflect the real tree."""
         d = tmp_path / "tree"
         d.mkdir()
         (d / "a.txt").write_text("a")
