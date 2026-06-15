@@ -416,3 +416,76 @@ class TestDownloadDirectory:
         ):
             await download("p/", str(dest), store=store)
         assert not canary.exists()
+
+
+class TestUploadDirectoryListingRace:
+    """Inject the rglob listing transient (cpython#146646) and assert
+    ``upload`` still returns the correct file_count. Mocking
+    ``Path.rglob`` to return empty/partial proves the upload path is
+    independent of pathlib's silent-swallow bug.
+    """
+
+    async def test_upload_finds_files_when_rglob_returns_empty(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        from pathlib import Path
+
+        (tmp_path / "a.txt").write_bytes(b"a")
+        (tmp_path / "b.txt").write_bytes(b"b")
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        (sub / "c.txt").write_bytes(b"c")
+
+        # Inject the listing race: Path.rglob returns empty even though
+        # the directory has 3 files.
+        # Regression guard: a future revert to Path.rglob would re-trigger this mock.
+        monkeypatch.setattr(Path, "rglob", lambda self, pat: iter([]))
+
+        out = await upload(str(tmp_path), "race_prefix", store=store)
+
+        # On main: file_count==0 (production silent-failure mode).
+        # After fix: safe_list_directory bypasses rglob via os.scandir.
+        assert out.ref.file_count == 3
+        assert out.synced is True
+
+    async def test_upload_finds_all_files_when_rglob_returns_partial(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        """Partial-result variant: rglob silently truncates after a
+        mid-walk OSError. The caller would see an undercount."""
+        from pathlib import Path
+
+        (tmp_path / "a.txt").write_bytes(b"a")
+        (tmp_path / "b.txt").write_bytes(b"b")
+        (tmp_path / "c.txt").write_bytes(b"c")
+
+        # Return only 1 of the 3 files — simulating partial-truncation.
+        # Regression guard: a future revert to Path.rglob would re-trigger this mock.
+        partial = [tmp_path / "a.txt"]
+        monkeypatch.setattr(Path, "rglob", lambda self, pat: iter(partial))
+
+        out = await upload(str(tmp_path), "partial_race", store=store)
+
+        # On main: file_count==1 (silent undercount).
+        # After fix: file_count==3 (all found via os.scandir).
+        assert out.ref.file_count == 3
+        assert out.synced is True
+
+    async def test_upload_with_raise_on_empty_unaffected_by_rglob_transient(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        """raise_on_empty=True must not misfire on a transient empty
+        rglob when the directory actually has files."""
+        from pathlib import Path
+
+        (tmp_path / "a.txt").write_bytes(b"a")
+        (tmp_path / "b.txt").write_bytes(b"b")
+
+        # Regression guard: a future revert to Path.rglob would re-trigger this mock.
+        monkeypatch.setattr(Path, "rglob", lambda self, pat: iter([]))
+
+        out = await upload(
+            str(tmp_path), "race_prefix", store=store, raise_on_empty=True
+        )
+
+        assert out.ref.file_count == 2
