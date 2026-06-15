@@ -576,6 +576,7 @@ class BaseIntegrationTest:
             needs_output_check = scenario.api_type == APIType.WORKFLOW and (
                 scenario.assert_min_total_assets is not None
                 or scenario.expected_asset_types is not None
+                or scenario.expected_counts is not None
             )
 
             if needs_metadata or needs_pandera or needs_output_check:
@@ -596,6 +597,7 @@ class BaseIntegrationTest:
                     response,
                     min_total=scenario.assert_min_total_assets,
                     required_types=scenario.expected_asset_types,
+                    expected_counts=scenario.expected_counts,
                 )
 
             logger.info("Scenario %s passed", scenario.name)
@@ -785,15 +787,19 @@ class BaseIntegrationTest:
         *,
         min_total: int | None = None,
         required_types: set[str] | None = None,
+        expected_counts: dict[str, int] | None = None,
         soft_if_no_base_path: bool = False,
     ) -> None:
         """Assert the extracted output meets a minimum bar.
 
-        Two complementary checks (either or both):
+        Three complementary checks (any combination):
           * ``min_total`` — the run must produce at least this many assets.
             Catches "workflow succeeded but extracted nothing" regressions that
             status-only validation is blind to.
           * ``required_types`` — every listed asset ``typeName`` must be present.
+          * ``expected_counts`` — exact per-type asset-count parity vs. a
+            (committed) direct-run baseline; fails if any listed type's count
+            differs.
 
         Operates on the **local** extracted output (the same ``transformed/``
         JSONL the metadata-baseline comparison reads), so it runs hermetically
@@ -869,11 +875,34 @@ class BaseIntegrationTest:
                     f"{sorted(present_types)} (total assets: {total})."
                 )
 
+        if expected_counts:
+            actual_counts: dict[str, int] = {}
+            for record in actual:
+                type_name = record.get("typeName")
+                if type_name:
+                    actual_counts[type_name] = actual_counts.get(type_name, 0) + 1
+            mismatches = {
+                type_name: (want, actual_counts.get(type_name, 0))
+                for type_name, want in expected_counts.items()
+                if actual_counts.get(type_name, 0) != want
+            }
+            if mismatches:
+                detail = ", ".join(
+                    f"{t}: expected {want}, got {got}"
+                    for t, (want, got) in sorted(mismatches.items())
+                )
+                raise AssertionError(
+                    f"Asset count parity failed for scenario '{scenario.name}' "
+                    f"(SDR run vs. direct-run baseline): {detail}. "
+                    f"Full actual counts: {dict(sorted(actual_counts.items()))}."
+                )
+
         logger.info(
-            "Output floor passed for scenario '%s': %d asset(s)%s",
+            "Output floor passed for scenario '%s': %d asset(s)%s%s",
             scenario.name,
             total,
             f", types present: {sorted(required_types)}" if required_types else "",
+            ", counts match baseline" if expected_counts else "",
         )
 
     def _validate_pandera_schemas(

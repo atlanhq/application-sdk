@@ -109,6 +109,7 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
             # already polled + validated them — don't double-poll here.
             and scenario.assert_min_total_assets is None
             and not scenario.expected_asset_types
+            and not scenario.expected_counts
             and result.success
             and result.response
         ):

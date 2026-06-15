@@ -149,3 +149,60 @@ def test_missing_workflow_ids_fails() -> None:
     runner = _Runner()
     with pytest.raises(AssertionError, match="workflow_id or run_id"):
         runner._validate_output_floor(_scenario(), {"data": {}}, min_total=1)
+
+
+# --------------------------------------------------------------------------
+# _validate_output_floor — count parity (M3)
+# --------------------------------------------------------------------------
+
+
+def test_expected_counts_match_passes() -> None:
+    runner = _Runner()
+    actual = [
+        {"typeName": "Database"},
+        {"typeName": "Schema"},
+        {"typeName": "Schema"},
+    ]
+    with patch(_LOAD, return_value=actual):
+        runner._validate_output_floor(
+            _scenario(), _wf_response(), expected_counts={"Database": 1, "Schema": 2}
+        )
+
+
+def test_expected_counts_mismatch_fails() -> None:
+    runner = _Runner()
+    actual = [{"typeName": "Database"}, {"typeName": "Schema"}]
+    with patch(_LOAD, return_value=actual):
+        with pytest.raises(AssertionError, match="Schema: expected 5, got 1"):
+            runner._validate_output_floor(
+                _scenario(), _wf_response(), expected_counts={"Database": 1, "Schema": 5}
+            )
+
+
+def test_expected_counts_missing_type_counts_as_zero() -> None:
+    runner = _Runner()
+    with patch(_LOAD, return_value=[{"typeName": "Database"}]):
+        with pytest.raises(AssertionError, match="Table: expected 1, got 0"):
+            runner._validate_output_floor(
+                _scenario(), _wf_response(), expected_counts={"Table": 1}
+            )
+
+
+# --------------------------------------------------------------------------
+# Scenario model validation — M3
+# --------------------------------------------------------------------------
+
+
+def test_expected_counts_only_for_workflow() -> None:
+    with pytest.raises(ValueError, match="workflow"):
+        Scenario(
+            name="x",
+            api="auth",
+            assert_that={"success": lambda v: True},
+            expected_counts={"Table": 1},
+        )
+
+
+def test_expected_counts_negative_value_raises() -> None:
+    with pytest.raises(ValueError, match=">= 0"):
+        _scenario(expected_counts={"Table": -1})

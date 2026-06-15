@@ -137,6 +137,12 @@ class Scenario:
             present in the extracted output (e.g. {"Database", "Schema",
             "Table", "Column"}). The run fails if any are missing. Workflow
             scenarios only.
+        expected_counts: Exact per-type asset counts the run must produce, e.g.
+            {"Database": 1, "Schema": 3, "Table": 42}. The run fails if any
+            listed type's count differs (asset-count parity vs. a direct,
+            non-SDR baseline run — generate the baseline once via a direct
+            extraction / the parity-extract action and commit the counts).
+            Workflow scenarios only.
     """
 
     name: str
@@ -166,6 +172,7 @@ class Scenario:
     preflight_timeout: int = 60
     assert_min_total_assets: int | None = None
     expected_asset_types: set[str] | None = None
+    expected_counts: dict[str, int] | None = None
 
     def __post_init__(self):
         """Validate the scenario after initialization."""
@@ -203,6 +210,7 @@ class Scenario:
         for _field, _value in (
             ("assert_min_total_assets", self.assert_min_total_assets),
             ("expected_asset_types", self.expected_asset_types),
+            ("expected_counts", self.expected_counts),
         ):
             if _value is not None and self.api.lower() != "workflow":
                 raise ValueError(
@@ -212,6 +220,11 @@ class Scenario:
 
         if self.assert_min_total_assets is not None and self.assert_min_total_assets < 0:
             raise ValueError("assert_min_total_assets must be >= 0")
+
+        if self.expected_counts is not None and any(
+            v < 0 for v in self.expected_counts.values()
+        ):
+            raise ValueError("expected_counts values must be >= 0")
 
         if self.api.lower() == "config":
             if self.config_action not in ("get", "update"):
