@@ -12,6 +12,7 @@ import application_sdk.templates.sql_metadata_extractor as mod
 from application_sdk.app.base import App
 from application_sdk.app.task import get_task_metadata, is_task
 from application_sdk.contracts.base import Output, PublishInputMixin
+from application_sdk.errors.leaves import InvalidInputError, UnimplementedError
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionOutput,
@@ -103,7 +104,7 @@ class TestFetchProceduresTask:
 
     async def test_fetch_procedures_raises_not_implemented(self) -> None:
         extractor = SqlMetadataExtractor.__new__(SqlMetadataExtractor)
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(UnimplementedError):
             await extractor.fetch_procedures(FetchProceduresInput())
 
     def test_fetch_procedures_input_has_no_workflow_args(self) -> None:
@@ -224,7 +225,7 @@ class TestSqlMetadataExtractorSubclass:
 
     async def test_fetch_databases_raises_not_implemented_by_default(self) -> None:
         extractor = SqlMetadataExtractor.__new__(SqlMetadataExtractor)
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(UnimplementedError):
             await extractor.fetch_databases(FetchDatabasesInput())
 
 
@@ -361,7 +362,7 @@ class TestSqlMetadataExtractorLoadSqlClient:
 
     async def test_load_sql_client_raises_when_class_not_set(self) -> None:
         extractor = SqlMetadataExtractor.__new__(SqlMetadataExtractor)
-        with pytest.raises(NotImplementedError, match="sql_client_class"):
+        with pytest.raises(UnimplementedError, match="sql_client_class"):
             await extractor._load_sql_client(ExtractionTaskInput())
 
     async def test_load_sql_client_instantiates_and_loads(self) -> None:
@@ -677,7 +678,7 @@ class TestGetCredentials:
         monkeypatch.setattr(mod, "get_infrastructure", lambda: None)
         extractor = SqlMetadataExtractor.__new__(SqlMetadataExtractor)
         with pytest.raises(
-            ValueError, match="No credential reference or GUID available"
+            InvalidInputError, match="No credential reference or GUID available"
         ):
             await extractor._get_credentials(ExtractionTaskInput())
 
@@ -686,7 +687,7 @@ class TestGetCredentials:
     ) -> None:
         monkeypatch.setattr(mod, "get_infrastructure", lambda: None)
         extractor = SqlMetadataExtractor.__new__(SqlMetadataExtractor)
-        with pytest.raises(ValueError, match="No secret store available"):
+        with pytest.raises(InvalidInputError, match="No secret store available"):
             await extractor._get_credentials(
                 ExtractionTaskInput(credential_guid="some-guid-that-needs-a-store")
             )
@@ -899,7 +900,7 @@ class TestFetchTablesHappyPath:
         )
 
         extractor = SqlMetadataExtractor.__new__(SqlMetadataExtractor)
-        with pytest.raises(NotImplementedError, match="fetch_table_sql"):
+        with pytest.raises(UnimplementedError, match="fetch_table_sql"):
             await extractor.fetch_tables(FetchTablesInput())
 
     async def test_fetch_schemas_raises_when_sql_not_set(self) -> None:
@@ -909,7 +910,7 @@ class TestFetchTablesHappyPath:
         )
 
         extractor = SqlMetadataExtractor.__new__(SqlMetadataExtractor)
-        with pytest.raises(NotImplementedError, match="fetch_schema_sql"):
+        with pytest.raises(UnimplementedError, match="fetch_schema_sql"):
             await extractor.fetch_schemas(FetchSchemasInput())
 
     async def test_fetch_columns_raises_when_sql_not_set(self) -> None:
@@ -919,7 +920,7 @@ class TestFetchTablesHappyPath:
         )
 
         extractor = SqlMetadataExtractor.__new__(SqlMetadataExtractor)
-        with pytest.raises(NotImplementedError, match="fetch_column_sql"):
+        with pytest.raises(UnimplementedError, match="fetch_column_sql"):
             await extractor.fetch_columns(FetchColumnsInput())
 
 

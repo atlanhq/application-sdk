@@ -190,6 +190,7 @@ def get_current_table_scope(
                 state_map.get("NO CHANGE", 0),
             )
 
+    # conformance: ignore[E004] cleanup-and-rethrow handler; exception preserved in TableScopeLoadError cause chain
     except Exception as e:
         close_scope(scope)
         from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415

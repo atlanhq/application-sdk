@@ -348,8 +348,8 @@ async def _prefer_v4_target(target_host: str) -> tuple[str, str | None]:
     host_stripped = host[1:-1] if host.startswith("[") and host.endswith("]") else host
     try:
         ipaddress.ip_address(host_stripped)
-    except ValueError:
-        pass  # not a literal IP — fall through to DNS resolution below
+    except ValueError:  # conformance: ignore[E002] host is not a literal IP; fall through to DNS resolution
+        pass
     else:
         # Already a literal IP — no resolution to do, no SNI to preserve.
         return target_host, None
@@ -372,6 +372,11 @@ async def _prefer_v4_target(target_host: str) -> tuple[str, str | None]:
             flags=socket.AI_ADDRCONFIG,
         )
     except (socket.gaierror, ValueError):
+        logger.warning(
+            "DNS resolution failed for %s; returning unresolved host",
+            host,
+            exc_info=True,
+        )
         return target_host, None
     if not results:
         return target_host, None

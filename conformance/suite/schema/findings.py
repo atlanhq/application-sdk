@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from suite.schema.builder import ReportBuilder
-from suite.schema.sarif import SarifReport
+from suite.schema.sarif import SarifReport, Suppression
 
 
 @dataclass(frozen=True)
 class Finding:
-    """A single rule violation found by a checker."""
+    """A single rule violation found by a checker.
+
+    ``suppressed=True`` means the violation was acknowledged at the source via
+    a ``# conformance: ignore[PXXX] <reason>`` directive.  Suppressed findings
+    still appear in the SARIF output (as ``kind="fail"`` with a
+    ``suppressions`` entry) so they are auditable, but they do not contribute
+    to the failing count and therefore do not affect the gate exit code.
+    """
 
     rule_id: str
     file: str
@@ -18,6 +25,10 @@ class Finding:
     column: int
     message: str
     snippet: str | None = None
+    suppressed: bool = field(default=False, compare=False, hash=False)
+    suppression_justification: str | None = field(
+        default=None, compare=False, hash=False
+    )
 
 
 def findings_to_report(
@@ -27,6 +38,7 @@ def findings_to_report(
     repo_uri: str | None = None,
     commit_sha: str | None = None,
     branch: str | None = None,
+    excluded_paths: list[str] | None = None,
 ) -> SarifReport:
     """Convert a list of Findings to a SARIF SarifReport via ReportBuilder."""
     from suite.rules import load_catalog
@@ -41,6 +53,15 @@ def findings_to_report(
         branch=branch,
     )
     for f in findings:
+        suppressions: list[Suppression] | None = None
+        if f.suppressed:
+            suppressions = [
+                Suppression(
+                    kind="inSource",
+                    justification=f.suppression_justification or "",
+                    status="accepted",
+                )
+            ]
         builder.add_result(
             rule_id=f.rule_id,
             file_uri=f.file,
@@ -48,5 +69,6 @@ def findings_to_report(
             start_column=f.column,
             message=f.message,
             snippet=f.snippet,
+            suppressions=suppressions,
         )
-    return builder.build()
+    return builder.build(excluded_paths=excluded_paths)

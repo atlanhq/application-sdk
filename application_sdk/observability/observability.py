@@ -299,8 +299,8 @@ class AtlanObservability(Generic[T], ABC):
 
             if _wf_unsafe.in_sandbox():
                 return
-        except ImportError:
-            pass  # optional: workflow sandbox check unavailable outside Temporal worker
+        except ImportError:  # conformance: ignore[E002,E008] Temporal sandbox check unavailable outside a worker; normal flush
+            pass
         try:
             # Group records by partition using record's own timestamp
             partition_records: dict[str, list[dict[str, Any]]] = {}

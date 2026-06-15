@@ -7,7 +7,7 @@ model and a validation helper.
 
 Rule ID namespaces:
 
-* ``P###``  — error-recovery patterns (P001–P099)
+* ``E###``  — error-handling patterns (E001–E099)
 * ``L###``  — logging patterns (L001–L099)
 * ``C###``  — CI/workflow supply-chain patterns (C001–C099)
 * (reserved) ``T###`` — test-quality patterns

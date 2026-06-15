@@ -136,6 +136,7 @@ def generate_aws_rds_token_with_iam_user(
             DBHostname=host, Port=port, DBUsername=user
         )
         return token
+    # conformance: ignore[E004] exception translation layer; broad catch converts to typed AwsRdsTokenError and re-raises
     except Exception as e:
         raise AwsRdsTokenError(cause=e) from e
 
@@ -315,6 +316,7 @@ def create_aws_client(
             )
             return boto3.client(service, region_name=region)  # type: ignore
 
+    # conformance: ignore[E004] exception translation layer; broad catch converts to typed AwsClientCreationError and re-raises
     except Exception as e:
         raise AwsClientCreationError(service=service, cause=e) from e
 

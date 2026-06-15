@@ -762,6 +762,9 @@ def create_store_from_binding_optional(
     try:
         return create_store_from_binding(name, components_dir=components_dir)
     except StorageBindingNotFoundError:
+        _get_logger().warning(
+            "Dapr component '%s' not found — treating as absent", name, exc_info=True
+        )
         return None
     except StorageBindingBrokenError as exc:
         _get_logger().warning(
@@ -769,6 +772,7 @@ def create_store_from_binding_optional(
             "(broken fields: %s) — treating as absent",
             name,
             ", ".join(exc.broken_fields or []),
+            exc_info=True,
         )
         return None
 
@@ -823,5 +827,6 @@ def _create_store_from_binding_optional_with_put_attrs(
             "(broken fields: %s) — treating as absent",
             name,
             ", ".join(exc.broken_fields or []),
+            exc_info=True,
         )
         return None, None

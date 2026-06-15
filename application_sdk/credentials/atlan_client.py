@@ -90,6 +90,7 @@ def _apply_app_headers(client: AsyncAtlanClient, headers: dict[str, str]) -> Non
         return
     try:
         update_headers(headers)
+    # conformance: ignore[E004] best-effort header attachment; exc_info already captured in debug log; swallowing is intentional per docstring
     except Exception:
         logger.debug(
             "update_headers failed on pyatlan client %s; continuing without app headers",

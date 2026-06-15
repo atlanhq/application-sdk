@@ -1,19 +1,44 @@
 # .github/workflows/conformance-reusable.yaml
 #
-# Reusable workflow: Conformance full suite gate.
+# Reusable workflow: full conformance suite gate.
 #
-# Wraps conformance-ci.yaml (C-series checks) plus the aggregating "Full suite"
-# gate job so that consumers (atlan-*-app repos) never copy gate logic — they
-# carry only a thin caller that sets triggers and passes sdk-ref.
+# Runs C-series and E-series checks as separate jobs so each appears as its own
+# status check:
+#   Conformance / conformance / CI
+#   Conformance / conformance / Error-handling
+#   Conformance / conformance / Full suite  (required gate)
 #
-# The gate job uses if: always() so it reports a concrete pass/fail rather than
-# "skipped", which is what allows it to be marked a required status check without
-# ever blocking the merge queue.
+# Jobs are intentionally inline (not delegating to sub-workflows) so GitHub
+# reports them at the correct depth — one level of workflow_call from the
+# caller produces three-level check paths, not four.
 #
-# Usage from a connector app:
+# Usage from a connector SDK/app:
 #   uses: atlanhq/application-sdk/.github/workflows/conformance-reusable.yaml@main
 #   with:
 #     sdk-ref: main
+#
+# ── Suppression vs path exclusion ─────────────────────────────────────────────
+#
+# There are two ways to reduce the set of findings a check reports.  They serve
+# different purposes and carry different audit properties:
+#
+#   # conformance: ignore[Exxx] <reason>   (or  # noqa: S110 — <reason>)
+#     A per-site, in-source suppression for a specific finding.  The finding is
+#     still emitted to the SARIF artifact as a suppressed result with the
+#     justification text preserved — it is counted in atlan/summary.suppressing
+#     and downloadable as a build artifact.  Suppressed results are stripped
+#     from the Security tab upload so they do not create alerts or PR
+#     annotations.  Use this for production code in the SDK/app that has a
+#     legitimate, site-specific carve-out.
+#
+#   exclude-paths-c / exclude-paths-e
+#     A path prefix removed from scanning entirely.  Nothing from that path
+#     appears in the SARIF report.  Use this only for code that is categorically
+#     outside the SDK/app surface — tooling, migration scripts, generated files,
+#     or other paths that will never run in production.  Excluded paths are
+#     recorded in atlan/excludedPaths in the SARIF run properties and surfaced
+#     as a ::notice annotation so the reduced scope is always visible.
+#     Extending this list to cover production code defeats the gate.
 
 name: "Conformance (reusable)"
 
@@ -25,27 +50,161 @@ on:
         required: false
         default: main
         type: string
+      upload-sarif:
+        description: "Upload SARIF report to GitHub Security tab (requires security-events: write)"
+        required: false
+        default: true
+        type: boolean
+      event_name:
+        description: "Caller's github.event_name (push / pull_request / merge_group); reusable workflows always see 'workflow_call' internally"
+        required: false
+        default: ""
+        type: string
+      exclude-paths-c:
+        description: >
+          Comma-separated repo-root-relative path prefixes to exclude from C-series
+          checks only, e.g. 'tools/'.  Default: nothing excluded.
+        required: false
+        default: ""
+        type: string
+      exclude-paths-e:
+        description: >
+          Comma-separated repo-root-relative path prefixes to exclude from E-series
+          checks only, e.g. 'tools/,contract-toolkit/'.  Default: nothing excluded.
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
   security-events: write
 
 jobs:
-  ci-series:
-    name: "CI series (C)"
-    uses: ./.github/workflows/conformance-ci.yaml
-    with:
-      sdk-ref: ${{ inputs.sdk-ref }}
+  # ── CI series (C-series: action-pinning, workflow supply-chain) ─────────────
+  ci:
+    name: "CI"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout caller repo"
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: "Detect changed files"
+        id: changes
+        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4
+        with:
+          filters: |
+            relevant:
+              - '.github/**'
+
+      - name: "Sparse-checkout conformance suite"
+        if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push'
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ inputs.sdk-ref }}
+          sparse-checkout: conformance
+          path: _sdk
+
+      - name: "Set up uv"
+        if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push'
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+      - name: "Run C-series checks"
+        if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push'
+        env:
+          PYTHONPATH: _sdk/conformance
+        run: |
+          uv run --with pydantic python -m suite.runner \
+            --repo . \
+            --series C \
+            --output ci.sarif \
+            ${{ inputs.exclude-paths-c != '' && format('--exclude "{0}"', inputs.exclude-paths-c) || '' }}
+
+      - name: "Upload SARIF artifact"
+        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push') && !cancelled()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-ci-sarif
+          path: ci.sarif
+
+      - name: "Strip suppressed results for Security tab"
+        if: ${{ inputs.upload-sarif && inputs.event_name == 'push' }}
+        run: |
+          jq '.runs[] |= (.results |= map(select(.suppressions == null or (.suppressions | length == 0))))' \
+            ci.sarif > ci-upload.sarif
+
+      - name: "Upload SARIF to Security tab"
+        if: ${{ inputs.upload-sarif && inputs.event_name == 'push' }}
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        with:
+          sarif_file: ci-upload.sarif
+
+  # ── Error-handling series (E-series: error patterns, exception hygiene) ─────
+  error-handling:
+    name: "Error-handling"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout caller repo"
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: "Detect changed files"
+        id: changes
+        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4
+        with:
+          filters: |
+            relevant:
+              - '**/*.py'
+
+      - name: "Sparse-checkout conformance suite"
+        if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push'
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ inputs.sdk-ref }}
+          sparse-checkout: conformance
+          path: _sdk
+
+      - name: "Set up uv"
+        if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push'
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+      - name: "Run E-series checks"
+        if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push'
+        env:
+          PYTHONPATH: _sdk/conformance
+        run: |
+          uv run --with pydantic python -m suite.runner \
+            --repo . \
+            --series E \
+            --output error-handling.sarif \
+            ${{ inputs.exclude-paths-e != '' && format('--exclude "{0}"', inputs.exclude-paths-e) || '' }}
+
+      - name: "Upload SARIF artifact"
+        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push') && !cancelled()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-error-handling-sarif
+          path: error-handling.sarif
+
+      - name: "Strip suppressed results for Security tab"
+        if: ${{ inputs.upload-sarif && inputs.event_name == 'push' }}
+        run: |
+          jq '.runs[] |= (.results |= map(select(.suppressions == null or (.suppressions | length == 0))))' \
+            error-handling.sarif > error-handling-upload.sarif
+
+      - name: "Upload SARIF to Security tab"
+        if: ${{ inputs.upload-sarif && inputs.event_name == 'push' }}
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        with:
+          sarif_file: error-handling-upload.sarif
 
   # ── Required gate ─────────────────────────────────────────────────────────
-  # This job always runs (if: always()) so it can be marked a required check
-  # without ever becoming "skipped" and blocking the merge queue.  It
-  # aggregates every series job above: if any series returned "failure" the
-  # gate exits 1; otherwise it exits 0 (pass or no-op).
+  # Always runs so it can be marked a required check without ever becoming
+  # "skipped" and blocking the merge queue.
   gate:
     name: "Full suite"
     runs-on: ubuntu-latest
-    needs: [ci-series]
+    needs: [ci, error-handling]
     if: always()
     steps:
       - name: "Evaluate conformance results"

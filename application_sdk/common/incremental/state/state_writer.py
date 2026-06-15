@@ -177,6 +177,7 @@ async def prepare_previous_state(
             previous_state_temp_dir,
         )
         return previous_state_temp_dir
+    # conformance: ignore[E004] re-raises as typed StateDownloadError; exception propagates to caller
     except Exception as e:
         if previous_state_temp_dir.exists():
             shutil.rmtree(previous_state_temp_dir)
