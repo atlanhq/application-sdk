@@ -317,19 +317,101 @@ jobs:
           snowflake-user: ${{ secrets.SNOWFLAKE_USER }}
           snowflake-password: ${{ secrets.SNOWFLAKE_PASSWORD }}
 
+  # Build a PR-scoped SDK runtime base image so the connector e2e tests can
+  # build the connector FROM the *rebuilt* base — exercising Dockerfile /
+  # base-image / daprd-apk changes that the pip-install (application_sdk_ref)
+  # path can't reach.
+  #
+  # Gated on the 'e2e' label ONLY (the same deliberate opt-in as
+  # connector-tests below) — NOT on the `container` paths-filter or the
+  # trivy-container scan. On merge_group this job is skipped and the
+  # connector dispatch passes no base_image_ref, so the connector builds
+  # FROM the released base exactly as before.
+  #
+  # Pushes to the public Harbor project (anonymous-pull), so the connector
+  # build pulls it through the same path it already uses for
+  # `FROM registry.atlan.com/public/app-runtime-base:<tag>` — no extra
+  # registry auth on the connector side. Fork PRs are excluded (no secrets).
+  build-sdk-base-image:
+    name: Build SDK base image (e2e)
+    needs: changes
+    if: |
+      needs.changes.outputs.code == 'true' &&
+      github.event_name == 'pull_request' &&
+      contains(github.event.pull_request.labels.*.name, 'e2e') &&
+      github.event.pull_request.head.repo.fork != true &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      image: ${{ steps.ref.outputs.image }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
+      - name: Compute PR base image ref
+        id: ref
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          echo "image=registry.atlan.com/public/app-runtime-base:pr-${PR_NUMBER}-sha-${HEAD_SHA::7}" >> "$GITHUB_OUTPUT"
+      - name: Log in to Atlan Harbor Registry
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: registry.atlan.com
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD }}
+      - name: Log in to Chainguard Container Registry
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: cgr.dev
+          username: ${{ secrets.CHAINGUARD_USERNAME }}
+          password: ${{ secrets.CHAINGUARD_PASSWORD }}
+      - name: Build, scan, and push PR base image
+        uses: ./.github/actions/secure-build-push-apps
+        with:
+          branch: ${{ github.ref_name }}
+          context: .
+          file: ./Dockerfile
+          push: true
+          # amd64 only — GitHub-hosted e2e runners are amd64; the connector
+          # build (sdr-e2e) is single-platform too. Keeps the rebuild fast.
+          platforms: linux/amd64
+          tags: ${{ steps.ref.outputs.image }}
+          build-args: |
+            ACCESS_TOKEN_USR=$GITHUB_ACTOR
+            ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
+          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+        env:
+          DOCKER_CLIENT_TIMEOUT: 600
+          COMPOSE_HTTP_TIMEOUT: 600
+
   # Connector tests: dispatches tests.yaml to each connector repo.
   # Triggers:
   #   merge_group — always runs on code-changing merge queue entries (the
   #     primary gate). Each entry has a unique SHA so runs are parallel.
+  #     build-sdk-base-image is skipped here, so base_image_ref is omitted
+  #     and connectors build FROM the released base.
   #   pull_request + 'e2e' label — opt-in during PR development; also used
   #     to release-gate the release PR before merging. The connector-side
   #     e2e job serialises itself via its own concurrency group, so
   #     simultaneous e2e-labelled PRs queue safely on the connector side.
+  #     On this path base_image_ref is the freshly-built PR base image, so
+  #     the connector is rebuilt on top of the SDK PR's runtime image.
   connector-tests:
     name: Connector Tests (${{ matrix.repo_name }})
-    needs: [changes, matrix-builder]
+    needs: [changes, matrix-builder, build-sdk-base-image]
+    # always() so a *skipped* build-sdk-base-image (merge_group path) does
+    # not auto-skip this job. The explicit result clause still BLOCKS this
+    # job when the base build genuinely fails on the e2e path — a base that
+    # won't build is the signal, not something to mask by silently falling
+    # back to the released base.
     if: |
-      needs.changes.outputs.code == 'true' && (
+      always() &&
+      needs.changes.outputs.code == 'true' &&
+      needs.matrix-builder.result == 'success' &&
+      (needs.build-sdk-base-image.result == 'success' || needs.build-sdk-base-image.result == 'skipped') && (
         github.event_name == 'merge_group' ||
         (
           github.event_name == 'pull_request' &&
@@ -350,7 +432,7 @@ jobs:
           repo-name: ${{ matrix.repo_name }}
           target-branch: "refs/heads/${{ matrix.target_branch }}"
           workflow: tests.yaml
-          workflow-inputs: ${{ github.event_name == 'merge_group' && format('{{"application_sdk_ref":"{0}"}}', github.sha) || format('{{"application_sdk_ref":"{0}","run_e2e":"true"}}', github.event.pull_request.head.sha) }}
+          workflow-inputs: ${{ github.event_name == 'merge_group' && format('{{"application_sdk_ref":"{0}"}}', github.sha) || format('{{"application_sdk_ref":"{0}","run_e2e":"true","base_image_ref":"{1}"}}', github.event.pull_request.head.sha, needs.build-sdk-base-image.outputs.image) }}
 
   # (sdr-matrix-builder, sdr-e2e-apps, and e2e-full-mysql removed —
   # superseded by connector-tests + the 'e2e' label on tests.yaml)
