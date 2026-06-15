@@ -108,6 +108,16 @@ on:
         required: false
         type: string
         default: ""
+      base-image-ref:
+        description: |
+          Optional runtime base image to build the connector FROM, passed
+          as the BASE_IMAGE build-arg to the connector Docker build. Set by
+          the apps-sdk PR dispatch to a freshly-built PR base image so
+          Dockerfile / base-image / daprd changes in the SDK PR are
+          exercised end-to-end. Empty = connector Dockerfile's default base.
+        required: false
+        type: string
+        default: ""
       distinct-id:
         description: |
           Identifier passed through from the caller's
@@ -194,3 +204,4 @@ jobs:
           # instead of waiting for a final dump.
           pytest-extra-args: "-s"
           application-sdk-ref: ${{ inputs.application-sdk-ref }}
+          base-image-ref: ${{ inputs.base-image-ref }}
