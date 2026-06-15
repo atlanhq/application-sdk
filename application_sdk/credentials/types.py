@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import base64
+import logging
 from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
+
+logger = logging.getLogger(__name__)
 
 # TODO(credentials): Add AwsCredential and migrate SQL client IAM auth to typed
 # credentials to eliminate the v2 fallback entirely.
@@ -135,6 +138,10 @@ class BearerTokenCredential(BaseModel, frozen=True):
                 expiry = expiry.replace(tzinfo=UTC)
             return datetime.now(UTC) >= expiry
         except ValueError:
+            logger.warning(
+                "Failed to parse expires_at as ISO datetime; returning False",
+                exc_info=True,
+            )
             return False
 
     async def validate(self) -> None:  # type: ignore[override]
@@ -179,6 +186,10 @@ class OAuthClientCredential(BaseModel, frozen=True):
                 expiry = expiry.replace(tzinfo=UTC)
             return datetime.now(UTC) >= expiry
         except ValueError:
+            logger.warning(
+                "Failed to parse expires_at as ISO datetime; returning False",
+                exc_info=True,
+            )
             return False
 
     def with_new_token(
@@ -186,7 +197,7 @@ class OAuthClientCredential(BaseModel, frozen=True):
         access_token: str,
         expires_at: str = "",
         refresh_token: str = "",
-    ) -> "OAuthClientCredential":
+    ) -> OAuthClientCredential:
         """Return a new instance with updated token fields."""
         return self.model_copy(
             update={

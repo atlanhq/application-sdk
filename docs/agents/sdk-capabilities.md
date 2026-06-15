@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.16.0
-source-sha:    ea9c3a207ffcb8a144cc87b54205b51a606ee3e8
-source-date:   2026-06-11T17:53:49+05:30
+sdk-version:   3.17.0
+source-sha:    4e4eb3f251cfcd3c9bb13e32ee391e9dbbe8a39b
+source-date:   2026-06-14T21:07:00+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -697,7 +697,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `CredentialResolver`
 
 - **Import:** `from application_sdk.credentials import CredentialResolver`
-- **Signature:** `class CredentialResolver(secret_store: 'SecretStore', registry: 'CredentialTypeRegistry | None' = None)`
+- **Signature:** `class CredentialResolver(secret_store: SecretStore, registry: CredentialTypeRegistry | None = None)`
 - **Summary:** Resolves a CredentialRef to a typed Credential.
 - **Defined in:** `application_sdk/credentials/resolver.py`
 

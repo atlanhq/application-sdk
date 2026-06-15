@@ -74,7 +74,7 @@ def _attach_psycopg2(dbapi_connection: Any) -> bool:
     try:
         import psycopg2.extensions as ext  # type: ignore[import-not-found]  # noqa: PLC0415
     except ImportError:  # conformance: ignore[E008] optional dep psycopg2 not installed; driver-detection probe
-        return False
+        return False  # conformance: ignore[E007] driver-detection probe; ImportError means optional dep absent, not an error
 
     def _cast(value: Any, _cur: Any) -> Any:
         if value is None:
@@ -108,7 +108,7 @@ def _attach_psycopg3(dbapi_connection: Any) -> bool:
             Loader,
         )
     except ImportError:  # conformance: ignore[E008] optional dep psycopg not installed; driver-detection probe
-        return False
+        return False  # conformance: ignore[E007] driver-detection probe; ImportError means optional dep absent, not an error
 
     class _TolerantTextLoader(Loader):
         def load(self, data: Any) -> str:

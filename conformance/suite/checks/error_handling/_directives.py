@@ -71,6 +71,11 @@ def _parse_directives(source: str) -> dict[int, _IgnoreDirective]:
         m = _SUPPRESS_RE.search(tok_string)
         if m:
             raw_ids, justification = m.group(1), (m.group(2) or "").strip()
+            # Justification text is mandatory — bare directives (no text after
+            # the rule ID) are silently rejected so the finding is not suppressed.
+            # This mirrors the noqa regex which also requires justification.
+            if not justification:
+                continue
             rule_ids: frozenset[str] | None
             if raw_ids:
                 rule_ids = frozenset(
@@ -105,11 +110,19 @@ def _parse_directives(source: str) -> dict[int, _IgnoreDirective]:
 
 
 def parse_ignore_directive(comment: str) -> _IgnoreDirective | None:
-    """Parse a raw comment string. Returns None if it is not a conformance directive."""
+    """Parse a raw comment string. Returns None if not a valid conformance directive.
+
+    A directive is invalid (returns None) when justification text is absent —
+    bare ``# conformance: ignore[E018]`` with nothing after the rule IDs is
+    rejected for the same reason the noqa regex requires text: unexlained
+    suppressions are indistinguishable from typos and carry no audit value.
+    """
     m = _SUPPRESS_RE.search(comment)
     if not m:
         return None
     raw_ids, justification = m.group(1), (m.group(2) or "").strip()
+    if not justification:
+        return None
     rule_ids: frozenset[str] | None
     if raw_ids:
         rule_ids = frozenset(r.strip().upper() for r in raw_ids.split(",") if r.strip())

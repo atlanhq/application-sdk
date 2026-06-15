@@ -524,6 +524,7 @@ async def upload(
                 )
                 return ok
 
+        # conformance: ignore[E010] results checked immediately below: errs filters BaseException, first is re-raised and rest are logged
         results = await asyncio.gather(
             *[_bounded_upload(fp, k) for fp, k in zip(files, keys)],
             return_exceptions=True,
@@ -704,6 +705,7 @@ async def download(
             transferred, reason = await _download_one(
                 resolved, norm_path, dest, skip_if_exists=skip_if_exists
             )
+        # conformance: ignore[E004] cleanup-only handler that always re-raises; no logging needed here
         except BaseException:
             # Don't leave an empty temp file behind on download failure
             # (BLDX-1155 #5).

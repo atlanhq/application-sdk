@@ -112,6 +112,15 @@ Rules are **typed Python**, not YAML.  Each series module (`ci.py`, `error_handl
 `logging.py`) exposes a `RULES: tuple[RuleDefinition, ...]`; `suite/rules/__init__.py`
 combines them into an immutable `CATALOG: Mapping[str, RuleDefinition]` (O(1) lookup).
 Each entry maps to a `reportingDescriptor` and carries the `atlan/*` governance fields.
+Rule ID namespaces:
+
+| Prefix | Domain |
+|---|---|
+| `E001–E099` | Error-handling patterns (from `signal-over-noise` surface phase) |
+| `L001–L099` | Logging patterns (from `signal-over-noise` tune phase) |
+| `C001–C099` | CI/workflow supply-chain (action-pinning, permissions, trigger hygiene) |
+| `T001–T099` | Test-quality patterns (reserved) |
+| `D001–D099` | Dependency patterns (reserved) |
 
 **A new rule is just a new entry in the appropriate series module** — it automatically fans
 out to every consumer app on the next upgrade, and the suite invalidates every app's
@@ -128,6 +137,8 @@ they are up-to-date with `uv run poe generate-rule-docs --check`.
 | `C001–C099` | CI/workflow supply-chain | [rules/ci.md](rules/ci.md) |
 | `T001–T099` | Test-quality patterns (reserved) | — |
 | `D001–D099` | Dependency patterns (reserved) | — |
+
+---
 
 ---
 

@@ -865,6 +865,7 @@ class PublishInputMixin(BaseModel):
                     workflow_id=_wf.info().workflow_id,
                     run_id=_wf.info().run_id,
                 )
+            # conformance: ignore[E002,E004] probe to detect Temporal workflow context; swallow is intentional, output_path stays empty by design
             except Exception:  # noqa: S110 — not in a Temporal workflow context; output_path stays empty by design
                 pass
 

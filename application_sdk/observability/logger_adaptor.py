@@ -253,6 +253,7 @@ def _has_remote_otlp_endpoint() -> bool:
 
         host = urlparse(ep).hostname or ""
         return host not in ("", "localhost", "127.0.0.1", "::1")
+    # conformance: ignore[E004] probe/feature-detect for OTEL endpoint; swallows parse errors and treats as local
     except Exception:
         logging.debug("OTEL endpoint check failed, treating as local", exc_info=True)
         return False
@@ -402,31 +403,40 @@ class _CloudflareTimeoutFilter(logging.Filter):
     _lock: ClassVar[threading.Lock] = threading.Lock()
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if record.levelno != logging.ERROR or not record.name.startswith("temporalio"):
-            return True
-        msg = record.getMessage()
-        if (
-            "invalid compression flag: 60" in msg  # ASCII '<' = first byte of HTML 504
-            and "504 Gateway Timeout" in msg
-            and "poll_workflow_task_queue" in msg
-        ):
-            with self._lock:
-                self._counts[record.name] = self._counts.get(record.name, 0) + 1
-                count = self._counts[record.name]
-                now = time.monotonic()
-                # Seed with now - interval so the very first occurrence always fires
-                last = self._last_emitted.get(record.name, now - self._WARN_INTERVAL)
-                should_emit = (now - last) >= self._WARN_INTERVAL
+        try:
+            if record.levelno != logging.ERROR or not record.name.startswith(
+                "temporalio"
+            ):
+                return True
+            msg = record.getMessage()
+            if (
+                "invalid compression flag: 60"
+                in msg  # ASCII '<' = first byte of HTML 504
+                and "504 Gateway Timeout" in msg
+                and "poll_workflow_task_queue" in msg
+            ):
+                with self._lock:
+                    self._counts[record.name] = self._counts.get(record.name, 0) + 1
+                    count = self._counts[record.name]
+                    now = time.monotonic()
+                    # Seed with now - interval so the very first occurrence always fires
+                    last = self._last_emitted.get(
+                        record.name, now - self._WARN_INTERVAL
+                    )
+                    should_emit = (now - last) >= self._WARN_INTERVAL
+                    if should_emit:
+                        self._last_emitted[record.name] = now
                 if should_emit:
-                    self._last_emitted[record.name] = now
-            if should_emit:
-                get_logger(__name__).info(
-                    f"Cloudflare 504 timeout on poll_workflow_task_queue"
-                    f" (occurrence {count} — expected, worker retrying normally,"
-                    " TFKB ERROR-NET-001)"
-                )
-            return False
-        return True
+                    get_logger(__name__).info(
+                        f"Cloudflare 504 timeout on poll_workflow_task_queue"
+                        f" (occurrence {count} — expected, worker retrying normally,"
+                        " TFKB ERROR-NET-001)"
+                    )
+                return False
+            return True
+        # conformance: ignore[E004] filter infra; any failure safely defaults to emitting the record
+        except Exception:
+            return True  # conformance: ignore[E007] logging adapter; log call would recurse; returning default is correct fallback
 
 
 _intercept_handler = InterceptHandler()

@@ -42,6 +42,7 @@ import orjson
 from application_sdk.contracts.types import ConnectionRef
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.e2e._errors import (
+    HarnessMethodNotImplementedError,
     ManifestDagMissingError,
     ManifestFileNotFoundError,
     MissingHarnessClassAttrError,
@@ -343,7 +344,10 @@ class BaseE2ETest:
         """Agent identity (tier 4 only). Return None for direct mode."""
         if self.mode is RunMode.DIRECT:
             return None
-        raise NotImplementedError
+        raise HarnessMethodNotImplementedError(
+            message="subclass must override agent_spec() for AGENT mode",
+            operation="agent_spec",
+        )
 
     def connection_spec(self) -> ConnectionSpec:
         """Where the resulting Atlas Connection will live."""
@@ -426,11 +430,9 @@ class BaseE2ETest:
         knowledge needed). Non-SQL connectors must always ship a
         manifest.json and set ``manifest_path``.
         """
-        raise NotImplementedError(
-            f"{type(self).__name__}: manifest_path is empty but "
-            "_build_legacy_seed_dag() is not overridden. Set manifest_path "
-            "to the connector's manifest.json, or override "
-            "_build_legacy_seed_dag() if you need a hand-crafted seed DAG."
+        raise HarnessMethodNotImplementedError(
+            message="non-SQL connectors must set manifest_path; SQL connectors must override _build_legacy_seed_dag()",
+            operation="_build_legacy_seed_dag",
         )
 
     # ------------------------------------------------------------------
