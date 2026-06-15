@@ -8,8 +8,8 @@
 #
 # Usage from a connector app:
 #   uses: atlanhq/application-sdk/.github/workflows/conformance-ci.yaml@main
-#   with:
-#     conformance-ref: main
+#   # No inputs needed — published PyPI package is used by default.
+#   # To test an unreleased version: with: { conformance-ref: '<branch-or-sha>' }
 
 name: "Conformance — CI series (C)"
 
@@ -19,7 +19,7 @@ on:
       conformance-ref:
         description: "Git ref for unreleased suite testing (empty = use published PyPI package)"
         required: false
-        default: main
+        default: ""
         type: string
       scan-path:
         description: "Path to watch for workflow/action change detection (default: .github)"
@@ -57,10 +57,6 @@ jobs:
             relevant:
               - '${{ inputs.scan-path }}/**'
 
-
-      - name: "Set up uv"
-        if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push'
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
 
       - name: "Set up uv"
         if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push'

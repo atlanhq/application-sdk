@@ -90,9 +90,10 @@ def _cmd_bootstrap(argv: list[str]) -> int:
         print(f"already installed: {dest}  (pass --force to overwrite)")
         return 0
 
+    existed = dest.exists()
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(_SKILL_MD)
-    action = "updated" if dest.exists() and force else "installed"
+    action = "updated" if existed else "installed"
     print(f"{action}: {dest}")
     return 0
 

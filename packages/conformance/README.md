@@ -32,8 +32,7 @@ Consumer repos should reference this package via the reusable workflow in
 
 ```yaml
 uses: atlanhq/application-sdk/.github/workflows/conformance-reusable.yaml@main
-with:
-  sdk-ref: main
+# No inputs required — the published PyPI package is used by default.
 ```
 
 See `conformance/programs/conformance-remediation.prose.md` for the
