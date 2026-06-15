@@ -128,3 +128,70 @@ def test_execute_scenario_skips_polling_when_expected_data_set(tmp_path) -> None
     ):
         suite._execute_scenario(sc)
         ensure.assert_not_called()
+
+
+def test_require_nonempty_output_runs_floor_check(workflow_scenario: Scenario) -> None:
+    """The default non-empty guard calls _validate_output_floor(min_total=1, soft)."""
+    suite = _Suite()
+    fake_response = {"data": {"workflow_id": "wf-1", "run_id": "run-1"}}
+    with (
+        patch.object(
+            BaseSDRIntegrationTest.__bases__[0],
+            "_execute_scenario",
+            return_value=MagicMock(success=True, response=fake_response),
+        ),
+        patch.object(suite, "_ensure_workflow_completed"),
+        patch.object(suite, "_validate_output_floor") as floor,
+    ):
+        suite._execute_scenario(workflow_scenario)
+        floor.assert_called_once()
+        kwargs = floor.call_args.kwargs
+        assert kwargs.get("min_total") == 1
+        assert kwargs.get("soft_if_no_base_path") is True
+
+
+def test_require_nonempty_output_can_be_disabled(workflow_scenario: Scenario) -> None:
+    class _NoCheckSuite(_Suite):
+        require_nonempty_output = False
+        scenarios = []
+
+    suite = _NoCheckSuite()
+    fake_response = {"data": {"workflow_id": "wf-1", "run_id": "run-1"}}
+    with (
+        patch.object(
+            BaseSDRIntegrationTest.__bases__[0],
+            "_execute_scenario",
+            return_value=MagicMock(success=True, response=fake_response),
+        ),
+        patch.object(suite, "_ensure_workflow_completed"),
+        patch.object(suite, "_validate_output_floor") as floor,
+    ):
+        suite._execute_scenario(workflow_scenario)
+        floor.assert_not_called()
+
+
+def test_explicit_floor_not_double_polled() -> None:
+    """A scenario with explicit floors is handled by the base runner — the SDR
+    layer must not re-poll or re-check it."""
+    sc = Scenario(
+        name="wf",
+        api="workflow",
+        assert_that={"success": lambda v: True},
+        workflow_timeout=300,
+        assert_min_total_assets=5,
+    )
+    suite = _Suite()
+    with (
+        patch.object(
+            BaseSDRIntegrationTest.__bases__[0],
+            "_execute_scenario",
+            return_value=MagicMock(
+                success=True, response={"data": {"workflow_id": "w", "run_id": "r"}}
+            ),
+        ),
+        patch.object(suite, "_ensure_workflow_completed") as ensure,
+        patch.object(suite, "_validate_output_floor") as floor,
+    ):
+        suite._execute_scenario(sc)
+        ensure.assert_not_called()
+        floor.assert_not_called()

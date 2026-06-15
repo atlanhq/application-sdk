@@ -573,8 +573,12 @@ class BaseIntegrationTest:
             )
             schema_path = scenario.schema_base_path or self.schema_base_path
             needs_pandera = bool(schema_path) and scenario.api_type == APIType.WORKFLOW
+            needs_output_check = scenario.api_type == APIType.WORKFLOW and (
+                scenario.assert_min_total_assets is not None
+                or scenario.expected_asset_types is not None
+            )
 
-            if needs_metadata or needs_pandera:
+            if needs_metadata or needs_pandera or needs_output_check:
                 self._ensure_workflow_completed(scenario, response)
 
             # Step 5: Validate metadata output if expected_data is set
@@ -584,6 +588,15 @@ class BaseIntegrationTest:
             # Step 6: Validate data with pandera if schema_base_path is set
             if needs_pandera:
                 self._validate_pandera_schemas(scenario, response, schema_path)
+
+            # Step 7: Validate output floor (asset count / expected types)
+            if needs_output_check:
+                self._validate_output_floor(
+                    scenario,
+                    response,
+                    min_total=scenario.assert_min_total_assets,
+                    required_types=scenario.expected_asset_types,
+                )
 
             logger.info("Scenario %s passed", scenario.name)
 
@@ -763,6 +776,104 @@ class BaseIntegrationTest:
             "Metadata validation passed for scenario '%s': %d assets match expected baseline",
             scenario.name,
             len(actual),
+        )
+
+    def _validate_output_floor(
+        self,
+        scenario: Scenario,
+        response: dict[str, Any],
+        *,
+        min_total: int | None = None,
+        required_types: set[str] | None = None,
+        soft_if_no_base_path: bool = False,
+    ) -> None:
+        """Assert the extracted output meets a minimum bar.
+
+        Two complementary checks (either or both):
+          * ``min_total`` — the run must produce at least this many assets.
+            Catches "workflow succeeded but extracted nothing" regressions that
+            status-only validation is blind to.
+          * ``required_types`` — every listed asset ``typeName`` must be present.
+
+        Operates on the **local** extracted output (the same ``transformed/``
+        JSONL the metadata-baseline comparison reads), so it runs hermetically
+        in the SDR/integration tier without a tenant query.
+
+        Args:
+            scenario: The workflow scenario being validated.
+            response: The workflow start response (carries workflow_id/run_id).
+            min_total: Minimum total asset count, or ``None`` to skip the count check.
+            required_types: Set of typeNames that must all be present, or ``None``.
+            soft_if_no_base_path: When True, skip with a warning if no extracted
+                output path is configured (used for the SDR default non-empty
+                check, which must not fail apps that haven't wired an output
+                path). When False, a missing path is a misconfiguration error.
+
+        Raises:
+            AssertionError: If the floor is not met (or the path is missing and
+                ``soft_if_no_base_path`` is False).
+        """
+        data = response.get("data", {})
+        workflow_id = data.get("workflow_id")
+        run_id = data.get("run_id")
+
+        if not workflow_id or not run_id:
+            raise AssertionError(
+                f"Cannot validate output for scenario '{scenario.name}': "
+                f"response missing workflow_id or run_id"
+            )
+
+        base_path = scenario.extracted_output_base_path or getattr(
+            self, "extracted_output_base_path", None
+        )
+        if not base_path:
+            msg = (
+                f"Cannot validate output floor for scenario '{scenario.name}': "
+                f"extracted_output_base_path not set on scenario or test class"
+            )
+            if soft_if_no_base_path:
+                logger.warning(
+                    "%s — skipping non-empty output check (set "
+                    "extracted_output_base_path to enable it)",
+                    msg,
+                )
+                return
+            raise AssertionError(msg)
+
+        actual = load_actual_output(
+            base_path,
+            workflow_id,
+            run_id,
+            subdirectory=scenario.output_subdirectory,
+        )
+        total = len(actual)
+
+        if min_total is not None and total < min_total:
+            raise AssertionError(
+                f"Output floor not met for scenario '{scenario.name}': expected "
+                f"at least {min_total} asset(s) but the run produced {total}. "
+                f"A workflow can report COMPLETED yet extract nothing — this "
+                f"check catches that. (output: {base_path}/{workflow_id}/{run_id}/"
+                f"{scenario.output_subdirectory})"
+            )
+
+        if required_types:
+            present_types = {
+                r.get("typeName") for r in actual if r.get("typeName")
+            }
+            missing = set(required_types) - present_types
+            if missing:
+                raise AssertionError(
+                    f"Expected asset types missing for scenario '{scenario.name}': "
+                    f"{sorted(missing)} not found. Present types: "
+                    f"{sorted(present_types)} (total assets: {total})."
+                )
+
+        logger.info(
+            "Output floor passed for scenario '%s': %d asset(s)%s",
+            scenario.name,
+            total,
+            f", types present: {sorted(required_types)}" if required_types else "",
         )
 
     def _validate_pandera_schemas(

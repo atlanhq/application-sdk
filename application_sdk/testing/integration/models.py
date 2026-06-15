@@ -129,6 +129,14 @@ class Scenario:
             Maps to PreflightInput.checks_to_run. Empty list = run all checks.
         preflight_timeout: Timeout in seconds for preflight checks.
             Maps to PreflightInput.timeout_seconds. Defaults to 60.
+        assert_min_total_assets: Minimum number of assets the workflow run must
+            produce. The run fails if fewer assets are found in the extracted
+            output — catches "workflow succeeded but extracted nothing"
+            regressions that status-only checks miss. Workflow scenarios only.
+        expected_asset_types: Set of asset ``typeName`` values that must all be
+            present in the extracted output (e.g. {"Database", "Schema",
+            "Table", "Column"}). The run fails if any are missing. Workflow
+            scenarios only.
     """
 
     name: str
@@ -156,6 +164,8 @@ class Scenario:
     connection_config: dict[str, Any] | None = None
     checks_to_run: list[str] | None = None
     preflight_timeout: int = 60
+    assert_min_total_assets: int | None = None
+    expected_asset_types: set[str] | None = None
 
     def __post_init__(self):
         """Validate the scenario after initialization."""
@@ -187,6 +197,21 @@ class Scenario:
                 f"Scenario '{self.name}': expected_data file not found: "
                 f"{self.expected_data}"
             )
+
+        # Output-floor checks (asset count / expected types) only make sense for
+        # workflow scenarios, since they inspect extracted workflow output.
+        for _field, _value in (
+            ("assert_min_total_assets", self.assert_min_total_assets),
+            ("expected_asset_types", self.expected_asset_types),
+        ):
+            if _value is not None and self.api.lower() != "workflow":
+                raise ValueError(
+                    f"{_field} can only be set for workflow scenarios, "
+                    f"but api is '{self.api}'"
+                )
+
+        if self.assert_min_total_assets is not None and self.assert_min_total_assets < 0:
+            raise ValueError("assert_min_total_assets must be >= 0")
 
         if self.api.lower() == "config":
             if self.config_action not in ("get", "update"):

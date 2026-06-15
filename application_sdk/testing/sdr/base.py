@@ -78,6 +78,12 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
 
     agent_spec_template: ClassVar[dict[str, Any]] = {}
     workflow_type: ClassVar[str | None] = None
+    #: When True (default), an SDR workflow run that completes but produces zero
+    #: assets fails — even when the scenario sets no ``expected_data`` /
+    #: ``assert_min_total_assets``. This is a no-op (warns, doesn't fail) unless
+    #: ``extracted_output_base_path`` is configured, so it never breaks apps that
+    #: haven't wired an output path. Set False to opt out.
+    require_nonempty_output: ClassVar[bool] = True
 
     def _build_scenario_args(self, scenario: Scenario) -> dict[str, Any]:
         args = super()._build_scenario_args(scenario)
@@ -99,11 +105,25 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
             and scenario.workflow_timeout > 0
             and not scenario.expected_data
             and not (scenario.schema_base_path or self.schema_base_path)
+            # When the scenario sets explicit output floors, the base runner
+            # already polled + validated them — don't double-poll here.
+            and scenario.assert_min_total_assets is None
+            and not scenario.expected_asset_types
             and result.success
             and result.response
         ):
             try:
                 self._ensure_workflow_completed(scenario, result.response)
+                # Default non-empty guard: fail a "COMPLETED but extracted
+                # nothing" run. Soft (warns, doesn't fail) when no output path
+                # is configured, so it never breaks apps that haven't wired one.
+                if self.require_nonempty_output:
+                    self._validate_output_floor(
+                        scenario,
+                        result.response,
+                        min_total=1,
+                        soft_if_no_base_path=True,
+                    )
             # conformance: ignore[E004] re-raises immediately; only mutates result object before propagation so caller boundary handles logging
             except Exception as exc:
                 # The parent's try/except/finally already appended `result`
