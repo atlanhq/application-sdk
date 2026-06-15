@@ -6,6 +6,17 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.12.0] - 2026-06-11
+
+### Features
+
+- notification node fires on completion + rename notifyOnFailure → notifications (#2011) ([8c44d82](https://github.com/atlanhq/application-sdk/commit/8c44d82))
+
+### Bug fixes
+
+- normalize APITree filters in extraction inputs (#2024) ([cbc7777](https://github.com/atlanhq/application-sdk/commit/cbc7777))
+- bump default publish node timeout 24h→72h (#2072) ([90e23fe](https://github.com/atlanhq/application-sdk/commit/90e23fe))
+
 ## [0.11.1] - 2026-06-08
 
 ### Bug fixes
