@@ -1,0 +1,152 @@
+# PR Title Guard — CI-only changes must not use changelog-surfacing types
+#
+# The SDK changelog (.github/scripts/update_changelog.py) is built from the
+# squash-merge commit subjects, which on this repo are the PR titles. A
+# `fix:`/`feat:` title therefore lands in the user-facing "Fixes"/"Features"
+# sections of CHANGELOG.md.
+#
+# A PR that only touches CI config (everything under `.github/`) is not a
+# user-facing fix or feature — labelling it `fix:`/`feat:` produces changelog
+# noise (see PR #2020: a `fix(publish):` title for a CI-only workflow change).
+# This guard fails such PRs and asks the author to use `ci:` (or `chore:`),
+# which the changelog generator does not surface as a fix/feature.
+#
+# On a violation it also posts a sticky PR comment explaining the fix. The
+# comment is cleared automatically once the title is corrected.
+#
+# Runs on `edited` too, so re-titling a flagged PR re-runs the check, clears the
+# comment, and turns the check green without a new push. Needs only a read-scope
+# GITHUB_TOKEN + the title from the event payload, so the pass/fail verdict
+# works on fork PRs (the sticky comment is skipped there — fork PRs get a
+# read-only token).
+#
+# `merge_group` runs are a no-op pass: the PR title was already validated at PR
+# time and the merge queue has no PR title to inspect. Passing (rather than
+# skipping) keeps the conclusion "success" so this can be a required check
+# without leaving the merge queue permanently pending.
+
+name: PR CI-only Title Guard
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+    branches: [main]
+  merge_group:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pr-ci-only-title-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  ci-only-title:
+    name: CI-only PRs must not use fix/feat title
+    runs-on: ubuntu-latest
+    steps:
+      - name: Detect CI-only PR with a changelog-surfacing title
+        id: detect
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          echo "PR #${PR_NUMBER}: ${PR_TITLE}"
+
+          # Collect changed paths (gh returns up to the first 100 files; that is
+          # ample for the small CI-only PRs this guard targets).
+          mapfile -t files < <(gh pr view "${PR_NUMBER}" --repo "${REPO}" --json files --jq '.files[].path')
+
+          violation=false
+          type=""
+
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No changed files reported; nothing to validate."
+          else
+            # CI-only := every changed file lives under .github/.
+            ci_only=true
+            for f in "${files[@]}"; do
+              case "$f" in
+                .github/*) ;;
+                *) ci_only=false; break ;;
+              esac
+            done
+
+            if [ "$ci_only" != true ]; then
+              echo "PR touches non-CI files — title type is unrestricted by this check."
+            else
+              echo "PR is CI-only (all changes under .github/)."
+              # Match a changelog-surfacing type with an optional scope and an
+              # optional breaking-change "!" before the colon, e.g. `fix:`,
+              # `fix(publish):`, `feat(ci)!:`. (Regex kept in a variable so the
+              # [[ ]] parser doesn't choke on the parentheses.)
+              title_re='^(fix|feat)(\([^)]*\))?!?:'
+              if [[ "${PR_TITLE}" =~ $title_re ]]; then
+                violation=true
+                type="${BASH_REMATCH[1]}"
+                echo "Violation: CI-only PR uses a '${type}:' title."
+              else
+                echo "CI-only PR uses a non-surfacing title type."
+              fi
+            fi
+          fi
+
+          {
+            echo "violation=${violation}"
+            echo "type=${type}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Post sticky comment on violation
+        if: >-
+          github.event_name == 'pull_request'
+          && steps.detect.outputs.violation == 'true'
+          && github.event.pull_request.head.repo.fork == false
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        with:
+          header: ci-only-title-guard
+          message: |
+            ### 🏷️ CI-only PR shouldn't use a `${{ steps.detect.outputs.type }}:` title
+
+            This PR only changes files under `.github/`, but its title starts with
+            `${{ steps.detect.outputs.type }}:`.
+
+            The SDK changelog is generated from PR titles, so a `${{ steps.detect.outputs.type }}:`
+            title would add this CI-only change to the user-facing changelog as a real
+            fix/feature — exactly the noise this check prevents.
+
+            **To resolve:** retitle this PR with a non-surfacing conventional type:
+            - `ci:` — changes to CI configuration files and scripts _(preferred)_
+            - `chore:` — other changes that don't modify src or test files
+
+            _Example:_ `ci(publish): use crane to copy large images GHCR → Docker Hub`
+
+            Editing the PR title re-runs this check and clears this comment automatically.
+
+      - name: Clear sticky comment when resolved
+        if: >-
+          github.event_name == 'pull_request'
+          && steps.detect.outputs.violation == 'false'
+          && github.event.pull_request.head.repo.fork == false
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        with:
+          header: ci-only-title-guard
+          delete: true
+
+      - name: Fail if CI-only PR uses a fix/feat title
+        if: steps.detect.outputs.violation == 'true'
+        env:
+          PR_TYPE: ${{ steps.detect.outputs.type }}
+        run: |
+          echo "::error title=CI-only PR uses a changelog type::This PR only changes files under .github/ but its title starts with '${PR_TYPE}:'. Use 'ci:' or 'chore:' instead."
+          exit 1
+
+      - name: Merge queue no-op
+        if: github.event_name == 'merge_group'
+        run: |
+          echo "merge_group event — PR title already validated at PR time; passing."
