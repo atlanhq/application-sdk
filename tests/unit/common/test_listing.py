@@ -310,9 +310,8 @@ class TestSafeListDirectoryIterativeInvariants:
         )
 
     def test_listing_does_not_depend_on_sibling_order(self, tmp_path: Path) -> None:
-        """Iterative descent visits siblings in LIFO order. Callers
-        must not depend on order — this pins that contract via set
-        equality.
+        """Callers must not depend on the order siblings are visited —
+        this pins that contract via set equality.
         """
         # Names chosen so alphabetical order would clash with LIFO
         # order if the filesystem iteration ordering happens to be

@@ -654,7 +654,8 @@ class TestPersistFileReferenceListingRace:
 
         ref = FileReference(local_path=str(tmp_path), tier=StorageTier.TRANSIENT)
 
-        # Inject the listing race
+        # Inject the listing race.
+        # Regression guard: a future revert to Path.rglob would re-trigger this mock.
         monkeypatch.setattr(Path, "rglob", lambda self, pat: iter([]))
 
         result = await persist_file_reference(store, ref)

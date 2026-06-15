@@ -372,6 +372,7 @@ async def test_transfer_upload_survives_rglob_listing_transient(
 
     # Inject the listing transient. Pre-fix this drops file_count to 0
     # and uploads nothing; post-fix safe_list_directory bypasses rglob.
+    # Regression guard: a future revert to Path.rglob would re-trigger this mock.
     monkeypatch.setattr(Path, "rglob", lambda self, pat: iter([]))
 
     out = await upload(str(src), "race_int/", store=store)

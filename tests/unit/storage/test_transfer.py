@@ -438,6 +438,7 @@ class TestUploadDirectoryListingRace:
 
         # Inject the listing race: Path.rglob returns empty even though
         # the directory has 3 files.
+        # Regression guard: a future revert to Path.rglob would re-trigger this mock.
         monkeypatch.setattr(Path, "rglob", lambda self, pat: iter([]))
 
         out = await upload(str(tmp_path), "race_prefix", store=store)
@@ -459,6 +460,7 @@ class TestUploadDirectoryListingRace:
         (tmp_path / "c.txt").write_bytes(b"c")
 
         # Return only 1 of the 3 files — simulating partial-truncation.
+        # Regression guard: a future revert to Path.rglob would re-trigger this mock.
         partial = [tmp_path / "a.txt"]
         monkeypatch.setattr(Path, "rglob", lambda self, pat: iter(partial))
 
@@ -479,6 +481,7 @@ class TestUploadDirectoryListingRace:
         (tmp_path / "a.txt").write_bytes(b"a")
         (tmp_path / "b.txt").write_bytes(b"b")
 
+        # Regression guard: a future revert to Path.rglob would re-trigger this mock.
         monkeypatch.setattr(Path, "rglob", lambda self, pat: iter([]))
 
         out = await upload(
