@@ -26,7 +26,10 @@
 #   3. Everything else (docs, examples, tests, conformance, components,
 #      remediation, renovate-config, tools, .github, .claude, .security, root
 #      config files, dependency manifests, contract-toolkit's own docs/tests,
-#      ...)  ->  title must be `chore:`/`chore(...):` or `ci:`/`ci(...):`.
+#      ...)  ->  title may use any conventional type EXCEPT `feat`/`fix`
+#      (chore, ci, docs, test, refactor, perf, style, build, revert, ...).
+#      feat:/fix: are reserved for shipped source so they don't add changelog
+#      noise.
 #
 # On a violation the job fails and posts a sticky PR comment explaining the
 # expected type; the comment is cleared automatically once the title is fixed.
@@ -120,14 +123,14 @@ jobs:
                   echo "Violation: contract-toolkit core change must use feat(contract-toolkit): or fix(contract-toolkit):."
                 fi
               else
-                # Rule 3: everything else must be chore or ci.
-                chore_re='^(chore|ci)(\([^)]*\))?!?:'
-                if [[ "${PR_TITLE}" =~ $chore_re ]]; then
-                  echo "Non-source change with a chore/ci title. ✅"
-                else
+                # Rule 3: everything else may use any type except feat/fix.
+                feat_fix_re='^(feat|fix)(\([^)]*\))?!?:'
+                if [[ "${PR_TITLE}" =~ $feat_fix_re ]]; then
                   violation=true
-                  expected="chore-ci"
-                  echo "Violation: non-source change must use chore: or ci:."
+                  expected="no-feat-fix"
+                  echo "Violation: non-source change must not use feat:/fix:."
+                else
+                  echo "Non-source change with a non-feat/fix title. ✅"
                 fi
               fi
             fi
@@ -157,16 +160,17 @@ jobs:
           EOF
             else
               cat > pr-title-comment.md <<'EOF'
-          ### 🏷️ Non-source PR shouldn't use a `feat`/`fix` title
+          ### 🏷️ Non-source PR must not use a `feat`/`fix` title
 
           This PR does not change shipped source (`application_sdk/` or
           `contract-toolkit/` core), so a `feat:`/`fix:` title would add it to the
           user-facing SDK changelog as a real feature/fix — exactly the noise this
           check prevents.
 
-          **Use a non-surfacing conventional type instead:**
-          - `ci:` / `ci(scope):` — changes to CI configuration and scripts
-          - `chore:` / `chore(scope):` — everything else not touching shipped source
+          **Use any conventional type except `feat`/`fix`**, e.g.:
+          - `ci:` — changes to CI configuration and scripts
+          - `chore:` — everything else not touching shipped source
+          - `docs:`, `test:`, `refactor:`, `build:`, … as appropriate
 
           _Example:_ `ci(publish): use crane to copy large images GHCR → Docker Hub`
 
@@ -203,7 +207,7 @@ jobs:
           if [ "${EXPECTED}" = "ct-core" ]; then
             echo "::error title=Invalid PR title::contract-toolkit core changes must use 'feat(contract-toolkit):' or 'fix(contract-toolkit):'."
           else
-            echo "::error title=Invalid PR title::Non-source changes must use 'chore:' or 'ci:' (feat:/fix: are reserved for application_sdk/ and contract-toolkit core)."
+            echo "::error title=Invalid PR title::Non-source changes must not use 'feat:'/'fix:' (use chore:, ci:, docs:, test:, refactor:, ... instead). feat:/fix: are reserved for application_sdk/ and contract-toolkit core."
           fi
           exit 1
 
