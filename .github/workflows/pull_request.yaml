@@ -312,8 +312,11 @@ jobs:
   build-sdk-base-image:
     name: Build SDK base image (e2e)
     needs: changes
+    # code OR container: a Dockerfile-only PR (the prime base-image use case,
+    # e.g. a daprd / base bump) is container==true / code==false — it must
+    # still rebuild the base so the connector e2e exercises the new image.
     if: |
-      needs.changes.outputs.code == 'true' &&
+      (needs.changes.outputs.code == 'true' || needs.changes.outputs.container == 'true') &&
       github.event_name == 'pull_request' &&
       contains(github.event.pull_request.labels.*.name, 'e2e') &&
       github.event.pull_request.head.repo.fork != true &&
@@ -386,7 +389,7 @@ jobs:
     # back to the released base.
     if: |
       always() &&
-      needs.changes.outputs.code == 'true' &&
+      (needs.changes.outputs.code == 'true' || needs.changes.outputs.container == 'true') &&
       needs.matrix-builder.result == 'success' &&
       (needs.build-sdk-base-image.result == 'success' || needs.build-sdk-base-image.result == 'skipped') && (
         github.event_name == 'merge_group' ||
