@@ -5,6 +5,12 @@ import sys
 
 import semver
 
+# Commits scoped to sub-packages that manage their own versioning are dropped
+# from the SDK bump walk. Path-only exclusion in git log doesn't cover mixed
+# PRs (a squash commit that touches both SDK files and sub-package files), so
+# we also filter by conventional-commit scope on the subject line.
+_SUBPKG_RE = re.compile(r"^[a-z]+\((contract-toolkit|conformance)\)!?:")
+
 
 def get_commits_since_last_tag() -> list[str]:
     """Get all commits since the last non release-candidate tag.
@@ -28,6 +34,9 @@ def get_commits_since_last_tag() -> list[str]:
         commits = subprocess.check_output(cmd, shell=True).decode().strip().split("\n")
         # Filter out empty lines that may appear between commits
         commits = [commit for commit in commits if commit.strip()]
+        # Drop sub-package scoped commits that slipped through the path filter
+        # (e.g. a mixed PR whose squash subject is feat(conformance): …).
+        commits = [c for c in commits if not _SUBPKG_RE.match(c.splitlines()[0])]
         logging.info(f"Found {len(commits)} commits since last tag: {last_tag}")
         return commits
 
@@ -55,17 +64,17 @@ def parse_conventional_commits(commits: list[str]) -> tuple[bool, bool, bool]:
 
     breaking_pattern = "!:"
     breaking_change = "BREAKING CHANGE:"
-    feature_pattern = "feat"
-    fix_pattern = "fix"
+    feature_pattern = r"^feat[(!:]"
+    fix_pattern = r"^fix[(!:]"
 
     for commit in commits:
         if re.search(
             breaking_pattern, commit, re.MULTILINE | re.IGNORECASE
         ) or re.search(breaking_change, commit, re.MULTILINE | re.IGNORECASE):
             is_breaking = True
-        elif re.search(feature_pattern, commit, re.IGNORECASE):
+        elif re.search(feature_pattern, commit, re.MULTILINE | re.IGNORECASE):
             is_feature = True
-        elif re.search(fix_pattern, commit, re.IGNORECASE):
+        elif re.search(fix_pattern, commit, re.MULTILINE | re.IGNORECASE):
             is_fix = True
 
     logging.info(

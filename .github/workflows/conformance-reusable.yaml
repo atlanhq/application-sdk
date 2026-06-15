@@ -15,6 +15,10 @@
 # Usage from a connector SDK/app:
 #   uses: atlanhq/application-sdk/.github/workflows/conformance-reusable.yaml@main
 #
+# Note: the default conformance-ref='' path requires atlan-application-sdk-conformance
+# to be published on PyPI. Pin conformance-ref to a git SHA only when testing
+# unreleased suite changes.
+#
 # ── Suppression vs path exclusion ─────────────────────────────────────────────
 #
 # There are two ways to reduce the set of findings a check reports.  They serve

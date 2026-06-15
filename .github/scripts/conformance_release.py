@@ -229,9 +229,19 @@ def main():
     tag = f"{TAG_PREFIX}{current}"
 
     if not tag_exists(tag):
-        sys.exit(
-            f"ERROR: tag {tag} not found. "
-            "Publish the current version first, or create the tag manually."
+        # No tag for the current version. Check whether any conformance tag
+        # exists at all — if so it's a genuine error; if not, this is the first
+        # release and we fall back to the initial commit exactly as release.py
+        # does for the SDK when no v* tag exists yet.
+        existing = _run(["git", "tag", "--list", f"{TAG_PREFIX}*"])
+        if existing.strip():
+            sys.exit(
+                f"ERROR: tag {tag!r} not found but other conformance tags exist. "
+                "Publish the current version first, or create the tag manually."
+            )
+        tag = _run(["git", "rev-list", "--max-parents=0", "HEAD"])
+        print(
+            f"No conformance tags found; treating as first release (base: {tag[:7]})."
         )
 
     subjects, bodies = commits_since_tag(tag)

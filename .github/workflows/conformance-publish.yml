@@ -24,7 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     if: >-
       github.event.pull_request.merged == true &&
-      contains(github.event.pull_request.labels.*.name, 'release:conformance')
+      contains(github.event.pull_request.labels.*.name, 'release:conformance') &&
+      startsWith(github.event.pull_request.head.ref, 'bump-version-conformance')
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
