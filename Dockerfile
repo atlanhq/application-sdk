@@ -50,6 +50,11 @@ ENV UV_NO_CACHE=1 \
     DAFT_ANALYTICS_ENABLED=0 \
     ATLAN_CONTRACT_GENERATED_DIR=/app/app/generated
 
+# TEMP — validation marker for the image-level connector e2e flow. Proves a
+# connector built on this PR's rebuilt base (not the released :3). Remove
+# before merge; this PR is a throwaway harness, not for merging.
+ENV APP_RUNTIME_BASE_E2E_MARKER=pr-validation
+
 # Copy entrypoint script for graceful shutdown handling
 COPY --chown=appuser:appuser entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
