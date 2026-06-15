@@ -88,14 +88,14 @@ def _flush_directory_metadata(path: Path) -> None:
             try:
                 fcntl.fcntl(fd, _DARWIN_F_FULLFSYNC)
                 return
-            except OSError:
+            except OSError:  # conformance: ignore[E002] F_FULLFSYNC unsupported on this device/FS; fall through to portable fsync
                 # Some Darwin device / FS combinations don't honor
                 # F_FULLFSYNC (e.g. tmpfs in a sandbox). Fall through
                 # to the portable barrier.
                 pass
         try:
             os.fsync(fd)
-        except OSError:
+        except OSError:  # conformance: ignore[E002] best-effort barrier; real listing errors surface via os.scandir below
             # Best-effort barrier — the listing primitive below is
             # the actual correctness layer.
             pass

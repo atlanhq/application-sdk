@@ -15,6 +15,11 @@ fixtures, no plugins — so the numbers reflect the listing cost
 itself, not framework overhead.
 """
 
+# This is a one-shot CLI benchmark whose only output is a markdown
+# table on stdout. ``print`` is the right primitive; the project-wide
+# rule against it (T201) targets library code, not entry-point scripts.
+# ruff: noqa: T201
+
 from __future__ import annotations
 
 import platform
