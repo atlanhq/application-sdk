@@ -19,8 +19,12 @@ def get_commits_since_last_tag() -> list[str]:
         last_tag = subprocess.check_output(last_tag_cmd, shell=True).decode().strip()
         logging.info(f"Last tag found: {last_tag}")
 
-        # Get all commits since that reference, including both subject and description
-        cmd = f"git log {last_tag}..HEAD --pretty=format:%s%n%b"
+        # Get all commits since that reference, excluding sub-packages that manage
+        # their own versioning and changelogs (contract-toolkit, conformance).
+        cmd = (
+            f"git log {last_tag}..HEAD --pretty=format:%s%n%b"
+            " -- . ':(exclude)contract-toolkit' ':(exclude)packages/conformance'"
+        )
         commits = subprocess.check_output(cmd, shell=True).decode().strip().split("\n")
         # Filter out empty lines that may appear between commits
         commits = [commit for commit in commits if commit.strip()]
