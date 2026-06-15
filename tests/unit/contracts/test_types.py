@@ -156,6 +156,37 @@ class TestFileReference:
         ref = FileReference.from_local("/does/not/exist")
         assert ref.file_count == 1
 
+    # ---- rglob listing race (PART-1148) ----------------------------------
+
+    def test_from_local_finds_files_when_rglob_returns_empty(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Reproduces the rglob listing race in FileReference.from_local.
+
+        When ``Path.rglob`` returns empty for a non-empty dir
+        (cpython#146646 — pathlib silently swallows OSError mid-walk —
+        and APFS directory-metadata visibility on macOS under
+        concurrent load), ``file_count`` comes out as 0 on the current
+        code. After migration to ``safe_list_directory``, ``os.scandir``
+        is used internally and the correct count is returned regardless
+        of the rglob transient.
+        """
+        d = tmp_path / "tree"
+        d.mkdir()
+        (d / "a.txt").write_text("a")
+        (d / "b.txt").write_text("b")
+        sub = d / "sub"
+        sub.mkdir()
+        (sub / "c.txt").write_text("c")
+
+        # Inject the listing transient
+        monkeypatch.setattr(Path, "rglob", lambda self, pat: iter([]))
+
+        ref = FileReference.from_local(d)
+
+        # On main: file_count == 0 (the bug). After fix: 3.
+        assert ref.file_count == 3
+
 
 # =============================================================================
 # UploadInput / DownloadInput — ref field symmetry

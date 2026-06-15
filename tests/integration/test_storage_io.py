@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-import application_sdk.constants as constants
+from application_sdk import constants
 from application_sdk.storage.batch import (
     delete_prefix,
     download_prefix,
@@ -340,3 +340,69 @@ async def test_transfer_upload_directory_max_concurrency(store, tmp_path):
 
     assert out.ref.file_count == 8
     assert out.synced is True
+
+
+# ---------------------------------------------------------------------------
+# PART-1148 — rglob listing-race integration coverage
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_transfer_upload_survives_rglob_listing_transient(
+    store, tmp_path, monkeypatch
+):
+    """End-to-end integration test for the rglob listing race.
+
+    Reproduces the production-observed silent-failure mode with a real
+    local obstore (not the in-memory mock used in unit tests). Mocks
+    ``Path.rglob`` to return empty for a non-empty directory — the
+    same symptom seen on macOS APFS under concurrent I/O load
+    (cpython#146646 pathlib OSError-swallow + APFS metadata visibility).
+
+    Pre-fix: upload silently completes with ``file_count=0`` and zero
+    files uploaded to the local obstore. Post-fix (safe_list_directory
+    using os.scandir): files are found and uploaded as expected.
+
+    Importantly this exercises the real disk path — open(O_DIRECTORY),
+    fsync barrier, scandir recursion — not the in-memory mock surface.
+    """
+    from pathlib import Path
+
+    from application_sdk.storage.batch import list_keys
+    from application_sdk.storage.transfer import download, upload
+
+    # Build a real directory tree with nested subdirs and multiple files.
+    src = tmp_path / "race_src"
+    src.mkdir()
+    (src / "a.txt").write_bytes(b"alpha")
+    (src / "b.txt").write_bytes(b"beta")
+    sub = src / "nested"
+    sub.mkdir()
+    (sub / "c.txt").write_bytes(b"gamma")
+
+    # Inject the listing transient. Pre-fix this drops file_count to 0
+    # and uploads nothing; post-fix safe_list_directory bypasses rglob.
+    monkeypatch.setattr(Path, "rglob", lambda self, pat: iter([]))
+
+    out = await upload(str(src), "race_int/", store=store)
+
+    # All three files were uploaded
+    assert out.ref.file_count == 3
+    assert out.synced is True
+
+    # The bytes actually landed in the real obstore (file-only keys;
+    # ignore the .sha256 sidecars that the upload writes alongside).
+    keys = {k for k in await list_keys("race_int/", store) if not k.endswith(".sha256")}
+    assert keys == {
+        "race_int/a.txt",
+        "race_int/b.txt",
+        "race_int/nested/c.txt",
+    }
+
+    # And a roundtrip download reads them back correctly
+    dest = tmp_path / "race_dest"
+    dl = await download("race_int/", str(dest), store=store)
+    assert dl.ref.file_count == 3
+    assert (dest / "a.txt").read_bytes() == b"alpha"
+    assert (dest / "b.txt").read_bytes() == b"beta"
+    assert (dest / "nested" / "c.txt").read_bytes() == b"gamma"

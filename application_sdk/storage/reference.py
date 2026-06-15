@@ -204,7 +204,12 @@ async def persist_file_reference(
     if local.is_dir():
         # ── Directory upload ───────────────────────────────────────────────
         prefix = _make_storage_prefix(ref, output_path=output_path)
-        files = [p for p in local.rglob("*") if p.is_file()]
+        # PART-1148: see _listing.safe_list_directory for rationale.
+        from application_sdk.storage._listing import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+            safe_list_directory,
+        )
+
+        files = safe_list_directory(local)
         _t0 = time.monotonic()
         logger.info(
             "file_ref.persist.start",

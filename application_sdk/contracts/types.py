@@ -277,7 +277,17 @@ class FileReference(BaseModel, frozen=True):
         file_count = 1
         try:
             if p.is_dir():
-                file_count = sum(1 for child in p.rglob("*") if child.is_file())
+                # Lazy import — avoids application_sdk.contracts → storage
+                # dependency at module load time. PART-1148: bypasses
+                # pathlib.rglob (cpython#146646) by using os.scandir, with
+                # a Darwin F_FULLFSYNC barrier for APFS metadata
+                # visibility. Returns the correct count even when
+                # rglob would silently return empty.
+                from application_sdk.storage._listing import (  # noqa: PLC0415
+                    safe_list_directory,
+                )
+
+                file_count = len(safe_list_directory(p))
         except OSError:  # conformance: ignore[E009] best-effort file_count; OSError in sandboxed contexts; safe fallback to 1
             file_count = 1
         return FileReference(

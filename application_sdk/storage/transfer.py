@@ -491,7 +491,17 @@ async def upload(
             normalize_key,
             append_leaf=False,
         )
-        files = [p for p in src.rglob("*") if p.is_file()]
+        # PART-1148: safe_list_directory composes an fsync barrier (Darwin
+        # F_FULLFSYNC / Linux fsync) with an os.scandir-based recursion
+        # that surfaces OSError instead of swallowing it like pathlib's
+        # Path.rglob does (cpython#146646). Closes the silent
+        # file_count=0 silent-failure mode observed under concurrent
+        # write-then-list load on macOS APFS.
+        from application_sdk.storage._listing import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+            safe_list_directory,
+        )
+
+        files = safe_list_directory(src)
         if raise_on_empty and not files:
             from application_sdk.storage.errors import (  # noqa: PLC0415
                 StorageEmptyUploadError,
