@@ -14,6 +14,6 @@ jobs:
   conformance:
     uses: ./.github/workflows/conformance-reusable.yaml
     with:
-      sdk-ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      conformance-ref: ${{ github.event.pull_request.head.sha || github.sha }}
       exclude-paths-e: "tools/,contract-toolkit/"
       event_name: ${{ github.event_name }}

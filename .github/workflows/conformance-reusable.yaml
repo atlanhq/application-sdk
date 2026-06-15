@@ -14,8 +14,10 @@
 #
 # Usage from a connector SDK/app:
 #   uses: atlanhq/application-sdk/.github/workflows/conformance-reusable.yaml@main
-#   with:
-#     sdk-ref: main
+#
+# Note: the default conformance-ref='' path requires atlan-application-sdk-conformance
+# to be published on PyPI. Pin conformance-ref to a git SHA only when testing
+# unreleased suite changes.
 #
 # ── Suppression vs path exclusion ─────────────────────────────────────────────
 #
@@ -39,16 +41,30 @@
 #     recorded in atlan/excludedPaths in the SARIF run properties and surfaced
 #     as a ::notice annotation so the reduced scope is always visible.
 #     Extending this list to cover production code defeats the gate.
+#
+# ── conformance-ref override ──────────────────────────────────────────────────
+#
+#   conformance-ref: ""  (default)
+#     Install atlan-application-sdk-conformance from PyPI (latest published).
+#
+#   conformance-ref: <branch|tag|sha>
+#     Install from that git ref's subdirectory, enabling pre-release testing
+#     of an unreleased conformance suite change before it is published.
+#     The SDK's own conformance.yaml passes the PR HEAD sha here so it always
+#     dogfoods its own in-flight suite.
 
 name: "Conformance (reusable)"
 
 on:
   workflow_call:
     inputs:
-      sdk-ref:
-        description: "Ref of atlanhq/application-sdk to source the conformance suite from"
+      conformance-ref:
+        description: >
+          Git ref of atlanhq/application-sdk to source the conformance suite from.
+          Empty (default) uses the latest published PyPI package.
+          Set to a branch/tag/sha to test an unreleased suite version.
         required: false
-        default: main
+        default: ""
         type: string
       upload-sarif:
         description: "Upload SARIF report to GitHub Security tab (requires security-events: write)"
@@ -96,25 +112,25 @@ jobs:
             relevant:
               - '.github/**'
 
-      - name: "Sparse-checkout conformance suite"
-        if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push'
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          repository: atlanhq/application-sdk
-          ref: ${{ inputs.sdk-ref }}
-          sparse-checkout: conformance
-          path: _sdk
-
       - name: "Set up uv"
         if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push'
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
 
-      - name: "Run C-series checks"
-        if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push'
-        env:
-          PYTHONPATH: _sdk/conformance
+      - name: "Run C-series checks (published package)"
+        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push') && inputs.conformance-ref == ''
         run: |
-          uv run --with pydantic python -m suite.runner \
+          uvx atlan-application-sdk-conformance detect \
+            --repo . \
+            --series C \
+            --output ci.sarif \
+            ${{ inputs.exclude-paths-c != '' && format('--exclude "{0}"', inputs.exclude-paths-c) || '' }}
+
+      - name: "Run C-series checks (from git ref)"
+        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push') && inputs.conformance-ref != ''
+        run: |
+          uv run \
+            --with "atlan-application-sdk-conformance @ git+https://github.com/atlanhq/application-sdk@${{ inputs.conformance-ref }}#subdirectory=packages/conformance" \
+            -- atlan-application-sdk-conformance detect \
             --repo . \
             --series C \
             --output ci.sarif \
@@ -155,25 +171,25 @@ jobs:
             relevant:
               - '**/*.py'
 
-      - name: "Sparse-checkout conformance suite"
-        if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push'
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          repository: atlanhq/application-sdk
-          ref: ${{ inputs.sdk-ref }}
-          sparse-checkout: conformance
-          path: _sdk
-
       - name: "Set up uv"
         if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push'
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
 
-      - name: "Run E-series checks"
-        if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push'
-        env:
-          PYTHONPATH: _sdk/conformance
+      - name: "Run E-series checks (published package)"
+        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push') && inputs.conformance-ref == ''
         run: |
-          uv run --with pydantic python -m suite.runner \
+          uvx atlan-application-sdk-conformance detect \
+            --repo . \
+            --series E \
+            --output error-handling.sarif \
+            ${{ inputs.exclude-paths-e != '' && format('--exclude "{0}"', inputs.exclude-paths-e) || '' }}
+
+      - name: "Run E-series checks (from git ref)"
+        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push') && inputs.conformance-ref != ''
+        run: |
+          uv run \
+            --with "atlan-application-sdk-conformance @ git+https://github.com/atlanhq/application-sdk@${{ inputs.conformance-ref }}#subdirectory=packages/conformance" \
+            -- atlan-application-sdk-conformance detect \
             --repo . \
             --series E \
             --output error-handling.sarif \

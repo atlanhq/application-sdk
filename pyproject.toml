@@ -141,6 +141,7 @@ dev = [
 test = [
     "mock>=5.1.0,<6.0.0",
     "pytest>=8.3.3,<10.0.0",
+    "semver>=3.0.2,<4.0.0",
     "coverage>=7.6.1,<8.0.0",
     "pytest-asyncio>=1.4.0,<2.0.0",
     "pytest-timeout>=2.3.0,<3.0.0",
@@ -159,16 +160,8 @@ docs = [
     "pydoctor>=24.11.2,<26.0.0",
     "mike>=2.1.3,<3.0.0",
 ]
-# Conformance suite — testing infrastructure only, never part of the production
-# runtime.  Install with: uv sync --group conformance
-conformance = [
-    # Validates emitted SARIF documents against the vendored sarif-schema-2.1.0.json.
-    # pydantic and pyyaml come from the core deps so are not repeated here.
-    "jsonschema>=4.23.0,<5.0.0",
-    # Test runner for the conformance suite itself.
-    "pytest>=8.3.3,<10.0.0",
-    "pytest-asyncio>=1.4.0,<2.0.0",
-]
+# Conformance suite — now a separate published package: atlan-application-sdk-conformance
+# Install via: uv add --dev atlan-application-sdk-conformance
 
 [tool.poe.tasks]
 download-components.shell = "ls -l components/*.yaml"
@@ -188,7 +181,6 @@ test-integration.shell = "temporal server start-dev --db-filename /tmp/temporal-
 # API docs — must be before any sub-table header ([tool.poe.tasks.*])
 # or TOML nests it inside the sub-table rather than the parent tasks namespace
 generate-apidocs.shell = "mkdocs build && pydoctor --html-output=site/api application_sdk --docformat=google"
-generate-rule-docs.shell = "PYTHONPATH=conformance uv run python conformance/tools/generate_rule_docs.py"
 
 # Local credential provisioning
 [tool.poe.tasks.provision-credentials]
@@ -227,7 +219,7 @@ packages = ["application_sdk"]
 venvPath = "."
 venv = ".venv"
 typeCheckingMode = "standard"
-extraPaths = ["conformance"]
+extraPaths = []
 exclude = [
     "application_sdk/test_utils/**",
     "application_sdk/testing/scale_data_generator/**",
@@ -246,11 +238,7 @@ reportInvalidTypeForm = "warning"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-# WARNING: "conformance" is a namespace package (no __init__.py at its root).
-# Adding an __init__.py inside conformance/tools/ would make it a regular package
-# and shadow the root tools/ namespace package, breaking all tools.migrate_v3.*
-# imports with ModuleNotFoundError. Keep conformance/tools/ __init__.py-free.
-pythonpath = [".", "conformance"]
+pythonpath = ["."]
 addopts = "-m 'not integration and not e2e and not s3_integration and not azure_integration and not gcs_integration'"
 markers = [
     "integration: tests requiring local Temporal server",
@@ -323,13 +311,10 @@ extend-select = [
 "contract-toolkit/scripts/**" = ["T201", "PLC0415"]
 "local/**" = ["T201", "PLC0415"]
 "contract-toolkit/examples/**/generated/_input.py" = ["F401"]
-"conformance/**" = ["G004", "PLC0415", "F841", "T201"]
 # Mid-file import required to break circular dependency between models.py and assertions.py
 "application_sdk/testing/integration/models.py" = ["E402"]
 # Post-importorskip imports required so the test module skips cleanly when rocksdict is absent.
 "tests/unit/common/test_spillable_dict.py" = ["E402"]
-# sys.path is mutated before suite imports to make the conformance package importable standalone.
-"conformance/tools/generate_rule_docs.py" = ["E402"]
 
 [tool.uv]
 default-groups = ["dev", "test"]
