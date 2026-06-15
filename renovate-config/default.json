@@ -1,62 +1,100 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "description": "Atlan fleet upgrade policy for atlan-*-app repos. Extend via: {\"extends\": [\"github>atlanhq/application-sdk//renovate-config/default.json\"]}",
-  "extends": ["config:recommended"],
-  "schedule": ["at any time"],
+  "extends": [
+    "config:recommended"
+  ],
+  "schedule": [
+    "at any time"
+  ],
   "prHourlyLimit": 0,
   "prConcurrentLimit": 3,
-  "labels": ["dependencies"],
+  "labels": [
+    "dependencies"
+  ],
   "dependencyDashboard": true,
-  "ignorePaths": ["requirements.txt"],
+  "ignorePaths": [
+    "requirements.txt"
+  ],
   "ignoreDeps": [
     "atlanhq/.github",
     "atlanhq/mothership"
   ],
-  "gitIgnoredAuthors": ["github-actions[bot]@users.noreply.github.com"],
+  "gitIgnoredAuthors": [
+    "github-actions[bot]@users.noreply.github.com"
+  ],
   "lockFileMaintenance": {
-    "description": "Python in-range deps: refresh uv.lock without touching pyproject.toml; auto-merge on green. Runs at most twice per hour (at :00 and :30) to avoid a continuous-merge feedback loop.",
+    "description": "Python in-range deps: refresh uv.lock without touching pyproject.toml; auto-merge on green.",
     "enabled": true,
-    "schedule": ["every 30 minutes"],
+    "schedule": [
+      "at any time"
+    ],
     "automerge": true,
     "automergeType": "pr",
     "platformAutomerge": true
   },
   "packageRules": [
     {
-      "description": "SDK: disable major bumps — these are opt-in manual migrations.",
-      "matchPackageNames": ["atlan-application-sdk"],
-      "matchUpdateTypes": ["major"],
+      "description": "SDK: disable major bumps \u2014 these are opt-in manual migrations.",
+      "matchPackageNames": [
+        "atlan-application-sdk"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
       "enabled": false
     },
     {
       "description": "app-contract-toolkit (Pkl): minor+patch in one PR; auto-merge on green. Matched by the regex customManager below.",
-      "matchManagers": ["custom.regex"],
-      "matchUpdateTypes": ["minor", "patch"],
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
       "groupName": "app-contract-toolkit",
       "automerge": true,
       "automergeType": "pr",
       "platformAutomerge": true,
-      "addLabels": ["contract-toolkit-update"]
+      "addLabels": [
+        "contract-toolkit-update"
+      ]
     },
     {
       "description": "app-contract-toolkit: disable major bumps.",
-      "matchManagers": ["custom.regex"],
-      "matchUpdateTypes": ["major"],
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
       "enabled": false
     },
     {
       "description": "GitHub Actions: group all update types (including major) in one PR; auto-merge on green. Major action bumps are safe to auto-merge because the auto-approval workflow gates on green CI, which validates behaviour. Unlike Python deps, action majors are frequent and low-risk compared to library API changes.",
-      "matchManagers": ["github-actions"],
-      "matchUpdateTypes": ["major", "minor", "patch", "digest"],
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchUpdateTypes": [
+        "major",
+        "minor",
+        "patch",
+        "digest"
+      ],
       "groupName": "github-actions",
       "automerge": true,
       "automergeType": "pr",
       "platformAutomerge": true
     },
     {
-      "description": "Trivy CLI version (version: in with: blocks): disable auto-updates. The scanner version is pinned deliberately — scan results drift when Trivy's vuln DB schema or detection logic changes, so bumps must be a conscious decision.",
-      "matchPackageNames": ["aquasecurity/trivy"],
-      "matchManagers": ["github-actions"],
+      "description": "Trivy CLI version (version: in with: blocks): disable auto-updates. The scanner version is pinned deliberately \u2014 scan results drift when Trivy's vuln DB schema or detection logic changes, so bumps must be a conscious decision.",
+      "matchPackageNames": [
+        "aquasecurity/trivy"
+      ],
+      "matchManagers": [
+        "github-actions"
+      ],
       "enabled": false
     }
   ],
@@ -64,7 +102,9 @@
     {
       "description": "Pkl app-contract-toolkit: track the @<version> URI pinned in contract/PklProject. Uses github-tags datasource against atlanhq/application-sdk, filtering to contract-toolkit-v* tags.",
       "customType": "regex",
-      "managerFilePatterns": ["(^|/)contract/PklProject$"],
+      "managerFilePatterns": [
+        "(^|/)contract/PklProject$"
+      ],
       "matchStrings": [
         "uri\\s*=\\s*\"package://atlanhq\\.github\\.io/application-sdk/contracts/app-contract-toolkit@(?<currentValue>[^\"]+)\""
       ],
