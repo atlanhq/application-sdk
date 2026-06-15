@@ -312,7 +312,7 @@ extend-select = [
 [tool.ruff.lint.per-file-ignores]
 "application_sdk/main.py" = ["T201"]
 ".github/**" = ["G004", "T201"]
-# tests, tools, examples exempted from PLC0415: production runtime risk does
+# tests and tools exempted from PLC0415: production runtime risk does
 # not apply, and tests sometimes use inline imports for fixture isolation.
 # F841 is also exempted in tests because enabling `preview = true` (required
 # for PLC0415) made F841 stricter on tuple unpacking and codemod tests
@@ -320,7 +320,6 @@ extend-select = [
 "tests/**" = ["G004", "PLC0415", "F841"]
 "tools/**" = ["T201", "PLC0415"]
 "application_sdk/tools/**" = ["T201", "PLC0415"]
-"examples/**" = ["T201", "PLC0415"]
 "contract-toolkit/scripts/**" = ["T201", "PLC0415"]
 "local/**" = ["T201", "PLC0415"]
 "contract-toolkit/examples/**/generated/_input.py" = ["F401"]

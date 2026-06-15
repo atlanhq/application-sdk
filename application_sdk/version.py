@@ -9,9 +9,9 @@ Holds two kinds of versions:
   the runtime behaviour, not import this value.
 
 CI workflows that need the daprd pin (`.github/workflows/push.yaml`,
-`.github/workflows/pull_request.yaml`, `.github/workflows/scale-tests.yaml`,
-`.github/actions/e2e-examples/action.yaml`) avoid hard-coding the runtime
-version by reading it from this file via a small shell step::
+`.github/workflows/pull_request.yaml`, `.github/workflows/scale-tests.yaml`)
+avoid hard-coding the runtime version by reading it from this file via a
+small shell step::
 
     ver=$(grep '^__dapr_version' application_sdk/version.py | cut -d'"' -f2)
 
