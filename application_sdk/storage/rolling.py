@@ -272,6 +272,9 @@ def _record_count(batch: Any) -> int:
     try:
         return len(batch)
     except TypeError:
+        logger.warning(
+            "Failed to get record count for batch; returning 1", exc_info=True
+        )
         return 1
 
 

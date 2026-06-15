@@ -6,6 +6,7 @@ import pytest
 
 from application_sdk.app.base import App
 from application_sdk.app.task import is_task
+from application_sdk.errors.leaves import UnimplementedError
 from application_sdk.templates.contracts.sql_query import (
     QueryBatchInput,
     QueryBatchOutput,
@@ -86,11 +87,11 @@ class TestSqlQueryExtractorSubclass:
     ) -> None:
         extractor = SqlQueryExtractor.__new__(SqlQueryExtractor)
         with pytest.raises(
-            NotImplementedError, match="must implement get_query_batches"
+            UnimplementedError, match="must implement get_query_batches"
         ):
             await extractor.get_query_batches(QueryBatchInput())
 
     async def test_fetch_queries_raises_not_implemented_by_default(self) -> None:
         extractor = SqlQueryExtractor.__new__(SqlQueryExtractor)
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(UnimplementedError):
             await extractor.fetch_queries(QueryFetchInput())

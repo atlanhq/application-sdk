@@ -137,11 +137,14 @@ class BaseSQLClient(ClientInterface):
             # Don't store persistent connection
             self.connection = None
 
+        # conformance: ignore[E004] exc_info omitted intentionally; SQLAlchemy embeds password in traceback; cause is sanitized and re-raised as typed error
         except Exception as e:
             # No exc_info here: SQLAlchemy errors embed the full connection
             # string (including the password) in their message, and the
             # traceback would print it verbatim into logs.
-            logger.error("Error loading SQL client: %s", sanitize_cause_repr(e))
+            logger.error(  # conformance: ignore[E005] exc_info would expose SQLAlchemy password in traceback; cause sanitized above
+                "Error loading SQL client: %s", sanitize_cause_repr(e)
+            )
             if self.engine:
                 self.engine.dispose()
                 self.engine = None
@@ -543,6 +546,7 @@ class BaseSQLClient(ClientInterface):
             return cast(Iterator["pd.DataFrame"], result)
         except AppError:
             raise
+        # conformance: ignore[E004] exception re-raised immediately as typed SqlPandasResultError; cause chain preserved via `from e`
         except Exception as e:
             raise SqlPandasResultError(
                 message="Error reading batched data from SQL", cause=e
@@ -569,6 +573,7 @@ class BaseSQLClient(ClientInterface):
             )
         except AppError:
             raise
+        # conformance: ignore[E004] exception re-raised immediately as typed SqlPandasResultError; cause chain preserved via `from e`
         except Exception as e:
             raise SqlPandasResultError(cause=e) from e
 
@@ -631,11 +636,12 @@ class AsyncBaseSQLClient(BaseSQLClient):
             # Don't store persistent connection
             self.connection = None
 
+        # conformance: ignore[E004] exc_info omitted intentionally; SQLAlchemy embeds password in traceback; cause is sanitized and re-raised as typed error
         except Exception as e:
             # No exc_info here: SQLAlchemy errors embed the full connection
             # string (including the password) in their message, and the
             # traceback would print it verbatim into logs.
-            logger.error(
+            logger.error(  # conformance: ignore[E005] exc_info would expose SQLAlchemy password in traceback; cause sanitized above
                 "Error establishing database connection: %s", sanitize_cause_repr(e)
             )
             if self.engine:
@@ -711,6 +717,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
 
             except AppError:
                 raise
+            # conformance: ignore[E004] exception re-raised immediately as typed SqlPandasResultError; cause chain preserved via `from e`
             except Exception as e:
                 raise SqlPandasResultError(
                     message="Error executing SQL query", cause=e

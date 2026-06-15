@@ -1,0 +1,123 @@
+---
+kind: function
+name: remediate-finding
+description: >
+  Proposes a source edit (or a justified inline suppression) for a single
+  conformance finding.  The model is the worker here — it reads the finding's
+  hint, classifies the fix, and emits an edit.  The deterministic re-check
+  gate (recheck-narrowest) decides whether the edit worked.
+---
+
+### Parameters
+
+- `finding` (object, required) — a finding as returned by `detect-violations`:
+  `rule_id`, `area`, `file`, `line`, `column`, `message`, `hint`,
+  `autofixable`, `disposition`, `fingerprint`.
+- `mode` (string, required) — `"default"` or `"strict"`.  The `suppress`
+  outcome is only available for WARNING-tier findings when mode is `"strict"`.
+
+### Returns
+
+- `outcome` — `"fix"` (source logic change) or `"suppress"` (inline ignore
+  directive, strict mode only).
+- `edit` — a description of the change to apply, including file path, the
+  exact lines to change or insert, and the replacement text.
+- `classification` — `"mechanical"` (deterministic, no judgment needed) or
+  `"judgment"` (model made a non-trivial call; route to residue for human
+  audit).
+- `external_influence` — boolean; true if the model consulted any content
+  outside the source file itself that could be attacker-influenced.  Always
+  false for error-handling in this phase; wired for future dependency/CVE use.
+- `not_remediable` — boolean; true when the area has no authored prescription
+  yet (returns to residue without an edit attempt).
+
+### Write-scope constraint
+
+This function may **only** propose edits to Python source files under the
+repository root — never to `tests/`, `.github/`, `conformance/`, or any CI /
+gate configuration.  This is the §6.1 "no self-judging changes" discipline:
+the remediator may not touch the gate it is judged against.
+
+### Dispatch by area
+
+Route on `finding.area` to the matching area prescription below.
+
+---
+
+#### Area: error-handling (E-series) — PHASE 1
+
+Consult the finding's `hint` and `message`, then look at the actual source
+lines around `finding.line` in `finding.file` before proposing a fix.
+
+**Mechanical rules** (`autofixable = true`) — produce a `"fix"` outcome with
+`classification = "mechanical"`:
+
+- **E005 ExceptBlockMissingExcInfo** — add `exc_info=True` to the log call
+  inside the except block.  The edit is always a single keyword argument
+  addition.  Example: `logger.warning("msg")` → `logger.warning("msg",
+  exc_info=True)`.
+
+- **E016 MissingExceptionChaining** — add `from exc` (or `from e`, matching
+  the existing except clause variable) to the bare `raise X(...)` inside the
+  except block.  Example: `raise ValueError(msg)` → `raise ValueError(msg)
+  from exc`.
+
+**Judgment rules** (`autofixable = false`) — produce a `"fix"` outcome with
+`classification = "judgment"`; always route to residue:
+
+- **E002 TypedExceptPass** — the `except SomeError: pass` swallows the
+  exception silently.  Propose replacing `pass` with a log call:
+  `logger.warning("Ignoring %s: %s", type(e).__name__, e, exc_info=True)`,
+  where `e` is the except clause variable (or `exc` if bare).  If the
+  surrounding context suggests a best-effort probe (e.g. feature detection at
+  import time), note this in the residue as a suppression candidate.
+
+- **E001 BareExceptPass** — same treatment as E002 but bare `except:`.
+  Propose adding a typed `Exception` clause and a log call.
+
+- **E013 LegacyAtlanErrorRaise** — the code raises a deprecated `AtlanError`
+  subclass.  Consult the `/typed-failures` prescription: propose replacing
+  with the appropriate `AppError` subclass from
+  `application_sdk.common.error_codes`.  Choose the subclass by matching the
+  raise site's semantic category (connection, permission, not-found, etc.) to
+  the `AppError` hierarchy.  Classification is always `"judgment"` — the
+  mapping requires understanding the call-site intent.
+
+- **E006 BareExceptWithBody** — bare `except:` with a non-empty body.
+  Propose narrowing to `except Exception as exc:` and adding
+  `exc_info=True` to any existing log calls in the body.
+
+- **All other E-series rules (E003, E004, E007–E012, E014–E018)** — produce
+  `classification = "judgment"` and a best-effort fix guided by the `hint` and
+  `message`.
+
+**Suppress outcome (strict mode only, WARNING-tier findings)**:
+
+When `mode == "strict"` and `finding.disposition == "warning"`, the model may
+propose a suppression instead of a fix if it judges the pattern a legitimate
+exception for this specific site (e.g. an E004 broad-except at a genuine
+top-level worker loop boundary).  The suppression edit is an inline directive
+inserted as a comment on the line above the violation:
+
+```
+# conformance: ignore[E004] <concise justification, 8–40 words>
+```
+
+The justification must describe _why_ the pattern is acceptable here, not
+merely that the rule is being suppressed.  Route every suppression to residue
+for human audit regardless.
+
+---
+
+#### Area: logging (L-series) — DEFERRED
+
+No prescription authored for this phase.  Return `not_remediable = true`.
+The finding is added to the residue report as "detected but not yet
+remediable; add a logging prescription to remediation/programs/areas/logging.prose.md".
+
+---
+
+#### Area: ci (C-series) — DEFERRED
+
+No prescription authored for this phase.  Return `not_remediable = true`.
+Same residue note as logging.

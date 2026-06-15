@@ -22,6 +22,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "`atlanhq/` org are exempt (they intentionally track @main); local "
             "`./` composite-action refs are exempt (no version to pin)."
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#c001",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/ci.md#c001",
     ),
 )

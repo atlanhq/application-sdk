@@ -188,15 +188,15 @@ class ReportBuilder:
         from suite.schema.extensions import AtlanResultProperties
 
         region = Region(
-            startLine=start_line,
-            startColumn=start_column,
-            endLine=end_line,
-            endColumn=end_column,
+            start_line=start_line,
+            start_column=start_column,
+            end_line=end_line,
+            end_column=end_column,
             snippet={"text": snippet} if snippet else None,
         )
         location = Location(
-            physicalLocation=PhysicalLocation(
-                artifactLocation=ArtifactLocation(uri=file_uri),
+            physical_location=PhysicalLocation(
+                artifact_location=ArtifactLocation(uri=file_uri),
                 region=region,
             )
         )
@@ -211,13 +211,13 @@ class ReportBuilder:
         effective_level = level or self._rule_levels.get(rule_id, "warning")
 
         result = Result(
-            ruleId=rule_id,
-            ruleIndex=self._rule_index.get(rule_id),
+            rule_id=rule_id,
+            rule_index=self._rule_index.get(rule_id),
             kind="fail",
             level=effective_level,
             message={"text": message},
             locations=[location],
-            partialFingerprints={"atlanConformance/v1": fingerprint},
+            partial_fingerprints={"atlanConformance/v1": fingerprint},
             suppressions=suppressions or [],
             properties=props,
         )
@@ -238,14 +238,14 @@ class ReportBuilder:
         failure was found.
         """
         result = Result(
-            ruleId=rule_id,
-            ruleIndex=self._rule_index.get(rule_id),
+            rule_id=rule_id,
+            rule_index=self._rule_index.get(rule_id),
             kind="pass",
             message={"text": message},
             locations=[
                 Location(
-                    physicalLocation=PhysicalLocation(
-                        artifactLocation=ArtifactLocation(uri=file_uri),
+                    physical_location=PhysicalLocation(
+                        artifact_location=ArtifactLocation(uri=file_uri),
                     )
                 )
             ],
@@ -253,7 +253,9 @@ class ReportBuilder:
         self._results.append(result)
         return self
 
-    def build(self, *, exit_code: int | None = None) -> SarifReport:
+    def build(
+        self, *, exit_code: int | None = None, excluded_paths: list[str] | None = None
+    ) -> SarifReport:
         """Finalise and return the :class:`SarifReport`.
 
         Computes the ``atlan/summary`` disposition counts and sets the
@@ -271,14 +273,12 @@ class ReportBuilder:
         summary = DispositionSummary()
         for result in self._results:
             disposition = derive_disposition(result)
-            if disposition == Disposition.PASS:
-                summary.passing += 1
-            elif disposition == Disposition.FAILING:
+            if disposition == Disposition.FAILING:
                 summary.failing += 1
             elif disposition == Disposition.WARNING:
                 summary.warning += 1
             elif disposition == Disposition.SUPPRESSED:
-                summary.suppressed += 1
+                summary.suppressing += 1
 
         # Gate decision
         derived_exit_code = 1 if summary.failing > 0 else 0
@@ -289,36 +289,39 @@ class ReportBuilder:
         if self._repo_uri:
             provenance.append(
                 VersionControlDetails(
-                    repositoryUri=self._repo_uri,
-                    revisionId=self._commit_sha,
+                    repository_uri=self._repo_uri,
+                    revision_id=self._commit_sha,
                     branch=self._branch,
                 )
             )
 
-        run_props = AtlanRunProperties(summary=summary)
+        run_props = AtlanRunProperties(
+            summary=summary,
+            excluded_paths=excluded_paths or [],
+        )
 
         run = SarifRun(
             tool=Tool(
                 driver=ToolComponent(
                     name=self._tool_name,
                     version=self._tool_version,
-                    semanticVersion=self._tool_version,
+                    semantic_version=self._tool_version,
                     rules=list(self._rules),
                 )
             ),
             results=list(self._results),
             invocations=[
                 Invocation(
-                    executionSuccessful=True,
-                    exitCode=effective_exit_code,
-                    exitCodeDescription=(
+                    execution_successful=True,
+                    exit_code=effective_exit_code,
+                    exit_code_description=(
                         "Gate failed: one or more blocking violations found."
                         if effective_exit_code != 0
                         else "Gate passed."
                     ),
                 )
             ],
-            versionControlProvenance=provenance,
+            version_control_provenance=provenance,
             properties=run_props.to_properties(),
         )
 

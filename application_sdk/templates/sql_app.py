@@ -138,6 +138,7 @@ def _orjson_default(obj: Any) -> Any:
         return float(obj)
     if isinstance(obj, (bytes, bytearray)):
         return obj.decode("utf-8", errors="replace")
+    # conformance: ignore[E012] orjson default= protocol contractually requires TypeError to signal non-serialisable; replacing with AppError would break serialisation
     raise TypeError(  # orjson default= protocol requires TypeError to signal non-serializable
         f"Object of type {type(obj).__name__} is not JSON-serializable"
     )
@@ -322,6 +323,7 @@ class SqlApp(App):
                 await client.get_results("SELECT 1")
             finally:
                 await client.close()
+        # conformance: ignore[E004] exc_info=True would embed the SQLAlchemy connection string (incl. password) in structured logs; safe_traceback with secrets redacted is logged instead
         except Exception as exc:
             duration_ms = (time.perf_counter() - start) * 1000.0
             # Truncate driver messages so the contract field stays bounded;
@@ -338,7 +340,7 @@ class SqlApp(App):
             # ourselves and redact secrets before logging — frames preserved,
             # credentials stripped.
             safe_traceback = redact_secrets("".join(traceback.format_exception(exc)))
-            logger.error(
+            logger.error(  # conformance: ignore[E005] exc_info would expose SQLAlchemy password in traceback; safe_traceback built above with secrets redacted
                 "SQL auth cache prime FAILED after %.1fms (%s) — short-circuiting "
                 "before parallel extract burst to avoid stacking failed_login_attempts "
                 "on the source.\n%s",

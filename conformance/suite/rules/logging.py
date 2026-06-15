@@ -22,7 +22,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "eagerly.  Rewrite as %-style message body: embed context directly in the\n"
             "format string, do not move values to kwargs.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l001",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l001",
     ),
     RuleDefinition(
         id="L002",
@@ -38,7 +38,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "fields, and breaks log correlation.  The checker discovers the canonical\n"
             "factory (dominant by occurrence count) in Phase 1 and flags deviations.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l002",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l002",
     ),
     RuleDefinition(
         id="L003",
@@ -55,7 +55,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "unindexed nested dict invisible to aggregation queries.  Framework-dependent\n"
             "classification; the checker must detect the active framework first.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l003",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l003",
     ),
     RuleDefinition(
         id="L004",
@@ -73,7 +73,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "``logger.warning()`` / ``logger.error()`` calls within an except block.\n"
             "``.exception()`` is exempt.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l004",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l004",
     ),
     RuleDefinition(
         id="L005",
@@ -90,7 +90,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "interleave with structured log lines.  Acceptable in CLI scripts, test/debug\n"
             'scripts, and ``if __name__ == "__main__":`` blocks.\n'
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l005",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l005",
     ),
     RuleDefinition(
         id="L006",
@@ -108,7 +108,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "should inspect whether the loop is clearly bounded (≤10 items) before\n"
             "flagging.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l006",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l006",
     ),
     RuleDefinition(
         id="L007",
@@ -124,7 +124,7 @@ RULES: tuple[RuleDefinition, ...] = (
             'failure is "critical" from some perspective.  Use ERROR and handle severity\n'
             "through alerting rules on the observability platform.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l007",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l007",
     ),
     RuleDefinition(
         id="L008",
@@ -140,7 +140,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "level is enabled.  Guard expensive serialization / computation with\n"
             "``if logger.isEnabledFor(logging.DEBUG):``.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l008",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l008",
     ),
     RuleDefinition(
         id="L009",
@@ -156,7 +156,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "the log stream, inflating error counts in dashboards.  Acceptable only\n"
             "when adding context not available to the caller.  Otherwise: just re-raise.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l009",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l009",
     ),
     RuleDefinition(
         id="L010",
@@ -175,7 +175,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "acceptable.  Logging a credential *name* is acceptable; logging a\n"
             "credential *value* is CRITICAL.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l010",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l010",
     ),
     RuleDefinition(
         id="L011",
@@ -190,7 +190,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "Like f-strings (L001), string concatenation embeds values into the message\n"
             "string in a way that breaks log grouping.  Rewrite as %-style message body.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l011",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l011",
     ),
     RuleDefinition(
         id="L012",
@@ -208,7 +208,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "structlog, LOW-to-HIGH for loguru depending on whether a bridge adapter is\n"
             "present.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l012",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l012",
     ),
     RuleDefinition(
         id="L013",
@@ -226,7 +226,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "keys include: ``name``, ``message``, ``module``, ``args``, ``filename``,\n"
             "``process``, ``thread``.  Applies to stdlib only.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l013",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l013",
     ),
     RuleDefinition(
         id="L014",
@@ -243,7 +243,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "and crashes the caller.  Very common when migrating from structlog/loguru.\n"
             "Applies to stdlib only.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l014",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l014",
     ),
     RuleDefinition(
         id="L015",
@@ -260,7 +260,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "overwrites the message with the domain value.  Rename the domain field to\n"
             "avoid collision.  Applies to structlog only.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l015",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l015",
     ),
     RuleDefinition(
         id="L016",
@@ -277,7 +277,7 @@ RULES: tuple[RuleDefinition, ...] = (
             'is the most common source of "why is my logging not working?".  Always set\n'
             '``"disable_existing_loggers": False``.  Applies to stdlib only.\n'
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l016",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l016",
     ),
     RuleDefinition(
         id="L017",
@@ -295,7 +295,7 @@ RULES: tuple[RuleDefinition, ...] = (
             '``basicConfig()`` call outside ``if __name__ == "__main__":`` blocks.\n'
             "Applies to stdlib only.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l017",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l017",
     ),
     RuleDefinition(
         id="L018",
@@ -313,7 +313,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "traceback or no traceback.  Use ``logger.error(..., exc_info=True)`` only\n"
             "inside except blocks.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l018",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l018",
     ),
     RuleDefinition(
         id="L024",
@@ -331,6 +331,6 @@ RULES: tuple[RuleDefinition, ...] = (
             "invisible in the log stream.  Embed context directly in the message body\n"
             "using %-style formatting.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l024",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l024",
     ),
 )

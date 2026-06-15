@@ -63,10 +63,9 @@ def test_golden_example_summary() -> None:
         (_FIXTURES / "golden_four_dispositions.sarif.json").read_text(encoding="utf-8")
     )
     summary = data["runs"][0]["properties"]["atlan/summary"]
-    assert summary["passing"] == 1
     assert summary["failing"] == 1
     assert summary["warning"] == 1
-    assert summary["suppressed"] == 1
+    assert summary["suppressing"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -93,7 +92,7 @@ def test_report_builder_with_results_validates() -> None:
         branch="main",
     )
     builder.add_result(
-        rule_id="P001",
+        rule_id="E001",
         file_uri="src/connector/extractor.py",
         start_line=42,
         message="Bare 'except: pass' silently discards every exception",
@@ -119,7 +118,7 @@ def test_report_builder_suppressed_result_validates() -> None:
         justification="optional-dep guard: acceptable here",
     )
     builder.add_result(
-        rule_id="P001",
+        rule_id="E001",
         file_uri="src/connector/extractor.py",
         start_line=87,
         suppressions=[suppression],
@@ -189,7 +188,7 @@ def test_validation_catches_invalid_level() -> None:
                 "tool": {"driver": {"name": "test"}},
                 "results": [
                     {
-                        "ruleId": "P001",
+                        "ruleId": "E001",
                         "level": "critical",  # not a valid SARIF level
                         "message": {"text": "test"},
                     }

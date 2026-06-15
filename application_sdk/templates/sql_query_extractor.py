@@ -25,6 +25,9 @@ from typing import Any, ClassVar
 from application_sdk.app.task import task
 from application_sdk.credentials import legacy_credential_ref
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.templates._template_errors import (
+    SqlQueryExtractorNotImplementedError,
+)
 from application_sdk.templates.base_metadata_extractor import BaseMetadataExtractor
 from application_sdk.templates.contracts.sql_query import (
     QueryBatchInput,
@@ -77,8 +80,9 @@ class SqlQueryExtractor(BaseMetadataExtractor):
 
         Override in your subclass to implement connector-specific batch counting.
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} must implement get_query_batches()."
+        raise SqlQueryExtractorNotImplementedError(
+            message=f"{type(self).__name__} must implement get_query_batches().",
+            operation="get_query_batches",
         )
 
     @task(timeout_seconds=3600)
@@ -87,8 +91,9 @@ class SqlQueryExtractor(BaseMetadataExtractor):
 
         Override this method in your connector subclass.
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} must implement fetch_queries()."
+        raise SqlQueryExtractorNotImplementedError(
+            message=f"{type(self).__name__} must implement fetch_queries().",
+            operation="fetch_queries",
         )
 
     async def run(self, input: QueryExtractionInput) -> QueryExtractionOutput:  # type: ignore[override]
@@ -151,6 +156,7 @@ class SqlQueryExtractor(BaseMetadataExtractor):
                 total_queries=total_queries,
             )
 
+        # conformance: ignore[E004] top-level run() handler; re-raises as typed SqlQueryExtractionError, exception context preserved via from e
         except Exception as e:
             from application_sdk.templates._template_errors import (  # noqa: PLC0415
                 SqlQueryExtractionError,

@@ -254,12 +254,18 @@ class AEWorkflowClient:
                 try:
                     return resp.status, orjson.loads(raw)
                 except orjson.JSONDecodeError:
+                    logger.warning(
+                        "Response body is not JSON; returning raw text", exc_info=True
+                    )
                     return resp.status, raw.decode(errors="replace")
         except urllib.error.HTTPError as e:
             raw = e.read()
             try:
                 return e.code, orjson.loads(raw)
             except orjson.JSONDecodeError:
+                logger.warning(
+                    "HTTP error body is not JSON; returning raw text", exc_info=True
+                )
                 return e.code, raw.decode(errors="replace")
 
     # ------------------------------------------------------------------
@@ -879,6 +885,9 @@ def _safe_node_status(raw: Any) -> DAGNodeStatus:
     try:
         return DAGNodeStatus(raw)
     except ValueError:
+        logger.warning(
+            "Unknown DAGNodeStatus value %r; returning PENDING", raw, exc_info=True
+        )
         return DAGNodeStatus.PENDING
 
 
@@ -889,6 +898,9 @@ def _safe_run_status(raw: Any) -> DAGRunStatus:
     try:
         return DAGRunStatus(raw)
     except ValueError:
+        logger.warning(
+            "Unknown DAGRunStatus value %r; returning PENDING", raw, exc_info=True
+        )
         return DAGRunStatus.PENDING
 
 
@@ -899,4 +911,5 @@ def _safe_int(raw: Any) -> int | None:
     try:
         return int(raw)
     except (TypeError, ValueError):
+        logger.warning("Cannot cast %r to int; returning None", raw, exc_info=True)
         return None

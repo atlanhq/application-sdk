@@ -32,7 +32,7 @@ def process_secret_data(secret_data: Any) -> dict[str, Any]:
                 parsed = json.loads(v)
                 if isinstance(parsed, dict):
                     return parsed
-            except json.JSONDecodeError:
-                pass  # v is not JSON; fall through to return the raw string value
+            except json.JSONDecodeError:  # conformance: ignore[E002] value isn't JSON; return the raw string value
+                pass
         return {k: v}
     return secret_data

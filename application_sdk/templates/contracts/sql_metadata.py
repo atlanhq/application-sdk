@@ -153,8 +153,9 @@ class ExtractionInput(Input):
         if isinstance(raw_conn, str) and raw_conn.strip().startswith("{"):
             try:
                 data = {**data, "connection": orjson.loads(raw_conn)}
+            # conformance: ignore[E002] connection field isn't JSON; leave as-is for Pydantic to validate
             except (orjson.JSONDecodeError, ValueError):
-                pass  # connection field isn't JSON — leave as-is for Pydantic to handle
+                pass
 
         field_names = set(cls.model_fields)
         updates: dict[str, Any] = {}
