@@ -20,7 +20,11 @@ pip install atlan-application-sdk
 ```
 
 > [!TIP]
-> **View sample apps built using Application SDK [here](https://github.com/atlanhq/atlan-sample-apps)**
+> **Example apps built with the Application SDK:**
+> - [Hello World](https://github.com/atlanhq/atlan-hello-world-app) — minimal reference app to get started
+> - [OpenAPI Spec Loader](https://github.com/atlanhq/atlan-openapi-app) — loads assets from an OpenAPI spec into Atlan
+> - [MySQL](https://github.com/atlanhq/atlan-mysql-app) — MySQL metadata crawler
+> - [Metabase](https://github.com/atlanhq/atlan-metabase-app) — Metabase metadata crawler
 
 ## Getting Started
 
