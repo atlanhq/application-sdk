@@ -80,11 +80,11 @@ argument-hint: "[--area error-handling|logging|ci] [--strict] [path]"
 
 
 def _cmd_bootstrap(argv: list[str]) -> int:
-    """Write ~/.claude/skills/remediate/SKILL.md if absent (or --force to overwrite)."""
+    """Write .claude/skills/remediate/SKILL.md in the current repo (or --force to overwrite)."""
     import pathlib
 
     force = "--force" in argv
-    dest = pathlib.Path.home() / ".claude" / "skills" / "remediate" / "SKILL.md"
+    dest = pathlib.Path.cwd() / ".claude" / "skills" / "remediate" / "SKILL.md"
 
     if dest.exists() and not force:
         print(f"already installed: {dest}  (pass --force to overwrite)")
