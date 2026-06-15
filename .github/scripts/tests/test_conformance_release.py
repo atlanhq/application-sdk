@@ -339,6 +339,202 @@ class TestUpdatePyproject:
 
 
 # ---------------------------------------------------------------------------
+# main() — bootstrap path (no conformance-v* tags yet)
+# ---------------------------------------------------------------------------
+
+
+class TestMainBootstrap:
+    """main() bootstrap branch: no conformance-vX.Y.Z tag for the current version exists.
+
+    Two sub-cases:
+      - No conformance-v* tags at all → fall back to the initial commit (first release).
+      - Other conformance-v* tags exist but not the current one → error exit.
+    """
+
+    def _setup(
+        self, version: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> tuple:
+        pyproject = _pyproject(version, tmp_path)
+        version_py = _version_py(version, tmp_path)
+        changelog = tmp_path / "CHANGELOG.md"
+        changelog.write_text("# Changelog\n")
+        relnotes = tmp_path / "release-notes.md"
+
+        monkeypatch.setattr(conformance_release, "PYPROJECT", str(pyproject))
+        monkeypatch.setattr(conformance_release, "VERSION_PY", str(version_py))
+        monkeypatch.setattr(conformance_release, "CHANGELOG", str(changelog))
+        monkeypatch.setattr(conformance_release, "RELEASE_NOTES_FILE", str(relnotes))
+        return pyproject, version_py, changelog, relnotes
+
+    def test_first_release_falls_back_to_initial_commit(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        pyproject, version_py, _changelog, relnotes = self._setup(
+            "0.1.0", tmp_path, monkeypatch
+        )
+
+        initial_sha = "abc1234def5678"
+
+        def fake_run(cmd, **_kw):
+            if "tag" in cmd and "--list" in cmd:
+                return ""  # no existing conformance tags
+            if "rev-list" in cmd:
+                return initial_sha
+            if "--format=%s" in cmd:
+                return "feat: add initial conformance suite"
+            if "--format=%B" in cmd:
+                return ""
+            if any("--format=%H" in str(c) for c in cmd):
+                return "abc1234\x00feat: add initial conformance suite\x00\x1e"
+            return ""
+
+        monkeypatch.setattr(conformance_release, "tag_exists", lambda _tag: False)
+        monkeypatch.setattr(conformance_release, "_run", fake_run)
+
+        outputs: dict = {}
+        monkeypatch.setattr(
+            conformance_release, "_set_output", lambda k, v: outputs.update({k: v})
+        )
+
+        conformance_release.main()
+
+        out = capsys.readouterr().out
+        assert "first release" in out
+        assert "0.2.0" in out  # feat: from 0.1.0 → minor bump → 0.2.0
+        assert outputs["skip"] == "false"
+        assert outputs["old"] == "0.1.0"
+        assert outputs["new"] == "0.2.0"
+        assert outputs["tag"] == "conformance-v0.2.0"
+        assert 'version = "0.2.0"' in pyproject.read_text()
+        assert '__version__ = "0.2.0"' in version_py.read_text()
+        assert relnotes.exists()
+
+    def test_error_when_other_tags_exist_but_current_missing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._setup("0.1.0", tmp_path, monkeypatch)
+
+        def fake_run(cmd, **_kw):
+            if "tag" in cmd and "--list" in cmd:
+                return "conformance-v0.2.0"  # stale tags exist — error condition
+            return ""
+
+        monkeypatch.setattr(conformance_release, "tag_exists", lambda _tag: False)
+        monkeypatch.setattr(conformance_release, "_run", fake_run)
+
+        with pytest.raises(SystemExit):
+            conformance_release.main()
+
+
+# ---------------------------------------------------------------------------
+# main() — normal path (existing conformance-vX.Y.Z tag found)
+# ---------------------------------------------------------------------------
+
+
+class TestMainExistingTag:
+    """main() normal path: tag_exists returns True, so no bootstrap fallback."""
+
+    def _setup(
+        self, version: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> tuple:
+        pyproject = _pyproject(version, tmp_path)
+        version_py = _version_py(version, tmp_path)
+        changelog = tmp_path / "CHANGELOG.md"
+        changelog.write_text("# Changelog\n")
+        relnotes = tmp_path / "release-notes.md"
+
+        monkeypatch.setattr(conformance_release, "PYPROJECT", str(pyproject))
+        monkeypatch.setattr(conformance_release, "VERSION_PY", str(version_py))
+        monkeypatch.setattr(conformance_release, "CHANGELOG", str(changelog))
+        monkeypatch.setattr(conformance_release, "RELEASE_NOTES_FILE", str(relnotes))
+        return pyproject, version_py, changelog, relnotes
+
+    def test_no_commits_sets_skip_true(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture,
+    ) -> None:
+        self._setup("0.2.0", tmp_path, monkeypatch)
+
+        monkeypatch.setattr(conformance_release, "tag_exists", lambda _tag: True)
+        monkeypatch.setattr(conformance_release, "_run", lambda _cmd, **_kw: "")
+
+        outputs: dict = {}
+        monkeypatch.setattr(
+            conformance_release, "_set_output", lambda k, v: outputs.update({k: v})
+        )
+
+        conformance_release.main()
+
+        assert outputs.get("skip") == "true"
+        assert "No unreleased" in capsys.readouterr().out
+
+    def test_fix_commits_produce_patch_bump(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pyproject, version_py, _changelog, _relnotes = self._setup(
+            "0.2.0", tmp_path, monkeypatch
+        )
+
+        def fake_run(cmd, **_kw):
+            if "--format=%s" in cmd:
+                return "fix: correct anchor"
+            if "--format=%B" in cmd:
+                return ""
+            if any("--format=%H" in str(c) for c in cmd):
+                return "abc5678\x00fix: correct anchor\x00\x1e"
+            return ""
+
+        monkeypatch.setattr(conformance_release, "tag_exists", lambda _tag: True)
+        monkeypatch.setattr(conformance_release, "_run", fake_run)
+
+        outputs: dict = {}
+        monkeypatch.setattr(
+            conformance_release, "_set_output", lambda k, v: outputs.update({k: v})
+        )
+
+        conformance_release.main()
+
+        assert outputs["skip"] == "false"
+        assert outputs["new"] == "0.2.1"  # patch bump from 0.2.0
+        assert 'version = "0.2.1"' in pyproject.read_text()
+        assert '__version__ = "0.2.1"' in version_py.read_text()
+
+    def test_feat_commits_produce_minor_bump(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pyproject, _ver_py, _changelog, _relnotes = self._setup(
+            "0.2.0", tmp_path, monkeypatch
+        )
+
+        def fake_run(cmd, **_kw):
+            if "--format=%s" in cmd:
+                return "feat: add new check"
+            if "--format=%B" in cmd:
+                return ""
+            if any("--format=%H" in str(c) for c in cmd):
+                return "abc9999\x00feat: add new check\x00\x1e"
+            return ""
+
+        monkeypatch.setattr(conformance_release, "tag_exists", lambda _tag: True)
+        monkeypatch.setattr(conformance_release, "_run", fake_run)
+
+        outputs: dict = {}
+        monkeypatch.setattr(
+            conformance_release, "_set_output", lambda k, v: outputs.update({k: v})
+        )
+
+        conformance_release.main()
+
+        assert outputs["new"] == "0.3.0"  # minor bump from 0.2.0
+        assert 'version = "0.3.0"' in pyproject.read_text()
+
+
+# ---------------------------------------------------------------------------
 # update_version_py
 # ---------------------------------------------------------------------------
 
