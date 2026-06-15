@@ -25,7 +25,7 @@ jobs:
       code: ${{ steps.filter.outputs.code }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4
         id: filter
         with:
           filters: |
@@ -214,7 +214,7 @@ jobs:
 
   matrix-builder:
     name: Build Test Matrix
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -224,6 +224,7 @@ jobs:
 
       - name: Get PR Labels
         id: get-labels
+        if: github.event_name == 'pull_request'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -240,8 +241,14 @@ jobs:
       - name: Build matrix from PR labels
         id: set-matrix
         run: |
-          # Get the target branch of PR
+          # For pull_request, github.base_ref is the branch name (e.g. 'main').
+          # For merge_group, github.base_ref is empty; use the event's base_ref
+          # and strip the refs/heads/ prefix.
           TARGET_BRANCH="${{ github.base_ref }}"
+          if [[ -z "$TARGET_BRANCH" ]]; then
+            TARGET_BRANCH="${{ github.event.merge_group.base_ref }}"
+            TARGET_BRANCH="${TARGET_BRANCH#refs/heads/}"
+          fi
           # Default matrix if no label provided
           DEFAULT_MATRIX="{\"include\":[{\"repo_name\":\"atlan-openapi-app\",\"target_branch\":\"${TARGET_BRANCH}\"},{\"repo_name\":\"atlan-mysql-app\",\"target_branch\":\"${TARGET_BRANCH}\"},{\"repo_name\":\"atlan-metabase-app\",\"target_branch\":\"${TARGET_BRANCH}\"}]}"
 
@@ -310,13 +317,27 @@ jobs:
           snowflake-user: ${{ secrets.SNOWFLAKE_USER }}
           snowflake-password: ${{ secrets.SNOWFLAKE_PASSWORD }}
 
-  # Connector tests: runs on every code-changing PR against both connector
-  # repos. Always dispatches tests.yaml (unit + integration); adds e2e when
-  # the 'e2e' label is present on the SDK PR.
+  # Connector tests: dispatches tests.yaml to each connector repo.
+  # Triggers:
+  #   merge_group — always runs on code-changing merge queue entries (the
+  #     primary gate). Each entry has a unique SHA so runs are parallel.
+  #   pull_request + 'e2e' label — opt-in during PR development; also used
+  #     to release-gate the release PR before merging. The connector-side
+  #     e2e job serialises itself via its own concurrency group, so
+  #     simultaneous e2e-labelled PRs queue safely on the connector side.
   connector-tests:
     name: Connector Tests (${{ matrix.repo_name }})
     needs: [changes, matrix-builder]
-    if: needs.changes.outputs.code == 'true' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true && github.event.pull_request.user.login != 'dependabot[bot]'
+    if: |
+      needs.changes.outputs.code == 'true' && (
+        github.event_name == 'merge_group' ||
+        (
+          github.event_name == 'pull_request' &&
+          contains(github.event.pull_request.labels.*.name, 'e2e') &&
+          github.event.pull_request.head.repo.fork != true &&
+          github.event.pull_request.user.login != 'dependabot[bot]'
+        )
+      )
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -329,7 +350,7 @@ jobs:
           repo-name: ${{ matrix.repo_name }}
           target-branch: "refs/heads/${{ matrix.target_branch }}"
           workflow: tests.yaml
-          workflow-inputs: ${{ contains(github.event.pull_request.labels.*.name, 'e2e') && format('{{"application_sdk_ref":"{0}","run_e2e":"true"}}', github.event.pull_request.head.sha) || format('{{"application_sdk_ref":"{0}"}}', github.event.pull_request.head.sha) }}
+          workflow-inputs: ${{ github.event_name == 'merge_group' && format('{{"application_sdk_ref":"{0}"}}', github.sha) || format('{{"application_sdk_ref":"{0}","run_e2e":"true"}}', github.event.pull_request.head.sha) }}
 
   # (sdr-matrix-builder, sdr-e2e-apps, and e2e-full-mysql removed —
   # superseded by connector-tests + the 'e2e' label on tests.yaml)

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from application_sdk.credentials.types import Credential
 
@@ -17,10 +18,10 @@ class CredentialTypeRegistry:
     can be added with ``register_credential_type()``.
     """
 
-    _instance: "CredentialTypeRegistry | None" = None
+    _instance: CredentialTypeRegistry | None = None
     _initialized: bool = False
 
-    def __new__(cls) -> "CredentialTypeRegistry":
+    def __new__(cls) -> CredentialTypeRegistry:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._registry: dict[str, tuple[type, CredentialParser]] = {}
@@ -115,6 +116,7 @@ class CredentialTypeRegistry:
         _, parser = entry
         try:
             return parser(data)
+        # conformance: ignore[E004] always re-raises as CredentialParseError; exception is never swallowed
         except Exception as exc:
             raise CredentialParseError(
                 f"Failed to parse credential of type '{type_name}': {exc}",

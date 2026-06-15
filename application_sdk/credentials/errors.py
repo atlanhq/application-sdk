@@ -18,6 +18,7 @@ from application_sdk.errors import (
     CREDENTIAL_VALIDATION_ERROR,
     ErrorCode,
 )
+from application_sdk.errors.base import sanitize_cause_repr
 from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import AuthError, InvalidInputError, NotFoundError
 
@@ -96,7 +97,10 @@ class CredentialError(AuthError):
         if self.credential_name:
             parts.append(f"credential={self.credential_name}")
         if self.cause:
-            parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
+            # Sanitized: cause messages can embed connection strings or
+            # secret values (e.g. SQLAlchemy URLs), and __str__ flows into
+            # HTTP error responses via `detail=str(e)`.
+            parts.append(f"caused_by={sanitize_cause_repr(self.cause)}")
         return " | ".join(parts)
 
 
@@ -171,7 +175,10 @@ class CredentialParseError(InvalidInputError, CredentialError):
         if self.credential_name:
             parts.append(f"credential={self.credential_name}")
         if self.cause:
-            parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
+            # Sanitized: cause messages can embed connection strings or
+            # secret values (e.g. SQLAlchemy URLs), and __str__ flows into
+            # HTTP error responses via `detail=str(e)`.
+            parts.append(f"caused_by={sanitize_cause_repr(self.cause)}")
         return " | ".join(parts)
 
 
@@ -214,5 +221,8 @@ class CredentialValidationError(InvalidInputError, CredentialError):
         if self.credential_name:
             parts.append(f"credential={self.credential_name}")
         if self.cause:
-            parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
+            # Sanitized: cause messages can embed connection strings or
+            # secret values (e.g. SQLAlchemy URLs), and __str__ flows into
+            # HTTP error responses via `detail=str(e)`.
+            parts.append(f"caused_by={sanitize_cause_repr(self.cause)}")
         return " | ".join(parts)

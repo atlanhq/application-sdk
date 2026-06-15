@@ -18,22 +18,48 @@ _BASE_FIELDS: frozenset[str] = frozenset(
 )
 
 _CAUSE_MAX_LEN = 500
-# Matches userinfo in URLs: https://user:pass@host → https://***@host
-_URL_USERINFO_RE = re.compile(r"(https?://)[^@\s]+@", re.IGNORECASE)
+# Matches userinfo in URLs for any scheme: https://user:pass@host → https://***@host,
+# postgresql://user:pass@host → postgresql://***@host (SQLAlchemy/JDBC-style
+# connection strings embed credentials the same way http URLs do).
+# `(?:[^@\s]+@)+` consumes *all* userinfo segments greedily so a raw `@` inside
+# the password (postgresql://u:p@ss@host) doesn't leave the tail exposed. This
+# is greedy up to the last `@` in a whitespace-free run, so it can over-redact a
+# trailing `@` in a no-space query string — the safe failure direction for a
+# secret redactor.
+_URL_USERINFO_RE = re.compile(r"([a-z][a-z0-9+.-]*://)(?:[^@\s]+@)+", re.IGNORECASE)
 # Matches secret query params: api_key=value → api_key=***
 _SECRET_PARAM_RE = re.compile(
     r"(?i)((?:api_key|access_token|auth_token|password|passwd|secret|credential|private_key)=)[^\s&,;#]+",
 )
 
 
-def _sanitize_cause_repr(exc: BaseException) -> str:
-    """Return a length-capped, secret-redacted string for a cause exception."""
-    text = str(exc)
+def redact_secrets(text: str) -> str:
+    """Redact URL userinfo and known secret query-params from a string.
+
+    Use this when logging strings that may embed credentials but are not a
+    single cause exception — e.g. a formatted traceback whose frames are worth
+    keeping but whose driver messages embed connection-string passwords.
+
+    ``text`` must be a ``str`` — callers holding an exception or other object
+    should stringify first (the sibling :func:`sanitize_cause_repr` does this
+    for cause exceptions). Non-``str`` input raises ``TypeError`` via ``re``.
+    """
     text = _URL_USERINFO_RE.sub(r"\1***@", text)
     text = _SECRET_PARAM_RE.sub(r"\1***", text)
+    return text
+
+
+def sanitize_cause_repr(exc: BaseException) -> str:
+    """Return a length-capped, secret-redacted string for a cause exception."""
+    text = redact_secrets(str(exc))
     if len(text) > _CAUSE_MAX_LEN:
         text = text[:_CAUSE_MAX_LEN] + "…"
     return f"{type(exc).__name__}: {text}"
+
+
+# Backward-compat alias: the helper is load-bearing across clients/sql.py and
+# credentials/errors.py, so it is public. Kept for existing internal/test imports.
+_sanitize_cause_repr = sanitize_cause_repr
 
 
 @dataclass(kw_only=True)
@@ -104,5 +130,5 @@ class AppError(Exception):
             evidence=evidence,
             app_name=self.app_name,
             run_id=self.run_id,
-            cause_repr=_sanitize_cause_repr(self.cause) if self.cause else None,
+            cause_repr=sanitize_cause_repr(self.cause) if self.cause else None,
         )

@@ -192,6 +192,7 @@ async def _download_files(
         # extension — preserve the READ classification instead of letting the
         # broad ``except Exception`` below re-wrap it as a DOWNLOAD failure.
         raise
+    # conformance: ignore[E004] re-raises immediately as typed ObjectStoreDownloadError; exception is never swallowed
     except Exception as e:
         raise ObjectStoreDownloadError(
             path=path,

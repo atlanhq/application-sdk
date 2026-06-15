@@ -186,3 +186,10 @@ temporal.db
 
 # Claude Code runtime lock files
 .claude/scheduled_tasks.lock
+
+# Remediation run artifacts
+remediation/node_modules/
+remediation/runs/
+
+# Renovate setup
+renovate-config/README.md

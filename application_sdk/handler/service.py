@@ -306,6 +306,9 @@ def _resolve_output_type_for_workflow(workflow_type_name: str) -> type | None:
     try:
         app_meta = AppRegistry.get_instance().get(app_cls_name)
     except AppNotFoundError:
+        logger.warning(
+            "App %r not found in registry; returning None", app_cls_name, exc_info=True
+        )
         return None
 
     if ":" in workflow_type_name:
@@ -419,7 +422,7 @@ def _import_optional_app_module(dotted: str) -> ModuleType | None:
 
     try:
         return importlib.import_module(dotted)
-    except ModuleNotFoundError as exc:
+    except ModuleNotFoundError as exc:  # conformance: ignore[E008] re-raises if missing dep is not the target module itself
         missing = exc.name or ""
         # Swallow only if what's missing is the target or one of its parents
         # (e.g. ``app``, ``app.<segment>``, ``app.<segment>.core``).
@@ -796,7 +799,7 @@ def _published_input_contract(ep: Any) -> Any:
     ):
         try:
             module = importlib.import_module(module_path)
-        except ImportError:
+        except ImportError:  # conformance: ignore[E008,E014] optional generated module; continue to next candidate
             continue
         contract = getattr(module, "AppInputContract", None)
         if contract is not None and hasattr(contract, "model_json_schema"):
@@ -925,8 +928,8 @@ async def _provision_local_vault(guid: str, body: dict[str, Any]) -> JSONRespons
         if tmp_path is not None and os.path.exists(tmp_path):
             try:
                 os.unlink(tmp_path)
-            except OSError:
-                pass  # temp file unlink failed; best-effort cleanup, not fatal
+            except OSError:  # conformance: ignore[E002] best-effort temp secrets-file cleanup; leftover file is non-fatal
+                pass
 
     # Write non-sensitive fields to object storage
     non_sensitive["credentialSource"] = non_sensitive.get("credentialSource", "direct")
@@ -1498,8 +1501,8 @@ def _register_workflow_routes(
         finally:
             try:
                 os.unlink(safe_tmp_path)
-            except FileNotFoundError:
-                pass  # temp file already removed — nothing to clean up
+            except FileNotFoundError:  # conformance: ignore[E002] temp file already removed; nothing to clean up
+                pass
 
         now_ms = int(datetime.now(UTC).timestamp() * 1000)
         response_obj = FileUploadResponse(

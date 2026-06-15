@@ -1,5 +1,35 @@
 # Changelog
 
+## v3.17.1 (June 15, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.17.0...v3.17.1
+
+### Bug Fixes
+
+- redact secrets in logs and errors, encode connection params, owner-only download perms (#2073) (by @vaibhavatlan in [10ace2d](https://github.com/atlanhq/application-sdk/commit/10ace2d))
+- update dependency faker to v40 (#2108) (by @renovate[bot] in [f28a057](https://github.com/atlanhq/application-sdk/commit/f28a057))
+- grant security-events: write to conformance-ci.yaml (#2111) (by @cmgrote in [be651b5](https://github.com/atlanhq/application-sdk/commit/be651b5))
+- address blocking error-handling checks (BLDX-1384) (#2123) (by @cmgrote in [d4fc38d](https://github.com/atlanhq/application-sdk/commit/d4fc38d))
+- throttle lockFileMaintenance to at most twice per hour (#2131) (by @cmgrote in [014c2ad](https://github.com/atlanhq/application-sdk/commit/014c2ad))
+- remediate WARN-tier E-series violations; promote E012 stdlib exceptions to typed errors (#2127) (by @cmgrote in [718c658](https://github.com/atlanhq/application-sdk/commit/718c658))
+- replace invalid 'every 30 minutes' schedule with 'at any time' (#2133) (by @cmgrote in [48c1a3f](https://github.com/atlanhq/application-sdk/commit/48c1a3f))
+
+
+## v3.17.0 (June 12, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.16.0...v3.17.0
+
+### Bug Fixes
+
+- include digest updates in github-actions automerge rule (#2051) (by @cmgrote in [11bf971](https://github.com/atlanhq/application-sdk/commit/11bf971))
+- add requirements.txt to ignorePaths in repo config (#2062) (by @cmgrote in [0cb81cf](https://github.com/atlanhq/application-sdk/commit/0cb81cf))
+- set rangeStrategy update-lockfile for uv manager (#2070) (by @cmgrote in [ad1b376](https://github.com/atlanhq/application-sdk/commit/ad1b376))
+- ignore github-actions[bot] commits as external edits (#2071) (by @cmgrote in [1254358](https://github.com/atlanhq/application-sdk/commit/1254358))
+- match Dapr S3 defaults — infer allow_http from http scheme + AWS_REGION fallback (#2085) (by @Lalit3716-atlan in [da425ec](https://github.com/atlanhq/application-sdk/commit/da425ec))
+- normalize APITree filters in extraction inputs (#2024) (by @fyzanshaik-atlan in [cbc7777](https://github.com/atlanhq/application-sdk/commit/cbc7777))
+- skip SARIF Security-tab upload in merge queue (#2097) (by @cmgrote in [c15fab0](https://github.com/atlanhq/application-sdk/commit/c15fab0))
+
+
 ## v3.16.0 (June 10, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.15.1...v3.16.0

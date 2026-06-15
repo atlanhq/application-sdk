@@ -38,7 +38,7 @@ class ConfigLoader:
             raise FileNotFoundError(f"Config file not found at: {self.config_path}")
         except yaml.YAMLError as e:
             raise ScaleDataConfigError(
-                message=f"Invalid YAML format: {e!s}",
+                message="Invalid YAML format",
                 constraint="yaml_format",
             ) from e
 

@@ -62,6 +62,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+import traceback
 from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
@@ -84,6 +85,7 @@ from application_sdk.constants import (
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.credentials import CredentialResolver, legacy_credential_ref
 from application_sdk.credentials.ref import CredentialRef
+from application_sdk.errors import redact_secrets
 from application_sdk.errors.leaves import (
     AppTimeoutError,
     AuthError,
@@ -136,6 +138,7 @@ def _orjson_default(obj: Any) -> Any:
         return float(obj)
     if isinstance(obj, (bytes, bytearray)):
         return obj.decode("utf-8", errors="replace")
+    # conformance: ignore[E012] orjson default= protocol contractually requires TypeError to signal non-serialisable; replacing with AppError would break serialisation
     raise TypeError(  # orjson default= protocol requires TypeError to signal non-serializable
         f"Object of type {type(obj).__name__} is not JSON-serializable"
     )
@@ -320,26 +323,30 @@ class SqlApp(App):
                 await client.get_results("SELECT 1")
             finally:
                 await client.close()
+        # conformance: ignore[E004] exc_info=True would embed the SQLAlchemy connection string (incl. password) in structured logs; safe_traceback with secrets redacted is logged instead
         except Exception as exc:
             duration_ms = (time.perf_counter() - start) * 1000.0
             # Truncate driver messages so the contract field stays bounded;
             # secret-sanitisation happens later when run() wraps this into
-            # an AuthError (errors.base._sanitize_cause_repr).
+            # an AuthError (errors.base.sanitize_cause_repr).
             error_message = str(exc)
             if len(error_message) > 500:
                 error_message = error_message[:500] + "…"
-            # exc_info=True preserves the traceback in worker logs even
-            # though the exception is being converted to structured return
-            # data. For most failures the class+message is sufficient, but
-            # the long-tail (TLS negotiation, driver bugs, version skew)
-            # is only diagnosable from the original frames.
-            logger.error(
+            # We want the traceback frames in worker logs — the long-tail
+            # (TLS negotiation, driver bugs, version skew) is only diagnosable
+            # from the original frames. But exc_info=True would render the
+            # SQLAlchemy cause's message verbatim, and that embeds the full
+            # connection string incl. password. So we format the traceback
+            # ourselves and redact secrets before logging — frames preserved,
+            # credentials stripped.
+            safe_traceback = redact_secrets("".join(traceback.format_exception(exc)))
+            logger.error(  # conformance: ignore[E005] exc_info would expose SQLAlchemy password in traceback; safe_traceback built above with secrets redacted
                 "SQL auth cache prime FAILED after %.1fms (%s) — short-circuiting "
                 "before parallel extract burst to avoid stacking failed_login_attempts "
-                "on the source.",
+                "on the source.\n%s",
                 duration_ms,
                 type(exc).__name__,
-                exc_info=True,
+                safe_traceback,
             )
             return PrimeAuthOutput(
                 duration_ms=duration_ms,

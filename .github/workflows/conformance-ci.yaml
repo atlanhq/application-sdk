@@ -1,0 +1,100 @@
+# .github/workflows/conformance-ci.yaml
+#
+# Reusable workflow: CI/workflow supply-chain checks (C-series) via
+# `suite.runner --series C`.  Currently enforces:
+#   C001  UnpinnedActionReference — every external action must use a digest pin
+#
+# New C-series checks added to suite/checks/ are picked up automatically.
+#
+# Usage from a connector app:
+#   uses: atlanhq/application-sdk/.github/workflows/conformance-ci.yaml@main
+#   with:
+#     sdk-ref: main
+
+name: "Conformance — CI series (C)"
+
+on:
+  workflow_call:
+    inputs:
+      sdk-ref:
+        description: "Ref of atlanhq/application-sdk to source the conformance suite from"
+        required: false
+        default: main
+        type: string
+      scan-path:
+        description: "Path to watch for workflow/action change detection (default: .github)"
+        required: false
+        default: .github
+        type: string
+      upload-sarif:
+        description: "Upload SARIF report to GitHub Security tab (requires security-events: write)"
+        required: false
+        default: true
+        type: boolean
+      event_name:
+        description: "Caller's github.event_name (push / pull_request / merge_group); reusable workflows always see 'workflow_call' internally"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  ci:
+    name: "CI"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout caller repo"
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: "Detect changed files"
+        id: changes
+        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4
+        with:
+          filters: |
+            relevant:
+              - '${{ inputs.scan-path }}/**'
+
+      - name: "Sparse-checkout conformance suite"
+        if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push'
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ inputs.sdk-ref }}
+          sparse-checkout: conformance
+          path: _sdk
+
+      - name: "Set up uv"
+        if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push'
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+      - name: "Run C-series checks"
+        if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push'
+        env:
+          PYTHONPATH: _sdk/conformance
+        run: |
+          uv run --with pydantic python -m suite.runner \
+            --repo . \
+            --series C \
+            --output ci.sarif
+
+      - name: "Upload SARIF artifact"
+        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push') && !cancelled()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-ci-sarif
+          path: ci.sarif
+
+      - name: "Strip suppressed results for Security tab"
+        if: ${{ inputs.upload-sarif && inputs.event_name == 'push' }}
+        run: |
+          jq '.runs[] |= (.results |= map(select(.suppressions == null or (.suppressions | length == 0))))' \
+            ci.sarif > ci-upload.sarif
+
+      - name: "Upload SARIF to Security tab"
+        if: ${{ inputs.upload-sarif && inputs.event_name == 'push' }}
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        with:
+          sarif_file: ci-upload.sarif
