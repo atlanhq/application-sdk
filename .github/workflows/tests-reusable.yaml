@@ -27,14 +27,10 @@ name: tests-reusable
 #     pytest fixtures — see openapi's .github/test/setup-services.sh)
 #   - Label/dispatch-gated e2e job via e2e-full-reusable
 #
-# The aggregator gate (tests-gate) lives in the caller so it appears as a
-# top-level check (Tests / Tests Gate) rather than a nested one.  The
-# reusable exposes outputs so the caller gate can read individual results.
-#
 # GitHub check name hierarchy (caller → tests-reusable):
 #   Tests / tests / Unit and integration  (pull_request)
-#   Tests / tests / End-to-end / e2e-full (pull_request)  ← 4-deep; nested reusable
-#   Tests / Tests Gate                                     ← 2-deep; caller job
+#   Tests / tests / e2e / End-to-end      (pull_request)  ← 4-deep; nested reusable
+#   Tests / tests / Tests Gate            (pull_request)
 #
 # Nested reusable depth: caller → tests-reusable → e2e-full-reusable = 3
 # (GitHub max is 4).  secrets: inherit chains through both levels.
@@ -45,16 +41,6 @@ name: tests-reusable
 
 on:
   workflow_call:
-    outputs:
-      tests-result:
-        description: "Result of the Unit and integration job (success / failure / skipped / cancelled)"
-        value: ${{ jobs.tests.result }}
-      e2e-result:
-        description: "Result of the End-to-end job (success / failure / skipped / cancelled)"
-        value: ${{ jobs.e2e.result }}
-      tests-summary:
-        description: "One-line summary from connector-integration-tests (coverage %, pass count)"
-        value: ${{ jobs.tests.outputs.summary }}
     inputs:
       app-name:
         required: true
@@ -193,7 +179,40 @@ jobs:
       distinct-id: ${{ inputs.distinct-id }}
     secrets: inherit
 
-  # NOTE: The aggregator gate (tests-gate) lives in the caller scaffold
-  # (tests.yaml) so it appears as "Tests / Tests Gate" (2-deep) rather than
-  # "Tests / tests / Tests Gate" (3-deep).  It reads results via the
-  # workflow_call outputs declared above.
+  # ── Aggregator gate (single required check for branch protection) ────────
+  tests-passed:
+    name: Tests Gate
+    needs: [tests, e2e]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      - name: Post unified test-summary comment on PR
+        if: always() && github.event_name == 'pull_request'
+        uses: mshick/add-pr-comment@8e4927817251f1ff60c001f04568532b38e0b4a0 # v3.11.0
+        with:
+          message-id: tests-summary
+          message: |
+            ## Tests Summary
+
+            | Job | Status | Result |
+            |---|---|---|
+            | tests | ${{ needs.tests.result == 'success' && '✅ Passed' || (needs.tests.result == 'skipped' && '⊘ Skipped' || '❌ Failed') }} | `${{ needs.tests.outputs.summary || 'no summary' }}` |
+            | e2e | ${{ needs.e2e.result == 'success' && '✅ Passed' || (needs.e2e.result == 'skipped' && '⊘ Skipped — add `e2e` label to trigger' || '❌ Failed') }} | (see run) |
+
+            **Overall:** ${{ (needs.tests.result == 'success' && (needs.e2e.result == 'success' || needs.e2e.result == 'skipped')) && '✅ All passed' || '❌ Some failed' }} — [view run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+        continue-on-error: true
+
+      - name: Verify all test jobs succeeded
+        run: |
+          if [ "${{ needs.tests.result }}" != "success" ]; then
+            echo "::error::tests job did not succeed (result=${{ needs.tests.result }})"
+            exit 1
+          fi
+          if [ "${{ needs.e2e.result }}" != "success" ] && [ "${{ needs.e2e.result }}" != "skipped" ]; then
+            echo "::error::e2e job did not succeed (result=${{ needs.e2e.result }})"
+            exit 1
+          fi
+          echo "All test jobs passed."
