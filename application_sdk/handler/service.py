@@ -1671,24 +1671,41 @@ def _register_workflow_routes(
     @app.get("/workflows/v1/configmap/{config_map_id}")
     async def get_configmap(config_map_id: str) -> JSONResponse:
         available_configmaps: list[str] = []
+        exact_match: "Path | None" = None
+        prefix_match: "Path | None" = None
         if CONTRACT_GENERATED_DIR.exists():
             for json_file in CONTRACT_GENERATED_DIR.rglob("*.json"):
                 available_configmaps.append(json_file.stem)
                 if json_file.stem == config_map_id:
-                    with open(json_file) as f:
-                        raw = json.load(f)
-                    configmap = {
-                        "kind": "ConfigMap",
-                        "apiVersion": "v1",
-                        "metadata": {"name": config_map_id},
-                        "data": {"config": json.dumps(raw.get("config", raw))},
-                    }
-                    return JSONResponse(
-                        content=_wrap_response(
-                            cast("dict[str, Any]", configmap),
-                            message="ConfigMap fetched successfully",
-                        )
-                    )
+                    exact_match = json_file
+                    break
+                # Apps with multi-entrypoint contracts generate files named
+                # "<id>-<entrypoint>.json" (e.g. "snowflake-crawler.json"),
+                # while the setup form asks for bare "<id>". Capture the
+                # first such file so we can fall back to it when no exact
+                # match exists. Exact match still wins when present.
+                if prefix_match is None and json_file.stem.startswith(
+                    f"{config_map_id}-"
+                ):
+                    prefix_match = json_file
+
+        target = exact_match or prefix_match
+        if target is not None:
+            with open(target) as f:
+                raw = json.load(f)
+            configmap = {
+                "kind": "ConfigMap",
+                "apiVersion": "v1",
+                "metadata": {"name": config_map_id},
+                "data": {"config": json.dumps(raw.get("config", raw))},
+            }
+            return JSONResponse(
+                content=_wrap_response(
+                    cast("dict[str, Any]", configmap),
+                    message="ConfigMap fetched successfully",
+                )
+            )
+
         logger.warning(
             "ConfigMap not found: requested=%s available=%s",
             config_map_id,

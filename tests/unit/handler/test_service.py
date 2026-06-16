@@ -1616,6 +1616,78 @@ class TestConfigMapEndpoints:
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
+    def test_configmap_prefix_match_falls_back_when_no_exact_match(
+        self, tmp_path: Path
+    ) -> None:
+        """A request for bare "<id>" should match "<id>-<entrypoint>.json".
+
+        Multi-entrypoint apps (snowflake-crawler / snowflake-miner / ...)
+        generate files named after each entrypoint, while the setup form
+        asks for the bare app name. The handler falls back to the first
+        prefix-matched file when no exact match exists.
+        """
+        from application_sdk.handler import service as svc_module
+
+        raw = {"config": {"key": "from-crawler"}}
+        (tmp_path / "snowflake-crawler.json").write_text(json.dumps(raw))
+        (tmp_path / "snowflake-miner.json").write_text(
+            json.dumps({"config": {"key": "from-miner"}})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/configmap/snowflake")
+            assert response.status_code == 200
+            data = response.json()["data"]
+            assert data["metadata"]["name"] == "snowflake"
+            parsed_config = json.loads(data["data"]["config"])
+            # Either prefix file is acceptable; both are valid fallbacks.
+            assert parsed_config["key"] in {"from-crawler", "from-miner"}
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_configmap_exact_match_wins_over_prefix(self, tmp_path: Path) -> None:
+        """When both "<id>.json" and "<id>-<entrypoint>.json" exist, exact wins."""
+        from application_sdk.handler import service as svc_module
+
+        (tmp_path / "snowflake.json").write_text(
+            json.dumps({"config": {"key": "exact"}})
+        )
+        (tmp_path / "snowflake-crawler.json").write_text(
+            json.dumps({"config": {"key": "prefix"}})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/configmap/snowflake")
+            assert response.status_code == 200
+            parsed_config = json.loads(response.json()["data"]["data"]["config"])
+            assert parsed_config["key"] == "exact"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_configmap_prefix_requires_hyphen_separator(self, tmp_path: Path) -> None:
+        """Prefix match needs the "<id>-" separator — substring match alone shouldn't trip it.
+
+        Regression guard: "saphana" must not match "sap-hana.json".
+        """
+        from application_sdk.handler import service as svc_module
+
+        (tmp_path / "sap-hana.json").write_text(json.dumps({"config": {}}))
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/configmap/saphana")
+            assert response.status_code == 404
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
     def test_configmaps_lists_stems_excluding_manifest(self, tmp_path: Path) -> None:
         from application_sdk.handler import service as svc_module
 
