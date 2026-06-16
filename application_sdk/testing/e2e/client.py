@@ -791,7 +791,9 @@ class AEWorkflowClient:
         results = asyncio.run(self._search_counts_async(prefix, type_names))
         return dict(zip(type_names, results))
 
-    def count_total_assets_under_connection(self, connection_qualified_name: str) -> int:
+    def count_total_assets_under_connection(
+        self, connection_qualified_name: str
+    ) -> int:
         """Total descendant-asset count under the connection prefix, ALL types.
 
         Unlike :meth:`count_assets_under_connection` (which requires explicit

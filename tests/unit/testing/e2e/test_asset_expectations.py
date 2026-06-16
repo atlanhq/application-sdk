@@ -119,9 +119,7 @@ def test_nonempty_fires_without_expectations_when_zero() -> None:
 def test_nonempty_without_expectations_passes_when_assets_present() -> None:
     # The true total (all types) is what the backstop checks, not the probed
     # per-type dict — so a no-expectations connector with real assets passes.
-    assert (
-        _NoExpectations()._evaluate_asset_expectations({}, total_assets=5) == []
-    )
+    assert _NoExpectations()._evaluate_asset_expectations({}, total_assets=5) == []
 
 
 def test_nonempty_opt_out_emits_only_floor_failure() -> None:
