@@ -15,13 +15,13 @@ Suppress a finding on the violating line or the line directly above it:
 
 | ID | Name | Tier | Category | Autofixable | Since |
 |---|---|---|---|---|---|
-| [P001](#p001) | `UnboundedContractFields` | `block` | `contract-payload-safety` | — | 0.2.0 |
+| [P001](#p001) | `UnboundedContractFields` | `block` | `contract-payload-safety` | — | 0.3.0 |
 
 ---
 
 ## P001 — `UnboundedContractFields` {#p001}
 
-**Tier:** `block` · **Category:** `contract-payload-safety` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `block` · **Category:** `contract-payload-safety` · **Autofixable:** — · **Since:** 0.3.0
 
 > Input/Output contract declared with allow_unbounded_fields=True — opts out of payload safety
 

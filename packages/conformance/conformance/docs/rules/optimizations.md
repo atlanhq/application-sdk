@@ -15,13 +15,13 @@ Suppress a finding on the violating line or the line directly above it:
 
 | ID | Name | Tier | Category | Autofixable | Since |
 |---|---|---|---|---|---|
-| [O001](#o001) | `StdlibJsonOverOrjson` | `warn` | `canonical-dependency` | — | 0.2.0 |
+| [O001](#o001) | `StdlibJsonOverOrjson` | `warn` | `canonical-dependency` | — | 0.3.0 |
 
 ---
 
 ## O001 — `StdlibJsonOverOrjson` {#o001}
 
-**Tier:** `warn` · **Category:** `canonical-dependency` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Category:** `canonical-dependency` · **Autofixable:** — · **Since:** 0.3.0
 
 > json.dumps()/json.loads() — prefer orjson (a core SDK dependency, ~10x faster)
 

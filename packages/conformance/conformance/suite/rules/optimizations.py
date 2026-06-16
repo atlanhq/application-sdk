@@ -20,7 +20,7 @@ RULES: tuple[RuleDefinition, ...] = (
         category="canonical-dependency",
         autofixable=False,
         orthogonal_gate="tests",
-        since="0.2.0",
+        since="0.3.0",
         short_description="json.dumps()/json.loads() — prefer orjson (a core SDK dependency, ~10x faster)",
         full_description=(
             "``orjson`` is already a core dependency of the application SDK, so it is\n"

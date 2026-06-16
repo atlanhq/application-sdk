@@ -20,7 +20,7 @@ RULES: tuple[RuleDefinition, ...] = (
         category="contract-payload-safety",
         autofixable=False,
         orthogonal_gate="tests",
-        since="0.2.0",
+        since="0.3.0",
         short_description="Input/Output contract declared with allow_unbounded_fields=True — opts out of payload safety",
         full_description=(
             "An ``Input``/``Output`` contract subclass declared with the\n"
