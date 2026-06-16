@@ -86,6 +86,15 @@ on:
         required: false
         type: string
         default: .github/e2e/e2e-full-docker-compose.yaml
+      storage-profile:
+        description: |
+          Optional cross-cloud storage matrix profile (aws|azure|gcp).
+          Forwarded to the sdr-e2e action, which swaps the customer object
+          store for an emulator (LocalStack/Azurite/fake-gcs). Empty = the
+          SDK default (localstorage), behaviour unchanged.
+        required: false
+        type: string
+        default: ""
       timeout-minutes:
         description: |
           GH job timeout. Must always be > ae_poll_timeout_seconds +
@@ -187,7 +196,9 @@ jobs:
           fi
           echo "Using agent-name=$(grep '^name=' "$GITHUB_OUTPUT" | cut -d= -f2)"
 
-      - uses: atlanhq/application-sdk/.github/actions/sdr-e2e@main
+      # TEMP(DISTR-767): pinned to the matrix branch to exercise the new
+      # storage-profile support before merge. REVERT to @main before ready.
+      - uses: atlanhq/application-sdk/.github/actions/sdr-e2e@adityachoudhury/gcs-emulator-base-url
         with:
           app-name: ${{ inputs.app-name }}
           app-image-name: ${{ inputs.app-image-name }}
@@ -195,6 +206,7 @@ jobs:
           secrets-script: ${{ inputs.secrets-script }}
           components-dir: ${{ inputs.components-dir }}
           compose-overlay: ${{ inputs.compose-overlay }}
+          storage-profile: ${{ inputs.storage-profile }}
           # Bump the container-health wait because the worker has to
           # establish the Temporal connection with TLS + auth before
           # /server/health turns green.

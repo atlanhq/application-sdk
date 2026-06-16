@@ -1,0 +1,19 @@
+# Cross-cloud matrix — Azure profile: customer object store on Azure Blob
+# (Azurite). Uses the well-known Azurite account + an http endpoint (→ SDK
+# infers allow_http). Overrides the SDK-default `objectstore`.
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: objectstore
+spec:
+  type: bindings.azure.blobstorage
+  version: v1
+  metadata:
+    - name: accountName
+      value: devstoreaccount1
+    - name: accountKey
+      value: Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMA==
+    - name: containerName
+      value: atlan-customer-e2e
+    - name: endpoint
+      value: http://azurite:10000/devstoreaccount1

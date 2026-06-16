@@ -1,0 +1,25 @@
+# Cross-cloud matrix — AWS profile: customer object store on S3 (LocalStack).
+# Overrides the SDK-default `objectstore` (bindings.localstorage). Upstream
+# `atlan-objectstore` (Atlan blobstorage proxy) is untouched.
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: objectstore
+spec:
+  type: bindings.aws.s3
+  version: v1
+  metadata:
+    - name: bucket
+      value: atlan-customer-e2e
+    - name: region
+      value: us-east-1
+    - name: endpoint
+      value: http://localstack:4566
+    - name: forcePathStyle
+      value: "true"
+    - name: disableSSL
+      value: "true"
+    - name: accessKey
+      value: test
+    - name: secretKey
+      value: test

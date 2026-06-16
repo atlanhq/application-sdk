@@ -1,0 +1,30 @@
+# Cross-cloud matrix — Azure profile sidecars (Azurite blob).
+# The init container self-retries until the blob endpoint is up, then creates
+# the customer container; atlan-app waits for it to complete.
+services:
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:3.31.0
+    command: ["azurite-blob", "--blobHost", "0.0.0.0", "--blobPort", "10000", "--skipApiVersionCheck"]
+    expose:
+      - "10000"
+
+  azurite-init:
+    image: mcr.microsoft.com/azure-cli:2.62.0
+    depends_on:
+      - azurite
+    environment:
+      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMA==;BlobEndpoint=http://azurite:10000/devstoreaccount1;"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        for i in $(seq 1 60); do
+          az storage container create --name atlan-customer-e2e >/dev/null 2>&1 && break
+          echo "waiting for azurite..."; sleep 2
+        done
+        echo "azurite-init done"
+    restart: "no"
+
+  atlan-app:
+    depends_on:
+      azurite-init:
+        condition: service_completed_successfully

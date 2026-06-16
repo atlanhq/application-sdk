@@ -1247,6 +1247,26 @@ class TestGCSStoreCredentials:
         assert mock_gcs_cls.call_args.kwargs["client_options"].get("allow_http") is not True
 
     @patch("obstore.store.GCSStore")
+    def test_skip_signature_for_unauthenticated_emulator(
+        self, mock_gcs_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        """skipSignature → config skip_signature (anonymous requests to fake-gcs)."""
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.gcs",
+            {
+                "bucket": "dev-bucket",
+                "endpoint": "http://fake-gcs:4443",
+                "skipSignature": "true",
+            },
+        )
+        mock_gcs_cls.return_value = MagicMock()
+        create_store_from_binding("objectstore", components_dir=components_dir)
+
+        assert mock_gcs_cls.call_args.kwargs["config"]["skip_signature"] == "true"
+
+    @patch("obstore.store.GCSStore")
     def test_private_key_newlines_normalized(
         self, mock_gcs_cls: MagicMock, tmp_path: Path
     ) -> None:

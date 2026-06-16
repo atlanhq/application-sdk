@@ -1,0 +1,20 @@
+# Cross-cloud matrix — GCP profile: customer object store on GCS
+# (fake-gcs-server). endpoint → obstore base_url (DISTR-774); skipSignature
+# sends unsigned/anonymous requests since the emulator has no auth.
+# Overrides the SDK-default `objectstore`.
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: objectstore
+spec:
+  type: bindings.gcs
+  version: v1
+  metadata:
+    - name: bucket
+      value: atlan-customer-e2e
+    - name: project_id
+      value: test
+    - name: endpoint
+      value: http://fake-gcs:4443
+    - name: skipSignature
+      value: "true"

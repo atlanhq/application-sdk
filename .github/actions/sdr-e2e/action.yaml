@@ -121,6 +121,16 @@ inputs:
       agent-name so the worker registers on its own Temporal queue).
     required: false
     default: ""
+  storage-profile:
+    description: |
+      Optional cross-cloud storage matrix profile: `aws` | `azure` | `gcp`.
+      When set, the profile under `profiles/<name>/` overrides the customer
+      object store with an emulator-backed variant (LocalStack S3 / Azurite /
+      fake-gcs-server) and its compose snippet adds the matching emulator
+      sidecar + bucket/container init. Empty (default) keeps the SDK default
+      `localstorage` — existing behaviour unchanged, so this is purely opt-in.
+    required: false
+    default: ""
 outputs:
   test-outcome:
     description: pytest exit outcome (success/failure)
@@ -376,6 +386,8 @@ runs:
       env:
         SDK_COMPONENTS: ${{ steps.action_root.outputs.path }}/components
         APP_COMPONENTS: ${{ inputs.components-dir }}
+        STORAGE_PROFILE: ${{ inputs.storage-profile }}
+        PROFILES_ROOT: ${{ steps.action_root.outputs.path }}/profiles
       run: |
         cp "${SDK_COMPONENTS}"/*.yaml ci-deploy/components/
         # Resolve effective overrides directory: explicit input wins,
@@ -389,6 +401,18 @@ runs:
           echo "Applying app-level component overrides from ${OVERRIDE_DIR}"
           cp "${OVERRIDE_DIR}"/*.yaml ci-deploy/components/
         fi
+        # Cross-cloud storage matrix (opt-in): the profile's components win last,
+        # so the customer object store becomes the emulator-backed variant.
+        if [ -n "${STORAGE_PROFILE}" ]; then
+          PROFILE_COMPONENTS="${PROFILES_ROOT}/${STORAGE_PROFILE}/components"
+          if [ -d "${PROFILE_COMPONENTS}" ]; then
+            echo "Applying storage-profile '${STORAGE_PROFILE}' components from ${PROFILE_COMPONENTS}"
+            cp "${PROFILE_COMPONENTS}"/*.yaml ci-deploy/components/
+          else
+            echo "::error::Unknown storage-profile '${STORAGE_PROFILE}' (no ${PROFILE_COMPONENTS})"
+            exit 1
+          fi
+        fi
 
     - name: Build compose -f chain
       id: compose_files
@@ -396,6 +420,8 @@ runs:
       env:
         SDK_COMPOSE: ${{ steps.action_root.outputs.path }}/docker-compose.ci.yml
         APP_COMPOSE: ${{ inputs.compose-overlay }}
+        STORAGE_PROFILE: ${{ inputs.storage-profile }}
+        PROFILES_ROOT: ${{ steps.action_root.outputs.path }}/profiles
       run: |
         # Order: configurator-generated base → SDK CI overrides → optional app layer.
         FILES=("-f" "ci-deploy/docker-compose.yaml" "-f" "${SDK_COMPOSE}")
@@ -409,6 +435,15 @@ runs:
         if [ -f "${OVERLAY}" ]; then
           echo "Adding app-level compose layer from ${OVERLAY}"
           FILES+=("-f" "${OVERLAY}")
+        fi
+        # Cross-cloud storage matrix (opt-in): add the emulator sidecar + init
+        # last so atlan-app gains a depends_on the emulator's bucket/container.
+        if [ -n "${STORAGE_PROFILE}" ]; then
+          PROFILE_COMPOSE="${PROFILES_ROOT}/${STORAGE_PROFILE}/docker-compose.ci.yml"
+          if [ -f "${PROFILE_COMPOSE}" ]; then
+            echo "Adding storage-profile '${STORAGE_PROFILE}' compose layer from ${PROFILE_COMPOSE}"
+            FILES+=("-f" "${PROFILE_COMPOSE}")
+          fi
         fi
         # Persist the array as a single space-joined string (compose -f flags
         # are simple paths, no whitespace issues).

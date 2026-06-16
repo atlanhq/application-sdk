@@ -1,0 +1,36 @@
+# Cross-cloud matrix — AWS profile sidecars (LocalStack S3).
+# The init container self-retries until S3 is up, then creates the customer
+# bucket; atlan-app waits for it to complete. No emulator healthcheck needed
+# (avoids depending on the image shipping curl/nc).
+services:
+  localstack:
+    image: localstack/localstack:3
+    environment:
+      - SERVICES=s3
+      - DEBUG=0
+    expose:
+      - "4566"
+
+  localstack-init:
+    image: amazon/aws-cli:2.15.0
+    depends_on:
+      - localstack
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        for i in $(seq 1 60); do
+          aws --endpoint-url=http://localstack:4566 s3 ls >/dev/null 2>&1 && break
+          echo "waiting for localstack s3..."; sleep 2
+        done
+        aws --endpoint-url=http://localstack:4566 s3 mb s3://atlan-customer-e2e || true
+        echo "localstack-init done"
+    restart: "no"
+
+  atlan-app:
+    depends_on:
+      localstack-init:
+        condition: service_completed_successfully

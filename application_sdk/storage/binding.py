@@ -537,6 +537,11 @@ def _build_gcs_config(
         client_options["allow_http"] = True
     if _coerce_bool(meta.get("insecureSSL", "")):
         client_options["allow_invalid_certificates"] = True
+    # Unauthenticated emulators (fake-gcs-server) reject signed requests; send
+    # anonymous, unsigned requests when the binding opts in. Real GCS never sets
+    # this, so production signing is unaffected.
+    if _coerce_bool(meta.get("skipSignature", "")):
+        gcs_config["skip_signature"] = "true"
 
     # --- Storage class --------------------------------------------------------
     storage_class = _nonempty(meta, "storageClass")

@@ -1,0 +1,30 @@
+# Cross-cloud matrix — GCP profile sidecars (fake-gcs-server).
+# The init container self-retries until the JSON API is up, then creates the
+# customer bucket; atlan-app waits for it to complete.
+services:
+  fake-gcs:
+    image: fsouza/fake-gcs-server:1.49.2
+    command: ["-scheme", "http", "-port", "4443", "-host", "0.0.0.0", "-public-host", "fake-gcs:4443"]
+    expose:
+      - "4443"
+
+  fake-gcs-init:
+    image: curlimages/curl:8.10.1
+    depends_on:
+      - fake-gcs
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        for i in $(seq 1 60); do
+          curl -sf -X POST "http://fake-gcs:4443/storage/v1/b?project=test" \
+            -H "Content-Type: application/json" \
+            -d '{"name":"atlan-customer-e2e"}' >/dev/null 2>&1 && break
+          echo "waiting for fake-gcs..."; sleep 2
+        done
+        echo "fake-gcs-init done"
+    restart: "no"
+
+  atlan-app:
+    depends_on:
+      fake-gcs-init:
+        condition: service_completed_successfully
