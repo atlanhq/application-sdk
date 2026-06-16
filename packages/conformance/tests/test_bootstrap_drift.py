@@ -63,13 +63,16 @@ def test_c002_is_autofixable() -> None:
 def test_discover_returns_all_managed_paths(tmp_path: pathlib.Path) -> None:
     paths = discover(tmp_path)
     names = {p.name for p in paths}
-    assert names == set(MANAGED_WORKFLOWS)
+    # Must include all managed shims plus the tests.yaml scaffold.
+    assert set(MANAGED_WORKFLOWS).issubset(names)
+    assert "tests.yaml" in names
 
 
 def test_discover_returns_paths_even_when_absent(tmp_path: pathlib.Path) -> None:
     """discover() must not filter out non-existent files."""
     paths = discover(tmp_path)
-    assert len(paths) == len(MANAGED_WORKFLOWS)
+    # managed shims + tests.yaml scaffold.
+    assert len(paths) == len(MANAGED_WORKFLOWS) + 1
     # None of them exist yet.
     assert all(not p.exists() for p in paths)
 
@@ -211,3 +214,105 @@ def test_each_workflow_clean_individually(tmp_path: pathlib.Path, name: str) -> 
     wf = tmp_path / ".github" / "workflows" / name
     findings = scan_path(wf, tmp_path)
     assert findings == [], f"{name}: {[f.message for f in findings]}"
+
+
+# ---------------------------------------------------------------------------
+# tests.yaml scaffold — write-if-absent, WARN-only drift tracking
+# ---------------------------------------------------------------------------
+
+
+def test_tests_yaml_clean_after_bootstrap(tmp_path: pathlib.Path) -> None:
+    """A freshly-bootstrapped tests.yaml yields no C002 finding."""
+    _bootstrap(tmp_path)
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    assert wf.exists()
+    findings = scan_path(wf, tmp_path)
+    assert findings == [], [f.message for f in findings]
+
+
+def test_tests_yaml_custom_app_name_not_flagged(tmp_path: pathlib.Path) -> None:
+    """Custom app-name is a recognised param — not structural drift."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "tests.yaml"
+    wf.write_text(render("tests.yaml", app_name="mysql"))
+    findings = scan_path(wf, tmp_path)
+    assert findings == []
+
+
+def test_tests_yaml_custom_enable_e2e_not_flagged(tmp_path: pathlib.Path) -> None:
+    """Custom enable-e2e value is a recognised param — not structural drift."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "tests.yaml"
+    wf.write_text(render("tests.yaml", app_name="hello-world", enable_e2e="false"))
+    findings = scan_path(wf, tmp_path)
+    assert findings == []
+
+
+def test_tests_yaml_active_services_script_not_flagged(tmp_path: pathlib.Path) -> None:
+    """Uncommented services-script is a recognised param — not structural drift."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "tests.yaml"
+    wf.write_text(
+        render(
+            "tests.yaml",
+            app_name="openapi",
+            services_script=".github/test/setup-services.sh",
+        )
+    )
+    findings = scan_path(wf, tmp_path)
+    assert findings == []
+
+
+def test_tests_yaml_structural_drift_produces_finding(tmp_path: pathlib.Path) -> None:
+    """Structural modification (not just param values) → one C002 finding."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "tests.yaml"
+    canonical = render("tests.yaml")
+    drifted = canonical.replace(
+        "  tests:", "  tests:\n    timeout-minutes: 999  # structural drift"
+    )
+    wf.write_text(drifted)
+    findings = scan_path(wf, tmp_path)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "C002"
+    assert "drifted" in findings[0].message
+
+
+def test_tests_yaml_missing_produces_finding(tmp_path: pathlib.Path) -> None:
+    """Absent tests.yaml → one C002 finding."""
+    wf_path = tmp_path / ".github" / "workflows" / "tests.yaml"
+    findings = scan_path(wf_path, tmp_path)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "C002"
+
+
+def test_tests_yaml_finding_is_warn_never_block(tmp_path: pathlib.Path) -> None:
+    """tests.yaml drift finding is WARN, not BLOCK — drift must never block CI."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "tests.yaml"
+    wf.write_text("completely wrong content")
+    findings = scan_path(wf, tmp_path)
+    assert len(findings) == 1
+    # C002 is defined as WARN tier — the finding inherits that.
+    rule = get_rule("C002")
+    assert rule.tier == EnforcementTier.WARN
+
+
+def test_tests_yaml_finding_message_mentions_delete_and_bootstrap(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Drift message tells users to delete + re-run bootstrap to remediate."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "tests.yaml"
+    wf.write_text("structural drift")
+    findings = scan_path(wf, tmp_path)
+    assert len(findings) == 1
+    msg = findings[0].message
+    assert "delete" in msg.lower() or "regenerate" in msg.lower()
+    assert "bootstrap" in msg

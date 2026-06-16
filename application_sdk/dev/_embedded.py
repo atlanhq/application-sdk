@@ -5,10 +5,17 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+# Stable download location for the Temporal CLI dev-server binary. Mirrors the
+# Dapr helper's ``~/.cache/atlan-sdk`` convention so the binary is fetched once
+# and reused across runs (and is cacheable in CI). ``start_local`` defaults to
+# the system temp dir, which fresh CI runners don't persist.
+_CACHE_DIR = Path.home() / ".cache" / "atlan-sdk" / "temporal"
 
 
 @dataclass(frozen=True)
@@ -41,9 +48,11 @@ async def embedded_runtime(
     """
     from temporalio.testing import WorkflowEnvironment  # noqa: PLC0415
 
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
     logger.info("Starting embedded workflow runtime")
     env = await WorkflowEnvironment.start_local(
         namespace=namespace,
+        download_dest_dir=str(_CACHE_DIR),
         ui=temporal_ui,
         ui_port=temporal_ui_port if temporal_ui else None,
         dev_server_log_level=log_level,

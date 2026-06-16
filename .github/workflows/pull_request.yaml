@@ -12,9 +12,6 @@ permissions:
   issues: write
   security-events: write
 
-env:
-  TEMPORAL_CLI_VERSION: "1.5.1"  # bundles Server 1.29.1 — matches tenant Server 1.29.4
-
 jobs:
   # Detect which files changed
   changes:
@@ -191,82 +188,29 @@ jobs:
       - uses: "./.github/actions/setup-deps"
         if: needs.changes.outputs.sdk == 'true'
 
-      - name: Install Temporal CLI
+      # Temporal and Dapr are provisioned in-process by the SDK's own embedded
+      # dev helpers (application_sdk.dev.embedded_runtime / embedded_dapr) — the
+      # same code path local development uses — so this job no longer installs
+      # or starts a standalone Temporal CLI or daprd. The Temporal dev-server
+      # version now follows the `temporalio` dep in uv.lock and the daprd
+      # version follows `__dapr_version` (application_sdk/version.py), so there
+      # is no separate CLI version pin to keep in sync.
+      #
+      # Both helpers fetch their binary to ~/.cache on first use; cache those
+      # paths across runs so we don't re-download every time.
+      - name: Cache embedded runtime binaries
         if: needs.changes.outputs.sdk == 'true'
-        run: |
-          mkdir -p "$HOME/.temporalio/bin"
-          curl -sSLf "https://github.com/temporalio/cli/releases/download/v${TEMPORAL_CLI_VERSION}/temporal_cli_${TEMPORAL_CLI_VERSION}_linux_amd64.tar.gz" \
-            -o /tmp/temporal.tar.gz
-          tar -xzf /tmp/temporal.tar.gz -C /tmp
-          mv /tmp/temporal "$HOME/.temporalio/bin/temporal"
-          chmod +x "$HOME/.temporalio/bin/temporal"
-          echo "$HOME/.temporalio/bin" >> "$GITHUB_PATH"
-
-      - name: Start Temporal dev server
-        if: needs.changes.outputs.sdk == 'true'
-        run: temporal server start-dev --db-filename /tmp/temporal-integ.db &
-
-      - name: Wait for Temporal to be ready
-        if: needs.changes.outputs.sdk == 'true'
-        run: |
-          for i in $(seq 1 20); do
-            if temporal workflow list --namespace default 2>/dev/null; then
-              echo "Temporal is ready"
-              break
-            fi
-            sleep 2
-          done
-
-      - name: Resolve pinned daprd version
-        id: dapr
-        if: needs.changes.outputs.sdk == 'true'
-        run: |
-          set -euo pipefail
-          ver=$(grep '^__dapr_version' application_sdk/version.py | cut -d'"' -f2)
-          if [[ -z "$ver" ]]; then
-            echo "::error::Failed to parse __dapr_version from application_sdk/version.py"
-            exit 1
-          fi
-          echo "version=$ver" >> "$GITHUB_OUTPUT"
-          echo "Resolved pinned daprd version: $ver"
-
-      - name: Install and start Dapr runtime (daprd)
-        if: needs.changes.outputs.sdk == 'true'
-        run: |
-          # Download daprd directly from the Dapr release. Mirrors the SDK's
-          # own embedded-runtime path (application_sdk/dev/_dapr.py) instead
-          # of invoking `dapr init --slim`, which also tries to fetch the
-          # placement binary — a binary we never use (we run with
-          # --placement-host-address '') and whose download has been a
-          # recurring source of 504s on this job.
-          DAPR_VERSION="${{ steps.dapr.outputs.version }}"
-          mkdir -p "$HOME/.dapr/bin"
-          curl -sSLf "https://github.com/dapr/dapr/releases/download/v${DAPR_VERSION}/daprd_linux_amd64.tar.gz" \
-            -o /tmp/daprd.tar.gz
-          tar -xzf /tmp/daprd.tar.gz -C "$HOME/.dapr/bin" daprd
-          chmod +x "$HOME/.dapr/bin/daprd"
-          mkdir -p tests/integration/dapr-data/objectstore
-          # Run daprd directly (no sidecar pattern) for deterministic behavior
-          "$HOME/.dapr/bin/daprd" \
-            --app-id integ-test \
-            --dapr-http-port 3500 \
-            --resources-path ./tests/integration/dapr-components \
-            --placement-host-address '' \
-            --scheduler-host-address '' \
-            --log-level warn &
-          for i in $(seq 1 15); do
-            if curl -sf http://localhost:3500/v1.0/metadata > /dev/null 2>&1; then
-              echo "daprd is ready"
-              break
-            fi
-            sleep 2
-          done
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: |
+            ~/.cache/atlan-sdk/temporal
+            ~/.cache/atlan-sdk/dapr
+          key: embedded-runtimes-${{ runner.os }}-${{ hashFiles('uv.lock', 'application_sdk/version.py') }}
+          restore-keys: |
+            embedded-runtimes-${{ runner.os }}-
 
       - name: Run integration tests
         if: needs.changes.outputs.sdk == 'true'
-        env:
-          TEMPORAL_HOST: "localhost:7233"
-          DAPR_HTTP_PORT: "3500"
         run: uv run pytest tests/integration/ -m integration -v --timeout=120
 
   storage-emulator:
