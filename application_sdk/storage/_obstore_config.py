@@ -43,6 +43,7 @@ without changing the outcome (see BLDX-1155 review thread).
 from __future__ import annotations
 
 import os
+import urllib.request
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -78,6 +79,16 @@ def _default_user_agent() -> str:
         return "atlan-application-sdk"
 
 
+def _obstore_proxy_url() -> str | None:
+    """Return the proxy URL from HTTPS_PROXY/HTTP_PROXY, or None.
+
+    obstore doesn't read proxy env vars itself, so we pass ``proxy_url``
+    explicitly. NO_PROXY isn't honored — the binding has no per-host excludes.
+    """
+    proxies = urllib.request.getproxies()
+    return proxies.get("https") or proxies.get("http") or None
+
+
 def obstore_client_options() -> ClientConfig:
     """Build an obstore ``ClientConfig`` from environment variables.
 
@@ -103,6 +114,9 @@ def obstore_client_options() -> ClientConfig:
     pool_max = os.getenv("ATLAN_OBSTORE_POOL_MAX_IDLE_PER_HOST")
     if pool_max:
         opts["pool_max_idle_per_host"] = pool_max
+    proxy_url = _obstore_proxy_url()
+    if proxy_url:
+        opts["proxy_url"] = proxy_url
     return opts
 
 

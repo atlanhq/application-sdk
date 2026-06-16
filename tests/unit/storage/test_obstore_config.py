@@ -59,7 +59,10 @@ class TestClientOptionsOverrides:
         monkeypatch.setenv("ATLAN_OBSTORE_USER_AGENT", "custom-agent/1.0")
         monkeypatch.setenv("ATLAN_OBSTORE_POOL_MAX_IDLE_PER_HOST", "32")
 
-        opts = obstore_client_options()
+        # Pin no proxy so the exact-dict assertion is deterministic regardless
+        # of the host's proxy env / system settings.
+        with patch("urllib.request.getproxies", return_value={}):
+            opts = obstore_client_options()
         assert opts == {
             "timeout": "1h",
             "connect_timeout": "10s",
@@ -68,6 +71,49 @@ class TestClientOptionsOverrides:
             "user_agent": "custom-agent/1.0",
             "pool_max_idle_per_host": "32",
         }
+
+
+# ---------------------------------------------------------------------------
+# proxy_url plumbing (obstore does not read proxy env vars itself)
+# ---------------------------------------------------------------------------
+
+
+class TestClientOptionsProxy:
+    """proxy_url is forwarded from the standard proxy env vars; getproxies is
+    patched so the result is platform-independent (it reads system config on
+    macOS)."""
+
+    def test_no_proxy_url_when_env_unset(self) -> None:
+        with patch("urllib.request.getproxies", return_value={}):
+            opts = obstore_client_options()
+        assert "proxy_url" not in opts
+
+    def test_https_proxy_is_used(self) -> None:
+        with patch(
+            "urllib.request.getproxies",
+            return_value={"https": "http://proxy.corp:8080"},
+        ):
+            opts = obstore_client_options()
+        assert opts["proxy_url"] == "http://proxy.corp:8080"
+
+    def test_http_proxy_used_as_fallback(self) -> None:
+        with patch(
+            "urllib.request.getproxies",
+            return_value={"http": "http://proxy.corp:3128"},
+        ):
+            opts = obstore_client_options()
+        assert opts["proxy_url"] == "http://proxy.corp:3128"
+
+    def test_https_preferred_over_http(self) -> None:
+        with patch(
+            "urllib.request.getproxies",
+            return_value={
+                "https": "http://secure.corp:8080",
+                "http": "http://plain.corp:3128",
+            },
+        ):
+            opts = obstore_client_options()
+        assert opts["proxy_url"] == "http://secure.corp:8080"
 
 
 # ---------------------------------------------------------------------------

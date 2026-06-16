@@ -446,30 +446,25 @@ def _build_temporal_proxy_config(
 ) -> HttpConnectProxyConfig | None:
     """Build an HTTP CONNECT proxy config for the Temporal gRPC connection.
 
-    Temporal's client does not read proxy environment variables on its own, so
-    the SDK forwards them explicitly, resolving them through the stdlib
-    (:func:`urllib.request.getproxies`) exactly like ``httpx`` does:
-
-    * the proxy is selected by target scheme — ``HTTPS_PROXY`` for TLS-enabled
-      connections, ``HTTP_PROXY`` for plaintext;
-    * ``NO_PROXY`` is honored (so in-cluster Temporal reached via Service DNS is
-      never tunneled);
-    * upper/lowercase env variants and the httpoxy CGI mitigation come for free.
+    Temporal doesn't read proxy env vars itself, so we resolve them via the
+    stdlib (``urllib.request.getproxies``) like httpx: HTTPS_PROXY for TLS,
+    HTTP_PROXY for plaintext, honoring NO_PROXY.
 
     Args:
-        host: Temporal target ``host[:port]`` (used for NO_PROXY matching and to
-            keep the proxy CONNECT keyed by hostname).
+        host: Temporal target ``host[:port]`` (used for NO_PROXY matching).
         tls_enabled: Whether the Temporal connection uses TLS.
 
     Returns:
-        An ``HttpConnectProxyConfig`` when a proxy applies, else ``None`` (direct).
+        An ``HttpConnectProxyConfig``, or ``None`` for a direct connection.
     """
     proxies = urllib.request.getproxies()
     proxy = proxies.get("https" if tls_enabled else "http")
     if not proxy:
         return None
 
-    hostname = host.rsplit(":", 1)[0]  # drop :port before NO_PROXY matching
+    # bare host:port needs // so urlsplit reads it as an authority
+    normalised = host if "//" in host else f"//{host}"
+    hostname = urlsplit(normalised).hostname
     if urllib.request.proxy_bypass_environment(hostname, proxies):
         logger.info("Temporal host %s matches NO_PROXY; connecting directly", host)
         return None

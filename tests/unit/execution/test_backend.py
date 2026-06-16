@@ -589,6 +589,24 @@ class TestTemporalProxyConfig:
             )
         assert "http_connect_proxy_config" not in connect.await_args.kwargs
 
+    @pytest.mark.parametrize(
+        "host",
+        [
+            "svc.internal.corp:7233",  # bare host:port
+            "https://svc.internal.corp:443",  # scheme-prefixed (customer form)
+            "user:pass@svc.internal.corp:7233",  # with userinfo
+        ],
+    )
+    def test_no_proxy_matches_on_bare_hostname(self, host: str) -> None:
+        """NO_PROXY matches on the hostname regardless of scheme/userinfo/port."""
+        # Real proxy_bypass_environment runs against the extracted hostname.
+        with mock.patch(
+            "urllib.request.getproxies",
+            return_value={"https": "http://proxy.corp:8080", "no": "internal.corp"},
+        ):
+            cfg = backend_module._build_temporal_proxy_config(host, tls_enabled=True)
+        assert cfg is None
+
     def test_build_proxy_config_extracts_credentials_without_leaking(self) -> None:
         """Credentials become basic_auth and never appear in target_host."""
         getproxies, bypass = self._proxy_env(
