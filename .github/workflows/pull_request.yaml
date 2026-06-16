@@ -26,8 +26,9 @@ jobs:
       #          tests must run. Deliberately EXCLUDES contract-toolkit/ (ships
       #          its own package + CI), docs/, and .github/ workflow-meta — a
       #          workflow-only or toolkit-only PR no longer drags in the full
-      #          test matrix. The two .github/actions/* entries are the test
-      #          harness itself, so changing *how* tests run still re-runs them.
+      #          test matrix. The .github/actions/* entries are the test
+      #          harness itself (the unit/integration deps + docstring-coverage
+      #          wrappers), so changing *how* those checks run still re-runs them.
       sdk: ${{ steps.filter.outputs.sdk }}
       # 'scan' — wider net for the Trivy filesystem scan: every first-party
       #          source tree + the dependency lockfiles. Still short-circuits on
@@ -52,6 +53,7 @@ jobs:
               - 'uv.lock'
               - '.github/actions/unit-tests/**'
               - '.github/actions/setup-deps/**'
+              - '.github/actions/docstring-coverage/**'
               # Markdown-only changes never affect SDK behaviour. Listed LAST so
               # paths-filter's gitignore-style last-match-wins excludes e.g.
               # application_sdk/README.md while application_sdk/foo.py still runs.
@@ -62,6 +64,7 @@ jobs:
               - 'tests/**'
               - 'pyproject.toml'
               - 'uv.lock'
+              - '.github/actions/trivy/**'
 
   # Required status check — the JOB has no `if:` so it always runs and always
   # concludes. The real validation step is gated to PR (non-fork) events: the
