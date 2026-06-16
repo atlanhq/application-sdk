@@ -147,7 +147,7 @@ commands:
   programs-dir   Print the absolute path to the bundled .prose.md programs
   gen-rule-docs  Regenerate rule docs from Python rule definitions
   remediate      Print programs path + version banner (SKILL.md drives execution)
-  bootstrap      Write .claude/skills/remediate/SKILL.md + 16 standard CI workflow
+  bootstrap      Write .claude/skills/remediate/SKILL.md + standard CI workflow
                  shims into .github/workflows/ (always overwrites — re-running
                  eradicates drift).
                    --package-name NAME       docstring-coverage package (default: app)

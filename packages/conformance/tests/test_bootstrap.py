@@ -1,7 +1,7 @@
 """Tests for the bootstrap command and its helpers.
 
 Covers _bootstrap_file and _ensure_gitignore_entry in isolation, and the full
-_cmd_bootstrap dispatch (SKILL.md + 16 CI workflow shims + .gitignore) via the
+_cmd_bootstrap dispatch (SKILL.md + CI workflow shims + .gitignore) via the
 CLI entrypoint so the tests exercise the same code path a caller would use.
 """
 
