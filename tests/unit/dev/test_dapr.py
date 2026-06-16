@@ -122,22 +122,19 @@ class TestWriteComponents:
             in (components_dir / "secretstore.yaml").read_text()
         )
 
-    def test_secrets_emit_file_backed_secret_store(self, tmp_path: Path) -> None:
-        """When ``secrets`` is supplied, the secret stores become file-backed."""
-        import json
-
+    def test_secrets_file_emits_file_backed_secret_store(self, tmp_path: Path) -> None:
+        """When ``secrets_file`` is supplied, the secret stores become file-backed."""
         components_dir = tmp_path / "components"
-        secrets = {"api-key": "abc-123", "db-password": "p@ss"}
+        secrets_file = tmp_path / "my-secrets.json"
+        secrets_file.write_text('{"api-key": "abc-123"}')
 
         _write_components(
             components_dir,
             tmp_path / "objects",
             tmp_path / "events",
-            secrets=secrets,
+            secrets_file=str(secrets_file),
         )
 
-        secrets_file = components_dir / "secrets.json"
-        assert json.loads(secrets_file.read_text()) == secrets
         # Hyphenated keys round-trip through a file store; ``local.env`` wouldn't.
         for name in ("secretstore", "deployment-secret-store"):
             content = (components_dir / f"{name}.yaml").read_text()
@@ -145,11 +142,10 @@ class TestWriteComponents:
             assert "secretstores.local.env" not in content
             assert str(secrets_file.resolve()) in content
 
-    def test_secrets_omitted_keeps_env_store(self, tmp_path: Path) -> None:
-        """Without ``secrets``, secret stores stay env-backed and no file is written."""
+    def test_secrets_file_omitted_keeps_env_store(self, tmp_path: Path) -> None:
+        """Without ``secrets_file``, secret stores stay env-backed."""
         components_dir = tmp_path / "components"
         _write_components(components_dir, tmp_path / "objects", tmp_path / "events")
-        assert not (components_dir / "secrets.json").exists()
         assert (
             "secretstores.local.env"
             in (components_dir / "secretstore.yaml").read_text()

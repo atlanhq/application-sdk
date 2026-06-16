@@ -12,7 +12,6 @@ production while requiring nothing on the host beyond Python and ``uv``.
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import platform
 import shutil
@@ -210,9 +209,11 @@ spec:
 }
 
 
-# File-backed secret store, used when explicit ``secrets`` are supplied (e.g.
-# integration tests that assert specific secret values). Hyphenated keys like
-# ``api-key`` round-trip cleanly through a file but not through ``local.env``.
+# File-backed secret store, used when a ``secrets_file`` path is supplied (e.g.
+# integration tests that assert specific secret values from a checked-in JSON
+# file). Hyphenated keys like ``api-key`` round-trip cleanly through a file but
+# not through ``local.env``. The component only references the file path — no
+# secret values pass through this process.
 _SECRET_STORE_FILE_YAML = """\
 apiVersion: dapr.io/v1alpha1
 kind: Component
@@ -235,22 +236,23 @@ def _write_components(
     components_dir: Path,
     objectstore_root: Path = Path(DEFAULT_OBJECTSTORE_ROOT),
     eventstore_root: Path = Path(DEFAULT_EVENTSTORE_ROOT),
-    secrets: dict[str, str] | None = None,
+    secrets_file: str | None = None,
 ) -> None:
     """Write the auto-generated Dapr component YAMLs into *components_dir*.
 
-    When *secrets* is provided, the ``secretstore`` /
-    ``deployment-secret-store`` components are emitted as
-    ``secretstores.local.file`` backed by a ``secrets.json`` written
-    alongside them, instead of the default env-var store.
+    When *secrets_file* (a path to a JSON secrets file) is provided, the
+    ``secretstore`` / ``deployment-secret-store`` components are emitted as
+    ``secretstores.local.file`` pointing at that file, instead of the default
+    env-var store. Only the path is referenced — secret *values* never flow
+    through this process.
     """
     components_dir.mkdir(parents=True, exist_ok=True)
     objectstore_root.mkdir(parents=True, exist_ok=True)
     eventstore_root.mkdir(parents=True, exist_ok=True)
     for filename, template in _COMPONENTS_YAML.items():
-        # When explicit secrets are supplied, skip the default env-var secret
+        # When a secrets file is supplied, skip the default env-var secret
         # store components — they are re-emitted as file-backed below.
-        if secrets is not None and filename in (
+        if secrets_file is not None and filename in (
             "secretstore.yaml",
             "deployment-secret-store.yaml",
         ):
@@ -261,14 +263,11 @@ def _write_components(
                 eventstore_root=str(eventstore_root.resolve()),
             )
         )
-    if secrets is not None:
-        secrets_file = components_dir / "secrets.json"
-        secrets_file.write_text(json.dumps(secrets))
+    if secrets_file is not None:
+        resolved = str(Path(secrets_file).resolve())
         for name in _FILE_SECRET_STORE_NAMES:
             (components_dir / f"{name}.yaml").write_text(
-                _SECRET_STORE_FILE_YAML.format(
-                    name=name, secrets_file=str(secrets_file.resolve())
-                )
+                _SECRET_STORE_FILE_YAML.format(name=name, secrets_file=resolved)
             )
 
 
@@ -298,7 +297,7 @@ async def embedded_dapr(
     app_id: str = "atlan-app",
     objectstore_root: str = DEFAULT_OBJECTSTORE_ROOT,
     eventstore_root: str = DEFAULT_EVENTSTORE_ROOT,
-    secrets: dict[str, str] | None = None,
+    secrets_file: str | None = None,
     log_level: str = "warn",
 ) -> AsyncIterator[EmbeddedDapr]:
     """Boot an embedded ``daprd`` for local app development.
@@ -307,8 +306,10 @@ async def embedded_dapr(
 
     * ``statestore`` — ``state.in-memory``
     * ``secretstore`` / ``deployment-secret-store`` — ``secretstores.local.env``
-      by default, or ``secretstores.local.file`` backed by *secrets* when that
-      mapping is supplied (handy for tests that assert specific secret values).
+      by default, or ``secretstores.local.file`` pointing at *secrets_file*
+      (a path to a JSON secrets file) when that is supplied — handy for tests
+      that assert specific secret values. Only the path is referenced; secret
+      values never flow through this process.
     * ``objectstore`` — ``bindings.localstorage`` rooted at *objectstore_root*
     * ``eventstore`` — ``bindings.localstorage`` rooted at *eventstore_root*
 
@@ -322,7 +323,10 @@ async def embedded_dapr(
     grpc_port = _pick_free_port()
     components_dir = Path(tempfile.mkdtemp(prefix="atlan-dapr-"))
     _write_components(
-        components_dir, Path(objectstore_root), Path(eventstore_root), secrets=secrets
+        components_dir,
+        Path(objectstore_root),
+        Path(eventstore_root),
+        secrets_file=secrets_file,
     )
 
     # Set env BEFORE spawning the subprocess so the observability sink's

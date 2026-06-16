@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -161,13 +162,10 @@ async def executor(temporal_client, task_queue):
     return TemporalExecutorBackend(temporal_client, task_queue)
 
 
-# Secrets the Dapr HTTP tests assert against. File-backed (see ``secrets=``
-# below) so hyphenated keys round-trip — ``local.env`` mangles them.
-_DAPR_TEST_SECRETS = {
-    "test-secret": "integration-test-value",
-    "api-key": "test-api-key-12345",
-    "db-password": "test-db-password",
-}
+# Checked-in JSON secrets file the Dapr HTTP tests assert against. Passed to
+# the embedded sidecar as a file path (not values) so hyphenated keys like
+# ``api-key`` round-trip — ``local.env`` mangles them.
+_DAPR_SECRETS_FILE = str(Path(__file__).parent / "secrets.json")
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
@@ -183,7 +181,7 @@ async def embedded_dapr_sidecar():
     """
     from application_sdk.dev import embedded_dapr
 
-    async with embedded_dapr(secrets=_DAPR_TEST_SECRETS) as dapr:
+    async with embedded_dapr(secrets_file=_DAPR_SECRETS_FILE) as dapr:
         yield dapr
 
 
