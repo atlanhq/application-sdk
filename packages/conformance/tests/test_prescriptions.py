@@ -46,6 +46,30 @@ def test_p001_silent_when_explicitly_false() -> None:
     assert _ids(src) == []
 
 
+def test_p001_silent_on_falsy_literals() -> None:
+    # Literal-falsy values are genuine opt-back-ins (runtime `if x:` is False).
+    for val in ("None", "0", "''"):
+        src = f"class MyInput(Input, allow_unbounded_fields={val}):\n    pass\n"
+        assert _ids(src) == [], f"should not fire on ={val}"
+
+
+def test_p001_fires_on_truthy_non_true_values() -> None:
+    # Runtime opt-out is `if allow_unbounded_fields:` — any truthy value opts
+    # out, so =1 must be caught (was a false-negative when matching only `True`).
+    assert _ids("class A(Input, allow_unbounded_fields=1):\n    pass\n") == ["P001"]
+
+
+def test_p001_fires_on_dynamic_value() -> None:
+    # A runtime-controlled opt-out on a BLOCK rule must be surfaced for review,
+    # not silently missed.
+    assert _ids(
+        "FLAG = True\nclass A(Input, allow_unbounded_fields=FLAG):\n    pass\n"
+    ) == ["P001"]
+    assert _ids("class A(Input, allow_unbounded_fields=(1 == 1)):\n    pass\n") == [
+        "P001"
+    ]
+
+
 def test_p001_silent_on_unrelated_class_keyword() -> None:
     # A different class keyword (e.g. metaclass) must not trip the rule.
     src = "class MyInput(Input, metaclass=ABCMeta):\n    pass\n"

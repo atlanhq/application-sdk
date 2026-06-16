@@ -13,6 +13,21 @@ Inline suppression
 ------------------
 Add a ``# conformance: ignore[O001] <reason>`` comment on the offending line or
 the comment-only line immediately above it.
+
+Known coverage limits (intentional — biased toward zero false positives at WARN
+tier; documented rather than silently capped):
+
+* **Out of scope by design:** ``json.dump`` / ``json.load`` (file-object APIs
+  orjson does not provide), ``json.JSONDecodeError`` / ``JSONEncoder``, and
+  other JSON libraries (``ujson``, ``simplejson``, ``rapidjson``) — O001 targets
+  stdlib ``json`` only.
+* **False negatives (not chased — same limitation the E-series accepts):**
+  ``from json import *`` then bare ``dumps(...)``; rebinding ``j = json`` then
+  ``j.dumps(...)``; storing the callable (``fn = json.dumps; fn(...)``).
+* **Rare false positive:** a module-level ``import json`` *and* a function
+  parameter also named ``json`` — a ``json.dumps`` inside that function is
+  flagged even though it refers to the parameter.  WARN-tier and suppressible;
+  proper scope resolution is deliberately not built for this edge.
 """
 
 from __future__ import annotations

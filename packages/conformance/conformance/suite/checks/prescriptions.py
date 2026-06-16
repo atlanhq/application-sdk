@@ -54,28 +54,32 @@ class _PrescriptionChecker(ast.NodeVisitor):
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         for kw in node.keywords:
-            if (
-                kw.arg == "allow_unbounded_fields"
-                and isinstance(kw.value, ast.Constant)
-                and kw.value.value is True
-            ):
-                self._findings.append(
-                    make_finding(
-                        filename=self._filename,
-                        rule_id="P001",
-                        node=node,
-                        message=(
-                            f"Contract '{node.name}' is declared with "
-                            "allow_unbounded_fields=True, opting out of payload-safety "
-                            "enforcement — arbitrary untyped fields may cross task "
-                            "boundaries. This must be exceptional: justify it with an "
-                            "inline '# conformance: ignore[P001] <reason>' directive at "
-                            "the declaration site."
-                        ),
-                        directives=self._directives,
-                    )
-                )
+            if kw.arg != "allow_unbounded_fields":
+                continue
+            # The opt-out is active for ANY truthy value: Input/Output's
+            # __init_subclass__ does ``if allow_unbounded_fields:``.  So
+            # ``=True``, ``=1`` and dynamic values (``=FLAG``, ``=(expr)``) all
+            # opt out.  Only an explicit literal-falsy value (False/None/0/"")
+            # is a genuine opt-back-in and must NOT be flagged.
+            if isinstance(kw.value, ast.Constant) and not kw.value.value:
                 break
+            self._findings.append(
+                make_finding(
+                    filename=self._filename,
+                    rule_id="P001",
+                    node=node,
+                    message=(
+                        f"Contract '{node.name}' opts out of payload-safety "
+                        "enforcement via allow_unbounded_fields — arbitrary untyped "
+                        "fields may cross task boundaries. This must be exceptional: "
+                        "justify it with an inline '# conformance: ignore[P001] "
+                        "<reason>' directive at the declaration site (and prefer a "
+                        "non-dynamic value so the opt-out is statically auditable)."
+                    ),
+                    directives=self._directives,
+                )
+            )
+            break
         self.generic_visit(node)
 
 
