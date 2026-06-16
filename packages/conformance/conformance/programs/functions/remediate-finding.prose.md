@@ -109,6 +109,63 @@ for human audit regardless.
 
 ---
 
+#### Area: optimizations (O-series) — PHASE 1
+
+Consult the finding's `hint` and `message`, then look at the actual source
+lines around `finding.line` in `finding.file` before proposing a fix.
+
+**Judgment rules** (`autofixable = false`) — produce a `"fix"` outcome with
+`classification = "judgment"`; always route to residue:
+
+- **O001 StdlibJsonOverOrjson** — the site calls `json.dumps(...)` or
+  `json.loads(...)` on the stdlib module.  `orjson` is **not** a drop-in, so
+  this is never mechanical:
+  - `json.loads(s)` → `orjson.loads(s)` is usually direct (orjson accepts
+    `str` or `bytes`).
+  - `json.dumps(obj)` → `orjson.dumps(obj)` returns **`bytes`, not `str`**.
+    Inspect the call site: if the result is written to a text sink, passed
+    where a `str` is required, or concatenated with `str`, append `.decode()`.
+    If it feeds a bytes sink (file opened `"wb"`, a socket, a hash), leave as
+    bytes.
+  - Translate keyword arguments: `indent=2` → `option=orjson.OPT_INDENT_2`;
+    `sort_keys=True` → `option=orjson.OPT_SORT_KEYS` (OR-combine multiple
+    options); a `default=` callable stays as the `default` keyword (orjson
+    supports it).  Drop kwargs orjson cannot express and note them in residue.
+  - Ensure `import orjson` is present at module top (it is a core SDK
+    dependency); add it if missing.
+
+  The orthogonal gate **bites** here: a `bytes`/`str` regression on any
+  covered path fails the behavioural tests, so a careless swap is caught by
+  `orthogonal-gate` before the edit survives.  Classification is always
+  `"judgment"` (the decode/kwargs call requires reading the call site), so the
+  edit is also routed to residue for human confirmation.
+
+**Suppress outcome (strict mode only, WARNING-tier findings)**:
+
+When `mode == "strict"` and the site legitimately needs stdlib `json` (e.g.
+interop with a library that requires a `str` and the bytes-decode round-trip
+is wasteful, or a `json.JSONEncoder` subclass), the model may propose an
+inline `# conformance: ignore[O001] <justification>` instead of a fix.  Route
+every suppression to residue for human audit.
+
+---
+
+#### Area: prescriptions (P-series) — DEFERRED
+
+No prescription authored for this phase.  Return `not_remediable = true`.
+
+P001 `UnboundedContractFields` is suppress-only and its only fix that clears
+the detector is adding `Annotated[..., MaxItems(N)]` or an inline suppression.
+`MaxItems` is **not runtime-enforced**, so `recheck-narrowest` accepts any
+bound and the orthogonal test gate is structurally blind — there is no gate
+that can catch a hollow fix (design §6.1).  P-series therefore stays
+detection-only; findings route to residue with the note "suppress-only rule
+with no orthogonal gate; needs human review and a gate that validates the
+bound".  To implement, author a P-series prescription here paired with a gate
+that actually bites (e.g. a runtime-enforced bound or a payload-size check).
+
+---
+
 #### Area: logging (L-series) — DEFERRED
 
 No prescription authored for this phase.  Return `not_remediable = true`.

@@ -5,7 +5,7 @@
 
 # CI/Workflow Supply-Chain Rules (C-series)
 
-**1 rule** · Checker: `suite.checks.actions_pinning` and related workflow checks (static)
+**2 rules** · Checker: `suite.checks.actions_pinning` and related workflow checks (static)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -16,6 +16,7 @@ Suppress a finding on the violating line or the line directly above it:
 | ID | Name | Tier | Category | Autofixable | Since |
 |---|---|---|---|---|---|
 | [C001](#c001) | `UnpinnedActionReference` | `block` | `supply-chain` | yes | 3.16.0 |
+| [C002](#c002) | `BootstrapWorkflowDrift` | `warn` | `ci-consistency` | yes | 0.3.0 |
 
 ---
 
@@ -29,5 +30,19 @@ External actions reused via `uses:` must be pinned to a full-length commit SHA (
 never a mutable tag (@v4) or branch (@main). A tag can be re-pointed to malicious code
 after review. Actions in the `atlanhq/` org are exempt (they intentionally track @main);
 local `./` composite-action refs are exempt (no version to pin).
+
+---
+
+## C002 — `BootstrapWorkflowDrift` {#c002}
+
+**Tier:** `warn` · **Category:** `ci-consistency` · **Autofixable:** yes · **Since:** 0.3.0
+
+> Managed CI workflow is absent or has drifted from the bootstrap canonical
+
+The `atlan-application-sdk-conformance bootstrap` command installs a standard set of CI
+workflow shims into `.github/workflows/`. This rule flags any managed file that is
+missing or whose content has diverged from what `bootstrap` would write. Re-run
+`bootstrap` to re-sync; structural drift is flagged while intentional per-repo value
+choices (e.g. `package_name`, `unit_tests_workflow_file`) are preserved.
 
 ---
