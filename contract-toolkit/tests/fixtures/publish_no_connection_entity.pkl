@@ -1,8 +1,9 @@
 /// Fixture: app whose typed publish step opts out of `connection_entity`.
 ///
 /// Exercises the pipeline path with `pipeline.publish.connectionEntity = null`,
-/// which must omit `connection_entity` from the generated publish node's args so
-/// publish builds a minimal entity from `connection_qualified_name` instead.
+/// which must omit `connection_entity` from the generated publish node's args and,
+/// because the two are linked, also set `connection_creation_enabled = false` so
+/// publish targets an existing connection and creates nothing.
 amends "../../src/App.pkl"
 
 name = "publish-no-connection-entity"

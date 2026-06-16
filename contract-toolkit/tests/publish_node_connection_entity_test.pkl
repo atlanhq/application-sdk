@@ -1,11 +1,13 @@
 // Tests that `connection_entity` is an optional arg on the built-in PublishNode.
 //
 // Background: `connection_entity` is the full connection entity JSON (typeName +
-// attributes). When provided, publish uses it for connection creation; when
-// omitted, publish constructs a minimal entity from `connection_qualified_name`.
-// PublishNode therefore exposes a nullable `connectionEntity` (default
-// "{{connection}}") and only emits the arg when it is non-null — both directly on
-// the node and via the typed `PublishStep.connectionEntity`.
+// attributes) that publish uses for connection creation. PublishNode exposes a
+// nullable `connectionEntity` (default "{{connection}}") and only emits the arg
+// when it is non-null — both directly on the node and via the typed
+// `PublishStep.connectionEntity`. The field is linked to `connectionCreationEnabled`
+// (default `connectionEntity != null`), so a null entity also sets
+// `connection_creation_enabled = false`: publish targets an existing connection
+// and creates nothing, rather than creating one from a partial entity.
 
 amends "pkl:test"
 
