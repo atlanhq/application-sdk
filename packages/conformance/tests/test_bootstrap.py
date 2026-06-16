@@ -371,7 +371,7 @@ def test_cmd_bootstrap_tests_yaml_recreated_when_deleted(
 # ---------------------------------------------------------------------------
 
 
-def test_tests_yaml_workflow_name_is_capitalised() -> None:
+def test_tests_yaml_workflow_name_is_capitalized() -> None:
     content = render("tests.yaml")
     assert "name: Tests\n" in content
 
