@@ -68,20 +68,37 @@ def render(
     *,
     package_name: str = "app",
     unit_tests_workflow: str = "tests.yaml",
+    app_name: str = "app",
+    app_image_name: str = "",
+    enable_e2e: str = "true",
+    services_script: str = "",
 ) -> str:
     """Render template *name* with the given substitution variables.
 
     For static templates (no ``<< >>`` variables) this is a plain file read.
-    The two parameterised templates are:
+    Parameterised templates:
 
     - ``build-and-publish.yaml``: ``unit_tests_workflow`` (default ``"tests.yaml"``)
     - ``docstring-coverage.yaml``: ``package_name`` (default ``"app"``)
+    - ``tests.yaml``: ``app_name`` (default ``"app"``), ``app_image_name``
+      (default derived as ``"atlan-<app_name>-app"``), ``enable_e2e``
+      (default ``"true"``), ``services_script`` (default ``""`` — renders the
+      services-script line commented out; supply a path to render it active).
 
     All other keyword arguments are accepted but unused, so callers can pass
     the full variable set without knowing which template is parametric.
     """
+    # Derive app_image_name from app_name if not supplied.
+    if not app_image_name:
+        app_image_name = f"atlan-{app_name}-app"
+
     raw = _load_template(name)
     tmpl = _ENV.from_string(raw)
     return tmpl.render(
-        package_name=package_name, unit_tests_workflow=unit_tests_workflow
+        package_name=package_name,
+        unit_tests_workflow=unit_tests_workflow,
+        app_name=app_name,
+        app_image_name=app_image_name,
+        enable_e2e=enable_e2e,
+        services_script=services_script,
     )

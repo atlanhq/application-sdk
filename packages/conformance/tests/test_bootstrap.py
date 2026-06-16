@@ -124,7 +124,13 @@ def test_gitignore_entry_match_is_exact_line(tmp_path: pathlib.Path) -> None:
 
 def test_parse_bootstrap_args_defaults() -> None:
     result = _parse_bootstrap_args([])
-    assert result == {"package_name": "app", "unit_tests_workflow": "tests.yaml"}
+    assert result == {
+        "package_name": "app",
+        "unit_tests_workflow": "tests.yaml",
+        "app_name": "app",
+        "app_image_name": "",
+        "enable_e2e": "true",
+    }
 
 
 def test_parse_bootstrap_args_space_separated() -> None:
@@ -143,6 +149,31 @@ def test_parse_bootstrap_args_both_flags() -> None:
     )
     assert result["package_name"] == "connector"
     assert result["unit_tests_workflow"] == "ci.yaml"
+
+
+def test_parse_bootstrap_args_app_name() -> None:
+    result = _parse_bootstrap_args(["--app-name", "mysql"])
+    assert result["app_name"] == "mysql"
+
+
+def test_parse_bootstrap_args_app_name_equals_form() -> None:
+    result = _parse_bootstrap_args(["--app-name=openapi"])
+    assert result["app_name"] == "openapi"
+
+
+def test_parse_bootstrap_args_app_image_name() -> None:
+    result = _parse_bootstrap_args(["--app-image-name", "atlan-mysql-app"])
+    assert result["app_image_name"] == "atlan-mysql-app"
+
+
+def test_parse_bootstrap_args_enable_e2e_false() -> None:
+    result = _parse_bootstrap_args(["--enable-e2e", "false"])
+    assert result["enable_e2e"] == "false"
+
+
+def test_parse_bootstrap_args_enable_e2e_equals_form() -> None:
+    result = _parse_bootstrap_args(["--enable-e2e=false"])
+    assert result["enable_e2e"] == "false"
 
 
 # ---------------------------------------------------------------------------
@@ -291,3 +322,119 @@ def test_cmd_bootstrap_custom_args_propagate(
     build = (tmp_path / ".github" / "workflows" / "build-and-publish.yaml").read_text()
     assert 'package_name: "myapp"' in docstring
     assert 'unit_tests_workflow_file: "run-tests.yaml"' in build
+
+
+# ---------------------------------------------------------------------------
+# tests.yaml scaffold — write-if-absent semantics
+# ---------------------------------------------------------------------------
+
+
+def test_cmd_bootstrap_writes_tests_yaml(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    assert (tmp_path / ".github" / "workflows" / "tests.yaml").exists()
+
+
+def test_cmd_bootstrap_tests_yaml_not_in_managed_workflows() -> None:
+    assert "tests.yaml" not in MANAGED_WORKFLOWS
+
+
+def test_cmd_bootstrap_tests_yaml_is_write_if_absent(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second bootstrap run must NOT overwrite an already-customised tests.yaml."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text("# my custom content\n")
+    _cmd_bootstrap([])
+    assert wf.read_text() == "# my custom content\n"
+
+
+def test_cmd_bootstrap_tests_yaml_recreated_when_deleted(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Delete tests.yaml → re-run bootstrap → file regenerated from canonical."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.unlink()
+    _cmd_bootstrap([])
+    assert wf.exists()
+    assert wf.read_text() == render("tests.yaml")
+
+
+# ---------------------------------------------------------------------------
+# tests.yaml template fidelity
+# ---------------------------------------------------------------------------
+
+
+def test_tests_yaml_contains_reusable_reference() -> None:
+    content = render("tests.yaml")
+    assert (
+        "atlanhq/application-sdk/.github/workflows/tests-reusable.yaml@main" in content
+    )
+
+
+def test_tests_yaml_contains_remediation_header() -> None:
+    content = render("tests.yaml")
+    assert "bootstrap" in content
+    assert "C002" in content
+
+
+def test_tests_yaml_contains_services_script_hint() -> None:
+    content = render("tests.yaml")
+    assert "# services-script:" in content
+
+
+def test_tests_yaml_contains_secrets_inherit() -> None:
+    content = render("tests.yaml")
+    assert "secrets: inherit" in content
+
+
+def test_tests_yaml_default_app_name() -> None:
+    content = render("tests.yaml")
+    assert 'app-name: "app"' in content
+    assert 'app-image-name: "atlan-app-app"' in content
+    assert "enable-e2e: true" in content
+
+
+def test_tests_yaml_custom_app_name_and_image() -> None:
+    content = render("tests.yaml", app_name="mysql", app_image_name="atlan-mysql-app")
+    assert 'app-name: "mysql"' in content
+    assert 'app-image-name: "atlan-mysql-app"' in content
+
+
+def test_tests_yaml_app_image_derived_when_not_given() -> None:
+    content = render("tests.yaml", app_name="openapi")
+    assert 'app-image-name: "atlan-openapi-app"' in content
+
+
+def test_tests_yaml_enable_e2e_false() -> None:
+    content = render("tests.yaml", enable_e2e="false")
+    assert "enable-e2e: false" in content
+
+
+def test_tests_yaml_services_script_active() -> None:
+    content = render("tests.yaml", services_script=".github/test/setup-services.sh")
+    assert "services-script: .github/test/setup-services.sh" in content
+    # The commented hint must NOT appear when the value is active.
+    assert "# services-script:" not in content
+
+
+def test_tests_yaml_no_unresolved_placeholders() -> None:
+    content = render("tests.yaml")
+    assert "<< " not in content
+    assert " >>" not in content
+
+
+def test_cmd_bootstrap_custom_app_args_propagate(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--app-name", "mysql", "--enable-e2e", "false"])
+    tests = (tmp_path / ".github" / "workflows" / "tests.yaml").read_text()
+    assert 'app-name: "mysql"' in tests
+    assert "enable-e2e: false" in tests

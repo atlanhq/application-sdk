@@ -84,17 +84,31 @@ def _ensure_gitignore_entry(root: pathlib.Path, entry: str) -> None:
 
 
 def _parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
-    """Parse --package-name and --unit-tests-workflow from argv.
+    """Parse bootstrap flags from argv.
 
     Supports both ``--flag value`` and ``--flag=value`` forms.
+
+    Flags
+    -----
+    --package-name NAME          docstring-coverage package (default: app)
+    --unit-tests-workflow FILE   build-and-publish test workflow (default: tests.yaml)
+    --app-name NAME              connector app name for tests.yaml scaffold (default: app)
+    --app-image-name NAME        GHCR image name for tests.yaml scaffold (default: atlan-<app-name>-app)
+    --enable-e2e BOOL            enable e2e job in tests.yaml scaffold (default: true)
     """
     result: dict[str, str] = {
         "package_name": "app",
         "unit_tests_workflow": "tests.yaml",
+        "app_name": "app",
+        "app_image_name": "",
+        "enable_e2e": "true",
     }
     _flags = {
         "--package-name": "package_name",
         "--unit-tests-workflow": "unit_tests_workflow",
+        "--app-name": "app_name",
+        "--app-image-name": "app_image_name",
+        "--enable-e2e": "enable_e2e",
     }
     i = 0
     while i < len(argv):
@@ -127,6 +141,18 @@ def _cmd_bootstrap(argv: list[str]) -> int:
             root / ".github" / "workflows" / name,
             render(name, **kwargs),
         )
+
+    # tests.yaml is write-if-absent (not always-overwrite) — bootstrap creates
+    # it once as a starting point; apps customise it freely.  C002 tracks drift
+    # at WARN only.  To force-regenerate: delete the file and re-run bootstrap.
+    tests_dest = root / ".github" / "workflows" / "tests.yaml"
+    if not tests_dest.exists():
+        tests_dest.parent.mkdir(parents=True, exist_ok=True)
+        tests_dest.write_text(render("tests.yaml", **kwargs), encoding="utf-8")
+        print(f"scaffolded: {tests_dest}")
+    else:
+        print(f"ok (exists): {tests_dest}  (edit freely; C002 tracks drift at WARN)")
+
     _ensure_gitignore_entry(root, "remediation/")
     return 0
 
@@ -147,11 +173,15 @@ commands:
   programs-dir   Print the absolute path to the bundled .prose.md programs
   gen-rule-docs  Regenerate rule docs from Python rule definitions
   remediate      Print programs path + version banner (SKILL.md drives execution)
-  bootstrap      Write .claude/skills/remediate/SKILL.md + standard CI workflow
-                 shims into .github/workflows/ (always overwrites — re-running
-                 eradicates drift).
-                   --package-name NAME       docstring-coverage package (default: app)
-                   --unit-tests-workflow FILE build-and-publish test workflow (default: tests.yaml)
+  bootstrap      Write .claude/skills/remediate/SKILL.md + all standard CI workflow
+                 shims into .github/workflows/. The 16 managed shims always overwrite
+                 (re-running eradicates drift). tests.yaml is write-if-absent
+                 (scaffolded once; delete it and re-run to regenerate from canonical).
+                   --package-name NAME         docstring-coverage package (default: app)
+                   --unit-tests-workflow FILE   build-and-publish test workflow (default: tests.yaml)
+                   --app-name NAME             connector app name for tests.yaml (default: app)
+                   --app-image-name NAME       GHCR image name for tests.yaml (default: atlan-<app-name>-app)
+                   --enable-e2e true|false     enable e2e in tests.yaml (default: true)
 """
 
 

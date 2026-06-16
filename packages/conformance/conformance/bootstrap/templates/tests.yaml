@@ -1,0 +1,94 @@
+# This file is scaffolded by `atlan-application-sdk-conformance bootstrap`
+# and drift-tracked at WARN by conformance check C002.
+#
+# Edit it freely — drift NEVER blocks CI (C002 is WARN-only, not BLOCK).
+# To force-regenerate this file from canonical, delete it and re-run bootstrap:
+#   atlan-application-sdk-conformance bootstrap --app-name <your-app-name>
+name: tests
+
+# Unified workflow — unit + integration (testcontainers), and full-DAG e2e.
+#
+#   tests        — unit + integration tests via connector-integration-tests
+#                  composite. Source systems should start from session-scoped
+#                  pytest fixtures (see mysql/metabase conftest.py); uncomment
+#                  services-script below only if that pattern doesn't fit.
+#   e2e          — full-DAG tests against a real tenant via e2e-full-reusable.
+#                  Triggered by the 'e2e' PR label or workflow_dispatch.
+#   tests-passed — aggregator gate; the single required check for branch
+#                  protection.  tests must pass; e2e can be skipped.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - labeled
+    branches:
+      - main
+  merge_group:
+  workflow_dispatch:
+    inputs:
+      application_sdk_ref:
+        description: |
+          Branch/SHA of atlanhq/application-sdk for cross-repo dispatch.
+          Pins SDK in tests + e2e jobs. Empty = lockfile version.
+        required: false
+        default: ""
+        type: string
+      distinct_id:
+        description: |
+          Identifier for codex-/return-dispatch matching. Echoed in step
+          names so the calling workflow can locate this run via the GH API.
+        required: false
+        default: ""
+        type: string
+      agent_name_override:
+        description: |
+          Override agent-name for the e2e job (default ci-<run_id>).
+          Useful when re-running against a worker that is already up.
+        required: false
+        default: ""
+        type: string
+      run_e2e:
+        description: "Set to 'true' to trigger the e2e job (cross-repo dispatch from application-sdk). Defaults to off."
+        required: false
+        default: ""
+        type: string
+      base_image_ref:
+        description: |
+          Runtime base image for the connector Docker build (BASE_IMAGE
+          build-arg), set by the application-sdk PR dispatch so SDK
+          base-image / Dockerfile / daprd changes are exercised. Empty =
+          the connector Dockerfile default base.
+        required: false
+        default: ""
+        type: string
+
+jobs:
+  tests:
+    uses: atlanhq/application-sdk/.github/workflows/tests-reusable.yaml@main
+    with:
+      app-name: "<< app_name >>"
+      app-image-name: "<< app_image_name >>"
+      enable-e2e: << enable_e2e >>
+<% if services_script %>
+      services-script: << services_script >>
+<% else %>
+      # services-script: .github/test/setup-services.sh
+      # Uncomment services-script (and add the script) if your source systems
+      # need CI-level startup rather than pytest fixtures.  See mysql/metabase
+      # tests/integration/conftest.py for the preferred fixture-based approach,
+      # and openapi's .github/test/setup-services.sh for a reference
+      # demonstration of the hook (used intentionally to exercise the pattern).
+<% endif %>
+      # Review test-paths and pytest-args before committing; defaults auto-discover.
+      application-sdk-ref: ${{ inputs.application_sdk_ref }}
+      distinct-id: ${{ inputs.distinct_id }}
+      run-e2e: ${{ inputs.run_e2e }}
+      base-image-ref: ${{ inputs.base_image_ref }}
+      agent-name-override: ${{ inputs.agent_name_override }}
+    secrets: inherit
