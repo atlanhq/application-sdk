@@ -63,7 +63,7 @@ def _bootstrap_file(dest: pathlib.Path, content: str) -> None:
     """
     existed = dest.exists()
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(content)
+    dest.write_text(content, encoding="utf-8")
     print(f"{'updated' if existed else 'installed'}: {dest}")
 
 
@@ -71,15 +71,15 @@ def _ensure_gitignore_entry(root: pathlib.Path, entry: str) -> None:
     """Append *entry* to .gitignore if not already present; never overwrites."""
     gitignore = root / ".gitignore"
     if gitignore.exists():
-        lines = gitignore.read_text().splitlines()
+        lines = gitignore.read_text(encoding="utf-8").splitlines()
         if any(line.strip() == entry for line in lines):
             print(f"ok:        {gitignore}  ({entry!r} already present)")
             return
         # Append with a preceding blank line for readability.
-        with gitignore.open("a") as fh:
+        with gitignore.open("a", encoding="utf-8") as fh:
             fh.write(f"\n{entry}\n")
     else:
-        gitignore.write_text(f"{entry}\n")
+        gitignore.write_text(f"{entry}\n", encoding="utf-8")
     print(f"appended:  {gitignore}  ({entry!r})")
 
 
