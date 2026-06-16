@@ -443,6 +443,12 @@ runs:
           if [ -f "${PROFILE_COMPOSE}" ]; then
             echo "Adding storage-profile '${STORAGE_PROFILE}' compose layer from ${PROFILE_COMPOSE}"
             FILES+=("-f" "${PROFILE_COMPOSE}")
+          else
+            # Symmetric with the component-override step: a profile with
+            # components but no compose would silently start no emulator
+            # sidecar and fail confusingly later. Fail loudly instead.
+            echo "::error::storage-profile '${STORAGE_PROFILE}' has no ${PROFILE_COMPOSE}"
+            exit 1
           fi
         fi
         # Persist the array as a single space-joined string (compose -f flags

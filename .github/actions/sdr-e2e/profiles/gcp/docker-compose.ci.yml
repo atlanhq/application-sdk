@@ -27,6 +27,10 @@ services:
           location / {
             proxy_pass http://storage-testbench:9000;
             proxy_hide_header ETag;
+            # A single constant ETag — fine for this suite's small single-PUT
+            # objects, but it will NOT survive multipart completion (needs
+            # per-part ETags) or any If-Match/conditional logic. Revisit if this
+            # profile is ever used for large-object E2E.
             add_header ETag '"d41d8cd98f00b204e9800998ecf8427e"' always;
           }
           # NB: the worker's best-effort post-upload cleanup DELETEs log a
@@ -48,12 +52,14 @@ services:
     command:
       - |
         for i in $(seq 1 60); do
-          curl -sf -X POST "http://gcs:9000/storage/v1/b?project=test" \
-            -H "Content-Type: application/json" \
-            -d '{"name":"atlan-customer-e2e"}' >/dev/null 2>&1 && break
+          if curl -sf -X POST "http://gcs:9000/storage/v1/b?project=test" \
+               -H "Content-Type: application/json" \
+               -d '{"name":"atlan-customer-e2e"}' >/dev/null 2>&1; then
+            echo "gcs-init done"; exit 0
+          fi
           echo "waiting for gcs proxy + testbench..."; sleep 2
         done
-        echo "gcs-init done"
+        echo "gcs-init: giving up after retries"; exit 1
     restart: "no"
 
   atlan-app:

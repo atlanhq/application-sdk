@@ -23,11 +23,13 @@ services:
     command:
       - |
         for i in $(seq 1 60); do
-          aws --endpoint-url=http://localstack:4566 s3 ls >/dev/null 2>&1 && break
+          aws --endpoint-url=http://localstack:4566 s3 mb s3://atlan-customer-e2e >/dev/null 2>&1
+          if aws --endpoint-url=http://localstack:4566 s3api head-bucket --bucket atlan-customer-e2e >/dev/null 2>&1; then
+            echo "localstack-init done"; exit 0
+          fi
           echo "waiting for localstack s3..."; sleep 2
         done
-        aws --endpoint-url=http://localstack:4566 s3 mb s3://atlan-customer-e2e || true
-        echo "localstack-init done"
+        echo "localstack-init: giving up after retries"; exit 1
     restart: "no"
 
   atlan-app:
