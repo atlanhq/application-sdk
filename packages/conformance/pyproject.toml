@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "atlan-application-sdk-conformance"
+version = "0.2.0"
+description = "Conformance suite, remediation programs, and CLI for the Atlan Application SDK"
+license = "Apache-2.0"
+authors = [
+    {name = "Atlan App Team", email = "connect@atlan.com"}
+]
+readme = "README.md"
+requires-python = ">=3.11"
+keywords = ["atlan", "sdk", "conformance", "linting", "remediation"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Operating System :: OS Independent",
+    "Development Status :: 4 - Beta",
+]
+dependencies = [
+    "pydantic>=2.10.6,<3.0.0",
+    "jsonschema>=4.23.0,<5.0.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.3.3,<10.0.0",
+    "pytest-asyncio>=1.4.0,<2.0.0",
+    "atlan-application-sdk",
+]
+
+[project.scripts]
+atlan-application-sdk-conformance = "conformance.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["conformance"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["G004", "PLC0415", "F841", "T201"]
+"conformance/tools/generate_rule_docs.py" = ["E402"]

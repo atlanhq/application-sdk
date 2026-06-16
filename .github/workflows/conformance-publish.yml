@@ -1,0 +1,88 @@
+name: Publish Conformance Package
+
+# Phase B of the conformance release. Fires when a release PR opened by
+# the Release Conformance Package workflow (conformance-release.yml) is
+# merged into main with the `release:conformance` label. Builds the wheel +
+# sdist from merged main and publishes to PyPI, then creates the
+# conformance-v<version> annotated tag.
+# No GitHub Release is created — that would interleave conformance-v* versions
+# with SDK v* releases on the repo releases page.
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  id-token: write
+  pull-requests: read
+
+jobs:
+  publish:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' || (
+        github.event.pull_request.merged == true &&
+        contains(github.event.pull_request.labels.*.name, 'release:conformance') &&
+        startsWith(github.event.pull_request.head.ref, 'bump-version-conformance')
+      )
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          version: "0.11.21"
+
+      - name: Read release version
+        id: meta
+        run: |
+          set -euo pipefail
+          version="$(uvx --from=toml-cli toml get --toml-path=packages/conformance/pyproject.toml project.version)"
+          if [ -z "$version" ]; then
+            echo "::error::could not parse version from packages/conformance/pyproject.toml"
+            exit 1
+          fi
+          tag="conformance-v${version}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "merge_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "Publishing conformance ${tag} from $(git rev-parse HEAD)"
+
+      - name: Build and publish to PyPI
+        run: |
+          cd packages/conformance
+          uv build
+          uv publish --trusted-publishing automatic
+
+      - name: Create source tag
+        run: |
+          set -euo pipefail
+          tag="${{ steps.meta.outputs.tag }}"
+          merge_sha="${{ steps.meta.outputs.merge_sha }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git ls-remote --exit-code --tags origin "${tag}" >/dev/null 2>&1; then
+            echo "tag ${tag} already exists on origin; skipping tag push"
+            exit 0
+          fi
+
+          git tag -a "$tag" "$merge_sha" -m "Release conformance $tag"
+          git push origin "$tag"
+
+      # No GitHub Release is created: conformance-v* releases would interleave
+      # with SDK v* releases on the repo's releases page, which is confusing.
+      # The annotated tag, PyPI publish, and CHANGELOG.md are the authoritative record.

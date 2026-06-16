@@ -26,7 +26,7 @@ Make sure your connector application is running:
 
 ```bash
 # Example: Start your connector
-python examples/application_sql.py
+python your_connector_app.py
 ```
 
 ### 3. Run Tests

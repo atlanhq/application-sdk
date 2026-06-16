@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.17.2 (June 15, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.17.1...v3.17.2
+
+### Bug Fixes
+
+- close rglob listing-race silent failure via safe_list_directory (PART-1148) (#2137) (by @prateek11rai in [04d0098](https://github.com/atlanhq/application-sdk/commit/04d0098))
+- increase AE submit timeout to 120s to allow KEDA pod spin-up (#2150) (by @cmgrote in [c7caa71](https://github.com/atlanhq/application-sdk/commit/c7caa71))
+
+
 ## v3.17.1 (June 15, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.17.0...v3.17.1

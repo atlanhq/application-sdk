@@ -54,7 +54,6 @@ jobs:
               - '.github/actions/setup-deps/**'
             scan:
               - 'application_sdk/**'
-              - 'examples/**'
               - 'contract-toolkit/**'
               - 'tests/**'
               - 'pyproject.toml'
@@ -346,28 +345,6 @@ jobs:
           echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
           echo "Matrix output: $MATRIX"
 
-  # Run Examples
-  run-examples:
-    name: Run Examples
-    needs: matrix-builder
-    if: ((github.event.action == 'labeled' && github.event.label.name == 'run-examples') || contains(github.event.pull_request.labels.*.name, 'run-examples')) && github.event.pull_request.head.repo.fork != true
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-22.04, macOS-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - uses: "./.github/actions/e2e-examples"
-        with:
-          operating-system: ${{ matrix.os }}
-          github-token: ${{ secrets.ORG_PAT_GITHUB }}
-          postgres-host: ${{ secrets.POSTGRES_HOST }}
-          postgres-password: ${{ secrets.POSTGRES_PASSWORD }}
-          snowflake-account-id: ${{ secrets.SNOWFLAKE_ACCOUNT_ID }}
-          snowflake-user: ${{ secrets.SNOWFLAKE_USER }}
-          snowflake-password: ${{ secrets.SNOWFLAKE_PASSWORD }}
-
   # Build a PR-scoped SDK runtime base image so the connector e2e tests can
   # build the connector FROM the *rebuilt* base — exercising Dockerfile /
   # base-image / daprd-apk changes that the pip-install (application_sdk_ref)
@@ -386,8 +363,11 @@ jobs:
   build-sdk-base-image:
     name: Build SDK base image (e2e)
     needs: changes
+    # sdk OR container: a Dockerfile-only PR (the prime base-image use case,
+    # e.g. a daprd / base bump) is container==true / sdk==false — it must
+    # still rebuild the base so the connector e2e exercises the new image.
     if: |
-      needs.changes.outputs.sdk == 'true' &&
+      (needs.changes.outputs.sdk == 'true' || needs.changes.outputs.container == 'true') &&
       github.event_name == 'pull_request' &&
       contains(github.event.pull_request.labels.*.name, 'e2e') &&
       github.event.pull_request.head.repo.fork != true &&
@@ -460,7 +440,7 @@ jobs:
     # back to the released base.
     if: |
       always() &&
-      needs.changes.outputs.sdk == 'true' &&
+      (needs.changes.outputs.sdk == 'true' || needs.changes.outputs.container == 'true') &&
       needs.matrix-builder.result == 'success' &&
       (needs.build-sdk-base-image.result == 'success' || needs.build-sdk-base-image.result == 'skipped') && (
         github.event_name == 'merge_group' ||
