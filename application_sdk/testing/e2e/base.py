@@ -170,10 +170,13 @@ class BaseE2ETest:
     # run and commit it. Empty = skip exact-count parity.
     expected_exact_counts: ClassVar[dict[str, int]] = {}
     # When True, a run that completes but lands ZERO assets in Atlas fails,
-    # even if no floors/exacts are declared for some types. Backstops the
-    # "workflow COMPLETED but extracted nothing" regression. Only enforced
-    # when at least one expected type is declared (floors or exacts), so it
-    # never false-fails a connector that hasn't declared expectations yet.
+    # backstopping the "workflow COMPLETED but extracted nothing" regression.
+    # Fires on any successful run regardless of whether floors/exacts are
+    # declared (so it also protects connectors that declare nothing — the ones
+    # most likely to silently regress), via the true all-types total count.
+    # Skipped only when the connector explicitly opts out
+    # (``require_nonempty_assets = False``) or its declared expectations
+    # themselves assert zero (only non-positive floors/exacts).
     require_nonempty_assets: ClassVar[bool] = True
     expect_lineage: ClassVar[bool] = True
 
