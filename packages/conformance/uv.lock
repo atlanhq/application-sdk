@@ -218,9 +218,10 @@ wheels = [
 
 [[package]]
 name = "atlan-application-sdk-conformance"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
+    { name = "jinja2" },
     { name = "jsonschema" },
     { name = "pydantic" },
 ]
@@ -235,6 +236,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "atlan-application-sdk", marker = "extra == 'test'" },
+    { name = "jinja2", specifier = ">=3.1.0,<4.0.0" },
     { name = "jsonschema", specifier = ">=4.23.0,<5.0.0" },
     { name = "pydantic", specifier = ">=2.10.6,<3.0.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.3.3,<10.0.0" },
