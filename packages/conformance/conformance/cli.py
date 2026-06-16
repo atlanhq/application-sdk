@@ -74,22 +74,54 @@ argument-hint: "[--area error-handling|logging|ci] [--strict] [path]"
 """
 
 
+_CONFORMANCE_WORKFLOW = """\
+name: "Conformance"
+
+on:
+  pull_request: {}
+  merge_group: {}
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  conformance:
+    uses: atlanhq/application-sdk/.github/workflows/conformance-reusable.yaml@main
+    with:
+      event_name: ${{ github.event_name }}
+"""
+
+
+def _bootstrap_file(dest: "pathlib.Path", content: str, force: bool) -> None:
+    if dest.exists() and not force:
+        print(f"already installed: {dest}  (pass --force to overwrite)")
+        return
+    existed = dest.exists()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(content)
+    print(f"{'updated' if existed else 'installed'}: {dest}")
+
+
 def _cmd_bootstrap(argv: list[str]) -> int:
-    """Write .claude/skills/remediate/SKILL.md in the current repo (or --force to overwrite)."""
+    """Write the SKILL.md shim and conformance workflow into the current repo."""
     import pathlib
 
     force = "--force" in argv
-    dest = pathlib.Path.cwd() / ".claude" / "skills" / "remediate" / "SKILL.md"
+    root = pathlib.Path.cwd()
 
-    if dest.exists() and not force:
-        print(f"already installed: {dest}  (pass --force to overwrite)")
-        return 0
-
-    existed = dest.exists()
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(_SKILL_MD)
-    action = "updated" if existed else "installed"
-    print(f"{action}: {dest}")
+    _bootstrap_file(
+        root / ".claude" / "skills" / "remediate" / "SKILL.md",
+        _SKILL_MD,
+        force,
+    )
+    _bootstrap_file(
+        root / ".github" / "workflows" / "conformance.yaml",
+        _CONFORMANCE_WORKFLOW,
+        force,
+    )
     return 0
 
 
@@ -109,7 +141,7 @@ commands:
   programs-dir   Print the absolute path to the bundled .prose.md programs
   gen-rule-docs  Regenerate rule docs from Python rule definitions
   remediate      Print programs path + version banner (SKILL.md drives execution)
-  bootstrap      Write ~/.claude/skills/remediate/SKILL.md  (--force to overwrite)
+  bootstrap      Write .claude/skills/remediate/SKILL.md + .github/workflows/conformance.yaml  (--force to overwrite)
 """
 
 
