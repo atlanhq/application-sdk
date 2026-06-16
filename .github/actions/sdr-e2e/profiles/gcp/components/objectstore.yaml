@@ -7,7 +7,10 @@ kind: Component
 metadata:
   name: objectstore
 spec:
-  type: bindings.gcs
+  # bindings.gcp.bucket is the canonical Dapr type daprd recognises (the SDK
+  # maps both gcp.bucket and the .gcs alias to obstore GCS; daprd only knows
+  # gcp.bucket, so the alias makes the sidecar fail at load).
+  type: bindings.gcp.bucket
   version: v1
   metadata:
     - name: bucket
