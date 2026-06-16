@@ -230,6 +230,9 @@ spec:
 """
 
 _FILE_SECRET_STORE_NAMES = ("secretstore", "deployment-secret-store")
+# Component filenames re-emitted as file-backed when a secrets file is supplied;
+# derived from the names above so adding a store only requires editing one place.
+_FILE_SECRET_STORE_FILENAMES = {f"{n}.yaml" for n in _FILE_SECRET_STORE_NAMES}
 
 
 def _write_components(
@@ -252,10 +255,7 @@ def _write_components(
     for filename, template in _COMPONENTS_YAML.items():
         # When a secrets file is supplied, skip the default env-var secret
         # store components — they are re-emitted as file-backed below.
-        if secrets_file is not None and filename in (
-            "secretstore.yaml",
-            "deployment-secret-store.yaml",
-        ):
+        if secrets_file is not None and filename in _FILE_SECRET_STORE_FILENAMES:
             continue
         (components_dir / filename).write_text(
             template.format(
@@ -312,6 +312,7 @@ async def embedded_dapr(
       values never flow through this process.
     * ``objectstore`` — ``bindings.localstorage`` rooted at *objectstore_root*
     * ``eventstore`` — ``bindings.localstorage`` rooted at *eventstore_root*
+    * ``pubsub`` — ``pubsub.in-memory``
 
     On entry the context manager sets ``DAPR_HTTP_PORT``, ``DAPR_GRPC_PORT``,
     and ``DAPR_COMPONENTS_PATH`` so callers (and any background observability

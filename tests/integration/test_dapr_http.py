@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import uuid
 
-import httpx
 import pytest
 
 from application_sdk.infrastructure._dapr.http import AsyncDaprClient, BindingResult
@@ -122,16 +121,13 @@ class TestBindingIntegration:
 
     async def test_invoke_binding_returns_binding_result(self, client):
         """Invoke a binding and verify the response type."""
-        try:
-            result = await client.invoke_binding(
-                "objectstore",
-                "list",
-                metadata={"prefix": "test/"},
-            )
-            assert isinstance(result, BindingResult)
-            assert isinstance(result.metadata, dict)
-        except httpx.ConnectError:
-            pytest.skip("No objectstore binding available")
+        result = await client.invoke_binding(
+            "objectstore",
+            "list",
+            metadata={"prefix": "test/"},
+        )
+        assert isinstance(result, BindingResult)
+        assert isinstance(result.metadata, dict)
 
 
 # ------------------------------------------------------------------
@@ -174,26 +170,20 @@ class TestPubSubIntegration:
 
     async def test_publish_event(self, client):
         """Publish an event to a topic."""
-        try:
-            await client.publish_event(
-                "pubsub",
-                "integ-test-topic",
-                json.dumps({"test": True, "id": uuid.uuid4().hex}),
-            )
-        except httpx.ConnectError:
-            pytest.skip("No pubsub component available")
+        await client.publish_event(
+            "pubsub",
+            "integ-test-topic",
+            json.dumps({"test": True, "id": uuid.uuid4().hex}),
+        )
 
     async def test_publish_event_with_metadata(self, client):
         """Publish with custom metadata headers."""
-        try:
-            await client.publish_event(
-                "pubsub",
-                "integ-test-topic",
-                json.dumps({"test": True}),
-                metadata={"rawPayload": "true"},
-            )
-        except httpx.ConnectError:
-            pytest.skip("No pubsub component available")
+        await client.publish_event(
+            "pubsub",
+            "integ-test-topic",
+            json.dumps({"test": True}),
+            metadata={"rawPayload": "true"},
+        )
 
 
 # ------------------------------------------------------------------
