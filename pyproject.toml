@@ -239,13 +239,14 @@ reportInvalidTypeForm = "warning"
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
-addopts = "-m 'not integration and not e2e and not s3_integration and not azure_integration and not gcs_integration'"
+addopts = "-m 'not integration and not e2e and not s3_integration and not azure_integration and not gcs_integration and not storage_emulator'"
 markers = [
     "integration: tests requiring local Temporal server",
     "e2e: tests requiring a live K8s cluster",
     "s3_integration: tests requiring real AWS S3 credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_BUCKET)",
     "azure_integration: tests requiring real Azure Blob Storage credentials (AZURE_STORAGE_ACCOUNT, AZURE_STORAGE_KEY)",
     "gcs_integration: tests requiring real GCS credentials (GCS_BUCKET, GCS_PROJECT_ID, GOOGLE_APPLICATION_CREDENTIALS)",
+    "storage_emulator: hermetic object-store tests against local emulators (MinIO/Azurite/storage-testbench); run in CI with emulator sidecars",
 ]
 
 [tool.coverage.run]
