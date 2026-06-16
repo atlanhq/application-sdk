@@ -371,11 +371,28 @@ def test_cmd_bootstrap_tests_yaml_recreated_when_deleted(
 # ---------------------------------------------------------------------------
 
 
+def test_tests_yaml_workflow_name_is_capitalised() -> None:
+    content = render("tests.yaml")
+    assert "name: Tests\n" in content
+
+
 def test_tests_yaml_contains_reusable_reference() -> None:
     content = render("tests.yaml")
     assert (
         "atlanhq/application-sdk/.github/workflows/tests-reusable.yaml@main" in content
     )
+
+
+def test_tests_yaml_contains_tests_gate_job() -> None:
+    content = render("tests.yaml")
+    assert "tests-gate:" in content
+    assert "name: Tests Gate" in content
+
+
+def test_tests_yaml_gate_reads_reusable_outputs() -> None:
+    content = render("tests.yaml")
+    assert "needs.tests.outputs.tests-result" in content
+    assert "needs.tests.outputs.e2e-result" in content
 
 
 def test_tests_yaml_contains_remediation_header() -> None:
