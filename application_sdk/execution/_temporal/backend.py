@@ -7,8 +7,10 @@ import ipaddress
 import random
 import socket
 import threading
+import urllib.request
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
@@ -82,7 +84,7 @@ if TYPE_CHECKING:
     from datetime import timedelta
 
     from temporalio.converter import DataConverter
-    from temporalio.service import TLSConfig
+    from temporalio.service import HttpConnectProxyConfig, TLSConfig
 
     from application_sdk.app.base import App
     from application_sdk.app.context import AppContext
@@ -439,6 +441,69 @@ def _apply_sni_domain(tls: TLSConfig | bool, sni: str) -> TLSConfig | bool:
     return tls
 
 
+def _build_temporal_proxy_config(
+    host: str, *, tls_enabled: bool
+) -> HttpConnectProxyConfig | None:
+    """Build an HTTP CONNECT proxy config for the Temporal gRPC connection.
+
+    Temporal doesn't read proxy env vars itself, so we resolve them via the
+    stdlib (``urllib.request.getproxies``) like httpx: HTTPS_PROXY for TLS,
+    HTTP_PROXY for plaintext, honoring NO_PROXY.
+
+    Args:
+        host: Temporal target ``host[:port]`` (used for NO_PROXY matching).
+        tls_enabled: Whether the Temporal connection uses TLS.
+
+    Returns:
+        An ``HttpConnectProxyConfig``, or ``None`` for a direct connection.
+    """
+    proxies = urllib.request.getproxies()
+    proxy = proxies.get("https" if tls_enabled else "http")
+    if not proxy:
+        return None
+
+    # bare host:port needs // so urlsplit reads it as an authority
+    normalised = host if "//" in host else f"//{host}"
+    hostname = urlsplit(normalised).hostname
+    if urllib.request.proxy_bypass_environment(hostname, proxies):
+        logger.info("Temporal host %s matches NO_PROXY; connecting directly", host)
+        return None
+
+    parsed = urlsplit(proxy)  # RFC 3986 proxy URL, e.g. http://host:port
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        # e.g. a schemeless "proxy.corp:8080" — fail loudly instead of handing
+        # Temporal an empty target_host. Log scheme/host only (no userinfo).
+        logger.error(
+            "Malformed proxy URL — expected http://host[:port], got scheme=%r "
+            "host=%r; connecting Temporal directly.",
+            parsed.scheme,
+            parsed.hostname,
+        )
+        return None
+    if parsed.scheme == "https":
+        logger.warning(
+            "Proxy URL uses an https:// scheme, but Temporal's HTTP CONNECT "
+            "tunnel reaches the proxy over plaintext (no TLS-to-proxy)."
+        )
+
+    # hostname[:port] only — keep any userinfo out of target_host and the logs.
+    target_host = f"{parsed.hostname}:{parsed.port}" if parsed.port else parsed.hostname
+    # Keep auth when only a username is present (token-as-username proxies,
+    # e.g. http://TOKEN@proxy/) — password defaults to empty rather than dropping.
+    basic_auth = (parsed.username, parsed.password or "") if parsed.username else None
+
+    from temporalio.service import (  # noqa: PLC0415 — cold path: only when a proxy is configured
+        HttpConnectProxyConfig,
+    )
+
+    logger.info(
+        "Routing Temporal gRPC via HTTP CONNECT proxy %s (tls=%s)",
+        target_host,
+        tls_enabled,
+    )
+    return HttpConnectProxyConfig(target_host=target_host, basic_auth=basic_auth)
+
+
 async def create_temporal_client(
     host: str = "localhost:7233",
     namespace: str = "default",
@@ -459,6 +524,10 @@ async def create_temporal_client(
 
     Supports plain TCP, TLS, mTLS, and API key auth. Retries the connection
     up to ``connect_max_attempts`` times with exponential backoff.
+
+    When ``HTTPS_PROXY`` (TLS) or ``HTTP_PROXY`` (plaintext) is set, the gRPC
+    connection is routed through that HTTP CONNECT proxy. Temporal does not read
+    these env vars itself, so the SDK forwards them.
 
     Args:
         host: Temporal server address.
@@ -518,6 +587,10 @@ async def create_temporal_client(
             "Connecting to Temporal (plaintext): host=%s namespace=%s", host, namespace
         )
 
+    # Temporal's client ignores proxy env vars, so forward an HTTP CONNECT proxy
+    # explicitly when HTTPS_PROXY/HTTP_PROXY is set (selected by TLS state).
+    proxy_config = _build_temporal_proxy_config(host, tls_enabled=tls_enabled)
+
     # SDR-only: pre-resolve the target hostname and prefer IPv4 when the OS
     # resolver returns both A and AAAA. Solves the half-broken-IPv6 case on
     # customer SDR hosts (link-local-only v6, or v6 enabled without a global
@@ -535,8 +608,11 @@ async def create_temporal_client(
     # stay healthy through Service IP churn. Only SDR — where DNS goes
     # through Cloudflare anycast and there's no in-cluster Service to track
     # — benefits from the literal-IP substitution.
+    #
+    # Skipped when a proxy is in use: the proxy does DNS, so we keep the hostname
+    # (CONNECT <hostname>, preserving allowlists) instead of sending a bare IP.
     resolved_host, sni_host = host, None
-    if ENABLE_ATLAN_UPLOAD:
+    if ENABLE_ATLAN_UPLOAD and proxy_config is None:
         resolved_host, sni_host = await _prefer_v4_target(host)
         if sni_host is not None:
             # We substituted an IP for the hostname — preserve TLS SNI so
@@ -560,6 +636,8 @@ async def create_temporal_client(
     }
     if api_key:
         kwargs["api_key"] = api_key
+    if proxy_config is not None:
+        kwargs["http_connect_proxy_config"] = proxy_config
 
     # Configure Temporal runtime (with or without Prometheus metrics)
     kwargs["runtime"] = _get_or_create_runtime(
