@@ -657,6 +657,15 @@ open class PublishNode extends DAGNode {
   /// or written to a dry-run path.
   currentStateViaAppEnabled: Boolean = false
 
+  /// Connection entity passed to the publish workflow as `args["connection_entity"]`.
+  ///
+  /// The full connection entity JSON (typeName + attributes). When provided, publish
+  /// uses it for connection creation; when omitted, publish constructs a minimal
+  /// entity from `connection_qualified_name`. Defaults to the `"{{connection}}"`
+  /// form placeholder. Set to `null` to omit the arg entirely so publish falls back
+  /// to building a minimal entity from the qualified name.
+  connectionEntity: String? = "{{connection}}"
+
   displayName = "Publish to Atlas"
   workflowType = "PublishWorkflow"
   appName = "publish"
@@ -667,7 +676,7 @@ open class PublishNode extends DAGNode {
     ["current_state_prefix"] = "$.\(upstream).outputs.current_state_prefix"
     ["connection_creation_enabled"] = true
     ["executor_enabled"] = executorEnabled
-    ["connection_entity"] = "{{connection}}"
+    when (connectionEntity != null) { ["connection_entity"] = connectionEntity }
     ["connection_cache_enabled"] = connectionCacheEnabled
     ["connection_cache_via_app_enabled"] = connectionCacheViaAppEnabled
     ["current_state_enabled"] = currentStateEnabled
@@ -1307,6 +1316,15 @@ class PublishStep {
   /// `false` alongside `currentStateEnabled` when the node must not write
   /// current-state at all.
   currentStateViaAppEnabled: Boolean = true
+
+  /// Connection entity passed to the publish workflow as `args["connection_entity"]`.
+  ///
+  /// The full connection entity JSON (typeName + attributes). When provided, publish
+  /// uses it for connection creation; when omitted, publish constructs a minimal
+  /// entity from `connection_qualified_name`. Defaults to the `"{{connection}}"`
+  /// form placeholder. Set to `null` to omit the arg entirely so publish falls back
+  /// to building a minimal entity from the qualified name.
+  connectionEntity: String? = "{{connection}}"
 
   /// Optional lineage-publish sub-step. When set, adds a `"lineage-publish"`
   /// node after the main publish step.
@@ -2090,6 +2108,7 @@ local function generateDAG(): Mapping<String, Any> = new Mapping {
           connectionCacheViaAppEnabled = ps.connectionCacheViaAppEnabled
           currentStateEnabled = ps.currentStateEnabled
           currentStateViaAppEnabled = ps.currentStateViaAppEnabled
+          connectionEntity = ps.connectionEntity
         })
   }
   when (pipeline.publish != null && pipeline.publish!!.lineagePublish != null) {

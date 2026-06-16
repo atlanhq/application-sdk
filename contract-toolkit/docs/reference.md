@@ -168,6 +168,7 @@ class LineageStep {                      // wraps LineageNode
 class PublishStep {
   executorEnabled: Boolean|String = true
   includeInputFields: Boolean = true     // generates output_dir/load_to_atlan/publish_dry_run in _input.py
+  connectionEntity: String? = "{{connection}}"  // args["connection_entity"]; null omits the arg entirely
   lineagePublish: LineagePublishStep?    // opt-in lineage publish (default-off)
   errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
     startToCloseTimeoutSeconds = 259200  // 72h default — AE's 2h is too tight for large tenants
@@ -1461,6 +1462,7 @@ class PublishNode extends DAGNode {
   executorEnabled: Boolean|String = true
   tagPipelineEnabled: Boolean|String? = null
   tagAttachmentsPrefix: String? = null
+  connectionEntity: String? = "{{connection}}"
   displayName = "Publish to Atlas"
   workflowType = "PublishWorkflow"
   appName = "publish"
@@ -1471,13 +1473,20 @@ class PublishNode extends DAGNode {
     ["current_state_prefix"] = "$.<upstream>.outputs.current_state_prefix"
     ["connection_creation_enabled"] = true
     ["executor_enabled"] = executorEnabled
-    ["connection_entity"] = "{{connection}}"
+    when (connectionEntity != null) { ["connection_entity"] = connectionEntity }
   }
   dependsOn { upstream }
 }
 ```
 
 `executorEnabled` can be a Boolean literal or an exact workflow placeholder string.
+
+`connectionEntity` is the full connection entity JSON (typeName + attributes);
+when provided, publish uses it for connection creation, and when omitted publish
+constructs a minimal entity from `connection_qualified_name`. It defaults to the
+`"{{connection}}"` form placeholder. Set it to `null` (on the node, or via
+`pipeline.publish.connectionEntity`) to omit `connection_entity` from the args
+entirely so publish falls back to building a minimal entity from the qualified name.
 For the auto-generated default publish node, set the app-level
 `publishExecutorEnabled`; for `extraNodes["publish"] = new PublishNode { ... }`,
 set `executorEnabled` on that node.
