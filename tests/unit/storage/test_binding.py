@@ -1244,7 +1244,10 @@ class TestGCSStoreCredentials:
 
         config = mock_gcs_cls.call_args.kwargs["config"]
         assert config["base_url"] == "https://fake-gcs:4443"
-        assert mock_gcs_cls.call_args.kwargs["client_options"].get("allow_http") is not True
+        assert (
+            mock_gcs_cls.call_args.kwargs["client_options"].get("allow_http")
+            is not True
+        )
 
     @patch("obstore.store.GCSStore")
     def test_skip_signature_attaches_anonymous_credential_provider(
