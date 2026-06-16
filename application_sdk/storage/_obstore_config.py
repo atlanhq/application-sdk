@@ -216,12 +216,13 @@ def make_gcs_store(
     opts = client_options if client_options is not None else obstore_client_options()
     retry = obstore_retry_config()
     log_obstore_config(label, client_options=opts, retry_config=retry)
-    kwargs: dict[str, object] = dict(
-        bucket=bucket, config=config, client_options=opts, retry_config=retry
-    )
-    if credential_provider is not None:
-        kwargs["credential_provider"] = credential_provider
-    return GCSStore(**kwargs)  # type: ignore[arg-type]
+    return GCSStore(
+        bucket=bucket,
+        config=config,
+        client_options=opts,
+        retry_config=retry,
+        credential_provider=credential_provider,
+    )  # type: ignore[arg-type]
 
 
 def log_obstore_config(

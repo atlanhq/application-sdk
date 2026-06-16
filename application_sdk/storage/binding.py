@@ -544,19 +544,15 @@ def _build_gcs_config(
             sa_data["private_key"] = sa_data["private_key"].replace("\\n", "\n")
         gcs_config["google_service_account_key"] = orjson.dumps(sa_data).decode()
 
-    # --- Custom endpoint (emulators: fake-gcs-server) -------------------------
+    # --- Custom endpoint (emulators) ------------------------------------------
     # obstore's GCS config key is ``base_url`` (env GOOGLE_BASE_URL); an http://
-    # endpoint means plaintext, so infer allow_http from the scheme — mirrors the
-    # S3 / Azure branches above. Real GCS leaves both unset (default endpoint).
+    # endpoint means plaintext, so infer allow_http from the scheme. Real GCS
+    # leaves the endpoint unset (default).
     endpoint = _nonempty(meta, "endpoint")
     if endpoint:
         gcs_config["base_url"] = endpoint
         if endpoint.lower().startswith("http://"):
             client_options["allow_http"] = True
-    if _coerce_bool(meta.get("disableSSL", "")):
-        client_options["allow_http"] = True
-    if _coerce_bool(meta.get("insecureSSL", "")):
-        client_options["allow_invalid_certificates"] = True
     # NB: ``skipSignature`` (unauthenticated emulators) is NOT a GCS config key —
     # obstore silently ignores it for GCS. It is handled by the caller, which
     # attaches a static anonymous credential_provider instead (see
