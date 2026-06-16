@@ -562,15 +562,6 @@ If set and points to a directory, all .pem/.crt/.cer/.ca-bundle files
 in that directory are trusted in addition to system CAs.
 """
 
-# Proxy Configuration
-#: Outbound HTTP CONNECT proxy for Temporal gRPC connections. Temporal's client
-#: does not read proxy environment variables on its own, so the SDK forwards
-#: them explicitly, mirroring how HTTP clients select a proxy by target scheme:
-#: HTTPS_PROXY is used for TLS-enabled connections and HTTP_PROXY for plaintext.
-#: Lowercase variants are honored as a fallback.
-HTTPS_PROXY = os.getenv("HTTPS_PROXY") or os.getenv("https_proxy") or ""
-HTTP_PROXY = os.getenv("HTTP_PROXY") or os.getenv("http_proxy") or ""
-
 # Daft analytics are disabled via ENV vars in the Dockerfile (DO_NOT_TRACK,
 # SCARF_NO_ANALYTICS, DAFT_ANALYTICS_ENABLED). They must NOT be set here at
 # module level — os.environ assignments call os.putenv(), which Temporal's
