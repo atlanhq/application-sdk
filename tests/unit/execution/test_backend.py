@@ -485,6 +485,210 @@ class TestCreateTemporalClient:
 
 
 # ---------------------------------------------------------------------------
+# HTTP CONNECT proxy support (HTTPS_PROXY / HTTP_PROXY / NO_PROXY via stdlib)
+# ---------------------------------------------------------------------------
+
+
+class TestTemporalProxyConfig:
+    """Proxy resolution goes through urllib.request.getproxies /
+    proxy_bypass_environment, so tests patch those to stay platform-independent
+    (plain proxy_bypass reads system config on macOS)."""
+
+    @staticmethod
+    def _connect_mock():
+        return mock.AsyncMock(return_value=mock.MagicMock())
+
+    @staticmethod
+    def _proxy_env(proxies: dict, bypass: bool = False):
+        """Patch the stdlib proxy resolver to return *proxies* and *bypass*."""
+        return (
+            mock.patch("urllib.request.getproxies", return_value=proxies),
+            mock.patch("urllib.request.proxy_bypass_environment", return_value=bypass),
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_proxy_config_when_env_unset(self) -> None:
+        """No proxy in the environment -> connect directly (no proxy kwarg)."""
+        getproxies, bypass = self._proxy_env({})
+        with (
+            getproxies,
+            bypass,
+            mock.patch.object(backend_module, "_get_or_create_runtime"),
+            mock.patch.object(
+                backend_module.Client, "connect", new=self._connect_mock()
+            ) as connect,
+        ):
+            await create_temporal_client(tls_enabled=True, connect_max_attempts=1)
+        assert "http_connect_proxy_config" not in connect.await_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_https_proxy_used_when_tls_enabled(self) -> None:
+        """The 'https' proxy is used (scheme stripped) when TLS is enabled."""
+        getproxies, bypass = self._proxy_env({"https": "http://proxy.corp:8080"})
+        with (
+            getproxies,
+            bypass,
+            mock.patch.object(backend_module, "_get_or_create_runtime"),
+            mock.patch.object(
+                backend_module.Client, "connect", new=self._connect_mock()
+            ) as connect,
+        ):
+            await create_temporal_client(tls_enabled=True, connect_max_attempts=1)
+        proxy = connect.await_args.kwargs["http_connect_proxy_config"]
+        assert proxy.target_host == "proxy.corp:8080"
+        assert proxy.basic_auth is None
+
+    @pytest.mark.asyncio
+    async def test_http_proxy_used_when_plaintext(self) -> None:
+        getproxies, bypass = self._proxy_env({"http": "http://plainproxy:3128"})
+        with (
+            getproxies,
+            bypass,
+            mock.patch.object(backend_module, "_get_or_create_runtime"),
+            mock.patch.object(
+                backend_module.Client, "connect", new=self._connect_mock()
+            ) as connect,
+        ):
+            await create_temporal_client(tls_enabled=False, connect_max_attempts=1)
+        proxy = connect.await_args.kwargs["http_connect_proxy_config"]
+        assert proxy.target_host == "plainproxy:3128"
+
+    @pytest.mark.asyncio
+    async def test_proxy_selected_by_tls_state(self) -> None:
+        """Only an 'http' proxy set -> a TLS connection picks nothing (direct)."""
+        getproxies, bypass = self._proxy_env({"http": "http://proxy.corp:3128"})
+        with (
+            getproxies,
+            bypass,
+            mock.patch.object(backend_module, "_get_or_create_runtime"),
+            mock.patch.object(
+                backend_module.Client, "connect", new=self._connect_mock()
+            ) as connect,
+        ):
+            await create_temporal_client(tls_enabled=True, connect_max_attempts=1)
+        assert "http_connect_proxy_config" not in connect.await_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_no_proxy_bypass(self) -> None:
+        """NO_PROXY match -> connect directly even with a proxy configured."""
+        getproxies, bypass = self._proxy_env(
+            {"https": "http://proxy.corp:8080", "no": "internal.corp"}, bypass=True
+        )
+        with (
+            getproxies,
+            bypass,
+            mock.patch.object(backend_module, "_get_or_create_runtime"),
+            mock.patch.object(
+                backend_module.Client, "connect", new=self._connect_mock()
+            ) as connect,
+        ):
+            await create_temporal_client(
+                host="temporal.internal.corp:7233",
+                tls_enabled=True,
+                connect_max_attempts=1,
+            )
+        assert "http_connect_proxy_config" not in connect.await_args.kwargs
+
+    @pytest.mark.parametrize(
+        "host",
+        [
+            "svc.internal.corp:7233",  # bare host:port
+            "https://svc.internal.corp:443",  # scheme-prefixed (customer form)
+            "user:pass@svc.internal.corp:7233",  # with userinfo
+        ],
+    )
+    def test_no_proxy_matches_on_bare_hostname(self, host: str) -> None:
+        """NO_PROXY matches on the hostname regardless of scheme/userinfo/port."""
+        # Real proxy_bypass_environment runs against the extracted hostname.
+        with mock.patch(
+            "urllib.request.getproxies",
+            return_value={"https": "http://proxy.corp:8080", "no": "internal.corp"},
+        ):
+            cfg = backend_module._build_temporal_proxy_config(host, tls_enabled=True)
+        assert cfg is None
+
+    def test_malformed_schemeless_proxy_rejected(self) -> None:
+        """A schemeless proxy value (ops typo) is rejected with an error log and
+        a direct connection, not a silent empty target_host."""
+        with (
+            mock.patch(
+                "urllib.request.getproxies", return_value={"https": "proxy.corp:8080"}
+            ),
+            mock.patch("urllib.request.proxy_bypass_environment", return_value=False),
+            mock.patch.object(backend_module.logger, "error") as err,
+        ):
+            cfg = backend_module._build_temporal_proxy_config(
+                "tmprl:443", tls_enabled=True
+            )
+        assert cfg is None
+        err.assert_called_once()
+
+    def test_build_proxy_config_extracts_credentials_without_leaking(self) -> None:
+        """Credentials become basic_auth and never appear in target_host."""
+        getproxies, bypass = self._proxy_env(
+            {"https": "http://user:pass@proxy.corp:8080"}
+        )
+        with getproxies, bypass:
+            cfg = backend_module._build_temporal_proxy_config(
+                "tmprl:443", tls_enabled=True
+            )
+        assert cfg is not None
+        assert cfg.target_host == "proxy.corp:8080"
+        assert cfg.basic_auth == ("user", "pass")
+
+    def test_build_proxy_config_keeps_token_username_without_password(self) -> None:
+        """Token-as-username proxy (http://TOKEN@proxy/) keeps auth, empty pass."""
+        getproxies, bypass = self._proxy_env({"https": "http://TOKEN@proxy.corp:8080"})
+        with getproxies, bypass:
+            cfg = backend_module._build_temporal_proxy_config(
+                "tmprl:443", tls_enabled=True
+            )
+        assert cfg is not None
+        assert cfg.basic_auth == ("TOKEN", "")
+
+    def test_build_proxy_config_warns_on_https_scheme(self) -> None:
+        getproxies, bypass = self._proxy_env({"https": "https://proxy.corp:443"})
+        with (
+            getproxies,
+            bypass,
+            mock.patch.object(backend_module.logger, "warning") as warn,
+        ):
+            cfg = backend_module._build_temporal_proxy_config(
+                "tmprl:443", tls_enabled=True
+            )
+        assert cfg is not None
+        assert cfg.target_host == "proxy.corp:443"
+        warn.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_proxy_skips_sdr_ipv4_substitution(self) -> None:
+        """With a proxy set, _prefer_v4_target is skipped so the proxy sees the
+        hostname (not a bare IP) and does DNS itself."""
+        getproxies, bypass = self._proxy_env({"https": "http://proxy.corp:8080"})
+        with (
+            getproxies,
+            bypass,
+            mock.patch.object(backend_module, "ENABLE_ATLAN_UPLOAD", True),
+            mock.patch.object(
+                backend_module, "_prefer_v4_target", new=mock.AsyncMock()
+            ) as prefer_v4,
+            mock.patch.object(backend_module, "_get_or_create_runtime"),
+            mock.patch.object(
+                backend_module.Client, "connect", new=self._connect_mock()
+            ) as connect,
+        ):
+            await create_temporal_client(
+                host="tenant-temporal.atlan.com:443",
+                tls_enabled=True,
+                connect_max_attempts=1,
+            )
+        prefer_v4.assert_not_awaited()
+        assert (
+            connect.await_args.kwargs["target_host"] == "tenant-temporal.atlan.com:443"
+        )
+
+
+# ---------------------------------------------------------------------------
 # _prefer_v4_target / _apply_sni_domain (IPv6-fallback safety net)
 #
 # These guard against a v3-vs-v2 regression seen on two SDR customer VMs:
