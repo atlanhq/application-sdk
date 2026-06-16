@@ -69,9 +69,9 @@ class TestPlatformTuple:
 
 
 class TestWriteComponents:
-    """``_write_components`` materialises the five YAMLs the SDK expects."""
+    """``_write_components`` materialises the YAMLs the SDK expects."""
 
-    def test_writes_all_five_components(self, tmp_path: Path) -> None:
+    def test_writes_all_components(self, tmp_path: Path) -> None:
         components_dir = tmp_path / "components"
         objectstore_root = tmp_path / "objects"
         eventstore_root = tmp_path / "events"
@@ -81,6 +81,11 @@ class TestWriteComponents:
         expected = sorted(_COMPONENTS_YAML.keys())
         actual = sorted(p.name for p in components_dir.iterdir())
         assert actual == expected
+
+    def test_pubsub_uses_in_memory(self, tmp_path: Path) -> None:
+        components_dir = tmp_path / "components"
+        _write_components(components_dir, tmp_path / "objects", tmp_path / "events")
+        assert "pubsub.in-memory" in (components_dir / "pubsub.yaml").read_text()
 
     def test_objectstore_root_substituted(self, tmp_path: Path) -> None:
         components_dir = tmp_path / "components"
@@ -110,6 +115,35 @@ class TestWriteComponents:
         assert "state.in-memory" in (components_dir / "statestore.yaml").read_text()
 
     def test_secretstore_uses_local_env(self, tmp_path: Path) -> None:
+        components_dir = tmp_path / "components"
+        _write_components(components_dir, tmp_path / "objects", tmp_path / "events")
+        assert (
+            "secretstores.local.env"
+            in (components_dir / "secretstore.yaml").read_text()
+        )
+
+    def test_secrets_file_emits_file_backed_secret_store(self, tmp_path: Path) -> None:
+        """When ``secrets_file`` is supplied, the secret stores become file-backed."""
+        components_dir = tmp_path / "components"
+        secrets_file = tmp_path / "my-secrets.json"
+        secrets_file.write_text('{"api-key": "abc-123"}')
+
+        _write_components(
+            components_dir,
+            tmp_path / "objects",
+            tmp_path / "events",
+            secrets_file=str(secrets_file),
+        )
+
+        # Hyphenated keys round-trip through a file store; ``local.env`` wouldn't.
+        for name in ("secretstore", "deployment-secret-store"):
+            content = (components_dir / f"{name}.yaml").read_text()
+            assert "secretstores.local.file" in content
+            assert "secretstores.local.env" not in content
+            assert str(secrets_file.resolve()) in content
+
+    def test_secrets_file_omitted_keeps_env_store(self, tmp_path: Path) -> None:
+        """Without ``secrets_file``, secret stores stay env-backed."""
         components_dir = tmp_path / "components"
         _write_components(components_dir, tmp_path / "objects", tmp_path / "events")
         assert (
