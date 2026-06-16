@@ -493,10 +493,11 @@ def _build_azure_config(
 
 def _build_gcs_config(
     meta: dict[str, str],
-) -> tuple[str, dict[str, str], dict[str, str] | None]:
+    sdk_client_options: dict[str, object],
+) -> tuple[str, dict[str, str], dict[str, object], dict[str, str] | None]:
     """Translate GCS Dapr binding metadata into obstore GCSStore constructor args.
 
-    Returns *(bucket, config, put_attributes)*.
+    Returns *(bucket, config, client_options, put_attributes)*.
 
     *put_attributes* is ``{"X-Goog-Storage-Class": "<class>"}`` when ``storageClass``
     is set in the binding metadata, or ``None`` otherwise.
@@ -505,6 +506,7 @@ def _build_gcs_config(
 
     bucket = meta.get("bucket", "")
     gcs_config: dict[str, str] = {}
+    client_options = dict(sdk_client_options)
 
     # Build service-account JSON only when actual credential material is
     # supplied.  ``project_id`` alone is not credential material — daprd's
@@ -522,13 +524,27 @@ def _build_gcs_config(
             sa_data["private_key"] = sa_data["private_key"].replace("\\n", "\n")
         gcs_config["google_service_account_key"] = orjson.dumps(sa_data).decode()
 
+    # --- Custom endpoint (emulators: fake-gcs-server) -------------------------
+    # obstore's GCS config key is ``base_url`` (env GOOGLE_BASE_URL); an http://
+    # endpoint means plaintext, so infer allow_http from the scheme — mirrors the
+    # S3 / Azure branches above. Real GCS leaves both unset (default endpoint).
+    endpoint = _nonempty(meta, "endpoint")
+    if endpoint:
+        gcs_config["base_url"] = endpoint
+        if endpoint.lower().startswith("http://"):
+            client_options["allow_http"] = True
+    if _coerce_bool(meta.get("disableSSL", "")):
+        client_options["allow_http"] = True
+    if _coerce_bool(meta.get("insecureSSL", "")):
+        client_options["allow_invalid_certificates"] = True
+
     # --- Storage class --------------------------------------------------------
     storage_class = _nonempty(meta, "storageClass")
     put_attributes: dict[str, str] | None = (
         {"X-Goog-Storage-Class": storage_class} if storage_class else None
     )
 
-    return bucket, gcs_config, put_attributes
+    return bucket, gcs_config, client_options, put_attributes
 
 
 def create_store_from_binding_with_put_attrs(
@@ -668,12 +684,14 @@ def _create_store_core(
         return store, put_attrs
 
     if store_kind == "gcs":
-        bucket, gcs_config, put_attrs = _build_gcs_config(meta)
+        bucket, gcs_config, gcs_client_options, put_attrs = _build_gcs_config(
+            meta, sdk_client_options
+        )
         store = make_gcs_store(
             bucket,
             # Pass ``None`` (not {}) so obstore uses Application Default Credentials.
             gcs_config if gcs_config else None,
-            client_options=sdk_client_options,
+            client_options=gcs_client_options,
         )
         return store, put_attrs
 
