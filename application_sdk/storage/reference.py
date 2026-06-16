@@ -47,6 +47,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from application_sdk.common._listing import safe_list_directory
 from application_sdk.contracts.types import FileReference
 
 if TYPE_CHECKING:
@@ -204,7 +205,8 @@ async def persist_file_reference(
     if local.is_dir():
         # ── Directory upload ───────────────────────────────────────────────
         prefix = _make_storage_prefix(ref, output_path=output_path)
-        files = [p for p in local.rglob("*") if p.is_file()]
+        # to_thread keeps the blocking fsync + scandir off the event loop.
+        files = await asyncio.to_thread(safe_list_directory, local)
         _t0 = time.monotonic()
         logger.info(
             "file_ref.persist.start",

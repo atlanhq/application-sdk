@@ -21,6 +21,7 @@ from typing import Annotated, Any, TypeVar
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
+from application_sdk.common._listing import safe_list_directory
 from application_sdk.contracts.types_errors import RunPrefixRequiredError
 from application_sdk.credentials.ref import CredentialRef
 
@@ -271,14 +272,14 @@ class FileReference(BaseModel, frozen=True):
             ``local_path`` and ``tier`` set.
         """
         p = Path(path) if not isinstance(path, Path) else path
-        # Best-effort file_count computation. We swallow OSError so the
-        # constructor is still usable from inside Temporal sandbox where
-        # filesystem inspection may not be desirable.
+        # Best-effort file_count. We swallow OSError so the constructor
+        # stays usable from inside Temporal sandbox where filesystem
+        # inspection may not be permitted.
         file_count = 1
         try:
             if p.is_dir():
-                file_count = sum(1 for child in p.rglob("*") if child.is_file())
-        except OSError:  # conformance: ignore[E009] best-effort file_count; OSError in sandboxed contexts; safe fallback to 1
+                file_count = len(safe_list_directory(p))
+        except OSError:  # conformance: ignore[E009] sandbox-safe fallback to 1
             file_count = 1
         return FileReference(
             local_path=str(p),

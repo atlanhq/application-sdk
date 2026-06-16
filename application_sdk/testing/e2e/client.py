@@ -65,6 +65,10 @@ _USER_AGENT = "atlan-sdk-full-dag-e2e/1.0 (+https://github.com/atlanhq/applicati
 # / ``poll_atlas_for_connection``; the per-request timeout just keeps
 # any one call from hanging the whole loop.
 _HTTP_TIMEOUT = 60
+# AE submit blocks while the tenant connector pod accepts the workflow —
+# KEDA may spin the pod up from zero, which adds ~60-90 s of startup latency
+# on top of the normal request time.
+_SUBMIT_TIMEOUT = 120
 
 # Cadence for "still polling" heartbeat log lines in
 # ``poll_native_status`` — lineage stages take 2-5 min on small
@@ -482,6 +486,7 @@ class AEWorkflowClient:
                 "POST",
                 "/api/service/package-workflows?submit=true",
                 body=payload,
+                timeout=_SUBMIT_TIMEOUT,
             )
             last = (status, body)
             if status < 300 and isinstance(body, dict):

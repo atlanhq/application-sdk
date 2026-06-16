@@ -92,9 +92,9 @@ def categorize_commits(commits):
 
         commit_hash, author_name, message_subject = parts
 
-        # contract-toolkit has its own CHANGELOG and release pipeline; exclude
-        # its commits from the SDK changelog.
-        if re.match(r"^[a-z]+\(contract-toolkit\):", message_subject):
+        # Sub-packages have their own CHANGELOGs and release pipelines; exclude
+        # their commits from the SDK changelog.
+        if re.match(r"^[a-z]+\((contract-toolkit|conformance)\):", message_subject):
             continue
 
         commit_link = f"https://github.com/{owner}/{repo}/commit/{commit_hash}"

@@ -8,18 +8,18 @@
 #
 # Usage from a connector app:
 #   uses: atlanhq/application-sdk/.github/workflows/conformance-ci.yaml@main
-#   with:
-#     sdk-ref: main
+#   # No inputs needed — published PyPI package is used by default.
+#   # To test an unreleased version: with: { conformance-ref: '<branch-or-sha>' }
 
 name: "Conformance — CI series (C)"
 
 on:
   workflow_call:
     inputs:
-      sdk-ref:
-        description: "Ref of atlanhq/application-sdk to source the conformance suite from"
+      conformance-ref:
+        description: "Git ref for unreleased suite testing (empty = use published PyPI package)"
         required: false
-        default: main
+        default: ""
         type: string
       scan-path:
         description: "Path to watch for workflow/action change detection (default: .github)"
@@ -57,25 +57,25 @@ jobs:
             relevant:
               - '${{ inputs.scan-path }}/**'
 
-      - name: "Sparse-checkout conformance suite"
-        if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push'
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          repository: atlanhq/application-sdk
-          ref: ${{ inputs.sdk-ref }}
-          sparse-checkout: conformance
-          path: _sdk
 
       - name: "Set up uv"
         if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push'
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
 
-      - name: "Run C-series checks"
-        if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push'
-        env:
-          PYTHONPATH: _sdk/conformance
+      - name: "Run C-series checks (published package)"
+        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push') && inputs.conformance-ref == ''
         run: |
-          uv run --with pydantic python -m suite.runner \
+          uvx atlan-application-sdk-conformance detect \
+            --repo . \
+            --series C \
+            --output ci.sarif
+
+      - name: "Run C-series checks (from git ref)"
+        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push') && inputs.conformance-ref != ''
+        run: |
+          uv run \
+            --with "atlan-application-sdk-conformance @ git+https://github.com/atlanhq/application-sdk@${{ inputs.conformance-ref }}#subdirectory=packages/conformance" \
+            -- atlan-application-sdk-conformance detect \
             --repo . \
             --series C \
             --output ci.sarif

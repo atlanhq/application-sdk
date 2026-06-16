@@ -31,9 +31,6 @@ To begin developing with the Application SDK:
    - [Windows](https://github.com/atlanhq/application-sdk/blob/main/docs/setup/WINDOWS.md)
    - [Mac](https://github.com/atlanhq/application-sdk/blob/main/docs/setup/MAC.md)
    - [Linux](https://github.com/atlanhq/application-sdk/blob/main/docs/setup/LINUX.md)
-3. Run the example application:
-   - [Hello World](https://github.com/atlanhq/application-sdk/blob/main/examples/application_hello_world.py)
-   - [SQL](https://github.com/atlanhq/application-sdk/blob/main/examples/application_sql.py)
 
 
 ## Documentation
