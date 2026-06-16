@@ -52,6 +52,10 @@ jobs:
               - 'uv.lock'
               - '.github/actions/unit-tests/**'
               - '.github/actions/setup-deps/**'
+              # Markdown-only changes never affect SDK behaviour. Listed LAST so
+              # paths-filter's gitignore-style last-match-wins excludes e.g.
+              # application_sdk/README.md while application_sdk/foo.py still runs.
+              - '!**/*.md'
             scan:
               - 'application_sdk/**'
               - 'contract-toolkit/**'
