@@ -12,6 +12,7 @@ production while requiring nothing on the host beyond Python and ``uv``.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import platform
 import shutil
@@ -196,25 +197,79 @@ spec:
     - name: rootPath
       value: {eventstore_root}
 """,
+    "pubsub.yaml": """\
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: pubsub
+spec:
+  type: pubsub.in-memory
+  version: v1
+  metadata: []
+""",
 }
+
+
+# File-backed secret store, used when explicit ``secrets`` are supplied (e.g.
+# integration tests that assert specific secret values). Hyphenated keys like
+# ``api-key`` round-trip cleanly through a file but not through ``local.env``.
+_SECRET_STORE_FILE_YAML = """\
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {name}
+spec:
+  type: secretstores.local.file
+  version: v1
+  metadata:
+    - name: secretsFile
+      value: {secrets_file}
+    - name: nestedSeparator
+      value: ":"
+"""
+
+_FILE_SECRET_STORE_NAMES = ("secretstore", "deployment-secret-store")
 
 
 def _write_components(
     components_dir: Path,
     objectstore_root: Path = Path(DEFAULT_OBJECTSTORE_ROOT),
     eventstore_root: Path = Path(DEFAULT_EVENTSTORE_ROOT),
+    secrets: dict[str, str] | None = None,
 ) -> None:
-    """Write the auto-generated Dapr component YAMLs into *components_dir*."""
+    """Write the auto-generated Dapr component YAMLs into *components_dir*.
+
+    When *secrets* is provided, the ``secretstore`` /
+    ``deployment-secret-store`` components are emitted as
+    ``secretstores.local.file`` backed by a ``secrets.json`` written
+    alongside them, instead of the default env-var store.
+    """
     components_dir.mkdir(parents=True, exist_ok=True)
     objectstore_root.mkdir(parents=True, exist_ok=True)
     eventstore_root.mkdir(parents=True, exist_ok=True)
     for filename, template in _COMPONENTS_YAML.items():
+        # When explicit secrets are supplied, skip the default env-var secret
+        # store components — they are re-emitted as file-backed below.
+        if secrets is not None and filename in (
+            "secretstore.yaml",
+            "deployment-secret-store.yaml",
+        ):
+            continue
         (components_dir / filename).write_text(
             template.format(
                 objectstore_root=str(objectstore_root.resolve()),
                 eventstore_root=str(eventstore_root.resolve()),
             )
         )
+    if secrets is not None:
+        secrets_file = components_dir / "secrets.json"
+        secrets_file.write_text(json.dumps(secrets))
+        for name in _FILE_SECRET_STORE_NAMES:
+            (components_dir / f"{name}.yaml").write_text(
+                _SECRET_STORE_FILE_YAML.format(
+                    name=name, secrets_file=str(secrets_file.resolve())
+                )
+            )
 
 
 async def _wait_for_dapr_ready(http_port: int, timeout_s: float = 30.0) -> None:
@@ -243,6 +298,7 @@ async def embedded_dapr(
     app_id: str = "atlan-app",
     objectstore_root: str = DEFAULT_OBJECTSTORE_ROOT,
     eventstore_root: str = DEFAULT_EVENTSTORE_ROOT,
+    secrets: dict[str, str] | None = None,
     log_level: str = "warn",
 ) -> AsyncIterator[EmbeddedDapr]:
     """Boot an embedded ``daprd`` for local app development.
@@ -251,6 +307,8 @@ async def embedded_dapr(
 
     * ``statestore`` — ``state.in-memory``
     * ``secretstore`` / ``deployment-secret-store`` — ``secretstores.local.env``
+      by default, or ``secretstores.local.file`` backed by *secrets* when that
+      mapping is supplied (handy for tests that assert specific secret values).
     * ``objectstore`` — ``bindings.localstorage`` rooted at *objectstore_root*
     * ``eventstore`` — ``bindings.localstorage`` rooted at *eventstore_root*
 
@@ -263,7 +321,9 @@ async def embedded_dapr(
     http_port = _pick_free_port()
     grpc_port = _pick_free_port()
     components_dir = Path(tempfile.mkdtemp(prefix="atlan-dapr-"))
-    _write_components(components_dir, Path(objectstore_root), Path(eventstore_root))
+    _write_components(
+        components_dir, Path(objectstore_root), Path(eventstore_root), secrets=secrets
+    )
 
     # Set env BEFORE spawning the subprocess so the observability sink's
     # flush cycle (which may fire during the ~3s daprd startup window) finds
