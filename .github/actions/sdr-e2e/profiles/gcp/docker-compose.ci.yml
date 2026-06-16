@@ -25,6 +25,10 @@ services:
           listen 9000;
           client_max_body_size 0;
           location / {
+            # testbench's XML API doesn't implement object DELETE (405); the
+            # worker's post-upload cleanup is best-effort, so ack DELETEs with
+            # 204 to keep the run log clean (object lifetime = container).
+            if ($request_method = DELETE) { return 204; }
             proxy_pass http://storage-testbench:9000;
             proxy_hide_header ETag;
             add_header ETag '"d41d8cd98f00b204e9800998ecf8427e"' always;
