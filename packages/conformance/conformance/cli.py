@@ -105,6 +105,22 @@ def _bootstrap_file(dest: "pathlib.Path", content: str, force: bool) -> None:
     print(f"{'updated' if existed else 'installed'}: {dest}")
 
 
+def _ensure_gitignore_entry(root: "pathlib.Path", entry: str) -> None:
+    """Append *entry* to .gitignore if not already present; never overwrites."""
+    gitignore = root / ".gitignore"
+    if gitignore.exists():
+        lines = gitignore.read_text().splitlines()
+        if any(line.strip() == entry for line in lines):
+            print(f"ok:        {gitignore}  ({entry!r} already present)")
+            return
+        # Append with a preceding blank line for readability.
+        with gitignore.open("a") as fh:
+            fh.write(f"\n{entry}\n")
+    else:
+        gitignore.write_text(f"{entry}\n")
+    print(f"appended:  {gitignore}  ({entry!r})")
+
+
 def _cmd_bootstrap(argv: list[str]) -> int:
     """Write the SKILL.md shim and conformance workflow into the current repo."""
     import pathlib
@@ -122,6 +138,7 @@ def _cmd_bootstrap(argv: list[str]) -> int:
         _CONFORMANCE_WORKFLOW,
         force,
     )
+    _ensure_gitignore_entry(root, "remediation/")
     return 0
 
 
