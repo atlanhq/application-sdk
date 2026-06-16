@@ -1247,10 +1247,10 @@ class TestGCSStoreCredentials:
         assert mock_gcs_cls.call_args.kwargs["client_options"].get("allow_http") is not True
 
     @patch("obstore.store.GCSStore")
-    def test_skip_signature_for_unauthenticated_emulator(
+    def test_skip_signature_attaches_anonymous_credential_provider(
         self, mock_gcs_cls: MagicMock, tmp_path: Path
     ) -> None:
-        """skipSignature → config skip_signature (anonymous requests to fake-gcs)."""
+        """skipSignature → a static credential_provider (anonymous fake-gcs auth)."""
         components_dir = _write_component(
             tmp_path,
             "objectstore",
@@ -1264,7 +1264,26 @@ class TestGCSStoreCredentials:
         mock_gcs_cls.return_value = MagicMock()
         create_store_from_binding("objectstore", components_dir=components_dir)
 
-        assert mock_gcs_cls.call_args.kwargs["config"]["skip_signature"] == "true"
+        provider = mock_gcs_cls.call_args.kwargs.get("credential_provider")
+        assert provider is not None
+        cred = provider()
+        assert cred["token"] and cred["expires_at"] is not None
+
+    @patch("obstore.store.GCSStore")
+    def test_no_skip_signature_leaves_credentials_default(
+        self, mock_gcs_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        """Without skipSignature, no credential_provider is injected (real GCS path)."""
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.gcs",
+            {"bucket": "prod-bucket", "endpoint": "https://storage.googleapis.com"},
+        )
+        mock_gcs_cls.return_value = MagicMock()
+        create_store_from_binding("objectstore", components_dir=components_dir)
+
+        assert mock_gcs_cls.call_args.kwargs.get("credential_provider") is None
 
     @patch("obstore.store.GCSStore")
     def test_private_key_newlines_normalized(

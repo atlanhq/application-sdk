@@ -491,6 +491,26 @@ def _build_azure_config(
     )
 
 
+def _anonymous_gcs_credential_provider():
+    """Static no-op GCS credential for unauthenticated emulators (fake-gcs-server).
+
+    obstore calls this instead of probing the GCE metadata server / OAuth token
+    endpoint; the emulator ignores the bearer token. Returns obstore's
+    ``GcpCredential`` shape ``{"token", "expires_at"}`` with a far-future expiry so
+    it is never refreshed. Test-only — gated on the binding's ``skipSignature``
+    flag, which real GCS never sets.
+    """
+    from datetime import datetime, timezone  # noqa: PLC0415
+
+    def _provider() -> dict[str, object]:
+        return {
+            "token": "anonymous-emulator",
+            "expires_at": datetime(2999, 1, 1, tzinfo=timezone.utc),
+        }
+
+    return _provider
+
+
 def _build_gcs_config(
     meta: dict[str, str],
     sdk_client_options: dict[str, object],
@@ -537,11 +557,10 @@ def _build_gcs_config(
         client_options["allow_http"] = True
     if _coerce_bool(meta.get("insecureSSL", "")):
         client_options["allow_invalid_certificates"] = True
-    # Unauthenticated emulators (fake-gcs-server) reject signed requests; send
-    # anonymous, unsigned requests when the binding opts in. Real GCS never sets
-    # this, so production signing is unaffected.
-    if _coerce_bool(meta.get("skipSignature", "")):
-        gcs_config["skip_signature"] = "true"
+    # NB: ``skipSignature`` (unauthenticated emulators) is NOT a GCS config key —
+    # obstore silently ignores it for GCS. It is handled by the caller, which
+    # attaches a static anonymous credential_provider instead (see
+    # create_store_from_binding's gcs branch).
 
     # --- Storage class --------------------------------------------------------
     storage_class = _nonempty(meta, "storageClass")
@@ -692,11 +711,22 @@ def _create_store_core(
         bucket, gcs_config, gcs_client_options, put_attrs = _build_gcs_config(
             meta, sdk_client_options
         )
+        # Unauthenticated emulators (fake-gcs-server): obstore's GCS client would
+        # otherwise hit the metadata server / OAuth for a token and fail. A static
+        # no-op credential makes obstore send a (token-bearing) request the emulator
+        # ignores. Gated on skipSignature — real GCS never sets it, so prod auth
+        # (SA key / ADC) is untouched.
+        gcs_credential_provider = (
+            _anonymous_gcs_credential_provider()
+            if _coerce_bool(meta.get("skipSignature", ""))
+            else None
+        )
         store = make_gcs_store(
             bucket,
             # Pass ``None`` (not {}) so obstore uses Application Default Credentials.
             gcs_config if gcs_config else None,
             client_options=gcs_client_options,
+            credential_provider=gcs_credential_provider,
         )
         return store, put_attrs
 
