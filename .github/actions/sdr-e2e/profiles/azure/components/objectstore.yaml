@@ -17,3 +17,10 @@ spec:
       value: atlan-customer-e2e
     - name: endpoint
       value: http://azurite:10000/devstoreaccount1
+    # The azurite-init sidecar already creates the container. Stop daprd's
+    # azure binding from trying to create it again at init — with the account
+    # already in `endpoint`, daprd doubles the path
+    # (.../devstoreaccount1/devstoreaccount1/...) → 400. The SDK does its real
+    # I/O via obstore, so daprd's binding only needs to load, not manage state.
+    - name: disableEntityManagement
+      value: "true"
