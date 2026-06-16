@@ -39,20 +39,39 @@ facts {
     new App.PublishNode { connectionEntity = "{{custom}}" }.args["connection_entity"] == "{{custom}}"
   }
 
+  // ---- connectionEntity is linked to connection_creation_enabled --------------
+
+  // A present entity means publish creates the connection from it.
+  ["PublishNode with a connection entity enables connection creation"] {
+    new App.PublishNode {}.args["connection_creation_enabled"] == true
+  }
+
+  // A null entity means there is nothing to create from, so creation is off.
+  ["PublishNode with a null connection entity disables connection creation"] {
+    new App.PublishNode { connectionEntity = null }.args["connection_creation_enabled"] == false
+  }
+
+  // The link is a default, not a hard constraint: creation can be disabled even
+  // when an entity is present (publish against an existing connection).
+  ["PublishNode connectionCreationEnabled can be overridden off with an entity present"] {
+    new App.PublishNode { connectionCreationEnabled = false }.args["connection_creation_enabled"] == false
+  }
+
   // ---- Typed pipeline (PublishStep) -------------------------------------------
 
-  ["Default pipeline emits connection_entity on the publish node"] {
+  ["Default pipeline emits connection_entity and enables connection creation"] {
     defaultPublishArgs["connection_entity"] == "{{connection}}"
+    defaultPublishArgs["connection_creation_enabled"] == true
   }
 
-  ["PublishStep.connectionEntity = null omits connection_entity from the generated node"] {
+  ["PublishStep.connectionEntity = null omits connection_entity and disables connection creation"] {
     !omittedPublishArgs.toMap().containsKey("connection_entity")
+    omittedPublishArgs["connection_creation_enabled"] == false
   }
 
-  // Omitting connection_entity must not disturb the other standard publish args.
+  // Omitting connection_entity must not disturb the remaining publish args.
   ["Omitting connection_entity preserves the other publish args"] {
     omittedPublishArgs["connection_qualified_name"] != null
-    omittedPublishArgs["connection_creation_enabled"] == true
     omittedPublishArgs["connection_cache_enabled"] == true
   }
 }
