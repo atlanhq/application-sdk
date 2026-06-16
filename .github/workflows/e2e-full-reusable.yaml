@@ -196,9 +196,7 @@ jobs:
           fi
           echo "Using agent-name=$(grep '^name=' "$GITHUB_OUTPUT" | cut -d= -f2)"
 
-      # TEMP(DISTR-767): pinned to the matrix branch to exercise the new
-      # storage-profile support before merge. REVERT to @main before ready.
-      - uses: atlanhq/application-sdk/.github/actions/sdr-e2e@adityachoudhury/gcs-emulator-base-url
+      - uses: atlanhq/application-sdk/.github/actions/sdr-e2e@main
         with:
           app-name: ${{ inputs.app-name }}
           app-image-name: ${{ inputs.app-image-name }}
