@@ -36,11 +36,19 @@ from conformance.suite.schema.findings import Finding, findings_to_report
 
 @dataclass(frozen=True)
 class CheckRegistration:
-    """A registered check module, identified by its rule-series letter."""
+    """A registered check module, identified by its rule-series letter.
+
+    A check supplies either ``scan_path`` (per-file scanning) or ``scan_all``
+    (cross-file scanning that needs to see every file before emitting findings —
+    e.g. transitive inheritance resolution).  When ``scan_all`` is set the
+    runner calls it once with the post-exclusion path list; otherwise it calls
+    ``scan_path`` per file.
+    """
 
     series: str
     discover: Callable[[Path], list[Path]]
     scan_path: Callable[[Path, Path], list[Finding]]
+    scan_all: Callable[[list[Path], Path], list[Finding]] | None = None
 
 
 _CHECKS: list[CheckRegistration] = [
@@ -63,6 +71,7 @@ _CHECKS: list[CheckRegistration] = [
         series=prescriptions.SERIES,
         discover=prescriptions.discover,
         scan_path=prescriptions.scan_path,
+        scan_all=prescriptions.scan_all,
     ),
     CheckRegistration(
         series=optimizations.SERIES,
@@ -229,12 +238,18 @@ def main(argv: list[str] | None = None) -> int:
     root = Path(args.repo).resolve()
     all_findings: list[Finding] = []
     for check in active:
+        paths: list[Path] = []
         for p in check.discover(root):
             if excluded_prefixes:
                 rel = p.relative_to(root).as_posix()
                 if any(rel.startswith(prefix) for prefix in excluded_prefixes):
                     continue
-            all_findings.extend(check.scan_path(p, root))
+            paths.append(p)
+        if check.scan_all is not None:
+            all_findings.extend(check.scan_all(paths, root))
+        else:
+            for p in paths:
+                all_findings.extend(check.scan_path(p, root))
 
     # Always surface violations in a human-readable form so CI logs are actionable.
     _print_human_summary(all_findings, args.series, excluded_prefixes)

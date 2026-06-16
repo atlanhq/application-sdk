@@ -39,4 +39,33 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p001",
     ),
+    RuleDefinition(
+        id="P002",
+        name="ErrorCodePrefixMismatch",
+        tier=EnforcementTier.BLOCK,
+        mechanism=RuleMechanism.STATIC,
+        category="error-code-shape",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.3.0",
+        short_description="AppError subclass code missing or doesn't start with the parent leaf's category prefix",
+        full_description=(
+            "Every concrete subclass of an ``application_sdk.errors`` leaf "
+            "(``AuthError``, ``InternalError``, ``InvalidInputError``, etc.) must\n"
+            "declare its own ``code: ClassVar[str]`` that starts with the leaf's\n"
+            "category prefix and an underscore (``AUTH_``, ``INTERNAL_``,\n"
+            "``INVALID_INPUT_``, etc.).  Without that prefix the code is opaque to\n"
+            "dashboards and on-call routing — the category column has to be joined\n"
+            "for every query.  Without an override, every site of the subclass\n"
+            "collapses into the leaf's bare bucket and is impossible to triage.\n"
+            "\n"
+            "The check resolves inheritance transitively: an intermediate class with\n"
+            "no ``code`` (a 'pass-through' subclass between a leaf and a concrete\n"
+            "leaf) is also flagged so failures don't silently inherit the bare\n"
+            "leaf's code.  Suppress with ``# conformance: ignore[P002] <reason>``\n"
+            "at the declaration when an intermediate is genuinely abstract — see\n"
+            "typed-error-prescription §4 and BLDX-1431.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p002",
+    ),
 )
