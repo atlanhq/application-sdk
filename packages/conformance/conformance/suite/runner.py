@@ -22,7 +22,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from conformance.suite.checks import actions_pinning, bootstrap_drift, error_handling
+from conformance.suite.checks import (
+    actions_pinning,
+    bootstrap_drift,
+    error_handling,
+    optimizations,
+    prescriptions,
+)
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier
 from conformance.suite.schema.findings import Finding, findings_to_report
@@ -52,6 +58,16 @@ _CHECKS: list[CheckRegistration] = [
         series=error_handling.SERIES,
         discover=error_handling.discover,
         scan_path=error_handling.scan_path,
+    ),
+    CheckRegistration(
+        series=prescriptions.SERIES,
+        discover=prescriptions.discover,
+        scan_path=prescriptions.scan_path,
+    ),
+    CheckRegistration(
+        series=optimizations.SERIES,
+        discover=optimizations.discover,
+        scan_path=optimizations.scan_path,
     ),
 ]
 
