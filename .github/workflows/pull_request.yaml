@@ -22,9 +22,22 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       container: ${{ steps.filter.outputs.container }}
-      code: ${{ steps.filter.outputs.code }}
+      # 'sdk'  — changes that can alter SDK behaviour, so the unit + integration
+      #          tests must run. Deliberately EXCLUDES contract-toolkit/ (ships
+      #          its own package + CI), docs/, and .github/ workflow-meta — a
+      #          workflow-only or toolkit-only PR no longer drags in the full
+      #          test matrix. The two .github/actions/* entries are the test
+      #          harness itself, so changing *how* tests run still re-runs them.
+      sdk: ${{ steps.filter.outputs.sdk }}
+      # 'scan' — wider net for the Trivy filesystem scan: every first-party
+      #          source tree + the dependency lockfiles. Still short-circuits on
+      #          pure docs/, .github-meta, and .security-only PRs.
+      scan: ${{ steps.filter.outputs.scan }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      # No explicit `base`: for pull_request, paths-filter diffs against the PR
+      # base automatically; for merge_group it diffs the queued merge ref against
+      # the default branch (the same proven setup the conformance jobs use).
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4
         id: filter
         with:
@@ -32,34 +45,49 @@ jobs:
             container:
               - 'Dockerfile'
               - 'entrypoint.sh'
-            code:
+            sdk:
               - 'application_sdk/**'
               - 'tests/**'
               - 'pyproject.toml'
               - 'uv.lock'
+              - '.github/actions/unit-tests/**'
+              - '.github/actions/setup-deps/**'
+            scan:
+              - 'application_sdk/**'
               - 'examples/**'
-              - '.github/**'
-              - '.security/**'
+              - 'contract-toolkit/**'
+              - 'tests/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
 
-  # Conventional Commits (skipped on fork PRs — no org PAT available)
+  # Required status check — the JOB has no `if:` so it always runs and always
+  # concludes. The real validation step is gated to PR (non-fork) events: the
+  # webiny action needs ORG_PAT_GITHUB, which fork PRs don't get, and merge_group
+  # entries have no PR commits to inspect. On those paths a no-op success step
+  # keeps the required context green instead of leaving it "skipped" (which would
+  # block fork PRs / the merge queue). The PR title — which becomes the squash
+  # commit subject — is independently enforced by "Validate PR title".
+  # See docs/standards/ci-required-checks.md.
   commits:
     name: Conventional Commits
-    if: github.event.pull_request.head.repo.fork != true || github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        if: github.event_name != 'merge_group'
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true
         with:
           fetch-depth: 0
       - uses: webiny/action-conventional-commits@7f91b1595ca1951cdb671ddc9f07a49081ec5b69 # v1.4.2
-        if: github.event_name != 'merge_group'
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true
         with:
           GITHUB_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+      - name: Skip on fork PR / merge_group
+        if: github.event_name == 'merge_group' || github.event.pull_request.head.repo.fork == true
+        run: echo "Commit-convention check not applicable here (fork PR or merge_group); PR title is enforced by Validate PR title."
 
   docstr:
     name: Docstring Coverage
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.sdk == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -69,14 +97,23 @@ jobs:
           fail-under: "30"
 
   # Security Checks
+  # Required status check — must ALWAYS run and ALWAYS conclude (never skip via a
+  # job-level `if:`, which GitHub reports as "skipped" and leaves a required check
+  # pending forever, blocking the merge queue). Instead the job always runs and
+  # short-circuits its real steps when no first-party source/deps changed.
+  # See docs/standards/ci-required-checks.md.
   trivy:
     name: Trivy Code Scan
     needs: changes
-    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
+      - name: Short-circuit when nothing to scan
+        if: needs.changes.outputs.scan != 'true'
+        run: echo "No first-party source or dependency changes — Trivy code scan not needed."
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        if: needs.changes.outputs.scan == 'true'
       - uses: "./.github/actions/trivy"
+        if: needs.changes.outputs.scan == 'true'
         with:
           add-report-comment-to-pr: "true"
 
@@ -95,10 +132,12 @@ jobs:
           fail-on-vulns: 'true'
 
   # Testing
+  # The matrix may skip when no SDK change — that is fine because the REQUIRED
+  # check is the always-run `unit-gate` aggregator below, not these cells.
   unit:
     name: Unit Tests
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.sdk == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     strategy:
@@ -130,17 +169,27 @@ jobs:
             exit 1
           fi
 
+  # Required status check — always runs and always concludes; short-circuits its
+  # real steps when no SDK change is present so non-code PRs and merge-queue
+  # entries pass in seconds rather than leaving a required check pending.
+  # See docs/standards/ci-required-checks.md.
   integration:
     name: Integration Tests
     needs: changes
-    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - name: Short-circuit when no SDK change
+        if: needs.changes.outputs.sdk != 'true'
+        run: echo "No SDK change on this PR/merge-group entry — integration tests not needed."
+
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        if: needs.changes.outputs.sdk == 'true'
       - uses: "./.github/actions/setup-deps"
+        if: needs.changes.outputs.sdk == 'true'
 
       - name: Install Temporal CLI
+        if: needs.changes.outputs.sdk == 'true'
         run: |
           mkdir -p "$HOME/.temporalio/bin"
           curl -sSLf "https://github.com/temporalio/cli/releases/download/v${TEMPORAL_CLI_VERSION}/temporal_cli_${TEMPORAL_CLI_VERSION}_linux_amd64.tar.gz" \
@@ -151,9 +200,11 @@ jobs:
           echo "$HOME/.temporalio/bin" >> "$GITHUB_PATH"
 
       - name: Start Temporal dev server
+        if: needs.changes.outputs.sdk == 'true'
         run: temporal server start-dev --db-filename /tmp/temporal-integ.db &
 
       - name: Wait for Temporal to be ready
+        if: needs.changes.outputs.sdk == 'true'
         run: |
           for i in $(seq 1 20); do
             if temporal workflow list --namespace default 2>/dev/null; then
@@ -165,6 +216,7 @@ jobs:
 
       - name: Resolve pinned daprd version
         id: dapr
+        if: needs.changes.outputs.sdk == 'true'
         run: |
           set -euo pipefail
           ver=$(grep '^__dapr_version' application_sdk/version.py | cut -d'"' -f2)
@@ -176,6 +228,7 @@ jobs:
           echo "Resolved pinned daprd version: $ver"
 
       - name: Install and start Dapr runtime (daprd)
+        if: needs.changes.outputs.sdk == 'true'
         run: |
           # Download daprd directly from the Dapr release. Mirrors the SDK's
           # own embedded-runtime path (application_sdk/dev/_dapr.py) instead
@@ -207,6 +260,7 @@ jobs:
           done
 
       - name: Run integration tests
+        if: needs.changes.outputs.sdk == 'true'
         env:
           TEMPORAL_HOST: "localhost:7233"
           DAPR_HTTP_PORT: "3500"
@@ -336,7 +390,7 @@ jobs:
     name: Build SDK base image (e2e)
     needs: changes
     if: |
-      needs.changes.outputs.code == 'true' &&
+      needs.changes.outputs.sdk == 'true' &&
       github.event_name == 'pull_request' &&
       contains(github.event.pull_request.labels.*.name, 'e2e') &&
       github.event.pull_request.head.repo.fork != true &&
@@ -409,7 +463,7 @@ jobs:
     # back to the released base.
     if: |
       always() &&
-      needs.changes.outputs.code == 'true' &&
+      needs.changes.outputs.sdk == 'true' &&
       needs.matrix-builder.result == 'success' &&
       (needs.build-sdk-base-image.result == 'success' || needs.build-sdk-base-image.result == 'skipped') && (
         github.event_name == 'merge_group' ||
