@@ -12,7 +12,7 @@ spec:
     - name: accountName
       value: devstoreaccount1
     - name: accountKey
-      value: Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMA==
+      value: Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==
     - name: containerName
       value: atlan-customer-e2e
     - name: endpoint

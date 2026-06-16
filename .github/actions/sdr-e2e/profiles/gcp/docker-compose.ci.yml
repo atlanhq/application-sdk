@@ -1,36 +1,40 @@
-# Cross-cloud matrix — GCP profile sidecars (fake-gcs-server).
-# The init container self-retries until the JSON API is up, then creates the
-# customer bucket; atlan-app waits for it to complete.
+# Cross-cloud matrix — GCP profile sidecars (Google storage-testbench).
+# fake-gcs-server rejected object_store's uploads with "invalid uploadType"
+# (a documented fake-gcs limitation); Google's official storage-testbench
+# implements the full upload API surface that obstore exercises. The init
+# self-retries until the JSON API is up, then creates the customer bucket;
+# atlan-app waits for it to complete.
 services:
-  fake-gcs:
-    image: fsouza/fake-gcs-server:1.49.2
-    command: ["-scheme", "http", "-port", "4443", "-host", "0.0.0.0", "-public-host", "fake-gcs:4443"]
+  gcs-testbench:
+    image: gcr.io/cloud-devrel-public-resources/storage-testbench:latest
+    environment:
+      - PORT=9000
     expose:
-      - "4443"
+      - "9000"
 
-  fake-gcs-init:
+  gcs-testbench-init:
     image: curlimages/curl:8.10.1
     depends_on:
-      - fake-gcs
+      - gcs-testbench
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         for i in $(seq 1 60); do
-          curl -sf -X POST "http://fake-gcs:4443/storage/v1/b?project=test" \
+          curl -sf -X POST "http://gcs-testbench:9000/storage/v1/b?project=test" \
             -H "Content-Type: application/json" \
             -d '{"name":"atlan-customer-e2e"}' >/dev/null 2>&1 && break
-          echo "waiting for fake-gcs..."; sleep 2
+          echo "waiting for storage-testbench..."; sleep 2
         done
-        echo "fake-gcs-init done"
+        echo "gcs-testbench-init done"
     restart: "no"
 
   atlan-app:
     # STORAGE_EMULATOR_HOST makes Google's Go client (used by daprd's gcp.bucket
-    # binding) talk to fake-gcs with NO credentials, so daprd inits cleanly
+    # binding) talk to the emulator with NO credentials, so daprd inits cleanly
     # instead of failing ADC lookup. obstore (the SDK's actual I/O path) is
     # pointed at the same emulator via the component's endpoint→base_url.
     environment:
-      - STORAGE_EMULATOR_HOST=fake-gcs:4443
+      - STORAGE_EMULATOR_HOST=gcs-testbench:9000
     depends_on:
-      fake-gcs-init:
+      gcs-testbench-init:
         condition: service_completed_successfully

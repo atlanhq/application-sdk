@@ -1,7 +1,9 @@
 # Cross-cloud matrix — GCP profile: customer object store on GCS
-# (fake-gcs-server). endpoint → obstore base_url (DISTR-774); skipSignature
-# sends unsigned/anonymous requests since the emulator has no auth.
-# Overrides the SDK-default `objectstore`.
+# (Google storage-testbench). endpoint → obstore base_url (DISTR-774);
+# skipSignature sends unsigned/anonymous requests since the emulator has no
+# auth. fake-gcs-server rejected obstore uploads ("invalid uploadType"); the
+# official storage-testbench implements the full upload API. Overrides the
+# SDK-default `objectstore`.
 apiVersion: dapr.io/v1alpha1
 kind: Component
 metadata:
@@ -18,6 +20,6 @@ spec:
     - name: project_id
       value: test
     - name: endpoint
-      value: http://fake-gcs:4443
+      value: http://gcs-testbench:9000
     - name: skipSignature
       value: "true"
