@@ -20,6 +20,6 @@ spec:
     - name: project_id
       value: test
     - name: endpoint
-      value: http://gcs-testbench:9000
+      value: http://gcs:9000
     - name: skipSignature
       value: "true"

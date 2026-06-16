@@ -1,40 +1,62 @@
-# Cross-cloud matrix — GCP profile sidecars (Google storage-testbench).
-# fake-gcs-server rejected object_store's uploads with "invalid uploadType"
-# (a documented fake-gcs limitation); Google's official storage-testbench
-# implements the full upload API surface that obstore exercises. The init
-# self-retries until the JSON API is up, then creates the customer bucket;
-# atlan-app waits for it to complete.
+# Cross-cloud matrix — GCP profile sidecars (storage-testbench + ETag shim).
+# Google's storage-testbench stores objects correctly (HTTP 200 on obstore's
+# XML-API PUT) but omits the ETag response header that obstore requires
+# ("ETag Header missing from response"). A tiny nginx proxy in front injects a
+# stable ETag on every response, patching that one emulator gap — fully
+# hermetic, no real GCS bucket needed. atlan-app + the bucket-init talk to the
+# proxy (gcs:9000); the proxy forwards to storage-testbench:9000.
 services:
-  gcs-testbench:
+  storage-testbench:
     image: gcr.io/cloud-devrel-public-resources/storage-testbench:latest
     environment:
       - PORT=9000
     expose:
       - "9000"
 
-  gcs-testbench-init:
+  gcs:
+    image: nginx:1.27-alpine
+    depends_on:
+      - storage-testbench
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        cat > /etc/nginx/conf.d/default.conf <<'NGINX'
+        server {
+          listen 9000;
+          client_max_body_size 0;
+          location / {
+            proxy_pass http://storage-testbench:9000;
+            proxy_hide_header ETag;
+            add_header ETag '"d41d8cd98f00b204e9800998ecf8427e"' always;
+          }
+        }
+        NGINX
+        exec nginx -g 'daemon off;'
+    expose:
+      - "9000"
+
+  gcs-init:
     image: curlimages/curl:8.10.1
     depends_on:
-      - gcs-testbench
+      - gcs
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         for i in $(seq 1 60); do
-          curl -sf -X POST "http://gcs-testbench:9000/storage/v1/b?project=test" \
+          curl -sf -X POST "http://gcs:9000/storage/v1/b?project=test" \
             -H "Content-Type: application/json" \
             -d '{"name":"atlan-customer-e2e"}' >/dev/null 2>&1 && break
-          echo "waiting for storage-testbench..."; sleep 2
+          echo "waiting for gcs proxy + testbench..."; sleep 2
         done
-        echo "gcs-testbench-init done"
+        echo "gcs-init done"
     restart: "no"
 
   atlan-app:
-    # STORAGE_EMULATOR_HOST makes Google's Go client (used by daprd's gcp.bucket
-    # binding) talk to the emulator with NO credentials, so daprd inits cleanly
-    # instead of failing ADC lookup. obstore (the SDK's actual I/O path) is
-    # pointed at the same emulator via the component's endpoint→base_url.
+    # STORAGE_EMULATOR_HOST makes daprd's gcp.bucket binding talk to the emulator
+    # credential-free; obstore uses the component endpoint (base_url). Both point
+    # at the nginx proxy so the injected ETag reaches obstore.
     environment:
-      - STORAGE_EMULATOR_HOST=gcs-testbench:9000
+      - STORAGE_EMULATOR_HOST=gcs:9000
     depends_on:
-      gcs-testbench-init:
+      gcs-init:
         condition: service_completed_successfully
