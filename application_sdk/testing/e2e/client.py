@@ -65,6 +65,10 @@ _USER_AGENT = "atlan-sdk-full-dag-e2e/1.0 (+https://github.com/atlanhq/applicati
 # / ``poll_atlas_for_connection``; the per-request timeout just keeps
 # any one call from hanging the whole loop.
 _HTTP_TIMEOUT = 60
+# AE submit blocks while the tenant connector pod accepts the workflow —
+# KEDA may spin the pod up from zero, which adds ~60-90 s of startup latency
+# on top of the normal request time.
+_SUBMIT_TIMEOUT = 120
 
 # Cadence for "still polling" heartbeat log lines in
 # ``poll_native_status`` — lineage stages take 2-5 min on small
@@ -482,6 +486,7 @@ class AEWorkflowClient:
                 "POST",
                 "/api/service/package-workflows?submit=true",
                 body=payload,
+                timeout=_SUBMIT_TIMEOUT,
             )
             last = (status, body)
             if status < 300 and isinstance(body, dict):
@@ -785,6 +790,39 @@ class AEWorkflowClient:
         prefix = f"{connection_qualified_name}/"
         results = asyncio.run(self._search_counts_async(prefix, type_names))
         return dict(zip(type_names, results))
+
+    def count_total_assets_under_connection(
+        self, connection_qualified_name: str
+    ) -> int:
+        """Total descendant-asset count under the connection prefix, ALL types.
+
+        Unlike :meth:`count_assets_under_connection` (which requires explicit
+        ``type_names``), this counts every asset under the connection's QN
+        prefix regardless of type. It is the signal the non-empty backstop needs
+        to protect connectors that declare no per-type expectations — the ones
+        most likely to silently regress to a zero-asset run. Returns 0 on search
+        error (treated as "nothing landed").
+        """
+        prefix = f"{connection_qualified_name}/"
+        return asyncio.run(self._count_total_async(prefix))
+
+    async def _count_total_async(self, prefix: str) -> int:
+        """Single ``count`` search under *prefix* with no type filter."""
+        from pyatlan.model.assets import Asset  # noqa: PLC0415
+        from pyatlan.model.fluent_search import FluentSearch  # noqa: PLC0415
+
+        try:
+            async with self._build_async_atlan_client() as client:
+                request = (
+                    FluentSearch()
+                    .where(Asset.QUALIFIED_NAME.startswith(prefix))
+                    .to_request()
+                )
+                request.dsl.size = 0  # cheap response: only .count matters
+                return int((await client.asset.search(request)).count)
+        except Exception:
+            logger.exception("Total-asset count under %s failed", prefix)
+            return 0
 
     def count_lineage_under_connection(
         self,

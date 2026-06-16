@@ -89,6 +89,16 @@ inputs:
       ref) action.yaml itself.
     required: false
     default: ""
+  base-image-ref:
+    description: |
+      Optional runtime base image to build the connector FROM, injected as
+      the BASE_IMAGE build-arg. Set by apps-sdk cross-repo dispatch to a
+      freshly-built PR base image so Dockerfile / base-image / daprd changes
+      in the SDK PR are exercised through a real connector build + run.
+      Empty (the default) leaves the connector Dockerfile's own default
+      FROM untouched — the merge-queue / non-e2e path is unchanged.
+    required: false
+    default: ""
   components-dir:
     description: |
       App-level directory holding additional Dapr component YAMLs to
@@ -196,9 +206,21 @@ runs:
     - name: Build and push PR image
       id: build
       shell: bash
+      env:
+        BASE_IMAGE_REF: ${{ inputs.base-image-ref }}
       run: |
         SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-8)
         IMAGE="ghcr.io/atlanhq/${{ inputs.app-image-name }}:sdr-test-${SHORT_SHA}"
+        # When a base-image-ref is supplied (apps-sdk cross-repo dispatch),
+        # build the connector FROM that image via the BASE_IMAGE build-arg
+        # so the SDK PR's rebuilt runtime base is exercised. Append the flag
+        # ONLY when non-empty — passing `BASE_IMAGE=` empty would clobber the
+        # Dockerfile's default FROM and break the non-e2e / merge-queue path.
+        BUILD_ARGS=()
+        if [ -n "${BASE_IMAGE_REF}" ]; then
+          echo "Building connector on dispatched base image: ${BASE_IMAGE_REF}"
+          BUILD_ARGS+=(--build-arg "BASE_IMAGE=${BASE_IMAGE_REF}")
+        fi
         # --push pushes to GHCR; compose pulls from there at run-time
         # (atlan-configurator wires app_image into the generated
         # compose file as a pull target). --load would conflict with
@@ -207,6 +229,7 @@ runs:
         docker buildx build \
           --tag "${IMAGE}" \
           --push \
+          "${BUILD_ARGS[@]}" \
           --cache-from "type=gha,scope=sdr-${{ inputs.app-name }}" \
           --cache-to "type=gha,mode=max,scope=sdr-${{ inputs.app-name }}" \
           .
@@ -215,7 +238,7 @@ runs:
     # Must run before atlan-configurator generates ci-deploy/ — setup-deps
     # uses actions/checkout internally which would wipe generated files.
     - name: Setup Python and dependencies
-      uses: atlanhq/application-sdk/.github/actions/setup-deps@v3.17.0
+      uses: atlanhq/application-sdk/.github/actions/setup-deps@v3.17.1
 
     # setup-deps' actions/checkout wipes the pre-build re-pin above. Do
     # it again so the host pytest runtime resolves the dispatched SDK

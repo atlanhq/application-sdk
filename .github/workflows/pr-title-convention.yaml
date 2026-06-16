@@ -1,0 +1,249 @@
+# PR Title Convention Guard
+#
+# The SDK changelog (.github/scripts/update_changelog.py) is generated from the
+# squash-merge commit subjects, which on this repo are the PR titles. `feat:`
+# and `fix:` land in the user-facing Features/Fixes sections, so a PR that does
+# not change shipped source code must not use those types — otherwise it adds
+# noise to the changelog (the motivating case: a `fix(publish):` PR that only
+# touched a CI workflow file).
+#
+# Rules, highest precedence first (decided from the PR's changed files):
+#
+#   0. Version-bump / release automation is ignored entirely
+#      (branch `bump-version-*`, or a `Bump version to ...` / `chore(...): release ...`
+#      title). These are generated and must not be policed.
+#
+#   1. Any change under `application_sdk/`  ->  no restriction.
+#      Source changes are the legitimate home of feat:/fix: (and may also be
+#      chore:/ci:/etc.). This takes precedence over every rule below.
+#
+#   2. Any change to `contract-toolkit/` *core* (anything under contract-toolkit/
+#      that is NOT in its docs/, examples/, scripts/, tests/, .github/ subfolders)
+#      ->  title must be `feat(contract-toolkit):` or `fix(contract-toolkit):`.
+#      contract-toolkit ships its own package and changelog, so its source
+#      changes carry that exact scope.
+#
+#   3. Any change to `packages/conformance/` *core* (anything under
+#      packages/conformance/ that is NOT in its tests/ subfolder)
+#      ->  title must be `feat(conformance):` or `fix(conformance):`.
+#      The conformance package ships independently and owns its own changelog.
+#
+#   4. Everything else (docs, examples, tests, components, renovate-config,
+#      tools, .github, .claude, .security, root config files, dependency
+#      manifests, contract-toolkit's own docs/tests, conformance tests, ...)
+#      ->  title must be `chore:`/`chore(...):` or `ci:`/`ci(...):`.
+#
+# On a violation the job fails and posts a sticky PR comment explaining the
+# expected type; the comment is cleared automatically once the title is fixed.
+#
+# Runs on `edited` so re-titling a flagged PR re-runs the check and clears the
+# comment without a new push. The pass/fail verdict needs only a read-scope
+# token + the title from the event payload, so it works on fork PRs (the sticky
+# comment is skipped there — fork PRs get a read-only token).
+#
+# `merge_group` runs are a passing no-op: a merge-queue entry has no PR title to
+# inspect and the title was already validated at PR time. Running (rather than
+# skipping) keeps the conclusion "success" so this can be a REQUIRED check
+# without leaving the merge queue permanently pending — the same pattern this
+# repo uses for capability-manifest-check.
+
+name: PR Title Convention
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+    branches: [main]
+  merge_group:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pr-title-convention-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  validate-title:
+    name: Validate PR title
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate PR title against changed files
+        id: detect
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          HEAD_REF: ${{ github.head_ref }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          echo "PR #${PR_NUMBER} (${HEAD_REF}): ${PR_TITLE}"
+
+          violation=false
+          expected=""
+
+          # --- Rule 0: ignore version-bump / release automation ---------------
+          release_re='^chore(\([^)]*\))?: release '
+          bump_re='^Bump version to '
+          if [[ "${HEAD_REF}" == bump-version* ]] || [[ "${PR_TITLE}" =~ $release_re ]] || [[ "${PR_TITLE}" =~ $bump_re ]]; then
+            echo "Version-bump / release PR — ignored by this guard."
+          else
+            # Up to the first 100 files; ample for the PRs this guard targets.
+            files=()
+            while IFS= read -r path; do
+              [ -n "$path" ] && files+=("$path")
+            done < <(gh pr view "${PR_NUMBER}" --repo "${REPO}" --json files --jq '.files[].path')
+
+            if [ "${#files[@]}" -eq 0 ]; then
+              echo "No changed files reported; nothing to validate."
+            else
+              # Classify changed paths into zones.
+              sdk=false        # application_sdk/**  (highest precedence)
+              ct_core=false    # contract-toolkit/** excluding its docs/examples/scripts/tests/.github
+              cf_core=false    # packages/conformance/** excluding its tests/
+              for f in "${files[@]}"; do
+                case "$f" in
+                  application_sdk/*) sdk=true ;;
+                  contract-toolkit/docs/*|contract-toolkit/examples/*|contract-toolkit/scripts/*|contract-toolkit/tests/*|contract-toolkit/.github/*) : ;;
+                  contract-toolkit/*) ct_core=true ;;
+                  packages/conformance/tests/*) : ;;
+                  packages/conformance/*) cf_core=true ;;
+                  *) : ;;
+                esac
+              done
+
+              if [ "$sdk" = true ]; then
+                echo "application_sdk/ touched — title type unrestricted. ✅"
+              elif [ "$ct_core" = true ]; then
+                # Rule 2: contract-toolkit core requires the contract-toolkit scope.
+                ct_re='^(feat|fix)\(contract-toolkit\)!?:'
+                if [[ "${PR_TITLE}" =~ $ct_re ]]; then
+                  echo "contract-toolkit core change with a valid scoped title. ✅"
+                else
+                  violation=true
+                  expected="ct-core"
+                  echo "Violation: contract-toolkit core change must use feat(contract-toolkit): or fix(contract-toolkit):."
+                fi
+              elif [ "$cf_core" = true ]; then
+                # Rule 3: conformance core requires the conformance scope.
+                cf_re='^(feat|fix)\(conformance\)!?:'
+                if [[ "${PR_TITLE}" =~ $cf_re ]]; then
+                  echo "packages/conformance core change with a valid scoped title. ✅"
+                else
+                  violation=true
+                  expected="cf-core"
+                  echo "Violation: conformance core change must use feat(conformance): or fix(conformance):."
+                fi
+              else
+                # Rule 4: everything else must be chore or ci.
+                chore_re='^(chore|ci)(\([^)]*\))?!?:'
+                if [[ "${PR_TITLE}" =~ $chore_re ]]; then
+                  echo "Non-source change with a chore/ci title. ✅"
+                else
+                  violation=true
+                  expected="chore-ci"
+                  echo "Violation: non-source change must use chore: or ci:."
+                fi
+              fi
+            fi
+          fi
+
+          {
+            echo "violation=${violation}"
+            echo "expected=${expected}"
+          } >> "$GITHUB_OUTPUT"
+
+          # Build the sticky-comment body for the violating case.
+          if [ "$violation" = true ]; then
+            if [ "$expected" = "ct-core" ]; then
+              cat > pr-title-comment.md <<'EOF'
+          ### 🏷️ contract-toolkit changes need a scoped `feat`/`fix` title
+
+          This PR changes `contract-toolkit/` source, so its title must use the
+          `contract-toolkit` scope:
+
+          - `feat(contract-toolkit): …`
+          - `fix(contract-toolkit): …`
+
+          (Changes confined to `contract-toolkit/{docs,examples,scripts,tests,.github}/`
+          should instead be `chore:`/`ci:`.)
+
+          Editing the PR title re-runs this check and clears this comment automatically.
+          EOF
+            elif [ "$expected" = "cf-core" ]; then
+              cat > pr-title-comment.md <<'EOF'
+          ### 🏷️ conformance package changes need a scoped `feat`/`fix` title
+
+          This PR changes `packages/conformance/` source, so its title must use the
+          `conformance` scope:
+
+          - `feat(conformance): …`
+          - `fix(conformance): …`
+
+          (Changes confined to `packages/conformance/tests/`
+          should instead be `chore:`/`ci:`.)
+
+          Editing the PR title re-runs this check and clears this comment automatically.
+          EOF
+            else
+              cat > pr-title-comment.md <<'EOF'
+          ### 🏷️ Non-source PR shouldn't use a `feat`/`fix` title
+
+          This PR does not change shipped source (`application_sdk/`,
+          `contract-toolkit/` core, or `packages/conformance/` core), so a
+          `feat:`/`fix:` title would add it to the user-facing SDK changelog as a
+          real feature/fix — exactly the noise this check prevents.
+
+          **Use a non-surfacing conventional type instead:**
+          - `ci:` / `ci(scope):` — changes to CI configuration and scripts
+          - `chore:` / `chore(scope):` — everything else not touching shipped source
+
+          _Example:_ `ci(publish): use crane to copy large images GHCR → Docker Hub`
+
+          Editing the PR title re-runs this check and clears this comment automatically.
+          EOF
+            fi
+          fi
+
+      - name: Post sticky comment on violation
+        if: >-
+          github.event_name == 'pull_request'
+          && steps.detect.outputs.violation == 'true'
+          && github.event.pull_request.head.repo.fork == false
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        with:
+          header: pr-title-convention
+          path: pr-title-comment.md
+
+      - name: Clear sticky comment when resolved
+        if: >-
+          github.event_name == 'pull_request'
+          && steps.detect.outputs.violation == 'false'
+          && github.event.pull_request.head.repo.fork == false
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        with:
+          header: pr-title-convention
+          delete: true
+
+      - name: Fail on invalid PR title
+        if: steps.detect.outputs.violation == 'true'
+        env:
+          EXPECTED: ${{ steps.detect.outputs.expected }}
+        run: |
+          if [ "${EXPECTED}" = "ct-core" ]; then
+            echo "::error title=Invalid PR title::contract-toolkit core changes must use 'feat(contract-toolkit):' or 'fix(contract-toolkit):'."
+          elif [ "${EXPECTED}" = "cf-core" ]; then
+            echo "::error title=Invalid PR title::conformance core changes must use 'feat(conformance):' or 'fix(conformance):'."
+          else
+            echo "::error title=Invalid PR title::Non-source changes must use 'chore:' or 'ci:' (feat:/fix: are reserved for application_sdk/, contract-toolkit core, and packages/conformance core)."
+          fi
+          exit 1
+
+      - name: Merge queue no-op
+        if: github.event_name == 'merge_group'
+        run: |
+          echo "merge_group event — PR title already validated at PR time; passing."

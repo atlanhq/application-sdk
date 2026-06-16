@@ -1,0 +1,30 @@
+/// Fixture: app whose typed publish step opts out of `connection_entity`.
+///
+/// Exercises the pipeline path with `pipeline.publish.connectionEntity = null`,
+/// which must omit `connection_entity` from the generated publish node's args and,
+/// because the two are linked, also set `connection_creation_enabled = false` so
+/// publish targets an existing connection and creates nothing.
+amends "../../src/App.pkl"
+
+name = "publish-no-connection-entity"
+displayName = "Publish No Connection Entity"
+icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
+hasCredentialConfig = false
+
+pipeline = new Pipeline {
+  publish = new PublishStep {
+    connectionEntity = null
+  }
+}
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["connection"] = new ConnectionCreator {
+          placeholderText = "Connection Name"
+        }
+      }
+    }
+  }
+}

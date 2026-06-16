@@ -1,0 +1,111 @@
+name: Release Conformance Package
+
+# Fired automatically when a non-release PR that touches packages/conformance/**
+# is merged to main. Runs .github/scripts/conformance_release.py to compute the
+# next semver (from conventional commits touching packages/conformance/** since
+# the last conformance-v* tag), bumps pyproject.toml + __init__.py, prepends a
+# new entry to packages/conformance/CHANGELOG.md, and creates or updates the
+# bump-version-conformance PR labeled release:conformance.
+# Merging that PR triggers Publish Conformance Package (conformance-publish.yml),
+# which handles the PyPI publish and tag.
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+    paths:
+      - "packages/conformance/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  RELEASE_LABEL: "release:conformance"
+  BUMP_BRANCH: "bump-version-conformance"
+
+jobs:
+  open-release-pr:
+    name: Open or update conformance release PR
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.pull_request.merged == true &&
+        !startsWith(github.event.pull_request.head.ref, 'bump-version-conformance')
+      )
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.ORG_PAT_GITHUB }}
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          version: "0.11.21"
+
+      - name: Compute version, bump pyproject + __init__, update CHANGELOG
+        id: versions
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python .github/scripts/conformance_release.py
+
+      - name: Sanity-build package
+        if: steps.versions.outputs.skip != 'true'
+        run: cd packages/conformance && uv build
+
+      - name: Push bump branch and open or update PR
+        if: steps.versions.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+        run: |
+          set -euo pipefail
+          new_version="${{ steps.versions.outputs.new }}"
+
+          git config --global user.name 'atlan-ci'
+          git config --global user.email 'it@atlan.com'
+
+          git checkout -b "${BUMP_BRANCH}"
+          git add packages/conformance/pyproject.toml \
+                  packages/conformance/conformance/__init__.py \
+                  packages/conformance/CHANGELOG.md
+          git commit -m "chore(conformance): release v${new_version}"
+          git push origin "${BUMP_BRANCH}" --force-with-lease
+
+          existing="$(gh pr list \
+            --head "${BUMP_BRANCH}" \
+            --base main \
+            --state open \
+            --json number \
+            --jq '.[0].number')"
+
+          if [ -n "$existing" ]; then
+            echo "PR #${existing} already exists for ${BUMP_BRANCH}; force-push updated it."
+          else
+            body_file="$(mktemp)"
+            {
+              echo "Automated release PR for atlan-application-sdk-conformance v${new_version}."
+              echo
+              echo "Merging this PR triggers Publish Conformance Package, which builds"
+              echo "the wheel + sdist and publishes to PyPI, then creates the"
+              echo "conformance-v${new_version} tag."
+              echo
+              echo "## Release notes"
+              echo
+              cat /tmp/conformance-release-notes.md
+            } > "$body_file"
+
+            gh pr create \
+              --base main \
+              --head "${BUMP_BRANCH}" \
+              --title "chore(conformance): release v${new_version}" \
+              --body-file "$body_file" \
+              --label "${RELEASE_LABEL}"
+          fi

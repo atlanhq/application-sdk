@@ -1,0 +1,49 @@
+name: Release Gate
+
+# Blocks release PRs (auto-labeled `release` by the SDK release-version-bump
+# workflow) from being merged until a reviewer adds the `e2e` label, which
+# triggers the full e2e tests as the final gate before a release is cut.
+#
+# All other PRs pass this check immediately — it exists solely to gate the
+# auto-created bump-version PRs without requiring `e2e` on every PR.
+#
+# Branch-protection targets: "Release Gate / Release Gate"
+# Add this alongside "Tests / tests-passed" in branch protection so that:
+# (a) this check blocks release PRs missing the label, and (b) the
+# tests-passed check enforces that unit, integration, and e2e tests all pass.
+
+on:
+  pull_request:
+    types: [opened, synchronize, labeled, unlabeled, reopened]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  release-gate:
+    name: Release Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verify release readiness
+        env:
+          LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+          has_release=$(echo "$LABELS" | jq 'index("release") != null')
+          has_e2e=$(echo "$LABELS" | jq 'index("e2e") != null')
+
+          if [[ "$has_release" != "true" ]]; then
+            echo "Not a release PR — gate passes."
+            exit 0
+          fi
+
+          if [[ "$has_e2e" != "true" ]]; then
+            echo "::error::Release PR requires the 'e2e' label before merging. Add it to trigger e2e tests; this gate unblocks once the label is present and the tests pass."
+            exit 1
+          fi
+
+          echo "Release PR has both 'release' and 'e2e' labels — gate passes."
+          echo "Test pass/fail is enforced separately by 'Tests / tests-passed'."

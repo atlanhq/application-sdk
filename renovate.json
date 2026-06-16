@@ -4,6 +4,8 @@
   "extends": [
     "github>atlanhq/application-sdk//renovate-config/default.json"
   ],
+  "dependencyDashboard": false,
+  "semanticCommitType": "chore",
   "ignorePaths": [
     ".venv/**",
     "**/node_modules/**",

@@ -1,0 +1,14 @@
+name: Release and Publish
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+jobs:
+  release:
+    if: github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'release')
+    permissions:
+      contents: write
+    uses: atlanhq/application-sdk/.github/workflows/tag-and-release.yaml@main
+    secrets: inherit
