@@ -156,7 +156,7 @@ def test_cmd_bootstrap_writes_skill_md(
     monkeypatch.chdir(tmp_path)
     _cmd_bootstrap([])
     dest = tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md"
-    assert dest.read_text() == render("SKILL.md")
+    assert dest.read_text() == render("remediate.md")
 
 
 def test_cmd_bootstrap_writes_all_managed_workflows(

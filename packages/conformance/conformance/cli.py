@@ -120,7 +120,7 @@ def _cmd_bootstrap(argv: list[str]) -> int:
 
     _bootstrap_file(
         root / ".claude" / "skills" / "remediate" / "SKILL.md",
-        render("SKILL.md", **kwargs),
+        render("remediate.md", **kwargs),
     )
     for name in MANAGED_WORKFLOWS:
         _bootstrap_file(
