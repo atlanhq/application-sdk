@@ -607,6 +607,22 @@ class TestTemporalProxyConfig:
             cfg = backend_module._build_temporal_proxy_config(host, tls_enabled=True)
         assert cfg is None
 
+    def test_malformed_schemeless_proxy_rejected(self) -> None:
+        """A schemeless proxy value (ops typo) is rejected with an error log and
+        a direct connection, not a silent empty target_host."""
+        with (
+            mock.patch(
+                "urllib.request.getproxies", return_value={"https": "proxy.corp:8080"}
+            ),
+            mock.patch("urllib.request.proxy_bypass_environment", return_value=False),
+            mock.patch.object(backend_module.logger, "error") as err,
+        ):
+            cfg = backend_module._build_temporal_proxy_config(
+                "tmprl:443", tls_enabled=True
+            )
+        assert cfg is None
+        err.assert_called_once()
+
     def test_build_proxy_config_extracts_credentials_without_leaking(self) -> None:
         """Credentials become basic_auth and never appear in target_host."""
         getproxies, bypass = self._proxy_env(
@@ -619,6 +635,16 @@ class TestTemporalProxyConfig:
         assert cfg is not None
         assert cfg.target_host == "proxy.corp:8080"
         assert cfg.basic_auth == ("user", "pass")
+
+    def test_build_proxy_config_keeps_token_username_without_password(self) -> None:
+        """Token-as-username proxy (http://TOKEN@proxy/) keeps auth, empty pass."""
+        getproxies, bypass = self._proxy_env({"https": "http://TOKEN@proxy.corp:8080"})
+        with getproxies, bypass:
+            cfg = backend_module._build_temporal_proxy_config(
+                "tmprl:443", tls_enabled=True
+            )
+        assert cfg is not None
+        assert cfg.basic_auth == ("TOKEN", "")
 
     def test_build_proxy_config_warns_on_https_scheme(self) -> None:
         getproxies, bypass = self._proxy_env({"https": "https://proxy.corp:443"})

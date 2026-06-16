@@ -45,6 +45,7 @@ from __future__ import annotations
 import os
 import urllib.request
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit, urlunsplit
 
 if TYPE_CHECKING:
     # obstore TypedDicts — not importable at runtime.
@@ -246,8 +247,26 @@ def log_obstore_config(
     logger.info(
         "obstore configured for %s: client=%s retry=%s",
         provider,
-        dict(client_options) if client_options else {},
+        _redact_proxy_userinfo(client_options) if client_options else {},
         dict(retry_config)
         if retry_config
         else "default(max_retries=10, retry_timeout=3m)",
     )
+
+
+def _redact_proxy_userinfo(client_options: ClientConfig) -> dict:
+    """Return a copy of *client_options* with any proxy_url credentials masked.
+
+    The real config keeps the userinfo (obstore needs it); only the log copy is
+    redacted so a `user:pass@` proxy never lands in logs.
+    """
+    opts = dict(client_options)
+    proxy = opts.get("proxy_url")
+    if not isinstance(proxy, str):
+        return opts
+    p = urlsplit(proxy)
+    if p.username or p.password:
+        host = p.hostname or ""
+        netloc = f"***@{host}:{p.port}" if p.port else f"***@{host}"
+        opts["proxy_url"] = urlunsplit((p.scheme, netloc, p.path, p.query, p.fragment))
+    return opts

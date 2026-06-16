@@ -183,6 +183,19 @@ class TestLogObstoreConfig:
         formatted = fmt % tuple(args)
         assert "default(max_retries=10" in formatted
 
+    def test_redacts_proxy_userinfo(self) -> None:
+        """A proxy_url with credentials must not log the password."""
+        with patch("application_sdk.storage._obstore_config.logger") as mock_logger:
+            log_obstore_config(
+                "s3",
+                client_options={"proxy_url": "http://user:secretpass@proxy.corp:8080"},
+                retry_config=None,
+            )
+        fmt, *args = mock_logger.info.call_args.args
+        formatted = fmt % tuple(args)
+        assert "secretpass" not in formatted
+        assert "***@proxy.corp:8080" in formatted
+
 
 # ---------------------------------------------------------------------------
 # binding.py / cloud.py plumbing — the actual fix

@@ -470,6 +470,16 @@ def _build_temporal_proxy_config(
         return None
 
     parsed = urlsplit(proxy)  # RFC 3986 proxy URL, e.g. http://host:port
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        # e.g. a schemeless "proxy.corp:8080" — fail loudly instead of handing
+        # Temporal an empty target_host. Log scheme/host only (no userinfo).
+        logger.error(
+            "Malformed proxy URL — expected http://host[:port], got scheme=%r "
+            "host=%r; connecting Temporal directly.",
+            parsed.scheme,
+            parsed.hostname,
+        )
+        return None
     if parsed.scheme == "https":
         logger.warning(
             "Proxy URL uses an https:// scheme, but Temporal's HTTP CONNECT "
@@ -477,14 +487,10 @@ def _build_temporal_proxy_config(
         )
 
     # hostname[:port] only — keep any userinfo out of target_host and the logs.
-    target_host = (
-        f"{parsed.hostname}:{parsed.port}" if parsed.port else (parsed.hostname or "")
-    )
-    basic_auth = (
-        (parsed.username, parsed.password)
-        if parsed.username and parsed.password
-        else None
-    )
+    target_host = f"{parsed.hostname}:{parsed.port}" if parsed.port else parsed.hostname
+    # Keep auth when only a username is present (token-as-username proxies,
+    # e.g. http://TOKEN@proxy/) — password defaults to empty rather than dropping.
+    basic_auth = (parsed.username, parsed.password or "") if parsed.username else None
 
     from temporalio.service import (  # noqa: PLC0415 — cold path: only when a proxy is configured
         HttpConnectProxyConfig,
