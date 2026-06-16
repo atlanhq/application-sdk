@@ -25,6 +25,12 @@ services:
     restart: "no"
 
   atlan-app:
+    # STORAGE_EMULATOR_HOST makes Google's Go client (used by daprd's gcp.bucket
+    # binding) talk to fake-gcs with NO credentials, so daprd inits cleanly
+    # instead of failing ADC lookup. obstore (the SDK's actual I/O path) is
+    # pointed at the same emulator via the component's endpoint→base_url.
+    environment:
+      - STORAGE_EMULATOR_HOST=fake-gcs:4443
     depends_on:
       fake-gcs-init:
         condition: service_completed_successfully
