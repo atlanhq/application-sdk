@@ -67,7 +67,6 @@ jobs:
   # keeps the required context green instead of leaving it "skipped" (which would
   # block fork PRs / the merge queue). The PR title — which becomes the squash
   # commit subject — is independently enforced by "Validate PR title".
-  # See docs/standards/ci-required-checks.md.
   commits:
     name: Conventional Commits
     runs-on: ubuntu-latest
@@ -101,7 +100,6 @@ jobs:
   # job-level `if:`, which GitHub reports as "skipped" and leaves a required check
   # pending forever, blocking the merge queue). Instead the job always runs and
   # short-circuits its real steps when no first-party source/deps changed.
-  # See docs/standards/ci-required-checks.md.
   trivy:
     name: Trivy Code Scan
     needs: changes
@@ -172,7 +170,6 @@ jobs:
   # Required status check — always runs and always concludes; short-circuits its
   # real steps when no SDK change is present so non-code PRs and merge-queue
   # entries pass in seconds rather than leaving a required check pending.
-  # See docs/standards/ci-required-checks.md.
   integration:
     name: Integration Tests
     needs: changes
