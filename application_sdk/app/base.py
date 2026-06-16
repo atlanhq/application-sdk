@@ -1741,6 +1741,7 @@ def _wrap_instance_tasks(app_instance: Any, context_data: dict[str, Any]) -> Non
                     task_meta.heartbeat_timeout_seconds,
                     task_meta.auto_heartbeat_seconds,
                     task_meta.retry_policy,
+                    task_meta.task_queue,
                 )
                 setattr(app_instance, attr_name, wrapper)
 
@@ -1756,6 +1757,7 @@ def _create_task_activity_wrapper(
     heartbeat_timeout_seconds: int | None = 60,
     auto_heartbeat_seconds: int | None = 10,
     retry_policy: Any = None,
+    task_queue: str | None = None,
 ) -> Any:
     """Create a wrapper that executes a task as a Temporal activity.
 
@@ -1770,6 +1772,9 @@ def _create_task_activity_wrapper(
         heartbeat_timeout_seconds: Heartbeat timeout. None disables.
         auto_heartbeat_seconds: Auto-heartbeat interval. None disables.
         retry_policy: Full retry policy (overrides max_attempts/interval if set).
+        task_queue: Target Temporal task queue. None inherits the workflow's
+            queue (default, unchanged behavior); a value routes the activity to
+            a dedicated worker pool polling that queue.
 
     Returns:
         Async function that executes the task as an activity.
@@ -1823,6 +1828,10 @@ def _create_task_activity_wrapper(
         # Execute as activity, routed through the SDK eviction-retry loop so
         # worker pod evictions (SIGTERM mid-activity) re-dispatch as fresh
         # attempts without burning the application-error retry budget.
+        # task_queue=None inherits the workflow's queue (Temporal default), so
+        # the kwarg is a no-op unless the task opted into a dedicated queue; the
+        # eviction-retry loop re-passes it on every re-dispatch, so a routed
+        # activity stays routed across evictions.
         result: Output = await execute_activity_with_eviction_retry(
             f"{app_name}:{task_name}",
             args=[task_context, input_data],
@@ -1831,6 +1840,7 @@ def _create_task_activity_wrapper(
             retry_policy=temporal_retry_policy,
             result_type=output_type,
             summary=summary,
+            task_queue=task_queue,
         )
 
         return result

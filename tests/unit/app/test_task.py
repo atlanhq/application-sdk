@@ -178,6 +178,30 @@ class TestTaskMetadata:
         assert metadata.heartbeat_timeout_seconds == 120
         assert metadata.auto_heartbeat_seconds == 20
 
+    def test_task_default_task_queue_is_none(self) -> None:
+        """task_queue defaults to None (inherits the workflow's queue)."""
+
+        class MyApp:
+            @task
+            async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.my_task)
+        assert metadata is not None
+        assert metadata.task_queue is None
+
+    def test_task_custom_task_queue(self) -> None:
+        """@task(task_queue=...) routes the activity to a dedicated queue."""
+
+        class MyApp:
+            @task(task_queue="atlan-publish-publish")
+            async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.my_task)
+        assert metadata is not None
+        assert metadata.task_queue == "atlan-publish-publish"
+
     def test_task_disable_heartbeat(self) -> None:
         """Setting heartbeat_timeout_seconds=None disables heartbeating."""
 

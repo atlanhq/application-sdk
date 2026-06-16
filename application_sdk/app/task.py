@@ -130,6 +130,13 @@ class TaskMetadata:
     Should be less than heartbeat_timeout_seconds (recommended: 1/6 of timeout).
     Default: 10 seconds."""
 
+    task_queue: str | None = None
+    """Route this task to a specific Temporal task queue. When set, the activity
+    is dispatched to this queue instead of the workflow's own queue, so a
+    dedicated worker deployment polling that queue can execute it (e.g. a
+    resource-isolated pool for a heavy or long-running task). Defaults to None,
+    which inherits the workflow's task queue — i.e. unchanged behavior."""
+
 
 def _validate_task_signature(
     fn: Callable[..., Any],
@@ -242,6 +249,7 @@ def task(
     retry_max_interval_seconds: int = 30,
     heartbeat_timeout_seconds: int | None | object = _USE_DEFAULT,
     auto_heartbeat_seconds: int | None | object = _USE_DEFAULT,
+    task_queue: str | None = None,
 ) -> Callable[[F], F]: ...
 
 
@@ -256,6 +264,7 @@ def task(
     retry_max_interval_seconds: int = 30,
     heartbeat_timeout_seconds: int | None | object = _USE_DEFAULT,
     auto_heartbeat_seconds: int | None | object = _USE_DEFAULT,
+    task_queue: str | None = None,
 ) -> F | Callable[[F], F]:
     """Decorator to mark a method as a task (Temporal activity).
 
@@ -333,6 +342,11 @@ def task(
         auto_heartbeat_seconds: Auto-heartbeat interval - framework sends
             heartbeats at this rate in a background task. Set to None to disable
             auto-heartbeating (manual only). Default: 10 seconds (~1/6 of timeout).
+        task_queue: Route this task to a specific Temporal task queue instead of
+            the workflow's own queue, so a dedicated worker deployment polling
+            that queue executes it (resource isolation for heavy/long-running
+            tasks). Defaults to None — inherits the workflow's queue (unchanged
+            behavior).
 
     Returns:
         The decorated function with task metadata attached.
@@ -379,6 +393,7 @@ def task(
             retry_max_interval_seconds=retry_max_interval_seconds,
             heartbeat_timeout_seconds=resolved_heartbeat_timeout,
             auto_heartbeat_seconds=resolved_auto_heartbeat,
+            task_queue=task_queue,
         )
 
         return fn

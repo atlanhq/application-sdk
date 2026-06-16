@@ -948,6 +948,47 @@ class TestCreateTaskActivityWrapper:
         # Temporal RetryPolicy uses .maximum_attempts (not .max_attempts).
         assert passed.maximum_attempts == 7
 
+    @pytest.mark.asyncio
+    async def test_wrapper_defaults_task_queue_to_none(self) -> None:
+        """Without routing, task_queue=None is forwarded (inherits the queue)."""
+        wrapper = _create_task_activity_wrapper(
+            app_name="a",
+            task_name="t",
+            timeout_seconds=1,
+            retry_max_attempts=1,
+            retry_max_interval_seconds=1,
+            output_type=_BLDXOutput,
+            context_data={},
+        )
+        with mock.patch(
+            "application_sdk.app.base.workflow.execute_activity",
+            new_callable=mock.AsyncMock,
+            return_value=_BLDXOutput(),
+        ) as exec_act:
+            await wrapper(_BLDXInput())
+        assert exec_act.call_args.kwargs["task_queue"] is None
+
+    @pytest.mark.asyncio
+    async def test_wrapper_routes_to_explicit_task_queue(self) -> None:
+        """A task_queue value is forwarded to workflow.execute_activity."""
+        wrapper = _create_task_activity_wrapper(
+            app_name="a",
+            task_name="t",
+            timeout_seconds=1,
+            retry_max_attempts=1,
+            retry_max_interval_seconds=1,
+            output_type=_BLDXOutput,
+            context_data={},
+            task_queue="atlan-publish-publish",
+        )
+        with mock.patch(
+            "application_sdk.app.base.workflow.execute_activity",
+            new_callable=mock.AsyncMock,
+            return_value=_BLDXOutput(),
+        ) as exec_act:
+            await wrapper(_BLDXInput())
+        assert exec_act.call_args.kwargs["task_queue"] == "atlan-publish-publish"
+
 
 # =============================================================================
 # generate_workflow_class — exercises the whole _run lifecycle end to end
