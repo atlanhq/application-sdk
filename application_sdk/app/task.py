@@ -55,7 +55,7 @@ class UnresolvableTaskAnnotationsError(InvalidInputError):
 class TaskContractError(InvalidInputError):
     """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
 
-    code: ClassVar[str] = "TASK_CONTRACT"
+    code: ClassVar[str] = "INVALID_INPUT_TASK_CONTRACT"
 
     def __init__(self, message: str, *, error_code: ErrorCode | None = None) -> None:
         warnings.warn(

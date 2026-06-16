@@ -69,7 +69,7 @@ class CredentialError(AuthError):
     credential_name: str | None = None
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CREDENTIAL_ERROR
-    code: ClassVar[str] = "CREDENTIAL"
+    code: ClassVar[str] = "AUTH_CREDENTIAL"
 
     # Intentional: dataclass fields define the wire-evidence schema; custom __init__ preserves positional-message compat.
     def __init__(
@@ -113,7 +113,7 @@ class CredentialNotFoundError(NotFoundError, CredentialError):
     """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CREDENTIAL_NOT_FOUND
-    code: ClassVar[str] = "CREDENTIAL_NOT_FOUND"
+    code: ClassVar[str] = "NOT_FOUND_CREDENTIAL"
     category: ClassVar[FailureCategory] = FailureCategory.NOT_FOUND
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.USER
@@ -145,7 +145,7 @@ class CredentialParseError(InvalidInputError, CredentialError):
     """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CREDENTIAL_PARSE_ERROR
-    code: ClassVar[str] = "CREDENTIAL_PARSE"
+    code: ClassVar[str] = "INVALID_INPUT_CREDENTIAL_PARSE"
     category: ClassVar[FailureCategory] = FailureCategory.INVALID_INPUT
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.USER
@@ -191,7 +191,7 @@ class CredentialValidationError(InvalidInputError, CredentialError):
     """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CREDENTIAL_VALIDATION_ERROR
-    code: ClassVar[str] = "CREDENTIAL_VALIDATION"
+    code: ClassVar[str] = "INVALID_INPUT_CREDENTIAL_VALIDATION"
     category: ClassVar[FailureCategory] = FailureCategory.INVALID_INPUT
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.USER
