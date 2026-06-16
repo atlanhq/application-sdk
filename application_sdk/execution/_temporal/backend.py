@@ -16,6 +16,8 @@ from temporalio.runtime import PrometheusConfig, Runtime, TelemetryConfig
 
 from application_sdk.constants import (
     ENABLE_ATLAN_UPLOAD,
+    HTTP_PROXY,
+    HTTPS_PROXY,
     TEMPORAL_PROMETHEUS_BIND_ADDRESS,
 )
 from application_sdk.execution.retry import RetryPolicy, _to_temporal_retry_policy
@@ -82,7 +84,7 @@ if TYPE_CHECKING:
     from datetime import timedelta
 
     from temporalio.converter import DataConverter
-    from temporalio.service import TLSConfig
+    from temporalio.service import HttpConnectProxyConfig, TLSConfig
 
     from application_sdk.app.base import App
     from application_sdk.app.context import AppContext
@@ -439,6 +441,31 @@ def _apply_sni_domain(tls: TLSConfig | bool, sni: str) -> TLSConfig | bool:
     return tls
 
 
+def _build_temporal_proxy_config(*, tls_enabled: bool) -> HttpConnectProxyConfig | None:
+    """Build an HTTP CONNECT proxy config for the Temporal gRPC connection.
+
+    Temporal's client does not read proxy environment variables on its own, so
+    the SDK forwards them explicitly — mirroring how HTTP clients select a proxy
+    by target scheme: ``HTTPS_PROXY`` for TLS-enabled connections and
+    ``HTTP_PROXY`` for plaintext. Returns ``None`` when no proxy is configured.
+    """
+    proxy = HTTPS_PROXY if tls_enabled else HTTP_PROXY
+    if not proxy:
+        return None
+
+    from temporalio.service import (  # noqa: PLC0415 — cold path: only when a proxy is configured
+        HttpConnectProxyConfig,
+    )
+
+    target_host = proxy.split("://", 1)[-1].rstrip("/")  # strip scheme/trailing slash
+    logger.info(
+        "Routing Temporal gRPC via HTTP CONNECT proxy %s (tls=%s)",
+        target_host,
+        tls_enabled,
+    )
+    return HttpConnectProxyConfig(target_host=target_host)
+
+
 async def create_temporal_client(
     host: str = "localhost:7233",
     namespace: str = "default",
@@ -459,6 +486,10 @@ async def create_temporal_client(
 
     Supports plain TCP, TLS, mTLS, and API key auth. Retries the connection
     up to ``connect_max_attempts`` times with exponential backoff.
+
+    When ``HTTPS_PROXY`` (TLS) or ``HTTP_PROXY`` (plaintext) is set, the gRPC
+    connection is routed through that HTTP CONNECT proxy. Temporal does not read
+    these env vars itself, so the SDK forwards them.
 
     Args:
         host: Temporal server address.
@@ -560,6 +591,12 @@ async def create_temporal_client(
     }
     if api_key:
         kwargs["api_key"] = api_key
+
+    # Temporal's client ignores proxy env vars, so forward an HTTP CONNECT proxy
+    # explicitly when HTTPS_PROXY/HTTP_PROXY is set (selected by TLS state).
+    proxy_config = _build_temporal_proxy_config(tls_enabled=tls_enabled)
+    if proxy_config is not None:
+        kwargs["http_connect_proxy_config"] = proxy_config
 
     # Configure Temporal runtime (with or without Prometheus metrics)
     kwargs["runtime"] = _get_or_create_runtime(

@@ -485,6 +485,74 @@ class TestCreateTemporalClient:
 
 
 # ---------------------------------------------------------------------------
+# HTTP CONNECT proxy support (HTTPS_PROXY / HTTP_PROXY)
+# ---------------------------------------------------------------------------
+
+
+class TestTemporalProxyConfig:
+    @staticmethod
+    def _connect_mock():
+        return mock.AsyncMock(return_value=mock.MagicMock())
+
+    @pytest.mark.asyncio
+    async def test_no_proxy_config_when_env_unset(self) -> None:
+        """No HTTPS_PROXY/HTTP_PROXY set -> connect directly (no proxy kwarg)."""
+        with (
+            mock.patch.object(backend_module, "HTTPS_PROXY", ""),
+            mock.patch.object(backend_module, "HTTP_PROXY", ""),
+            mock.patch.object(backend_module, "_get_or_create_runtime"),
+            mock.patch.object(
+                backend_module.Client, "connect", new=self._connect_mock()
+            ) as connect,
+        ):
+            await create_temporal_client(tls_enabled=True, connect_max_attempts=1)
+        assert "http_connect_proxy_config" not in connect.await_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_https_proxy_used_when_tls_enabled(self) -> None:
+        """HTTPS_PROXY is used (scheme stripped) when TLS is enabled."""
+        with (
+            mock.patch.object(backend_module, "HTTPS_PROXY", "http://proxy.corp:8080"),
+            mock.patch.object(backend_module, "HTTP_PROXY", ""),
+            mock.patch.object(backend_module, "_get_or_create_runtime"),
+            mock.patch.object(
+                backend_module.Client, "connect", new=self._connect_mock()
+            ) as connect,
+        ):
+            await create_temporal_client(tls_enabled=True, connect_max_attempts=1)
+        proxy = connect.await_args.kwargs["http_connect_proxy_config"]
+        assert proxy.target_host == "proxy.corp:8080"
+
+    @pytest.mark.asyncio
+    async def test_http_proxy_used_when_plaintext(self) -> None:
+        with (
+            mock.patch.object(backend_module, "HTTPS_PROXY", ""),
+            mock.patch.object(backend_module, "HTTP_PROXY", "plainproxy:3128"),
+            mock.patch.object(backend_module, "_get_or_create_runtime"),
+            mock.patch.object(
+                backend_module.Client, "connect", new=self._connect_mock()
+            ) as connect,
+        ):
+            await create_temporal_client(tls_enabled=False, connect_max_attempts=1)
+        proxy = connect.await_args.kwargs["http_connect_proxy_config"]
+        assert proxy.target_host == "plainproxy:3128"
+
+    @pytest.mark.asyncio
+    async def test_proxy_selected_by_tls_state(self) -> None:
+        """HTTPS_PROXY must not be used for a plaintext connection."""
+        with (
+            mock.patch.object(backend_module, "HTTPS_PROXY", "http://proxy.corp:8080"),
+            mock.patch.object(backend_module, "HTTP_PROXY", ""),
+            mock.patch.object(backend_module, "_get_or_create_runtime"),
+            mock.patch.object(
+                backend_module.Client, "connect", new=self._connect_mock()
+            ) as connect,
+        ):
+            await create_temporal_client(tls_enabled=False, connect_max_attempts=1)
+        assert "http_connect_proxy_config" not in connect.await_args.kwargs
+
+
+# ---------------------------------------------------------------------------
 # _prefer_v4_target / _apply_sni_domain (IPv6-fallback safety net)
 #
 # These guard against a v3-vs-v2 regression seen on two SDR customer VMs:
