@@ -45,8 +45,6 @@ def _cmd_remediate(argv: list[str]) -> int:
     The actual remediation loop is driven by the SKILL.md shim which reads
     the .prose.md contracts from the printed programs directory.
     """
-    import pathlib
-
     from conformance import __version__
 
     here = pathlib.Path(__file__).parent
