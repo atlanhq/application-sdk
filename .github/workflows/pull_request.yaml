@@ -211,6 +211,60 @@ jobs:
           DAPR_HTTP_PORT: "3500"
         run: uv run pytest tests/integration/ -m integration -v --timeout=120
 
+  storage-emulator:
+    name: Storage Emulator Tests
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: "./.github/actions/setup-deps"
+
+      - name: Start object-store emulators
+        run: |
+          set -euo pipefail
+          # S3 → MinIO
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio server /data
+          # Azure → Azurite
+          docker run -d --name azurite -p 10000:10000 \
+            mcr.microsoft.com/azure-storage/azurite:3.31.0 \
+            azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
+          # GCS → storage-testbench behind an nginx proxy that re-injects the
+          # ETag / Last-Modified headers testbench omits (obstore requires them).
+          docker network create gcs-net || true
+          docker run -d --name gcs-testbench --network gcs-net -e PORT=9000 \
+            gcr.io/cloud-devrel-public-resources/storage-testbench:latest
+          docker run -d --name gcs-proxy --network gcs-net -p 9095:9000 \
+            -v "$PWD/tests/integration/storage/gcs_emulator_proxy.conf:/etc/nginx/conf.d/default.conf:ro" \
+            nginx:1.27-alpine
+
+      - name: Wait for emulators + provision buckets/container
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do curl -sf http://localhost:9000/minio/health/live >/dev/null 2>&1 && break; sleep 2; done
+          for i in $(seq 1 30); do curl -s --max-time 2 http://localhost:10000/devstoreaccount1 >/dev/null 2>&1 && break; sleep 2; done
+          for i in $(seq 1 40); do curl -sf "http://localhost:9095/storage/v1/b?project=test" >/dev/null 2>&1 && break; sleep 2; done
+          AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin AWS_DEFAULT_REGION=us-east-1 \
+            aws --endpoint-url http://localhost:9000 s3 mb s3://sdk-emulator-test
+          az storage container create --name sdk-emulator-test \
+            --connection-string "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;"
+          curl -sf -X POST "http://localhost:9095/storage/v1/b?project=test" \
+            -H "Content-Type: application/json" -d '{"name":"sdk-emulator-test"}'
+
+      - name: Run storage emulator tests
+        env:
+          AWS_ENDPOINT_URL: http://localhost:9000
+          AZURE_STORAGE_ENDPOINT: http://localhost:10000
+          GCS_EMULATOR_ENDPOINT: http://localhost:9095
+        run: uv run pytest tests/integration/storage -m storage_emulator -v --timeout=120
+
+      - name: Teardown emulators
+        if: always()
+        run: docker rm -f minio azurite gcs-testbench gcs-proxy 2>/dev/null || true
+
   matrix-builder:
     name: Build Test Matrix
     if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
