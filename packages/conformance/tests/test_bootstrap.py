@@ -18,7 +18,6 @@ from conformance.cli import (
     _ensure_gitignore_entry,
 )
 
-
 # ---------------------------------------------------------------------------
 # _bootstrap_file
 # ---------------------------------------------------------------------------
@@ -133,7 +132,9 @@ def test_gitignore_entry_match_is_exact_line(tmp_path: pathlib.Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_cmd_bootstrap_writes_skill_md(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cmd_bootstrap_writes_skill_md(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     _cmd_bootstrap([])
     dest = tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md"
@@ -162,11 +163,17 @@ def test_cmd_bootstrap_idempotent_without_force(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     _cmd_bootstrap([])
-    skill_mtime = (tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md").stat().st_mtime
+    skill_mtime = (
+        (tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md").stat().st_mtime
+    )
     wf_mtime = (tmp_path / ".github" / "workflows" / "conformance.yaml").stat().st_mtime
     _cmd_bootstrap([])
-    assert (tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md").stat().st_mtime == skill_mtime
-    assert (tmp_path / ".github" / "workflows" / "conformance.yaml").stat().st_mtime == wf_mtime
+    assert (
+        tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md"
+    ).stat().st_mtime == skill_mtime
+    assert (
+        tmp_path / ".github" / "workflows" / "conformance.yaml"
+    ).stat().st_mtime == wf_mtime
 
 
 def test_cmd_bootstrap_force_overwrites(
@@ -209,7 +216,9 @@ def test_cmd_bootstrap_returns_zero(
     assert _cmd_bootstrap([]) == 0
 
 
-def test_conformance_workflow_contains_event_name(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_conformance_workflow_contains_event_name(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The bundled workflow uses event_name, not the stale sdk-ref input."""
     monkeypatch.chdir(tmp_path)
     _cmd_bootstrap([])

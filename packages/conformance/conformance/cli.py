@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pathlib
 import sys
 
 
@@ -13,7 +14,6 @@ def _cmd_detect(argv: list[str]) -> int:
 
 def _cmd_programs_dir(_argv: list[str]) -> int:
     import importlib.resources as _ir
-    import pathlib
 
     programs = _ir.files("conformance") / "programs"
     # Resolve to a real filesystem path (works for both installed wheels and
@@ -95,7 +95,7 @@ jobs:
 """
 
 
-def _bootstrap_file(dest: "pathlib.Path", content: str, force: bool) -> None:
+def _bootstrap_file(dest: pathlib.Path, content: str, force: bool) -> None:
     if dest.exists() and not force:
         print(f"already installed: {dest}  (pass --force to overwrite)")
         return
@@ -105,7 +105,7 @@ def _bootstrap_file(dest: "pathlib.Path", content: str, force: bool) -> None:
     print(f"{'updated' if existed else 'installed'}: {dest}")
 
 
-def _ensure_gitignore_entry(root: "pathlib.Path", entry: str) -> None:
+def _ensure_gitignore_entry(root: pathlib.Path, entry: str) -> None:
     """Append *entry* to .gitignore if not already present; never overwrites."""
     gitignore = root / ".gitignore"
     if gitignore.exists():
@@ -123,8 +123,6 @@ def _ensure_gitignore_entry(root: "pathlib.Path", entry: str) -> None:
 
 def _cmd_bootstrap(argv: list[str]) -> int:
     """Write the SKILL.md shim and conformance workflow into the current repo."""
-    import pathlib
-
     force = "--force" in argv
     root = pathlib.Path.cwd()
 
