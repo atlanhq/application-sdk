@@ -55,48 +55,12 @@ def _cmd_remediate(argv: list[str]) -> int:
     return 0
 
 
-# The SKILL.md written by `bootstrap`. Keep it minimal and stable — the real
-# logic lives in the package; this shim just locates and invokes it.
-_SKILL_MD = """\
----
-name: remediate
-description: Drive the conformance remediation loop (validators + OpenProse programs from the atlan-application-sdk-conformance package)
-argument-hint: "[--area error-handling|logging|ci] [--strict] [path]"
----
+def _bootstrap_file(dest: pathlib.Path, content: str) -> None:
+    """Write *content* to *dest*, creating parent directories as needed.
 
-1. Resolve programs dir:
-   - Inside a connector repo: `PROGRAMS=$(uv run atlan-application-sdk-conformance programs-dir)`
-   - Anywhere else: `PROGRAMS=$(uvx atlan-application-sdk-conformance@latest programs-dir)`
-2. Read `$PROGRAMS/conformance-remediation.prose.md` and execute it as the entry contract.
-3. All gated re-checks call `atlan-application-sdk-conformance detect` — follow the .prose.md exactly.
-"""
-
-
-_CONFORMANCE_WORKFLOW = """\
-name: "Conformance"
-
-on:
-  pull_request: {}
-  merge_group: {}
-  push:
-    branches: [main]
-
-permissions:
-  contents: read
-  security-events: write
-
-jobs:
-  conformance:
-    uses: atlanhq/application-sdk/.github/workflows/conformance-reusable.yaml@main
-    with:
-      event_name: ${{ github.event_name }}
-"""
-
-
-def _bootstrap_file(dest: pathlib.Path, content: str, force: bool) -> None:
-    if dest.exists() and not force:
-        print(f"already installed: {dest}  (pass --force to overwrite)")
-        return
+    Always overwrites — bootstrap owns these files and re-running is how
+    drift is eradicated.
+    """
     existed = dest.exists()
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(content)
@@ -119,21 +83,50 @@ def _ensure_gitignore_entry(root: pathlib.Path, entry: str) -> None:
     print(f"appended:  {gitignore}  ({entry!r})")
 
 
+def _parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
+    """Parse --package-name and --unit-tests-workflow from argv.
+
+    Supports both ``--flag value`` and ``--flag=value`` forms.
+    """
+    result: dict[str, str] = {
+        "package_name": "app",
+        "unit_tests_workflow": "tests.yaml",
+    }
+    _flags = {
+        "--package-name": "package_name",
+        "--unit-tests-workflow": "unit_tests_workflow",
+    }
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        for flag, dest in _flags.items():
+            if arg == flag and i + 1 < len(argv):
+                result[dest] = argv[i + 1]
+                i += 1
+                break
+            if arg.startswith(f"{flag}="):
+                result[dest] = arg[len(flag) + 1 :]
+                break
+        i += 1
+    return result
+
+
 def _cmd_bootstrap(argv: list[str]) -> int:
-    """Write the SKILL.md shim and conformance workflow into the current repo."""
-    force = "--force" in argv
+    """Write the SKILL.md shim and standard CI workflows into the current repo."""
+    from conformance.bootstrap.render import MANAGED_WORKFLOWS, render
+
+    kwargs = _parse_bootstrap_args(argv)
     root = pathlib.Path.cwd()
 
     _bootstrap_file(
         root / ".claude" / "skills" / "remediate" / "SKILL.md",
-        _SKILL_MD,
-        force,
+        render("SKILL.md", **kwargs),
     )
-    _bootstrap_file(
-        root / ".github" / "workflows" / "conformance.yaml",
-        _CONFORMANCE_WORKFLOW,
-        force,
-    )
+    for name in MANAGED_WORKFLOWS:
+        _bootstrap_file(
+            root / ".github" / "workflows" / name,
+            render(name, **kwargs),
+        )
     _ensure_gitignore_entry(root, "remediation/")
     return 0
 
@@ -154,7 +147,11 @@ commands:
   programs-dir   Print the absolute path to the bundled .prose.md programs
   gen-rule-docs  Regenerate rule docs from Python rule definitions
   remediate      Print programs path + version banner (SKILL.md drives execution)
-  bootstrap      Write .claude/skills/remediate/SKILL.md + .github/workflows/conformance.yaml  (--force to overwrite)
+  bootstrap      Write .claude/skills/remediate/SKILL.md + 16 standard CI workflow
+                 shims into .github/workflows/ (always overwrites — re-running
+                 eradicates drift).
+                   --package-name NAME       docstring-coverage package (default: app)
+                   --unit-tests-workflow FILE build-and-publish test workflow (default: tests.yaml)
 """
 
 
