@@ -8,9 +8,9 @@ name: Release Gate
 # auto-created bump-version PRs without requiring `e2e` on every PR.
 #
 # Branch-protection targets: "Release Gate / Release Gate"
-# Add this alongside "Tests / tests-passed" in branch protection so that:
+# Add this alongside "Tests / Tests Gate" in branch protection so that:
 # (a) this check blocks release PRs missing the label, and (b) the
-# tests-passed check enforces that unit, integration, and e2e tests all pass.
+# Tests Gate check enforces that unit, integration, and e2e tests all pass.
 
 on:
   pull_request:
@@ -46,4 +46,4 @@ jobs:
           fi
 
           echo "Release PR has both 'release' and 'e2e' labels — gate passes."
-          echo "Test pass/fail is enforced separately by 'Tests / tests-passed'."
+          echo "Test pass/fail is enforced separately by 'Tests / Tests Gate'."
