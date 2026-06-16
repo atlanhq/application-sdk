@@ -1,0 +1,79 @@
+// Tests that `connection_entity` is an optional arg on the built-in PublishNode.
+//
+// Background: `connection_entity` is the full connection entity JSON (typeName +
+// attributes) that publish uses for connection creation. PublishNode exposes a
+// nullable `connectionEntity` (default "{{connection}}") and only emits the arg
+// when it is non-null — both directly on the node and via the typed
+// `PublishStep.connectionEntity`. The field is linked to `connectionCreationEnabled`
+// (default `connectionEntity != null`), so a null entity also sets
+// `connection_creation_enabled = false`: publish targets an existing connection
+// and creates nothing, rather than creating one from a partial entity.
+
+amends "pkl:test"
+
+import "pkl:json"
+import "fixtures/default_pipeline.pkl" as defaultPipelineApp
+import "fixtures/publish_no_connection_entity.pkl" as noConnEntityApp
+import "../src/App.pkl" as App
+
+// Default (undeclared) pipeline: the publish node should carry connection_entity.
+local defaultPublishArgs = new json.Parser { useMapping = true }.parse(
+  defaultPipelineApp.output.files["app/generated/manifest.json"].text
+)["dag"]["publish"]["inputs"]["args"]
+
+// Pipeline with `pipeline.publish.connectionEntity = null`: arg must be absent.
+local omittedPublishArgs = new json.Parser { useMapping = true }.parse(
+  noConnEntityApp.output.files["app/generated/manifest.json"].text
+)["dag"]["publish"]["inputs"]["args"]
+
+facts {
+  // ---- Direct class instances -------------------------------------------------
+
+  ["PublishNode defaults connection_entity to the {{connection}} placeholder"] {
+    new App.PublishNode {}.args["connection_entity"] == "{{connection}}"
+  }
+
+  ["PublishNode omits connection_entity entirely when connectionEntity is null"] {
+    !new App.PublishNode { connectionEntity = null }.args.toMap().containsKey("connection_entity")
+  }
+
+  ["PublishNode passes through a custom connectionEntity value"] {
+    new App.PublishNode { connectionEntity = "{{custom}}" }.args["connection_entity"] == "{{custom}}"
+  }
+
+  // ---- connectionEntity is linked to connection_creation_enabled --------------
+
+  // A present entity means publish creates the connection from it.
+  ["PublishNode with a connection entity enables connection creation"] {
+    new App.PublishNode {}.args["connection_creation_enabled"] == true
+  }
+
+  // A null entity means there is nothing to create from, so creation is off.
+  ["PublishNode with a null connection entity disables connection creation"] {
+    new App.PublishNode { connectionEntity = null }.args["connection_creation_enabled"] == false
+  }
+
+  // The link is a default, not a hard constraint: creation can be disabled even
+  // when an entity is present (publish against an existing connection).
+  ["PublishNode connectionCreationEnabled can be overridden off with an entity present"] {
+    new App.PublishNode { connectionCreationEnabled = false }.args["connection_creation_enabled"] == false
+  }
+
+  // ---- Typed pipeline (PublishStep) -------------------------------------------
+
+  ["Default pipeline emits connection_entity and enables connection creation"] {
+    defaultPublishArgs["connection_entity"] == "{{connection}}"
+    defaultPublishArgs["connection_creation_enabled"] == true
+  }
+
+  ["PublishStep.connectionEntity = null omits connection_entity and disables connection creation"] {
+    !omittedPublishArgs.toMap().containsKey("connection_entity")
+    omittedPublishArgs["connection_creation_enabled"] == false
+  }
+
+  // Omitting connection_entity must not disturb the remaining publish args.
+  ["Omitting connection_entity preserves the other publish args"] {
+    omittedPublishArgs["connection_qualified_name"] != null
+    omittedPublishArgs["connection_cache_enabled"] == true
+  }
+}
