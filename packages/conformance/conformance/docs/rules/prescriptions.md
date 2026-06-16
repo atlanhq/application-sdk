@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**1 rule** · Checker: `suite.checks.prescriptions` (AST-based)
+**2 rules** · Checker: `suite.checks.prescriptions` (AST-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -16,6 +16,7 @@ Suppress a finding on the violating line or the line directly above it:
 | ID | Name | Tier | Category | Autofixable | Since |
 |---|---|---|---|---|---|
 | [P001](#p001) | `UnboundedContractFields` | `block` | `contract-payload-safety` | — | 0.3.0 |
+| [P002](#p002) | `CategoryFieldOverride` | `block` | `category-immutability` | — | 0.3.0 |
 
 ---
 
@@ -36,5 +37,31 @@ Suppressed declarations are still emitted to the SARIF report (counted in their 
 category), so every opt-out is reported every single time. This rule is `BLOCK`
 (suppress-only): an unsuppressed declaration fails the conformance gate — the only
 sanctioned use is the justified inline suppression above — see BLDX-1428.
+
+---
+
+## P002 — `CategoryFieldOverride` {#p002}
+
+**Tier:** `block` · **Category:** `category-immutability` · **Autofixable:** — · **Since:** 0.3.0
+
+> AppError subclass redeclares the `category` ClassVar — drifts the canonical taxonomy
+
+`FailureCategory` is the closed, single-axis taxonomy the SDK owns — every value is the
+canonical answer to *what happened* and is consumed as an immutable reporting metric
+(dashboards, SLA gates, on-call routing). The 14 categorical leaves in
+`application_sdk.errors.leaves` (and `AppError` itself) are the sole defining sites:
+each leaf binds exactly one `FailureCategory` to its `category` `ClassVar`.
+
+Domain subclasses MUST inherit `category` from their categorical-leaf parent — never
+redeclare it.  A redeclaration is either a same-value duplication (clutter that drifts
+as soon as the parent is renamed) or a true override (silent taxonomy drift that splits
+a metric across lookalike values).  Both are blocked uniformly: domain subclasses
+specialise via `code` and evidence fields, not `category`.
+
+Suppressed declarations are still emitted to the SARIF report (counted in their own
+category), so every opt-out is reported every single time. This rule is `BLOCK`
+(suppress-only): an unsuppressed redeclaration fails the conformance gate — the only
+sanctioned use is the justified inline suppression `# conformance: ignore[P002]
+<reason>` at the declaration site — see BLDX-1432.
 
 ---

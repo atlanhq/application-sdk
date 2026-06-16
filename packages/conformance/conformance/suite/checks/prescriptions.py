@@ -8,6 +8,9 @@ Currently implemented:
 
 * ``P001`` UnboundedContractFields — an ``Input``/``Output`` contract subclass
   declared with the ``allow_unbounded_fields=True`` class keyword.
+* ``P002`` CategoryFieldOverride — a subclass of ``AppError`` (or any of its
+  14 categorical leaves) that redeclares the ``category`` ``ClassVar`` in its
+  own body, drifting the canonical taxonomy.
 
 Inline suppression
 ------------------
@@ -29,13 +32,48 @@ from pathlib import Path
 
 from conformance.suite.checks._ast_common import make_finding
 from conformance.suite.checks.error_handling import discover
+from conformance.suite.checks.error_handling._constants import LEAF_CLASSES
 from conformance.suite.checks.error_handling._directives import (
     _IgnoreDirective,
     _parse_directives,
 )
+from conformance.suite.checks.error_handling._helpers import _get_name
 from conformance.suite.schema.findings import Finding, findings_to_report
 
 SERIES = "P"
+
+# P002 — names of the canonical SDK error classes (the ``AppError`` base plus
+# the 14 categorical leaves in ``application_sdk/errors/leaves.py``).  These
+# are the sole defining sites for ``FailureCategory``: any class outside this
+# set that subclasses one of them and assigns ``category`` in its body is a
+# taxonomy override.  Matched on the *simple* base name so both
+# ``class Foo(NotFoundError):`` and ``class Foo(errors.NotFoundError):`` are
+# covered.
+_CANONICAL_ERROR_CLASSES: frozenset[str] = LEAF_CLASSES | {"AppError"}
+
+
+def _find_category_assignment(cls: ast.ClassDef) -> ast.stmt | None:
+    """Return the first class-body statement assigning to a top-level ``category``.
+
+    Matches ``category: ClassVar[FailureCategory] = ...`` (``AnnAssign`` whose
+    target is the simple Name ``category``) and ``category = ...`` (``Assign``
+    targeting Name ``category``).  Annotation-only forms with no value
+    (``category: ClassVar[FailureCategory]``) are not redeclarations — they
+    refine the type without binding a value — and are not flagged.
+    """
+    for stmt in cls.body:
+        if isinstance(stmt, ast.AnnAssign):
+            if (
+                isinstance(stmt.target, ast.Name)
+                and stmt.target.id == "category"
+                and stmt.value is not None
+            ):
+                return stmt
+        elif isinstance(stmt, ast.Assign):
+            for target in stmt.targets:
+                if isinstance(target, ast.Name) and target.id == "category":
+                    return stmt
+    return None
 
 
 class _PrescriptionChecker(ast.NodeVisitor):
@@ -80,6 +118,36 @@ class _PrescriptionChecker(ast.NodeVisitor):
                 )
             )
             break
+
+        # ── P002 ──────────────────────────────────────────────────────────────
+        # The canonical SDK error classes themselves are the *defining sites*
+        # for ``category`` — exempt them from the rule by name.  Any other
+        # class that subclasses one of them and assigns ``category`` in its
+        # body is overriding the canonical taxonomy.
+        if node.name not in _CANONICAL_ERROR_CLASSES and any(
+            _get_name(base) in _CANONICAL_ERROR_CLASSES for base in node.bases
+        ):
+            assign_node = _find_category_assignment(node)
+            if assign_node is not None:
+                self._findings.append(
+                    make_finding(
+                        filename=self._filename,
+                        rule_id="P002",
+                        node=assign_node,
+                        message=(
+                            f"Class '{node.name}' redeclares the `category` "
+                            "ClassVar — drifts the canonical FailureCategory "
+                            "taxonomy. Domain subclasses must inherit `category` "
+                            "from their categorical-leaf parent and specialise via "
+                            "`code` (and evidence fields) only. If the redeclaration "
+                            "is genuinely necessary, justify it with an inline "
+                            "'# conformance: ignore[P002] <reason>' directive at the "
+                            "assignment site."
+                        ),
+                        directives=self._directives,
+                    )
+                )
+
         self.generic_visit(node)
 
 
