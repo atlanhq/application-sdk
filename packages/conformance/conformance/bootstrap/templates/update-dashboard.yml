@@ -1,0 +1,19 @@
+name: Update Security Dashboard
+
+on:
+  workflow_run:
+    workflows: ["Vulnerability Scan", "Build & Publish"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  actions: read
+
+jobs:
+  dashboard:
+    uses: atlanhq/application-sdk/.github/workflows/update-dashboard.yaml@main
+    with:
+      scan_workflow: ${{ github.event.workflow_run.name == 'Build & Publish' && 'build-and-publish.yaml' || 'vulnerability-scan.yml' }}
+    secrets: inherit

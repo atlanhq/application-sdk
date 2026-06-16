@@ -1,0 +1,12 @@
+name: Release Version Bump
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+jobs:
+  bump:
+    if: github.event.pull_request.merged == true && !startsWith(github.event.pull_request.head.ref, 'bump-version')
+    uses: atlanhq/application-sdk/.github/workflows/release-version-bump.yaml@main
+    secrets: inherit

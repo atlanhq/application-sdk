@@ -24,4 +24,23 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/ci.md#c001",
     ),
+    RuleDefinition(
+        id="C002",
+        name="BootstrapWorkflowDrift",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="ci-consistency",
+        autofixable=True,
+        since="0.3.0",
+        short_description="Managed CI workflow is absent or has drifted from the bootstrap canonical",
+        full_description=(
+            "The `atlan-application-sdk-conformance bootstrap` command installs a "
+            "standard set of CI workflow shims into `.github/workflows/`. This rule "
+            "flags any managed file that is missing or whose content has diverged "
+            "from what `bootstrap` would write. Re-run `bootstrap` to re-sync; "
+            "structural drift is flagged while intentional per-repo value choices "
+            "(e.g. `package_name`, `unit_tests_workflow_file`) are preserved."
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/ci.md#c002",
+    ),
 )
