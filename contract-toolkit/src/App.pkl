@@ -138,7 +138,7 @@ visibility: String = "public"
 buildTag: String = "v1"
 
 /// Whether images are published for self-deployed runtime.
-selfDeployedRuntime: Boolean = false
+selfDeployedRuntime: Boolean = true
 
 /// Extra top-level metadata fields for atlan.yaml.
 metadata: Mapping<String, Any> = new Mapping {}
