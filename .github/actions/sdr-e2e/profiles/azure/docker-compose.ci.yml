@@ -17,11 +17,14 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        for i in $(seq 1 60); do
-          az storage container create --name atlan-customer-e2e >/dev/null 2>&1 && break
-          echo "waiting for azurite..."; sleep 2
+        for i in $(seq 1 40); do
+          if az storage container create --name atlan-customer-e2e \
+               --connection-string "$AZURE_STORAGE_CONNECTION_STRING"; then
+            echo "azurite-init: container created"; exit 0
+          fi
+          echo "waiting for azurite (attempt $i)..."; sleep 3
         done
-        echo "azurite-init done"
+        echo "azurite-init: giving up after retries"; exit 1
     restart: "no"
 
   atlan-app:
