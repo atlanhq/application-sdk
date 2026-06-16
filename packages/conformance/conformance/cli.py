@@ -122,6 +122,14 @@ def _parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
                 result[dest] = arg[len(flag) + 1 :]
                 break
         i += 1
+
+    if result["enable_e2e"] not in ("true", "false"):
+        print(
+            f"error: --enable-e2e must be 'true' or 'false', got {result['enable_e2e']!r}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
     return result
 
 
@@ -174,7 +182,7 @@ commands:
   gen-rule-docs  Regenerate rule docs from Python rule definitions
   remediate      Print programs path + version banner (SKILL.md drives execution)
   bootstrap      Write .claude/skills/remediate/SKILL.md + all standard CI workflow
-                 shims into .github/workflows/. The 16 managed shims always overwrite
+                 shims into .github/workflows/. The 14 managed shims always overwrite
                  (re-running eradicates drift). tests.yaml is write-if-absent
                  (scaffolded once; delete it and re-run to regenerate from canonical).
                    --package-name NAME         docstring-coverage package (default: app)

@@ -237,7 +237,9 @@ runs:
     - name: Start runtime services (services-script hook)
       if: inputs.services-script != ''
       shell: bash
-      run: bash "${{ inputs.services-script }}"
+      env:
+        SERVICES_SCRIPT: ${{ inputs.services-script }}
+      run: bash "$SERVICES_SCRIPT"
 
     - name: Start app server
       shell: bash

@@ -63,7 +63,7 @@ def test_c002_is_autofixable() -> None:
 def test_discover_returns_all_managed_paths(tmp_path: pathlib.Path) -> None:
     paths = discover(tmp_path)
     names = {p.name for p in paths}
-    # Must include all 16 managed shims plus the tests.yaml scaffold.
+    # Must include all managed shims plus the tests.yaml scaffold.
     assert set(MANAGED_WORKFLOWS).issubset(names)
     assert "tests.yaml" in names
 
@@ -71,7 +71,7 @@ def test_discover_returns_all_managed_paths(tmp_path: pathlib.Path) -> None:
 def test_discover_returns_paths_even_when_absent(tmp_path: pathlib.Path) -> None:
     """discover() must not filter out non-existent files."""
     paths = discover(tmp_path)
-    # 16 managed shims + tests.yaml scaffold.
+    # managed shims + tests.yaml scaffold.
     assert len(paths) == len(MANAGED_WORKFLOWS) + 1
     # None of them exist yet.
     assert all(not p.exists() for p in paths)

@@ -12,7 +12,7 @@ package_name, etc.) are not flagged as drift — only structural changes are cau
 
 **Two drift tracks:**
 
-1. **Managed shims** (``MANAGED_WORKFLOWS`` — 16 files): always-overwrite.
+1. **Managed shims** (``MANAGED_WORKFLOWS`` — 14 files): always-overwrite.
    Absent or drifted → WARN finding; run bootstrap to re-sync (re-runs overwrite).
 
 2. **tests.yaml**: write-if-absent scaffold.  Bootstrap creates it once and
@@ -66,8 +66,8 @@ def _extract_unit_tests_workflow(text: str) -> str:
 _APP_NAME_RE = re.compile(r'app-name:\s+"([^"]+)"')
 _APP_IMAGE_NAME_RE = re.compile(r'app-image-name:\s+"([^"]+)"')
 _ENABLE_E2E_RE = re.compile(r"enable-e2e:\s+(true|false)")
-# Matches an *uncommented* services-script line in the with: block.
-_SERVICES_SCRIPT_RE = re.compile(r"^\s+services-script:\s+(.+)$", re.MULTILINE)
+# Matches an *uncommented* services-script line (quoted value) in the with: block.
+_SERVICES_SCRIPT_RE = re.compile(r'^\s+services-script:\s+"([^"]+)"$', re.MULTILINE)
 
 
 def _extract_tests_yaml_params(text: str) -> dict[str, str]:
@@ -118,7 +118,7 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
 
 
 def _scan_managed_shim(path: Path, root: Path) -> list[Finding]:
-    """Scan one of the 16 always-managed workflow shims."""
+    """Scan one of the always-managed workflow shims."""
     try:
         rel = path.relative_to(root).as_posix()
     except ValueError:

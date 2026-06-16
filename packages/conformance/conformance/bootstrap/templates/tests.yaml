@@ -76,7 +76,7 @@ jobs:
       app-image-name: "<< app_image_name >>"
       enable-e2e: << enable_e2e >>
 <% if services_script %>
-      services-script: << services_script >>
+      services-script: "<< services_script >>"
 <% else %>
       # services-script: .github/test/setup-services.sh
       # Uncomment services-script (and add the script) if your source systems

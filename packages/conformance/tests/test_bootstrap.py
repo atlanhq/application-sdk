@@ -419,7 +419,7 @@ def test_tests_yaml_enable_e2e_false() -> None:
 
 def test_tests_yaml_services_script_active() -> None:
     content = render("tests.yaml", services_script=".github/test/setup-services.sh")
-    assert "services-script: .github/test/setup-services.sh" in content
+    assert 'services-script: ".github/test/setup-services.sh"' in content
     # The commented hint must NOT appear when the value is active.
     assert "# services-script:" not in content
 
@@ -434,7 +434,17 @@ def test_cmd_bootstrap_custom_app_args_propagate(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    _cmd_bootstrap(["--app-name", "mysql", "--enable-e2e", "false"])
+    _cmd_bootstrap(
+        [
+            "--app-name",
+            "mysql",
+            "--app-image-name",
+            "custom-image-name",
+            "--enable-e2e",
+            "false",
+        ]
+    )
     tests = (tmp_path / ".github" / "workflows" / "tests.yaml").read_text()
     assert 'app-name: "mysql"' in tests
+    assert 'app-image-name: "custom-image-name"' in tests
     assert "enable-e2e: false" in tests
