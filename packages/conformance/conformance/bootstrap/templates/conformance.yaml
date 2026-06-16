@@ -1,0 +1,17 @@
+name: "Conformance"
+
+on:
+  pull_request: {}
+  merge_group: {}
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  conformance:
+    uses: atlanhq/application-sdk/.github/workflows/conformance-reusable.yaml@main
+    with:
+      event_name: ${{ github.event_name }}

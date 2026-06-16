@@ -657,6 +657,22 @@ open class PublishNode extends DAGNode {
   /// or written to a dry-run path.
   currentStateViaAppEnabled: Boolean = false
 
+  /// Connection entity passed to the publish workflow as `args["connection_entity"]`.
+  ///
+  /// The full connection entity JSON (typeName + attributes), used for connection
+  /// creation. Defaults to the `"{{connection}}"` form placeholder. Set to `null`
+  /// to omit the arg entirely — doing so also turns `connectionCreationEnabled`
+  /// off (see below), since there is no entity for publish to create from.
+  connectionEntity: String? = "{{connection}}"
+
+  /// Whether publish should create the connection (`args["connection_creation_enabled"]`).
+  ///
+  /// Linked to `connectionEntity`: defaults to `connectionEntity != null`, so a
+  /// `null` entity yields `false` (publish targets an existing connection and
+  /// creates nothing) and a present entity yields `true`. Override explicitly to
+  /// disable creation even when an entity is present.
+  connectionCreationEnabled: Boolean = connectionEntity != null
+
   displayName = "Publish to Atlas"
   workflowType = "PublishWorkflow"
   appName = "publish"
@@ -665,9 +681,9 @@ open class PublishNode extends DAGNode {
     ["transformed_data_prefix"] = "$.\(upstream).outputs.transformed_data_prefix"
     ["publish_state_prefix"] = "$.\(upstream).outputs.publish_state_prefix"
     ["current_state_prefix"] = "$.\(upstream).outputs.current_state_prefix"
-    ["connection_creation_enabled"] = true
+    ["connection_creation_enabled"] = connectionCreationEnabled
     ["executor_enabled"] = executorEnabled
-    ["connection_entity"] = "{{connection}}"
+    when (connectionEntity != null) { ["connection_entity"] = connectionEntity }
     ["connection_cache_enabled"] = connectionCacheEnabled
     ["connection_cache_via_app_enabled"] = connectionCacheViaAppEnabled
     ["current_state_enabled"] = currentStateEnabled
@@ -1307,6 +1323,15 @@ class PublishStep {
   /// `false` alongside `currentStateEnabled` when the node must not write
   /// current-state at all.
   currentStateViaAppEnabled: Boolean = true
+
+  /// Connection entity passed to the publish workflow as `args["connection_entity"]`.
+  ///
+  /// The full connection entity JSON (typeName + attributes), used for connection
+  /// creation. Defaults to the `"{{connection}}"` form placeholder. Set to `null`
+  /// to omit the arg entirely; doing so also sets `connection_creation_enabled` to
+  /// `false` on the generated publish node (the node links the two), so publish
+  /// targets an existing connection and creates nothing.
+  connectionEntity: String? = "{{connection}}"
 
   /// Optional lineage-publish sub-step. When set, adds a `"lineage-publish"`
   /// node after the main publish step.
@@ -2090,6 +2115,7 @@ local function generateDAG(): Mapping<String, Any> = new Mapping {
           connectionCacheViaAppEnabled = ps.connectionCacheViaAppEnabled
           currentStateEnabled = ps.currentStateEnabled
           currentStateViaAppEnabled = ps.currentStateViaAppEnabled
+          connectionEntity = ps.connectionEntity
         })
   }
   when (pipeline.publish != null && pipeline.publish!!.lineagePublish != null) {
