@@ -150,19 +150,45 @@ every suppression to residue for human audit.
 
 ---
 
-#### Area: prescriptions (P-series) — DEFERRED
+#### Area: prescriptions (P-series) — PHASE 1 (suggest-only)
 
-No prescription authored for this phase.  Return `not_remediable = true`.
+Drafts a **proposed** fix for human review.  The `prescriptions-area` records
+the proposal in residue and **never applies it** (see prescriptions.prose.md):
+P001's only detector-clearing fix is a `MaxItems` bound or an inline
+suppression, and `MaxItems` is **not runtime-enforced**, so `recheck-narrowest`
+accepts any bound and the orthogonal test gate is structurally blind — no gate
+can validate the proposal (design §6.1).  The safe form is therefore
+propose-don't-apply: this function only *drafts* the change; a human is the gate.
 
-P001 `UnboundedContractFields` is suppress-only and its only fix that clears
-the detector is adding `Annotated[..., MaxItems(N)]` or an inline suppression.
-`MaxItems` is **not runtime-enforced**, so `recheck-narrowest` accepts any
-bound and the orthogonal test gate is structurally blind — there is no gate
-that can catch a hollow fix (design §6.1).  P-series therefore stays
-detection-only; findings route to residue with the note "suppress-only rule
-with no orthogonal gate; needs human review and a gate that validates the
-bound".  To implement, author a P-series prescription here paired with a gate
-that actually bites (e.g. a runtime-enforced bound or a payload-size check).
+- **P001 UnboundedContractFields** — the contract opts out of payload safety
+  via the `allow_unbounded_fields=True` class keyword.  Read the contract's
+  fields around `finding.line`, then draft, in order of preference:
+
+  1. **The real fix (preferred)** — remove `allow_unbounded_fields=True` and
+     bound each field the payload-safety validator would reject: wrap an
+     unbounded `list[T]` as `Annotated[list[T], MaxItems(N)]` and an unbounded
+     `dict[K, V]` as `Annotated[dict[K, V], MaxItems(N)]`, choosing `N` from
+     the field's realistic cardinality and **stating that assumption** in the
+     proposal (e.g. ~10000 ≈ ~1MB JSON, well under Temporal's 2MB limit).  A
+     scalar-only contract needs only the opt-out removed.  Add
+     `from typing import Annotated` and
+     `from application_sdk.contracts.types import MaxItems` if missing.
+     Return `outcome = "fix"`.
+
+  2. **Fallback** — if a field is genuinely unbounded with no sensible cap,
+     draft an inline `# conformance: ignore[P001] <concise justification>` on
+     the declaration line, where the justification explains *why* unbounded
+     fields are unavoidable here (not merely that the rule is suppressed).
+     Return `outcome = "suppress"`.
+
+  `classification` is **always `"judgment"`** for P001 — both the bound value
+  and the bound-vs-suppress decision require human-level judgement, and there
+  is no gate to validate them.  The proposal is recorded in residue for human
+  review; the area does not apply it.
+
+This area graduates to the full `detect-fix-recheck` (apply-and-keep) loop only
+once a gate exists that validates the bound (a runtime-enforced `MaxItems`, or
+a payload-size behavioural check).
 
 ---
 
