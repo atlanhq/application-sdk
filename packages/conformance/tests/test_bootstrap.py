@@ -236,7 +236,7 @@ def test_conformance_workflow_contains_event_name() -> None:
 def test_all_shims_have_atlanhq_uses_reference() -> None:
     """Every managed workflow delegates to atlanhq/* (or a known inline file)."""
     # These files contain inline logic (no `uses: atlanhq/...`) but are still standard.
-    inline_ok = {"release-gate.yaml", "autolabel.yml"}
+    inline_ok = {"release-gate.yaml"}
     for name in MANAGED_WORKFLOWS:
         content = render(name)
         if name in inline_ok:
