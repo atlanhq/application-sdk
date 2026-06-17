@@ -52,14 +52,16 @@ _ATLAN_BUCKET = os.environ.get("ATLAN_OBJECT_STORE_BUCKET", "sdk-atlan-objectsto
 
 @pytest.fixture(scope="module", autouse=True)
 def require_minio() -> None:
-    """Skip the module when MinIO isn't reachable."""
+    """Skip the module when MinIO isn't reachable or unhealthy."""
     import httpx
 
     try:
         with httpx.Client(timeout=3.0) as client:
-            client.get(f"{_ENDPOINT}/minio/health/live")
+            resp = client.get(f"{_ENDPOINT}/minio/health/live")
     except Exception as exc:  # pragma: no cover — env guard
         pytest.skip(f"MinIO not reachable at {_ENDPOINT}: {exc}")
+    if resp.status_code >= 500:  # pragma: no cover — env guard
+        pytest.skip(f"MinIO unhealthy at {_ENDPOINT}: HTTP {resp.status_code}")
 
 
 def _s3_store(component_name: str, bucket: str, components_dir):
