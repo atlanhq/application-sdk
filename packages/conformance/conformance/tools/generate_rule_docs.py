@@ -84,6 +84,16 @@ _SERIES_META: list[SeriesMeta] = [
         checker=("`suite.checks.actions_pinning` and related workflow checks (static)"),
         suppression_example="# conformance: ignore[C001] intentional: org-internal action",
     ),
+    SeriesMeta(
+        title="Dependency Rules (D-series)",
+        prefix="D",
+        source_module="conformance/suite/rules/dependency.py",
+        output_filename="dependency.md",
+        checker="`suite.checks.dependency_conformance` (TOML-based, static)",
+        suppression_example=(
+            "# conformance: ignore[D002] intentional: pinned to pre-release for hotfix"
+        ),
+    ),
 ]
 
 

@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from types import MappingProxyType
 
 from conformance.suite.rules.ci import RULES as _CI_RULES
+from conformance.suite.rules.dependency import RULES as _D_RULES
 from conformance.suite.rules.error_handling import RULES as _E_RULES
 from conformance.suite.rules.logging import RULES as _L_RULES
 from conformance.suite.schema.catalog import RuleDefinition
@@ -26,7 +27,12 @@ def _combine_rules(*series: tuple[RuleDefinition, ...]) -> dict[str, RuleDefinit
     return result
 
 
-_ALL_SERIES: tuple[tuple[RuleDefinition, ...], ...] = (_E_RULES, _L_RULES, _CI_RULES)
+_ALL_SERIES: tuple[tuple[RuleDefinition, ...], ...] = (
+    _E_RULES,
+    _L_RULES,
+    _CI_RULES,
+    _D_RULES,
+)
 
 
 def _build_catalog() -> MappingProxyType[str, RuleDefinition]:
