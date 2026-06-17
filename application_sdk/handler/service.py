@@ -1670,26 +1670,49 @@ def _register_workflow_routes(
 
     @app.get("/workflows/v1/configmap/{config_map_id}")
     async def get_configmap(config_map_id: str) -> JSONResponse:
+        # 1. Direct match against any generated configmap file stem.
+        #    The setup form normally requests the form file by its stem
+        #    (e.g. "snowflake-crawler"), which lands here.
         available_configmaps: list[str] = []
-        exact_match: "Path | None" = None
-        prefix_match: "Path | None" = None
+        target: "Path | None" = None
         if CONTRACT_GENERATED_DIR.exists():
             for json_file in CONTRACT_GENERATED_DIR.rglob("*.json"):
                 available_configmaps.append(json_file.stem)
                 if json_file.stem == config_map_id:
-                    exact_match = json_file
+                    target = json_file
                     break
-                # Apps with multi-entrypoint contracts generate files named
-                # "<id>-<entrypoint>.json" (e.g. "snowflake-crawler.json"),
-                # while the setup form asks for bare "<id>". Capture the
-                # first such file so we can fall back to it when no exact
-                # match exists. Exact match still wins when present.
-                if prefix_match is None and json_file.stem.startswith(
-                    f"{config_map_id}-"
-                ):
-                    prefix_match = json_file
 
-        target = exact_match or prefix_match
+        # 2. Default-entrypoint fallback (aligns with PR #1965 semantics
+        #    used by /workflows/v1/start and /workflows/v1/input-contract).
+        #    The marketplace UI sometimes builds the configmap URL from the
+        #    app/marketplace id (e.g. "atlan-snowflake", bare "snowflake")
+        #    rather than the entrypoint-form stem. In that case, resolve to
+        #    the app's default entrypoint and serve its form configmap.
+        #    Multi-entrypoint apps with no marked default fall through to
+        #    404 — the caller must use the explicit form stem.
+        if target is None:
+            try:
+                _, ep = _resolve_app_entrypoint(
+                    _workflow_config.app_name, None, unknown_ep_status=404
+                )
+            except HTTPException:
+                ep = None
+            if ep is not None:
+                # Form configmaps for an entrypoint live under
+                # CONTRACT_GENERATED_DIR/<ep.name>/ (see EntryPointMetadata
+                # docstring: kebab name on the wire and on disk). Pick the
+                # form file by excluding the two well-known non-form siblings:
+                # `manifest.json` (DAG manifest) and `atlan-connectors-*.json`
+                # (credential template). Sorted for determinism.
+                entrypoint_dir = CONTRACT_GENERATED_DIR / ep.name
+                if entrypoint_dir.is_dir():
+                    for json_file in sorted(entrypoint_dir.glob("*.json")):
+                        stem = json_file.stem
+                        if stem == "manifest" or stem.startswith("atlan-connectors-"):
+                            continue
+                        target = json_file
+                        break
+
         if target is not None:
             with open(target) as f:
                 raw = json.load(f)

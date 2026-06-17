@@ -1616,53 +1616,87 @@ class TestConfigMapEndpoints:
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
-    def test_configmap_prefix_match_falls_back_when_no_exact_match(
+    def test_configmap_default_entrypoint_resolves_form_when_bare_id(
         self, tmp_path: Path
     ) -> None:
-        """A request for bare "<id>" should match "<id>-<entrypoint>.json".
+        """Bare-id requests resolve to the default entrypoint's form configmap.
 
-        Multi-entrypoint apps (snowflake-crawler / snowflake-miner / ...)
-        generate files named after each entrypoint, while the setup form
-        asks for the bare app name. The handler falls back to the first
-        prefix-matched file when no exact match exists.
+        The marketplace UI builds configmap URLs from the app/marketplace id
+        (e.g. ``atlan-snowflake``) rather than the entrypoint form stem
+        (``snowflake-crawler``). When no file stem matches the request id
+        exactly, the handler resolves the app's default entrypoint (same
+        semantics as ``/workflows/v1/start`` and
+        ``/workflows/v1/input-contract``) and serves the form configmap
+        living under that entrypoint's generated dir.
         """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
         from application_sdk.handler import service as svc_module
 
-        raw = {"config": {"key": "from-crawler"}}
-        (tmp_path / "snowflake-crawler.json").write_text(json.dumps(raw))
-        (tmp_path / "snowflake-miner.json").write_text(
-            json.dumps({"config": {"key": "from-miner"}})
+        class _MultiEpApp(App):
+            @entrypoint
+            async def miner(self, input: _AlphaInput) -> _AlphaOutput:
+                return _AlphaOutput()
+
+            @entrypoint(default=True)
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        crawler_dir = tmp_path / "crawler"
+        crawler_dir.mkdir()
+        (crawler_dir / "manifest.json").write_text(json.dumps({"dag": {}}))
+        (crawler_dir / "snowflake-crawler.json").write_text(
+            json.dumps({"config": {"key": "from-crawler-form"}})
         )
 
         original = svc_module.CONTRACT_GENERATED_DIR
         svc_module.CONTRACT_GENERATED_DIR = tmp_path
         try:
-            client = _make_client()
-            response = client.get("/workflows/v1/configmap/snowflake")
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="snowflake", app_class=_MultiEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/configmap/atlan-snowflake")
             assert response.status_code == 200
             data = response.json()["data"]
-            assert data["metadata"]["name"] == "snowflake"
+            # Echoed back as the request id, not the file stem — the bare
+            # marketplace id is what the caller asked for.
+            assert data["metadata"]["name"] == "atlan-snowflake"
             parsed_config = json.loads(data["data"]["config"])
-            # Either prefix file is acceptable; both are valid fallbacks.
-            assert parsed_config["key"] in {"from-crawler", "from-miner"}
+            assert parsed_config["key"] == "from-crawler-form"
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
-    def test_configmap_exact_match_wins_over_prefix(self, tmp_path: Path) -> None:
-        """When both "<id>.json" and "<id>-<entrypoint>.json" exist, exact wins."""
+    def test_configmap_exact_match_wins_over_default_fallback(
+        self, tmp_path: Path
+    ) -> None:
+        """Exact file-stem match preempts the default-entrypoint fallback."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
         from application_sdk.handler import service as svc_module
 
+        class _OneEpApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        # Both an exact stem AND a default-entrypoint form file exist.
         (tmp_path / "snowflake.json").write_text(
             json.dumps({"config": {"key": "exact"}})
         )
-        (tmp_path / "snowflake-crawler.json").write_text(
-            json.dumps({"config": {"key": "prefix"}})
+        crawler_dir = tmp_path / "crawler"
+        crawler_dir.mkdir()
+        (crawler_dir / "snowflake-crawler.json").write_text(
+            json.dumps({"config": {"key": "fallback"}})
         )
 
         original = svc_module.CONTRACT_GENERATED_DIR
         svc_module.CONTRACT_GENERATED_DIR = tmp_path
         try:
-            client = _make_client()
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="snowflake", app_class=_OneEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
             response = client.get("/workflows/v1/configmap/snowflake")
             assert response.status_code == 200
             parsed_config = json.loads(response.json()["data"]["data"]["config"])
@@ -1670,20 +1704,82 @@ class TestConfigMapEndpoints:
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
-    def test_configmap_prefix_requires_hyphen_separator(self, tmp_path: Path) -> None:
-        """Prefix match needs the "<id>-" separator — substring match alone shouldn't trip it.
+    def test_configmap_default_fallback_skips_manifest_and_credentials(
+        self, tmp_path: Path
+    ) -> None:
+        """Default-entrypoint fallback skips manifest.json and atlan-connectors-*.json.
 
-        Regression guard: "saphana" must not match "sap-hana.json".
+        The entrypoint's generated dir contains the DAG manifest and (for
+        connectors) a credential template alongside the form configmap. The
+        fallback must serve the form, not the credential schema.
         """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
         from application_sdk.handler import service as svc_module
 
-        (tmp_path / "sap-hana.json").write_text(json.dumps({"config": {}}))
+        class _OneEpApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        crawler_dir = tmp_path / "crawler"
+        crawler_dir.mkdir()
+        (crawler_dir / "manifest.json").write_text(json.dumps({"dag": {}}))
+        (crawler_dir / "atlan-connectors-snowflake.json").write_text(
+            json.dumps({"config": {"key": "credential-schema"}})
+        )
+        (crawler_dir / "snowflake-crawler.json").write_text(
+            json.dumps({"config": {"key": "form-config"}})
+        )
 
         original = svc_module.CONTRACT_GENERATED_DIR
         svc_module.CONTRACT_GENERATED_DIR = tmp_path
         try:
-            client = _make_client()
-            response = client.get("/workflows/v1/configmap/saphana")
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="snowflake", app_class=_OneEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/configmap/atlan-snowflake")
+            assert response.status_code == 200
+            parsed_config = json.loads(response.json()["data"]["data"]["config"])
+            assert parsed_config["key"] == "form-config"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_configmap_default_fallback_returns_404_when_only_excluded_files(
+        self, tmp_path: Path
+    ) -> None:
+        """Default-entrypoint dir with only manifest + credential → 404.
+
+        Regression guard: when the entrypoint's generated dir exists but
+        every file in it is on the exclusion list (no form configmap), the
+        fallback finds no candidate and the handler returns 404 rather than
+        serving the credential template or the manifest.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _OneEpApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        crawler_dir = tmp_path / "crawler"
+        crawler_dir.mkdir()
+        (crawler_dir / "manifest.json").write_text(json.dumps({"dag": {}}))
+        (crawler_dir / "atlan-connectors-snowflake.json").write_text(
+            json.dumps({"config": {"key": "credential"}})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="snowflake", app_class=_OneEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/configmap/atlan-snowflake")
             assert response.status_code == 404
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
