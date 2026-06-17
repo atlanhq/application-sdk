@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.17.0
-source-sha:    4e4eb3f251cfcd3c9bb13e32ee391e9dbbe8a39b
-source-date:   2026-06-14T21:07:00+01:00
+sdk-version:   3.17.2
+source-sha:    ab591dae78d51bb566d363d51e8223954a1aff91
+source-date:   2026-06-16T23:37:20Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2263,7 +2263,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Summary:** Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0.
 - **Fields:**
   - `DEFAULT_ERROR_CODE: ErrorCode` `= CONTRACT_VALIDATION`
-  - `code: str` `= 'CONTRACT_VALIDATION'`
+  - `code: str` `= 'INVALID_INPUT_CONTRACT_VALIDATION'`
   - `error_code: ErrorCode`
 - **Defined in:** `application_sdk/contracts/base.py`
 

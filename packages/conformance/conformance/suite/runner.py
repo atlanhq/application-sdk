@@ -29,7 +29,8 @@ from conformance.suite.checks import (
     optimizations,
     prescriptions,
 )
-from conformance.suite.rules import get_rule
+from conformance.suite.checks._ast_common import TOOL_VERSION
+from conformance.suite.rules import assert_registry_consistent, get_rule
 from conformance.suite.schema.disposition import EnforcementTier
 from conformance.suite.schema.findings import Finding, findings_to_report
 
@@ -79,6 +80,11 @@ _CHECKS: list[CheckRegistration] = [
         scan_path=optimizations.scan_path,
     ),
 ]
+
+
+# Registry invariant: every registered checker's series must have rule
+# definitions in the catalog (so get_rule() resolves for each finding it emits).
+assert_registry_consistent(check_series=frozenset(c.series for c in _CHECKS))
 
 
 def _tier(f: Finding) -> EnforcementTier:
@@ -203,7 +209,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--output", metavar="FILE", help="Write SARIF to FILE (default: stdout)"
     )
-    parser.add_argument("--tool-version", default="3.16.0", metavar="VERSION")
+    parser.add_argument("--tool-version", default=TOOL_VERSION, metavar="VERSION")
     parser.add_argument(
         "--series",
         metavar="LETTERS",
@@ -231,8 +237,11 @@ def main(argv: list[str] | None = None) -> int:
         active = list(_CHECKS)
 
     # Build the set of excluded prefixes once (normalised, non-empty only).
+    # Trailing slashes are stripped so matching is done on path-component
+    # boundaries — 'tools' excludes 'tools/' and the file 'tools' itself,
+    # but never 'tools_extra/'.
     excluded_prefixes = tuple(
-        p.strip().lstrip("/") for p in args.exclude.split(",") if p.strip()
+        p.strip().lstrip("/").rstrip("/") for p in args.exclude.split(",") if p.strip()
     )
 
     root = Path(args.repo).resolve()
@@ -242,7 +251,10 @@ def main(argv: list[str] | None = None) -> int:
         for p in check.discover(root):
             if excluded_prefixes:
                 rel = p.relative_to(root).as_posix()
-                if any(rel.startswith(prefix) for prefix in excluded_prefixes):
+                if any(
+                    rel == prefix or rel.startswith(prefix + "/")
+                    for prefix in excluded_prefixes
+                ):
                     continue
             paths.append(p)
         if check.scan_all is not None:

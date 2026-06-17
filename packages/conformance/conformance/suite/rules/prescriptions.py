@@ -4,6 +4,16 @@ Above-the-bar engineering prescriptions the SDK mandates that do not fall under
 a narrower category series (error-handling E, logging L, CI C, security S,
 backwards-compatibility B, tests T, automation A).  Optimisations and
 recommendations *below* the prescription bar live in the O-series instead.
+
+Rule-id stability (non-migration policy)
+----------------------------------------
+P-ids are a permanent public contract: each is exposed in SARIF ``help_uri`` and
+referenced by inline ``# conformance: ignore[Pxxx]`` suppressions across the
+fleet.  A P-id therefore **never migrates and never changes**, even if a future
+domain series (S/B/T/A/…) later subsumes the same topic.  When a domain series
+takes over an area, the P-rule is retired in place (kept documented, no longer
+firing) and the new rule gets a fresh id — the original P-id is never reused or
+reassigned.  The same policy applies to O-ids.
 """
 
 from __future__ import annotations

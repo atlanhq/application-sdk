@@ -5,7 +5,7 @@
 ## Quick Reference
 
 - **Image base**: `cgr.dev/chainguard-private/python` -> golden images -> SDK -> apps
-- **Dapr runtime**: Installed via Chainguard APK (0 CVEs), configured in Dockerfile
+- **Dapr runtime**: baked into the `app-framework-golden` base image via Chainguard Custom Assembly (0 CVEs). The container's daprd version is owned by the Custom Assembly config — the Dockerfile no longer installs it. (The `__dapr_version` pin in `application_sdk/version.py` governs only the local-dev auto-download, a separate path.)
 - **Registries**: Harbor (`registry.atlan.com`) for production, GHCR for CI
 
 ## Build & Scan Commands

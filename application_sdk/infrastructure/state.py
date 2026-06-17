@@ -11,7 +11,7 @@ class StateStoreError(DependencyUnavailableError):
     """Deprecated: use ``application_sdk.errors.DependencyUnavailableError`` — removed in v4.0."""
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STATE_STORE_ERROR
-    code: ClassVar[str] = "STATE_STORE"
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_STATE_STORE"
 
     def __init__(
         self,

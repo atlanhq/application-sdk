@@ -1,12 +1,41 @@
-"""Directive parsing — ``# conformance: ignore[...]`` and ``# noqa`` shorthands."""
+"""Suppression directive grammar — ``# conformance: ignore[...]`` and ``# noqa``.
+
+This is the neutral, series-agnostic directive parser shared by every AST-based
+check series (E, P, O, …).  It lived in the E-series package originally; it now
+lives here so no series has to reach into another series' private surface to
+parse suppression comments.
+"""
 
 from __future__ import annotations
 
 import io
+import re
 import tokenize
 from dataclasses import dataclass
 
-from ._constants import _NOQA_RE, _NOQA_TO_RULES, _SUPPRESS_RE
+# Directive regex: "# conformance: ignore[E001,E002] some reason"
+_SUPPRESS_RE = re.compile(
+    r"^#\s*conformance\s*:\s*ignore\s*(?:\[([^\]]*)\])?\s*(.*)",
+    re.IGNORECASE,
+)
+
+# A noqa comment is accepted ONLY when it names at least one mapped code AND
+# supplies non-empty justification text after a visual separator (—, –, or -).
+# Bare "# noqa" and "# noqa: CODE" with no justification are rejected.
+_NOQA_RE = re.compile(
+    r"^#\s*noqa\s*:\s*([A-Z][A-Z0-9]*(?:\s*,\s*[A-Z][A-Z0-9]*)*)\s*[—–\-]+\s*(.+)$",
+    re.IGNORECASE,
+)
+
+# noqa-code → conformance-rule-id mapping.  Only series that have a recognised
+# noqa equivalent appear here (today: E-series try/except shorthands).  Other
+# series have no noqa form, so a noqa comment never suppresses their findings —
+# the mapping being E-only is incidental, not a coupling to the E-series.
+_NOQA_TO_RULES: dict[str, frozenset[str]] = {
+    "S110": frozenset({"E001", "E002"}),  # try-except-pass (bare or typed)
+    "BLE001": frozenset({"E004"}),  # blind/broad exception catch
+    "S112": frozenset({"E014"}),  # try-except-continue (loop swallow)
+}
 
 
 @dataclass(frozen=True)
@@ -16,7 +45,7 @@ class _IgnoreDirective:
     rule_ids: frozenset[str] | None  # None = suppress every rule on this line
     justification: str
     # True when the directive appears on a comment-only line (no preceding code
-    # token on the same row).  Used by Checker._add to decide whether a
+    # token on the same row).  Used by make_finding to decide whether a
     # "line above" directive is applicable: trailing inline directives on code
     # lines must not absorb findings on the *next* statement.
     comment_only: bool = True

@@ -75,6 +75,11 @@ on:
         required: false
         type: string
         default: "app"
+      private_git_auth:
+        description: "Set true if the app has a private-org (atlanhq) git dependency that `uv sync` must clone in the certify gate. When true, certify authenticates atlanhq GitHub remotes with ORG_PAT_GITHUB before installing deps, so the install succeeds and unit tests actually run. Default false — apps with only PyPI deps are unaffected."
+        required: false
+        type: boolean
+        default: false
     secrets:
       ORG_PAT_GITHUB:
         required: true
@@ -423,6 +428,14 @@ jobs:
           fi
 
       # ── 2. App dependencies ───────────────────────────────────────────────────
+      - name: Configure git auth for private dependencies
+        if: ${{ inputs.private_git_auth }}
+        env:
+          GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+        run: |
+          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
+          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
+
       - name: Install app dependencies
         id: app_install
         continue-on-error: true
@@ -1087,6 +1100,8 @@ jobs:
           build-args: |
             ACCESS_TOKEN_USR=${{ github.actor }}
             ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
+          secrets: |
+            git_token=${{ secrets.ORG_PAT_GITHUB }}
 
   # ── Job 3: Merge arch digests into a single multi-arch manifest ───────────────
   merge:

@@ -12,7 +12,7 @@ class BindingError(DependencyUnavailableError):
     """Deprecated: use ``application_sdk.errors.DependencyUnavailableError`` — removed in v4.0."""
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = BINDING_ERROR
-    code: ClassVar[str] = "BINDING"
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_BINDING"
 
     def __init__(
         self,

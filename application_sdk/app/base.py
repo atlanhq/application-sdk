@@ -209,7 +209,7 @@ class AppContextError(_InternalError):
     """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_CONTEXT_ERROR
-    code: ClassVar[str] = "APP_CONTEXT"
+    code: ClassVar[str] = "INTERNAL_APP_CONTEXT"
 
     def __init__(self, message: str, *, error_code: ErrorCode | None = None) -> None:
         _InternalError.__init__(self, message=message)
