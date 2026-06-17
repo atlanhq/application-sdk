@@ -170,3 +170,54 @@ async def test_sdr_atlan_upload_handoff_transfers_asset(tmp_path):
     # Cleanup so reruns against a persistent emulator stay idempotent.
     await obstore.delete_async(customer_store, source_key)
     await obstore.delete_async(atlan_store, target_key)
+
+
+async def test_sdr_atlan_upload_handoff_transfers_directory(tmp_path):
+    """The realistic SDR shape: a *directory* of extracted files is handed off.
+
+    Extract output is normally a tree of parquet files, not a single object, so
+    ``App.upload`` passes the run prefix and ``transfer.upload`` takes its
+    directory-fallback branch — listing every key under the source prefix in the
+    customer store and streaming each to the Atlan store. This exercises that
+    multi-file branch (distinct from the single-file path above).
+    """
+    from application_sdk.contracts.types import FileReference, StorageTier
+    from application_sdk.storage.transfer import upload as transfer_upload
+
+    components = tmp_path / "components"
+    customer_store = _s3_store("objectstore", _CUSTOMER_BUCKET, components)
+    atlan_store = _s3_store("atlan-objectstore", _ATLAN_BUCKET, components)
+
+    # 1. Extract output: several files under the run's extracted/ prefix.
+    src_prefix = "artifacts/apps/sdr-app/workflows/run-2/extracted"
+    dst_prefix = "artifacts/apps/sdr-app/workflows/run-2/published"
+    files = {
+        "db1/schema1/tables.parquet": b"PAR1-tables-bytes",
+        "db1/schema1/columns.parquet": b"PAR1-columns-bytes",
+        "db2/views.parquet": b"PAR1-views-bytes",
+    }
+    for rel, data in files.items():
+        await obstore.put_async(customer_store, f"{src_prefix}/{rel}", data)
+
+    # 2. Directory handoff: customer-store prefix → atlan-store prefix.
+    result = await transfer_upload(
+        "",
+        dst_prefix,
+        store=atlan_store,
+        _source_ref=FileReference(local_path="extracted", storage_path=src_prefix),
+        _source_store=customer_store,
+        _tier=StorageTier.RETAINED,
+    )
+
+    assert result.synced is True
+    assert result.ref.file_count == len(files)
+
+    # 3. Every file landed in the Atlan store, byte-for-byte, under dst_prefix.
+    for rel, data in files.items():
+        landed = await obstore.get_async(atlan_store, f"{dst_prefix}/{rel}")
+        assert bytes(await landed.bytes_async()) == data
+
+    # Cleanup so reruns against a persistent emulator stay idempotent.
+    for rel in files:
+        await obstore.delete_async(customer_store, f"{src_prefix}/{rel}")
+        await obstore.delete_async(atlan_store, f"{dst_prefix}/{rel}")
