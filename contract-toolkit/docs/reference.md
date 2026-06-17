@@ -96,7 +96,7 @@ The single entry point for all new native app contracts. Supersedes `NativeApp.p
 | `type` | String | `"connector"` | Marketplace type. |
 | `visibility` | String | `"public"` | Marketplace visibility. |
 | `buildTag` | String | `"v1"` | Emitted as `build_tag`. |
-| `selfDeployedRuntime` | Boolean | `false` | Emitted as `self_deployed_runtime`. |
+| `selfDeployedRuntime` | Boolean | `true` | Emitted as `self_deployed_runtime`. |
 
 ### Workflow & Manifest
 
@@ -478,7 +478,7 @@ contract/app.pkl
 | `iconUrl` | String? | null | Root `icon_url`. |
 | `visibility` | String | `"public"` | Marketplace visibility. |
 | `buildTag` | String | `"v1"` | Emitted as `build_tag`. |
-| `selfDeployedRuntime` | Boolean | `false` | Emitted as `self_deployed_runtime`. |
+| `selfDeployedRuntime` | Boolean | `true` | Emitted as `self_deployed_runtime`. |
 | `metadata` | Mapping<String, Any> | `{}` | Extra top-level `atlan.yaml` fields. |
 | `atlanYamlOverrides` | Mapping<String, Any> | `{}` | Deep overrides applied after typed fields and `metadata`. Use for exact rendered yaml control, including nested `deploy` overrides. |
 | `entrypoints` | Listing<Entrypoint> | `[]` | Marketplace card / SDK entrypoint definitions. |

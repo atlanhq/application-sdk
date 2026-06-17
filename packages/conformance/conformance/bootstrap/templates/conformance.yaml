@@ -11,7 +11,7 @@ permissions:
   security-events: write
 
 jobs:
-  conformance:
+  suite:
     uses: atlanhq/application-sdk/.github/workflows/conformance-reusable.yaml@main
     with:
       event_name: ${{ github.event_name }}

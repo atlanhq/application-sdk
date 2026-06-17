@@ -21,7 +21,7 @@ from application_sdk.errors import (
     STORAGE_PERMISSION,
     ErrorCode,
 )
-from application_sdk.errors.categories import Audience, FailureCategory
+from application_sdk.errors.categories import Audience
 from application_sdk.errors.leaves import (
     AppPermissionDeniedError,
     DataIntegrityError,
@@ -84,7 +84,6 @@ class StorageNotFoundError(NotFoundError, StorageError):
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_NOT_FOUND
     code: ClassVar[str] = "STORAGE_NOT_FOUND"
-    category: ClassVar[FailureCategory] = FailureCategory.NOT_FOUND
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.USER
 
@@ -127,7 +126,6 @@ class StoragePermissionError(AppPermissionDeniedError, StorageError):
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_PERMISSION
     code: ClassVar[str] = "STORAGE_PERMISSION"
-    category: ClassVar[FailureCategory] = FailureCategory.PERMISSION
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.USER
 
@@ -170,7 +168,6 @@ class StorageConfigError(InvalidInputError, StorageError):
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_CONFIG
     code: ClassVar[str] = "STORAGE_CONFIG"
-    category: ClassVar[FailureCategory] = FailureCategory.INVALID_INPUT
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.USER
 
@@ -314,7 +311,6 @@ class StorageEmptyUploadError(DataIntegrityError, StorageError):
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_EMPTY_UPLOAD
     code: ClassVar[str] = "STORAGE_EMPTY_UPLOAD"
-    category: ClassVar[FailureCategory] = FailureCategory.DATA_INTEGRITY
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.APP_OWNER
 
