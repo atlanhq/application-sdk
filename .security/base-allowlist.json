@@ -16,5 +16,15 @@
     "re_evaluation_trigger": "fix_released",
     "fix_available_date": "",
     "suppressed": false
+  },
+  "CVE-2026-44432": {
+    "package": "py3-pip-wheel",
+    "severity": "HIGH",
+    "reason": "Vulnerable py3-pip-wheel 26.1.2-r0 is bundled in the Chainguard-based application-sdk base image. The image's /etc/apk/repositories point to content-addressed Chainguard APK indexes, so the package cannot be upgraded from a connector Dockerfile. A fix version 26.1.2-r1 is reported by Trivy, but it requires the base image to be rebuilt/republished with the updated package. Remove this entry once application-sdk-main picks up py3-pip-wheel >= 26.1.2-r1.",
+    "expires": "2026-07-17",
+    "added_by": "faizan.shaik@atlan.com",
+    "re_evaluation_trigger": "fix_released",
+    "fix_available_date": "2026-06-17",
+    "suppressed": false
   }
 }
