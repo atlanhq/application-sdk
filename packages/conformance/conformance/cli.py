@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pathlib
+import re
 import sys
 
 
@@ -83,6 +84,37 @@ def _ensure_gitignore_entry(root: pathlib.Path, entry: str) -> None:
     print(f"appended:  {gitignore}  ({entry!r})")
 
 
+def _read_atlan_yaml_name(root: pathlib.Path) -> str:
+    """Return the ``name:`` value from ``atlan.yaml`` in *root*, or ``""``."""
+
+    atlan_yaml = root / "atlan.yaml"
+    if not atlan_yaml.exists():
+        return ""
+    try:
+        for line in atlan_yaml.read_text(encoding="utf-8").splitlines():
+            m = re.match(r"^name:\s+(\S+)", line)
+            if m:
+                return m.group(1).strip("\"'")
+    except OSError:
+        pass
+    return ""
+
+
+def _derive_app_name_from_dir(root: pathlib.Path) -> str:
+    """Derive app name from the repo directory name.
+
+    Strips a leading ``atlan-`` prefix and a trailing ``-app`` suffix so that
+    e.g. ``atlan-openapi-app`` → ``openapi``.  Falls back to ``"app"`` if the
+    result would be empty.
+    """
+    name = root.name
+    if name.startswith("atlan-"):
+        name = name[len("atlan-") :]
+    if name.endswith("-app"):
+        name = name[: -len("-app")]
+    return name or "app"
+
+
 def _parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
     """Parse bootstrap flags from argv.
 
@@ -92,16 +124,20 @@ def _parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
     -----
     --package-name NAME          docstring-coverage package (default: app)
     --unit-tests-workflow FILE   build-and-publish test workflow (default: tests.yaml)
-    --app-name NAME              connector app name for tests.yaml scaffold (default: app)
+    --app-name NAME              connector app name for tests.yaml scaffold
+                                 (default: auto-detected from atlan.yaml, else "app")
     --app-image-name NAME        GHCR image name for tests.yaml scaffold (default: atlan-<app-name>-app)
     --enable-e2e BOOL            enable e2e job in tests.yaml scaffold (default: true)
+    --services-script PATH       path to services setup script for tests.yaml scaffold
+                                 (default: auto-detected from .github/test/setup-services.sh)
     """
     result: dict[str, str] = {
         "package_name": "app",
         "unit_tests_workflow": "tests.yaml",
-        "app_name": "app",
+        "app_name": "",
         "app_image_name": "",
         "enable_e2e": "true",
+        "services_script": "",
     }
     _flags = {
         "--package-name": "package_name",
@@ -109,6 +145,7 @@ def _parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
         "--app-name": "app_name",
         "--app-image-name": "app_image_name",
         "--enable-e2e": "enable_e2e",
+        "--services-script": "services_script",
     }
     i = 0
     while i < len(argv):
@@ -139,6 +176,17 @@ def _cmd_bootstrap(argv: list[str]) -> int:
 
     kwargs = _parse_bootstrap_args(argv)
     root = pathlib.Path.cwd()
+    # Auto-detect app name when --app-name was not supplied:
+    # 1. atlan.yaml `name:` field, 2. repo directory name, 3. "app".
+    if not kwargs["app_name"]:
+        kwargs["app_name"] = _read_atlan_yaml_name(root) or _derive_app_name_from_dir(
+            root
+        )
+    # Auto-detect services-script when --services-script was not supplied.
+    if not kwargs["services_script"]:
+        candidate = root / ".github" / "test" / "setup-services.sh"
+        if candidate.exists():
+            kwargs["services_script"] = ".github/test/setup-services.sh"
 
     _bootstrap_file(
         root / ".claude" / "skills" / "remediate" / "SKILL.md",
@@ -150,16 +198,20 @@ def _cmd_bootstrap(argv: list[str]) -> int:
             render(name, **kwargs),
         )
 
-    # tests.yaml is write-if-absent (not always-overwrite) — bootstrap creates
-    # it once as a starting point; apps customise it freely.  C002 tracks drift
-    # at WARN only.  To force-regenerate: delete the file and re-run bootstrap.
-    tests_dest = root / ".github" / "workflows" / "tests.yaml"
-    if not tests_dest.exists():
-        tests_dest.parent.mkdir(parents=True, exist_ok=True)
-        tests_dest.write_text(render("tests.yaml", **kwargs), encoding="utf-8")
-        print(f"scaffolded: {tests_dest}")
-    else:
-        print(f"ok (exists): {tests_dest}  (edit freely; C002 tracks drift at WARN)")
+    # Write-if-absent scaffolds — created once; apps customise freely.
+    # C002 tracks drift at WARN only.  Delete + re-run to force-regenerate.
+    for scaffold_dest, scaffold_name in [
+        (root / ".github" / "workflows" / "tests.yaml", "tests.yaml"),
+        (root / "renovate.json", "renovate.json"),
+    ]:
+        if not scaffold_dest.exists():
+            scaffold_dest.parent.mkdir(parents=True, exist_ok=True)
+            scaffold_dest.write_text(render(scaffold_name, **kwargs), encoding="utf-8")
+            print(f"scaffolded: {scaffold_dest}")
+        else:
+            print(
+                f"ok (exists): {scaffold_dest}  (edit freely; C002 tracks drift at WARN)"
+            )
 
     _ensure_gitignore_entry(root, "remediation/")
     return 0
@@ -187,9 +239,10 @@ commands:
                  (scaffolded once; delete it and re-run to regenerate from canonical).
                    --package-name NAME         docstring-coverage package (default: app)
                    --unit-tests-workflow FILE   build-and-publish test workflow (default: tests.yaml)
-                   --app-name NAME             connector app name for tests.yaml (default: app)
+                   --app-name NAME             connector app name for tests.yaml (default: from atlan.yaml, else "app")
                    --app-image-name NAME       GHCR image name for tests.yaml (default: atlan-<app-name>-app)
-                   --enable-e2e true|false     enable e2e in tests.yaml (default: true)
+                   --enable-e2e true|false     enable e2e in tests.yaml (default: true, line omitted)
+                   --services-script PATH      services setup script (default: auto-detected from .github/test/setup-services.sh)
 """
 
 
