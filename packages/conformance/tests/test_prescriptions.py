@@ -325,6 +325,44 @@ def test_p002_suppressed_by_trailing_directive() -> None:
     assert findings[0].suppressed is True
 
 
+def test_p002_fires_on_subscripted_leaf_base() -> None:
+    # ``class Foo(NotFoundError[T])`` — base is Subscript; _get_name must
+    # unwrap it to reach the Name, otherwise the class escapes detection.
+    src = (
+        "from typing import ClassVar, TypeVar\n"
+        "T = TypeVar('T')\n"
+        "class DomainErr(NotFoundError[T]):\n"
+        "    category: ClassVar[FailureCategory] = FailureCategory.NOT_FOUND\n"
+    )
+    assert _ids(src) == ["P002"]
+
+
+def test_p002_fires_on_subscripted_attribute_base() -> None:
+    # ``class Foo(errors.NotFoundError[T])`` — Subscript wrapping an Attribute.
+    src = (
+        "from typing import ClassVar, TypeVar\n"
+        "T = TypeVar('T')\n"
+        "class DomainErr(errors.NotFoundError[T]):\n"
+        "    category: ClassVar[FailureCategory] = FailureCategory.NOT_FOUND\n"
+    )
+    assert _ids(src) == ["P002"]
+
+
+def test_p002_fires_on_second_generation_override() -> None:
+    # ``class TenantErr(SourceErr)`` where ``SourceErr`` is itself a
+    # first-generation override.  Transitive closure must catch it.
+    src = (
+        "from typing import ClassVar\n"
+        "class SourceErr(AppTimeoutError):\n"
+        "    category: ClassVar[FailureCategory] = FailureCategory.TIMEOUT\n"
+        "class TenantErr(SourceErr):\n"
+        "    category: ClassVar[FailureCategory] = FailureCategory.TIMEOUT\n"
+    )
+    findings = scan_text(src, "x.py")
+    rule_ids = [f.rule_id for f in findings]
+    assert rule_ids.count("P002") == 2
+
+
 def test_p002_does_not_match_p001_directive() -> None:
     # A P001 suppression must not absorb a P002 finding.
     src = (

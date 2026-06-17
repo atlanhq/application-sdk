@@ -219,7 +219,7 @@ jobs:
   # "skipped" and blocking the merge queue.  A matrix job's aggregate result is
   # 'failure' if any leg fails, so a single `needs: [suite]` covers all series.
   gate:
-    name: "Full suite"
+    name: "Conformance Gate"
     runs-on: ubuntu-latest
     needs: [suite]
     if: always()
