@@ -228,6 +228,7 @@ class CredentialRef(BaseModel, frozen=True):
             else:
                 try:
                     spec = AgentCredentialSpec.model_validate(raw_agent)
+                # conformance: ignore[E004] probe/feature-detect: parse failure is benign; caller treats unparseable agent_json as absent
                 except Exception:
                     logger.debug(
                         "Failed to parse agent_json, treating as unpopulated",

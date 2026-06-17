@@ -152,7 +152,7 @@ jobs:
           This PR bumps \`__dapr_version\` in [\`application_sdk/version.py\`](application_sdk/version.py) so:
 
           - The embedded local-dev daprd (via \`application_sdk.dev.embedded_dapr\`) downloads the new release on first use.
-          - CI workflows (\`scale-tests.yaml\`, \`e2e-examples\`) pass the new version to \`dapr init --runtime-version\`.
+          - CI workflows (\`scale-tests.yaml\`) pass the new version to \`dapr init --runtime-version\`.
 
           Release notes: https://github.com/dapr/dapr/releases/tag/v${latest}
 

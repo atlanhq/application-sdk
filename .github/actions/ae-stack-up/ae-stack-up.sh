@@ -66,8 +66,8 @@ PYEOF
 log "DAG needs sibling apps: $(echo "$NEEDS" | cut -d'|' -f1 | tr '\n' ' ' )"
 
 # ── 2. Toolchain: Dapr (slim) + Temporal CLI + uv ────────────────────────────
-DAPR_CLI_VERSION="1.17.1"
-DAPR_RUNTIME_VERSION="1.17.9"
+DAPR_CLI_VERSION="1.18.0"
+DAPR_RUNTIME_VERSION="1.18.0"
 if ! command -v dapr >/dev/null 2>&1; then
   wget -q "https://github.com/dapr/cli/releases/download/v${DAPR_CLI_VERSION}/dapr_linux_amd64.tar.gz" -O /tmp/dapr.tar.gz
   tar -xzf /tmp/dapr.tar.gz -C /tmp && sudo mv /tmp/dapr /usr/local/bin/

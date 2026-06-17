@@ -151,7 +151,7 @@ A run-level **notification node** (`notifications`) is appended when `notificati
 
 ### `_input.py` (`app/generated/_input.py`)
 
-Typed Python `AppInputContract` dataclass. SDK-owned fields inherited from `ExtractionInput`; app-specific fields generated from `uiConfig.properties`.
+Typed Python `AppInputContract` dataclass. SDK-owned fields inherited from `ExtractionInput`; app-specific fields generated from `uiConfig.properties`. Inherited `include_filter` and `exclude_filter` fields accept APITree object selections by normalizing them to the SDK filter-map shape before validation.
 
 ## Modules
 
@@ -240,11 +240,16 @@ pipeline {
     executorEnabled = "{{load-to-atlan}}"
     includeInputFields = true
     errorHandling = new ErrorHandlingConfig { startToCloseTimeoutSeconds = 14400 }
+    // connectionEntity: default "{{connection}}". Set null to omit
+    // connection_entity AND disable connection creation (see below).
+    connectionEntity = null
   }
 }
 ```
 
 Dependencies between pipeline steps are **auto-wired** based on position — you do not write `dependsOn` for pipeline steps. Use `extraNodes` for custom nodes outside the typed pipeline.
+
+`PublishStep.connectionEntity` (also settable directly on `PublishNode`) controls the publish node's `connection_entity` arg — the full connection entity JSON used for connection creation. It defaults to the `"{{connection}}"` form placeholder. Setting it to `null` omits `connection_entity` from the generated args entirely, and because the field is **linked** to `connection_creation_enabled` (which defaults to `connectionEntity != null`), a `null` entity also disables connection creation — publish then targets an already-existing connection and creates nothing. Override `connectionCreationEnabled` explicitly on the node to disable creation even when an entity is present.
 
 The toolkit can append a run-level notification node when an app opts in:
 

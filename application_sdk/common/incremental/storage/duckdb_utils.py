@@ -27,7 +27,7 @@ try:
     import duckdb
 
     DuckDBConnection = Optional[duckdb.DuckDBPyConnection]
-except ImportError:
+except ImportError:  # conformance: ignore[E008,E009] optional dep duckdb not installed; sentinel fallback
     duckdb = None  # type: ignore[assignment]
     DuckDBConnection = Any
 

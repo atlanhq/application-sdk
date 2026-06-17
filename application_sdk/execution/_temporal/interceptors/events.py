@@ -123,6 +123,7 @@ def _enrich_event_metadata(event: Event) -> Event:
             event.metadata.workflow_type = workflow_info.workflow_type
             event.metadata.workflow_id = workflow_info.workflow_id
             event.metadata.workflow_run_id = workflow_info.run_id
+    # conformance: ignore[E004] probe to detect workflow context; exception is expected when called outside a workflow
     except Exception:
         logger.debug("Not in workflow context, cannot enrich event metadata")
 
@@ -136,6 +137,7 @@ def _enrich_event_metadata(event: Event) -> Event:
             event.metadata.workflow_id = activity_info.workflow_id
             event.metadata.workflow_run_id = activity_info.workflow_run_id
             event.metadata.workflow_state = WorkflowStates.RUNNING.value
+    # conformance: ignore[E004] probe to detect activity context; exception is expected when called outside an activity
     except Exception:
         logger.debug("Not in activity context, cannot enrich event metadata")
 
@@ -225,6 +227,7 @@ def _send_lifecycle_event_to_segment(event: Event) -> None:
         )
 
         metrics.segment_client.send_metric(metric_record)
+    # conformance: ignore[E004] best-effort side-channel; exc_info already captured in the debug log below
     except Exception:
         logger.debug("Failed to send lifecycle event to Segment", exc_info=True)
 
@@ -287,6 +290,7 @@ async def publish_event(event_data: dict) -> None:
         event = Event(**event_data)
         await _publish_event_via_binding(event)
         logger.info("Published event: %s", event_data.get("event_name", ""))
+    # conformance: ignore[E004] re-raises as typed EventPublishError; exception is propagated to caller
     except Exception as e:
         from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
             EventPublishError,
@@ -390,6 +394,7 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             workflow_state = (
                 WorkflowStates.COMPLETED.value
             )  # Update to completed on success
+        # conformance: ignore[E004] captures failure state then re-raises; exception propagates to Temporal runtime
         except Exception:
             workflow_state = WorkflowStates.FAILED.value  # Keep as failed
             raise

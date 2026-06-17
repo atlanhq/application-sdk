@@ -170,6 +170,7 @@ class _MetricsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         exc_caught: BaseException | None = None
         try:
             return await self.next.execute_workflow(input)
+        # conformance: ignore[E004] measurement wrapper; re-raises immediately after capturing exc for metric tagging
         except BaseException as exc:
             status = "ERROR"
             exc_caught = exc
@@ -177,6 +178,7 @@ class _MetricsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         finally:
             duration_s = (time.monotonic_ns() - start_ns) / 1_000_000_000
             tagged = {**attrs, "otel.status_code": status}
+            # conformance: ignore[E004] best-effort observability; metric emission must never block or raise in a workflow finally block
             try:
                 _workflow_executions().add(1, tagged)
                 _workflow_duration().record(duration_s, tagged)
@@ -186,6 +188,7 @@ class _MetricsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                         1,
                         {**attrs, **classified},
                     )
+            # conformance: ignore[E004] best-effort observability; metric emission must never block or raise in a workflow finally block
             except Exception:  # noqa: S110 — best-effort observability; never block the workflow on metric emission
                 pass
 
@@ -203,6 +206,7 @@ class _MetricsActivityInboundInterceptor(ActivityInboundInterceptor):
         exception_class = ""
         try:
             return await self.next.execute_activity(input)
+        # conformance: ignore[E004] measurement wrapper; re-raises immediately after capturing exc class for metric tagging
         except BaseException as exc:
             status = "ERROR"
             exception_class = type(exc).__name__
@@ -211,6 +215,7 @@ class _MetricsActivityInboundInterceptor(ActivityInboundInterceptor):
             duration_s = (time.monotonic_ns() - start_ns) / 1_000_000_000
             end_sample = resource_sampler.sample()
             tagged = {**attrs, "otel.status_code": status}
+            # conformance: ignore[E004] best-effort observability; metric emission must never block or raise in an activity finally block
             try:
                 _activity_executions().add(1, tagged)
                 _activity_duration().record(duration_s, tagged)
@@ -228,6 +233,7 @@ class _MetricsActivityInboundInterceptor(ActivityInboundInterceptor):
                     )
                     _activity_cpu_seconds().record(cpu_s, tagged)
                     _activity_mem_gib_seconds().record(mem_gib_s, tagged)
+            # conformance: ignore[E004] best-effort observability; metric emission must never block or raise in an activity finally block
             except Exception:  # noqa: S110 — best-effort observability; never block the activity on metric emission
                 pass
 

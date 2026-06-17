@@ -51,6 +51,7 @@ class AtlanApiToken(BearerTokenCredential, frozen=True):
         client = AsyncAtlanClient(base_url=self.base_url, api_key=self.token)
         try:
             await client.user.get_current()
+        # conformance: ignore[E004] broad catch is acceptable; every exception is immediately re-raised as CredentialValidationError with full cause chain
         except Exception as exc:
             raise CredentialValidationError(
                 f"AtlanApiToken validation failed: {type(exc).__name__}",
@@ -126,7 +127,7 @@ class AtlanOAuthClient(OAuthClientCredential, frozen=True):
         access_token: str,
         expires_at: str = "",
         refresh_token: str = "",
-    ) -> "AtlanOAuthClient":
+    ) -> AtlanOAuthClient:
         """Return a new instance with updated token fields, preserving AtlanOAuthClient type."""
         return self.model_copy(
             update={
@@ -169,6 +170,7 @@ class AtlanOAuthClient(OAuthClientCredential, frozen=True):
         client = AsyncAtlanClient(base_url=self.base_url, api_key=self.access_token)
         try:
             await client.user.get_current()
+        # conformance: ignore[E004] broad catch is acceptable; every exception is immediately re-raised as CredentialValidationError with full cause chain
         except Exception as exc:
             raise CredentialValidationError(
                 f"AtlanOAuthClient validation failed: {type(exc).__name__}",

@@ -86,6 +86,7 @@ async def wait_for_dapr_sidecar(
                 r = await client.get(url)
                 if r.status_code == 204:
                     return
+            # conformance: ignore[E004] sidecar health probe; network errors are expected during startup and logged at debug
             except Exception:
                 logger.debug("Dapr sidecar poll failed", exc_info=True)
             if loop.time() >= deadline:
@@ -144,10 +145,10 @@ class AsyncDaprClient:
     async def close(self) -> None:
         await self._client.aclose()
 
-    async def __aenter__(self) -> "AsyncDaprClient":
+    async def __aenter__(self) -> AsyncDaprClient:
         return self
 
-    async def __aexit__(self, *exc: Any) -> None:
+    async def __aexit__(self, *exc: object) -> None:
         await self.close()
 
     # ------------------------------------------------------------------
@@ -249,7 +250,11 @@ class AsyncDaprClient:
                     body["data"] = parsed
                 else:
                     body["data"] = data.decode("utf-8", errors="replace")
-            except (json.JSONDecodeError, UnicodeDecodeError):
+            # conformance: ignore[E009] JSON/Unicode decode fallback; raw string is the safe default
+            except (
+                json.JSONDecodeError,
+                UnicodeDecodeError,
+            ):
                 body["data"] = data.decode("utf-8", errors="replace")
         resp = await self._client.post(
             BINDING_PATH.format(binding_name=binding_name),

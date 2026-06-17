@@ -9,7 +9,7 @@ import glob
 import json
 import os
 import re
-from typing import Any
+from typing import Any, TypeAlias
 
 from application_sdk.common.sql_filters_errors import InvalidSqlFilterError
 from application_sdk.errors import AppError
@@ -89,6 +89,10 @@ _FORBIDDEN_FILTER_SEQUENCES: tuple[str, ...] = (
 SAFE_FILTER_PATTERN: str = r"^[^'\";\x00]*$"
 _SAFE_FILTER_PATTERN = SAFE_FILTER_PATTERN  # backward-compat alias
 
+FilterValue: TypeAlias = list[str] | str | dict[str, dict[str, Any]]
+
+_MAX_FILTER_NESTING_DEPTH = 4
+
 
 def validate_filter_no_sql_injection(v: Any) -> Any:
     """Reject filter values containing SQL-meaningful character sequences.
@@ -123,9 +127,27 @@ def validate_filter_no_sql_injection(v: Any) -> Any:
     def _check_str(label: str, value: str) -> None:
         for seq in _FORBIDDEN_FILTER_SEQUENCES:
             if seq in value:
+                # conformance: ignore[E012] Pydantic @field_validator requires ValueError to collect validation errors; any other type bypasses Pydantic's error collection and propagates raw, breaking model instantiation for all callers
                 raise ValueError(
                     f"SQL-unsafe sequence {seq!r} not allowed in filter {label}: {value!r}"
                 )
+
+    def _check_value(label: str, value: Any, depth: int = 0) -> None:
+        if depth > _MAX_FILTER_NESTING_DEPTH:
+            # conformance: ignore[E012] Pydantic @field_validator requires ValueError to collect validation errors; any other type bypasses Pydantic's error collection and propagates raw, breaking model instantiation for all callers
+            raise ValueError(
+                f"Filter nesting exceeds maximum depth {_MAX_FILTER_NESTING_DEPTH}"
+            )
+        if isinstance(value, str):
+            _check_str(label, value)
+        elif isinstance(value, list):
+            for item in value:
+                _check_value("value", item, depth + 1)
+        elif isinstance(value, dict):
+            for nested_key, nested_value in value.items():
+                if isinstance(nested_key, str):
+                    _check_str("key", nested_key)
+                _check_value("value", nested_value, depth + 1)
 
     if isinstance(v, str):
         # Legacy AE callers pass the filter as a JSON-encoded string. The
@@ -139,7 +161,7 @@ def validate_filter_no_sql_injection(v: Any) -> Any:
         if stripped.startswith("{") and stripped.endswith("}"):
             try:
                 parsed = json.loads(stripped)
-            except json.JSONDecodeError:
+            except json.JSONDecodeError:  # conformance: ignore[E009] JSON parse probe; None signals "not a dict filter", handled below
                 parsed = None
             if isinstance(parsed, dict):
                 # Validate the parsed shape; ignore the returned value
@@ -149,13 +171,9 @@ def validate_filter_no_sql_injection(v: Any) -> Any:
         _check_str("value", v)
     elif isinstance(v, dict):
         for key, values in v.items():
-            _check_str("key", key)
-            if isinstance(values, list):
-                for item in values:
-                    if isinstance(item, str):
-                        _check_str("value", item)
-            elif isinstance(values, str):
-                _check_str("value", values)
+            if isinstance(key, str):
+                _check_str("key", key)
+            _check_value("value", values)
     return v
 
 
@@ -572,7 +590,7 @@ def prepare_filters(
 
 
 def normalize_filters(
-    filter_dict: dict[str, list[str] | str], is_include: bool
+    filter_dict: dict[str, FilterValue], is_include: bool
 ) -> list[str]:
     """Normalize filter dict to fully-anchored ``db.schema`` regex patterns.
 
@@ -583,6 +601,7 @@ def normalize_filters(
     Mapping:
         - ``{"^db$": []}`` or ``{"^db$": "*"}`` → ``^db\\..*$`` (every schema in db)
         - ``{"^db$": ["^sch$"]}`` → ``^db\\.sch$`` (exactly that schema)
+        - ``{"^db$": {"^sch$": {}}}`` → ``^db\\.sch$`` (APITree object shape)
 
     The previous implementation emitted unanchored ``db\\.*`` (literal dot,
     zero-or-more), which substring-matched targets like ``something.atlan_dev``
@@ -604,6 +623,9 @@ def normalize_filters(
         if filtered_schemas == "*" or not filtered_schemas:
             normalized_filter_list.append(f"^{db}\\..*$")
             continue
+
+        if isinstance(filtered_schemas, dict):
+            filtered_schemas = list(filtered_schemas.keys())
 
         if isinstance(filtered_schemas, list):
             for schema in filtered_schemas:

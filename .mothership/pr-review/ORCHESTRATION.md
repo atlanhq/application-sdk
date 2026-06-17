@@ -738,63 +738,6 @@ inline comment body:
 
 MEDIUM/LOW/INFO findings: one-line suggested_fix only. No path_forward.
 
-### 2f-bis. PR Title Check (mandatory)
-
-**This check MUST run before §2g determines the final verdict. A title
-mismatch is treated as a Critical finding and forces verdict =
-NEEDS_FIXES — never READY_TO_MERGE — regardless of what the code review
-turned up.**
-
-Squash-merge means the PR title becomes the commit subject on main,
-which is what `release.py` (SDK) and `contract_toolkit_release.py`
-(toolkit) walk to compute the next semver. A mismatched title silently
-over-bumps or under-bumps the version. Catching this in review keeps
-the release pipeline honest.
-
-**Inputs:**
-- `/tmp/PR.json` → `.title` and `.headRefName` (already fetched in Phase 0)
-- The list of changed files. Get it once:
-  ```bash
-  gh pr view "$PR_NUMBER" --repo "$REPO" --json files --jq '.files[].path' > /tmp/PR_FILES.txt
-  ```
-
-**Categorize the changed files into three buckets:**
-
-| Bucket | Path prefix |
-|---|---|
-| `HAS_SDK` | `application_sdk/` |
-| `HAS_CT`  | `contract-toolkit/` |
-| `HAS_OTHER` | everything else (docs/, .github/, scripts/, tests/, .mothership/, etc.) |
-
-**Parse the title.** It must match conventional-commit shape:
-`<type>(<optional-scope>)<!?>: <description>`. Allowed types: `feat`,
-`fix`, `chore`, `docs`, `style`, `refactor`, `perf`, `test`, `build`,
-`ci`, `revert`. If it doesn't match the shape at all, that's a
-`not_conventional` finding.
-
-**Apply the rule** (first match wins, based on which buckets are set):
-
-| Files touched | Required title | Reason |
-|---|---|---|
-| `application_sdk/` (with or without `contract-toolkit/` or `other`) | `feat(...): ...` or `fix(...): ...` — any scope, including no scope | SDK release walks every commit since the last `v*` tag; only `feat`/`fix` (or breaking `!`) drive a real bump |
-| `contract-toolkit/` only — no `application_sdk/` | `feat(contract-toolkit): ...` or `fix(contract-toolkit): ...` — scope **must** be `contract-toolkit` | Toolkit release walks commits filtered to `contract-toolkit/**`; the scope keeps the toolkit CHANGELOG entries readable |
-| Neither `application_sdk/` nor `contract-toolkit/` | Anything except `feat` or `fix` — `chore`/`docs`/`ci`/`refactor`/`perf`/`test`/`build`/`revert`/`style` | A `feat:` or `fix:` here would still trigger an SDK semver bump despite shipping no SDK code |
-
-**If the title fails the rule:**
-
-1. Add a Critical finding: `[TITLE] PR title doesn't match file scope.`
-   Body: explain what the title is, what the file buckets are, what
-   title shape is required, and give 1–2 concrete suggested rewrites.
-2. **Force verdict = `NEEDS_FIXES`** in §2g — title mismatch cannot
-   coexist with `READY_TO_MERGE` even if the code is otherwise clean.
-3. Record the result in the §3e summary's "PR Title Check" section
-   (see template) — exactly one line, either ✅ aligned or 🟥 with the
-   reason.
-
-**If the title passes:** also note in the §3e "PR Title Check" section
-that it aligned, so the human reading the verdict comment sees an
-explicit confirmation rather than absence of a complaint.
-
 ### 2g. Determine Verdict
 
 | Verdict | Condition | approval_recommendation |
@@ -802,8 +745,8 @@ explicit confirmation rather than absence of a complaint.
 | BLOCKED | G1/G2/G3/G5 violation | REJECT |
 | NEEDS_HUMAN | DESIGN_CHANGE scope | REQUEST_CHANGES |
 | NEEDS_HUMAN | `review_scope` is `contract-toolkit` or `mixed-sdk-toolkit`, and non-empty `/tmp/TOOLKIT_ROVER_NOTE.md` exists or `/tmp/TOOLKIT_VALIDATION.md` has any mandatory toolkit compatibility check with status `needs rerun` | REQUEST_CHANGES |
-| NEEDS_FIXES | Critical, G4/G6, **any Important**, CI failing, **OR §2f-bis title mismatch** | REQUEST_CHANGES |
-| READY_TO_MERGE | **0 Critical AND 0 Important**, CI passing, **AND §2f-bis title aligned** | APPROVE |
+| NEEDS_FIXES | Critical, G4/G6, **any Important**, CI failing | REQUEST_CHANGES |
+| READY_TO_MERGE | **0 Critical AND 0 Important**, CI passing | APPROVE |
 
 `READY_TO_MERGE` is strict: a single Important finding forces
 `NEEDS_FIXES`. Nits do not block. If you believe an Important should
@@ -966,10 +909,6 @@ after `VERDICT:` MUST be one of: `READY_TO_MERGE`, `NEEDS_FIXES`,
 
 ---
 
-### PR Title Check                         <!-- ALWAYS present, from §2f-bis -->
-- ✅ **Aligned** — title \`<title>\` matches the file scope (<which bucket and why>). <!-- when passed -->
-- 🟥 **Needs change** — title \`<title>\` doesn't match the file scope. Files touched: <SDK|CT|OTHER buckets>. Required: <expected title shape>. Suggested rewrite: \`<example>\`. <!-- when failed; forces verdict = NEEDS_FIXES per §2f-bis -->
-
 ### Affected Toolkit Surfaces             <!-- ONLY when review_scope=contract-toolkit or mixed-sdk-toolkit -->
 - `<surface>` — <why it is affected>
 
@@ -998,7 +937,7 @@ after `VERDICT:` MUST be one of: `READY_TO_MERGE`, `NEEDS_FIXES`,
 > describing the fix. Findings spanning multiple files appear under
 > each affected file's header. Sort files alphabetically; within a
 > file, sort by severity (Critical → Important → Nit) then by line
-> number. PR-metadata-level findings (e.g. title mismatches) go under
+> number. PR-metadata-level findings go under
 > a `**PR metadata**` pseudo-header.
 
 **`<path/to/file.py>`**

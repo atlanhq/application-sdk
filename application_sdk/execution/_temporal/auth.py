@@ -101,6 +101,7 @@ class TemporalAuthManager:
 
         try:
             access_token = await self._get_token_service().get_token(force_refresh=True)
+        # conformance: ignore[E004] re-raises immediately as typed TemporalAuthTokenAcquireError; no swallowing occurs
         except Exception as exc:
             from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
                 TemporalAuthTokenAcquireError,
@@ -209,8 +210,8 @@ class TemporalAuthManager:
                     timeout=sleep_seconds,
                 )
                 break
-            except TimeoutError:
-                pass  # wait_for timeout means sleep duration elapsed; continue loop
+            except TimeoutError:  # conformance: ignore[E002,E014] wait_for timeout = sleep interval elapsed; loop continues
+                pass
 
             try:
                 await self._do_refresh(client)
@@ -226,8 +227,8 @@ class TemporalAuthManager:
                         timeout=float(_RETRY_INTERVAL_SECONDS),
                     )
                     break
-                except TimeoutError:
-                    pass  # wait_for timeout means retry sleep elapsed; continue loop
+                except TimeoutError:  # conformance: ignore[E002,E014] wait_for timeout = retry duration elapsed; loop continues
+                    pass
 
         logger.info("Token refresh loop exiting")
 

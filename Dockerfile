@@ -1,13 +1,11 @@
 FROM cgr.dev/atlan.com/app-framework-golden:3.13
 
-# Dapr version argument
-ARG DAPR_RUNTIME_PACKAGE=dapr-daprd-1.17
+# daprd is baked into the customized app-framework-golden base image via
+# Chainguard Custom Assembly, so no `apk add` is needed here. The runtime
+# version is pinned by the base-image Custom Assembly config, not this file.
 
-# Switch to root for installation
+# Switch to root for setup
 USER root
-
-# Install Dapr runtime from Chainguard APK
-RUN apk add --no-cache ${DAPR_RUNTIME_PACKAGE}
 
 # Create appuser (standardized user for all apps)
 RUN addgroup -g 1000 appuser && adduser -D -u 1000 -G appuser appuser

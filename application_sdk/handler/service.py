@@ -343,6 +343,9 @@ def _resolve_output_type_for_workflow(workflow_type_name: str) -> type | None:
     try:
         app_meta = AppRegistry.get_instance().get(app_cls_name)
     except AppNotFoundError:
+        logger.warning(
+            "App %r not found in registry; returning None", app_cls_name, exc_info=True
+        )
         return None
 
     if ":" in workflow_type_name:
@@ -456,7 +459,7 @@ def _import_optional_app_module(dotted: str) -> ModuleType | None:
 
     try:
         return importlib.import_module(dotted)
-    except ModuleNotFoundError as exc:
+    except ModuleNotFoundError as exc:  # conformance: ignore[E008] re-raises if missing dep is not the target module itself
         missing = exc.name or ""
         # Swallow only if what's missing is the target or one of its parents
         # (e.g. ``app``, ``app.<segment>``, ``app.<segment>.core``).
@@ -833,7 +836,7 @@ def _published_input_contract(ep: Any) -> Any:
     ):
         try:
             module = importlib.import_module(module_path)
-        except ImportError:
+        except ImportError:  # conformance: ignore[E008,E014] optional generated module; continue to next candidate
             continue
         contract = getattr(module, "AppInputContract", None)
         if contract is not None and hasattr(contract, "model_json_schema"):
@@ -962,8 +965,8 @@ async def _provision_local_vault(guid: str, body: dict[str, Any]) -> JSONRespons
         if tmp_path is not None and os.path.exists(tmp_path):
             try:
                 os.unlink(tmp_path)
-            except OSError:
-                pass  # temp file unlink failed; best-effort cleanup, not fatal
+            except OSError:  # conformance: ignore[E002] best-effort temp secrets-file cleanup; leftover file is non-fatal
+                pass
 
     # Write non-sensitive fields to object storage
     non_sensitive["credentialSource"] = non_sensitive.get("credentialSource", "direct")
@@ -1535,8 +1538,8 @@ def _register_workflow_routes(
         finally:
             try:
                 os.unlink(safe_tmp_path)
-            except FileNotFoundError:
-                pass  # temp file already removed — nothing to clean up
+            except FileNotFoundError:  # conformance: ignore[E002] temp file already removed; nothing to clean up
+                pass
 
         now_ms = int(datetime.now(UTC).timestamp() * 1000)
         response_obj = FileUploadResponse(
@@ -1704,25 +1707,65 @@ def _register_workflow_routes(
 
     @app.get("/workflows/v1/configmap/{config_map_id}")
     async def get_configmap(config_map_id: str) -> JSONResponse:
+        # 1. Direct match against any generated configmap file stem.
+        #    The setup form normally requests the form file by its stem
+        #    (e.g. "snowflake-crawler"), which lands here.
         available_configmaps: list[str] = []
+        target: Path | None = None
         if CONTRACT_GENERATED_DIR.exists():
             for json_file in CONTRACT_GENERATED_DIR.rglob("*.json"):
                 available_configmaps.append(json_file.stem)
                 if json_file.stem == config_map_id:
-                    with open(json_file) as f:
-                        raw = json.load(f)
-                    configmap = {
-                        "kind": "ConfigMap",
-                        "apiVersion": "v1",
-                        "metadata": {"name": config_map_id},
-                        "data": {"config": json.dumps(raw.get("config", raw))},
-                    }
-                    return JSONResponse(
-                        content=_wrap_response(
-                            cast("dict[str, Any]", configmap),
-                            message="ConfigMap fetched successfully",
-                        )
-                    )
+                    target = json_file
+                    break
+
+        # 2. Default-entrypoint fallback (aligns with PR #1965 semantics
+        #    used by /workflows/v1/start and /workflows/v1/input-contract).
+        #    The marketplace UI sometimes builds the configmap URL from the
+        #    app/marketplace id (e.g. "atlan-snowflake", bare "snowflake")
+        #    rather than the entrypoint-form stem. In that case, resolve to
+        #    the app's default entrypoint and serve its form configmap.
+        #    When ep resolution fails or the ep directory has no eligible
+        #    form configmap, target stays None and the handler returns 404.
+        if target is None:
+            try:
+                _, ep = _resolve_app_entrypoint(
+                    _workflow_config.app_name, None, unknown_ep_status=404
+                )
+            except HTTPException:
+                ep = None
+            if ep is not None:
+                # Form configmaps for an entrypoint live under
+                # CONTRACT_GENERATED_DIR/<ep.name>/ (see EntryPointMetadata
+                # docstring: kebab name on the wire and on disk). Pick the
+                # form file by excluding the two well-known non-form siblings:
+                # `manifest.json` (DAG manifest) and `atlan-connectors-*.json`
+                # (credential template). Sorted for determinism.
+                entrypoint_dir = CONTRACT_GENERATED_DIR / ep.name
+                if entrypoint_dir.is_dir():
+                    for json_file in sorted(entrypoint_dir.glob("*.json")):
+                        stem = json_file.stem
+                        if stem == "manifest" or stem.startswith("atlan-connectors-"):
+                            continue
+                        target = json_file
+                        break
+
+        if target is not None:
+            with open(target) as f:
+                raw = json.load(f)
+            configmap = {
+                "kind": "ConfigMap",
+                "apiVersion": "v1",
+                "metadata": {"name": config_map_id},
+                "data": {"config": json.dumps(raw.get("config", raw))},
+            }
+            return JSONResponse(
+                content=_wrap_response(
+                    cast("dict[str, Any]", configmap),
+                    message="ConfigMap fetched successfully",
+                )
+            )
+
         logger.warning(
             "ConfigMap not found: requested=%s available=%s",
             config_map_id,
@@ -1754,6 +1797,76 @@ def _register_workflow_routes(
     # Manifest endpoint
     # ------------------------------------------------------------------
 
+    async def _serve_entrypoint_manifest(
+        entrypoint_name: str,
+        fe_inputs: str | None,
+        deployment: bytes,
+    ) -> Response:
+        """Read <entrypoint>/manifest.json, substitute placeholders, run the
+        optional ``compute_manifest`` hook, and return the Response.
+
+        Shared by the explicit-``?entrypoint=`` branch and the default-
+        entrypoint fallback below — avoids duplicating the placeholder /
+        hook logic across both code paths.
+        """
+        # Build a registry from the filesystem: {entrypoint_name → manifest_path}.
+        # The Path objects in the dict come from glob(), not from user input, so
+        # the path that reaches read_bytes() is never tainted by the HTTP param.
+        # glob("*/manifest.json") only returns direct children of CONTRACT_GENERATED_DIR,
+        # so no is_relative_to guard is needed.
+        registry: dict[str, Path] = {
+            p.parent.name: p for p in CONTRACT_GENERATED_DIR.glob("*/manifest.json")
+        }
+        ep_manifest = registry.get(entrypoint_name)
+        if ep_manifest is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No manifest found for entrypoint {entrypoint_name!r}",
+            )
+        raw = ep_manifest.read_bytes()
+        raw = raw.replace(b"{deployment_name}", deployment)
+        raw = raw.replace(b"{app_name}", (app_name or "").encode())
+
+        # Dynamic-manifest hook: if the app defines
+        # `app.<entrypoint_snake>.core.compute_manifest`, hand the
+        # static manifest + decoded `fe_inputs` to it and use the
+        # returned dict as the response body. Apps that don't define
+        # the hook get the static manifest unchanged (current behavior).
+        compute = _discover_compute_manifest(entrypoint_name)
+        if compute is not None:
+            fe_inputs_decoded = _decode_fe_inputs(fe_inputs)
+            manifest_dict = json.loads(raw)
+            try:
+                # The hook is async-only (discovery rejects sync defs), so
+                # await it directly. Authors doing CPU/IO-bound work inside
+                # (SQL generation, full DAG rewrite) own offloading it — e.g.
+                # `await asyncio.to_thread(...)` — rather than the SDK
+                # guessing on their behalf.
+                computed = await compute(manifest_dict, fe_inputs_decoded)
+            except HTTPException:
+                raise
+            except Exception:
+                # Don't leak the hook's internals (stack/SQL/paths) to the
+                # caller — mirror the other handler routes' generic 500.
+                logger.error(
+                    "compute_manifest hook failed for entrypoint %r",
+                    entrypoint_name,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=500, detail="Internal server error"
+                ) from None
+            if not isinstance(computed, dict):
+                logger.error(
+                    "compute_manifest for entrypoint %r returned %s, expected dict",
+                    entrypoint_name,
+                    type(computed).__name__,
+                )
+                raise HTTPException(status_code=500, detail="Internal server error")
+            raw = json.dumps(computed).encode()
+
+        return Response(content=raw, media_type="application/json")
+
     @app.get("/workflows/v1/manifest")
     async def get_manifest(
         entrypoint: str | None = None,
@@ -1765,63 +1878,7 @@ def _register_workflow_routes(
             # Guard 1 (400): reject obviously-malformed names before touching disk.
             if not _ENTRYPOINT_NAME_RE.match(entrypoint):
                 raise HTTPException(status_code=400, detail="Invalid entrypoint name")
-            # Build a registry from the filesystem: {entrypoint_name → manifest_path}.
-            # The Path objects in the dict come from glob(), not from user input, so
-            # the path that reaches read_bytes() is never tainted by the HTTP param.
-            # glob("*/manifest.json") only returns direct children of CONTRACT_GENERATED_DIR,
-            # so no is_relative_to guard is needed.
-            registry: dict[str, Path] = {
-                p.parent.name: p for p in CONTRACT_GENERATED_DIR.glob("*/manifest.json")
-            }
-            ep_manifest = registry.get(entrypoint)
-            if ep_manifest is None:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"No manifest found for entrypoint {entrypoint!r}",
-                )
-            raw = ep_manifest.read_bytes()
-            raw = raw.replace(b"{deployment_name}", deployment)
-            raw = raw.replace(b"{app_name}", (app_name or "").encode())
-
-            # Dynamic-manifest hook: if the app defines
-            # `app.<entrypoint_snake>.core.compute_manifest`, hand the
-            # static manifest + decoded `fe_inputs` to it and use the
-            # returned dict as the response body. Apps that don't define
-            # the hook get the static manifest unchanged (current behavior).
-            compute = _discover_compute_manifest(entrypoint)
-            if compute is not None:
-                fe_inputs_decoded = _decode_fe_inputs(fe_inputs)
-                manifest_dict = json.loads(raw)
-                try:
-                    # The hook is async-only (discovery rejects sync defs), so
-                    # await it directly. Authors doing CPU/IO-bound work inside
-                    # (SQL generation, full DAG rewrite) own offloading it — e.g.
-                    # `await asyncio.to_thread(...)` — rather than the SDK
-                    # guessing on their behalf.
-                    computed = await compute(manifest_dict, fe_inputs_decoded)
-                except HTTPException:
-                    raise
-                except Exception:
-                    # Don't leak the hook's internals (stack/SQL/paths) to the
-                    # caller — mirror the other handler routes' generic 500.
-                    logger.error(
-                        "compute_manifest hook failed for entrypoint %r",
-                        entrypoint,
-                        exc_info=True,
-                    )
-                    raise HTTPException(
-                        status_code=500, detail="Internal server error"
-                    ) from None
-                if not isinstance(computed, dict):
-                    logger.error(
-                        "compute_manifest for entrypoint %r returned %s, expected dict",
-                        entrypoint,
-                        type(computed).__name__,
-                    )
-                    raise HTTPException(status_code=500, detail="Internal server error")
-                raw = json.dumps(computed).encode()
-
-            return Response(content=raw, media_type="application/json")
+            return await _serve_entrypoint_manifest(entrypoint, fe_inputs, deployment)
 
         # No entrypoint param: single-entrypoint path
         if manifest is not None:
@@ -1837,6 +1894,29 @@ def _register_workflow_routes(
             raw = raw.replace(b"{deployment_name}", deployment)
             raw = raw.replace(b"{app_name}", (app_name or "").encode())
             return Response(content=raw, media_type="application/json")
+
+        # Default-entrypoint fallback (aligns with PR #1965 semantics used
+        # by /workflows/v1/start and /workflows/v1/input-contract — same
+        # treatment we apply to /workflows/v1/configmap above). Multi-
+        # entrypoint apps don't have a root manifest.json by design: each
+        # entrypoint has its own under <ep.name>/manifest.json. When the
+        # caller (e.g. Heracles/AE pre-validation) omits ?entrypoint=, fall
+        # back to the app's default entrypoint instead of 404-ing.
+        try:
+            _, ep = _resolve_app_entrypoint(
+                _workflow_config.app_name, None, unknown_ep_status=404
+            )
+        except HTTPException:
+            ep = None
+        if ep is not None:
+            try:
+                return await _serve_entrypoint_manifest(ep.name, fe_inputs, deployment)
+            except HTTPException as exc:
+                if exc.status_code != 404:
+                    raise
+                # Default entrypoint exists but has no manifest file on disk —
+                # fall through to the canonical 404 below.
+
         raise HTTPException(status_code=404, detail="No manifest available")
 
     # ------------------------------------------------------------------

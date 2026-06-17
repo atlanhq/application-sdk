@@ -52,14 +52,16 @@ LINEAR_URL = "https://api.linear.app/graphql"
 
 TRIVY_FILES = ["trivy-image-results.json", "trivy-fs-results.json"]
 
-# All severities are ticketed. The hourly scan runs with --ignore-unfixed, so
-# every finding that reaches here has an upstream fix available. "Fix available"
-# is NOT the same as "we fix it by bumping uv.lock": the fix is delivered either
-# as a dependency bump (Case 1, our dep) OR a base-image rebuild (Case 4, a
-# package baked into app-runtime-base, e.g. Dapr). --ignore-unfixed filters out
-# our-dep-no-fix CVEs, so the rover's allowlist/alternative branches (Cases 2/3)
-# don't fire today, but Case 4 is fully reachable. The rover classifies each
-# finding from the ticket — see .mothership/vuln-triage/ORCHESTRATION.md.
+# All severities are ticketed. The hourly scan no longer runs with
+# --ignore-unfixed, so findings that reach here may OR may not have an upstream
+# fix available. A fix, when one exists, is delivered either as a dependency
+# bump (Case 1, our dep) OR a base-image rebuild (Case 4, a package baked into
+# app-runtime-base, e.g. Dapr). No-fix CVEs (our-dep-no-fix and disputed/
+# won't-fix) now reach the rover too, so its allowlist/alternative branches
+# (Cases 2/3) are fully reachable — those are exactly the findings that need an
+# operational mitigation or an explicit allowlist decision rather than a bump.
+# The rover classifies each finding from the ticket — see
+# .mothership/vuln-triage/ORCHESTRATION.md.
 ACTIONABLE_SEVERITIES_TRIVY = {"CRITICAL", "HIGH", "MEDIUM", "LOW"}
 
 # Lower rank sorts first.

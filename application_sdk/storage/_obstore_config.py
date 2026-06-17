@@ -43,7 +43,9 @@ without changing the outcome (see BLDX-1155 review thread).
 from __future__ import annotations
 
 import os
+import urllib.request
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit, urlunsplit
 
 if TYPE_CHECKING:
     # obstore TypedDicts — not importable at runtime.
@@ -78,6 +80,16 @@ def _default_user_agent() -> str:
         return "atlan-application-sdk"
 
 
+def _obstore_proxy_url() -> str | None:
+    """Return the proxy URL from HTTPS_PROXY/HTTP_PROXY, or None.
+
+    obstore doesn't read proxy env vars itself, so we pass ``proxy_url``
+    explicitly. NO_PROXY isn't honored — the binding has no per-host excludes.
+    """
+    proxies = urllib.request.getproxies()
+    return proxies.get("https") or proxies.get("http") or None
+
+
 def obstore_client_options() -> ClientConfig:
     """Build an obstore ``ClientConfig`` from environment variables.
 
@@ -103,6 +115,9 @@ def obstore_client_options() -> ClientConfig:
     pool_max = os.getenv("ATLAN_OBSTORE_POOL_MAX_IDLE_PER_HOST")
     if pool_max:
         opts["pool_max_idle_per_host"] = pool_max
+    proxy_url = _obstore_proxy_url()
+    if proxy_url:
+        opts["proxy_url"] = proxy_url
     return opts
 
 
@@ -232,8 +247,26 @@ def log_obstore_config(
     logger.info(
         "obstore configured for %s: client=%s retry=%s",
         provider,
-        dict(client_options) if client_options else {},
+        _redact_proxy_userinfo(client_options) if client_options else {},
         dict(retry_config)
         if retry_config
         else "default(max_retries=10, retry_timeout=3m)",
     )
+
+
+def _redact_proxy_userinfo(client_options: ClientConfig) -> dict:
+    """Return a copy of *client_options* with any proxy_url credentials masked.
+
+    The real config keeps the userinfo (obstore needs it); only the log copy is
+    redacted so a `user:pass@` proxy never lands in logs.
+    """
+    opts = dict(client_options)
+    proxy = opts.get("proxy_url")
+    if not isinstance(proxy, str):
+        return opts
+    p = urlsplit(proxy)
+    if p.username or p.password:
+        host = p.hostname or ""
+        netloc = f"***@{host}:{p.port}" if p.port else f"***@{host}"
+        opts["proxy_url"] = urlunsplit((p.scheme, netloc, p.path, p.query, p.fragment))
+    return opts

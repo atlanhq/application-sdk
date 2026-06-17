@@ -351,6 +351,19 @@ class TestDownloadFile:
         await download_file("n.bin", dest, store)
         assert dest.read_bytes() == b"nested"
 
+    @pytest.mark.skipif(
+        os.name == "nt", reason="POSIX file-mode bits not meaningful on Windows"
+    )
+    async def test_download_file_is_owner_only(self, store, tmp_path) -> None:
+        """Downloaded artifacts must not be group/other-readable (umask-independent)."""
+        f = tmp_path / "src.bin"
+        f.write_bytes(b"secret")
+        await upload_file("perm.bin", f, store)
+
+        dest = tmp_path / "out.bin"
+        await download_file("perm.bin", dest, store)
+        assert dest.stat().st_mode & 0o077 == 0
+
 
 class TestPutJson:
     """Tests for the public put_json() helper."""

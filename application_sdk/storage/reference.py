@@ -47,6 +47,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from application_sdk.common._listing import safe_list_directory
 from application_sdk.contracts.types import FileReference
 
 if TYPE_CHECKING:
@@ -204,7 +205,8 @@ async def persist_file_reference(
     if local.is_dir():
         # ── Directory upload ───────────────────────────────────────────────
         prefix = _make_storage_prefix(ref, output_path=output_path)
-        files = [p for p in local.rglob("*") if p.is_file()]
+        # to_thread keeps the blocking fsync + scandir off the event loop.
+        files = await asyncio.to_thread(safe_list_directory, local)
         _t0 = time.monotonic()
         logger.info(
             "file_ref.persist.start",
@@ -587,8 +589,15 @@ async def materialize_file_reference(
                             is_cache_hit=True,
                         )
                         return True
-                except Exception:  # noqa: S110,BLE001
-                    pass  # sidecar check failed — fall through to re-download
+                # conformance: ignore[E004] sidecar integrity probe; failure is benign and logged at debug before falling through to re-download
+                except Exception:
+                    logger.debug(
+                        "file_ref.materialize.sidecar_check_failed",
+                        storage_path=key,
+                        local_path=dest,
+                        exc_info=True,
+                    )
+                    # fall through to re-download
 
             sha256 = await download_file(
                 key, dest, store, compute_hash=True, normalize=False

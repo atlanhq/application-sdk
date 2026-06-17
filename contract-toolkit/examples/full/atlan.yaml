@@ -7,7 +7,7 @@ execution_mode: native
 icon_url: https://assets.atlan.com/assets/fullscreen-open.svg
 visibility: public
 build_tag: v1
-self_deployed_runtime: false
+self_deployed_runtime: true
 entrypoints:
 - name: full-featured
   display_name: Full-Featured Example

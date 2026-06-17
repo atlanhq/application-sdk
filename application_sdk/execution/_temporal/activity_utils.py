@@ -80,6 +80,7 @@ def get_workflow_id() -> str:
 
     try:
         wf_id = activity.info().workflow_id
+    # conformance: ignore[E004] re-raises as typed WorkflowIdError; no swallowing occurs
     except Exception as exc:
         raise WorkflowIdError(cause=exc) from exc
     if wf_id is None:
@@ -110,6 +111,7 @@ def get_workflow_run_id() -> str:
 
     try:
         wf_run_id = activity.info().workflow_run_id
+    # conformance: ignore[E004,E007] re-raises immediately as typed WorkflowRunIdError; broad catch is intentional to wrap any unexpected SDK error
     except Exception as exc:
         raise WorkflowRunIdError(cause=exc) from exc
     if wf_run_id is None:
@@ -215,4 +217,9 @@ def get_object_store_prefix(path: str) -> str:
     except ValueError:
         # os.path.commonpath or os.path.relpath can raise ValueError on Windows with different drives
         # In this case, treat as user-provided path, normalize the same way.
+        logger.warning(
+            "os.path.commonpath/relpath raised ValueError for path %r; falling back to direct normalization",
+            path,
+            exc_info=True,
+        )
         return _to_relative_object_store_key(path)

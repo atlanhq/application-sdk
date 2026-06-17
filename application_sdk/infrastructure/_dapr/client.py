@@ -56,6 +56,7 @@ class DaprStateStore:
                 key=key,
                 value=value,
             )
+        # conformance: ignore[E004] re-raises as typed StateStoreError with cause chain; traceback preserved
         except Exception as e:
             raise StateStoreError(
                 f"Failed to save state: {e}",
@@ -74,6 +75,7 @@ class DaprStateStore:
             if data:
                 return json.loads(data)
             return None
+        # conformance: ignore[E004] re-raises as typed StateStoreError with cause chain; traceback preserved
         except Exception as e:
             raise StateStoreError(
                 f"Failed to load state: {e}",
@@ -90,6 +92,7 @@ class DaprStateStore:
                 key=key,
             )
             return True
+        # conformance: ignore[E004] re-raises as typed StateStoreError with cause chain; traceback preserved
         except Exception as e:
             raise StateStoreError(
                 f"Failed to delete state: {e}",
@@ -159,6 +162,7 @@ class DaprSecretStore:
             return orjson.dumps(result).decode()
         except SecretNotFoundError:
             raise
+        # conformance: ignore[E004] re-raises as typed SecretStoreError with cause chain; traceback preserved
         except Exception as e:
             raise SecretStoreError(
                 f"Failed to get secret: {e}",
@@ -170,7 +174,9 @@ class DaprSecretStore:
         """Get a secret via Dapr, returning None if not found."""
         try:
             return await self.get(name)
+        # conformance: ignore[E004] intentional probe: SecretNotFoundError → None is the API contract
         except SecretNotFoundError:
+            # conformance: ignore[E007] intentional probe; SecretNotFoundError → None is the documented API contract for get_optional
             return None
 
     async def get_bulk(self, names: list[str]) -> dict[str, str]:
@@ -197,6 +203,7 @@ class DaprSecretStore:
                     )
                 bulk[name] = next(iter(inner.values()), "")
             return bulk
+        # conformance: ignore[E004] re-raises as typed SecretStoreError with cause chain; traceback preserved
         except Exception as e:
             raise SecretStoreError(
                 f"Failed to get bulk secrets: {e}",
@@ -208,6 +215,7 @@ class DaprSecretStore:
         try:
             result = await self._client.get_bulk_secret(store_name=self._store_name)
             return list(result.keys())
+        # conformance: ignore[E004] re-raises as typed SecretStoreError with cause chain; traceback preserved
         except Exception as e:
             raise SecretStoreError(
                 f"Failed to list secrets: {e}",
@@ -247,6 +255,8 @@ class DaprPubSub:
                 data=orjson.dumps(data).decode(),
                 metadata=metadata or {},
             )
+        # conformance: ignore[E007] re-raises as typed PubSubError with cause chain; no silent swallow
+        # conformance: ignore[E004] re-raises immediately as typed PubSubError; no information is discarded
         except Exception as e:
             raise PubSubError(
                 f"Failed to publish message: {e}",
@@ -337,6 +347,7 @@ class DaprBinding:
                 data=result.data if result.data else None,
                 metadata=dict(result.metadata) if result.metadata else {},
             )
+        # conformance: ignore[E004] re-raises as typed BindingError with cause chain; traceback preserved
         except Exception as e:
             raise BindingError(
                 f"Failed to invoke binding: {e}",

@@ -12,6 +12,7 @@ from application_sdk.errors.leaves import (
     InvalidInputError,
     NotFoundError,
     PreconditionError,
+    UnimplementedError,
 )
 
 # ---------------------------------------------------------------------------
@@ -95,3 +96,12 @@ class AgentSpecRequiredError(InvalidInputError):
     message: str = "Agent mode requires an AgentSpec"
     field: str | None = "agent_spec"
     constraint: str | None = "required_for_agent_mode"
+
+
+@dataclass(kw_only=True)
+class HarnessMethodNotImplementedError(UnimplementedError):
+    """Abstract test harness method was not overridden by a connector subclass."""
+
+    code: ClassVar[str] = "UNIMPLEMENTED_HARNESS_METHOD"
+    message: str = "Test harness subclass did not implement required method"
+    component: str | None = "e2e_harness"

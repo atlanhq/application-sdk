@@ -40,6 +40,7 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from application_sdk.common._listing import safe_list_directory
 from application_sdk.constants import MAX_CONCURRENT_STORAGE_TRANSFERS
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.observability.logger_adaptor import get_logger
@@ -491,7 +492,8 @@ async def upload(
             normalize_key,
             append_leaf=False,
         )
-        files = [p for p in src.rglob("*") if p.is_file()]
+        # to_thread keeps the blocking fsync + scandir off the event loop.
+        files = await asyncio.to_thread(safe_list_directory, src)
         if raise_on_empty and not files:
             from application_sdk.storage.errors import (  # noqa: PLC0415
                 StorageEmptyUploadError,
@@ -524,6 +526,7 @@ async def upload(
                 )
                 return ok
 
+        # conformance: ignore[E010] results checked immediately below: errs filters BaseException, first is re-raised and rest are logged
         results = await asyncio.gather(
             *[_bounded_upload(fp, k) for fp, k in zip(files, keys)],
             return_exceptions=True,
@@ -704,14 +707,15 @@ async def download(
             transferred, reason = await _download_one(
                 resolved, norm_path, dest, skip_if_exists=skip_if_exists
             )
+        # conformance: ignore[E004] cleanup-only handler that always re-raises; no logging needed here
         except BaseException:
             # Don't leave an empty temp file behind on download failure
             # (BLDX-1155 #5).
             if owns_temp:
                 try:
                     dest.unlink(missing_ok=True)
-                except OSError:
-                    pass  # best-effort cleanup of partial download; re-raise follows
+                except OSError:  # conformance: ignore[E002] best-effort cleanup of partial download; original error re-raised below
+                    pass
             raise
         ref = FileReference(
             local_path=str(dest),

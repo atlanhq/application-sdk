@@ -56,6 +56,7 @@ from typing import ClassVar
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.full_dag._errors import (
+    HarnessMethodNotImplementedError,
     ManifestDagMissingError,
     ManifestFileNotFoundError,
     MissingHarnessClassAttrError,
@@ -330,13 +331,18 @@ class BaseFullDAGE2ETest:
         Tier 5 (direct mode): values are sent verbatim to the prod pod
         as credential overrides; must work as-is.
         """
-        raise NotImplementedError  # stdlib-interop: abstract method — subclass must override
+        raise HarnessMethodNotImplementedError(
+            message="subclass must override database_spec()", operation="database_spec"
+        )
 
     def agent_spec(self) -> AgentSpec | None:
         """Agent identity (tier 4 only). Return None for direct mode."""
         if self.mode is RunMode.DIRECT:
             return None
-        raise NotImplementedError  # stdlib-interop: abstract method — subclass must override for agent mode
+        raise HarnessMethodNotImplementedError(
+            message="subclass must override agent_spec() for AGENT mode",
+            operation="agent_spec",
+        )
 
     def connection_spec(self) -> ConnectionSpec:
         """Where the resulting Atlas Connection will live.

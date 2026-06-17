@@ -8,15 +8,22 @@ Holds two kinds of versions:
   underscore signals it is **SDK-internal**; consumer apps should rely on
   the runtime behaviour, not import this value.
 
+  This governs **only** the local-dev download path (and the CI daprd cache
+  key). It does **not** control the container image's daprd: that is baked
+  into the ``app-framework-golden`` base image via Chainguard Custom Assembly
+  and pinned by the Custom Assembly config. The two are independent — a
+  major-version auto-bump of this constant will not move the container, so
+  the base image must be re-customized separately.
+
 CI workflows that need the daprd pin (`.github/workflows/push.yaml`,
-`.github/workflows/pull_request.yaml`, `.github/workflows/scale-tests.yaml`,
-`.github/actions/e2e-examples/action.yaml`) avoid hard-coding the runtime
-version by reading it from this file via a small shell step::
+`.github/workflows/pull_request.yaml`, `.github/workflows/scale-tests.yaml`)
+avoid hard-coding the runtime version by reading it from this file via a
+small shell step::
 
     ver=$(grep '^__dapr_version' application_sdk/version.py | cut -d'"' -f2)
 
 Bump deliberately — older Dapr releases drop off the CDN.
 """
 
-__version__ = "3.16.0"
-__dapr_version: str = "1.17.9"
+__version__ = "3.17.3"
+__dapr_version: str = "1.18.0"

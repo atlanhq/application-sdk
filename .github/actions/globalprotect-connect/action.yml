@@ -26,7 +26,7 @@ runs:
   using: "composite"
   steps:
     - name: Connect via OpenConnect
-      uses: nick-fields/retry@ce71cc2ab81d554ebbe88c79ab5975992d79ba08 # v3
+      uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60 # v4
       id: openconnect-connection
       with:
         max_attempts: ${{ fromJSON(inputs.max-attempts) }}

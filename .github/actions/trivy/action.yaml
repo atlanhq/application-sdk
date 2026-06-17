@@ -70,13 +70,13 @@ runs:
         TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
 
     - name: Upload Vulnerability Scan Results
-      uses: github/codeql-action/upload-sarif@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3
+      uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
       with:
         sarif_file: 'trivy-vuln-results.sarif'
         category: 'trivy-vulnerability'
 
     - name: Upload Secret Scan Results
-      uses: github/codeql-action/upload-sarif@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3
+      uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
       with:
         sarif_file: 'trivy-secret-results.sarif'
         category: 'trivy-secret'
@@ -107,14 +107,14 @@ runs:
 
     - name: Comment on PR with Vulnerability Scan Results
       if: inputs.add-report-comment-to-pr == 'true'
-      uses: mshick/add-pr-comment@b8f338c590a895d50bcbfa6c5859251edc8952fc # v2
+      uses: mshick/add-pr-comment@8e4927817251f1ff60c001f04568532b38e0b4a0 # v3
       with:
         message-id: trivy-vuln
         message-path: trivy-vuln-results.md
 
     - name: Comment on PR with Secret Scan Results
       if: inputs.add-report-comment-to-pr == 'true'
-      uses: mshick/add-pr-comment@b8f338c590a895d50bcbfa6c5859251edc8952fc # v2
+      uses: mshick/add-pr-comment@8e4927817251f1ff60c001f04568532b38e0b4a0 # v3
       with:
         message-id: trivy-secret
         message-path: trivy-secret-results.md

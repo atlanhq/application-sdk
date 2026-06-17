@@ -200,6 +200,7 @@ class AzureClient(ClientInterface):
             ) from e
         except AppError:
             raise
+        # conformance: ignore[E004] catch-all re-raises as typed AzureClientAuthError; no logging needed since caller receives the typed error
         except Exception as e:
             raise AzureClientAuthError(message="Unexpected error", cause=e) from e
 
@@ -278,7 +279,7 @@ class AzureClient(ClientInterface):
                     error=error,
                 )
             except Exception as e:
-                logger.debug(
+                logger.warning(
                     "Service health check failed for %s",
                     service_name,
                     exc_info=True,
@@ -319,6 +320,7 @@ class AzureClient(ClientInterface):
             raise AzureInputValidationError(cause=e) from e
         except AppError:
             raise
+        # conformance: ignore[E004] catch-all re-raises as typed AzureClientAuthError; no logging needed since caller receives the typed error
         except Exception as e:
             raise AzureClientAuthError(message="Unexpected error", cause=e) from e
 

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from typing import Annotated
+
 from pydantic import Field
 
 from application_sdk.contracts.base import Input, Output
+from application_sdk.contracts.types import MaxItems
 
 
-class CleanupInput(Input, allow_unbounded_fields=True):
+class CleanupInput(Input):
     """Input for ``App.cleanup_files``.
 
     Args:
@@ -18,10 +21,10 @@ class CleanupInput(Input, allow_unbounded_fields=True):
             always cleaned up regardless of this field.
     """
 
-    extra_paths: list[str] = Field(default_factory=list)
+    extra_paths: Annotated[list[str], MaxItems(10000)] = Field(default_factory=list)
 
 
-class CleanupOutput(Output, allow_unbounded_fields=True):
+class CleanupOutput(Output):
     """Output from ``App.cleanup_files``.
 
     Args:
@@ -29,10 +32,12 @@ class CleanupOutput(Output, allow_unbounded_fields=True):
             already absent, ``False`` = error during deletion).
     """
 
-    path_results: dict[str, bool] = Field(default_factory=dict)
+    path_results: Annotated[dict[str, bool], MaxItems(10000)] = Field(
+        default_factory=dict
+    )
 
 
-class StorageCleanupInput(Input, allow_unbounded_fields=True):
+class StorageCleanupInput(Input):
     """Input for ``App.cleanup_storage``.
 
     Args:
@@ -46,7 +51,7 @@ class StorageCleanupInput(Input, allow_unbounded_fields=True):
     include_prefix_cleanup: bool = False
 
 
-class StorageCleanupOutput(Output, allow_unbounded_fields=True):
+class StorageCleanupOutput(Output):
     """Output from ``App.cleanup_storage``.
 
     Args:

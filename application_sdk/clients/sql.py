@@ -33,7 +33,7 @@ from application_sdk.common.aws_utils import (
 )
 from application_sdk.constants import AWS_SESSION_NAME, USE_SERVER_SIDE_CURSOR
 from application_sdk.credentials.utils import parse_credentials_extra
-from application_sdk.errors import AppError
+from application_sdk.errors import AppError, sanitize_cause_repr
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -137,8 +137,14 @@ class BaseSQLClient(ClientInterface):
             # Don't store persistent connection
             self.connection = None
 
+        # conformance: ignore[E004] exc_info omitted intentionally; SQLAlchemy embeds password in traceback; cause is sanitized and re-raised as typed error
         except Exception as e:
-            logger.error("Error loading SQL client", exc_info=True)
+            # No exc_info here: SQLAlchemy errors embed the full connection
+            # string (including the password) in their message, and the
+            # traceback would print it verbatim into logs.
+            logger.error(  # conformance: ignore[E005] exc_info would expose SQLAlchemy password in traceback; cause sanitized above
+                "Error loading SQL client: %s", sanitize_cause_repr(e)
+            )
             if self.engine:
                 self.engine.dispose()
                 self.engine = None
@@ -276,7 +282,10 @@ class BaseSQLClient(ClientInterface):
         Args:
             connection_string (str): Base SQLAlchemy connection string.
             source_connection_params (Dict[str, Any]): Additional connection parameters
-                to append to the connection string.
+                to append to the connection string. Keys and values must be
+                **raw, not pre-encoded** — both are URL-encoded here (via
+                ``quote_plus``) to prevent ``&``/``=`` injection, so a
+                pre-encoded value would be double-encoded.
 
         Returns:
             str: Connection string with additional parameters appended.
@@ -286,7 +295,9 @@ class BaseSQLClient(ClientInterface):
                 connection_string += "?"
             else:
                 connection_string += "&"
-            connection_string += f"{key}={value}"
+            # URL-encode so values containing &, =, or spaces can't inject
+            # extra connection parameters (e.g. sslmode overrides).
+            connection_string += f"{quote_plus(str(key))}={quote_plus(str(value))}"
 
         return connection_string
 
@@ -535,6 +546,7 @@ class BaseSQLClient(ClientInterface):
             return cast(Iterator["pd.DataFrame"], result)
         except AppError:
             raise
+        # conformance: ignore[E004] exception re-raised immediately as typed SqlPandasResultError; cause chain preserved via `from e`
         except Exception as e:
             raise SqlPandasResultError(
                 message="Error reading batched data from SQL", cause=e
@@ -561,6 +573,7 @@ class BaseSQLClient(ClientInterface):
             )
         except AppError:
             raise
+        # conformance: ignore[E004] exception re-raised immediately as typed SqlPandasResultError; cause chain preserved via `from e`
         except Exception as e:
             raise SqlPandasResultError(cause=e) from e
 
@@ -623,8 +636,14 @@ class AsyncBaseSQLClient(BaseSQLClient):
             # Don't store persistent connection
             self.connection = None
 
+        # conformance: ignore[E004] exc_info omitted intentionally; SQLAlchemy embeds password in traceback; cause is sanitized and re-raised as typed error
         except Exception as e:
-            logger.error("Error establishing database connection", exc_info=True)
+            # No exc_info here: SQLAlchemy errors embed the full connection
+            # string (including the password) in their message, and the
+            # traceback would print it verbatim into logs.
+            logger.error(  # conformance: ignore[E005] exc_info would expose SQLAlchemy password in traceback; cause sanitized above
+                "Error establishing database connection: %s", sanitize_cause_repr(e)
+            )
             if self.engine:
                 await self.engine.dispose()
                 self.engine = None
@@ -698,6 +717,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
 
             except AppError:
                 raise
+            # conformance: ignore[E004] exception re-raised immediately as typed SqlPandasResultError; cause chain preserved via `from e`
             except Exception as e:
                 raise SqlPandasResultError(
                     message="Error executing SQL query", cause=e

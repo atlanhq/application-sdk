@@ -96,7 +96,7 @@ The single entry point for all new native app contracts. Supersedes `NativeApp.p
 | `type` | String | `"connector"` | Marketplace type. |
 | `visibility` | String | `"public"` | Marketplace visibility. |
 | `buildTag` | String | `"v1"` | Emitted as `build_tag`. |
-| `selfDeployedRuntime` | Boolean | `false` | Emitted as `self_deployed_runtime`. |
+| `selfDeployedRuntime` | Boolean | `true` | Emitted as `self_deployed_runtime`. |
 
 ### Workflow & Manifest
 
@@ -168,6 +168,7 @@ class LineageStep {                      // wraps LineageNode
 class PublishStep {
   executorEnabled: Boolean|String = true
   includeInputFields: Boolean = true     // generates output_dir/load_to_atlan/publish_dry_run in _input.py
+  connectionEntity: String? = "{{connection}}"  // args["connection_entity"]; null omits it AND sets connection_creation_enabled=false
   lineagePublish: LineagePublishStep?    // opt-in lineage publish (default-off)
   errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
     startToCloseTimeoutSeconds = 259200  // 72h default — AE's 2h is too tight for large tenants
@@ -477,7 +478,7 @@ contract/app.pkl
 | `iconUrl` | String? | null | Root `icon_url`. |
 | `visibility` | String | `"public"` | Marketplace visibility. |
 | `buildTag` | String | `"v1"` | Emitted as `build_tag`. |
-| `selfDeployedRuntime` | Boolean | `false` | Emitted as `self_deployed_runtime`. |
+| `selfDeployedRuntime` | Boolean | `true` | Emitted as `self_deployed_runtime`. |
 | `metadata` | Mapping<String, Any> | `{}` | Extra top-level `atlan.yaml` fields. |
 | `atlanYamlOverrides` | Mapping<String, Any> | `{}` | Deep overrides applied after typed fields and `metadata`. Use for exact rendered yaml control, including nested `deploy` overrides. |
 | `entrypoints` | Listing<Entrypoint> | `[]` | Marketplace card / SDK entrypoint definitions. |
@@ -1461,6 +1462,8 @@ class PublishNode extends DAGNode {
   executorEnabled: Boolean|String = true
   tagPipelineEnabled: Boolean|String? = null
   tagAttachmentsPrefix: String? = null
+  connectionEntity: String? = "{{connection}}"
+  connectionCreationEnabled: Boolean = connectionEntity != null
   displayName = "Publish to Atlas"
   workflowType = "PublishWorkflow"
   appName = "publish"
@@ -1469,16 +1472,25 @@ class PublishNode extends DAGNode {
     ["transformed_data_prefix"] = "$.<upstream>.outputs.transformed_data_prefix"
     ["publish_state_prefix"] = "$.<upstream>.outputs.publish_state_prefix"
     ["current_state_prefix"] = "$.<upstream>.outputs.current_state_prefix"
-    ["connection_creation_enabled"] = true
+    ["connection_creation_enabled"] = connectionCreationEnabled
     ["executor_enabled"] = executorEnabled
-    ["connection_entity"] = "{{connection}}"
+    when (connectionEntity != null) { ["connection_entity"] = connectionEntity }
   }
   dependsOn { upstream }
 }
 ```
 
 `executorEnabled` can be a Boolean literal or an exact workflow placeholder string.
-For the auto-generated default publish node, set the app-level
+
+`connectionEntity` is the full connection entity JSON (typeName + attributes) used
+for connection creation. It defaults to the `"{{connection}}"` form placeholder.
+Set it to `null` (on the node, or via `pipeline.publish.connectionEntity`) to omit
+`connection_entity` from the args entirely. `connectionEntity` is **linked** to
+`connectionCreationEnabled`, which defaults to `connectionEntity != null`: a `null`
+entity therefore also sets `connection_creation_enabled = false` (publish targets an
+existing connection and creates nothing), while a present entity sets it `true`.
+Override `connectionCreationEnabled` explicitly to disable creation even when an
+entity is present. For the auto-generated default publish node, set the app-level
 `publishExecutorEnabled`; for `extraNodes["publish"] = new PublishNode { ... }`,
 set `executorEnabled` on that node.
 
@@ -2545,7 +2557,10 @@ class AppInputContract(ExtractionInput):
   into generated connector contracts.
 - SDK-owned fields are skipped in the generated subclass so parent validators
   continue to apply. This includes `include_filter`, `exclude_filter`, and
-  `temp_table_regex`.
+  `temp_table_regex`. When `include-filter` or `exclude-filter` are object
+  widgets such as `APITree`, the SDK normalizes tree selections like
+  `{"catalog": {"db": {}}}` to the existing filter map shape
+  `{"catalog": ["db"]}` before validation.
 - Publish fields simplified: `publish_dry_run` replaces the loader-specific fields
 
 ---

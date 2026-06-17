@@ -1,0 +1,10 @@
+name: Mark stale issues and PRs
+
+on:
+  schedule:
+    # weekly: At 00:00 on Sunday
+    - cron: 0 0 * * 0
+
+jobs:
+  call-stale-workflow:
+    uses: atlanhq/application-sdk/.github/workflows/stale.yml@main

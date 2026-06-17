@@ -42,7 +42,7 @@ description: |
   steps:
     - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
     - uses: ./.github/actions/mssql-native-deps   # connector-local action
-    - uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@v3.16.0
+    - uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@v3.17.1
       with:
         app-name: mssql
   ```
@@ -103,11 +103,11 @@ inputs:
   dapr-version:
     required: false
     description: Dapr runtime version to install.
-    default: "1.17.9"
+    default: "1.18.0"
   dapr-cli-version:
     required: false
     description: Dapr CLI version to download (may differ from the runtime version).
-    default: "1.17.1"
+    default: "1.18.0"
   force-external-runtime:
     required: false
     description: >
@@ -116,6 +116,51 @@ inputs:
       connector's main.py has NOT been migrated to the embedded runtime path yet
       and still expects external daprd at localhost:3500 + temporal at localhost:7233.
     default: "false"
+  application-sdk-ref:
+    required: false
+    description: |
+      Branch/SHA of atlanhq/application-sdk to pin before running tests.
+      Empty = use the lockfile version. Used by cross-repo dispatch from
+      application-sdk PRs to exercise the SDK branch under review.
+    default: ""
+  services-script:
+    required: false
+    description: |
+      Optional path (relative to the caller's checked-out repo root) of a
+      shell script that starts runtime source services and exports any needed
+      env vars via ``>> "$GITHUB_ENV"``.  The script runs AFTER setup-deps
+      (caller repo checked out, deps installed) and BEFORE the app server
+      starts, so services are ready when pytest begins.
+
+      Use this hook for services that cannot be managed from inside a pytest
+      fixture — e.g. externally-provisioned object stores, multi-container
+      stacks, or services whose Docker image is too slow to start inside a
+      fixture timeout.  For source systems that *can* run as Docker
+      containers, prefer the mysql/metabase pattern: a session-scoped
+      testcontainers fixture in tests/integration/conftest.py — it keeps CI
+      and local dev symmetric.
+
+      See atlan-openapi-app/.github/test/setup-services.sh for a reference
+      demonstration of the pattern.
+
+      ## Runtime-service hook vs native-build-dep pre-step
+
+      This hook covers *runtime services needed at test time* (post-install).
+      It is NOT the right place for OS-level build deps (ODBC drivers, SAP
+      JCo, etc.) that must be apt-installed *before* uv sync compiles native
+      Python extensions.  Those require a PRE-STEP in the caller's own
+      tests.yaml before invoking this action (see the "Connectors with native
+      dependencies" section above).
+
+      ## Cross-repo safety
+
+      This action checks out the caller's repo via setup-deps, so
+      services-script paths resolve against the caller's tree — identical to
+      how e2e-full-reusable.yaml forwards secrets-script and compose-overlay
+      to the sdr-e2e composite.  Never use ``uses: ./…`` references from
+      inside a reusable/composite workflow: they resolve against the
+      reusable's repo, not the caller's.
+    default: ""
 
 runs:
   using: "composite"
@@ -124,6 +169,16 @@ runs:
       uses: atlanhq/application-sdk/.github/actions/setup-deps@main
       with:
         python-version: ${{ inputs.python-version }}
+
+    - name: Pin application-sdk to dispatched ref
+      if: inputs.application-sdk-ref != ''
+      shell: bash
+      env:
+        SDK_REF: ${{ inputs.application-sdk-ref }}
+      run: |
+        chmod +x "${{ github.action_path }}/repin-application-sdk.sh"
+        "${{ github.action_path }}/repin-application-sdk.sh"
+        uv sync --all-extras --all-groups
 
     # SDK 3.13+ boots an embedded daprd + Temporal directly from
     # `python main.py` (application_sdk/dev/_dapr.py + _embedded.py), each
@@ -179,6 +234,13 @@ runs:
         uv run poe start-deps
         sleep 5
 
+    - name: Start runtime services (services-script hook)
+      if: inputs.services-script != ''
+      shell: bash
+      env:
+        SERVICES_SCRIPT: ${{ inputs.services-script }}
+      run: bash "$SERVICES_SCRIPT"
+
     - name: Start app server
       shell: bash
       env:
@@ -227,7 +289,7 @@ runs:
 
     - name: Upload test results
       if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
       with:
         name: integration-test-results
         path: results/

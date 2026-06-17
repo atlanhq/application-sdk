@@ -20,7 +20,7 @@ class CredentialVaultError(DependencyUnavailableError):
     """Deprecated: use ``application_sdk.errors.DependencyUnavailableError`` — removed in v4.0."""
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CREDENTIAL_VAULT_ERROR
-    code: ClassVar[str] = "CREDENTIAL_VAULT"
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_CREDENTIAL_VAULT"
 
     def __init__(
         self,

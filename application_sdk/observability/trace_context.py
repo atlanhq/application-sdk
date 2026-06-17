@@ -33,6 +33,7 @@ def get_trace_context() -> tuple[str, str]:
         if not ctx.is_valid:
             return "", ""
         return format(ctx.trace_id, "032x"), format(ctx.span_id, "016x")
+    # conformance: ignore[E004] probe pattern; no active tracer is expected and benign — empty strings returned silently
     except Exception:
         logger.debug("Failed to read trace context", exc_info=True)
         return "", ""

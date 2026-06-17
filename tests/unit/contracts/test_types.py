@@ -77,12 +77,16 @@ class TestFileReference:
         f.write_text("col1,col2\n1,2\n")
         ref = FileReference.from_local(f)
         assert ref.local_path == str(f)
+        assert ref.file_count == 1
+        assert ref.is_durable is False
 
     def test_from_local_string_path(self, tmp_path: Path) -> None:
         f = tmp_path / "results.parquet"
         f.write_bytes(b"PAR1fake")
         ref = FileReference.from_local(str(f))
         assert ref.local_path == str(f)
+        assert ref.file_count == 1
+        assert ref.is_durable is False
 
     def test_equality(self) -> None:
         ref1 = FileReference(local_path="/tmp/a.json", file_count=1)
@@ -155,6 +159,44 @@ class TestFileReference:
         # Does not stat the path eagerly for non-existent inputs.
         ref = FileReference.from_local("/does/not/exist")
         assert ref.file_count == 1
+
+    def test_from_local_oserror_falls_back_to_one(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """OSError from safe_list_directory uses file_count=1 fallback."""
+        import application_sdk.contracts.types as types_module
+
+        monkeypatch.setattr(
+            types_module,
+            "safe_list_directory",
+            lambda _: (_ for _ in ()).throw(OSError("sandbox")),
+        )
+        ref = FileReference.from_local(tmp_path)
+        assert ref.file_count == 1
+
+    # ---- rglob listing race ---------------------------------------------
+
+    def test_from_local_finds_files_when_rglob_returns_empty(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Mock ``Path.rglob`` to return empty (cpython#146646 silent-
+        swallow); ``file_count`` must still reflect the real tree."""
+        d = tmp_path / "tree"
+        d.mkdir()
+        (d / "a.txt").write_text("a")
+        (d / "b.txt").write_text("b")
+        sub = d / "sub"
+        sub.mkdir()
+        (sub / "c.txt").write_text("c")
+
+        # Inject the listing transient.
+        # Regression guard: a future revert to Path.rglob would re-trigger this mock.
+        monkeypatch.setattr(Path, "rglob", lambda self, pat: iter([]))
+
+        ref = FileReference.from_local(d)
+
+        # On main: file_count == 0 (the bug). After fix: 3.
+        assert ref.file_count == 3
 
 
 # =============================================================================

@@ -42,6 +42,7 @@ import orjson
 from application_sdk.contracts.types import ConnectionRef
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.e2e._errors import (
+    HarnessMethodNotImplementedError,
     ManifestDagMissingError,
     ManifestFileNotFoundError,
     MissingHarnessClassAttrError,
@@ -83,6 +84,7 @@ class FullDAGOutcome:
     connection_qualified_name: str
     connection_in_atlas: bool
     asset_counts: dict[str, int] = field(default_factory=dict)
+    total_assets: int = 0
     lineage_present: bool = False
 
     @property
@@ -162,6 +164,20 @@ class BaseE2ETest:
     atlas_asset_poll_timeout_seconds: ClassVar[int] = 15
 
     expected_min_asset_counts: ClassVar[dict[str, int]] = {}
+    # Exact per-type asset-count parity vs a direct (non-SDR) baseline run.
+    # Floors (above) assert ">= N"; this asserts "== N" — catches both
+    # under- and over-extraction. Generate the baseline once from a direct
+    # run and commit it. Empty = skip exact-count parity.
+    expected_exact_counts: ClassVar[dict[str, int]] = {}
+    # When True, a run that completes but lands ZERO assets in Atlas fails,
+    # backstopping the "workflow COMPLETED but extracted nothing" regression.
+    # Fires on any successful run regardless of whether floors/exacts are
+    # declared (so it also protects connectors that declare nothing — the ones
+    # most likely to silently regress), via the true all-types total count.
+    # Skipped only when the connector explicitly opts out
+    # (``require_nonempty_assets = False``) or its declared expectations
+    # themselves assert zero (only non-positive floors/exacts).
+    require_nonempty_assets: ClassVar[bool] = True
     expect_lineage: ClassVar[bool] = True
 
     # ------------------------------------------------------------------
@@ -260,6 +276,7 @@ class BaseE2ETest:
                     "Set connection_admin_roles on the test class to avoid "
                     "ATLAS-400-00-114 errors.",
                     _exc,
+                    exc_info=True,
                 )
 
     def teardown_method(self, method: Any) -> None:
@@ -342,7 +359,10 @@ class BaseE2ETest:
         """Agent identity (tier 4 only). Return None for direct mode."""
         if self.mode is RunMode.DIRECT:
             return None
-        raise NotImplementedError
+        raise HarnessMethodNotImplementedError(
+            message="subclass must override agent_spec() for AGENT mode",
+            operation="agent_spec",
+        )
 
     def connection_spec(self) -> ConnectionSpec:
         """Where the resulting Atlas Connection will live."""
@@ -425,11 +445,9 @@ class BaseE2ETest:
         knowledge needed). Non-SQL connectors must always ship a
         manifest.json and set ``manifest_path``.
         """
-        raise NotImplementedError(
-            f"{type(self).__name__}: manifest_path is empty but "
-            "_build_legacy_seed_dag() is not overridden. Set manifest_path "
-            "to the connector's manifest.json, or override "
-            "_build_legacy_seed_dag() if you need a hand-crafted seed DAG."
+        raise HarnessMethodNotImplementedError(
+            message="non-SQL connectors must set manifest_path; SQL connectors must override _build_legacy_seed_dag()",
+            operation="_build_legacy_seed_dag",
         )
 
     # ------------------------------------------------------------------
@@ -575,6 +593,7 @@ class BaseE2ETest:
         )
 
         asset_counts: dict[str, int] = {}
+        total_assets = 0
         lineage_present = False
         if ae_result.all_nodes_succeeded:
             connection_in_atlas = self.client.poll_atlas_for_connection(
@@ -583,34 +602,52 @@ class BaseE2ETest:
                 timeout_seconds=self.atlas_poll_timeout_seconds,
             )
             if connection_in_atlas:
-                if self.expected_min_asset_counts:
+                # Probe the union of types referenced by floors + exact-count
+                # parity, so both kinds of expectation get real Atlas counts.
+                probe_types = tuple(
+                    {*self.expected_min_asset_counts, *self.expected_exact_counts}
+                )
+                if probe_types:
                     # Poll for asset counts — Elasticsearch is eventually
                     # consistent but assets appear within seconds if publish
                     # succeeded. Use a short dedicated timeout rather than the
                     # full atlas_poll_timeout_seconds used for the connection.
-                    probe_types = tuple(self.expected_min_asset_counts.keys())
                     deadline = time.monotonic() + self.atlas_asset_poll_timeout_seconds
                     while True:
                         asset_counts = self.client.count_assets_under_connection(
                             self.connection_qualified_name,
                             type_names=probe_types,
                         )
-                        thresholds_met = all(
-                            asset_counts.get(tn, 0) >= floor
-                            for tn, floor in self.expected_min_asset_counts.items()
-                        )
                         logger.info(
                             "Atlas inventory under %s: %s",
                             self.connection_qualified_name,
                             asset_counts,
                         )
-                        if thresholds_met or time.monotonic() >= deadline:
+                        # Single source of truth: the polling exit reuses the
+                        # same evaluator as the final assertion, so the two can
+                        # never drift to different definitions of "met".
+                        met = not self._evaluate_asset_expectations(asset_counts)
+                        if time.monotonic() >= deadline:
+                            break
+                        # Floors/non-empty can exit as soon as they're satisfied.
+                        # Exact-count parity must NOT: ES indexing is eventually
+                        # consistent, so a transient match could end polling
+                        # before late-arriving over-extracted assets land. Keep
+                        # polling to the deadline so over-extraction surfaces.
+                        if met and not self.expected_exact_counts:
                             break
                         time.sleep(self.atlas_asset_poll_interval_seconds)
+                # True total across ALL asset types (not just the probed ones).
+                # The non-empty backstop uses this so it also protects connectors
+                # that declare no per-type expectations — precisely the ones most
+                # likely to silently regress to a zero-asset run.
+                total_assets = self.client.count_total_assets_under_connection(
+                    self.connection_qualified_name
+                )
                 if self.expect_lineage:
                     lineage_counts = self.client.count_lineage_under_connection(
                         self.connection_qualified_name,
-                        type_names=tuple(self.expected_min_asset_counts.keys()),
+                        type_names=probe_types,
                     )
                     lineage_present = any(c > 0 for c in lineage_counts.values())
                     logger.info(
@@ -634,8 +671,70 @@ class BaseE2ETest:
             connection_qualified_name=self.connection_qualified_name,
             connection_in_atlas=connection_in_atlas,
             asset_counts=asset_counts,
+            total_assets=total_assets,
             lineage_present=lineage_present,
         )
+
+    # ------------------------------------------------------------------
+    # Asset-output expectations (floors + exact parity + non-empty)
+    # ------------------------------------------------------------------
+
+    def _evaluate_asset_expectations(
+        self, asset_counts: dict[str, int], *, total_assets: int | None = None
+    ) -> list[str]:
+        """Evaluate per-type asset expectations against the Atlas counts.
+
+        Pure function of ``asset_counts`` + the class attrs, so it is
+        unit-testable without a tenant. Returns a list of human-readable
+        failure lines (empty list = all expectations met). Covers:
+
+          * ``expected_min_asset_counts`` — floors (``>=``).
+          * ``expected_exact_counts`` — exact parity (``==``) vs the
+            direct-run baseline; catches under- AND over-extraction.
+          * ``require_nonempty_assets`` — a COMPLETED run that lands zero
+            assets fails (the "completed but extracted nothing" backstop).
+
+        *total_assets* is the true count across ALL asset types (from
+        ``count_total_assets_under_connection``); when omitted it falls back to
+        ``sum(asset_counts.values())`` so unit tests can drive the pure logic.
+        The backstop uses it so it fires even for connectors that declare no
+        per-type expectations — the ones most likely to silently regress —
+        UNLESS the connector opts out (``require_nonempty_assets = False``) or
+        its declared expectations themselves assert zero (only non-positive
+        floors/exacts, e.g. "exactly 0 of X").
+        """
+        failures: list[str] = []
+
+        for type_name, floor in self.expected_min_asset_counts.items():
+            got = asset_counts.get(type_name, 0)
+            if got < floor:
+                failures.append(f"  - {type_name}: got {got}, expected >= {floor}")
+
+        for type_name, want in self.expected_exact_counts.items():
+            got = asset_counts.get(type_name, 0)
+            if got != want:
+                failures.append(
+                    f"  - {type_name}: got {got}, expected exactly {want} "
+                    f"(count parity vs. direct-run baseline)"
+                )
+
+        floors = self.expected_min_asset_counts
+        exacts = self.expected_exact_counts
+        has_positive_expectation = any(v > 0 for v in floors.values()) or any(
+            v > 0 for v in exacts.values()
+        )
+        # A connector whose only declared expectations are zero (e.g.
+        # exact {"X": 0}) is asserting "produces zero of X" — the backstop must
+        # not override that into a failure.
+        asserting_zero = bool(floors or exacts) and not has_positive_expectation
+        total = total_assets if total_assets is not None else sum(asset_counts.values())
+        if self.require_nonempty_assets and not asserting_zero and total == 0:
+            failures.append(
+                "  - run produced ZERO assets in Atlas (workflow completed but "
+                "extracted nothing)"
+            )
+
+        return failures
 
     # ------------------------------------------------------------------
     # Default test method
@@ -647,7 +746,9 @@ class BaseE2ETest:
         Asserts (in order):
           1. Every DAG node succeeded.
           2. The Connection asset exists in Atlas.
-          3. Per-type asset counts meet ``expected_min_asset_counts`` floors.
+          3. Asset-count expectations: ``expected_min_asset_counts`` floors,
+             ``expected_exact_counts`` parity vs. the direct-run baseline, and
+             the non-empty backstop (see ``_evaluate_asset_expectations``).
           4. At least one Process/ColumnProcess exists (unless ``expect_lineage``
              is False).
         """
@@ -671,19 +772,16 @@ class BaseE2ETest:
                 f"Failed nodes:\n{failures_msg}"
             )
 
-        if self.expected_min_asset_counts:
-            shortfalls = [
-                f"  - {tn}: got {outcome.asset_counts.get(tn, 0)}, expected >= {floor}"
-                for tn, floor in self.expected_min_asset_counts.items()
-                if outcome.asset_counts.get(tn, 0) < floor
-            ]
-            if shortfalls:
-                raise AssertionError(
-                    "Atlas inventory under "
-                    f"{outcome.connection_qualified_name} below thresholds:\n"
-                    + "\n".join(shortfalls)
-                    + f"\nFull counts: {outcome.asset_counts}"
-                )
+        asset_failures = self._evaluate_asset_expectations(
+            outcome.asset_counts, total_assets=outcome.total_assets
+        )
+        if asset_failures:
+            raise AssertionError(
+                "Atlas inventory under "
+                f"{outcome.connection_qualified_name} did not meet expectations:\n"
+                + "\n".join(asset_failures)
+                + f"\nFull counts: {outcome.asset_counts}"
+            )
 
         if self.expect_lineage and not outcome.lineage_present:
             raise AssertionError(

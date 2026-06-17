@@ -66,7 +66,7 @@ runs:
         token: ${{ inputs.github-token }}
 
     - name: Setup AWS Credentials
-      uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+      uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6
       continue-on-error: true
       id: aws-creds
       with:
@@ -81,7 +81,7 @@ runs:
         aws s3 sync ./htmlcov s3://kryptonite-store/coverage/application-sdk/pr/${{ github.event.number }} --delete
 
     - name: Comment Coverage Report URL on PR
-      uses: mshick/add-pr-comment@b8f338c590a895d50bcbfa6c5859251edc8952fc # v2
+      uses: mshick/add-pr-comment@8e4927817251f1ff60c001f04568532b38e0b4a0 # v3
       if: ${{ github.event_name == 'pull_request' }}
       with:
         message-id: "coverage"

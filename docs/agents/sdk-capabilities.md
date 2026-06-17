@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.16.0
-source-sha:    281849ccf28b0e9b3b6b458fe625a995c0759a9b
-source-date:   2026-06-10T11:48:16Z
+sdk-version:   3.17.2
+source-sha:    ab591dae78d51bb566d363d51e8223954a1aff91
+source-date:   2026-06-16T23:37:20Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -23,7 +23,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 9 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 51 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 53 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 10 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 23 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 34 |
@@ -359,7 +359,7 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 #### `normalize_filters`
 
 - **Import:** `from application_sdk.common import normalize_filters`
-- **Signature:** `normalize_filters(filter_dict: dict[str, list[str] | str], is_include: bool)`
+- **Signature:** `normalize_filters(filter_dict: dict[str, FilterValue], is_include: bool)`
 - **Summary:** Normalize filter dict to fully-anchored ``db.schema`` regex patterns.
 - **Defined in:** `application_sdk/common/sql_filters.py`
 
@@ -697,7 +697,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `CredentialResolver`
 
 - **Import:** `from application_sdk.credentials import CredentialResolver`
-- **Signature:** `class CredentialResolver(secret_store: 'SecretStore', registry: 'CredentialTypeRegistry | None' = None)`
+- **Signature:** `class CredentialResolver(secret_store: SecretStore, registry: CredentialTypeRegistry | None = None)`
 - **Summary:** Resolves a CredentialRef to a typed Credential.
 - **Defined in:** `application_sdk/credentials/resolver.py`
 
@@ -1023,6 +1023,22 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Signature:** `class UnimplementedError(*, ...)`
 - **Summary:** Operation not supported or capability not yet built.
 - **Defined in:** `application_sdk/errors/leaves.py`
+
+### Functions
+
+#### `redact_secrets`
+
+- **Import:** `from application_sdk.errors import redact_secrets`
+- **Signature:** `redact_secrets(text: str)`
+- **Summary:** Redact URL userinfo and known secret query-params from a string.
+- **Defined in:** `application_sdk/errors/base.py`
+
+#### `sanitize_cause_repr`
+
+- **Import:** `from application_sdk.errors import sanitize_cause_repr`
+- **Signature:** `sanitize_cause_repr(exc: BaseException)`
+- **Summary:** Return a length-capped, secret-redacted string for a cause exception.
+- **Defined in:** `application_sdk/errors/base.py`
 
 ### Constants and Enums
 
@@ -2254,7 +2270,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Summary:** Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0.
 - **Fields:**
   - `DEFAULT_ERROR_CODE: ErrorCode` `= CONTRACT_VALIDATION`
-  - `code: str` `= 'CONTRACT_VALIDATION'`
+  - `code: str` `= 'INVALID_INPUT_CONTRACT_VALIDATION'`
   - `error_code: ErrorCode`
 - **Defined in:** `application_sdk/contracts/base.py`
 
@@ -2631,8 +2647,8 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `agent_json: AgentCredentialSpec | None` — Typed agent credential spec. Non-None when extraction_method is agent.
   - `output_prefix: str` `= ''` — Object store prefix for all output artifacts.
   - `output_path: str` `= ''` — Local or object store path for output files.
-  - `exclude_filter: FilterMap | str` `= Field(default='')` — Filter for excluding schemas/tables.
-  - `include_filter: FilterMap | str` `= Field(default='')` — Filter for including schemas/tables.
+  - `exclude_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)` — Filter for excluding schemas/tables.
+  - `include_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)` — Filter for including schemas/tables.
   - `temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''` — Regex pattern identifying temporary tables.
   - `source_tag_prefix: str` `= ''` — Tag prefix for source-level metadata.
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
@@ -2667,8 +2683,8 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `credential_ref: CredentialRef | None`
   - `output_prefix: str` `= ''`
   - `output_path: str` `= ''`
-  - `exclude_filter: FilterMap | str` `= Field(default='')`
-  - `include_filter: FilterMap | str` `= Field(default='')`
+  - `exclude_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)`
+  - `include_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)`
   - `temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''`
   - `source_tag_prefix: str` `= ''`
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`

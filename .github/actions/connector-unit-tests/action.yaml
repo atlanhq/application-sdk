@@ -73,14 +73,14 @@ runs:
 
     - name: Comment coverage on PR
       if: github.event_name == 'pull_request'
-      uses: orgoro/coverage@ca0c362dc1a4f100447309405e6dfea47e251495 # v3.3
+      uses: orgoro/coverage@71cf993a407154ad9d8dd027c88a374b0ed002a9 # v3.3
       with:
         coverageFile: coverage.xml
         token: ${{ inputs.github-token }}
 
     - name: Upload coverage artifacts
       if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
       with:
         name: unit-test-coverage
         path: |

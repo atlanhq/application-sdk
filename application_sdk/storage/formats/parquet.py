@@ -267,6 +267,7 @@ class ParquetFileReader(Reader):
                 (pd.read_parquet(parquet_file) for parquet_file in parquet_files),
                 ignore_index=True,
             )
+        # conformance: ignore[E004] exception is re-raised as FormatReadError; traceback preserved in cause chain
         except Exception as e:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 FormatReadError,
@@ -332,6 +333,7 @@ class ParquetFileReader(Reader):
                 df = pd.read_parquet(parquet_file)
                 for i in range(0, len(df), self.chunk_size):
                     yield df.iloc[i : i + self.chunk_size]  # type: ignore
+        # conformance: ignore[E004] exception is re-raised as FormatReadError; traceback preserved in cause chain
         except Exception as e:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 FormatReadError,
@@ -386,6 +388,7 @@ class ParquetFileReader(Reader):
             # and _build_unified_daft_schema for the failure modes guarded.
             daft_schema = _build_unified_daft_schema(parquet_files, daft)
             return daft.read_parquet(parquet_files, schema=daft_schema)
+        # conformance: ignore[E004] exception is re-raised as FormatReadError; traceback preserved in cause chain
         except Exception as e:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 FormatReadError,
@@ -814,6 +817,7 @@ class ParquetFileWriter(Writer):
                         path, path, retain_local_copy=self.retain_local_copy
                     )
 
+        # conformance: ignore[E004] exception is re-raised after recording failure metrics; not swallowed
         except Exception as e:
             # Record metrics for failed write
             self.metrics.record_metric(

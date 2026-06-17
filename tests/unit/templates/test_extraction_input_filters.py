@@ -4,8 +4,12 @@ Filters accept dict (structured from AE), JSON string, raw regex string,
 list, and None. SQL injection is guarded by rejecting single quotes.
 """
 
-import pytest
+from typing import Annotated
 
+import pytest
+from pydantic import Field
+
+from application_sdk.contracts.types import MaxItems
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionTaskInput,
@@ -58,6 +62,111 @@ class TestFilterCoercion:
         assert result.exclude_filter == ""
 
 
+class TestAPITreeFilterCoercion:
+    """APITree include/exclude filters decode before app workflow code starts."""
+
+    def test_apitree_exclude_filter_normalized_to_filter_map(self):
+        payload = {
+            "exclude_filter": {
+                "AwsDataCatalog": {
+                    "mswtest_2": {},
+                    "mswtest_3": {},
+                    "redshift_sample_testing": {},
+                }
+            }
+        }
+        result = ExtractionInput.model_validate(payload)
+        assert result.exclude_filter == {
+            "AwsDataCatalog": [
+                "mswtest_2",
+                "mswtest_3",
+                "redshift_sample_testing",
+            ]
+        }
+
+    def test_apitree_include_filter_lifted_from_ae_metadata(self):
+        payload = {
+            "metadata": {
+                "include-filter": {
+                    "AwsDataCatalog": {
+                        "mswtest_2": {},
+                    }
+                }
+            }
+        }
+        result = ExtractionInput.model_validate(payload)
+        assert result.include_filter == {"AwsDataCatalog": ["mswtest_2"]}
+
+    def test_apitree_filter_works_for_generated_contract_subclasses(self):
+        class AppInputContract(ExtractionInput):
+            pass
+
+        payload = {
+            "include_filter": {
+                "AwsDataCatalog": {
+                    "mswtest_2": {},
+                }
+            }
+        }
+        result = AppInputContract.model_validate(payload)
+        assert result.include_filter == {"AwsDataCatalog": ["mswtest_2"]}
+
+    def test_apitree_filter_works_for_task_inputs(self):
+        payload = {
+            "exclude_filter": {
+                "AwsDataCatalog": {
+                    "mswtest_2": {},
+                }
+            }
+        }
+        result = ExtractionTaskInput.model_validate(payload)
+        assert result.exclude_filter == {"AwsDataCatalog": ["mswtest_2"]}
+
+    def test_deeper_apitree_filter_truncated_to_catalog_schema_level(self):
+        payload = {
+            "include_filter": {
+                "AwsDataCatalog": {
+                    "mswtest_2": {
+                        "nested_schema": {},
+                    },
+                }
+            }
+        }
+        result = ExtractionInput.model_validate(payload)
+        assert result.include_filter == {"AwsDataCatalog": ["mswtest_2"]}
+
+    def test_overridden_filter_fields_keep_app_specific_tree_shape(self):
+        class AppSpecificInput(ExtractionInput, allow_unbounded_fields=True):
+            include_filter: Annotated[dict[str, object], MaxItems(1000)] = Field(  # type: ignore[assignment]
+                default_factory=dict
+            )
+            exclude_filter: Annotated[dict[str, object], MaxItems(1000)] = Field(  # type: ignore[assignment]
+                default_factory=dict
+            )
+
+        payload = {
+            "include_filter": {
+                "warehouse_1": {
+                    "project_1": {
+                        "dataset_1": {},
+                    },
+                }
+            },
+            "exclude_filter": {
+                "warehouse_2": {},
+            },
+        }
+        result = AppSpecificInput.model_validate(payload)
+        assert result.include_filter == {
+            "warehouse_1": {
+                "project_1": {
+                    "dataset_1": {},
+                },
+            }
+        }
+        assert result.exclude_filter == {"warehouse_2": {}}
+
+
 class TestFilterSQLInjectionGuard:
     """SQL-unsafe sequences blocked in filter values (BLDX-518 deny-list)."""
 
@@ -73,6 +182,24 @@ class TestFilterSQLInjectionGuard:
 
     def test_single_quote_in_dict_value_rejected(self):
         payload = {"include_filter": {"^db$": ["schema'; DROP TABLE--"]}}
+        with pytest.raises(ValueError, match=r"SQL-unsafe sequence"):
+            ExtractionInput.model_validate(payload)
+
+    def test_single_quote_in_nested_apitree_value_rejected(self):
+        payload = {"include_filter": {"AwsDataCatalog": {"db'; DROP TABLE--": {}}}}
+        with pytest.raises(ValueError, match=r"SQL-unsafe sequence"):
+            ExtractionInput.model_validate(payload)
+
+    def test_single_quote_in_deeper_apitree_descendant_rejected(self):
+        payload = {
+            "include_filter": {
+                "AwsDataCatalog": {
+                    "mswtest_2": {
+                        "schema'; DROP TABLE--": {},
+                    }
+                }
+            }
+        }
         with pytest.raises(ValueError, match=r"SQL-unsafe sequence"):
             ExtractionInput.model_validate(payload)
 

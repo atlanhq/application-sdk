@@ -28,7 +28,10 @@ import os
 from typing import Any, ClassVar
 
 from application_sdk.contracts.types import ConnectionRef
-from application_sdk.testing.e2e._errors import AdminRoleNotResolvedError
+from application_sdk.testing.e2e._errors import (
+    AdminRoleNotResolvedError,
+    HarnessMethodNotImplementedError,
+)
 from application_sdk.testing.e2e.base import BaseE2ETest
 from application_sdk.testing.e2e.credential import CredentialBody
 from application_sdk.testing.e2e.payload import (
@@ -102,7 +105,10 @@ class SQLAppE2ETest(BaseE2ETest):
         Tier 5 (direct mode): values are sent verbatim to the prod pod
         as credential overrides; must work as-is.
         """
-        raise NotImplementedError
+        raise HarnessMethodNotImplementedError(
+            message="subclass must override database_spec() to provide the DB under test",
+            operation="database_spec",
+        )
 
     def agent_spec(self) -> AgentSpec | None:
         """Default AGENT-mode agent identity, or None in DIRECT mode."""
@@ -161,9 +167,9 @@ class SQLAppE2ETest(BaseE2ETest):
 
     def _credential_body(self) -> CredentialBody | None:
         """SQL connectors must override to return their generated credential body."""
-        raise NotImplementedError(
-            f"{type(self).__name__}: SQL connectors must override _credential_body() "
-            "to return their generated <Connector>CredentialBody instance."
+        raise HarnessMethodNotImplementedError(
+            message="SQL connectors must override _credential_body() to return their generated CredentialBody instance",
+            operation="_credential_body",
         )
 
     def _build_legacy_seed_dag(self, extract_queue: str) -> dict[str, Any]:

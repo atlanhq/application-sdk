@@ -184,6 +184,7 @@ def get_tables_needing_column_extraction(
 
         return filtered_df, changed_count, backfill_count, no_change_count
 
+    # conformance: ignore[E004] re-raises immediately as typed DaftAnalysisError; no swallow occurs
     except Exception as e:
         from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415
             DaftAnalysisError,

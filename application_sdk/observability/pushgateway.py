@@ -78,6 +78,7 @@ class TemporalCoreCollector:
             if resp.status_code != 200:
                 return
             yield from text_string_to_metric_families(resp.text)
+        # conformance: ignore[E004] best-effort scrape; exc_info already present; transient hiccup must not poison the push
         except Exception:
             # Best-effort — a transient Temporal core hiccup must not poison the push.
             logger.debug(
@@ -110,6 +111,7 @@ def _log_push_failure(error: HTTPError, request_body: bytes) -> None:
         resp = ""
         try:
             resp = error.read().decode("utf-8", errors="replace")[:2000]
+        # conformance: ignore[E004] diagnostic-only inner read; failure to decode response body must not replace the outer HTTPError
         except Exception:  # noqa: S110 — diagnostic-only
             pass
         msg = (
@@ -211,6 +213,7 @@ class PushGatewayClient:
             self._task.cancel()
             try:
                 await self._task
+            # conformance: ignore[E004] shutdown cleanup; task cancellation swallows all exceptions by design
             except (asyncio.CancelledError, Exception):  # noqa: S110 — task cancellation is the goal; surface nothing on shutdown
                 pass
             self._task = None
@@ -256,8 +259,8 @@ class PushGatewayClient:
                     await asyncio.wait_for(
                         self._stopped.wait(), timeout=self._interval_s
                     )
-                except TimeoutError:
-                    pass  # wait_for timeout means push interval elapsed; continue loop
+                except TimeoutError:  # conformance: ignore[E002,E014] wait_for timeout = push interval elapsed; loop continues
+                    pass
                 if self._stopped.is_set():
                     return
                 try:
@@ -344,6 +347,7 @@ class PushGatewayClient:
         for match in _PUSH_TIME_LINE.finditer(text):
             try:
                 last_push = float(match.group("ts"))
+            # conformance: ignore[E014] malformed timestamp line; skip to next match
             except ValueError:
                 continue
             labels = dict(_LABEL_PAIR.findall(match.group("labels")))

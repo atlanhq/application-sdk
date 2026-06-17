@@ -240,6 +240,7 @@ class ObjectStoreMetricExporter(MetricExporter):
             logger.warning(
                 "Object store '%s' not configured; metric upload disabled",
                 name,
+                exc_info=True,
             )
             return None
         except Exception:
@@ -310,8 +311,8 @@ class ObjectStoreMetricExporter(MetricExporter):
             finally:
                 try:
                     os.unlink(local_path)
-                except OSError:
-                    pass  # best-effort local-file cleanup; never block metric export
+                except OSError:  # conformance: ignore[E002] best-effort local metric-file cleanup; never block export
+                    pass
 
         except Exception:
             logger.warning("ObjectStore metric export failed", exc_info=True)

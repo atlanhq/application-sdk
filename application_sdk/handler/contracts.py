@@ -52,13 +52,16 @@ class _DictLikeConfigBase(BaseModel):
                 return getattr(self, name)
         if self.model_extra and key in self.model_extra:
             return self.model_extra[key]
-        raise KeyError(key)  # stdlib-interop: __getitem__ protocol requires KeyError
+        # conformance: ignore[E007] __getitem__ must raise KeyError per Mapping protocol; callers use get() for safe access
+        # conformance: ignore[E012] KeyError is required by the Mapping/__getitem__ protocol; tests/unit/handler/test_contracts.py:295 asserts KeyError
+        raise KeyError(key)
 
     def get(self, key: str, default: Any = None) -> Any:
         """Dict-style accessor with default — mirrors ``dict.get``."""
         try:
             return self[key]
         except KeyError:
+            # conformance: ignore[E007] KeyError is expected control-flow; logging every dict.get() miss would be noisy
             return default
 
     def __contains__(self, key: object) -> bool:
@@ -66,7 +69,9 @@ class _DictLikeConfigBase(BaseModel):
             return False
         try:
             self[key]
+        # conformance: ignore[E012] KeyError is required by the Mapping/__contains__ protocol; AppError would break stdlib interop
         except KeyError:
+            # conformance: ignore[E007] __contains__ returning False on KeyError is expected protocol behaviour; not an error condition
             return False
         return True
 

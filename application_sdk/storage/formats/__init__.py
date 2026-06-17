@@ -318,7 +318,7 @@ class Writer(ABC):
                     import daft  # noqa: PLC0415 — optional dep: daft
 
                     return daft.from_pandas(data)
-                except ImportError:
+                except ImportError:  # conformance: ignore[E008] re-raising as DaftNotInstalledError; optional dep daft not installed
                     from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                         DaftNotInstalledError,
                     )
@@ -332,9 +332,7 @@ class Writer(ABC):
 
             if isinstance(data, daft.DataFrame):
                 return data
-        except ImportError:
-            # Optional dep: daft is not installed — input cannot be a daft
-            # DataFrame, so fall through to the dict/list branches.
+        except ImportError:  # conformance: ignore[E002,E008] optional dep daft not installed; fall through to dict/list handling
             pass
 
         # Convert dict or list of dicts to DataFrame
@@ -359,7 +357,7 @@ class Writer(ABC):
                                     columnar_data[key] = []
                                 columnar_data[key].append(value)
                     return daft.from_pydict(columnar_data)
-                except ImportError:
+                except ImportError:  # conformance: ignore[E008] re-raising as DaftNotInstalledError; optional dep daft not installed
                     from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                         DaftNotInstalledError,
                     )
@@ -477,6 +475,7 @@ class Writer(ABC):
                 for dataframe in sync_generator:
                     if not is_empty_dataframe(dataframe):
                         await self._write_dataframe(dataframe)
+        # conformance: ignore[E004] re-raises as typed FormatWriteError; no information is discarded
         except Exception as e:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 FormatWriteError,
@@ -551,6 +550,7 @@ class Writer(ABC):
             if self.chunk_start is None:
                 self.chunk_count += 1
             self.partitions.append(self.chunk_part)
+        # conformance: ignore[E004] records error metrics then re-raises; caller receives the original exception
         except Exception as e:
             # Record metrics for failed write
             self.metrics.record_metric(
@@ -595,6 +595,7 @@ class Writer(ABC):
                 for dataframe in sync_generator:
                     if not is_empty_dataframe(dataframe):
                         await self._write_daft_dataframe(dataframe)
+        # conformance: ignore[E004] re-raises as typed FormatWriteError; no information is discarded
         except Exception as e:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 FormatWriteError,
@@ -724,6 +725,7 @@ class Writer(ABC):
             )
             return self._result
 
+        # conformance: ignore[E004] re-raises as typed FormatCloseError; no information is discarded
         except Exception as e:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 FormatCloseError,
@@ -776,6 +778,7 @@ class Writer(ABC):
                     description="Number of chunks written to files",
                 )
 
+        # conformance: ignore[E004] records error metrics then re-raises; caller receives the original exception
         except Exception as e:
             # Record metrics for failed write
             self.metrics.record_metric(
@@ -847,6 +850,7 @@ class Writer(ABC):
             await self._upload_file(output_file_name)
 
             return statistics
+        # conformance: ignore[E004] re-raises as typed FormatStatisticsWriteError; no information is discarded
         except Exception as e:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 FormatStatisticsWriteError,

@@ -71,6 +71,7 @@ async def acquire_distributed_lock(
                 }
 
             raise LockAcquisitionError()
+    # conformance: ignore[E004] top-level error boundary; always re-raises as AppError or typed RedisLockError
     except Exception as e:
         if isinstance(e, AppError):
             raise

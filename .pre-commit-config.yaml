@@ -35,6 +35,6 @@ repos:
         files: ^(uv\.lock|requirements\.txt)$
         pass_filenames: false
   - repo: https://github.com/RobertCraigie/pyright-python
-    rev: v1.1.393
+    rev: v1.1.410
     hooks:
       - id: pyright

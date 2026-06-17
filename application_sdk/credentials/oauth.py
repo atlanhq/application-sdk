@@ -49,14 +49,16 @@ def _parse_jwt_exp(token: str) -> float | None:
         claims: dict[str, object] = json.loads(base64.urlsafe_b64decode(padded))
         exp = claims.get("exp")
         return float(exp) if exp is not None else None  # type: ignore[arg-type]
+    # conformance: ignore[E004] probe that decodes opaque/non-JWT tokens; None return is the intended fallback for any parse failure
     except Exception:  # noqa: BLE001
+        # conformance: ignore[E007] probe returning None on parse failure; logging every non-JWT token decode attempt would be noisy
         return None
 
 
 class OAuthTokenError(AuthError):
     """Raised when an OAuth 2.0 token exchange or refresh fails (category=AUTH)."""
 
-    code: ClassVar[str] = "OAUTH_TOKEN"
+    code: ClassVar[str] = "AUTH_OAUTH_TOKEN"
 
     def __init__(self, message: str, *, cause: Exception | None = None) -> None:
         AuthError.__init__(self, message=message, cause=cause)
@@ -147,6 +149,10 @@ class OAuthTokenService:
                 expiry = expiry.replace(tzinfo=UTC)
             return expiry
         except ValueError:
+            logger.warning(
+                "Failed to parse token expiry from ISO format; returning None",
+                exc_info=True,
+            )
             return None
 
     @property
@@ -257,7 +263,7 @@ class OAuthTokenService:
             ) from exc
         except httpx.HTTPError as exc:
             raise OAuthTokenError(
-                message=f"Token exchange HTTP error: {exc}", cause=exc
+                message="Token exchange HTTP error", cause=exc
             ) from exc
         t_after = time.time()
 

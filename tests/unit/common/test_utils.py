@@ -127,6 +127,18 @@ class TestPrepareFilters:
         assert "^db1\\..*$" == include_regex
         assert "^$" == exclude_regex
 
+    def test_prepare_filters_with_apitree_object_shape(self) -> None:
+        """APITree JSON strings normalize through the SQL helper path too."""
+        include_filter = '{"AwsDataCatalog": {"mswtest_2": {}, "mswtest_3": {}}}'
+        exclude_filter = "{}"
+
+        include_regex, exclude_regex = prepare_filters(include_filter, exclude_filter)
+
+        assert (
+            "^AwsDataCatalog\\.mswtest_2$|^AwsDataCatalog\\.mswtest_3$" == include_regex
+        )
+        assert "^$" == exclude_regex
+
     def test_prepare_filters_with_empty_include_and_filled_exclude(self) -> None:
         """Test prepare_filters with empty include filter but filled exclude filter"""
         include_filter = "{}"
@@ -173,6 +185,15 @@ class TestNormalizeFilters:
         # ``^``/``$`` are stripped from both the db key and each schema entry,
         # then re-anchored on the assembled segment.
         assert result == ["^db1\\.schema1$"]
+
+    def test_normalize_filters_with_apitree_object_shape(self) -> None:
+        filter_dict = {"AwsDataCatalog": {"mswtest_2": {}, "mswtest_3": {}}}
+        result = normalize_filters(filter_dict, True)
+
+        assert result == [
+            "^AwsDataCatalog\\.mswtest_2$",
+            "^AwsDataCatalog\\.mswtest_3$",
+        ]
 
     def test_normalize_filters_wildcard_and_empty_list_equivalent(self) -> None:
         """``"*"`` and an empty list both mean "every schema in this db"."""

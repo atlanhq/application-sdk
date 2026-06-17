@@ -182,7 +182,7 @@ class RedisClient(BaseRedisClient):
 
         except AppError:
             raise
-        except (ConnectionError, TimeoutError, RedisError, Exception) as e:
+        except (ConnectionError, TimeoutError, RedisError) as e:
             _handle_redis_error(e)
 
     def _connect_via_sentinel(self) -> None:
@@ -202,7 +202,7 @@ class RedisClient(BaseRedisClient):
                 REDIS_SENTINEL_SERVICE_NAME, password=REDIS_PASSWORD
             )
 
-        except (ConnectionError, TimeoutError, RedisError, Exception) as e:
+        except (ConnectionError, TimeoutError, RedisError) as e:
             _handle_redis_error(e)
 
     def _connect_standalone(self) -> None:
@@ -218,7 +218,7 @@ class RedisClient(BaseRedisClient):
                 host=REDIS_HOST, port=int(REDIS_PORT), password=REDIS_PASSWORD
             )
 
-        except (ConnectionError, TimeoutError, RedisError, Exception) as e:
+        except (ConnectionError, TimeoutError, RedisError) as e:
             _handle_redis_error(e)
 
     def close(self) -> None:
@@ -265,7 +265,7 @@ class RedisClient(BaseRedisClient):
                 resource_id, owner_id, nx=True, ex=ttl_seconds
             )
             return bool(result)
-        except (ConnectionError, TimeoutError, RedisError, Exception) as e:
+        except (ConnectionError, TimeoutError, RedisError) as e:
             _handle_redis_error(e)
 
     def _release_lock(
@@ -299,7 +299,7 @@ class RedisClient(BaseRedisClient):
             # results. Re-raise unchanged instead of letting `_handle_redis_error`
             # re-wrap it.
             raise
-        except (ConnectionError, TimeoutError, RedisError, Exception) as e:
+        except (ConnectionError, TimeoutError, RedisError) as e:
             _handle_redis_error(e)
 
 
@@ -332,7 +332,7 @@ class RedisClientAsync(BaseRedisClient):
 
         except AppError:
             raise
-        except (ConnectionError, TimeoutError, RedisError, Exception) as e:
+        except (ConnectionError, TimeoutError, RedisError) as e:
             _handle_redis_error(e)
 
     async def _connect_via_sentinel(self) -> None:
@@ -352,7 +352,7 @@ class RedisClientAsync(BaseRedisClient):
                 REDIS_SENTINEL_SERVICE_NAME, password=REDIS_PASSWORD
             )
 
-        except (ConnectionError, TimeoutError, RedisError, Exception) as e:
+        except (ConnectionError, TimeoutError, RedisError) as e:
             _handle_redis_error(e)
 
     async def _connect_standalone(self) -> None:
@@ -368,7 +368,7 @@ class RedisClientAsync(BaseRedisClient):
                 host=REDIS_HOST, port=int(REDIS_PORT), password=REDIS_PASSWORD
             )
 
-        except (ConnectionError, TimeoutError, RedisError, Exception) as e:
+        except (ConnectionError, TimeoutError, RedisError) as e:
             _handle_redis_error(e)
 
     async def close(self) -> None:
@@ -415,7 +415,7 @@ class RedisClientAsync(BaseRedisClient):
                 resource_id, owner_id, nx=True, ex=ttl_seconds
             )
             return bool(result)
-        except (ConnectionError, TimeoutError, RedisError, Exception) as e:
+        except (ConnectionError, TimeoutError, RedisError) as e:
             _handle_redis_error(e)
 
     async def _release_lock(
@@ -449,5 +449,5 @@ class RedisClientAsync(BaseRedisClient):
             # results. Re-raise unchanged instead of letting `_handle_redis_error`
             # re-wrap it.
             raise
-        except (ConnectionError, TimeoutError, RedisError, Exception) as e:
+        except (ConnectionError, TimeoutError, RedisError) as e:
             _handle_redis_error(e)

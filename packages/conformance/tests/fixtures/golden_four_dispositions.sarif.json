@@ -1,0 +1,207 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "atlan-conformance",
+          "version": "3.16.0",
+          "semanticVersion": "3.16.0",
+          "rules": [
+            {
+              "id": "P001",
+              "name": "BareExceptPass",
+              "shortDescription": {
+                "text": "Bare 'except: pass' silently discards every exception"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#p001",
+              "defaultConfiguration": {
+                "level": "error",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "block",
+                "atlan/mechanism": "static",
+                "atlan/category": "silent-swallow",
+                "atlan/autofixable": false,
+                "atlan/orthogonalGate": "tests",
+                "atlan/since": "3.16.0"
+              }
+            },
+            {
+              "id": "L001",
+              "name": "FStringInLogMessage",
+              "shortDescription": {
+                "text": "f-string in log message \u2014 breaks log grouping and aggregation"
+              },
+              "helpUri": "https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/schema-contract.md#l001",
+              "defaultConfiguration": {
+                "level": "error",
+                "enabled": true
+              },
+              "properties": {
+                "atlan/tier": "block",
+                "atlan/mechanism": "static",
+                "atlan/category": "log-format",
+                "atlan/autofixable": true,
+                "atlan/since": "3.16.0"
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "L001",
+          "ruleIndex": 1,
+          "kind": "pass",
+          "message": {
+            "text": "No f-string log messages found in src/connector/loader.py"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/connector/loader.py"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "P001",
+          "ruleIndex": 0,
+          "kind": "fail",
+          "level": "error",
+          "message": {
+            "text": "Bare 'except: pass' silently discards every exception including KeyboardInterrupt and SystemExit"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/connector/extractor.py"
+                },
+                "region": {
+                  "startLine": 42,
+                  "startColumn": 5,
+                  "snippet": {
+                    "text": "except:\n    pass"
+                  }
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "atlanConformance/v1": "a3f8c12d1b4e6f90"
+          },
+          "suppressions": [],
+          "properties": {
+            "atlan/hint": "Replace with: except Exception:\\n    logger.warning('description', exc_info=True)"
+          }
+        },
+        {
+          "ruleId": "L001",
+          "ruleIndex": 1,
+          "kind": "fail",
+          "level": "warning",
+          "message": {
+            "text": "f-string in log message creates a unique message per call, breaking log aggregation"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/connector/extractor.py"
+                },
+                "region": {
+                  "startLine": 78,
+                  "startColumn": 9,
+                  "snippet": {
+                    "text": "logger.info(f\"loaded {count} records from {table}\")"
+                  }
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "atlanConformance/v1": "b9e2d45a7c1f3080"
+          },
+          "suppressions": [],
+          "properties": {
+            "atlan/hint": "Rewrite as: logger.info('loaded %d records from %s', count, table)"
+          }
+        },
+        {
+          "ruleId": "P001",
+          "ruleIndex": 0,
+          "kind": "fail",
+          "level": "error",
+          "message": {
+            "text": "Bare 'except: pass' suppressed: optional-dep guard \u2014 PIL is never available in CI"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/connector/extractor.py"
+                },
+                "region": {
+                  "startLine": 87,
+                  "startColumn": 5,
+                  "snippet": {
+                    "text": "except:\n    pass  # noqa: atlan-suppress P001 -- optional-dep guard: PIL is never available in CI"
+                  }
+                }
+              }
+            }
+          ],
+          "partialFingerprints": {
+            "atlanConformance/v1": "c7d4e89b2a5f1020"
+          },
+          "suppressions": [
+            {
+              "kind": "inSource",
+              "justification": "optional-dep guard: PIL is never available in CI but the fallback path is correct",
+              "location": {
+                "physicalLocation": {
+                  "artifactLocation": {
+                    "uri": "src/connector/extractor.py"
+                  },
+                  "region": {
+                    "startLine": 88
+                  }
+                }
+              },
+              "status": "accepted"
+            }
+          ],
+          "properties": {}
+        }
+      ],
+      "invocations": [
+        {
+          "executionSuccessful": true,
+          "exitCode": 1,
+          "exitCodeDescription": "Gate failed: one or more blocking violations found."
+        }
+      ],
+      "versionControlProvenance": [
+        {
+          "repositoryUri": "https://github.com/atlanhq/my-app",
+          "revisionId": "abc1234567890def",
+          "branch": "main"
+        }
+      ],
+      "properties": {
+        "atlan/profileVersion": "v1",
+        "atlan/summary": {
+          "failing": 1,
+          "warning": 1,
+          "suppressing": 1
+        }
+      }
+    }
+  ]
+}

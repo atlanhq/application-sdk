@@ -194,6 +194,7 @@ class JsonFileReader(Reader):
                 )
                 for chunk in json_reader_obj:
                     yield chunk
+        # conformance: ignore[E004] pure re-raise into typed FormatReadError; exception is not swallowed
         except Exception as e:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 FormatReadError,
@@ -219,6 +220,7 @@ class JsonFileReader(Reader):
                 ignore_index=True,
             )
 
+        # conformance: ignore[E004] pure re-raise into typed FormatReadError; exception is not swallowed
         except Exception as e:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 FormatReadError,
@@ -244,6 +246,7 @@ class JsonFileReader(Reader):
             # Yield each discovered file as separate batch with chunking
             for json_file in json_files:
                 yield daft.read_json(json_file, _chunk_size=self.chunk_size)
+        # conformance: ignore[E004] pure re-raise into typed FormatReadError; exception is not swallowed
         except Exception as e:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 FormatReadError,
@@ -266,6 +269,7 @@ class JsonFileReader(Reader):
 
             # Use the discovered/downloaded files directly
             return daft.read_json(json_files)
+        # conformance: ignore[E004] pure re-raise into typed FormatReadError; exception is not swallowed
         except Exception as e:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415
                 FormatReadError,
@@ -484,6 +488,7 @@ class JsonFileWriter(Writer):
             if self.chunk_start is None:
                 self.chunk_count += 1
             self.partitions.append(self.chunk_part)
+        # conformance: ignore[E004] records error metric then re-raises; exception is not swallowed
         except Exception as e:
             # Record metrics for failed write
             self.metrics.record_metric(

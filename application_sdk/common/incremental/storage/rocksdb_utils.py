@@ -18,7 +18,7 @@ logger = get_logger(__name__)
 
 try:
     from rocksdict import Rdict
-except ImportError:
+except ImportError:  # conformance: ignore[E008,E009] optional dep rocksdict not installed; sentinel fallback
     Rdict = None  # type: ignore[misc, assignment]
 
 

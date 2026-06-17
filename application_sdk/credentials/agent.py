@@ -41,6 +41,9 @@ consumable by any SQL, REST, NoSQL, or cloud-storage client whose
 
 from __future__ import annotations
 
+import hashlib
+import re
+import traceback
 from typing import TYPE_CHECKING, Any
 
 import orjson
@@ -51,6 +54,7 @@ from application_sdk.credentials.errors import (
     CredentialNotFoundError,
     CredentialParseError,
 )
+from application_sdk.errors import redact_secrets
 from application_sdk.infrastructure.secrets import SecretNotFoundError
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -82,8 +86,8 @@ _LITERAL_KEYS: frozenset[str] = frozenset(
 
 
 async def resolve_agent_credential(
-    spec: "AgentCredentialSpec",
-    secret_store: "SecretStore",
+    spec: AgentCredentialSpec,
+    secret_store: SecretStore,
 ) -> dict[str, Any]:
     """Resolve a typed agent credential spec to a flat dict.
 
@@ -138,7 +142,7 @@ async def resolve_agent_credential(
 # Keep backward-compatible alias for existing callers and tests
 async def resolve_agent_json(
     agent_json: str,
-    secret_store: "SecretStore",
+    secret_store: SecretStore,
 ) -> dict[str, Any]:
     """Resolve an agent-shape JSON string to a flat dict.
 
@@ -160,14 +164,13 @@ async def resolve_agent_json(
     return await resolve_agent_credential(spec, secret_store)
 
 
-async def _fetch_bundle(
-    secret_store: "SecretStore", secret_path: str
-) -> dict[str, Any]:
+async def _fetch_bundle(secret_store: SecretStore, secret_path: str) -> dict[str, Any]:
     """Fetch and JSON-parse the secret bundle at ``secret-path``."""
     try:
         raw = await secret_store.get(secret_path)
     except SecretNotFoundError as exc:
         raise CredentialNotFoundError(secret_path) from exc
+    # conformance: ignore[E004] re-raises immediately as typed CredentialError with chained cause; logging deferred to caller boundary
     except Exception as exc:
         raise CredentialError(
             f"Failed to fetch agent secret bundle at '{secret_path}': {exc}",
@@ -196,7 +199,7 @@ async def _fetch_bundle(
 
 
 async def _fetch_per_key_bundle(
-    secret_store: "SecretStore", raw: dict[str, Any]
+    secret_store: SecretStore, raw: dict[str, Any]
 ) -> dict[str, Any]:
     """Build a synthetic bundle by per-key lookups against the secret store.
 
@@ -220,26 +223,46 @@ async def _fetch_per_key_bundle(
         seen.add(value)
         try:
             secret = await secret_store.get_optional(value)
-        except Exception:
+        # conformance: ignore[E004] logger.warning with redacted traceback is emitted below; exc_info omitted intentionally to prevent secret ref-key leaking through stdlib traceback formatting
+        except Exception as exc:
             # Store-side error — distinct from "key not in store" (silent
             # below). A transient outage here on a real secret field
             # would otherwise auth-fail with the ref-key as the literal
-            # username, so surface at WARNING with stack trace.
-            logger.warning(
-                "single-key probe failed for ref-key %r — store error, "
+            # username, so surface at WARNING with the stack trace.
+            # Log a hash, not the ref-key itself: ref-key names encode secret
+            # store topology (purpose, environment) and enable enumeration if
+            # logs leak.
+            value_hash = hashlib.sha256(value.encode()).hexdigest()[:8]
+            # NOT exc_info=True: SecretStoreError.__str__ renders `secret=<ref-key>`
+            # and its message embeds the backend cause, which can echo the raw
+            # ref-key — that would undo the hashing above in the same log record.
+            # Format the traceback ourselves, redact known secret patterns, and
+            # additionally scrub the literal ref-key (which redact_secrets can't
+            # know) so the topology stays hidden while diagnosis survives.
+            # Bound the ref-key match to standalone tokens: a literal replace of
+            # a short key like "DB" would corrupt "DB_CONNECTION"; the
+            # lookarounds treat word chars and hyphens as identifier-continuation
+            # so only whole-token occurrences are scrubbed.
+            safe_traceback = re.sub(
+                rf"(?<![\w-]){re.escape(value)}(?![\w-])",
+                f"sha256:{value_hash}",
+                redact_secrets("".join(traceback.format_exception(exc))),
+            )
+            logger.warning(  # conformance: ignore[E005] exc_info would bypass the secret-redacted traceback built above; safe_traceback included inline
+                "single-key probe failed for ref-key sha256:%s — store error, "
                 "treating as non-secret. If this was a real credential "
                 "key, the auth attempt will fail with the ref-key as the "
-                "literal value.",
-                value,
-                exc_info=True,
+                "literal value.\n%s",
+                value_hash,
+                safe_traceback,
             )
             return
         if secret in (None, ""):
             # Key not in store — expected for non-secret fields probed
             # in single-key mode (host, port, region literals).
             logger.debug(
-                "single-key probe: %r not found in store (non-secret field)",
-                value,
+                "single-key probe: sha256:%s not found in store (non-secret field)",
+                hashlib.sha256(value.encode()).hexdigest()[:8],
             )
             return
         bundle[value] = secret

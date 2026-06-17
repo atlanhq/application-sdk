@@ -540,7 +540,7 @@ class ContractValidationError(_InvalidInputError):
     """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CONTRACT_VALIDATION
-    code: ClassVar[str] = "CONTRACT_VALIDATION"
+    code: ClassVar[str] = "INVALID_INPUT_CONTRACT_VALIDATION"
 
     def __init__(
         self,
@@ -607,7 +607,7 @@ class PayloadSafetyError(ContractValidationError):
     """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = PAYLOAD_SAFETY
-    code: ClassVar[str] = "PAYLOAD_SAFETY"
+    code: ClassVar[str] = "INVALID_INPUT_PAYLOAD_SAFETY"
 
     def __init__(
         self, cls_name: str, field_name: str, field_type: type, reason: str
@@ -865,8 +865,9 @@ class PublishInputMixin(BaseModel):
                     workflow_id=_wf.info().workflow_id,
                     run_id=_wf.info().run_id,
                 )
-            except Exception:  # noqa: S110
-                pass  # Not in Temporal context — output_path stays empty
+            # conformance: ignore[E002,E004] probe to detect Temporal workflow context; swallow is intentional, output_path stays empty by design
+            except Exception:  # noqa: S110 — not in a Temporal workflow context; output_path stays empty by design
+                pass
 
         # Derive transformed_data_prefix from output_path
         if not self.transformed_data_prefix and self.output_path:

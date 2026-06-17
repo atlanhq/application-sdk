@@ -185,6 +185,7 @@ class CloudStore:
             return bytes(await result.bytes_async())
         except FileNotFoundError as exc:
             raise StorageNotFoundError(f"Key not found: {key}", key=key) from exc
+        # conformance: ignore[E004] re-raise only; discriminates NotFoundError by name then wraps in StorageError/StorageNotFoundError
         except Exception as exc:
             # obstore backends raise different exception types for not-found:
             # - LocalStore: FileNotFoundError (caught above)
@@ -296,6 +297,7 @@ class CloudStore:
                 for path, _ in items
                 if not lfilter or any(path.lower().endswith(s) for s in lfilter)
             )
+        # conformance: ignore[E004] re-raise only; wraps obstore listing failure into StorageError
         except Exception as exc:
             raise StorageError(
                 f"Failed to list keys with prefix: {list_prefix!r}", cause=exc
@@ -355,6 +357,7 @@ class CloudStore:
                         await writer.write(buf)
         except StorageError:
             raise
+        # conformance: ignore[E004] re-raise only; checks azure container-not-found then wraps in StorageConfigError/StorageError
         except Exception as exc:
             if _is_azure_container_not_found(exc):
                 raise StorageConfigError(
@@ -376,6 +379,7 @@ class CloudStore:
         """
         try:
             await obs.put_async(self._store, key, data, attributes=self._put_attributes)
+        # conformance: ignore[E004] re-raise only; wraps obstore put failure into StorageError
         except Exception as exc:
             raise StorageError(f"Failed to upload key: {key}", cause=exc) from exc
         return len(data)

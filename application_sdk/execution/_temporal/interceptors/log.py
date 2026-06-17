@@ -121,6 +121,7 @@ def _failure_details_from_detail(detail: Any) -> dict[str, str]:
             "failure.audience": fd.audience.value,
             "failure.code": fd.code,
         }
+    # conformance: ignore[E004] probe that recovers FailureDetails from arbitrary detail shapes; exc_info already on the debug call below
     except Exception:
         logger.debug(
             "Failed to extract failure details for log enrichment", exc_info=True
@@ -345,6 +346,7 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
 
         try:
             logger.info("workflow.started", **identity)
+        # conformance: ignore[E004] best-effort observability guard; logging failure must never block workflow execution
         except Exception:  # noqa: S110 — best-effort observability; never block the workflow on logging
             pass
 
@@ -353,6 +355,7 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         exc_caught: BaseException | None = None
         try:
             return await self.next.execute_workflow(input)
+        # conformance: ignore[E004] captures exception for ended log enrichment then unconditionally re-raises; exc logged in finally block
         except Exception as e:
             status = "ERROR"
             exc_caught = e
@@ -370,6 +373,7 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                     logger.error("workflow.ended", exc_info=True, **ended_attrs)
                 else:
                     logger.info("workflow.ended", **ended_attrs)
+            # conformance: ignore[E004] best-effort observability guard in finally; logging failure must never block workflow completion
             except Exception:  # noqa: S110 — best-effort observability; never block the workflow on logging
                 pass
 
@@ -452,6 +456,7 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
 
         try:
             logger.info("activity.started", **identity)
+        # conformance: ignore[E004] best-effort observability guard; logging failure must never block activity execution
         except Exception:  # noqa: S110 — best-effort observability; never block the activity on logging
             pass
 
@@ -460,6 +465,7 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
         exc_caught: BaseException | None = None
         try:
             return await self.next.execute_activity(input)
+        # conformance: ignore[E004] captures exception for ended log enrichment then unconditionally re-raises; exc logged in finally block
         except BaseException as e:
             status = "ERROR"
             exc_caught = e
@@ -477,6 +483,7 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
                     logger.error("activity.ended", exc_info=True, **ended_attrs)
                 else:
                     logger.info("activity.ended", **ended_attrs)
+            # conformance: ignore[E004] best-effort observability guard in finally; logging failure must never block activity completion
             except Exception:  # noqa: S110 — best-effort observability; never block the activity on logging
                 pass
 
