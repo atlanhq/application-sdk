@@ -140,6 +140,36 @@ buildTag: String = "v1"
 /// Whether images are published for self-deployed runtime.
 selfDeployedRuntime: Boolean = true
 
+/// One-line app description for the marketplace card.
+///
+/// Default: `""` (omitted from `atlan.yaml`). Set this when the connector
+/// should advertise a tagline alongside its `displayName` in the marketplace
+/// listing. The Atlan CLI reads it from the rendered top-level
+/// `short_description` key during `atlan app register` and forwards it to the
+/// Global Marketplace App row, so the source of truth follows the contract on
+/// every regenerate. Authors who would have set this via the `metadata`
+/// escape-hatch should migrate to this typed property; the `metadata` value
+/// continues to win on conflict (deep-merge order is preserved).
+shortDescription: String = ""
+
+/// Long-form description (markdown) shown on the marketplace detail page.
+///
+/// Default: `""` (omitted from `atlan.yaml`). Use this for the multi-paragraph
+/// "About this app" block in the marketplace UI. Same publish path as
+/// `shortDescription` — emitted as top-level `long_description` and consumed
+/// by the CLI's `atlan app register`. Multi-line strings are rendered as
+/// YAML literal blocks by the toolkit's `YamlRenderer`.
+longDescription: String = ""
+
+/// Marketplace category tags for filtering / search.
+///
+/// Default: `[]` (omitted from `atlan.yaml`). Each entry is a free-form
+/// string; the marketplace surface decides how to render them. Emitted as a
+/// top-level `tags` YAML list, consumed by the CLI's `atlan app register`,
+/// and forwarded to the Global Marketplace App row. Empty Listings produce
+/// no key in the rendered yaml (the `when` guard suppresses emission).
+tags: Listing<String> = new Listing {}
+
 /// Extra top-level metadata fields for atlan.yaml.
 metadata: Mapping<String, Any> = new Mapping {}
 
@@ -3048,6 +3078,9 @@ local generatedAtlanYamlData: Mapping<String, Any> = new Mapping {
   ["name"] = name
   when (appId != "") { ["app_id"] = appId }
   ["display_name"] = displayName
+  when (shortDescription != "") { ["short_description"] = shortDescription }
+  when (longDescription != "") { ["long_description"] = longDescription }
+  when (docsUrl != "") { ["docs_url"] = docsUrl }
   when (creatorOrg != null) { ["creator_org"] = creatorOrg }
   ["type"] = type
   ["execution_mode"] = deploy.executionMode
@@ -3055,6 +3088,7 @@ local generatedAtlanYamlData: Mapping<String, Any> = new Mapping {
   ["visibility"] = visibility
   ["build_tag"] = buildTag
   ["self_deployed_runtime"] = selfDeployedRuntime
+  when (tags.toList().length > 0) { ["tags"] = tags }
   when (emitEntrypoints) {
     ["entrypoints"] = new Listing {
       for (ep in effectiveEntrypoints) {

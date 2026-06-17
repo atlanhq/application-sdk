@@ -20,7 +20,7 @@ runs:
   steps:
     - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       with:
-        fetch-depth: 0
+        fetch-depth: 1
 
     - name: Set up Python
       id: setup-python
@@ -28,12 +28,31 @@ runs:
       with:
         python-version: ${{ inputs.python-version }}
 
+    - name: Cache uv binary
+      id: cache-uv-bin
+      uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+      with:
+        path: ${{ runner.tool_cache }}/uv
+        key: uv-bin-${{ runner.os }}-${{ runner.arch }}-0.11.21
+
     - name: Install uv
       uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
       with:
         version: "0.11.21"
+        enable-cache: true
+        cache-dependency-glob: "uv.lock"
+        github-token: ${{ github.token }}
+        download-from-astral-mirror: false
+
+    - name: Cache virtual environment
+      id: cache-venv
+      uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+      with:
+        path: .venv
+        key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('uv.lock') }}
 
     - name: Install dependencies
+      if: steps.cache-venv.outputs.cache-hit != 'true'
       shell: bash
       run: |
         PYTHON_MINOR=$(echo "${{ inputs.python-version }}" | cut -d. -f2)

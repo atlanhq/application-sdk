@@ -2,12 +2,24 @@
 # To regenerate: pkl eval -m . contract/app.pkl
 name: full-featured
 display_name: Full-Featured Example
+short_description: Reference contract that exercises every App.pkl property.
+long_description: |-
+  Full-featured reference contract used by the toolkit's own tests.
+
+  Covers JDBC URL auth, every pipeline step, diverse widgets, UIRules,
+  extraNodes, run-completion notifications, and the full marketplace
+  metadata block emitted into atlan.yaml.
+docs_url: https://docs.example.com/apps/full-featured
 type: connector
 execution_mode: native
 icon_url: https://assets.atlan.com/assets/fullscreen-open.svg
 visibility: public
 build_tag: v1
 self_deployed_runtime: true
+tags:
+- reference
+- example
+- postgres
 entrypoints:
 - name: full-featured
   display_name: Full-Featured Example
