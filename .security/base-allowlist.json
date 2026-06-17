@@ -1,20 +1,30 @@
 {
-  "_comment": "Central allowlist for SDK base image vulnerabilities. Shared across all connector repos. Updated by SDK team. CODEOWNERS: SDK/security team only.",
-  "_base_image": "application-sdk-main",
-  "_updated": "2026-06-13",
-  "_renewal_note": "Expiry dates staggered by severity. CRITICAL: 15 days. HIGH: 30 days. Review before expiry. Enforced by .github/scripts/validate_allowlist.py via _expiry_policy below.",
-  "_expiry_policy": {
-    "CRITICAL": 15,
-    "HIGH": 30
-  },
-  "GHSA-36hh-v3qg-5jq4": {
-    "package": "pyo3",
-    "severity": "HIGH",
-    "reason": "Transitive Rust CVE bundled inside temporalio's compiled bridge (temporalio/bridge/Cargo.lock -> pyo3 0.25.1); not a directly-pinnable Python dependency. No temporalio release ships the fix yet -- the latest, 1.28.0 (2026-06-04), still bundles pyo3 0.25.1, so no upgrade resolves it. The advisory is an out-of-bounds READ in PyO3's Iterator::nth / nth_back for PyList/PyTuple iterators, reachable only when Rust calls .nth(n) with an attacker-controlled large n on a Python list/tuple iterator -- a path internal to the Temporal SDK bridge that is not reachable from connector or workflow-input code. Re-evaluate and drop this entry when temporalio bumps pyo3 to >= 0.29.0.",
-    "expires": "2026-07-13",
-    "added_by": "hariharan.radhakrishnan@atlan.com",
-    "re_evaluation_trigger": "fix_released",
-    "fix_available_date": "",
-    "suppressed": false
-  }
+    "_comment": "Central allowlist for SDK base image vulnerabilities. Shared across all connector repos. Updated by SDK team. CODEOWNERS: SDK/security team only.",
+    "_base_image": "application-sdk-main",
+    "_updated": "2026-06-17",
+    "_renewal_note": "Expiry dates staggered by severity. CRITICAL: 15 days. HIGH: 30 days. Review before expiry. Enforced by .github/scripts/validate_allowlist.py via _expiry_policy below.",
+    "_expiry_policy": {
+        "CRITICAL": 15,
+        "HIGH": 30
+    },
+    "GHSA-36hh-v3qg-5jq4": {
+        "package": "pyo3",
+        "severity": "HIGH",
+        "reason": "Transitive Rust CVE bundled inside temporalio's compiled bridge (temporalio/bridge/Cargo.lock -> pyo3 0.25.1); not a directly-pinnable Python dependency. No temporalio release ships the fix yet -- the latest, 1.28.0 (2026-06-04), still bundles pyo3 0.25.1, so no upgrade resolves it. The advisory is an out-of-bounds READ in PyO3's Iterator::nth / nth_back for PyList/PyTuple iterators, reachable only when Rust calls .nth(n) with an attacker-controlled large n on a Python list/tuple iterator -- a path internal to the Temporal SDK bridge that is not reachable from connector or workflow-input code. Re-evaluate and drop this entry when temporalio bumps pyo3 to >= 0.29.0.",
+        "expires": "2026-07-13",
+        "added_by": "hariharan.radhakrishnan@atlan.com",
+        "re_evaluation_trigger": "fix_released",
+        "fix_available_date": "",
+        "suppressed": false
+    },
+    "CVE-2026-44432": {
+        "package": "py3-pip-wheel",
+        "severity": "HIGH",
+        "reason": "Alpine OS package in the app-runtime-base:3 base image. Fix available in py3-pip-wheel@26.1.2-r1 but requires a base image rebuild - not addressable via Python dependency pinning in connector uv.lock files. CVE entered Trivy advisory database 2026-06-17; currently blocking atlanhq/atlan-looker-app#126 (DBBI-1008 BQ->Looker lineage fix). The auto-fix Vulnerabilities workflow ran and correctly skipped - it cannot resolve an Alpine OS package. Drop this entry once app-runtime-base:3 is rebuilt with the patched Alpine package.",
+        "expires": "2026-07-17",
+        "added_by": "tejesh.allampati@atlan.com",
+        "re_evaluation_trigger": "base_image_rebuilt",
+        "fix_available_date": "2026-06-17",
+        "suppressed": false
+    }
 }
