@@ -8,7 +8,7 @@ Currently implemented:
 
 * ``P001`` UnboundedContractFields — an ``Input``/``Output`` contract subclass
   declared with the ``allow_unbounded_fields=True`` class keyword.
-* ``P002`` ErrorCodePrefixMismatch — a (transitive) subclass of an
+* ``P003`` ErrorCodePrefixMismatch — a (transitive) subclass of an
   ``application_sdk.errors`` leaf class either omits its own ``code: ClassVar[str]``
   declaration or declares one that does not start with the leaf's category prefix.
   This check resolves inheritance across files via a multi-pass scan, so
@@ -44,7 +44,7 @@ from conformance.suite.schema.findings import Finding, findings_to_report
 
 SERIES = "P"
 
-# ── P002: leaf-class → category prefix map ───────────────────────────────────
+# ── P003: leaf-class → category prefix map ───────────────────────────────────
 # Mirrors application_sdk/errors/leaves.py.  Subclasses (transitively) of these
 # 14 classes must declare a ``code: ClassVar[str]`` that starts with the
 # corresponding prefix followed by an underscore.
@@ -114,12 +114,12 @@ class _PrescriptionChecker(ast.NodeVisitor):
         self.generic_visit(node)
 
 
-# ── P002: cross-file class registry ───────────────────────────────────────────
+# ── P003: cross-file class registry ───────────────────────────────────────────
 
 
 @dataclass
 class _ClassRecord:
-    """A ClassDef collected for P002 inheritance resolution."""
+    """A ClassDef collected for P003 inheritance resolution."""
 
     name: str
     file: str
@@ -261,12 +261,12 @@ def _resolve_leaf_prefix(
     return result
 
 
-def _emit_p002(
+def _emit_p003(
     rec: _ClassRecord,
     leaf_prefix: str,
     directives: dict[int, _IgnoreDirective],
 ) -> Finding:
-    """Build a P002 finding for *rec* (missing or wrong-prefix code)."""
+    """Build a P003 finding for *rec* (missing or wrong-prefix code)."""
     if rec.code_value is None:
         node: ast.AST = rec.node
         message = (
@@ -287,7 +287,7 @@ def _emit_p002(
         )
     return make_finding(
         filename=rec.file,
-        rule_id="P002",
+        rule_id="P003",
         node=node,
         message=message,
         directives=directives,
@@ -300,7 +300,7 @@ def _emit_p002(
 def scan_text(text: str, file: str) -> list[Finding]:
     """Scan a single Python source *text* for P001 findings only.
 
-    P002 needs cross-file context; use :func:`scan_all` for full-suite runs.
+    P003 needs cross-file context; use :func:`scan_all` for full-suite runs.
     Kept for symmetry with the per-file ``scan_path`` runner contract.
     """
     try:
@@ -314,7 +314,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
 
 
 def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan a single Python file (P001 only).  P002 requires :func:`scan_all`."""
+    """Scan a single Python file (P001 only).  P003 requires :func:`scan_all`."""
     try:
         text = path.read_text(encoding="utf-8")
     except OSError:
@@ -327,7 +327,7 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:
-    """Multi-pass scan over *paths*, emitting P001 + P002 findings.
+    """Multi-pass scan over *paths*, emitting P001 + P003 findings.
 
     Pass 1 — parse every file once, run P001 per-file, collect every ``ClassDef``
     into a name-keyed registry along with its base names and any literal
@@ -338,7 +338,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     ``_LEAF_PREFIX_MAP``.  Cycle-safe via a per-resolution ``visiting`` set;
     results memoised.
 
-    Pass 3 — emit P002 for every class that derives from a leaf and either
+    Pass 3 — emit P003 for every class that derives from a leaf and either
     omits its own ``code`` declaration or declares one that does not start
     with the leaf's category prefix + ``_``.  The 14 leaves themselves are
     exempt (their bare codes are the prefix definitions).
@@ -372,7 +372,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         checker.visit(tree)
         findings.extend(checker._findings)
 
-        # Class registry for P002 — de-alias base names so aliased imports
+        # Class registry for P003 — de-alias base names so aliased imports
         # of leaf classes (``from … import InternalError as _InternalError``)
         # don't hide the real ancestry.
         aliases = _collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
@@ -384,7 +384,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         for rec in records:
             by_name.setdefault(rec.name, rec)
 
-    # Pass 2 + 3 — resolve and emit P002
+    # Pass 2 + 3 — resolve and emit P003
     cache: dict[str, str | None] = {}
     for path, records in file_records.items():
         directives = file_directives[path]
@@ -400,9 +400,9 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
             if leaf_prefix is None:
                 continue  # not derived from a typed AppError leaf — out of scope
             if rec.code_value is None:
-                findings.append(_emit_p002(rec, leaf_prefix, directives))
+                findings.append(_emit_p003(rec, leaf_prefix, directives))
             elif not rec.code_value.startswith(f"{leaf_prefix}_"):
-                findings.append(_emit_p002(rec, leaf_prefix, directives))
+                findings.append(_emit_p003(rec, leaf_prefix, directives))
     return findings
 
 
@@ -442,7 +442,7 @@ def main(argv: list[str] | None = None) -> int:
 
     root = Path(args.root).resolve()
     # Resolve every input to a flat path list so scan_all can build a single
-    # cross-file class registry covering all of them — P002 requires this.
+    # cross-file class registry covering all of them — P003 requires this.
     collected: list[Path] = []
     for raw in args.scan_paths:
         p = Path(raw)

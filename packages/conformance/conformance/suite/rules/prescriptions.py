@@ -40,7 +40,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p001",
     ),
     RuleDefinition(
-        id="P002",
+        id="P003",
         name="ErrorCodePrefixMismatch",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
@@ -62,10 +62,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "The check resolves inheritance transitively: an intermediate class with\n"
             "no ``code`` (a 'pass-through' subclass between a leaf and a concrete\n"
             "leaf) is also flagged so failures don't silently inherit the bare\n"
-            "leaf's code.  Suppress with ``# conformance: ignore[P002] <reason>``\n"
+            "leaf's code.  Suppress with ``# conformance: ignore[P003] <reason>``\n"
             "at the declaration when an intermediate is genuinely abstract — see\n"
             "typed-error-prescription §4 and BLDX-1431.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p002",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p003",
     ),
 )

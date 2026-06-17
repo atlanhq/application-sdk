@@ -1,4 +1,4 @@
-"""Meta-tests for the P-series prescription checks (P001, P002).
+"""Meta-tests for the P-series prescription checks (P001, P003).
 
 These checks are shipped in the conformance package and fanned out across the
 fleet — a buggy check false-positives across hundreds of apps and triggers
@@ -177,10 +177,10 @@ def test_p001_sarif_output_validates(tmp_path: Path) -> None:
     validate_sarif(report)
 
 
-# ── P002 ErrorCodePrefixMismatch ──────────────────────────────────────────────
+# ── P003 ErrorCodePrefixMismatch ──────────────────────────────────────────────
 
 
-def test_p002_silent_on_correctly_prefixed_subclass(tmp_path: Path) -> None:
+def test_p003_silent_on_correctly_prefixed_subclass(tmp_path: Path) -> None:
     src = (
         "from typing import ClassVar\n"
         "class IamTokenError(AuthError):\n"
@@ -190,7 +190,7 @@ def test_p002_silent_on_correctly_prefixed_subclass(tmp_path: Path) -> None:
     assert [f.rule_id for f in findings] == []
 
 
-def test_p002_fires_on_wrong_prefix(tmp_path: Path) -> None:
+def test_p003_fires_on_wrong_prefix(tmp_path: Path) -> None:
     src = (
         "from typing import ClassVar\n"
         "class AppNotFoundError(InvalidInputError):\n"
@@ -198,22 +198,22 @@ def test_p002_fires_on_wrong_prefix(tmp_path: Path) -> None:
     )
     findings = _scan_one(tmp_path, src)
     assert len(findings) == 1
-    assert findings[0].rule_id == "P002"
+    assert findings[0].rule_id == "P003"
     assert "INVALID_INPUT_" in findings[0].message
     assert "APP_NOT_FOUND" in findings[0].message
 
 
-def test_p002_fires_on_missing_code_declaration(tmp_path: Path) -> None:
+def test_p003_fires_on_missing_code_declaration(tmp_path: Path) -> None:
     """Subclasses (transitive) of a leaf must declare their own code."""
     src = "class SilentSubclass(InternalError):\n    pass\n"
     findings = _scan_one(tmp_path, src)
     assert len(findings) == 1
-    assert findings[0].rule_id == "P002"
+    assert findings[0].rule_id == "P003"
     assert "does not declare its own" in findings[0].message
     assert "INTERNAL_" in findings[0].message
 
 
-def test_p002_fires_on_bare_leaf_prefix_without_underscore(tmp_path: Path) -> None:
+def test_p003_fires_on_bare_leaf_prefix_without_underscore(tmp_path: Path) -> None:
     """A subclass that reuses the bare leaf code (e.g. ``"AUTH"``) collapses with
     the leaf — must add a suffix after the prefix underscore."""
     src = (
@@ -222,10 +222,10 @@ def test_p002_fires_on_bare_leaf_prefix_without_underscore(tmp_path: Path) -> No
         '    code: ClassVar[str] = "AUTH"\n'
     )
     findings = _scan_one(tmp_path, src)
-    assert [f.rule_id for f in findings] == ["P002"]
+    assert [f.rule_id for f in findings] == ["P003"]
 
 
-def test_p002_silent_on_leaf_class_itself(tmp_path: Path) -> None:
+def test_p003_silent_on_leaf_class_itself(tmp_path: Path) -> None:
     """The 14 leaves themselves declare ``code = "<PREFIX>"`` — that's the
     canonical source, not a violation."""
     src = (
@@ -237,7 +237,7 @@ def test_p002_silent_on_leaf_class_itself(tmp_path: Path) -> None:
     assert findings == []
 
 
-def test_p002_silent_on_classes_outside_apperror_tree(tmp_path: Path) -> None:
+def test_p003_silent_on_classes_outside_apperror_tree(tmp_path: Path) -> None:
     """A class with a ``code`` attribute that isn't an AppError subclass is out of scope."""
     src = (
         "from typing import ClassVar\n"
@@ -248,7 +248,7 @@ def test_p002_silent_on_classes_outside_apperror_tree(tmp_path: Path) -> None:
     assert findings == []
 
 
-def test_p002_resolves_transitive_inheritance_in_one_file(tmp_path: Path) -> None:
+def test_p003_resolves_transitive_inheritance_in_one_file(tmp_path: Path) -> None:
     """Pass-through intermediate (no ``code``) flagged; concrete grandchild OK."""
     src = (
         "from typing import ClassVar\n"
@@ -259,13 +259,13 @@ def test_p002_resolves_transitive_inheritance_in_one_file(tmp_path: Path) -> Non
     )
     findings = _scan_one(tmp_path, src)
     rule_ids = [f.rule_id for f in findings]
-    assert rule_ids == ["P002"]
+    assert rule_ids == ["P003"]
     # The intermediate's missing-code message names the leaf prefix
     assert "AUTH" in findings[0].message
     assert "_SqlAuth" in findings[0].message
 
 
-def test_p002_resolves_transitive_inheritance_across_files(tmp_path: Path) -> None:
+def test_p003_resolves_transitive_inheritance_across_files(tmp_path: Path) -> None:
     """The cross-file class registry walks bases that live in another module."""
     files = {
         "a.py": (
@@ -282,12 +282,12 @@ def test_p002_resolves_transitive_inheritance_across_files(tmp_path: Path) -> No
     }
     findings = _scan_files(tmp_path, files)
     rule_ids = [f.rule_id for f in findings]
-    assert rule_ids == ["P002"]
+    assert rule_ids == ["P003"]
     assert "AUTH_" in findings[0].message
     assert "WrongPrefixError" in findings[0].message
 
 
-def test_p002_resolves_transitive_chain_with_intermediate_in_separate_file(
+def test_p003_resolves_transitive_chain_with_intermediate_in_separate_file(
     tmp_path: Path,
 ) -> None:
     """B → A → InternalError, all in different files: B flagged on wrong prefix."""
@@ -304,10 +304,10 @@ def test_p002_resolves_transitive_chain_with_intermediate_in_separate_file(
         ),
     }
     findings = _scan_files(tmp_path, files)
-    assert [f.rule_id for f in findings] == ["P002"]
+    assert [f.rule_id for f in findings] == ["P003"]
 
 
-def test_p002_handles_attribute_access_in_base(tmp_path: Path) -> None:
+def test_p003_handles_attribute_access_in_base(tmp_path: Path) -> None:
     """``class Foo(application_sdk.errors.AuthError)`` resolves via attribute access."""
     src = (
         "import application_sdk.errors as errors\n"
@@ -316,10 +316,10 @@ def test_p002_handles_attribute_access_in_base(tmp_path: Path) -> None:
         '    code: ClassVar[str] = "INTERNAL_WRONG"\n'
     )
     findings = _scan_one(tmp_path, src)
-    assert [f.rule_id for f in findings] == ["P002"]
+    assert [f.rule_id for f in findings] == ["P003"]
 
 
-def test_p002_handles_aliased_leaf_import(tmp_path: Path) -> None:
+def test_p003_handles_aliased_leaf_import(tmp_path: Path) -> None:
     """A leaf imported under a private alias (``InternalError as _InternalError``)
     must still be recognised as the leaf — otherwise aliased subclasses become
     silent false-negatives."""
@@ -330,11 +330,11 @@ def test_p002_handles_aliased_leaf_import(tmp_path: Path) -> None:
         '    code: ClassVar[str] = "APP_CONTEXT"\n'
     )
     findings = _scan_one(tmp_path, src)
-    assert [f.rule_id for f in findings] == ["P002"]
+    assert [f.rule_id for f in findings] == ["P003"]
     assert "INTERNAL_" in findings[0].message
 
 
-def test_p002_aliased_import_with_correct_prefix_is_silent(tmp_path: Path) -> None:
+def test_p003_aliased_import_with_correct_prefix_is_silent(tmp_path: Path) -> None:
     src = (
         "from application_sdk.errors.leaves import AuthError as _Auth\n"
         "from typing import ClassVar\n"
@@ -345,38 +345,38 @@ def test_p002_aliased_import_with_correct_prefix_is_silent(tmp_path: Path) -> No
     assert findings == []
 
 
-def test_p002_silent_when_no_classvar_annotation(tmp_path: Path) -> None:
+def test_p003_silent_when_no_classvar_annotation(tmp_path: Path) -> None:
     """Plain ``code = "..."`` (no ClassVar) still binds an attribute and is checked."""
     src = "class WrongPlain(InternalError):\n" '    code = "AUTH_BAD"\n'
     findings = _scan_one(tmp_path, src)
-    assert [f.rule_id for f in findings] == ["P002"]
+    assert [f.rule_id for f in findings] == ["P003"]
 
 
-def test_p002_silent_on_abstract_intermediate_with_directive(tmp_path: Path) -> None:
+def test_p003_silent_on_abstract_intermediate_with_directive(tmp_path: Path) -> None:
     """An abstract intermediate without a ``code`` can opt out with a directive."""
     src = (
-        "# conformance: ignore[P002] genuinely abstract intermediate\n"
+        "# conformance: ignore[P003] genuinely abstract intermediate\n"
         "class _AbstractMid(InternalError):\n"
         "    pass\n"
     )
     findings = _scan_one(tmp_path, src)
     # Finding still emitted, but suppressed=True → gate stays green
-    assert [f.rule_id for f in findings] == ["P002"]
+    assert [f.rule_id for f in findings] == ["P003"]
     assert findings[0].suppressed is True
 
 
-def test_p002_suppressed_by_directive_on_code_line(tmp_path: Path) -> None:
+def test_p003_suppressed_by_directive_on_code_line(tmp_path: Path) -> None:
     src = (
         "from typing import ClassVar\n"
         "class WrongCode(InvalidInputError):\n"
-        '    code: ClassVar[str] = "APP_NOT_FOUND"  # conformance: ignore[P002] deprecated v4.0 shim\n'
+        '    code: ClassVar[str] = "APP_NOT_FOUND"  # conformance: ignore[P003] deprecated v4.0 shim\n'
     )
     findings = _scan_one(tmp_path, src)
     assert findings[0].suppressed is True
     assert "shim" in (findings[0].suppression_justification or "")
 
 
-def test_p002_handles_cycle_without_recursion_error(tmp_path: Path) -> None:
+def test_p003_handles_cycle_without_recursion_error(tmp_path: Path) -> None:
     """Self-referential or mutually-recursive base chains must not raise."""
     files = {
         "a.py": "class A(B): pass\n",
@@ -387,7 +387,7 @@ def test_p002_handles_cycle_without_recursion_error(tmp_path: Path) -> None:
     assert findings == []
 
 
-def test_p002_first_wins_on_global_class_name_collision(tmp_path: Path) -> None:
+def test_p003_first_wins_on_global_class_name_collision(tmp_path: Path) -> None:
     """When two files define a class with the same name, the first-seen record
     is used as the resolution source — this is best-effort, not a feature."""
     # Test purely confirms no crash; behaviour documented in scan_all.
@@ -397,18 +397,18 @@ def test_p002_first_wins_on_global_class_name_collision(tmp_path: Path) -> None:
     }
     findings = _scan_files(tmp_path, files)
     # Both _Pivot definitions are intermediates without code — both flagged.
-    assert all(f.rule_id == "P002" for f in findings)
+    assert all(f.rule_id == "P003" for f in findings)
     assert len(findings) == 2
 
 
-# ── P002 tier / disposition / gate ─────────────────────────────────────────────
+# ── P003 tier / disposition / gate ─────────────────────────────────────────────
 
 
-def test_p002_is_block_tier() -> None:
-    assert get_rule("P002").tier is EnforcementTier.BLOCK
+def test_p003_is_block_tier() -> None:
+    assert get_rule("P003").tier is EnforcementTier.BLOCK
 
 
-def test_p002_block_violation_fails_the_gate(tmp_path: Path) -> None:
+def test_p003_block_violation_fails_the_gate(tmp_path: Path) -> None:
     (tmp_path / "m.py").write_text(
         "from typing import ClassVar\n"
         "class WrongCode(AuthError):\n"
@@ -418,17 +418,17 @@ def test_p002_block_violation_fails_the_gate(tmp_path: Path) -> None:
     assert code == 1
 
 
-def test_p002_suppressed_declaration_keeps_gate_green(tmp_path: Path) -> None:
+def test_p003_suppressed_declaration_keeps_gate_green(tmp_path: Path) -> None:
     (tmp_path / "m.py").write_text(
         "from typing import ClassVar\n"
         "class WrongCode(AuthError):\n"
-        '    code: ClassVar[str] = "INTERNAL_X"  # conformance: ignore[P002] deprecated v4.0 shim\n'
+        '    code: ClassVar[str] = "INTERNAL_X"  # conformance: ignore[P003] deprecated v4.0 shim\n'
     )
     code = main(["--root", str(tmp_path), str(tmp_path / "m.py")])
     assert code == 0
 
 
-def test_p002_result_is_failing_disposition(tmp_path: Path) -> None:
+def test_p003_result_is_failing_disposition(tmp_path: Path) -> None:
     (tmp_path / "m.py").write_text(
         "from typing import ClassVar\n"
         "class WrongCode(AuthError):\n"
@@ -449,7 +449,7 @@ def test_p002_result_is_failing_disposition(tmp_path: Path) -> None:
     assert Disposition.FAILING in dispositions
 
 
-def test_p002_sarif_output_validates(tmp_path: Path) -> None:
+def test_p003_sarif_output_validates(tmp_path: Path) -> None:
     (tmp_path / "m.py").write_text(
         "from typing import ClassVar\n"
         "class WrongCode(AuthError):\n"

@@ -16,7 +16,7 @@ Suppress a finding on the violating line or the line directly above it:
 | ID | Name | Tier | Category | Autofixable | Since |
 |---|---|---|---|---|---|
 | [P001](#p001) | `UnboundedContractFields` | `block` | `contract-payload-safety` | — | 0.3.0 |
-| [P002](#p002) | `ErrorCodePrefixMismatch` | `block` | `error-code-shape` | — | 0.3.0 |
+| [P003](#p003) | `ErrorCodePrefixMismatch` | `block` | `error-code-shape` | — | 0.3.0 |
 
 ---
 
@@ -40,7 +40,7 @@ sanctioned use is the justified inline suppression above — see BLDX-1428.
 
 ---
 
-## P002 — `ErrorCodePrefixMismatch` {#p002}
+## P003 — `ErrorCodePrefixMismatch` {#p003}
 
 **Tier:** `block` · **Category:** `error-code-shape` · **Autofixable:** — · **Since:** 0.3.0
 
@@ -56,7 +56,7 @@ impossible to triage.
 
 The check resolves inheritance transitively: an intermediate class with no `code` (a
 'pass-through' subclass between a leaf and a concrete leaf) is also flagged so failures
-don't silently inherit the bare leaf's code.  Suppress with `# conformance: ignore[P002]
+don't silently inherit the bare leaf's code.  Suppress with `# conformance: ignore[P003]
 <reason>` at the declaration when an intermediate is genuinely abstract — see
 typed-error-prescription §4 and BLDX-1431.
 
