@@ -528,6 +528,17 @@ def test_cmd_bootstrap_reads_app_name_from_atlan_yaml(
     assert 'app-image-name: "atlan-openapi-app"' in tests
 
 
+def test_cmd_bootstrap_strips_quotes_from_atlan_yaml_name(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Quoted name: \"openapi\" in atlan.yaml should still resolve to openapi."""
+    (tmp_path / "atlan.yaml").write_text('name: "openapi"\n')
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    tests = (tmp_path / ".github" / "workflows" / "tests.yaml").read_text()
+    assert 'app-name: "openapi"' in tests
+
+
 def test_cmd_bootstrap_explicit_app_name_overrides_atlan_yaml(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

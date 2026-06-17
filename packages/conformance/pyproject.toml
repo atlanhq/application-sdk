@@ -47,6 +47,9 @@ packages = ["conformance"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 
+[tool.ruff.format]
+exclude = ["conformance/bootstrap/templates/renovate.json"]
+
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["G004", "PLC0415", "F841", "T201"]
 "conformance/tools/generate_rule_docs.py" = ["E402"]

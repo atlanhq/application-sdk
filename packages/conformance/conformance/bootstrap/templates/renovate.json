@@ -1,4 +1,6 @@
 {
-    "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-    "extends": ["github>atlanhq/application-sdk//renovate-config/default.json"],
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "github>atlanhq/application-sdk//renovate-config/default.json"
+  ]
 }

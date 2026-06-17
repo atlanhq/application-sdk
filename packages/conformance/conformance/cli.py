@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pathlib
+import re
 import sys
 
 
@@ -85,7 +86,6 @@ def _ensure_gitignore_entry(root: pathlib.Path, entry: str) -> None:
 
 def _read_atlan_yaml_name(root: pathlib.Path) -> str:
     """Return the ``name:`` value from ``atlan.yaml`` in *root*, or ``""``."""
-    import re
 
     atlan_yaml = root / "atlan.yaml"
     if not atlan_yaml.exists():
@@ -94,7 +94,7 @@ def _read_atlan_yaml_name(root: pathlib.Path) -> str:
         for line in atlan_yaml.read_text(encoding="utf-8").splitlines():
             m = re.match(r"^name:\s+(\S+)", line)
             if m:
-                return m.group(1)
+                return m.group(1).strip("\"'")
     except OSError:
         pass
     return ""
