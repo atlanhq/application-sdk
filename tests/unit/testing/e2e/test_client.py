@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
-from application_sdk.testing.e2e._errors import AtlanApiHttpError
+from application_sdk.testing.e2e._errors import AtlanApiHttpError, AtlanApiTimeoutError
 from application_sdk.testing.e2e.client import (
     AEWorkflowClient,
     DAGNodeResult,
@@ -133,3 +133,108 @@ class TestPollNativeStatusTransientHandling:
                 timeout_seconds=60,
                 max_transient_failures=5,
             )
+
+
+class TestPostWithRetry:
+    """_post_with_retry: locks in the timeout-is-retriable contract."""
+
+    def test_timeout_then_success(self):
+        """TimeoutError on attempt 1 → succeeds on attempt 2."""
+        client = _make_client()
+        with (
+            patch.object(
+                client,
+                "_request",
+                side_effect=[TimeoutError("timed out"), (200, {"ok": True})],
+            ),
+            patch("time.sleep"),
+        ):
+            status, body = client._post_with_retry(
+                "/some/path",
+                total_attempts=2,
+                sleep_seconds=1,
+                retryable=lambda s, b: s >= 500,
+                op_name="test_op",
+            )
+        assert status == 200
+        assert body == {"ok": True}
+
+    def test_repeated_timeout_raises_atlan_timeout(self):
+        """TimeoutError on every attempt → raises AtlanApiTimeoutError."""
+        client = _make_client()
+        with (
+            patch.object(client, "_request", side_effect=TimeoutError("timed out")),
+            patch("time.sleep"),
+            pytest.raises(AtlanApiTimeoutError),
+        ):
+            client._post_with_retry(
+                "/some/path",
+                total_attempts=3,
+                sleep_seconds=1,
+                retryable=lambda s, b: s >= 500,
+                op_name="test_op",
+            )
+
+    def test_5xx_then_success(self):
+        """HTTP 503 on attempt 1 → succeeds on attempt 2."""
+        client = _make_client()
+        with (
+            patch.object(
+                client,
+                "_request",
+                side_effect=[(503, {"err": "overloaded"}), (200, {"ok": True})],
+            ),
+            patch("time.sleep"),
+        ):
+            status, _ = client._post_with_retry(
+                "/some/path",
+                total_attempts=2,
+                sleep_seconds=1,
+                retryable=lambda s, b: s >= 500,
+                op_name="test_op",
+            )
+        assert status == 200
+
+    def test_non_retryable_4xx_returns_immediately_without_sleep(self):
+        """HTTP 404 with retryable=False → returns on first attempt, no sleep."""
+        client = _make_client()
+        with (
+            patch.object(client, "_request", side_effect=[(404, {"not": "found"})]),
+            patch("time.sleep") as mock_sleep,
+        ):
+            status, _ = client._post_with_retry(
+                "/some/path",
+                total_attempts=5,
+                sleep_seconds=1,
+                retryable=lambda s, b: s >= 500,
+                op_name="test_op",
+            )
+        assert status == 404
+        mock_sleep.assert_not_called()
+
+    def test_2xx_body_shape_retry(self):
+        """2xx with wrong body shape retries; 2xx with correct shape returns.
+
+        Exercises the ``b`` argument of the retryable predicate — the exact
+        path introduced for publish_version.  A future refactor that drops
+        ``b`` from the _post_with_retry call site would silently break
+        publish_version; this test would catch it.
+        """
+        client = _make_client()
+        pending = (200, {"status": "pending"})
+        success = (200, {"status": "success"})
+        with (
+            patch.object(client, "_request", side_effect=[pending, success]),
+            patch("time.sleep") as mock_sleep,
+        ):
+            status, body = client._post_with_retry(
+                "/some/path",
+                total_attempts=3,
+                sleep_seconds=1,
+                retryable=lambda s, b: s >= 300
+                or not (isinstance(b, dict) and b.get("status") == "success"),
+                op_name="test_op",
+            )
+        assert status == 200
+        assert isinstance(body, dict) and body.get("status") == "success"
+        mock_sleep.assert_called_once()

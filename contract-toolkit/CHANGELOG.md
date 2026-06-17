@@ -6,6 +6,13 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.13.0] - 2026-06-16
+
+### Features
+
+- default selfDeployedRuntime to true (#2173) ([efaca08](https://github.com/atlanhq/application-sdk/commit/efaca08))
+- make `connectionEntity` argument optional in `publish` (#2159) ([a28a849](https://github.com/atlanhq/application-sdk/commit/a28a849))
+
 ## [0.12.0] - 2026-06-11
 
 ### Features

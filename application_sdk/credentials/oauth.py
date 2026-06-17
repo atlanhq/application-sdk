@@ -58,7 +58,7 @@ def _parse_jwt_exp(token: str) -> float | None:
 class OAuthTokenError(AuthError):
     """Raised when an OAuth 2.0 token exchange or refresh fails (category=AUTH)."""
 
-    code: ClassVar[str] = "OAUTH_TOKEN"
+    code: ClassVar[str] = "AUTH_OAUTH_TOKEN"
 
     def __init__(self, message: str, *, cause: Exception | None = None) -> None:
         AuthError.__init__(self, message=message, cause=cause)
