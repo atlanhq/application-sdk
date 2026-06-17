@@ -43,15 +43,17 @@ _CONTAINER = os.environ.get("AZURE_EMULATOR_CONTAINER", "sdk-emulator-test")
 
 @pytest.fixture(scope="module", autouse=True)
 def require_azurite() -> None:
-    """Skip the module when Azurite isn't reachable."""
+    """Skip the module when Azurite isn't reachable or unhealthy."""
     import httpx
 
     try:
         with httpx.Client(timeout=3.0) as client:
             # Azurite returns 400 (not 5xx) for the bare account URL — reachable.
-            client.get(_BLOB_ENDPOINT)
+            resp = client.get(_BLOB_ENDPOINT)
     except Exception as exc:  # pragma: no cover — env guard
         pytest.skip(f"Azurite not reachable at {_BLOB_ENDPOINT}: {exc}")
+    if resp.status_code >= 500:  # pragma: no cover — env guard
+        pytest.skip(f"Azurite unhealthy at {_BLOB_ENDPOINT}: HTTP {resp.status_code}")
 
 
 async def test_azure_binding_roundtrip(tmp_path):

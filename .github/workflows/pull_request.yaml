@@ -261,14 +261,16 @@ jobs:
           for i in $(seq 1 30); do curl -s --max-time 2 http://localhost:10000/devstoreaccount1 >/dev/null 2>&1 && break; sleep 2; done
           for i in $(seq 1 40); do curl -sf "http://localhost:9095/storage/v1/b?project=test" >/dev/null 2>&1 && break; sleep 2; done
           export AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin AWS_DEFAULT_REGION=us-east-1
-          aws --endpoint-url http://localhost:9000 s3 mb s3://sdk-emulator-test
+          # Provisioning is idempotent (|| true) so a step re-run on a still-warm
+          # runner doesn't abort on "bucket already exists" under set -e.
+          aws --endpoint-url http://localhost:9000 s3 mb s3://sdk-emulator-test || true
           # SDR ENABLE_ATLAN_UPLOAD handoff: customer-managed + internal Atlan buckets.
-          aws --endpoint-url http://localhost:9000 s3 mb s3://sdk-customer-objectstore
-          aws --endpoint-url http://localhost:9000 s3 mb s3://sdk-atlan-objectstore
+          aws --endpoint-url http://localhost:9000 s3 mb s3://sdk-customer-objectstore || true
+          aws --endpoint-url http://localhost:9000 s3 mb s3://sdk-atlan-objectstore || true
           az storage container create --name sdk-emulator-test \
-            --connection-string "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;"
+            --connection-string "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;" || true
           curl -sf -X POST "http://localhost:9095/storage/v1/b?project=test" \
-            -H "Content-Type: application/json" -d '{"name":"sdk-emulator-test"}'
+            -H "Content-Type: application/json" -d '{"name":"sdk-emulator-test"}' || true
 
       - name: Run storage emulator tests
         if: needs.changes.outputs.sdk == 'true'

@@ -63,14 +63,18 @@ def _anonymous_credential():
 
 @pytest.fixture(scope="module", autouse=True)
 def require_testbench() -> None:
-    """Skip the module when the GCS emulator (proxy) isn't reachable."""
+    """Skip the module when the GCS emulator (proxy) isn't reachable or unhealthy."""
     import httpx
 
     try:
         with httpx.Client(timeout=3.0) as client:
-            client.get(f"{_ENDPOINT}/storage/v1/b?project=test")
+            resp = client.get(f"{_ENDPOINT}/storage/v1/b?project=test")
     except Exception as exc:  # pragma: no cover — env guard
         pytest.skip(f"GCS emulator not reachable at {_ENDPOINT}: {exc}")
+    # Reachable but 5xx means the emulator/proxy is up yet unhealthy — skip with a
+    # clear signal rather than letting the round-trip fail with an opaque error.
+    if resp.status_code >= 500:  # pragma: no cover — env guard
+        pytest.skip(f"GCS emulator unhealthy at {_ENDPOINT}: HTTP {resp.status_code}")
 
 
 @pytest.fixture
@@ -122,5 +126,15 @@ async def test_gcs_binding_write_read(tmp_path, _redirect_gcs_to_emulator):
     payload = b"hello-from-sdk-gcs-emulator-test"
     await obstore.put_async(store, key, payload)
 
-    result = await obstore.get_async(store, key)
-    assert bytes(await result.bytes_async()) == payload
+    try:
+        result = await obstore.get_async(store, key)
+        assert bytes(await result.bytes_async()) == payload
+    finally:
+        # obstore's S3-style DELETE isn't served by testbench, but its JSON API is.
+        # Keep a long-lived local testbench clean across reruns (CI is fresh).
+        import httpx
+
+        with httpx.Client(timeout=3.0) as client:
+            client.delete(
+                f"{_ENDPOINT}/storage/v1/b/{_BUCKET}/o/{key.replace('/', '%2F')}"
+            )

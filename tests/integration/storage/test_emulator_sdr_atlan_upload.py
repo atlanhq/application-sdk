@@ -104,28 +104,36 @@ async def test_sdr_atlan_upload_handoff_transfers_directory(tmp_path):
         "db1/schema1/columns.parquet": b"PAR1-columns-bytes",
         "db2/views.parquet": b"PAR1-views-bytes",
     }
-    for rel, data in files.items():
-        await obstore.put_async(customer_store, f"{src_prefix}/{rel}", data)
+    try:
+        for rel, data in files.items():
+            await obstore.put_async(customer_store, f"{src_prefix}/{rel}", data)
 
-    # 2. Directory handoff: customer-store prefix → atlan-store prefix.
-    result = await transfer_upload(
-        "",
-        dst_prefix,
-        store=atlan_store,
-        _source_ref=FileReference(local_path="extracted", storage_path=src_prefix),
-        _source_store=customer_store,
-        _tier=StorageTier.RETAINED,
-    )
+        # 2. Directory handoff: customer-store prefix → atlan-store prefix.
+        result = await transfer_upload(
+            "",
+            dst_prefix,
+            store=atlan_store,
+            _source_ref=FileReference(local_path="extracted", storage_path=src_prefix),
+            _source_store=customer_store,
+            _tier=StorageTier.RETAINED,
+        )
 
-    assert result.synced is True
-    assert result.ref.file_count == len(files)
+        assert result.synced is True
+        assert result.ref.file_count == len(files)
 
-    # 3. Every file landed in the Atlan store, byte-for-byte, under dst_prefix.
-    for rel, data in files.items():
-        landed = await obstore.get_async(atlan_store, f"{dst_prefix}/{rel}")
-        assert bytes(await landed.bytes_async()) == data
+        # 3. Every file landed in the Atlan store, byte-for-byte, under dst_prefix.
+        for rel, data in files.items():
+            landed = await obstore.get_async(atlan_store, f"{dst_prefix}/{rel}")
+            assert bytes(await landed.bytes_async()) == data
+    finally:
+        # Runs on any path (incl. assertion failure) so reruns against a
+        # persistent emulator stay idempotent. CI is fresh containers.
+        import contextlib
 
-    # Cleanup so reruns against a persistent emulator stay idempotent.
-    for rel in files:
-        await obstore.delete_async(customer_store, f"{src_prefix}/{rel}")
-        await obstore.delete_async(atlan_store, f"{dst_prefix}/{rel}")
+        for rel in files:
+            for store, prefix in (
+                (customer_store, src_prefix),
+                (atlan_store, dst_prefix),
+            ):
+                with contextlib.suppress(Exception):
+                    await obstore.delete_async(store, f"{prefix}/{rel}")

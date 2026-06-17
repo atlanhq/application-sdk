@@ -36,14 +36,16 @@ _BUCKET = os.environ.get("S3_EMULATOR_BUCKET", "sdk-emulator-test")
 
 @pytest.fixture(scope="module", autouse=True)
 def require_minio() -> None:
-    """Skip the module when MinIO isn't reachable."""
+    """Skip the module when MinIO isn't reachable or unhealthy."""
     import httpx
 
     try:
         with httpx.Client(timeout=3.0) as client:
-            client.get(f"{_ENDPOINT}/minio/health/live")
+            resp = client.get(f"{_ENDPOINT}/minio/health/live")
     except Exception as exc:  # pragma: no cover — env guard
         pytest.skip(f"MinIO not reachable at {_ENDPOINT}: {exc}")
+    if resp.status_code >= 500:  # pragma: no cover — env guard
+        pytest.skip(f"MinIO unhealthy at {_ENDPOINT}: HTTP {resp.status_code}")
 
 
 async def test_s3_binding_roundtrip(tmp_path):
