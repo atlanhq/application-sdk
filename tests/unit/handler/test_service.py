@@ -1616,6 +1616,216 @@ class TestConfigMapEndpoints:
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
+    def test_configmap_default_entrypoint_resolves_form_when_bare_id(
+        self, tmp_path: Path
+    ) -> None:
+        """Bare-id requests resolve to the default entrypoint's form configmap.
+
+        The marketplace UI builds configmap URLs from the app/marketplace id
+        (e.g. ``atlan-snowflake``) rather than the entrypoint form stem
+        (``snowflake-crawler``). When no file stem matches the request id
+        exactly, the handler resolves the app's default entrypoint (same
+        semantics as ``/workflows/v1/start`` and
+        ``/workflows/v1/input-contract``) and serves the form configmap
+        living under that entrypoint's generated dir.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _MultiEpApp(App):
+            @entrypoint
+            async def miner(self, input: _AlphaInput) -> _AlphaOutput:
+                return _AlphaOutput()
+
+            @entrypoint(default=True)
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        crawler_dir = tmp_path / "crawler"
+        crawler_dir.mkdir()
+        (crawler_dir / "manifest.json").write_text(json.dumps({"dag": {}}))
+        (crawler_dir / "snowflake-crawler.json").write_text(
+            json.dumps({"config": {"key": "from-crawler-form"}})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            # app_name= sets the task-queue name only; _resolve_app_entrypoint
+            # keys on _MultiEpApp._app_name (kebab of the class name).
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="snowflake", app_class=_MultiEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/configmap/atlan-snowflake")
+            assert response.status_code == 200
+            data = response.json()["data"]
+            # Echoed back as the request id, not the file stem — the bare
+            # marketplace id is what the caller asked for.
+            assert data["metadata"]["name"] == "atlan-snowflake"
+            parsed_config = json.loads(data["data"]["config"])
+            assert parsed_config["key"] == "from-crawler-form"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_configmap_exact_match_wins_over_default_fallback(
+        self, tmp_path: Path
+    ) -> None:
+        """Exact file-stem match preempts the default-entrypoint fallback."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _OneEpApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        # Both an exact stem AND a default-entrypoint form file exist.
+        (tmp_path / "snowflake.json").write_text(
+            json.dumps({"config": {"key": "exact"}})
+        )
+        crawler_dir = tmp_path / "crawler"
+        crawler_dir.mkdir()
+        (crawler_dir / "snowflake-crawler.json").write_text(
+            json.dumps({"config": {"key": "fallback"}})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            # app_name= sets the task-queue name only; _resolve_app_entrypoint
+            # keys on _OneEpApp._app_name (kebab of the class name).
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="snowflake", app_class=_OneEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/configmap/snowflake")
+            assert response.status_code == 200
+            parsed_config = json.loads(response.json()["data"]["data"]["config"])
+            assert parsed_config["key"] == "exact"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_configmap_default_fallback_skips_manifest_and_credentials(
+        self, tmp_path: Path
+    ) -> None:
+        """Default-entrypoint fallback skips manifest.json and atlan-connectors-*.json.
+
+        The entrypoint's generated dir contains the DAG manifest and (for
+        connectors) a credential template alongside the form configmap. The
+        fallback must serve the form, not the credential schema.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _OneEpApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        crawler_dir = tmp_path / "crawler"
+        crawler_dir.mkdir()
+        (crawler_dir / "manifest.json").write_text(json.dumps({"dag": {}}))
+        (crawler_dir / "atlan-connectors-snowflake.json").write_text(
+            json.dumps({"config": {"key": "credential-schema"}})
+        )
+        (crawler_dir / "snowflake-crawler.json").write_text(
+            json.dumps({"config": {"key": "form-config"}})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            # app_name= sets the task-queue name only; _resolve_app_entrypoint
+            # keys on _OneEpApp._app_name (kebab of the class name).
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="snowflake", app_class=_OneEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/configmap/atlan-snowflake")
+            assert response.status_code == 200
+            parsed_config = json.loads(response.json()["data"]["data"]["config"])
+            assert parsed_config["key"] == "form-config"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_configmap_default_fallback_returns_404_when_only_excluded_files(
+        self, tmp_path: Path
+    ) -> None:
+        """Default-entrypoint dir with only manifest + credential → 404.
+
+        Regression guard: when the entrypoint's generated dir exists but
+        every file in it is on the exclusion list (no form configmap), the
+        fallback finds no candidate and the handler returns 404 rather than
+        serving the credential template or the manifest.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _OneEpApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        crawler_dir = tmp_path / "crawler"
+        crawler_dir.mkdir()
+        (crawler_dir / "manifest.json").write_text(json.dumps({"dag": {}}))
+        (crawler_dir / "atlan-connectors-snowflake.json").write_text(
+            json.dumps({"config": {"key": "credential"}})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            # app_name= sets the task-queue name only; _resolve_app_entrypoint
+            # keys on _OneEpApp._app_name (kebab of the class name).
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="snowflake", app_class=_OneEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/configmap/atlan-snowflake")
+            assert response.status_code == 404
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_configmap_returns_404_when_fallback_ep_dir_missing(
+        self, tmp_path: Path
+    ) -> None:
+        """Default-entrypoint fallback → 404 when ep directory missing on disk.
+
+        The fallback resolves the app's default entrypoint, then looks for a
+        form configmap under ``CONTRACT_GENERATED_DIR/<ep.name>/``.  When that
+        directory does not exist, ``entrypoint_dir.is_dir()`` is False, no
+        candidate is found, and the handler returns 404.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _NoEpDirApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        # tmp_path exists but has no crawler/ subdirectory.
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            # app_name= sets the task-queue name only; _resolve_app_entrypoint
+            # keys on _NoEpDirApp._app_name (kebab of the class name).
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="snowflake", app_class=_NoEpDirApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/configmap/atlan-snowflake")
+            assert response.status_code == 404
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
     def test_configmaps_lists_stems_excluding_manifest(self, tmp_path: Path) -> None:
         from application_sdk.handler import service as svc_module
 
@@ -2032,6 +2242,169 @@ class TestManifestEndpoint:
             client = _make_client()
             response = client.get("/workflows/v1/manifest")
             assert response.status_code == 404
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_manifest_default_entrypoint_fallback_when_no_root_manifest(
+        self, tmp_path: Path
+    ) -> None:
+        """No `?entrypoint=` + no root manifest → resolve default entrypoint.
+
+        Multi-entrypoint apps (postgres crawler+miner, snowflake crawler+miner)
+        don't have a root manifest.json — each entrypoint has its own under
+        ``<ep.name>/manifest.json``. When Heracles/AE calls
+        ``/workflows/v1/manifest`` without ``?entrypoint=`` for pre-flight app
+        validation, the SDK falls back to the default entrypoint's manifest
+        instead of 404-ing (same semantics as ``/start`` and ``/input-contract``).
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _MultiEpApp(App):
+            @entrypoint
+            async def miner(self, input: _AlphaInput) -> _AlphaOutput:
+                return _AlphaOutput()
+
+            @entrypoint(default=True)
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        crawler_dir = tmp_path / "crawler"
+        crawler_dir.mkdir()
+        (crawler_dir / "manifest.json").write_text(
+            json.dumps({"execution_mode": "automation-engine", "ep": "crawler"})
+        )
+        miner_dir = tmp_path / "miner"
+        miner_dir.mkdir()
+        (miner_dir / "manifest.json").write_text(
+            json.dumps({"execution_mode": "automation-engine", "ep": "miner"})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            # app_name= sets the task-queue name only; _resolve_app_entrypoint
+            # keys on _MultiEpApp._app_name (kebab of the class name).
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="postgres", app_class=_MultiEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/manifest")
+            assert response.status_code == 200
+            assert response.json()["ep"] == "crawler"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_manifest_root_file_wins_over_default_entrypoint_fallback(
+        self, tmp_path: Path
+    ) -> None:
+        """Root manifest.json preempts the default-entrypoint fallback."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _OneEpApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        (tmp_path / "manifest.json").write_text(
+            json.dumps({"execution_mode": "linear", "source": "root"})
+        )
+        crawler_dir = tmp_path / "crawler"
+        crawler_dir.mkdir()
+        (crawler_dir / "manifest.json").write_text(
+            json.dumps({"execution_mode": "automation-engine", "source": "ep"})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            # app_name= sets the task-queue name only; _resolve_app_entrypoint
+            # keys on _OneEpApp._app_name (kebab of the class name).
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="postgres", app_class=_OneEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/manifest")
+            assert response.status_code == 200
+            assert response.json()["source"] == "root"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_manifest_404_when_default_entrypoint_dir_has_no_manifest(
+        self, tmp_path: Path
+    ) -> None:
+        """Default-entrypoint resolves but its dir has no manifest.json → 404.
+
+        Regression guard: the fallback must not silently swallow a missing
+        entrypoint manifest. Returning 404 keeps the failure visible.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _OneEpApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        # Entrypoint dir is empty (e.g. contract generation skipped manifest).
+        (tmp_path / "crawler").mkdir()
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            # app_name= sets the task-queue name only; _resolve_app_entrypoint
+            # keys on _OneEpApp._app_name (kebab of the class name).
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="postgres", app_class=_OneEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/manifest")
+            assert response.status_code == 404
+            assert response.json()["detail"] == "No manifest available"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_manifest_returns_404_when_fallback_ep_dir_missing(
+        self, tmp_path: Path
+    ) -> None:
+        """Default-entrypoint fallback → 404 when ep manifest missing on disk.
+
+        Multi-entrypoint apps place each manifest under ``<ep.name>/manifest.json``.
+        When the default ep's directory does not exist, ``_serve_entrypoint_manifest``
+        raises HTTPException(404), which is caught, and the fallback returns
+        ``"No manifest available"``.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _NoEpDirManifestApp(App):
+            @entrypoint(default=True)
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def miner(self, input: _AlphaInput) -> _AlphaOutput:
+                return _AlphaOutput()
+
+        # tmp_path exists but has no crawler/ or miner/ subdirectory and no
+        # root manifest.json — forces the fallback to reach the missing-ep-dir path.
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            # app_name= sets the task-queue name only; _resolve_app_entrypoint
+            # keys on _NoEpDirManifestApp._app_name (kebab of the class name).
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="postgres", app_class=_NoEpDirManifestApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/manifest")
+            assert response.status_code == 404
+            assert response.json()["detail"] == "No manifest available"
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 

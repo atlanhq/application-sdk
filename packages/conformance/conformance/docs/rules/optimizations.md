@@ -13,13 +13,21 @@ Suppress a finding on the violating line or the line directly above it:
 # conformance: ignore[O001] intentional: stdlib json required here
 ```
 
+**Rule-id stability (non-migration policy):** P-ids and O-ids are a permanent public
+contract — each is exposed in the SARIF `help_uri` and referenced by inline `#
+conformance: ignore[...]` suppressions across the fleet.  An id therefore **never
+migrates and never changes**, even if a future domain series (S/B/T/A/…) later subsumes
+the same topic.  When a domain series takes over an area, the rule is retired in place
+(kept documented, no longer firing) and the new rule gets a fresh id — the original id
+is never reused or reassigned.
+
 | ID | Name | Tier | Category | Autofixable | Since |
 |---|---|---|---|---|---|
-| [O001](#o001) | `StdlibJsonOverOrjson` | `warn` | `canonical-dependency` | — | 0.3.0 |
+| [O001](#o001) | `OrjsonOverStdlibJson` | `warn` | `canonical-dependency` | — | 0.3.0 |
 
 ---
 
-## O001 — `StdlibJsonOverOrjson` {#o001}
+## O001 — `OrjsonOverStdlibJson` {#o001}
 
 **Tier:** `warn` · **Category:** `canonical-dependency` · **Autofixable:** — · **Since:** 0.3.0
 

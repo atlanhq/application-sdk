@@ -176,10 +176,7 @@ def test_p002_fires_on_leaf_subclass_redeclaring_category() -> None:
 
 
 def test_p002_fires_on_plain_assignment_no_annotation() -> None:
-    src = (
-        "class DomainErr(InternalError):\n"
-        "    category = FailureCategory.INTERNAL\n"
-    )
+    src = "class DomainErr(InternalError):\n    category = FailureCategory.INTERNAL\n"
     assert _ids(src) == ["P002"]
 
 
@@ -275,10 +272,7 @@ def test_p002_silent_on_subclass_that_does_not_redeclare_category() -> None:
 def test_p002_silent_on_unrelated_class_assigning_category() -> None:
     # A class that doesn't inherit from any AppError leaf may use a field named
     # ``category`` for its own purposes — must not fire.
-    src = (
-        "class Product(BaseModel):\n"
-        "    category: str = 'electronics'\n"
-    )
+    src = "class Product(BaseModel):\n    category: str = 'electronics'\n"
     assert _ids(src) == []
 
 

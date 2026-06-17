@@ -165,7 +165,7 @@ async def test_download_missing_key_raises_typed_not_found(local_store, tmp_path
 
     err = excinfo.value
     assert err.key == "missing/nope.txt"
-    assert err.code == "STORAGE_NOT_FOUND"
+    assert err.code == "NOT_FOUND_STORAGE"
     assert err.default_retryable is False
     # Failed download must not leave a partial file behind for this branch.
     assert not (tmp_path / "out").exists()

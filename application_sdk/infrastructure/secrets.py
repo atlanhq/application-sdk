@@ -85,7 +85,7 @@ class SecretStoreError(DependencyUnavailableError):
     secret_name: str | None = None
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = SECRET_STORE_ERROR
-    code: ClassVar[str] = "SECRET_STORE"
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_SECRET_STORE"
 
     # Intentional: dataclass fields define the wire-evidence schema; custom __init__ preserves positional-message compat.
     def __init__(
@@ -126,7 +126,7 @@ class SecretNotFoundError(NotFoundError, SecretStoreError):
     """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = SECRET_NOT_FOUND
-    code: ClassVar[str] = "SECRET_NOT_FOUND"
+    code: ClassVar[str] = "NOT_FOUND_SECRET"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.USER
 

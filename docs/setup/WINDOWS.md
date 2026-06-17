@@ -59,14 +59,14 @@ Install DAPR using PowerShell:
 Set-ExecutionPolicy RemoteSigned -scope CurrentUser
 
 # Install DAPR CLI
-$script=iwr -useb https://raw.githubusercontent.com/dapr/cli/master/install/install.ps1; $block=[ScriptBlock]::Create($script); invoke-command -ScriptBlock $block -ArgumentList 1.17.1, "$env:USERPROFILE\.dapr\bin\"
+$script=iwr -useb https://raw.githubusercontent.com/dapr/cli/master/install/install.ps1; $block=[ScriptBlock]::Create($script); invoke-command -ScriptBlock $block -ArgumentList 1.18.0, "$env:USERPROFILE\.dapr\bin\"
 
 # Add to PATH
 $env:Path += ";$env:USERPROFILE\.dapr\bin\"
 [Environment]::SetEnvironmentVariable("Path", $env:Path, [System.EnvironmentVariableTarget]::User)
 
 # Initialize DAPR (slim mode)
-dapr init --runtime-version 1.17.3 --slim
+dapr init --runtime-version 1.18.0 --slim
 
 # Verify installation
 dapr --version

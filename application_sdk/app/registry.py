@@ -55,7 +55,7 @@ class AppMetadata:
 class AppNotFoundError(InvalidInputError):
     """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
 
-    code: ClassVar[str] = "APP_NOT_FOUND"
+    code: ClassVar[str] = "INVALID_INPUT_APP_NOT_FOUND"
 
     def __init__(
         self,
@@ -91,7 +91,7 @@ class AppNotFoundError(InvalidInputError):
 class AppAlreadyRegisteredError(InvalidInputError):
     """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
 
-    code: ClassVar[str] = "APP_ALREADY_REGISTERED"
+    code: ClassVar[str] = "INVALID_INPUT_APP_ALREADY_REGISTERED"
 
     def __init__(
         self, name: str, version: str, *, error_code: ErrorCode | None = None
@@ -325,7 +325,7 @@ class AppRegistry:
 class TaskNotFoundError(InvalidInputError):
     """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
 
-    code: ClassVar[str] = "TASK_NOT_FOUND"
+    code: ClassVar[str] = "INVALID_INPUT_TASK_NOT_FOUND"
 
     def __init__(
         self, app_name: str, task_name: str, *, error_code: ErrorCode | None = None

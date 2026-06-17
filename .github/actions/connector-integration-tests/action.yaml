@@ -103,11 +103,11 @@ inputs:
   dapr-version:
     required: false
     description: Dapr runtime version to install.
-    default: "1.17.9"
+    default: "1.18.0"
   dapr-cli-version:
     required: false
     description: Dapr CLI version to download (may differ from the runtime version).
-    default: "1.17.1"
+    default: "1.18.0"
   force-external-runtime:
     required: false
     description: >

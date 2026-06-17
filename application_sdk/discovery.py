@@ -42,7 +42,7 @@ logger = get_logger(__name__)
 class DiscoveryError(InvalidInputError):
     """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
 
-    code: ClassVar[str] = "DISCOVERY"
+    code: ClassVar[str] = "INVALID_INPUT_DISCOVERY"
 
     def __init__(
         self,

@@ -26,7 +26,7 @@ def _ids(src: str) -> list[str]:
     return [f.rule_id for f in scan_text(src, "x.py")]
 
 
-# ── O001 StdlibJsonOverOrjson ──────────────────────────────────────────────────
+# ── O001 OrjsonOverStdlibJson ──────────────────────────────────────────────────
 
 
 def test_o001_fires_on_json_dumps_and_loads() -> None:

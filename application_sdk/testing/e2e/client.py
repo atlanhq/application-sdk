@@ -38,6 +38,7 @@ import asyncio
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -65,9 +66,11 @@ _USER_AGENT = "atlan-sdk-full-dag-e2e/1.0 (+https://github.com/atlanhq/applicati
 # / ``poll_atlas_for_connection``; the per-request timeout just keeps
 # any one call from hanging the whole loop.
 _HTTP_TIMEOUT = 60
-# AE submit blocks while the tenant connector pod accepts the workflow —
-# KEDA may spin the pod up from zero, which adds ~60-90 s of startup latency
-# on top of the normal request time.
+# AE create and submit can take >60 s on the first call — the origin
+# server may be slow to respond, causing Cloudflare to return HTTP 504
+# at its own gateway timeout before urllib's 60 s window closes.  Using
+# 120 s lets Cloudflare's 504 arrive as an HTTP error (which the
+# existing 5xx retry loop handles) rather than a raw TimeoutError.
 _SUBMIT_TIMEOUT = 120
 
 # Cadence for "still polling" heartbeat log lines in
@@ -276,6 +279,82 @@ class AEWorkflowClient:
     # Endpoints
     # ------------------------------------------------------------------
 
+    def _post_with_retry(
+        self,
+        path: str,
+        *,
+        body: dict[str, Any] | None = None,
+        total_attempts: int,
+        sleep_seconds: int,
+        retryable: Callable[[int, dict[str, Any] | str], bool],
+        op_name: str,
+    ) -> tuple[int, dict[str, Any] | str]:
+        """POST *path* with unified timeout + retry, returning ``(status, body)``.
+
+        Centralises the _SUBMIT_TIMEOUT budget, TimeoutError/OSError retry,
+        and HTTP-status-based retry that every AE write endpoint shares.
+        The caller inspects the returned ``(status, body)`` to extract the
+        expected value or raise an endpoint-specific error.
+
+        Args:
+            path: URL path relative to ``self.tenant_url``.
+            body: Optional JSON-serialisable request body.
+            total_attempts: Maximum number of calls (1 initial + N retries).
+            sleep_seconds: Seconds to sleep between attempts.
+            retryable: Called with ``(status, body)`` after each response.
+                Return True to retry — works for both non-2xx status codes
+                and 2xx responses with an unexpected body shape.  Return
+                False to accept the response and return it to the caller.
+            op_name: Human-readable label used in log / error messages.
+        """
+        last: tuple[int, dict[str, Any] | str] = (0, {})
+        for attempt in range(1, total_attempts + 1):
+            try:
+                status, resp_body = self._request(
+                    "POST", path, body=body, timeout=_SUBMIT_TIMEOUT
+                )
+            except (TimeoutError, OSError) as exc:
+                if attempt < total_attempts:
+                    logger.warning(
+                        "%s attempt %d/%d: timeout (%s) — retrying in %ds",
+                        op_name,
+                        attempt,
+                        total_attempts,
+                        exc,
+                        sleep_seconds,
+                    )
+                    time.sleep(sleep_seconds)
+                    continue
+                raise AtlanApiTimeoutError(
+                    message=f"{op_name} timed out after {total_attempts} attempts",
+                    operation=path,
+                ) from exc
+            last = (status, resp_body)
+            is_retry = retryable(status, resp_body)
+            if not is_retry and status < 300:
+                if attempt > 1:
+                    logger.info(
+                        "%s succeeded on attempt %d/%d",
+                        op_name,
+                        attempt,
+                        total_attempts,
+                    )
+                return last
+            if is_retry and attempt < total_attempts:
+                logger.warning(
+                    "%s attempt %d/%d: HTTP %d — retrying in %ds  body=%r",
+                    op_name,
+                    attempt,
+                    total_attempts,
+                    status,
+                    sleep_seconds,
+                    resp_body,
+                )
+                time.sleep(sleep_seconds)
+                continue
+            break
+        return last
+
     def create_workflow(
         self,
         name: str,
@@ -293,52 +372,29 @@ class AEWorkflowClient:
         idempotent on name — submitting the same name returns the
         existing workflow's slug.
 
-        Retries on HTTP 5xx (same ``AE-COMMON-500-01: An unexpected
-        error occurred`` shape we already handle on ``create_version``
-        / ``submit_workflow`` / ``poll_native_status``). 4 attempts at
-        5s intervals covers the typical AE recovery window without
-        sitting on a hard failure.
+        Retries on HTTP 5xx and timeout. 4 retries at 5s intervals covers
+        the typical AE recovery window without sitting on a hard failure.
 
         Returns:
-            The workflow slug (used by subsequent version + submit
-            calls).
-
-        Raises:
-            RuntimeError: On non-2xx after retries are exhausted or on
-                missing slug in the response body.
+            The workflow slug (used by subsequent version + submit calls).
         """
-        last: tuple[int, Any] = (0, {})
-        for attempt in range(1, retries + 2):
-            status, body = self._request(
-                "POST",
-                "/automation/api/v1/workflows",
-                body={"name": name, "description": description},
-            )
-            last = (status, body)
-            if status < 300 and isinstance(body, dict):
-                data = body.get("data") if isinstance(body.get("data"), dict) else body
-                slug = data.get("slug") if isinstance(data, dict) else None
-                if not slug:
-                    raise AtlanApiResponseInvariantError(
-                        message=f"create_workflow returned no slug\nresponse={body!r}",
-                        expectation="slug present in create_workflow response",
-                    )
-                if attempt > 1:
-                    logger.info("create_workflow succeeded on attempt %d", attempt)
-                return str(slug)
-            if status >= 500 and attempt <= retries:
-                logger.warning(
-                    "create_workflow attempt %d/%d: HTTP %d (retrying in %ds) body=%r",
-                    attempt,
-                    retries + 1,
-                    status,
-                    retry_sleep_seconds,
-                    body,
+        status, body = self._post_with_retry(
+            "/automation/api/v1/workflows",
+            body={"name": name, "description": description},
+            total_attempts=retries + 1,
+            sleep_seconds=retry_sleep_seconds,
+            retryable=lambda s, b: s >= 500,
+            op_name="create_workflow",
+        )
+        if status < 300 and isinstance(body, dict):
+            data = body.get("data") if isinstance(body.get("data"), dict) else body
+            slug = data.get("slug") if isinstance(data, dict) else None
+            if not slug:
+                raise AtlanApiResponseInvariantError(
+                    message=f"create_workflow returned no slug\nresponse={body!r}",
+                    expectation="slug present in create_workflow response",
                 )
-                time.sleep(retry_sleep_seconds)
-                continue
-            break
-        status, body = last
+            return str(slug)
         raise AtlanApiHttpError(
             message=f"create_workflow failed: HTTP {status}\nresponse={body!r}",
             target=f"POST /automation/api/v1/workflows HTTP {status}",
@@ -359,47 +415,26 @@ class AEWorkflowClient:
         least one *published* version before package-workflows submit
         will accept a run against it.
 
-        Retries on HTTP 404 because AE has a brief indexing window
-        between ``create_workflow`` returning a slug and that slug
-        being queryable on this endpoint — early calls hit AE-WF-404-02
-        ("Workflow with slug 'X' not found. Create the workflow
-        first.") even though we just created it. mssql platform-smoke
-        bridges the gap with a ``sleep 3`` after create_workflow; we
-        retry on 404 directly so the harness self-recovers regardless
-        of how slow indexing is on a given tenant.
+        Retries on HTTP 404 (indexing lag — slug not yet queryable after
+        create_workflow), HTTP 5xx (AE under load), and timeout.
 
         Returns:
             The version number assigned by AE (typically a Unix
             timestamp, but treat as opaque int).
         """
-        last: tuple[int, dict[str, Any] | str] = (0, "")
-        for attempt in range(1, retries + 1):
-            status, body = self._request(
-                "POST",
-                f"/automation/api/v1/workflows/{slug}/versions",
-                body=version_payload,
-            )
-            last = (status, body)
-            if status < 300 and isinstance(body, dict):
-                data = body.get("data") if isinstance(body.get("data"), dict) else body
-                version = data.get("version") if isinstance(data, dict) else None
-                if version is not None:
-                    return int(version)
-            # 404 is the indexing-lag case — retry. Other failures are
-            # not retryable (auth, validation, etc.) so bail immediately
-            # with the body for diagnostic.
-            if status != 404:
-                break
-            logger.warning(
-                "create_version attempt %d/%d: HTTP 404 (slug %s indexing); retrying in %ds",
-                attempt,
-                retries,
-                slug,
-                retry_sleep_seconds,
-            )
-            if attempt < retries:
-                time.sleep(retry_sleep_seconds)
-        status, body = last
+        status, body = self._post_with_retry(
+            f"/automation/api/v1/workflows/{slug}/versions",
+            body=version_payload,
+            total_attempts=retries,
+            sleep_seconds=retry_sleep_seconds,
+            retryable=lambda s, b: s == 404 or s >= 500,
+            op_name="create_version",
+        )
+        if status < 300 and isinstance(body, dict):
+            data = body.get("data") if isinstance(body.get("data"), dict) else body
+            version = data.get("version") if isinstance(data, dict) else None
+            if version is not None:
+                return int(version)
         raise AtlanApiHttpError(
             message=f"create_version failed: HTTP {status}\nresponse={body!r}",
             target=f"POST /automation/api/v1/workflows/.../versions HTTP {status}",
@@ -417,42 +452,20 @@ class AEWorkflowClient:
 
         AE can lag a few seconds between version-create and version-
         publish — early calls return 404 (AE-WF-404-02 "version not
-        found"). Retries on failure (mssql platform-smoke does the
-        same: 5 attempts, 5s spacing).
-
-        Raises:
-            RuntimeError: If all retries return a non-success status.
+        found"). Retries on any non-success response and timeout.
         """
-        last_body: dict[str, Any] | str = ""
-        for attempt in range(1, retries + 1):
-            status, body = self._request(
-                "POST",
-                f"/automation/api/v1/workflows/{slug}/versions/{version}/publish",
-            )
-            last_body = body
-            if (
-                status < 300
-                and isinstance(body, dict)
-                and body.get("status") == "success"
-            ):
-                logger.info(
-                    "Published workflow %s version %d (attempt %d)",
-                    slug,
-                    version,
-                    attempt,
-                )
-                return
-            logger.warning(
-                "publish_version attempt %d/%d: HTTP %s body=%r",
-                attempt,
-                retries,
-                status,
-                body,
-            )
-            if attempt < retries:
-                time.sleep(retry_sleep_seconds)
+        status, body = self._post_with_retry(
+            f"/automation/api/v1/workflows/{slug}/versions/{version}/publish",
+            total_attempts=retries,
+            sleep_seconds=retry_sleep_seconds,
+            retryable=lambda s, b: s >= 300
+            or not (isinstance(b, dict) and b.get("status") == "success"),
+            op_name="publish_version",
+        )
+        if status < 300 and isinstance(body, dict) and body.get("status") == "success":
+            return
         raise AtlanApiHttpError(
-            message=f"publish_version failed after {retries} attempts: {last_body!r}",
+            message=f"publish_version failed after {retries} attempts: {body!r}",
             target="POST /automation/api/v1/workflows/.../versions/.../publish",
         )
 
@@ -469,50 +482,27 @@ class AEWorkflowClient:
         response shape is not officially documented; we look for
         ``run_id`` under either the top level or a nested ``data`` key.
 
-        Retries on HTTP 5xx — AE's submit can race with the
-        publish_version indexing window and surface a generic
-        ``AE-COMMON-500-01: An unexpected error occurred`` even after
-        publish_version returned 200. 4 retries at 5s intervals
-        covers the longest indexing lag we've observed (~15s) without
-        sitting on a hard failure.
-
-        Raises:
-            RuntimeError: On non-2xx HTTP status after retries are
-                exhausted, or on missing ``run_id`` in the response.
+        Retries on HTTP 5xx and timeout. 4 retries at 5s intervals covers
+        the longest indexing lag we've observed (~15s) without sitting on
+        a hard failure.
         """
-        last: tuple[int, Any] = (0, {})
-        for attempt in range(1, retries + 2):
-            status, body = self._request(
-                "POST",
-                "/api/service/package-workflows?submit=true",
-                body=payload,
-                timeout=_SUBMIT_TIMEOUT,
+        status, body = self._post_with_retry(
+            "/api/service/package-workflows?submit=true",
+            body=payload,
+            total_attempts=retries + 1,
+            sleep_seconds=retry_sleep_seconds,
+            retryable=lambda s, b: s >= 500,
+            op_name="submit_workflow",
+        )
+        if status < 300 and isinstance(body, dict):
+            data = body.get("data") if isinstance(body.get("data"), dict) else body
+            run_id = data.get("run_id") if isinstance(data, dict) else None
+            if run_id:
+                return run_id
+            raise AtlanApiResponseInvariantError(
+                message=f"AE submit returned no run_id\nresponse={body!r}",
+                expectation="run_id present in submit response",
             )
-            last = (status, body)
-            if status < 300 and isinstance(body, dict):
-                data = body.get("data") if isinstance(body.get("data"), dict) else body
-                run_id = data.get("run_id") if isinstance(data, dict) else None
-                if run_id:
-                    if attempt > 1:
-                        logger.info("AE submit succeeded on attempt %d", attempt)
-                    return run_id
-                raise AtlanApiResponseInvariantError(
-                    message=f"AE submit returned no run_id\nresponse={body!r}",
-                    expectation="run_id present in submit response",
-                )
-            if status >= 500 and attempt <= retries:
-                logger.warning(
-                    "AE submit attempt %d/%d: HTTP %d (retrying in %ds) body=%r",
-                    attempt,
-                    retries + 1,
-                    status,
-                    retry_sleep_seconds,
-                    body,
-                )
-                time.sleep(retry_sleep_seconds)
-                continue
-            break
-        status, body = last
         raise AtlanApiHttpError(
             message=f"AE submit failed: HTTP {status}\nresponse={body!r}",
             target=f"POST /api/service/package-workflows?submit=true HTTP {status}",
