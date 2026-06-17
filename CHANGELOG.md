@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.17.3 (June 17, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.17.2...v3.17.3
+
+### Bug Fixes
+
+- honor HTTP(S)_PROXY for Temporal gRPC and obstore object storage (#2165) (by @louisnow in [9fb13b1](https://github.com/atlanhq/application-sdk/commit/9fb13b1))
+- rename wire codes to follow leaf-category prefix rule (BLDX-1431) (#2177) (by @mothership-ai[bot] in [4de2e87](https://github.com/atlanhq/application-sdk/commit/4de2e87))
+- extend _SUBMIT_TIMEOUT + TimeoutError retry to all AE write endpoints (#2178) (by @cmgrote in [49cd3c2](https://github.com/atlanhq/application-sdk/commit/49cd3c2))
+- match `<id>-<entrypoint>.json` when frontend asks for bare `<id>` (#2168) (by @mananjain99 in [153136f](https://github.com/atlanhq/application-sdk/commit/153136f))
+
+
 ## v3.17.2 (June 15, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.17.1...v3.17.2
