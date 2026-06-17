@@ -4,10 +4,22 @@ Scans Python source for above-the-bar prescription violations (P001–P099).
 Every check is purely deterministic: the same source text always produces the
 same set of findings.
 
+Each rule lives in its own module (``_unbounded_fields`` → P001,
+``_category_override`` → P002, ``_error_code_prefix`` → P003, …); this
+``__init__`` assembles them into the public scan + CLI API.  Adding a rule is
+a new module plus one line in ``scan_text`` (for per-file rules) or a new
+pass in ``scan_all`` (for cross-file rules).
+
 Currently implemented:
 
 * ``P001`` UnboundedContractFields — an ``Input``/``Output`` contract subclass
   declared with the ``allow_unbounded_fields=True`` class keyword.
+* ``P002`` CategoryFieldOverride — a subclass of ``AppError`` (or any of its
+  14 categorical leaves) that redeclares the ``category`` ``ClassVar`` in its
+  own body, drifting the canonical taxonomy.  The check uses a transitive
+  closure of AppError-derived class names within the file so second-generation
+  overrides are caught even when the intermediate class is not in the canonical
+  set.
 * ``P003`` ErrorCodePrefixMismatch — a (transitive) subclass of an
   ``application_sdk.errors`` leaf class either omits its own ``code: ClassVar[str]``
   declaration or declares one that does not start with the leaf's category prefix.
@@ -41,6 +53,11 @@ from conformance.suite.checks._ast_common import (
 )
 from conformance.suite.schema.findings import Finding, findings_to_report
 
+from ._category_override import (
+    _CANONICAL_ERROR_CLASSES,
+    CategoryOverrideChecker,
+    _collect_apperror_subclasses,
+)
 from ._error_code_prefix import (
     LEAF_PREFIX_MAP,
     ClassRecord,
@@ -57,7 +74,7 @@ __all__ = ["SERIES", "discover", "main", "scan_all", "scan_path", "scan_text"]
 
 
 def scan_text(text: str, file: str) -> list[Finding]:
-    """Scan a single Python source *text* for P001 findings only.
+    """Scan a single Python source *text* for P001 and P002 findings.
 
     P003 needs cross-file context; use :func:`scan_all` for full-suite runs.
     Kept for symmetry with the per-file ``scan_path`` runner contract.
@@ -68,13 +85,23 @@ def scan_text(text: str, file: str) -> list[Finding]:
         return []
 
     directives = _parse_directives(text)
-    checker = UnboundedContractFieldsChecker(filename=file, directives=directives)
-    checker.visit(tree)
-    return checker._findings
+
+    p001 = UnboundedContractFieldsChecker(filename=file, directives=directives)
+    p001.visit(tree)
+
+    apperror_subclasses = _collect_apperror_subclasses(tree, _CANONICAL_ERROR_CLASSES)
+    p002 = CategoryOverrideChecker(
+        filename=file,
+        directives=directives,
+        apperror_subclasses=apperror_subclasses,
+    )
+    p002.visit(tree)
+
+    return p001._findings + p002._findings
 
 
 def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan a single Python file (P001 only).  P003 requires :func:`scan_all`."""
+    """Scan a single Python file (P001 + P002 only).  P003 requires :func:`scan_all`."""
     try:
         text = path.read_text(encoding="utf-8")
     except OSError:
@@ -87,11 +114,11 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:
-    """Multi-pass scan over *paths*, emitting P001 + P003 findings.
+    """Multi-pass scan over *paths*, emitting P001 + P002 + P003 findings.
 
-    Pass 1 — parse every file once, run P001 per-file, collect every ``ClassDef``
-    into a name-keyed registry along with its base names and any literal
-    ``code`` declaration.
+    Pass 1 — parse every file once, run P001 and P002 per-file, collect every
+    ``ClassDef`` into a name-keyed registry along with its base names and any
+    literal ``code`` declaration.
 
     Pass 2 — for each registered class, walk its (transitive) base chain to
     find the deepest ancestor that names one of the 14 leaves in
@@ -133,6 +160,18 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         )
         checker.visit(tree)
         findings.extend(checker._findings)
+
+        # P002 (per-file)
+        apperror_subclasses = _collect_apperror_subclasses(
+            tree, _CANONICAL_ERROR_CLASSES
+        )
+        p002_checker = CategoryOverrideChecker(
+            filename=rel_str,
+            directives=directives,
+            apperror_subclasses=apperror_subclasses,
+        )
+        p002_checker.visit(tree)
+        findings.extend(p002_checker._findings)
 
         # Class registry for P003 — de-alias base names so aliased imports
         # of leaf classes don't hide the real ancestry.
