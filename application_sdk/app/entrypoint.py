@@ -71,7 +71,7 @@ class UnresolvableEntrypointAnnotationsError(InvalidInputError):
 class EntryPointContractError(InvalidInputError):
     """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
 
-    code: ClassVar[str] = "ENTRYPOINT_CONTRACT"
+    code: ClassVar[str] = "INVALID_INPUT_ENTRYPOINT_CONTRACT"
 
     def __init__(self, message: str, *, error_code: ErrorCode | None = None) -> None:
         warnings.warn(
