@@ -19,7 +19,7 @@ from application_sdk.errors import (
     ErrorCode,
 )
 from application_sdk.errors.base import sanitize_cause_repr
-from application_sdk.errors.categories import Audience, FailureCategory
+from application_sdk.errors.categories import Audience
 from application_sdk.errors.leaves import AuthError, InvalidInputError, NotFoundError
 
 # ---------------------------------------------------------------------------
@@ -114,7 +114,6 @@ class CredentialNotFoundError(NotFoundError, CredentialError):
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CREDENTIAL_NOT_FOUND
     code: ClassVar[str] = "CREDENTIAL_NOT_FOUND"
-    category: ClassVar[FailureCategory] = FailureCategory.NOT_FOUND
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.USER
 
@@ -146,7 +145,6 @@ class CredentialParseError(InvalidInputError, CredentialError):
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CREDENTIAL_PARSE_ERROR
     code: ClassVar[str] = "CREDENTIAL_PARSE"
-    category: ClassVar[FailureCategory] = FailureCategory.INVALID_INPUT
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.USER
 
@@ -192,7 +190,6 @@ class CredentialValidationError(InvalidInputError, CredentialError):
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CREDENTIAL_VALIDATION_ERROR
     code: ClassVar[str] = "CREDENTIAL_VALIDATION"
-    category: ClassVar[FailureCategory] = FailureCategory.INVALID_INPUT
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.USER
 
