@@ -182,7 +182,8 @@ def emit_p003(
             f"AppError but does not declare its own 'code: ClassVar[str]'.  Without an "
             f"override, every raise of this class collapses to the bare leaf code "
             f"'{leaf_prefix}', making the failure impossible to triage from dashboards.  "
-            f"Add a code that starts with '{leaf_prefix}_' (typed-error-prescription §4)."
+            f"Add a code that starts with '{leaf_prefix}_' (typed-error-prescription §4).  "
+            f"See https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p003"
         )
     else:
         node = rec.code_node or rec.node
@@ -191,7 +192,8 @@ def emit_p003(
             f"parent leaf's category prefix '{leaf_prefix}_' (subclass of "
             f"'{leaf_prefix}'-category).  The category prefix lets dashboards and "
             f"on-call routing group by failure category without joining on the "
-            f"category column (typed-error-prescription §4)."
+            f"category column (typed-error-prescription §4).  "
+            f"See https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p003"
         )
     return make_finding(
         filename=rec.file,

@@ -347,7 +347,7 @@ def test_p003_aliased_import_with_correct_prefix_is_silent(tmp_path: Path) -> No
 
 def test_p003_silent_when_no_classvar_annotation(tmp_path: Path) -> None:
     """Plain ``code = "..."`` (no ClassVar) still binds an attribute and is checked."""
-    src = "class WrongPlain(InternalError):\n" '    code = "AUTH_BAD"\n'
+    src = 'class WrongPlain(InternalError):\n    code = "AUTH_BAD"\n'
     findings = _scan_one(tmp_path, src)
     assert [f.rule_id for f in findings] == ["P003"]
 
@@ -399,6 +399,99 @@ def test_p003_first_wins_on_global_class_name_collision(tmp_path: Path) -> None:
     # Both _Pivot definitions are intermediates without code — both flagged.
     assert all(f.rule_id == "P003" for f in findings)
     assert len(findings) == 2
+
+
+def test_p003_collision_concrete_child_resolves_to_first_seen_prefix(
+    tmp_path: Path,
+) -> None:
+    """A downstream child of the colliding name resolves to the first-seen definition."""
+    files = {
+        "a.py": "class _Pivot(AuthError):\n    pass\n",  # first-seen → AUTH
+        "b.py": "class _Pivot(InternalError):\n    pass\n",
+        "c.py": (
+            "from typing import ClassVar\n"
+            "class Concrete(_Pivot):\n"
+            '    code: ClassVar[str] = "INTERNAL_CONCRETE"\n'
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    concrete = [f for f in findings if "Concrete" in f.message]
+    assert len(concrete) == 1
+    # First-seen _Pivot is from a.py (AuthError) — INTERNAL_ prefix is wrong
+    assert "AUTH_" in concrete[0].message
+
+
+def test_p003_first_base_wins_on_multiple_leaf_bases(tmp_path: Path) -> None:
+    """class X(AuthError, InternalError): first base in list order picks the prefix."""
+    src = (
+        "from typing import ClassVar\n"
+        "class MultiLeaf(AuthError, InternalError):\n"
+        '    code: ClassVar[str] = "INTERNAL_MIXED"\n'
+    )
+    findings = _scan_one(tmp_path, src)
+    assert [f.rule_id for f in findings] == ["P003"]
+    # AUTH wins (first base) — INTERNAL_ code is wrong
+    assert "AUTH_" in findings[0].message
+
+
+def test_p003_multi_leaf_correct_first_prefix_is_silent(tmp_path: Path) -> None:
+    src = (
+        "from typing import ClassVar\n"
+        "class MultiLeaf(AuthError, InternalError):\n"
+        '    code: ClassVar[str] = "AUTH_MIXED"\n'
+    )
+    findings = _scan_one(tmp_path, src)
+    assert findings == []
+
+
+def test_p003_fires_on_empty_code(tmp_path: Path) -> None:
+    src = (
+        "from typing import ClassVar\n"
+        "class EmptyCode(AuthError):\n"
+        '    code: ClassVar[str] = ""\n'
+    )
+    findings = _scan_one(tmp_path, src)
+    assert [f.rule_id for f in findings] == ["P003"]
+
+
+def test_p003_fires_on_lowercase_prefix(tmp_path: Path) -> None:
+    """Prefix match is case-sensitive (startswith); lowercase prefix must fire."""
+    src = (
+        "from typing import ClassVar\n"
+        "class LowerPrefix(AuthError):\n"
+        '    code: ClassVar[str] = "auth_token"\n'
+    )
+    findings = _scan_one(tmp_path, src)
+    assert [f.rule_id for f in findings] == ["P003"]
+
+
+def test_p003_recognises_leaf_via_star_import(tmp_path: Path) -> None:
+    """from … import * then class Foo(InternalError): leaf resolved via LEAF_PREFIX_MAP."""
+    src = (
+        "from application_sdk.errors.leaves import *\n"
+        "from typing import ClassVar\n"
+        "class StarImportError(InternalError):\n"
+        '    code: ClassVar[str] = "AUTH_WRONG"\n'
+    )
+    findings = _scan_one(tmp_path, src)
+    assert [f.rule_id for f in findings] == ["P003"]
+    assert "INTERNAL_" in findings[0].message
+
+
+def test_p003_recognises_leaf_via_init_reexport(tmp_path: Path) -> None:
+    """Leaf re-exported through a package __init__ is still recognised."""
+    files = {
+        "myerrors/__init__.py": "from application_sdk.errors.leaves import AuthError\n",
+        "consumer.py": (
+            "from myerrors import AuthError\n"
+            "from typing import ClassVar\n"
+            "class BadCode(AuthError):\n"
+            '    code: ClassVar[str] = "INTERNAL_BAD"\n'
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings] == ["P003"]
+    assert "AUTH_" in findings[0].message
 
 
 # ── P003 tier / disposition / gate ─────────────────────────────────────────────
