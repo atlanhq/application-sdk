@@ -36,8 +36,9 @@ RULE_ID = "C002"
 
 _CLI_CMD = "atlan-application-sdk-conformance bootstrap"
 
-# Filename of the write-if-absent scaffold (tracked separately from MANAGED_WORKFLOWS).
+# Write-if-absent scaffolds tracked alongside managed shims (WARN-only drift).
 _TESTS_WORKFLOW = "tests.yaml"
+_RENOVATE_JSON = "renovate.json"
 
 # ---------------------------------------------------------------------------
 # Managed-shim param extractors
@@ -98,15 +99,16 @@ def _extract_tests_yaml_params(text: str) -> dict[str, str]:
 
 
 def discover(root: Path) -> list[Path]:
-    """Return expected managed + scaffold workflow paths under root/.github/workflows/.
+    """Return expected managed + scaffold paths for this repo.
 
     Paths are returned whether or not they exist; ``scan_path`` handles the
     missing-file case so absent shims are reported as findings.
     """
     wf_dir = root / ".github" / "workflows"
     paths = [wf_dir / name for name in MANAGED_WORKFLOWS]
-    # Also track the write-if-absent tests.yaml scaffold.
+    # Write-if-absent scaffolds (WARN-only drift tracking).
     paths.append(wf_dir / _TESTS_WORKFLOW)
+    paths.append(root / _RENOVATE_JSON)
     return paths
 
 
@@ -114,6 +116,8 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
     """Return C002 findings for *path* (may or may not exist on disk)."""
     if path.name == _TESTS_WORKFLOW:
         return _scan_tests_yaml(path, root)
+    if path.name == _RENOVATE_JSON:
+        return _scan_renovate_json(path, root)
     return _scan_managed_shim(path, root)
 
 
@@ -164,6 +168,52 @@ def _scan_managed_shim(path: Path, root: Path) -> list[Finding]:
             message=(
                 f"CI workflow '{name}' has drifted from the bootstrap canonical. "
                 f"Run `{_CLI_CMD}` to re-sync."
+            ),
+        )
+    ]
+
+
+def _scan_renovate_json(path: Path, root: Path) -> list[Finding]:
+    """Scan the write-if-absent renovate.json scaffold — WARN-only, never BLOCK."""
+    try:
+        rel = path.relative_to(root).as_posix()
+    except ValueError:
+        rel = str(path)
+
+    _remediate = (
+        f"To regenerate, delete renovate.json and re-run `{_CLI_CMD}` "
+        f"(drift is informational — WARN only, never blocks CI)."
+    )
+
+    if not path.exists():
+        return [
+            Finding(
+                rule_id=RULE_ID,
+                file=rel,
+                line=1,
+                column=1,
+                message=(
+                    f"Scaffolded renovate.json is absent. "
+                    f"Run `{_CLI_CMD}` to regenerate it. " + _remediate
+                ),
+            )
+        ]
+
+    on_disk = path.read_text(encoding="utf-8")
+    canonical = render(_RENOVATE_JSON)
+
+    if on_disk == canonical:
+        return []
+
+    return [
+        Finding(
+            rule_id=RULE_ID,
+            file=rel,
+            line=1,
+            column=1,
+            message=(
+                "Scaffolded renovate.json has drifted from the bootstrap canonical. "
+                + _remediate
             ),
         )
     ]
