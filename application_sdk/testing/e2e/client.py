@@ -286,7 +286,7 @@ class AEWorkflowClient:
         body: dict[str, Any] | None = None,
         total_attempts: int,
         sleep_seconds: int,
-        retryable: Callable[[int], bool],
+        retryable: Callable[[int, dict[str, Any] | str], bool],
         op_name: str,
     ) -> tuple[int, dict[str, Any] | str]:
         """POST *path* with unified timeout + retry, returning ``(status, body)``.
@@ -301,8 +301,10 @@ class AEWorkflowClient:
             body: Optional JSON-serialisable request body.
             total_attempts: Maximum number of calls (1 initial + N retries).
             sleep_seconds: Seconds to sleep between attempts.
-            retryable: Called with the HTTP status when the response is not
-                2xx.  Return True to retry, False to bail immediately.
+            retryable: Called with ``(status, body)`` after each response.
+                Return True to retry — works for both non-2xx status codes
+                and 2xx responses with an unexpected body shape.  Return
+                False to accept the response and return it to the caller.
             op_name: Human-readable label used in log / error messages.
         """
         last: tuple[int, dict[str, Any] | str] = (0, {})
@@ -328,7 +330,8 @@ class AEWorkflowClient:
                     operation=path,
                 ) from exc
             last = (status, resp_body)
-            if status < 300:
+            is_retry = retryable(status, resp_body)
+            if not is_retry and status < 300:
                 if attempt > 1:
                     logger.info(
                         "%s succeeded on attempt %d/%d",
@@ -337,7 +340,7 @@ class AEWorkflowClient:
                         total_attempts,
                     )
                 return last
-            if retryable(status) and attempt < total_attempts:
+            if is_retry and attempt < total_attempts:
                 logger.warning(
                     "%s attempt %d/%d: HTTP %d — retrying in %ds  body=%r",
                     op_name,
@@ -380,7 +383,7 @@ class AEWorkflowClient:
             body={"name": name, "description": description},
             total_attempts=retries + 1,
             sleep_seconds=retry_sleep_seconds,
-            retryable=lambda s: s >= 500,
+            retryable=lambda s, b: s >= 500,
             op_name="create_workflow",
         )
         if status < 300 and isinstance(body, dict):
@@ -424,7 +427,7 @@ class AEWorkflowClient:
             body=version_payload,
             total_attempts=retries,
             sleep_seconds=retry_sleep_seconds,
-            retryable=lambda s: s == 404 or s >= 500,
+            retryable=lambda s, b: s == 404 or s >= 500,
             op_name="create_version",
         )
         if status < 300 and isinstance(body, dict):
@@ -455,7 +458,8 @@ class AEWorkflowClient:
             f"/automation/api/v1/workflows/{slug}/versions/{version}/publish",
             total_attempts=retries,
             sleep_seconds=retry_sleep_seconds,
-            retryable=lambda s: s >= 300,
+            retryable=lambda s, b: s >= 300
+            or not (isinstance(b, dict) and b.get("status") == "success"),
             op_name="publish_version",
         )
         if status < 300 and isinstance(body, dict) and body.get("status") == "success":
@@ -487,7 +491,7 @@ class AEWorkflowClient:
             body=payload,
             total_attempts=retries + 1,
             sleep_seconds=retry_sleep_seconds,
-            retryable=lambda s: s >= 500,
+            retryable=lambda s, b: s >= 500,
             op_name="submit_workflow",
         )
         if status < 300 and isinstance(body, dict):
