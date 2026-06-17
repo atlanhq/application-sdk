@@ -393,26 +393,43 @@ class AEWorkflowClient:
         """
         last: tuple[int, dict[str, Any] | str] = (0, "")
         for attempt in range(1, retries + 1):
-            status, body = self._request(
-                "POST",
-                f"/automation/api/v1/workflows/{slug}/versions",
-                body=version_payload,
-            )
+            try:
+                status, body = self._request(
+                    "POST",
+                    f"/automation/api/v1/workflows/{slug}/versions",
+                    body=version_payload,
+                    timeout=_SUBMIT_TIMEOUT,
+                )
+            except (TimeoutError, OSError) as exc:
+                if attempt < retries:
+                    logger.warning(
+                        "create_version attempt %d/%d: timeout (%s) — retrying in %ds",
+                        attempt,
+                        retries,
+                        exc,
+                        retry_sleep_seconds,
+                    )
+                    time.sleep(retry_sleep_seconds)
+                    continue
+                raise AtlanApiTimeoutError(
+                    message=f"create_version timed out after {retries} attempts",
+                    operation=f"POST /automation/api/v1/workflows/{slug}/versions",
+                ) from exc
             last = (status, body)
             if status < 300 and isinstance(body, dict):
                 data = body.get("data") if isinstance(body.get("data"), dict) else body
                 version = data.get("version") if isinstance(data, dict) else None
                 if version is not None:
                     return int(version)
-            # 404 is the indexing-lag case — retry. Other failures are
-            # not retryable (auth, validation, etc.) so bail immediately
-            # with the body for diagnostic.
-            if status != 404:
+            # 404 = indexing lag (slug not yet queryable after create_workflow).
+            # 5xx = AE under load — retry. Other 4xx bail immediately.
+            if status != 404 and status < 500:
                 break
             logger.warning(
-                "create_version attempt %d/%d: HTTP 404 (slug %s indexing); retrying in %ds",
+                "create_version attempt %d/%d: HTTP %d (slug %s); retrying in %ds",
                 attempt,
                 retries,
+                status,
                 slug,
                 retry_sleep_seconds,
             )
@@ -444,10 +461,27 @@ class AEWorkflowClient:
         """
         last_body: dict[str, Any] | str = ""
         for attempt in range(1, retries + 1):
-            status, body = self._request(
-                "POST",
-                f"/automation/api/v1/workflows/{slug}/versions/{version}/publish",
-            )
+            try:
+                status, body = self._request(
+                    "POST",
+                    f"/automation/api/v1/workflows/{slug}/versions/{version}/publish",
+                    timeout=_SUBMIT_TIMEOUT,
+                )
+            except (TimeoutError, OSError) as exc:
+                if attempt < retries:
+                    logger.warning(
+                        "publish_version attempt %d/%d: timeout (%s) — retrying in %ds",
+                        attempt,
+                        retries,
+                        exc,
+                        retry_sleep_seconds,
+                    )
+                    time.sleep(retry_sleep_seconds)
+                    continue
+                raise AtlanApiTimeoutError(
+                    message=f"publish_version timed out after {retries} attempts",
+                    operation=f"POST /automation/api/v1/workflows/{slug}/versions/{version}/publish",
+                ) from exc
             last_body = body
             if (
                 status < 300
