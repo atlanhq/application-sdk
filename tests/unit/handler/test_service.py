@@ -2203,6 +2203,123 @@ class TestManifestEndpoint:
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
+    def test_manifest_default_entrypoint_fallback_when_no_root_manifest(
+        self, tmp_path: Path
+    ) -> None:
+        """No `?entrypoint=` + no root manifest → resolve default entrypoint.
+
+        Multi-entrypoint apps (postgres crawler+miner, snowflake crawler+miner)
+        don't have a root manifest.json — each entrypoint has its own under
+        ``<ep.name>/manifest.json``. When Heracles/AE calls
+        ``/workflows/v1/manifest`` without ``?entrypoint=`` for pre-flight app
+        validation, the SDK falls back to the default entrypoint's manifest
+        instead of 404-ing (same semantics as ``/start`` and ``/input-contract``).
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _MultiEpApp(App):
+            @entrypoint
+            async def miner(self, input: _AlphaInput) -> _AlphaOutput:
+                return _AlphaOutput()
+
+            @entrypoint(default=True)
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        crawler_dir = tmp_path / "crawler"
+        crawler_dir.mkdir()
+        (crawler_dir / "manifest.json").write_text(
+            json.dumps({"execution_mode": "automation-engine", "ep": "crawler"})
+        )
+        miner_dir = tmp_path / "miner"
+        miner_dir.mkdir()
+        (miner_dir / "manifest.json").write_text(
+            json.dumps({"execution_mode": "automation-engine", "ep": "miner"})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="postgres", app_class=_MultiEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/manifest")
+            assert response.status_code == 200
+            assert response.json()["ep"] == "crawler"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_manifest_root_file_wins_over_default_entrypoint_fallback(
+        self, tmp_path: Path
+    ) -> None:
+        """Root manifest.json preempts the default-entrypoint fallback."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _OneEpApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        (tmp_path / "manifest.json").write_text(
+            json.dumps({"execution_mode": "linear", "source": "root"})
+        )
+        crawler_dir = tmp_path / "crawler"
+        crawler_dir.mkdir()
+        (crawler_dir / "manifest.json").write_text(
+            json.dumps({"execution_mode": "automation-engine", "source": "ep"})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="postgres", app_class=_OneEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/manifest")
+            assert response.status_code == 200
+            assert response.json()["source"] == "root"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_manifest_404_when_default_entrypoint_dir_has_no_manifest(
+        self, tmp_path: Path
+    ) -> None:
+        """Default-entrypoint resolves but its dir has no manifest.json → 404.
+
+        Regression guard: the fallback must not silently swallow a missing
+        entrypoint manifest. Returning 404 keeps the failure visible.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _OneEpApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        # Entrypoint dir is empty (e.g. contract generation skipped manifest).
+        (tmp_path / "crawler").mkdir()
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="postgres", app_class=_OneEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/manifest")
+            assert response.status_code == 404
+            assert response.json()["detail"] == "No manifest available"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
     def test_simple_app_manifest_lives_at_root_not_in_subdir(
         self, tmp_path: Path
     ) -> None:
