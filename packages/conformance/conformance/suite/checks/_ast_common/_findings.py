@@ -1,18 +1,12 @@
-"""Shared helpers for AST-based check modules (P-series, O-series, …).
-
-The Python-source discovery walk, the ``# conformance: ignore[...]`` directive
-parser, and the ``_get_name`` AST helper live in the E-series check package
-(``checks.error_handling``); this module adds the one piece every AST series
-needs but the E-series keeps private — suppression-aware ``Finding``
-construction — so the P/O series do not each re-implement it.
-"""
+"""Suppression-aware :class:`Finding` construction shared by AST check series."""
 
 from __future__ import annotations
 
 import ast
 
-from conformance.suite.checks.error_handling._directives import _IgnoreDirective
 from conformance.suite.schema.findings import Finding
+
+from ._directives import _IgnoreDirective
 
 
 def make_finding(

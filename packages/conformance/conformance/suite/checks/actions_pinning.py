@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-import argparse
-import json
 import re
 import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-from conformance.suite.schema.findings import Finding, findings_to_report
+from conformance.suite.checks._ast_common import make_cli_main
+from conformance.suite.schema.findings import Finding
 
 SERIES = "C"
 RULE_ID = "C001"
@@ -129,73 +128,23 @@ def discover(root: Path) -> list[Path]:
     return sorted(paths)
 
 
-def main(argv: list[str] | None = None) -> int:
-    """CLI entry point for C001 check."""
-    parser = argparse.ArgumentParser(
-        description="C001: scan GitHub Actions files for non-digest-pinned actions."
-    )
-    parser.add_argument(
-        "scan_paths",
-        nargs="*",
-        default=[".github"],
-        metavar="PATH",
-        help="Directories or files to scan (default: .github)",
-    )
-    parser.add_argument(
-        "--root",
-        default=".",
-        metavar="DIR",
-        help="Repo root for relative URI construction (default: .)",
-    )
-    parser.add_argument(
-        "--sarif-output",
-        metavar="FILE",
-        help="Write SARIF report to FILE (default: stdout)",
-    )
-    parser.add_argument(
-        "--validate",
-        action="store_true",
-        help="Validate emitted SARIF against the official schema",
-    )
-    parser.add_argument(
-        "--tool-version",
-        default="3.16.0",
-        metavar="VERSION",
-    )
-    args = parser.parse_args(argv)
+def _walk_workflow_files(path: Path) -> list[Path]:
+    """Enumerate YAML files under a directory argument (CLI dir-scan).
 
-    root = Path(args.root).resolve()
-    findings: list[Finding] = []
-    for raw in args.scan_paths:
-        p = Path(raw)
-        if not p.is_absolute():
-            p = root / p
-        if p.is_file():
-            try:
-                rel = p.relative_to(root)
-            except ValueError:
-                rel = p
-            findings.extend(scan_text(p.read_text(encoding="utf-8"), str(rel)))
-        elif p.is_dir():
-            all_files = sorted(p.rglob("*.yml")) + sorted(p.rglob("*.yaml"))
-            for wf in all_files:
-                if wf.is_file():
-                    findings.extend(scan_path(wf, root))
+    Unlike :func:`discover` (which the runner uses and scopes to ``.github/``),
+    a directory passed on the CLI is walked recursively for any ``*.yml`` /
+    ``*.yaml`` so an explicit path scans exactly what was asked for.
+    """
+    return sorted(path.rglob("*.yml")) + sorted(path.rglob("*.yaml"))
 
-    report = findings_to_report(findings, tool_version=args.tool_version)
 
-    if args.validate:
-        from conformance.suite.schema.validate import validate_sarif
-
-        validate_sarif(report)
-
-    payload = json.dumps(report.model_dump(by_alias=True, exclude_none=True), indent=2)
-    if args.sarif_output:
-        Path(args.sarif_output).write_text(payload, encoding="utf-8")
-    else:
-        print(payload)
-
-    return report.runs[0].invocations[0].exit_code  # type: ignore[return-value]
+main = make_cli_main(
+    scan_text,
+    description="C001: scan GitHub Actions files for non-digest-pinned actions.",
+    discover=_walk_workflow_files,
+    default_scan_paths=(".github",),
+)
+"""CLI entry point for C001 check."""
 
 
 if __name__ == "__main__":

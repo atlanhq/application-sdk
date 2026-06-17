@@ -272,6 +272,21 @@ def main(argv: list[str] | None = None) -> None:
         outdir.mkdir(parents=True, exist_ok=True)
 
     grouped = _group_by_prefix(_ALL_SERIES)
+
+    # Invariant: the doc-metadata table and the rule catalog must describe
+    # exactly the same set of series.  A rule series with no SeriesMeta would be
+    # silently left undocumented; a SeriesMeta with no rules would render an
+    # empty doc.  (This is equality — unlike the runner's checks ⊆ rules subset
+    # relation — because every defined rule series is expected to be documented.)
+    meta_prefixes = {m.prefix for m in _SERIES_META}
+    rule_prefixes = set(grouped)
+    if meta_prefixes != rule_prefixes:
+        raise RuntimeError(
+            "rule-doc registry drift: series with rules but no SeriesMeta="
+            f"{sorted(rule_prefixes - meta_prefixes)}; SeriesMeta with no rules="
+            f"{sorted(meta_prefixes - rule_prefixes)}"
+        )
+
     stale: list[str] = []
 
     for meta in _SERIES_META:

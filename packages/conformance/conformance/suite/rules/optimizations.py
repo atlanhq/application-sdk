@@ -14,7 +14,7 @@ from conformance.suite.schema.disposition import EnforcementTier, RuleMechanism
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="O001",
-        name="StdlibJsonOverOrjson",
+        name="OrjsonOverStdlibJson",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="canonical-dependency",

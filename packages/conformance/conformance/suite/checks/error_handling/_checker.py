@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import ast
 
+from conformance.suite.checks._ast_common import _IgnoreDirective
 from conformance.suite.schema.findings import Finding
 
-from ._directives import _IgnoreDirective
 from .exception_chaining import ExceptionChainingMixin
 from .security import SecurityMixin
 from .silent_swallow import SilentSwallowMixin

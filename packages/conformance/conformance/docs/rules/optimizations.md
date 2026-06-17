@@ -15,11 +15,11 @@ Suppress a finding on the violating line or the line directly above it:
 
 | ID | Name | Tier | Category | Autofixable | Since |
 |---|---|---|---|---|---|
-| [O001](#o001) | `StdlibJsonOverOrjson` | `warn` | `canonical-dependency` | — | 0.3.0 |
+| [O001](#o001) | `OrjsonOverStdlibJson` | `warn` | `canonical-dependency` | — | 0.3.0 |
 
 ---
 
-## O001 — `StdlibJsonOverOrjson` {#o001}
+## O001 — `OrjsonOverStdlibJson` {#o001}
 
 **Tier:** `warn` · **Category:** `canonical-dependency` · **Autofixable:** — · **Since:** 0.3.0
 

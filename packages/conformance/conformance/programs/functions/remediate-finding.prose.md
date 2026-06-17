@@ -117,7 +117,7 @@ lines around `finding.line` in `finding.file` before proposing a fix.
 **Judgment rules** (`autofixable = false`) — produce a `"fix"` outcome with
 `classification = "judgment"`; always route to residue:
 
-- **O001 StdlibJsonOverOrjson** — the site calls `json.dumps(...)` or
+- **O001 OrjsonOverStdlibJson** — the site calls `json.dumps(...)` or
   `json.loads(...)` on the stdlib module.  `orjson` is **not** a drop-in, so
   this is never mechanical:
   - `json.loads(s)` → `orjson.loads(s)` is usually direct (orjson accepts
