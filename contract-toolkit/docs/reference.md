@@ -90,13 +90,16 @@ The single entry point for all new native app contracts. Supersedes `NativeApp.p
 | `displayName` | String | `name.capitalize()` | UI display name. |
 | `connector` | Connectors.Type? | null | Connector from the registry. Required when `hasCredentialConfig = true`. |
 | `icon` | String | required | Icon URL. |
-| `docsUrl` | String | `""` | Documentation link. |
+| `docsUrl` | String | `""` | Documentation link. Emitted as top-level `docs_url` in `atlan.yaml` (omitted when empty); the Atlan CLI forwards it to the Global Marketplace App row on `atlan app register`. |
 | `logo` | String | `icon` | Logo URL. |
 | `helpdeskLink` | String | `""` | Helpdesk link for credential form. |
 | `type` | String | `"connector"` | Marketplace type. |
 | `visibility` | String | `"public"` | Marketplace visibility. |
 | `buildTag` | String | `"v1"` | Emitted as `build_tag`. |
 | `selfDeployedRuntime` | Boolean | `true` | Emitted as `self_deployed_runtime`. |
+| `shortDescription` | String | `""` | One-line marketplace card description. Emitted as top-level `short_description` (omitted when empty). |
+| `longDescription` | String | `""` | Long-form marketplace detail-page description (markdown). Emitted as top-level `long_description` (omitted when empty); multi-line strings render as YAML literal blocks. |
+| `tags` | Listing\<String\> | `[]` | Free-form marketplace category tags. Emitted as top-level `tags` (omitted when empty). |
 
 ### Workflow & Manifest
 
