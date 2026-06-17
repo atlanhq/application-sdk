@@ -38,9 +38,9 @@ def _single(src: str, rule_id: str) -> None:
 def _none(src: str) -> None:
     """Assert no active (non-suppressed) findings."""
     active = [f for f in scan_text(src, "fake.py") if not f.suppressed]
-    assert not active, (
-        f"Expected no findings, got {[f.rule_id for f in active]!r}\nSource:\n{src}"
-    )
+    assert (
+        not active
+    ), f"Expected no findings, got {[f.rule_id for f in active]!r}\nSource:\n{src}"
 
 
 def _suppressed(src: str, rule_id: str) -> None:
@@ -89,9 +89,9 @@ except:  # conformance: ignore[E001]
     pass
 """
     active = [f for f in scan_text(src, "fake.py") if not f.suppressed]
-    assert any(f.rule_id == "E001" for f in active), (
-        "E001 should be active — bare directive without justification must not suppress"
-    )
+    assert any(
+        f.rule_id == "E001" for f in active
+    ), "E001 should be active — bare directive without justification must not suppress"
 
 
 def test_parse_directive_case_insensitive() -> None:

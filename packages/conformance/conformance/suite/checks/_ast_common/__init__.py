@@ -10,11 +10,7 @@ consume it without reaching into one another's private surface.
 from __future__ import annotations
 
 from ._cli import TOOL_VERSION, make_cli_main
-from ._directives import (
-    _IgnoreDirective,
-    _parse_directives,
-    parse_ignore_directive,
-)
+from ._directives import _IgnoreDirective, _parse_directives, parse_ignore_directive
 from ._discovery import EXCLUDE_DIRS, discover
 from ._findings import make_finding
 
