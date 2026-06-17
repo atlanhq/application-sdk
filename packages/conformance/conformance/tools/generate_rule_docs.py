@@ -34,7 +34,7 @@ import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 
-from conformance.suite.rules import _ALL_SERIES
+from conformance.suite.rules import _ALL_SERIES, assert_registry_consistent
 from conformance.suite.schema.catalog import RuleDefinition
 from conformance.suite.schema.disposition import EnforcementTier
 
@@ -57,6 +57,25 @@ class SeriesMeta:
     """Short description of the checker that produces findings."""
     suppression_example: str
     """Example suppression directive for the series."""
+    stability_note: str | None = None
+    """Optional series-level prose rendered above the rule table (e.g. the
+    rule-id stability contract).  RST double-backticks are converted to
+    Markdown.  ``None`` renders nothing."""
+
+
+# Rule-id stability contract — kept verbatim in sync with the module docstrings
+# of rules/prescriptions.py and rules/optimizations.py so the policy is visible
+# to consumers reading the rule catalog, not only to code readers.
+_ID_STABILITY_NOTE = (
+    "**Rule-id stability (non-migration policy):** P-ids and O-ids are a "
+    "permanent public contract — each is exposed in the SARIF ``help_uri`` and "
+    "referenced by inline ``# conformance: ignore[...]`` suppressions across the "
+    "fleet.  An id therefore **never migrates and never changes**, even if a "
+    "future domain series (S/B/T/A/…) later subsumes the same topic.  When a "
+    "domain series takes over an area, the rule is retired in place (kept "
+    "documented, no longer firing) and the new rule gets a fresh id — the "
+    "original id is never reused or reassigned."
+)
 
 
 _SERIES_META: list[SeriesMeta] = [
@@ -91,6 +110,7 @@ _SERIES_META: list[SeriesMeta] = [
         output_filename="prescriptions.md",
         checker="`suite.checks.prescriptions` (AST-based)",
         suppression_example="# conformance: ignore[P001] intentional: generic cleanup payload",
+        stability_note=_ID_STABILITY_NOTE,
     ),
     SeriesMeta(
         title="Optimisation / Recommendation Rules (O-series)",
@@ -99,6 +119,7 @@ _SERIES_META: list[SeriesMeta] = [
         output_filename="optimizations.md",
         checker="`suite.checks.optimizations` (AST-based)",
         suppression_example="# conformance: ignore[O001] intentional: stdlib json required here",
+        stability_note=_ID_STABILITY_NOTE,
     ),
 ]
 
@@ -154,6 +175,17 @@ def _render_series(meta: SeriesMeta, rules: list[RuleDefinition]) -> str:
     lines.append("")
     lines.append(f"```python\n{meta.suppression_example}\n```")
     lines.append("")
+
+    # Optional series-level prose (e.g. the rule-id stability contract).
+    if meta.stability_note:
+        wrapped = textwrap.fill(
+            _rst_to_md(meta.stability_note),
+            width=88,
+            break_long_words=False,
+            break_on_hyphens=False,
+        )
+        lines.append(wrapped)
+        lines.append("")
 
     # Summary table
     lines.append("| ID | Name | Tier | Category | Autofixable | Since |")
@@ -273,19 +305,10 @@ def main(argv: list[str] | None = None) -> None:
 
     grouped = _group_by_prefix(_ALL_SERIES)
 
-    # Invariant: the doc-metadata table and the rule catalog must describe
-    # exactly the same set of series.  A rule series with no SeriesMeta would be
-    # silently left undocumented; a SeriesMeta with no rules would render an
-    # empty doc.  (This is equality — unlike the runner's checks ⊆ rules subset
-    # relation — because every defined rule series is expected to be documented.)
-    meta_prefixes = {m.prefix for m in _SERIES_META}
-    rule_prefixes = set(grouped)
-    if meta_prefixes != rule_prefixes:
-        raise RuntimeError(
-            "rule-doc registry drift: series with rules but no SeriesMeta="
-            f"{sorted(rule_prefixes - meta_prefixes)}; SeriesMeta with no rules="
-            f"{sorted(meta_prefixes - rule_prefixes)}"
-        )
+    # Invariant: the doc-metadata table must describe exactly the rule series in
+    # the catalog (orphan SeriesMeta → empty doc; undocumented series → silent
+    # gap).  Shared with the runner via assert_registry_consistent.
+    assert_registry_consistent(meta_series=frozenset(m.prefix for m in _SERIES_META))
 
     stale: list[str] = []
 

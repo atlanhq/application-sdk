@@ -13,6 +13,14 @@ Suppress a finding on the violating line or the line directly above it:
 # conformance: ignore[P001] intentional: generic cleanup payload
 ```
 
+**Rule-id stability (non-migration policy):** P-ids and O-ids are a permanent public
+contract — each is exposed in the SARIF `help_uri` and referenced by inline `#
+conformance: ignore[...]` suppressions across the fleet.  An id therefore **never
+migrates and never changes**, even if a future domain series (S/B/T/A/…) later subsumes
+the same topic.  When a domain series takes over an area, the rule is retired in place
+(kept documented, no longer firing) and the new rule gets a fresh id — the original id
+is never reused or reassigned.
+
 | ID | Name | Tier | Category | Autofixable | Since |
 |---|---|---|---|---|---|
 | [P001](#p001) | `UnboundedContractFields` | `block` | `contract-payload-safety` | — | 0.3.0 |

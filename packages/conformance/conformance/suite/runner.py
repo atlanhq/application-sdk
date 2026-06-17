@@ -30,7 +30,7 @@ from conformance.suite.checks import (
     prescriptions,
 )
 from conformance.suite.checks._ast_common import TOOL_VERSION
-from conformance.suite.rules import CATALOG, get_rule
+from conformance.suite.rules import assert_registry_consistent, get_rule
 from conformance.suite.schema.disposition import EnforcementTier
 from conformance.suite.schema.findings import Finding, findings_to_report
 
@@ -74,18 +74,10 @@ _CHECKS: list[CheckRegistration] = [
 
 
 # Registry invariant: every registered checker's series must have rule
-# definitions in the catalog, so get_rule() resolves for each finding it emits.
-# The relation is a SUBSET, not equality: a series may ship rule definitions
-# (and docs) before its checker is implemented — the L-series is exactly this
-# case today (rules + docs exist, no checker yet).  Do not tighten to equality.
-_CHECK_SERIES: frozenset[str] = frozenset(c.series for c in _CHECKS)
-_RULE_SERIES: frozenset[str] = frozenset(rule_id[0] for rule_id in CATALOG)
-if not _CHECK_SERIES <= _RULE_SERIES:
-    raise RuntimeError(
-        "conformance registry drift: checker series "
-        f"{sorted(_CHECK_SERIES - _RULE_SERIES)} have no rule definitions in the "
-        "catalog (add them to conformance.suite.rules)"
-    )
+# definitions in the catalog (so get_rule() resolves for each finding it emits).
+# Shared with the doc generator via assert_registry_consistent — see its
+# docstring for why this is a subset, not an equality, relation.
+assert_registry_consistent(check_series=frozenset(c.series for c in _CHECKS))
 
 
 def _tier(f: Finding) -> EnforcementTier:
@@ -251,6 +243,13 @@ def main(argv: list[str] | None = None) -> int:
         for p in check.discover(root):
             if excluded_prefixes:
                 rel = p.relative_to(root).as_posix()
+                # Two match shapes, both anchored on a path-component boundary:
+                #   rel == prefix              → an exact single-file exclude
+                #                                (e.g. --exclude path/to/foo.py)
+                #   rel.startswith(prefix+'/') → a directory-prefix exclude
+                #                                (the common case, e.g. 'tools/')
+                # 'tools' thus excludes tools/ and the file 'tools', never
+                # 'tools_extra/'.
                 if any(
                     rel == prefix or rel.startswith(prefix + "/")
                     for prefix in excluded_prefixes

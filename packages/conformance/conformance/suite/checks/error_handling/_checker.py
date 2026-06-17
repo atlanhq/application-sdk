@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import ast
 
-from conformance.suite.checks._ast_common import _IgnoreDirective
+from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.schema.findings import Finding
 
 from .exception_chaining import ExceptionChainingMixin
@@ -46,32 +46,15 @@ class Checker(
     # ── Finding creation ──────────────────────────────────────────────────────
 
     def _add(self, rule_id: str, node: ast.AST, message: str) -> None:
-        line: int = getattr(node, "lineno", 1)
-        col: int = getattr(node, "col_offset", 0) + 1
-        suppressed = False
-        justification: str | None = None
-        for check_line in (line, line - 1):
-            if check_line in self._directives:
-                d = self._directives[check_line]
-                # Only honour a directive on the line *above* when that line is
-                # comment-only.  A trailing inline directive on a code line
-                # (e.g. ``do_it()  # conformance: ignore[E001]``) must NOT
-                # absorb a finding on the following statement.
-                if check_line == line - 1 and not d.comment_only:
-                    continue
-                if d.rule_ids is None or rule_id in d.rule_ids:
-                    suppressed = True
-                    justification = d.justification
-                    break
+        # Suppression-aware Finding construction is shared with the P/O series;
+        # delegate to the neutral helper rather than re-implementing it here.
         self._findings.append(
-            Finding(
+            make_finding(
+                filename=self._filename,
                 rule_id=rule_id,
-                file=self._filename,
-                line=line,
-                column=col,
+                node=node,
                 message=message,
-                suppressed=suppressed,
-                suppression_justification=justification,
+                directives=self._directives,
             )
         )
 
