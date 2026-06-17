@@ -65,9 +65,11 @@ _USER_AGENT = "atlan-sdk-full-dag-e2e/1.0 (+https://github.com/atlanhq/applicati
 # / ``poll_atlas_for_connection``; the per-request timeout just keeps
 # any one call from hanging the whole loop.
 _HTTP_TIMEOUT = 60
-# AE submit blocks while the tenant connector pod accepts the workflow —
-# KEDA may spin the pod up from zero, which adds ~60-90 s of startup latency
-# on top of the normal request time.
+# AE create and submit can take >60 s on the first call — the origin
+# server may be slow to respond, causing Cloudflare to return HTTP 504
+# at its own gateway timeout before urllib's 60 s window closes.  Using
+# 120 s lets Cloudflare's 504 arrive as an HTTP error (which the
+# existing 5xx retry loop handles) rather than a raw TimeoutError.
 _SUBMIT_TIMEOUT = 120
 
 # Cadence for "still polling" heartbeat log lines in
@@ -309,11 +311,28 @@ class AEWorkflowClient:
         """
         last: tuple[int, Any] = (0, {})
         for attempt in range(1, retries + 2):
-            status, body = self._request(
-                "POST",
-                "/automation/api/v1/workflows",
-                body={"name": name, "description": description},
-            )
+            try:
+                status, body = self._request(
+                    "POST",
+                    "/automation/api/v1/workflows",
+                    body={"name": name, "description": description},
+                    timeout=_SUBMIT_TIMEOUT,
+                )
+            except (TimeoutError, OSError) as exc:
+                if attempt <= retries:
+                    logger.warning(
+                        "create_workflow attempt %d/%d: timeout (%s) — retrying in %ds",
+                        attempt,
+                        retries + 1,
+                        exc,
+                        retry_sleep_seconds,
+                    )
+                    time.sleep(retry_sleep_seconds)
+                    continue
+                raise AtlanApiTimeoutError(
+                    message=f"create_workflow timed out after {retries + 1} attempts",
+                    operation="POST /automation/api/v1/workflows",
+                ) from exc
             last = (status, body)
             if status < 300 and isinstance(body, dict):
                 data = body.get("data") if isinstance(body.get("data"), dict) else body
