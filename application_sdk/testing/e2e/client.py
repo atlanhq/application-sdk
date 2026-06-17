@@ -284,6 +284,9 @@ class AEWorkflowClient:
         path: str,
         *,
         body: dict[str, Any] | None = None,
+        body_transform: (
+            Callable[[dict[str, Any] | None, int], dict[str, Any] | None] | None
+        ) = None,
         total_attempts: int,
         sleep_seconds: int,
         retryable: Callable[[int, dict[str, Any] | str], bool],
@@ -299,6 +302,11 @@ class AEWorkflowClient:
         Args:
             path: URL path relative to ``self.tenant_url``.
             body: Optional JSON-serialisable request body.
+            body_transform: Optional callable ``(body, attempt) -> body``
+                applied before each POST.  Lets callers mutate
+                attempt-sensitive fields (e.g. a credential ``name``) to
+                avoid non-idempotent side-effects on the server when the
+                endpoint is retried after a partial failure.
             total_attempts: Maximum number of calls (1 initial + N retries).
             sleep_seconds: Seconds to sleep between attempts.
             retryable: Called with ``(status, body)`` after each response.
@@ -309,9 +317,10 @@ class AEWorkflowClient:
         """
         last: tuple[int, dict[str, Any] | str] = (0, {})
         for attempt in range(1, total_attempts + 1):
+            attempt_body = body_transform(body, attempt) if body_transform else body
             try:
                 status, resp_body = self._request(
-                    "POST", path, body=body, timeout=_SUBMIT_TIMEOUT
+                    "POST", path, body=attempt_body, timeout=_SUBMIT_TIMEOUT
                 )
             except (TimeoutError, OSError) as exc:
                 if attempt < total_attempts:
@@ -485,10 +494,41 @@ class AEWorkflowClient:
         Retries on HTTP 5xx and timeout. 4 retries at 5s intervals covers
         the longest indexing lag we've observed (~15s) without sitting on
         a hard failure.
+
+        The submit endpoint creates credentials as a side-effect before
+        executing its internal CreateVersion call.  If that call times out
+        and AE returns HTTP 500, the credentials are already committed to
+        the DB.  Retrying with the same payload therefore triggers a
+        ``duplicate key value violates unique constraint "credentials_name_key"``
+        HTTP 400.  To avoid this, ``body_transform`` appends ``-r{attempt}``
+        to the credential ``name`` on every retry so each attempt uses a
+        distinct name.  Credentials from failed prior attempts are left as
+        orphans in the test tenant — an acceptable trade-off vs. a flaky
+        test that can never recover.
         """
+
+        def _unique_credential_name(
+            b: dict[str, Any] | None, attempt: int
+        ) -> dict[str, Any] | None:
+            if attempt == 1 or b is None or "payload" not in b:
+                return b
+            new_items = []
+            for item in b.get("payload", []):
+                if item.get("type") == "credential" and isinstance(
+                    item.get("body"), dict
+                ):
+                    new_body = {
+                        **item["body"],
+                        "name": f"{item['body'].get('name', '')}-r{attempt}",
+                    }
+                    item = {**item, "body": new_body}
+                new_items.append(item)
+            return {**b, "payload": new_items}
+
         status, body = self._post_with_retry(
             "/api/service/package-workflows?submit=true",
             body=payload,
+            body_transform=_unique_credential_name,
             total_attempts=retries + 1,
             sleep_seconds=retry_sleep_seconds,
             retryable=lambda s, b: s >= 500,

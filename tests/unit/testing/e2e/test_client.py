@@ -238,3 +238,91 @@ class TestPostWithRetry:
         assert status == 200
         assert isinstance(body, dict) and body.get("status") == "success"
         mock_sleep.assert_called_once()
+
+    def test_body_transform_applied_per_attempt(self):
+        """body_transform receives the attempt number and may mutate the body.
+
+        This locks in the mechanism used by submit_workflow to avoid
+        "duplicate key value violates unique constraint credentials_name_key"
+        when AE's internal CreateVersion call times out on attempt 1 (returning
+        HTTP 500) after already committing the credential to the DB.  On attempt
+        2 the transform appends -r2 to the credential name, producing a fresh
+        name that doesn't conflict with the orphaned record from attempt 1.
+        """
+        client = _make_client()
+        bodies_seen: list[dict | None] = []
+
+        def _capture_and_succeed(method, path, body=None, timeout=None):
+            bodies_seen.append(body)
+            if len(bodies_seen) == 1:
+                return (500, {"error": "timeout"})
+            return (200, {"ok": True})
+
+        def _suffix_transform(b, attempt):
+            if attempt == 1 or b is None:
+                return b
+            return {**b, "name": f"{b.get('name', '')}-r{attempt}"}
+
+        with (
+            patch.object(client, "_request", side_effect=_capture_and_succeed),
+            patch("time.sleep"),
+        ):
+            status, _ = client._post_with_retry(
+                "/some/path",
+                body={"name": "cred-base"},
+                body_transform=_suffix_transform,
+                total_attempts=2,
+                sleep_seconds=1,
+                retryable=lambda s, b: s >= 500,
+                op_name="test_op",
+            )
+        assert status == 200
+        assert bodies_seen[0] == {"name": "cred-base"}
+        assert bodies_seen[1] == {"name": "cred-base-r2"}
+
+    def test_submit_workflow_credential_name_unique_per_attempt(self):
+        """submit_workflow appends -r{n} to credential name on retries.
+
+        Reproduces the failure pattern from a production CI run where AE's
+        package-workflows?submit=true returned HTTP 500 (internal CreateVersion
+        timeout) after committing the credential, then returned HTTP 400
+        "duplicate key value violates unique constraint credentials_name_key"
+        on the next attempt because the same payload was resubmitted.
+        """
+        client = _make_client()
+        bodies_seen: list[dict | None] = []
+
+        def _capture_and_succeed(method, path, body=None, timeout=None):
+            bodies_seen.append(body)
+            if len(bodies_seen) == 1:
+                return (
+                    500,
+                    {
+                        "code": 500,
+                        "message": "ae: CreateVersion request failed: context deadline exceeded",
+                    },
+                )
+            return (200, {"run_id": "abc-123"})
+
+        submit_payload = {
+            "metadata": {"name": "atlan-mysql-123"},
+            "payload": [
+                {
+                    "parameter": "credentialGuid",
+                    "type": "credential",
+                    "body": {"name": "default-mysql-123-0", "authType": "basic"},
+                }
+            ],
+        }
+
+        with (
+            patch.object(client, "_request", side_effect=_capture_and_succeed),
+            patch("time.sleep"),
+        ):
+            run_id = client.submit_workflow(submit_payload, retries=1)
+
+        assert run_id == "abc-123"
+        cred_name_attempt_1 = bodies_seen[0]["payload"][0]["body"]["name"]
+        cred_name_attempt_2 = bodies_seen[1]["payload"][0]["body"]["name"]
+        assert cred_name_attempt_1 == "default-mysql-123-0"
+        assert cred_name_attempt_2 == "default-mysql-123-0-r2"
