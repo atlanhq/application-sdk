@@ -6,13 +6,6 @@ ARG DAPR_RUNTIME_PACKAGE=dapr-daprd-1.18
 # Switch to root for installation
 USER root
 
-# Install Dapr runtime from Chainguard APK.
-# dapr-daprd was moved to Atlan's private APK repo (enterprise-packages), which
-# the golden base image is not entitled to by default. Point apk at the org
-# private repo for this single install via -X, authenticating with a Chainguard
-# pull token injected as a BuildKit secret (never written to an image layer).
-# Using -X instead of editing /etc/apk/repositories keeps the published base
-# clean, so downstream app `apk add`s don't hit the auth-gated repo.
 RUN --mount=type=secret,id=cgr-auth \
     HTTP_AUTH="basic:apk.cgr.dev:$(cat /run/secrets/cgr-auth)" \
     apk add --no-cache -X https://apk.cgr.dev/atlan.com ${DAPR_RUNTIME_PACKAGE}
