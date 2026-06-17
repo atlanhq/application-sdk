@@ -74,7 +74,9 @@ jobs:
     with:
       app-name: "<< app_name >>"
       app-image-name: "<< app_image_name >>"
+<% if enable_e2e != 'true' %>
       enable-e2e: << enable_e2e >>
+<% endif %>
 <% if services_script %>
       services-script: "<< services_script >>"
 <% else %>

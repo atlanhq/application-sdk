@@ -14,6 +14,7 @@ from conformance.bootstrap.render import MANAGED_WORKFLOWS, render
 from conformance.cli import (
     _bootstrap_file,
     _cmd_bootstrap,
+    _derive_app_name_from_dir,
     _ensure_gitignore_entry,
     _parse_bootstrap_args,
 )
@@ -127,9 +128,10 @@ def test_parse_bootstrap_args_defaults() -> None:
     assert result == {
         "package_name": "app",
         "unit_tests_workflow": "tests.yaml",
-        "app_name": "app",
+        "app_name": "",
         "app_image_name": "",
         "enable_e2e": "true",
+        "services_script": "",
     }
 
 
@@ -357,13 +359,15 @@ def test_cmd_bootstrap_tests_yaml_recreated_when_deleted(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Delete tests.yaml → re-run bootstrap → file regenerated from canonical."""
-    monkeypatch.chdir(tmp_path)
+    app_dir = tmp_path / "atlan-myapp-app"
+    app_dir.mkdir()
+    monkeypatch.chdir(app_dir)
     _cmd_bootstrap([])
-    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf = app_dir / ".github" / "workflows" / "tests.yaml"
     wf.unlink()
     _cmd_bootstrap([])
     assert wf.exists()
-    assert wf.read_text() == render("tests.yaml")
+    assert wf.read_text() == render("tests.yaml", app_name="myapp")
 
 
 # ---------------------------------------------------------------------------
@@ -403,7 +407,7 @@ def test_tests_yaml_default_app_name() -> None:
     content = render("tests.yaml")
     assert 'app-name: "app"' in content
     assert 'app-image-name: "atlan-app-app"' in content
-    assert "enable-e2e: true" in content
+    assert "enable-e2e:" not in content
 
 
 def test_tests_yaml_custom_app_name_and_image() -> None:
@@ -453,3 +457,149 @@ def test_cmd_bootstrap_custom_app_args_propagate(
     assert 'app-name: "mysql"' in tests
     assert 'app-image-name: "custom-image-name"' in tests
     assert "enable-e2e: false" in tests
+
+
+# ---------------------------------------------------------------------------
+# Auto-detection: app name from atlan.yaml
+# ---------------------------------------------------------------------------
+
+
+def test_cmd_bootstrap_reads_app_name_from_atlan_yaml(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """bootstrap reads `name:` from atlan.yaml when --app-name is not supplied."""
+    (tmp_path / "atlan.yaml").write_text("name: openapi\ndisplay_name: OpenAPI\n")
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    tests = (tmp_path / ".github" / "workflows" / "tests.yaml").read_text()
+    assert 'app-name: "openapi"' in tests
+    assert 'app-image-name: "atlan-openapi-app"' in tests
+
+
+def test_cmd_bootstrap_explicit_app_name_overrides_atlan_yaml(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Explicit --app-name takes priority over atlan.yaml."""
+    (tmp_path / "atlan.yaml").write_text("name: openapi\n")
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--app-name", "mysql"])
+    tests = (tmp_path / ".github" / "workflows" / "tests.yaml").read_text()
+    assert 'app-name: "mysql"' in tests
+
+
+def test_cmd_bootstrap_falls_back_to_dir_name(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without atlan.yaml, app name is derived from the repo directory name."""
+    app_dir = tmp_path / "atlan-postgres-app"
+    app_dir.mkdir()
+    monkeypatch.chdir(app_dir)
+    _cmd_bootstrap([])
+    tests = (app_dir / ".github" / "workflows" / "tests.yaml").read_text()
+    assert 'app-name: "postgres"' in tests
+    assert 'app-image-name: "atlan-postgres-app"' in tests
+
+
+def test_cmd_bootstrap_atlan_yaml_takes_priority_over_dir_name(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """atlan.yaml name: takes priority over the directory name."""
+    app_dir = tmp_path / "atlan-wrong-app"
+    app_dir.mkdir()
+    (app_dir / "atlan.yaml").write_text("name: openapi\n")
+    monkeypatch.chdir(app_dir)
+    _cmd_bootstrap([])
+    tests = (app_dir / ".github" / "workflows" / "tests.yaml").read_text()
+    assert 'app-name: "openapi"' in tests
+
+
+# ---------------------------------------------------------------------------
+# Auto-detection: services-script from .github/test/setup-services.sh
+# ---------------------------------------------------------------------------
+
+
+def test_cmd_bootstrap_detects_services_script(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """bootstrap activates services-script when .github/test/setup-services.sh exists."""
+    script = tmp_path / ".github" / "test" / "setup-services.sh"
+    script.parent.mkdir(parents=True)
+    script.write_text("#!/bin/bash\n")
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    tests = (tmp_path / ".github" / "workflows" / "tests.yaml").read_text()
+    assert 'services-script: ".github/test/setup-services.sh"' in tests
+    assert "# services-script:" not in tests
+
+
+def test_cmd_bootstrap_no_services_script_when_absent(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without setup-services.sh the services-script line stays commented out."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    tests = (tmp_path / ".github" / "workflows" / "tests.yaml").read_text()
+    assert "# services-script:" in tests
+    assert 'services-script: ".github/test/setup-services.sh"' not in tests
+
+
+def test_cmd_bootstrap_explicit_services_script_overrides_autodetect(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Explicit --services-script takes priority over auto-detected path."""
+    script = tmp_path / ".github" / "test" / "setup-services.sh"
+    script.parent.mkdir(parents=True)
+    script.write_text("#!/bin/bash\n")
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--services-script", ".github/test/custom-setup.sh"])
+    tests = (tmp_path / ".github" / "workflows" / "tests.yaml").read_text()
+    assert 'services-script: ".github/test/custom-setup.sh"' in tests
+
+
+# ---------------------------------------------------------------------------
+# enable-e2e: omitted when default (true)
+# ---------------------------------------------------------------------------
+
+
+def test_tests_yaml_enable_e2e_omitted_when_default() -> None:
+    """enable-e2e: true is the reusable workflow default — don't emit it."""
+    content = render("tests.yaml")
+    assert "enable-e2e:" not in content
+
+
+def test_tests_yaml_enable_e2e_present_when_false() -> None:
+    """enable-e2e: false must appear explicitly to opt out of e2e."""
+    content = render("tests.yaml", enable_e2e="false")
+    assert "enable-e2e: false" in content
+
+
+# ---------------------------------------------------------------------------
+# _derive_app_name_from_dir unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_derive_strips_atlan_prefix_and_app_suffix(tmp_path: pathlib.Path) -> None:
+    assert _derive_app_name_from_dir(tmp_path / "atlan-openapi-app") == "openapi"
+
+
+def test_derive_strips_only_prefix(tmp_path: pathlib.Path) -> None:
+    assert _derive_app_name_from_dir(tmp_path / "atlan-openapi") == "openapi"
+
+
+def test_derive_strips_only_suffix(tmp_path: pathlib.Path) -> None:
+    assert _derive_app_name_from_dir(tmp_path / "my-connector-app") == "my-connector"
+
+
+def test_derive_no_affixes(tmp_path: pathlib.Path) -> None:
+    assert _derive_app_name_from_dir(tmp_path / "postgres") == "postgres"
+
+
+def test_derive_hello_world(tmp_path: pathlib.Path) -> None:
+    assert (
+        _derive_app_name_from_dir(tmp_path / "atlan-hello-world-app") == "hello-world"
+    )
+
+
+def test_derive_falls_back_to_app_for_bare_atlan(tmp_path: pathlib.Path) -> None:
+    # "atlan-app" → strip prefix → "app" → strip suffix ("app" doesn't end with "-app") → "app"
+    assert _derive_app_name_from_dir(tmp_path / "atlan-app") == "app"
