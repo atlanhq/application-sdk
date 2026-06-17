@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pathlib
 import sys
 
 
@@ -13,7 +14,6 @@ def _cmd_detect(argv: list[str]) -> int:
 
 def _cmd_programs_dir(_argv: list[str]) -> int:
     import importlib.resources as _ir
-    import pathlib
 
     programs = _ir.files("conformance") / "programs"
     # Resolve to a real filesystem path (works for both installed wheels and
@@ -45,8 +45,6 @@ def _cmd_remediate(argv: list[str]) -> int:
     The actual remediation loop is driven by the SKILL.md shim which reads
     the .prose.md contracts from the printed programs directory.
     """
-    import pathlib
-
     from conformance import __version__
 
     here = pathlib.Path(__file__).parent
@@ -57,39 +55,113 @@ def _cmd_remediate(argv: list[str]) -> int:
     return 0
 
 
-# The SKILL.md written by `bootstrap`. Keep it minimal and stable — the real
-# logic lives in the package; this shim just locates and invokes it.
-_SKILL_MD = """\
----
-name: remediate
-description: Drive the conformance remediation loop (validators + OpenProse programs from the atlan-application-sdk-conformance package)
-argument-hint: "[--area error-handling|logging|ci] [--strict] [path]"
----
+def _bootstrap_file(dest: pathlib.Path, content: str) -> None:
+    """Write *content* to *dest*, creating parent directories as needed.
 
-1. Resolve programs dir:
-   - Inside a connector repo: `PROGRAMS=$(uv run atlan-application-sdk-conformance programs-dir)`
-   - Anywhere else: `PROGRAMS=$(uvx atlan-application-sdk-conformance@latest programs-dir)`
-2. Read `$PROGRAMS/conformance-remediation.prose.md` and execute it as the entry contract.
-3. All gated re-checks call `atlan-application-sdk-conformance detect` — follow the .prose.md exactly.
-"""
+    Always overwrites — bootstrap owns these files and re-running is how
+    drift is eradicated.
+    """
+    existed = dest.exists()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(content, encoding="utf-8")
+    print(f"{'updated' if existed else 'installed'}: {dest}")
+
+
+def _ensure_gitignore_entry(root: pathlib.Path, entry: str) -> None:
+    """Append *entry* to .gitignore if not already present; never overwrites."""
+    gitignore = root / ".gitignore"
+    if gitignore.exists():
+        lines = gitignore.read_text(encoding="utf-8").splitlines()
+        if any(line.strip() == entry for line in lines):
+            print(f"ok:        {gitignore}  ({entry!r} already present)")
+            return
+        # Append with a preceding blank line for readability.
+        with gitignore.open("a", encoding="utf-8") as fh:
+            fh.write(f"\n{entry}\n")
+    else:
+        gitignore.write_text(f"{entry}\n", encoding="utf-8")
+    print(f"appended:  {gitignore}  ({entry!r})")
+
+
+def _parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
+    """Parse bootstrap flags from argv.
+
+    Supports both ``--flag value`` and ``--flag=value`` forms.
+
+    Flags
+    -----
+    --package-name NAME          docstring-coverage package (default: app)
+    --unit-tests-workflow FILE   build-and-publish test workflow (default: tests.yaml)
+    --app-name NAME              connector app name for tests.yaml scaffold (default: app)
+    --app-image-name NAME        GHCR image name for tests.yaml scaffold (default: atlan-<app-name>-app)
+    --enable-e2e BOOL            enable e2e job in tests.yaml scaffold (default: true)
+    """
+    result: dict[str, str] = {
+        "package_name": "app",
+        "unit_tests_workflow": "tests.yaml",
+        "app_name": "app",
+        "app_image_name": "",
+        "enable_e2e": "true",
+    }
+    _flags = {
+        "--package-name": "package_name",
+        "--unit-tests-workflow": "unit_tests_workflow",
+        "--app-name": "app_name",
+        "--app-image-name": "app_image_name",
+        "--enable-e2e": "enable_e2e",
+    }
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        for flag, dest in _flags.items():
+            if arg == flag and i + 1 < len(argv):
+                result[dest] = argv[i + 1]
+                i += 1
+                break
+            if arg.startswith(f"{flag}="):
+                result[dest] = arg[len(flag) + 1 :]
+                break
+        i += 1
+
+    if result["enable_e2e"] not in ("true", "false"):
+        print(
+            f"error: --enable-e2e must be 'true' or 'false', got {result['enable_e2e']!r}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    return result
 
 
 def _cmd_bootstrap(argv: list[str]) -> int:
-    """Write .claude/skills/remediate/SKILL.md in the current repo (or --force to overwrite)."""
-    import pathlib
+    """Write the SKILL.md shim and standard CI workflows into the current repo."""
+    from conformance.bootstrap.render import MANAGED_WORKFLOWS, render
 
-    force = "--force" in argv
-    dest = pathlib.Path.cwd() / ".claude" / "skills" / "remediate" / "SKILL.md"
+    kwargs = _parse_bootstrap_args(argv)
+    root = pathlib.Path.cwd()
 
-    if dest.exists() and not force:
-        print(f"already installed: {dest}  (pass --force to overwrite)")
-        return 0
+    _bootstrap_file(
+        root / ".claude" / "skills" / "remediate" / "SKILL.md",
+        render("remediate.md", **kwargs),
+    )
+    for name in MANAGED_WORKFLOWS:
+        _bootstrap_file(
+            root / ".github" / "workflows" / name,
+            render(name, **kwargs),
+        )
 
-    existed = dest.exists()
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(_SKILL_MD)
-    action = "updated" if existed else "installed"
-    print(f"{action}: {dest}")
+    # tests.yaml is write-if-absent (not always-overwrite) — bootstrap creates
+    # it once as a starting point; apps customise it freely.  C002 tracks drift
+    # at WARN only.  To force-regenerate: delete the file and re-run bootstrap.
+    tests_dest = root / ".github" / "workflows" / "tests.yaml"
+    if not tests_dest.exists():
+        tests_dest.parent.mkdir(parents=True, exist_ok=True)
+        tests_dest.write_text(render("tests.yaml", **kwargs), encoding="utf-8")
+        print(f"scaffolded: {tests_dest}")
+    else:
+        print(f"ok (exists): {tests_dest}  (edit freely; C002 tracks drift at WARN)")
+
+    _ensure_gitignore_entry(root, "remediation/")
     return 0
 
 
@@ -109,7 +181,15 @@ commands:
   programs-dir   Print the absolute path to the bundled .prose.md programs
   gen-rule-docs  Regenerate rule docs from Python rule definitions
   remediate      Print programs path + version banner (SKILL.md drives execution)
-  bootstrap      Write ~/.claude/skills/remediate/SKILL.md  (--force to overwrite)
+  bootstrap      Write .claude/skills/remediate/SKILL.md + all standard CI workflow
+                 shims into .github/workflows/. The 14 managed shims always overwrite
+                 (re-running eradicates drift). tests.yaml is write-if-absent
+                 (scaffolded once; delete it and re-run to regenerate from canonical).
+                   --package-name NAME         docstring-coverage package (default: app)
+                   --unit-tests-workflow FILE   build-and-publish test workflow (default: tests.yaml)
+                   --app-name NAME             connector app name for tests.yaml (default: app)
+                   --app-image-name NAME       GHCR image name for tests.yaml (default: atlan-<app-name>-app)
+                   --enable-e2e true|false     enable e2e in tests.yaml (default: true)
 """
 
 

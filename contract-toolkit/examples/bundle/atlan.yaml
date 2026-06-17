@@ -7,7 +7,7 @@ execution_mode: native
 icon_url: https://assets.atlan.com/assets/snowflake.svg
 visibility: public
 build_tag: v1
-self_deployed_runtime: false
+self_deployed_runtime: true
 entrypoints:
 - name: crawler
   display_name: Crawler

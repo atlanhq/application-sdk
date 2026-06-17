@@ -13,7 +13,7 @@ class PubSubError(DependencyUnavailableError):
     """Deprecated: use ``application_sdk.errors.DependencyUnavailableError`` — removed in v4.0."""
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = PUBSUB_ERROR
-    code: ClassVar[str] = "PUBSUB"
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_PUBSUB"
 
     def __init__(
         self,

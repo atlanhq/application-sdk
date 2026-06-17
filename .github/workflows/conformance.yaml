@@ -11,7 +11,7 @@ permissions:
   security-events: write
 
 jobs:
-  conformance:
+  suite:
     uses: ./.github/workflows/conformance-reusable.yaml
     with:
       conformance-ref: ${{ github.event.pull_request.head.sha || github.sha }}
