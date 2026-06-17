@@ -211,3 +211,30 @@ class TestPostWithRetry:
             )
         assert status == 404
         mock_sleep.assert_not_called()
+
+    def test_2xx_body_shape_retry(self):
+        """2xx with wrong body shape retries; 2xx with correct shape returns.
+
+        Exercises the ``b`` argument of the retryable predicate — the exact
+        path introduced for publish_version.  A future refactor that drops
+        ``b`` from the _post_with_retry call site would silently break
+        publish_version; this test would catch it.
+        """
+        client = _make_client()
+        pending = (200, {"status": "pending"})
+        success = (200, {"status": "success"})
+        with (
+            patch.object(client, "_request", side_effect=[pending, success]),
+            patch("time.sleep") as mock_sleep,
+        ):
+            status, body = client._post_with_retry(
+                "/some/path",
+                total_attempts=3,
+                sleep_seconds=1,
+                retryable=lambda s, b: s >= 300
+                or not (isinstance(b, dict) and b.get("status") == "success"),
+                op_name="test_op",
+            )
+        assert status == 200
+        assert isinstance(body, dict) and body.get("status") == "success"
+        mock_sleep.assert_called_once()
