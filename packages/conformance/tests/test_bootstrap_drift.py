@@ -63,16 +63,17 @@ def test_c002_is_autofixable() -> None:
 def test_discover_returns_all_managed_paths(tmp_path: pathlib.Path) -> None:
     paths = discover(tmp_path)
     names = {p.name for p in paths}
-    # Must include all managed shims plus the tests.yaml scaffold.
+    # Must include all managed shims plus the write-if-absent scaffolds.
     assert set(MANAGED_WORKFLOWS).issubset(names)
     assert "tests.yaml" in names
+    assert "renovate.json" in names
 
 
 def test_discover_returns_paths_even_when_absent(tmp_path: pathlib.Path) -> None:
     """discover() must not filter out non-existent files."""
     paths = discover(tmp_path)
-    # managed shims + tests.yaml scaffold.
-    assert len(paths) == len(MANAGED_WORKFLOWS) + 1
+    # managed shims + tests.yaml + renovate.json scaffolds.
+    assert len(paths) == len(MANAGED_WORKFLOWS) + 2
     # None of them exist yet.
     assert all(not p.exists() for p in paths)
 
@@ -316,3 +317,68 @@ def test_tests_yaml_finding_message_mentions_delete_and_bootstrap(
     msg = findings[0].message
     assert "delete" in msg.lower() or "regenerate" in msg.lower()
     assert "bootstrap" in msg
+
+
+# ---------------------------------------------------------------------------
+# renovate.json scaffold — write-if-absent, WARN-only drift tracking
+# ---------------------------------------------------------------------------
+
+
+def test_renovate_json_clean_after_bootstrap(tmp_path: pathlib.Path) -> None:
+    """A freshly-bootstrapped renovate.json yields no C002 finding."""
+    _bootstrap(tmp_path)
+    rj = tmp_path / "renovate.json"
+    assert rj.exists()
+    findings = scan_path(rj, tmp_path)
+    assert findings == [], [f.message for f in findings]
+
+
+def test_renovate_json_missing_produces_finding(tmp_path: pathlib.Path) -> None:
+    """Absent renovate.json → one C002 finding."""
+    rj = tmp_path / "renovate.json"
+    findings = scan_path(rj, tmp_path)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "C002"
+    assert "absent" in findings[0].message
+
+
+def test_renovate_json_drifted_produces_finding(tmp_path: pathlib.Path) -> None:
+    """Structurally modified renovate.json → one C002 WARN finding."""
+    _bootstrap(tmp_path)
+    rj = tmp_path / "renovate.json"
+    rj.write_text('{"completely": "wrong"}\n')
+    findings = scan_path(rj, tmp_path)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "C002"
+    assert "drifted" in findings[0].message
+
+
+def test_renovate_json_finding_is_warn_never_block(tmp_path: pathlib.Path) -> None:
+    """renovate.json drift is WARN, not BLOCK."""
+    rj = tmp_path / "renovate.json"
+    rj.write_text("{}\n")
+    findings = scan_path(rj, tmp_path)
+    assert len(findings) == 1
+    assert get_rule("C002").tier == EnforcementTier.WARN
+
+
+def test_renovate_json_finding_mentions_delete_and_bootstrap(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Drift message tells users to delete + re-run bootstrap to remediate."""
+    rj = tmp_path / "renovate.json"
+    rj.write_text("{}\n")
+    findings = scan_path(rj, tmp_path)
+    assert len(findings) == 1
+    msg = findings[0].message
+    assert "delete" in msg.lower() or "regenerate" in msg.lower()
+    assert "bootstrap" in msg
+
+
+def test_all_scaffolds_clean_after_bootstrap(tmp_path: pathlib.Path) -> None:
+    """Every discovered path — managed shims + both scaffolds — is clean after bootstrap."""
+    _bootstrap(tmp_path)
+    findings = []
+    for path in discover(tmp_path):
+        findings.extend(scan_path(path, tmp_path))
+    assert findings == [], [f.message for f in findings]

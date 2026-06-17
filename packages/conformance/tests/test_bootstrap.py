@@ -327,6 +327,58 @@ def test_cmd_bootstrap_custom_args_propagate(
 
 
 # ---------------------------------------------------------------------------
+# renovate.json scaffold — write-if-absent semantics
+# ---------------------------------------------------------------------------
+
+
+def test_cmd_bootstrap_writes_renovate_json(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    assert (tmp_path / "renovate.json").exists()
+
+
+def test_cmd_bootstrap_renovate_json_not_in_managed_workflows() -> None:
+    assert "renovate.json" not in MANAGED_WORKFLOWS
+
+
+def test_cmd_bootstrap_renovate_json_is_write_if_absent(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second bootstrap run must NOT overwrite an already-customised renovate.json."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    rj = tmp_path / "renovate.json"
+    rj.write_text('{"customised": true}\n')
+    _cmd_bootstrap([])
+    assert rj.read_text() == '{"customised": true}\n'
+
+
+def test_cmd_bootstrap_renovate_json_recreated_when_deleted(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Delete renovate.json → re-run bootstrap → file regenerated from canonical."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    rj = tmp_path / "renovate.json"
+    rj.unlink()
+    _cmd_bootstrap([])
+    assert rj.exists()
+    assert rj.read_text() == render("renovate.json")
+
+
+def test_renovate_json_contains_fleet_preset() -> None:
+    content = render("renovate.json")
+    assert "atlanhq/application-sdk//renovate-config/default.json" in content
+
+
+def test_renovate_json_contains_schema() -> None:
+    content = render("renovate.json")
+    assert "renovate-schema.json" in content
+
+
+# ---------------------------------------------------------------------------
 # tests.yaml scaffold — write-if-absent semantics
 # ---------------------------------------------------------------------------
 

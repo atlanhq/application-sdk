@@ -198,16 +198,20 @@ def _cmd_bootstrap(argv: list[str]) -> int:
             render(name, **kwargs),
         )
 
-    # tests.yaml is write-if-absent (not always-overwrite) — bootstrap creates
-    # it once as a starting point; apps customise it freely.  C002 tracks drift
-    # at WARN only.  To force-regenerate: delete the file and re-run bootstrap.
-    tests_dest = root / ".github" / "workflows" / "tests.yaml"
-    if not tests_dest.exists():
-        tests_dest.parent.mkdir(parents=True, exist_ok=True)
-        tests_dest.write_text(render("tests.yaml", **kwargs), encoding="utf-8")
-        print(f"scaffolded: {tests_dest}")
-    else:
-        print(f"ok (exists): {tests_dest}  (edit freely; C002 tracks drift at WARN)")
+    # Write-if-absent scaffolds — created once; apps customise freely.
+    # C002 tracks drift at WARN only.  Delete + re-run to force-regenerate.
+    for scaffold_dest, scaffold_name in [
+        (root / ".github" / "workflows" / "tests.yaml", "tests.yaml"),
+        (root / "renovate.json", "renovate.json"),
+    ]:
+        if not scaffold_dest.exists():
+            scaffold_dest.parent.mkdir(parents=True, exist_ok=True)
+            scaffold_dest.write_text(render(scaffold_name, **kwargs), encoding="utf-8")
+            print(f"scaffolded: {scaffold_dest}")
+        else:
+            print(
+                f"ok (exists): {scaffold_dest}  (edit freely; C002 tracks drift at WARN)"
+            )
 
     _ensure_gitignore_entry(root, "remediation/")
     return 0
