@@ -25,9 +25,8 @@ from pathlib import Path
 from conformance.suite.checks import (
     actions_pinning,
     bootstrap_drift,
+    dependency_conformance,
     error_handling,
-    optimizations,
-    prescriptions,
 )
 from conformance.suite.checks._ast_common import TOOL_VERSION
 from conformance.suite.rules import assert_registry_consistent, get_rule
@@ -61,14 +60,9 @@ _CHECKS: list[CheckRegistration] = [
         scan_path=error_handling.scan_path,
     ),
     CheckRegistration(
-        series=prescriptions.SERIES,
-        discover=prescriptions.discover,
-        scan_path=prescriptions.scan_path,
-    ),
-    CheckRegistration(
-        series=optimizations.SERIES,
-        discover=optimizations.discover,
-        scan_path=optimizations.scan_path,
+        series=dependency_conformance.SERIES,
+        discover=dependency_conformance.discover,
+        scan_path=dependency_conformance.scan_path,
     ),
 ]
 
