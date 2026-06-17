@@ -31,13 +31,19 @@ Rule implementations are split by category:
 
 from __future__ import annotations
 
-import argparse
 import ast
-import json
 import sys
 from pathlib import Path
 
-from conformance.suite.schema.findings import Finding, findings_to_report
+from conformance.suite.checks._ast_common import (
+    EXCLUDE_DIRS,
+    _IgnoreDirective,
+    _parse_directives,
+    discover,
+    make_cli_main,
+    parse_ignore_directive,
+)
+from conformance.suite.schema.findings import Finding
 
 from ._checker import Checker
 from ._collect import _collect_imports, _collect_legacy_aliases
@@ -45,14 +51,12 @@ from ._constants import (
     _ATLAN_LEGACY_MODULE,
     ACTIVITY_DECORATORS,
     BUILTIN_RAISES,
-    EXCLUDE_DIRS,
     INTEROP_DECORATORS,
     INTEROP_METHODS,
     LEAF_CLASSES,
     LEGACY_ATLAN_ERRORS,
     SERIES,
 )
-from ._directives import _IgnoreDirective, _parse_directives, parse_ignore_directive
 from ._helpers import is_broad_suppress, is_builtin_raise
 
 __all__ = [
@@ -115,97 +119,11 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
     return scan_text(text, str(rel))
 
 
-def discover(root: Path) -> list[Path]:
-    """Discover Python source files under *root*, excluding test and infra dirs.
-
-    Two exclusion layers apply universally (not configurable per-repo):
-
-    * **Named infra dirs** — any path component in ``EXCLUDE_DIRS`` (e.g. ``tests``,
-      ``build``, ``.venv``).
-    * **Dot-prefixed dirs** — any path component that starts with ``"."`` (e.g.
-      ``.github``, ``.claude``, ``.mothership``).  These are CI/dev/skill
-      scaffolding — never shipped application code — and this rule holds for every
-      app repo that reuses the conformance suite.
-    """
-    paths: list[Path] = []
-    for path in root.rglob("*.py"):
-        # Exclude named infra / virtualenv dirs
-        parts = set(path.parts)
-        if parts & EXCLUDE_DIRS:
-            continue
-        # Exclude any dot-prefixed directory component (.github, .claude, …)
-        rel_parts = path.relative_to(root).parts
-        if any(p.startswith(".") for p in rel_parts[:-1]):
-            continue
-        # Exclude test files by name convention
-        name = path.name
-        if name.startswith("test_") or name.endswith("_test.py"):
-            continue
-        paths.append(path)
-    return sorted(paths)
-
-
-def main(argv: list[str] | None = None) -> int:
-    """CLI entry point for E-series error-handling checks."""
-    parser = argparse.ArgumentParser(
-        description="E-series: scan Python files for error-handling anti-patterns."
-    )
-    parser.add_argument(
-        "scan_paths",
-        nargs="*",
-        default=["."],
-        metavar="PATH",
-        help="Directories or files to scan (default: .)",
-    )
-    parser.add_argument(
-        "--root",
-        default=".",
-        metavar="DIR",
-        help="Repo root for relative URI construction (default: .)",
-    )
-    parser.add_argument(
-        "--sarif-output",
-        metavar="FILE",
-        help="Write SARIF report to FILE (default: stdout)",
-    )
-    parser.add_argument(
-        "--validate",
-        action="store_true",
-        help="Validate emitted SARIF against the official schema",
-    )
-    parser.add_argument("--tool-version", default="3.17.0", metavar="VERSION")
-    args = parser.parse_args(argv)
-
-    root = Path(args.root).resolve()
-    findings: list[Finding] = []
-    for raw in args.scan_paths:
-        p = Path(raw)
-        if not p.is_absolute():
-            p = root / p
-        if p.is_file():
-            try:
-                rel = p.relative_to(root)
-            except ValueError:
-                rel = p
-            findings.extend(scan_text(p.read_text(encoding="utf-8"), str(rel)))
-        elif p.is_dir():
-            for py_file in discover(p):
-                findings.extend(scan_path(py_file, root))
-
-    report = findings_to_report(findings, tool_version=args.tool_version)
-
-    if args.validate:
-        from conformance.suite.schema.validate import validate_sarif
-
-        validate_sarif(report)
-
-    payload = json.dumps(report.model_dump(by_alias=True, exclude_none=True), indent=2)
-    if args.sarif_output:
-        Path(args.sarif_output).write_text(payload, encoding="utf-8")
-    else:
-        print(payload)
-
-    return report.runs[0].invocations[0].exit_code  # type: ignore[return-value]
+main = make_cli_main(
+    scan_text,
+    description="E-series: scan Python files for error-handling anti-patterns.",
+)
+"""CLI entry point for E-series error-handling checks."""
 
 
 if __name__ == "__main__":

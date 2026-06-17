@@ -16,4 +16,8 @@ jobs:
     with:
       conformance-ref: ${{ github.event.pull_request.head.sha || github.sha }}
       exclude-paths-e: "tools/,contract-toolkit/"
+      exclude-paths-p: "tools/,contract-toolkit/"
+      # O-series (orjson) excludes the conformance package itself: the suite
+      # legitimately uses stdlib json for SARIF string output (orjson returns bytes).
+      exclude-paths-o: "tools/,contract-toolkit/,packages/conformance/"
       event_name: ${{ github.event_name }}

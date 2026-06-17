@@ -1494,6 +1494,50 @@ def test_runner_exclude_drops_prefixed_paths(tmp_path: Path) -> None:
     assert exit_code == 1
 
 
+def test_runner_exclude_matches_on_path_component_boundary(tmp_path: Path) -> None:
+    """--exclude 'tools' drops tools/ but NOT a sibling like tools_extra/.
+
+    Prefix matching is anchored to path-component boundaries: a bare prefix only
+    excludes that exact directory (or file), never a same-stem sibling.
+    """
+    from conformance.suite.runner import main as runner_main
+
+    # Excluded: tools/ itself.
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "a.py").write_text("try:\n    x = 1\nexcept:\n    pass\n")
+
+    # NOT excluded: tools_extra/ shares the stem but is a different component.
+    (tmp_path / "tools_extra").mkdir()
+    (tmp_path / "tools_extra" / "b.py").write_text(
+        "try:\n    x = 1\nexcept:\n    pass\n"
+    )
+
+    sarif_file = tmp_path / "out.sarif"
+    runner_main(
+        [
+            "--repo",
+            str(tmp_path),
+            "--series",
+            "E",
+            "--exclude",
+            "tools",
+            "--output",
+            str(sarif_file),
+        ]
+    )
+
+    report = SarifReport.model_validate(json.loads(sarif_file.read_text()))
+    uris = {
+        r.locations[0].physical_location.artifact_location.uri
+        for r in report.runs[0].results
+        if r.locations
+        and r.locations[0].physical_location is not None
+        and r.locations[0].physical_location.artifact_location is not None
+    }
+    assert not any(u.startswith("tools/") for u in uris)  # tools/ excluded
+    assert any(u.startswith("tools_extra/") for u in uris)  # sibling kept
+
+
 def test_runner_exclude_all_paths_exits_0(tmp_path: Path) -> None:
     """Excluding all paths with violations produces exit code 0."""
     from conformance.suite.runner import main as runner_main
