@@ -1674,7 +1674,7 @@ def _register_workflow_routes(
         #    The setup form normally requests the form file by its stem
         #    (e.g. "snowflake-crawler"), which lands here.
         available_configmaps: list[str] = []
-        target: "Path | None" = None
+        target: Path | None = None
         if CONTRACT_GENERATED_DIR.exists():
             for json_file in CONTRACT_GENERATED_DIR.rglob("*.json"):
                 available_configmaps.append(json_file.stem)
@@ -1688,8 +1688,8 @@ def _register_workflow_routes(
         #    app/marketplace id (e.g. "atlan-snowflake", bare "snowflake")
         #    rather than the entrypoint-form stem. In that case, resolve to
         #    the app's default entrypoint and serve its form configmap.
-        #    Multi-entrypoint apps with no marked default fall through to
-        #    404 — the caller must use the explicit form stem.
+        #    When ep resolution fails or the ep directory has no eligible
+        #    form configmap, target stays None and the handler returns 404.
         if target is None:
             try:
                 _, ep = _resolve_app_entrypoint(
