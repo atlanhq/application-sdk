@@ -183,8 +183,7 @@ def test_d001_passes_for_extras_pin() -> None:
 def test_d002_redeclared_core_dep() -> None:
     text = _write_pyproject(
         deps=(
-            '    "atlan-application-sdk>=3.17.2,<4.0.0",\n'
-            '    "pydantic>=2.10,<3.0",\n'
+            '    "atlan-application-sdk>=3.17.2,<4.0.0",\n    "pydantic>=2.10,<3.0",\n'
         )
     )
     findings = scan_text(
@@ -198,6 +197,22 @@ def test_d002_redeclared_core_dep() -> None:
     assert f.line == 6
     assert "'pydantic' is already pinned" in f.message
     assert "[project.dependencies]" in f.message
+
+
+def test_d002_redeclared_in_optional_extra_inline_form() -> None:
+    """D002 fires when an optional-extra array is written inline (single-line)."""
+    text = (
+        '[project]\nname = "demo-app"\nversion = "0.1.0"\n'
+        "dependencies = [\n"
+        '    "atlan-application-sdk>=3.17.2,<4.0.0",\n'
+        "]\n"
+        "[project.optional-dependencies]\n"
+        'sql = ["pydantic>=2,<3"]\n'
+    )
+    findings = scan_text(text, "pyproject.toml", sdk_managed_packages={"pydantic"})
+    assert len(findings) == 1
+    assert findings[0].rule_id == "D002"
+    assert "[project.optional-dependencies.sql]" in findings[0].message
 
 
 def test_d002_redeclared_in_optional_extra() -> None:
@@ -227,8 +242,7 @@ def test_d002_skipped_when_sdk_metadata_unavailable(
     monkeypatch.setattr(dc, "_sdk_managed_packages", lambda: None)
     text = _write_pyproject(
         deps=(
-            '    "atlan-application-sdk>=3.17.2,<4.0.0",\n'
-            '    "pydantic>=2.10,<3.0",\n'
+            '    "atlan-application-sdk>=3.17.2,<4.0.0",\n    "pydantic>=2.10,<3.0",\n'
         )
     )
     findings = scan_text(text, "pyproject.toml")

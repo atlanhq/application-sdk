@@ -17,8 +17,6 @@ are *publishers* of the contract, not apps subject to it).
 
 from __future__ import annotations
 
-import argparse
-import json
 import re
 import sys
 import tomllib
@@ -28,7 +26,8 @@ from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any
 
-from conformance.suite.schema.findings import Finding, findings_to_report
+from conformance.suite.checks._ast_common import make_cli_main
+from conformance.suite.schema.findings import Finding
 
 SERIES = "D"
 RULE_D001 = "D001"
@@ -141,13 +140,14 @@ def _is_bounded_specifier(spec: str) -> bool:
     has_lower = False
     has_upper = False
     for clause in clauses:
+        if clause.startswith("==="):
+            # ``===X`` is arbitrary-equality — counts as exact.
+            return True
         if clause.startswith("=="):
             # ``==X`` is exact — counts as both bounds.
             return True
         if clause.startswith("~="):
             # ``~=X.Y`` is PEP 440 compatible release: ``>=X.Y, <X+1``.
-            return True
-        if clause.startswith("==="):
             return True
         if clause.startswith(">="):
             has_lower = True
@@ -200,6 +200,9 @@ def _iter_dep_entries(text: str) -> Iterator[_DepEntry]:
         r"^\s*dependencies\s*=\s*\[\s*(?P<body>.*?)\s*\]\s*(?:#.*)?$"
     )
     extras_open_re = re.compile(r"^\s*([A-Za-z0-9_-]+)\s*=\s*\[\s*(?:#.*)?$")
+    extras_inline_re = re.compile(
+        r"^\s*([A-Za-z0-9_-]+)\s*=\s*\[\s*(?P<body>.*?)\s*\]\s*(?:#.*)?$"
+    )
     array_close_re = re.compile(r"^\s*\]\s*(?:#.*)?$")
     # A string entry inside an array: ``"requirement-spec",`` (optional comma,
     # optional inline ``# comment``).
@@ -251,12 +254,28 @@ def _iter_dep_entries(text: str) -> Iterator[_DepEntry]:
                 em = extras_open_re.match(raw_line)
                 if em is not None:
                     extra_name = em.group(1)
-                    array_path = (
-                        f"{extras_table}.{extra_name}"
-                        if extras_table == "project.optional-dependencies"
-                        else f"{extras_table}.{extra_name}"
-                    )
+                    array_path = f"{extras_table}.{extra_name}"
                     in_array = True
+                    continue
+                # ``<extra-name> = ["req"]`` (inline single-line form)
+                ei = extras_inline_re.match(raw_line)
+                if ei is not None:
+                    extra_name = ei.group(1)
+                    inline_path = f"{extras_table}.{extra_name}"
+                    body = ei.group("body")
+                    for sm in re.finditer(r'"([^"\\]*(?:\\.[^"\\]*)*)"', body):
+                        entry = sm.group(1)
+                        parsed = _parse_requirement(entry)
+                        if parsed is None:
+                            continue
+                        name, _spec = parsed
+                        yield _DepEntry(
+                            raw=entry,
+                            name=name,
+                            line=lineno,
+                            column=raw_line.index(sm.group(0)) + 2,
+                            array_path=inline_path,
+                        )
                     continue
             # [project.optional-dependencies] table-of-arrays form:
             # the dotted-key style ``[project.optional-dependencies.sql]``
@@ -429,6 +448,11 @@ def scan_text(
         ``None``, looked up via ``importlib.metadata.requires``; when the SDK
         is not importable, D002 is skipped silently.
     """
+    try:
+        tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return []
+
     name = _project_name(text)
     if _is_self_check(name):
         return []
@@ -570,73 +594,13 @@ def discover(root: Path) -> list[Path]:
 # CLI
 # ---------------------------------------------------------------------------
 
-
-def main(argv: list[str] | None = None) -> int:
-    """CLI entry point for the D-series check.
-
-    Mirrors the C001/E-series CLIs: scans the given pyproject.toml(s),
-    emits a SARIF report (stdout by default), exits 1 if any blocking
-    finding is present.
-    """
-    parser = argparse.ArgumentParser(
-        description=(
-            "D001/D002: scan pyproject.toml against the application-sdk contract."
-        ),
-    )
-    parser.add_argument(
-        "scan_paths",
-        nargs="*",
-        default=["pyproject.toml"],
-        metavar="PATH",
-        help="pyproject.toml file(s) to scan (default: ./pyproject.toml)",
-    )
-    parser.add_argument(
-        "--root",
-        default=".",
-        metavar="DIR",
-        help="Repo root for relative URI construction (default: .)",
-    )
-    parser.add_argument(
-        "--sarif-output",
-        metavar="FILE",
-        help="Write SARIF report to FILE (default: stdout)",
-    )
-    parser.add_argument(
-        "--validate",
-        action="store_true",
-        help="Validate emitted SARIF against the official schema",
-    )
-    parser.add_argument(
-        "--tool-version",
-        default="0.4.0",
-        metavar="VERSION",
-    )
-    args = parser.parse_args(argv)
-
-    root = Path(args.root).resolve()
-    findings: list[Finding] = []
-    for raw in args.scan_paths:
-        p = Path(raw)
-        if not p.is_absolute():
-            p = root / p
-        if not p.is_file():
-            continue
-        findings.extend(scan_path(p, root))
-
-    report = findings_to_report(findings, tool_version=args.tool_version)
-
-    if args.validate:
-        from conformance.suite.schema.validate import validate_sarif
-
-        validate_sarif(report)
-
-    payload = json.dumps(report.model_dump(by_alias=True, exclude_none=True), indent=2)
-    if args.sarif_output:
-        Path(args.sarif_output).write_text(payload, encoding="utf-8")
-    else:
-        print(payload)
-
-    return report.runs[0].invocations[0].exit_code  # type: ignore[return-value]
+main = make_cli_main(
+    scan_text,
+    description="D001/D002: scan pyproject.toml against the application-sdk contract.",
+    discover=discover,
+    default_scan_paths=("pyproject.toml",),
+)
+"""CLI entry point for the D-series check."""
 
 
 if __name__ == "__main__":
