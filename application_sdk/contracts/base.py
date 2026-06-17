@@ -540,7 +540,7 @@ class ContractValidationError(_InvalidInputError):
     """Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0."""
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CONTRACT_VALIDATION
-    code: ClassVar[str] = "CONTRACT_VALIDATION"
+    code: ClassVar[str] = "INVALID_INPUT_CONTRACT_VALIDATION"
 
     def __init__(
         self,
@@ -607,7 +607,7 @@ class PayloadSafetyError(ContractValidationError):
     """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = PAYLOAD_SAFETY
-    code: ClassVar[str] = "PAYLOAD_SAFETY"
+    code: ClassVar[str] = "INVALID_INPUT_PAYLOAD_SAFETY"
 
     def __init__(
         self, cls_name: str, field_name: str, field_type: type, reason: str

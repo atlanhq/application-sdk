@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, ClassVar, Protocol
 
 from application_sdk.errors import SECRET_NOT_FOUND, SECRET_STORE_ERROR, ErrorCode
-from application_sdk.errors.categories import Audience, FailureCategory
+from application_sdk.errors.categories import Audience
 from application_sdk.errors.leaves import DependencyUnavailableError, NotFoundError
 from application_sdk.infrastructure._secret_utils import process_secret_data
 from application_sdk.observability.logger_adaptor import get_logger
@@ -85,7 +85,7 @@ class SecretStoreError(DependencyUnavailableError):
     secret_name: str | None = None
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = SECRET_STORE_ERROR
-    code: ClassVar[str] = "SECRET_STORE"
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_SECRET_STORE"
 
     # Intentional: dataclass fields define the wire-evidence schema; custom __init__ preserves positional-message compat.
     def __init__(
@@ -126,8 +126,7 @@ class SecretNotFoundError(NotFoundError, SecretStoreError):
     """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = SECRET_NOT_FOUND
-    code: ClassVar[str] = "SECRET_NOT_FOUND"
-    category: ClassVar[FailureCategory] = FailureCategory.NOT_FOUND
+    code: ClassVar[str] = "NOT_FOUND_SECRET"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.USER
 

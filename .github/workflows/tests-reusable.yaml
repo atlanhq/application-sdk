@@ -1,47 +1,36 @@
 name: tests-reusable
 
-# Reusable workflow for the standard connector tests + e2e + tests-passed
-# scaffold.  Each connector's per-app tests.yaml collapses to a thin caller:
+# Reusable workflow for the standard connector tests + e2e scaffold.
+# Each connector's per-app tests.yaml collapses to a thin caller:
 #
-#     name: tests
-#     on:
-#       push:
-#         branches: [main]
-#       pull_request:
-#         types: [opened, synchronize, reopened, labeled]
-#         branches: [main]
-#       merge_group:
-#       workflow_dispatch:
-#         inputs:
-#           application_sdk_ref: {required: false, type: string, default: ""}
-#           distinct_id:         {required: false, type: string, default: ""}
-#           run_e2e:             {required: false, type: string, default: ""}
-#           base_image_ref:      {required: false, type: string, default: ""}
-#           agent_name_override: {required: false, type: string, default: ""}
+#     name: Tests
 #     jobs:
 #       tests:
 #         uses: atlanhq/application-sdk/.github/workflows/tests-reusable.yaml@main
 #         with:
 #           app-name: mysql
-#           app-image-name: atlan-mysql-app
-#           application-sdk-ref: ${{ inputs.application_sdk_ref }}
-#           distinct-id:         ${{ inputs.distinct_id }}
-#           run-e2e:             ${{ inputs.run_e2e }}
-#           base-image-ref:      ${{ inputs.base_image_ref }}
-#           agent-name-override: ${{ inputs.agent_name_override }}
+#           ...
 #         secrets: inherit
+#       tests-gate:
+#         name: Tests Gate
+#         needs: [tests]
+#         if: always()
+#         ...  # gate logic using needs.tests.outputs.*
 #
-# Standard boilerplate baked here so apps don't copy-paste it:
+# Standard boilerplate baked in this reusable so apps don't copy-paste it:
 #   - 60-min job timeout (override via timeout-minutes input)
 #   - Concurrency group on github.ref — queues rather than races same branch
 #   - pull-requests:write + contents:read permissions
 #   - distinct-id echo for cross-repo dispatch tracking
 #   - connector-integration-tests composite with services-script hook (no-op
 #     by default; used when source systems need CI-level startup rather than
-#     pytest fixtures — see openapi's .github/test/setup-services.sh for a
-#     reference demonstration using this hook intentionally)
+#     pytest fixtures — see openapi's .github/test/setup-services.sh)
 #   - Label/dispatch-gated e2e job via e2e-full-reusable
-#   - tests-passed aggregator gate (single required check for branch protection)
+#
+# GitHub check name hierarchy (caller → tests-reusable):
+#   Tests / tests / Unit and integration  (pull_request)
+#   Tests / tests / e2e / End-to-end      (pull_request)  ← 4-deep; nested reusable
+#   Tests / tests / Tests Gate            (pull_request)
 #
 # Nested reusable depth: caller → tests-reusable → e2e-full-reusable = 3
 # (GitHub max is 4).  secrets: inherit chains through both levels.
@@ -134,7 +123,7 @@ jobs:
 
   # ── Unit + Integration (testcontainers or services-script hook) ──────────
   tests:
-    name: tests
+    name: Unit and integration
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
     concurrency:
@@ -162,7 +151,7 @@ jobs:
 
   # ── Full-DAG e2e (system apps — extract→qi→publish→lineage) ─────────────
   e2e:
-    name: e2e
+    name: End-to-end
     concurrency:
       group: tests-e2e-${{ github.ref }}
       cancel-in-progress: false
@@ -192,7 +181,7 @@ jobs:
 
   # ── Aggregator gate (single required check for branch protection) ────────
   tests-passed:
-    name: tests-passed
+    name: Tests Gate
     needs: [tests, e2e]
     if: always()
     runs-on: ubuntu-latest
