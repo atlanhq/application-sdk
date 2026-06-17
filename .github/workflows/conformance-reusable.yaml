@@ -4,9 +4,9 @@
 #
 # Runs C-series and E-series checks as separate jobs so each appears as its own
 # status check:
-#   Conformance / conformance / CI
-#   Conformance / conformance / Error-handling
-#   Conformance / conformance / Full suite  (required gate)
+#   Conformance / suite / CI
+#   Conformance / suite / Error-handling
+#   Conformance / suite / Conformance Gate  (required gate)
 #
 # Jobs are intentionally inline (not delegating to sub-workflows) so GitHub
 # reports them at the correct depth — one level of workflow_call from the
@@ -350,7 +350,7 @@ jobs:
   # Always runs so it can be marked a required check without ever becoming
   # "skipped" and blocking the merge queue.
   gate:
-    name: "Full suite"
+    name: "Conformance Gate"
     runs-on: ubuntu-latest
     needs: [ci, error-handling, prescriptions, optimizations]
     if: always()

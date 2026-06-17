@@ -21,7 +21,7 @@ from application_sdk.errors import (
     STORAGE_PERMISSION,
     ErrorCode,
 )
-from application_sdk.errors.categories import Audience, FailureCategory
+from application_sdk.errors.categories import Audience
 from application_sdk.errors.leaves import (
     AppPermissionDeniedError,
     DataIntegrityError,
@@ -42,7 +42,7 @@ class StorageError(DependencyUnavailableError):
     key: str | None = None
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_OPERATION
-    code: ClassVar[str] = "STORAGE"
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_STORAGE"
 
     # Intentional: dataclass fields define the wire-evidence schema; custom __init__ preserves positional-message compat.
     def __init__(
@@ -83,8 +83,7 @@ class StorageNotFoundError(NotFoundError, StorageError):
     """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_NOT_FOUND
-    code: ClassVar[str] = "STORAGE_NOT_FOUND"
-    category: ClassVar[FailureCategory] = FailureCategory.NOT_FOUND
+    code: ClassVar[str] = "NOT_FOUND_STORAGE"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.USER
 
@@ -126,8 +125,7 @@ class StoragePermissionError(AppPermissionDeniedError, StorageError):
     """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_PERMISSION
-    code: ClassVar[str] = "STORAGE_PERMISSION"
-    category: ClassVar[FailureCategory] = FailureCategory.PERMISSION
+    code: ClassVar[str] = "PERMISSION_STORAGE"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.USER
 
@@ -169,8 +167,7 @@ class StorageConfigError(InvalidInputError, StorageError):
     """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_CONFIG
-    code: ClassVar[str] = "STORAGE_CONFIG"
-    category: ClassVar[FailureCategory] = FailureCategory.INVALID_INPUT
+    code: ClassVar[str] = "INVALID_INPUT_STORAGE_CONFIG"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.USER
 
@@ -214,7 +211,7 @@ class StorageBindingNotFoundError(StorageConfigError):
     "component absent" from other configuration errors (e.g. wrong binding type).
     """
 
-    code: ClassVar[str] = "STORAGE_BINDING_NOT_FOUND"
+    code: ClassVar[str] = "INVALID_INPUT_STORAGE_BINDING_NOT_FOUND"
     binding_name: str | None = None
 
     def __init__(
@@ -251,7 +248,7 @@ class StorageBindingBrokenError(StorageConfigError):
     in optional contexts.
     """
 
-    code: ClassVar[str] = "STORAGE_BINDING_BROKEN"
+    code: ClassVar[str] = "INVALID_INPUT_STORAGE_BINDING_BROKEN"
     binding_name: str | None = None
     broken_fields: list[str] | None = None
 
@@ -313,8 +310,7 @@ class StorageEmptyUploadError(DataIntegrityError, StorageError):
     """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_EMPTY_UPLOAD
-    code: ClassVar[str] = "STORAGE_EMPTY_UPLOAD"
-    category: ClassVar[FailureCategory] = FailureCategory.DATA_INTEGRITY
+    code: ClassVar[str] = "DATA_INTEGRITY_STORAGE_EMPTY_UPLOAD"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.APP_OWNER
 
