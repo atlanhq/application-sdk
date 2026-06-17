@@ -15,6 +15,11 @@ app uses to inject ``allow_http``). The production binding is exercised
 unchanged via ``create_store_from_binding``; only the final obstore store
 construction is redirected at the emulator.
 
+Scope caveat: because the emulator base_url + credential are injected at the
+test layer, the GCS credential/endpoint *construction* path in ``binding.py`` is
+NOT the thing under test here — this proves obstore can round-trip against a GCS
+backend, not GCS-binding parity with the S3/Azure tests.
+
 Marked ``storage_emulator``. Local (storage-testbench + nginx ETag proxy):
 
     docker network create gcs-net
@@ -39,7 +44,7 @@ from tests.integration.storage.conftest import write_dapr_component
 
 pytestmark = pytest.mark.storage_emulator
 
-_ENDPOINT = os.environ.get("GCS_EMULATOR_ENDPOINT", "http://localhost:9000").rstrip("/")
+_ENDPOINT = os.environ.get("GCS_EMULATOR_ENDPOINT", "http://localhost:9095").rstrip("/")
 _BUCKET = os.environ.get("GCS_EMULATOR_BUCKET", "sdk-emulator-test")
 
 

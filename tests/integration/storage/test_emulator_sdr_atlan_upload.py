@@ -1,32 +1,21 @@
-"""Hermetic integration test: the SDR ``ENABLE_ATLAN_UPLOAD`` handoff.
+"""Hermetic integration test: the SDR ``ENABLE_ATLAN_UPLOAD`` *directory* handoff.
 
 In a Self-Deployed-Runtime deployment the extract app writes its artifacts to
-the **customer-configured** object store (the ``objectstore`` /
-``DEPLOYMENT_OBJECT_STORE_NAME`` binding), then hands them off to Atlan's
-**internal** object store (``atlan-objectstore`` / ``UPSTREAM_OBJECT_STORE_NAME``)
-so the publish app — running in Atlan's infrastructure — can consume them. That
-handoff is what ``ENABLE_ATLAN_UPLOAD=true`` gates in production.
+the **customer-configured** object store (``objectstore``), then ``App.upload()``
+hands them off to Atlan's **internal** object store (``atlan-objectstore``) for
+the publish app to consume.
 
-The production path is two parts, both exercised here against two MinIO buckets
-(customer + atlan), with **no production-code changes**:
+The routing (``App.upload`` prefers ``upstream_storage``) and the *single-file*
+cross-pod fallback are already pinned against the real ``App.upload`` in
+``tests/integration/test_app_upload_routing.py`` (cases a/b/d/e). The one branch
+that exercises NOTHING there is the **directory** (multi-file) cross-store
+fallback — extract output is normally a tree of parquet files, which goes
+through ``transfer.upload``'s directory branch (``_upload_from_store`` per key),
+distinct from the single-file path. This test closes that gap against two MinIO
+buckets, with **no production-code change**.
 
-1. **Routing** — ``App.upload()`` selects the upstream store when one is
-   configured: ``store = self.context.upstream_storage or self.context.storage``
-   (``application_sdk/app/base.py``). This test builds a real ``AppContext`` with
-   both stores bound to real emulator buckets and asserts the upstream (Atlan)
-   store is the one chosen.
-2. **Transfer** — ``App.upload()`` delegates to
-   ``application_sdk.storage.transfer.upload`` with ``store=<upstream>`` and
-   ``_source_store=<customer>``. When the file isn't present on the local pod
-   (the cross-pod / KEDA-scaled SDR case) it streams the object directly from
-   the customer store to the Atlan store via ``_upload_from_store``. This test
-   writes an "extracted asset" into the customer bucket and drives that exact
-   delegate, then asserts the bytes land in the Atlan bucket (and the source
-   is left intact).
-
-This is the object-store equivalent of proving the layer-1 → layer-2 transfer:
-customer-managed storage → internal Atlan storage. Marked ``storage_emulator``
-(deselected by default; run in CI with the MinIO sidecar). Local:
+Marked ``storage_emulator`` (deselected by default; run in CI with the MinIO
+sidecar). Local:
 
     docker run -d --rm -p 9000:9000 \\
         -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \\
@@ -91,95 +80,14 @@ def _s3_store(component_name: str, bucket: str, components_dir):
     return create_store_from_binding(component_name, components_dir=components_dir)
 
 
-def test_sdr_upload_routes_to_upstream_atlan_store(tmp_path):
-    """``App.upload`` routing: when the upstream (Atlan) store is configured it
-    is preferred over the customer/deployment store — the SDR selection rule
-    ``context.upstream_storage or context.storage``, exercised with real stores.
-    """
-    from application_sdk.app.context import AppContext
-
-    components = tmp_path / "components"
-    customer_store = _s3_store("objectstore", _CUSTOMER_BUCKET, components)
-    atlan_store = _s3_store("atlan-objectstore", _ATLAN_BUCKET, components)
-
-    sdr_ctx = AppContext(
-        app_name="sdr-handoff-test",
-        app_version="1",
-        _storage=customer_store,
-        _upstream_storage=atlan_store,
-    )
-    # This is the exact expression App.upload() evaluates to pick its target.
-    assert (sdr_ctx.upstream_storage or sdr_ctx.storage) is atlan_store
-
-    # Non-SDR control: no upstream configured → falls back to the customer store.
-    non_sdr_ctx = AppContext(
-        app_name="non-sdr-test", app_version="1", _storage=customer_store
-    )
-    assert non_sdr_ctx.upstream_storage is None
-    assert (non_sdr_ctx.upstream_storage or non_sdr_ctx.storage) is customer_store
-
-
-async def test_sdr_atlan_upload_handoff_transfers_asset(tmp_path):
-    """An extracted asset in the customer store is uploaded to the Atlan store.
-
-    Reproduces the SDR cross-pod handoff: the file is absent locally, so
-    ``transfer.upload`` streams it from the customer (source) store to the Atlan
-    (upstream) store — the same call ``App.upload`` makes under
-    ``ENABLE_ATLAN_UPLOAD``.
-    """
-    from application_sdk.contracts.types import FileReference, StorageTier
-    from application_sdk.storage.transfer import upload as transfer_upload
-
-    components = tmp_path / "components"
-    customer_store = _s3_store("objectstore", _CUSTOMER_BUCKET, components)
-    atlan_store = _s3_store("atlan-objectstore", _ATLAN_BUCKET, components)
-
-    # 1. Extract step output: an asset written to the customer object store.
-    source_key = "artifacts/apps/sdr-app/workflows/run-1/extracted/assets.parquet"
-    target_key = "artifacts/apps/sdr-app/workflows/run-1/published/assets.parquet"
-    payload = b"PAR1-sdr-extracted-asset-bytes-customer-objectstore"
-    await obstore.put_async(customer_store, source_key, payload)
-
-    # Sanity: the Atlan store does not have it yet.
-    with pytest.raises(Exception):
-        await obstore.get_async(atlan_store, target_key)
-
-    # 2. The handoff: stream customer-store → atlan-store via the real delegate.
-    #    local_path="" forces the deployment-store fallback (cross-pod SDR case),
-    #    mirroring App.upload(store=upstream, _source_store=customer, _source_ref=...).
-    result = await transfer_upload(
-        "",
-        target_key,
-        store=atlan_store,
-        _source_ref=FileReference(local_path="assets.parquet", storage_path=source_key),
-        _source_store=customer_store,
-        _tier=StorageTier.RETAINED,
-    )
-
-    assert result.synced is True
-    assert result.reason == "uploaded"
-
-    # 3. The asset now lives in the Atlan (upstream) store, byte-for-byte.
-    landed = await obstore.get_async(atlan_store, target_key)
-    assert bytes(await landed.bytes_async()) == payload
-
-    # 4. The source asset is left intact (upload copies, it does not move).
-    src = await obstore.get_async(customer_store, source_key)
-    assert bytes(await src.bytes_async()) == payload
-
-    # Cleanup so reruns against a persistent emulator stay idempotent.
-    await obstore.delete_async(customer_store, source_key)
-    await obstore.delete_async(atlan_store, target_key)
-
-
 async def test_sdr_atlan_upload_handoff_transfers_directory(tmp_path):
-    """The realistic SDR shape: a *directory* of extracted files is handed off.
+    """A *directory* of extracted files is handed off customer-store → atlan-store.
 
-    Extract output is normally a tree of parquet files, not a single object, so
-    ``App.upload`` passes the run prefix and ``transfer.upload`` takes its
+    Extract output is a tree of parquet files, so ``transfer.upload`` takes its
     directory-fallback branch — listing every key under the source prefix in the
-    customer store and streaming each to the Atlan store. This exercises that
-    multi-file branch (distinct from the single-file path above).
+    customer store and streaming each to the Atlan store. (Single-file + routing
+    are covered in ``tests/integration/test_app_upload_routing.py``; this pins the
+    multi-file branch, which those don't reach.)
     """
     from application_sdk.contracts.types import FileReference, StorageTier
     from application_sdk.storage.transfer import upload as transfer_upload
