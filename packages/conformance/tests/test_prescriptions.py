@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from conformance.suite.checks.prescriptions import main, scan_all, scan_text
 from conformance.suite.rules import get_rule
 from conformance.suite.schema import SarifReport, derive_disposition, validate_sarif
@@ -345,11 +346,31 @@ def test_p003_aliased_import_with_correct_prefix_is_silent(tmp_path: Path) -> No
     assert findings == []
 
 
-def test_p003_silent_when_no_classvar_annotation(tmp_path: Path) -> None:
-    """Plain ``code = "..."`` (no ClassVar) still binds an attribute and is checked."""
+def test_p003_fires_on_plain_code_assign_without_classvar_annotation(
+    tmp_path: Path,
+) -> None:
+    """Plain ``code = "..."`` (no ClassVar annotation) is still extracted and checked."""
     src = 'class WrongPlain(InternalError):\n    code = "AUTH_BAD"\n'
     findings = _scan_one(tmp_path, src)
     assert [f.rule_id for f in findings] == ["P003"]
+
+
+def test_p003_silent_on_non_string_code_constant(tmp_path: Path) -> None:
+    """``code = 123`` (non-string Constant) is ignored — not extracted as a code string."""
+    src = "class NumericCode(InternalError):\n    code = 123\n"
+    findings = _scan_one(tmp_path, src)
+    # Treated as missing code declaration; still fires P003 but must not crash.
+    assert [f.rule_id for f in findings] == ["P003"]
+    assert "does not declare" in findings[0].message
+
+
+def test_p003_silent_on_dynamic_code_value(tmp_path: Path) -> None:
+    """``code = SOME_VAR`` (non-Constant) is not extracted — must not crash."""
+    src = "CODE = 'INTERNAL_X'\nclass DynCode(InternalError):\n    code = CODE\n"
+    findings = _scan_one(tmp_path, src)
+    # Treated as missing code declaration; still fires P003 but must not crash.
+    assert [f.rule_id for f in findings] == ["P003"]
+    assert "does not declare" in findings[0].message
 
 
 def test_p003_silent_on_abstract_intermediate_with_directive(tmp_path: Path) -> None:
@@ -492,6 +513,76 @@ def test_p003_recognises_leaf_via_init_reexport(tmp_path: Path) -> None:
     findings = _scan_files(tmp_path, files)
     assert [f.rule_id for f in findings] == ["P003"]
     assert "AUTH_" in findings[0].message
+
+
+def test_p003_detects_nested_class(tmp_path: Path) -> None:
+    """ast.walk descends into nested ClassDef bodies."""
+    src = (
+        "from typing import ClassVar\n"
+        "class Outer:\n"
+        "    class Inner(InternalError):\n"
+        '        code: ClassVar[str] = "AUTH_WRONG"\n'
+    )
+    findings = _scan_one(tmp_path, src)
+    assert [f.rule_id for f in findings] == ["P003"]
+
+
+def test_p003_detects_decorated_class(tmp_path: Path) -> None:
+    """@decorator does not prevent ClassDef from being found."""
+    src = (
+        "from dataclasses import dataclass\n"
+        "from typing import ClassVar\n"
+        "@dataclass\n"
+        "class DataError(InternalError):\n"
+        '    code: ClassVar[str] = "AUTH_WRONG"\n'
+    )
+    findings = _scan_one(tmp_path, src)
+    assert [f.rule_id for f in findings] == ["P003"]
+
+
+def test_p003_handles_subscript_leaf_base(tmp_path: Path) -> None:
+    """class X(InternalError, Generic[T]) — Subscript base handled by _get_name."""
+    src = (
+        "from typing import ClassVar, Generic, TypeVar\n"
+        "T = TypeVar('T')\n"
+        "class GenericError(InternalError, Generic[T]):\n"
+        '    code: ClassVar[str] = "AUTH_WRONG"\n'
+    )
+    findings = _scan_one(tmp_path, src)
+    assert [f.rule_id for f in findings] == ["P003"]
+
+
+def test_p003_detects_class_inside_type_checking_block(tmp_path: Path) -> None:
+    """ClassDef inside TYPE_CHECKING is found by ast.walk."""
+    src = (
+        "from typing import TYPE_CHECKING\n"
+        "if TYPE_CHECKING:\n"
+        "    class FakeError(InternalError):\n"
+        "        pass\n"
+    )
+    findings = _scan_one(tmp_path, src)
+    assert [f.rule_id for f in findings] == ["P003"]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "collect_import_aliases uses iter_child_nodes (top-level only) so "
+        "aliases inside 'if TYPE_CHECKING:' are invisible — known false-negative"
+    ),
+)
+def test_p003_type_checking_aliased_import_is_false_negative(tmp_path: Path) -> None:
+    """Leaf alias imported inside TYPE_CHECKING block escapes alias resolution."""
+    src = (
+        "from __future__ import annotations\n"
+        "if TYPE_CHECKING:\n"
+        "    from application_sdk.errors.leaves import InternalError as _IE\n"
+        "from typing import ClassVar\n"
+        "class Foo(_IE):\n"
+        '    code: ClassVar[str] = "AUTH_WRONG"\n'
+    )
+    findings = _scan_one(tmp_path, src)
+    assert [f.rule_id for f in findings] == ["P003"]
 
 
 # ── P003 tier / disposition / gate ─────────────────────────────────────────────

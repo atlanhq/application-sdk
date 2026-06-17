@@ -35,6 +35,9 @@ LEAF_PREFIX_MAP: dict[str, str] = {
     "UnimplementedError": "UNIMPLEMENTED",
 }
 
+# Inverted map so messages can cite the leaf class name alongside the prefix.
+_PREFIX_TO_LEAF: dict[str, str] = {v: k for k, v in LEAF_PREFIX_MAP.items()}
+
 
 @dataclass
 class ClassRecord:
@@ -175,13 +178,15 @@ def emit_p003(
     directives: dict[int, _IgnoreDirective],
 ) -> Finding:
     """Build a P003 finding for *rec* (missing or wrong-prefix code)."""
+    leaf_class = _PREFIX_TO_LEAF.get(leaf_prefix, leaf_prefix)
     if rec.code_value is None:
         node: ast.AST = rec.node
         message = (
-            f"Class '{rec.name}' is a (transitive) subclass of '{leaf_prefix}'-category "
-            f"AppError but does not declare its own 'code: ClassVar[str]'.  Without an "
-            f"override, every raise of this class collapses to the bare leaf code "
-            f"'{leaf_prefix}', making the failure impossible to triage from dashboards.  "
+            f"Class '{rec.name}' is a (transitive) subclass of '{leaf_class}' "
+            f"(category prefix '{leaf_prefix}_') but does not declare its own "
+            f"'code: ClassVar[str]'.  Without an override, every raise of this class "
+            f"collapses to the bare leaf code '{leaf_prefix}', making the failure "
+            f"impossible to triage from dashboards.  "
             f"Add a code that starts with '{leaf_prefix}_' (typed-error-prescription §4).  "
             f"See https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p003"
         )
@@ -190,9 +195,9 @@ def emit_p003(
         message = (
             f"Error code '{rec.code_value}' on class '{rec.name}' must start with the "
             f"parent leaf's category prefix '{leaf_prefix}_' (subclass of "
-            f"'{leaf_prefix}'-category).  The category prefix lets dashboards and "
-            f"on-call routing group by failure category without joining on the "
-            f"category column (typed-error-prescription §4).  "
+            f"'{leaf_class}').  The category prefix lets dashboards and on-call routing "
+            f"group by failure category without joining on the category column "
+            f"(typed-error-prescription §4).  "
             f"See https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p003"
         )
     return make_finding(

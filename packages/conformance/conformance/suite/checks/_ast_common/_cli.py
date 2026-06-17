@@ -39,21 +39,30 @@ the same ``toolVersion`` into their SARIF output."""
 
 
 def make_cli_main(
-    scan_text: Callable[[str, str], list[Finding]],
+    scan_text: Callable[[str, str], list[Finding]] | None = None,
     *,
+    scan_all: Callable[[list[Path], Path], list[Finding]] | None = None,
     description: str,
     discover: Callable[[Path], list[Path]] = _default_discover,
     default_scan_paths: tuple[str, ...] = (".",),
     default_tool_version: str = TOOL_VERSION,
 ) -> CliMain:
-    """Build a series ``main(argv)`` from its ``scan_text`` function.
+    """Build a series ``main(argv)`` from its scan function.
 
-    *scan_text* takes ``(source_text, relative_path)`` and returns findings;
-    *discover* enumerates the files under a directory argument (defaults to the
-    shared Python-source discovery walk); *default_scan_paths* is what to scan
-    when no path is given on the CLI.  The returned callable parses CLI args,
-    scans every requested path, emits SARIF, and returns the report exit code.
+    Pass exactly one of:
+
+    * *scan_text* ``(source_text, relative_path) -> findings`` — for series
+      whose rules are purely per-file (C, E, L, O, …).
+    * *scan_all* ``(paths, root) -> findings`` — for series that need the full
+      path list before they can run (cross-file registry rules, e.g. P-series).
+
+    *discover* enumerates files under a directory argument; *default_scan_paths*
+    is what to scan when no path is given on the CLI.  The returned callable
+    parses CLI args, scans every requested path, emits SARIF, and returns the
+    report exit code.
     """
+    if (scan_text is None) == (scan_all is None):
+        raise TypeError("exactly one of scan_text or scan_all must be provided")
 
     def main(argv: list[str] | None = None) -> int:
         parser = argparse.ArgumentParser(description=description)
@@ -87,23 +96,38 @@ def make_cli_main(
 
         root = Path(args.root).resolve()
 
-        def _scan_file(path: Path) -> list[Finding]:
-            try:
-                rel = path.relative_to(root)
-            except ValueError:
-                rel = path
-            return scan_text(path.read_text(encoding="utf-8"), str(rel))
+        if scan_all is not None:
+            collected: list[Path] = []
+            for raw in args.scan_paths:
+                p = Path(raw)
+                if not p.is_absolute():
+                    p = root / p
+                if p.is_file():
+                    collected.append(p)
+                elif p.is_dir():
+                    collected.extend(discover(p))
+            findings = scan_all(collected, root)
+        else:
+            assert scan_text is not None
+            _scan_text = scan_text  # bind non-None for closure (pyright can't narrow through closures)
 
-        findings: list[Finding] = []
-        for raw in args.scan_paths:
-            p = Path(raw)
-            if not p.is_absolute():
-                p = root / p
-            if p.is_file():
-                findings.extend(_scan_file(p))
-            elif p.is_dir():
-                for py_file in discover(p):
-                    findings.extend(_scan_file(py_file))
+            def _scan_file(path: Path) -> list[Finding]:
+                try:
+                    rel = path.relative_to(root)
+                except ValueError:
+                    rel = path
+                return _scan_text(path.read_text(encoding="utf-8"), str(rel))
+
+            findings = []
+            for raw in args.scan_paths:
+                p = Path(raw)
+                if not p.is_absolute():
+                    p = root / p
+                if p.is_file():
+                    findings.extend(_scan_file(p))
+                elif p.is_dir():
+                    for py_file in discover(p):
+                        findings.extend(_scan_file(py_file))
 
         report = findings_to_report(findings, tool_version=args.tool_version)
 

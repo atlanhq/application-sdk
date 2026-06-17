@@ -38,20 +38,17 @@ the comment-only line immediately above it::
 
 from __future__ import annotations
 
-import argparse
 import ast
-import json
 import sys
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
-    TOOL_VERSION,
     _IgnoreDirective,
     _parse_directives,
     discover,
     make_cli_main,
 )
-from conformance.suite.schema.findings import Finding, findings_to_report
+from conformance.suite.schema.findings import Finding
 
 from ._category_override import (
     _CANONICAL_ERROR_CLASSES,
@@ -202,71 +199,10 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     return findings
 
 
-def main(argv: list[str] | None = None) -> int:
-    """CLI entry point for P-series prescription checks."""
-    parser = argparse.ArgumentParser(
-        description="P-series: scan Python files for prescription violations."
-    )
-    parser.add_argument(
-        "scan_paths",
-        nargs="*",
-        default=["."],
-        metavar="PATH",
-        help="Directories or files to scan (default: .)",
-    )
-    parser.add_argument(
-        "--root",
-        default=".",
-        metavar="DIR",
-        help="Repo root for relative URI construction (default: .)",
-    )
-    parser.add_argument(
-        "--sarif-output",
-        metavar="FILE",
-        help="Write SARIF report to FILE (default: stdout)",
-    )
-    parser.add_argument(
-        "--validate",
-        action="store_true",
-        help="Validate emitted SARIF against the official schema",
-    )
-    parser.add_argument("--tool-version", default=TOOL_VERSION, metavar="VERSION")
-    args = parser.parse_args(argv)
-
-    root = Path(args.root).resolve()
-    # Resolve every input to a flat path list so scan_all can build a single
-    # cross-file class registry — P003 requires this.
-    collected: list[Path] = []
-    for raw in args.scan_paths:
-        p = Path(raw)
-        if not p.is_absolute():
-            p = root / p
-        if p.is_file():
-            collected.append(p)
-        elif p.is_dir():
-            collected.extend(discover(p))
-
-    findings = scan_all(collected, root)
-
-    report = findings_to_report(findings, tool_version=args.tool_version)
-
-    if args.validate:
-        from conformance.suite.schema.validate import validate_sarif
-
-        validate_sarif(report)
-
-    payload = json.dumps(report.model_dump(by_alias=True, exclude_none=True), indent=2)
-    if args.sarif_output:
-        Path(args.sarif_output).write_text(payload, encoding="utf-8")
-    else:
-        print(payload)
-
-    return report.runs[0].invocations[0].exit_code  # type: ignore[return-value]
-
-
-# make_cli_main is the per-file CLI helper; keep it available for completeness
-# but main() above supersedes it for P-series (which needs cross-file scan_all).
-_ = make_cli_main  # suppress unused-import linter noise
+main = make_cli_main(
+    scan_all=scan_all,
+    description="P-series: scan Python files for prescription violations.",
+)
 
 
 if __name__ == "__main__":
