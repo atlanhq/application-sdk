@@ -147,6 +147,7 @@ on:
 
 jobs:
   e2e-full:
+    name: End-to-end
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
     concurrency:
