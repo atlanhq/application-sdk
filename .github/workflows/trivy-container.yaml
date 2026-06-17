@@ -15,10 +15,6 @@ on:
         required: true
       CHAINGUARD_PASSWORD:
         required: true
-      CHAINGUARD_APK_USERNAME:
-        required: false
-      CHAINGUARD_APK_PASSWORD:
-        required: false
 
     inputs:
       skip-files:
@@ -62,8 +58,6 @@ jobs:
         with:
           chainguard-username: ${{ secrets.CHAINGUARD_USERNAME }}
           chainguard-password: ${{ secrets.CHAINGUARD_PASSWORD }}
-          chainguard-apk-username: ${{ secrets.CHAINGUARD_APK_USERNAME }}
-          chainguard-apk-password: ${{ secrets.CHAINGUARD_APK_PASSWORD }}
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
           skip-files: ${{ inputs.skip-files }}
           fail-on-vulns: 'false'

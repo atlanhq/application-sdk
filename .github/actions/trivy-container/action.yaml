@@ -12,12 +12,6 @@ inputs:
   chainguard-password:
     description: Chainguard registry password
     required: true
-  chainguard-apk-username:
-    description: Username for apk.cgr.dev private APK repo auth (HTTP basic)
-    required: false
-  chainguard-apk-password:
-    description: Token/password for apk.cgr.dev private APK repo auth (HTTP basic)
-    required: false
   github-token:
     description: GitHub token for Docker build secrets
     required: true
@@ -59,7 +53,6 @@ runs:
         cache-to: type=gha,mode=max
         secrets: |
           "PRIVATE_REPO_ACCESS_TOKEN=${{ inputs.github-token }}"
-          "cgr-auth=${{ inputs.chainguard-apk-username }}:${{ inputs.chainguard-apk-password }}"
 
     - name: Run Trivy scan (JSON)
       id: scan

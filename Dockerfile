@@ -6,9 +6,8 @@ ARG DAPR_RUNTIME_PACKAGE=dapr-daprd-1.18
 # Switch to root for installation
 USER root
 
-RUN --mount=type=secret,id=cgr-auth \
-    HTTP_AUTH="basic:apk.cgr.dev:$(cat /run/secrets/cgr-auth)" \
-    apk add --no-cache -X https://apk.cgr.dev/atlan.com ${DAPR_RUNTIME_PACKAGE}
+# Install Dapr runtime from Chainguard APK
+RUN apk add --no-cache ${DAPR_RUNTIME_PACKAGE}
 
 # Create appuser (standardized user for all apps)
 RUN addgroup -g 1000 appuser && adduser -D -u 1000 -G appuser appuser

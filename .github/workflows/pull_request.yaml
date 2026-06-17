@@ -129,8 +129,6 @@ jobs:
         with:
           chainguard-username: ${{ secrets.CHAINGUARD_USERNAME }}
           chainguard-password: ${{ secrets.CHAINGUARD_PASSWORD }}
-          chainguard-apk-username: ${{ secrets.CHAINGUARD_APK_USERNAME }}
-          chainguard-apk-password: ${{ secrets.CHAINGUARD_APK_PASSWORD }}
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
           fail-on-vulns: 'true'
 
@@ -366,8 +364,6 @@ jobs:
           build-args: |
             ACCESS_TOKEN_USR=$GITHUB_ACTOR
             ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
-          secrets: |
-            cgr-auth=${{ secrets.CHAINGUARD_APK_USERNAME }}:${{ secrets.CHAINGUARD_APK_PASSWORD }}
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
         env:
           DOCKER_CLIENT_TIMEOUT: 600
