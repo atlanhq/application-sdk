@@ -326,3 +326,35 @@ class TestPostWithRetry:
         cred_name_attempt_2 = bodies_seen[1]["payload"][0]["body"]["name"]
         assert cred_name_attempt_1 == "default-mysql-123-0"
         assert cred_name_attempt_2 == "default-mysql-123-0-r2"
+
+    def test_submit_workflow_raises_on_missing_credential_name(self):
+        """submit_workflow raises AtlanApiResponseInvariantError if credential body has no name.
+
+        A malformed payload with a credential item missing 'name' would otherwise
+        silently produce '-r{n}' as the retry name.  The guard detects this on the
+        first retry and raises rather than submitting a nonsense name.
+        """
+        from application_sdk.testing.e2e._errors import AtlanApiResponseInvariantError
+
+        client = _make_client()
+
+        def _500_then_ok(method, path, body=None, timeout=None):
+            return (500, {"error": "transient"})
+
+        nameless_payload = {
+            "metadata": {"name": "atlan-mysql-123"},
+            "payload": [
+                {
+                    "parameter": "credentialGuid",
+                    "type": "credential",
+                    "body": {"authType": "basic"},  # 'name' intentionally absent
+                }
+            ],
+        }
+
+        with (
+            patch.object(client, "_request", side_effect=_500_then_ok),
+            patch("time.sleep"),
+            pytest.raises(AtlanApiResponseInvariantError, match="missing 'name'"),
+        ):
+            client.submit_workflow(nameless_payload, retries=1)

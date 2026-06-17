@@ -517,10 +517,13 @@ class AEWorkflowClient:
                 if item.get("type") == "credential" and isinstance(
                     item.get("body"), dict
                 ):
-                    new_body = {
-                        **item["body"],
-                        "name": f"{item['body'].get('name', '')}-r{attempt}",
-                    }
+                    original_name = item["body"].get("name")
+                    if not original_name:
+                        raise AtlanApiResponseInvariantError(
+                            message="credential body is missing 'name' — cannot make unique per attempt",
+                            expectation="credential body carries a non-empty 'name' field",
+                        )
+                    new_body = {**item["body"], "name": f"{original_name}-r{attempt}"}
                     item = {**item, "body": new_body}
                 new_items.append(item)
             return {**b, "payload": new_items}
