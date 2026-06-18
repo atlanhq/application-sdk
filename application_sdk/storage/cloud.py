@@ -483,6 +483,11 @@ def _create_s3_store(
         base_access_key = access_key or None
         base_secret_key = secret_key or None
         if bool(base_access_key) != bool(base_secret_key):
+            _log().warning(
+                "S3 assume-role: both username and password are required as base "
+                "credentials; only one was set — dropping both and falling back to "
+                "the ambient credential chain as the STS caller identity."
+            )
             base_access_key = None
             base_secret_key = None
         credential_provider = make_s3_assume_role_provider(
@@ -491,7 +496,7 @@ def _create_s3_store(
             region=region or None,
             base_access_key=base_access_key,
             base_secret_key=base_secret_key,
-            base_session_token=creds.get("token") or None if base_access_key else None,
+            base_session_token=(creds.get("token") or None) if base_access_key else None,
         )
         _log().debug("S3 cross-account assume-role auth configured")
     elif access_key and secret_key:
