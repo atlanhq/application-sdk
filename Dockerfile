@@ -1,9 +1,5 @@
 FROM cgr.dev/atlan.com/app-framework-golden:3.13
 
-# daprd is baked into the customized app-framework-golden base image via
-# Chainguard Custom Assembly, so no `apk add` is needed here. The runtime
-# version is pinned by the base-image Custom Assembly config, not this file.
-
 # Switch to root for setup
 USER root
 
