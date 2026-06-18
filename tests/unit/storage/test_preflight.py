@@ -189,15 +189,16 @@ async def test_verify_noop_when_sdr_disabled(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_verify_skips_upstream_probe_when_upstream_absent(monkeypatch) -> None:
-    """SDR mode + upstream_storage=None → upstream probe skipped; no error raised.
+async def test_verify_fails_when_upstream_absent_in_sdr(monkeypatch) -> None:
+    """SDR mode + upstream_storage=None → ObjectStorePreflightError mentioning upstream.
 
-    Absent upstream binding in SDR mode is caught earlier at construction time
-    by ``_create_store_from_binding_optional_with_put_attrs(required=True)``,
-    which raises ``StorageBindingNotFoundError``.  ``verify_object_store_access``
-    itself only probes stores that are present.
+    Defense-in-depth check: the primary guard is the binding factory raising
+    ``StorageBindingNotFoundError`` at construction time (``required=True``);
+    this catches any caller that bypasses the factory and passes
+    ``upstream_storage=None`` directly.
     """
     import application_sdk.constants as constants_mod
+    from application_sdk.storage.errors import ObjectStorePreflightError
 
     monkeypatch.setattr(constants_mod, "ENABLE_ATLAN_UPLOAD", True)
 
@@ -210,7 +211,14 @@ async def test_verify_skips_upstream_probe_when_upstream_absent(monkeypatch) -> 
     infra = _make_infra(storage=fake_store, upstream_storage=None)
 
     with patch.dict("sys.modules", {"obstore": fake_obstore}):
-        await verify_object_store_access(infra)  # must not raise
+        with pytest.raises(ObjectStorePreflightError) as exc_info:
+            await verify_object_store_access(infra)
+
+    err = exc_info.value
+    assert err.failure_count >= 1
+    msg = str(err)
+    assert "upstream" in msg
+    assert "ENABLE_ATLAN_UPLOAD" in msg
 
 
 @pytest.mark.asyncio

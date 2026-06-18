@@ -203,8 +203,10 @@ async def verify_object_store_access(infra: InfrastructureContext) -> None:
     """In SDR mode, verify read+write access to every configured object store.
 
     Performs a write → read → delete round-trip on the deployment store and,
-    when present, the upstream Atlan store.  Absent upstream store in SDR mode
-    is caught earlier at construction (``StorageBindingNotFoundError``).
+    when configured, the upstream Atlan store.  Also hard-fails if SDR mode is
+    active but the upstream store is absent — this is a defense-in-depth check;
+    the primary guard is ``_create_store_from_binding_optional_with_put_attrs``
+    raising ``StorageBindingNotFoundError`` at construction time.
 
     Each per-store probe is bounded by ``ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS``
     (default: 30 s).  A probe that times out is classified as
@@ -218,7 +220,8 @@ async def verify_object_store_access(infra: InfrastructureContext) -> None:
             ``_create_infrastructure`` in ``main.py``.
 
     Raises:
-        ObjectStorePreflightError: If any configured store is inaccessible.
+        ObjectStorePreflightError: If any store is inaccessible or the upstream
+            store is absent while SDR mode is enabled.
     """
     from application_sdk.constants import (  # noqa: PLC0415 — cold path: SDR-gated; constants only loaded when needed
         DEPLOYMENT_OBJECT_STORE_NAME,
@@ -237,6 +240,20 @@ async def verify_object_store_access(infra: InfrastructureContext) -> None:
     )
 
     failures: list[str] = []
+
+    # Defense-in-depth: hard-fail if upstream store absent in SDR mode.
+    # The primary guard is the binding factory raising StorageBindingNotFoundError
+    # at construction time (required=ENABLE_ATLAN_UPLOAD); this check catches any
+    # caller that bypasses the factory and passes upstream_storage=None directly.
+    if infra.upstream_storage is None:
+        failures.append(
+            f"  * upstream store (binding: '{UPSTREAM_OBJECT_STORE_NAME}'): not configured\n"
+            "    SDR mode is enabled (ENABLE_ATLAN_UPLOAD=true) but the upstream Atlan\n"
+            "    object store is absent — artifacts produced by this connector would\n"
+            "    never reach Atlan.\n"
+            f"    Hint:  Add a Dapr component named '{UPSTREAM_OBJECT_STORE_NAME}' to\n"
+            "           the components directory and ensure its credentials are resolvable."
+        )
 
     # Round-trip probe each store
     stores_to_probe: list[tuple[str, str, object]] = [

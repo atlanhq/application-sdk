@@ -679,6 +679,39 @@ class TestCreateInfrastructureUpstreamStore:
         )
         mock_binding.assert_called_once_with("objectstore", components_dir=ANY)
 
+    async def test_upstream_required_true_when_sdr_enabled(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """required=True is passed to the upstream factory when ENABLE_ATLAN_UPLOAD=True."""
+        self._make_dapr_env(monkeypatch)
+        monkeypatch.setattr("application_sdk.constants.ENABLE_ATLAN_UPLOAD", True)
+        upstream_store = MagicMock()
+        deployment_store = MagicMock()
+
+        with (
+            patch(
+                "application_sdk.main._log_dapr_components",
+                new_callable=AsyncMock,
+                return_value=set(),
+            ),
+            patch(f"{self._DAPR_CLIENT_MOD}.AsyncDaprClient"),
+            patch(f"{self._DAPR_CLIENT_MOD}.DaprStateStore"),
+            patch(f"{self._DAPR_CLIENT_MOD}.DaprSecretStore"),
+            patch(
+                "application_sdk.storage.binding._create_store_from_binding_optional_with_put_attrs",
+                return_value=(upstream_store, None),
+            ) as mock_optional,
+            patch(
+                f"{self._STORAGE_MOD}.create_store_from_binding_with_put_attrs",
+                return_value=(deployment_store, None),
+            ),
+        ):
+            await _create_infrastructure()
+
+        _name, _args, kwargs = mock_optional.mock_calls[0]
+        assert kwargs.get("required") is True
+
 
 class TestInstallGracefulSignalHandlers:
     """Tests for _install_graceful_signal_handlers()."""
