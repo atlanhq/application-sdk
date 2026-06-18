@@ -69,7 +69,7 @@ def _is_covered(required: str, present: frozenset[str]) -> bool:
 def _present_lines(path: Path) -> frozenset[str]:
     """Return the set of non-blank, non-comment, stripped lines in *path*."""
     lines: set[str] = set()
-    for raw in path.read_text(encoding="utf-8").splitlines():
+    for raw in path.read_text(encoding="utf-8-sig").splitlines():
         stripped = raw.strip()
         if stripped and not stripped.startswith("#"):
             lines.add(stripped)

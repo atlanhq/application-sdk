@@ -62,7 +62,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="ci-consistency",
         autofixable=False,
-        since="0.4.1",
+        since="0.4.0",
         rationale=(
             "A .gitignore that is missing standard entries risks accidentally committing "
             "secrets, virtual environments, build artefacts, or IDE noise — each of which "
