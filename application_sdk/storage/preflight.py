@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-_PREFLIGHT_PREFIX = ".atlan-preflight"
+_PREFLIGHT_PREFIX = "artifacts/.atlan-preflight"
 _PREFLIGHT_PAYLOAD = b"atlan-preflight"
 
 # Per-store probe timeout.  Keeps a blackholed endpoint from stalling boot
