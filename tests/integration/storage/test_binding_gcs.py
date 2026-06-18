@@ -22,6 +22,7 @@ import hashlib
 import json
 import os
 import secrets
+import warnings
 
 import pytest
 
@@ -183,11 +184,11 @@ async def test_large_payload_round_trip(tmp_path):
         )
         assert ops_dl.stat().st_size == src_size
     finally:
-        import contextlib
-
         for k in (cs_key, ops_key):
-            with contextlib.suppress(Exception):
+            try:
                 await ops.delete(k, store=cs.store)
+            except Exception as exc:
+                warnings.warn(f"GCS cleanup failed for {k!r}: {exc}", stacklevel=1)
 
 
 @pytest.mark.gcs_integration
