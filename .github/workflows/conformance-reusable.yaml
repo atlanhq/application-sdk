@@ -181,6 +181,13 @@ jobs:
 
       - name: "Detect changed files"
         id: changes
+        # Skip when forcing (release/version-bump/tag) or on push-to-main: in
+        # all those cases the downstream steps fire regardless (their `if:`s OR
+        # in `inputs.event_name == 'push' || inputs.force-all`), and a tag push
+        # has no clean diff base for paths-filter — running it could hard-fail
+        # the leg and turn the gate red on a release. Mirrors sdk-gate.yaml,
+        # which skips its own outer filter for the same reason.
+        if: inputs.event_name != 'push' && !inputs.force-all
         uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4
         with:
           filters: |
@@ -233,9 +240,19 @@ jobs:
     if: always()
     steps:
       - name: "Evaluate conformance results"
+        env:
+          SUITE_RESULT: ${{ needs.suite.result }}
         run: |
-          if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" ]]; then
-            echo "::error::Conformance gate FAILED — one or more series found violations."
+          set -euo pipefail
+          # Fail closed on anything that is not a clean pass. The matrix job's
+          # aggregate result is 'failure' if any leg failed, 'cancelled' if a
+          # run was cancelled, 'skipped' if every series self-skipped (nothing
+          # relevant changed), 'success' otherwise. Only success|skipped pass —
+          # 'cancelled' must NOT slip through (the old contains(...,'failure')
+          # rule let it).
+          if [[ "$SUITE_RESULT" == "success" || "$SUITE_RESULT" == "skipped" ]]; then
+            echo "Conformance gate passed (suite result: $SUITE_RESULT)."
+          else
+            echo "::error::Conformance gate FAILED — suite result: $SUITE_RESULT."
             exit 1
           fi
-          echo "Conformance gate passed (suite result: ${{ join(needs.*.result, ', ') }})."

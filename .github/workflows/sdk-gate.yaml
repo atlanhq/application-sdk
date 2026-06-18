@@ -108,6 +108,12 @@ jobs:
               - '.github/actions/unit-tests/**'
               - '.github/actions/setup-deps/**'
               - '.github/actions/docstring-coverage/**'
+              # Self-test the SDK-test harness itself: editing the reusable that
+              # runs these tests, or the gate that composes them, must re-run the
+              # SDK Tests area — otherwise a PR could break the harness and the
+              # gate would stay green because the area it governs never ran.
+              - '.github/workflows/sdk-tests-reusable.yaml'
+              - '.github/workflows/sdk-gate.yaml'
               # Markdown-only changes never affect SDK behaviour. Listed LAST so
               # paths-filter's last-match-wins excludes e.g.
               # application_sdk/README.md while application_sdk/foo.py still runs.
@@ -132,6 +138,9 @@ jobs:
             # re-runs the package's unit tests here — conformance-only, never SDK.
             conformance_pkg:
               - 'packages/conformance/**'
+              # Self-test the suite-test harness: editing the reusable that runs
+              # the package's pytest must re-run it (same reasoning as `sdk`).
+              - '.github/workflows/conformance-suite-tests-reusable.yaml'
             # A container change (base image / daprd / system deps / entrypoint)
             # can alter SDK runtime behaviour, so it runs ALL gate areas — in
             # addition to the orthogonal Trivy container scan + connector e2e
