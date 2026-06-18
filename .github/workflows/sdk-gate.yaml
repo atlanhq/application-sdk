@@ -50,6 +50,7 @@ jobs:
       sdk: ${{ steps.filter.outputs.sdk }}
       toolkit: ${{ steps.filter.outputs.toolkit }}
       conformance: ${{ steps.filter.outputs.conformance }}
+      conformance_pkg: ${{ steps.filter.outputs.conformance_pkg }}
       container: ${{ steps.filter.outputs.container }}
       force_all: ${{ steps.force.outputs.force_all }}
     steps:
@@ -87,6 +88,12 @@ jobs:
         if: steps.force.outputs.force_all != 'true'
         with:
           filters: |
+            # Dependency routing (Renovate auto-bumps these lockfiles within
+            # range pins): ROOT pyproject.toml / uv.lock are the SDK's own deps,
+            # so they route to SDK-ONLY. packages/conformance/ has its OWN
+            # pyproject.toml / uv.lock (and tests), so it routes to
+            # CONFORMANCE-ONLY (see conformance_pkg). Neither bleeds into the
+            # other area.
             sdk:
               - 'application_sdk/**'
               - 'tests/**'
@@ -105,18 +112,23 @@ jobs:
               - 'application_sdk/credentials/**'
               - 'application_sdk/handler/**'
               - 'application_sdk/templates/contracts/**'
-              - 'pyproject.toml'
-              - 'uv.lock'
               - '.github/workflows/contract-toolkit-*.yml'
               - '.github/workflows/contract-toolkit-*.yaml'
+            # Conformance RULE detection (C/E/P/O). Deliberately NOT triggered by
+            # pyproject.toml: D-series is app-scoped and no-ops on the SDK, and
+            # E/P/O scan .py — so a root pyproject/uv.lock bump is SDK-only.
             conformance:
               - '**/*.py'
               - '.github/**'
-              - '**/pyproject.toml'
               - '!**/*.md'
+            # The conformance PACKAGE itself (its source, pyproject.toml, uv.lock,
+            # and own pytest tests). A Renovate bump to packages/conformance/uv.lock
+            # re-runs the package's unit tests here — conformance-only, never SDK.
+            conformance_pkg:
+              - 'packages/conformance/**'
             # A container change (base image / daprd / system deps / entrypoint)
-            # can alter SDK runtime behaviour, so it runs ALL three gate areas —
-            # in addition to the orthogonal Trivy container scan + connector e2e
+            # can alter SDK runtime behaviour, so it runs ALL gate areas — in
+            # addition to the orthogonal Trivy container scan + connector e2e
             # that live in pull_request.yaml.
             container:
               - 'Dockerfile'
@@ -157,6 +169,19 @@ jobs:
     uses: ./.github/workflows/contract-toolkit-reusable.yaml
     secrets: inherit
 
+  # The conformance PACKAGE's own pytest unit tests (packages/conformance/tests).
+  # Distinct from the `conformance` area above, which runs rule DETECTION
+  # (`detect --series`). Gated on packages/conformance/** so a change to the
+  # package's source OR its pyproject.toml / uv.lock (e.g. a Renovate dep bump)
+  # re-runs its tests — closing the gap where these were only exercised on
+  # merge/publish, never on PRs.
+  conformance-suite-tests:
+    name: Conformance Suite Tests
+    needs: changes
+    if: needs.changes.outputs.conformance_pkg == 'true' || needs.changes.outputs.force_all == 'true'
+    uses: ./.github/workflows/conformance-suite-tests-reusable.yaml
+    secrets: inherit
+
   # ── The single required check ───────────────────────────────────────────────
   # Always runs and always concludes, so branch protection can require exactly
   # this one context for all three areas.  A reusable-workflow call that was
@@ -165,7 +190,7 @@ jobs:
   # else → fail (do not let `cancelled` slip through).
   gate:
     name: SDK Gate
-    needs: [sdk-tests, conformance, toolkit]
+    needs: [sdk-tests, conformance, toolkit, conformance-suite-tests]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -174,6 +199,7 @@ jobs:
           SDK_RESULT: ${{ needs.sdk-tests.result }}
           CONFORMANCE_RESULT: ${{ needs.conformance.result }}
           TOOLKIT_RESULT: ${{ needs.toolkit.result }}
+          CONFORMANCE_PKG_RESULT: ${{ needs.conformance-suite-tests.result }}
         run: |
           set -euo pipefail
           ok=true
@@ -186,9 +212,10 @@ jobs:
               ok=false
             fi
           }
-          check "SDK Tests"        "$SDK_RESULT"
-          check "Conformance"      "$CONFORMANCE_RESULT"
-          check "Contract Toolkit" "$TOOLKIT_RESULT"
+          check "SDK Tests"             "$SDK_RESULT"
+          check "Conformance"           "$CONFORMANCE_RESULT"
+          check "Contract Toolkit"      "$TOOLKIT_RESULT"
+          check "Conformance Suite Tests" "$CONFORMANCE_PKG_RESULT"
           if [[ "$ok" != "true" ]]; then
             echo "::error::SDK gate FAILED — one or more areas did not pass."
             exit 1
