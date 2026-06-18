@@ -492,6 +492,9 @@ def _create_s3_store(
             base_secret_key = None
         credential_provider = make_s3_assume_role_provider(
             role_arn=role_arn,
+            # Distinct from binding.py's "atlan-application-sdk" default so the
+            # two S3 auth paths are distinguishable in CloudTrail AssumeRole logs
+            # (and preserves CloudStore's historical session name).
             session_name=extra.get("aws_role_session_name") or "cloud-store-session",
             region=region or None,
             base_access_key=base_access_key,
