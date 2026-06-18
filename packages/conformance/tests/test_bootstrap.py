@@ -266,10 +266,44 @@ def test_conformance_workflow_contains_event_name() -> None:
     assert "sdk-ref" not in content
 
 
+def test_conformance_upload_sarif_workflow_run_trigger() -> None:
+    """Upload workflow is triggered by the Conformance workflow_run on main."""
+    content = render("conformance-upload-sarif.yaml")
+    assert 'workflows: ["Conformance"]' in content
+    assert "workflow_run" in content
+    assert "branches: [main]" in content
+
+
+def test_conformance_upload_sarif_decoupled_from_gate() -> None:
+    """Upload workflow uses continue-on-error on download so it always exits 0."""
+    content = render("conformance-upload-sarif.yaml")
+    assert "continue-on-error: true" in content
+
+
+def test_conformance_upload_sarif_passes_ref_and_sha() -> None:
+    """Upload workflow passes head_branch and head_sha so SARIF is anchored to the triggering commit."""
+    content = render("conformance-upload-sarif.yaml")
+    assert "workflow_run.head_branch" in content
+    assert "workflow_run.head_sha" in content
+
+
+def test_conformance_upload_sarif_has_actions_read_permission() -> None:
+    """actions: read is required to download artifacts from the triggering run."""
+    content = render("conformance-upload-sarif.yaml")
+    assert "actions: read" in content
+
+
+def test_conformance_upload_sarif_covers_all_series() -> None:
+    """Upload workflow covers all four conformance series slugs."""
+    content = render("conformance-upload-sarif.yaml")
+    for slug in ("ci", "error-handling", "prescriptions", "optimizations"):
+        assert slug in content, f"Missing series slug: {slug}"
+
+
 def test_all_shims_have_atlanhq_uses_reference() -> None:
     """Every managed workflow delegates to atlanhq/* (or a known inline file)."""
     # These files contain inline logic (no `uses: atlanhq/...`) but are still standard.
-    inline_ok = {"release-gate.yaml"}
+    inline_ok = {"release-gate.yaml", "conformance-upload-sarif.yaml"}
     for name in MANAGED_WORKFLOWS:
         content = render(name)
         if name in inline_ok:
