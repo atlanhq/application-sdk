@@ -43,6 +43,10 @@ def _is_covered(
     if rule_id in ignored:
         return False
     if "ALL" in selected:
+        # ALL selects everything, but prefix-level ignores still override.
+        for end in range(len(rule_id) - 1, 0, -1):
+            if rule_id[:end] in ignored:
+                return False
         return True
     if rule_id in selected:
         return True
@@ -63,7 +67,7 @@ def check_ruff_config(toml_path: Path, root: Path) -> list[Finding]:
     try:
         text = toml_path.read_text(encoding="utf-8")
         data = tomllib.loads(text)
-    except (OSError, Exception):
+    except (OSError, tomllib.TOMLDecodeError):
         return []
 
     # Self-check exemption: skip the SDK's own pyproject.toml.

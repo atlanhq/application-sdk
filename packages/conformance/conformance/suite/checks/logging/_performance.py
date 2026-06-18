@@ -72,6 +72,10 @@ class PerformanceMixin(_MixinBase):
 
 # ---------------------------------------------------------------------------
 # L009 — standalone visitor (needs statement-list context)
+#
+# Use WarnThenRaiseVisitor (not a Checker mixin) for any rule that requires
+# comparing *adjacent statements* in a block; use a mixin when a single Call
+# node carries enough information to emit a finding.
 # ---------------------------------------------------------------------------
 
 

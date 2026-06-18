@@ -57,14 +57,21 @@ def detect_framework(tree: ast.Module) -> Framework:
 
 
 def is_logger_call(node: ast.Call) -> bool:
-    """True if *node* is a recognised ``logger.<method>(...)`` call."""
+    """True if *node* is a recognised ``logger.<method>(...)`` call.
+
+    Matches both named-variable receivers (``LOGGER_NAMES``) and the stdlib
+    module-level form (``logging.info(...)``), so L012/L013/L015 catch
+    calls like ``logging.info("…", custom=1)``.
+    """
     func = node.func
     if not isinstance(func, ast.Attribute):
         return False
     if func.attr not in LOG_METHODS:
         return False
     obj = func.value
-    return isinstance(obj, ast.Name) and obj.id in LOGGER_NAMES
+    if not isinstance(obj, ast.Name):
+        return False
+    return obj.id in LOGGER_NAMES or obj.id == "logging"
 
 
 def get_logger_method(node: ast.Call) -> str | None:
@@ -75,7 +82,7 @@ def get_logger_method(node: ast.Call) -> str | None:
     if attr not in LOG_METHODS:
         return None
     obj = node.func.value
-    if isinstance(obj, ast.Name) and obj.id in LOGGER_NAMES:
+    if isinstance(obj, ast.Name) and (obj.id in LOGGER_NAMES or obj.id == "logging"):
         return attr
     return None
 
@@ -102,11 +109,14 @@ def has_exc_info_kwarg(call: ast.Call) -> bool:
 def is_adapter_file(tree: ast.Module) -> bool:
     """True if this file defines the logging adapter.
 
-    Files that define ``AtlanLoggerAdapter`` or ``get_logger`` are the logging
-    infrastructure themselves and are exempt from L017 (.exception() shim) and
-    L018 (kwargs in the factory / adapter body).
+    Files that define ``AtlanLoggerAdapter`` or ``get_logger`` at module
+    top-level are the logging infrastructure itself and are exempt from
+    L017 (.exception() shim) and L018 (kwargs in the factory / adapter body).
+
+    Only top-level definitions are checked (``tree.body``): a nested method
+    named ``get_logger`` inside an unrelated class must not exempt the file.
     """
-    for node in ast.walk(tree):
+    for node in tree.body:
         if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
             if node.name in ADAPTER_MARKERS:
                 return True

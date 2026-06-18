@@ -53,8 +53,8 @@ from conformance.suite.checks._ast_common import (
 from conformance.suite.schema.findings import Finding
 
 from ._checker import build_checker
-from ._constants import SERIES
-from ._helpers import is_adapter_file
+from ._constants import FACTORY_PATTERNS, SERIES
+from ._helpers import is_adapter_file, main_block_lines
 from ._performance import WarnThenRaiseVisitor
 from ._toml import check_ruff_config
 
@@ -68,10 +68,6 @@ __all__ = ["SERIES", "discover", "main", "scan_all", "scan_path", "scan_text"]
 
 def scan_text(text: str, file: str) -> list[Finding]:
     """Scan Python source *text* and return all per-file L-series findings."""
-    from conformance.suite.checks._ast_common._directives import (  # noqa: PLC0415
-        _parse_directives,
-    )
-
     directives = _parse_directives(text)
     result = build_checker(text, file, directives)
     if result is None:
@@ -116,9 +112,8 @@ def _detect_factory(tree: ast.Module) -> str | None:
     * ``"sdk_adapter"`` — ``from application_sdk... import get_logger`` (canonical)
     * ``"loguru"``      — ``from loguru import logger`` (direct loguru)
     * ``"structlog"``   — ``structlog.get_logger(...)`` in an assignment
-    * ``"stdlib"``      — ``logging.getLogger(...)`` / ``getLogger(...)`` in an assignment
-    * ``"sdk_adapter"`` — bare ``get_logger(...)`` in an assignment with no other match
-                          (only the SDK adapter exports ``get_logger`` in this ecosystem)
+    * ``"stdlib"``      — ``logging.getLogger(...)`` / bare ``getLogger(...)`` in an assignment
+    * ``"sdk_adapter"`` — bare ``get_logger(...)`` with no stdlib alias in scope
     """
     # 1. SDK adapter import — most specific, check before anything else
     for node in ast.walk(tree):
@@ -136,38 +131,39 @@ def _detect_factory(tree: ast.Module) -> str | None:
                     if alias.name == "logger":
                         return "loguru"
 
-    # 3–5. Factory calls in assignments
+    # Collect aliases of stdlib getLogger so that
+    # ``from logging import getLogger as get_logger`` is not misclassified
+    # as the SDK adapter in the bare-call branch below.
+    stdlib_getlogger_aliases: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if (node.module or "").split(".")[0] == "logging":
+                for alias in node.names:
+                    if alias.name == "getLogger":
+                        stdlib_getlogger_aliases.add(alias.asname or alias.name)
+
+    # 3–5. Factory calls in assignments — use FACTORY_PATTERNS for attr-calls
     for node in ast.walk(tree):
         if not isinstance(node, (ast.Assign, ast.AnnAssign)):
             continue
-        rhs: ast.expr | None = (
-            node.value if isinstance(node, ast.Assign) else node.value
-        )
+        rhs: ast.expr | None = node.value
         if rhs is None or not isinstance(rhs, ast.Call):
             continue
         func = rhs.func
-        # structlog.get_logger(...)
-        if (
-            isinstance(func, ast.Attribute)
-            and func.attr == "get_logger"
-            and isinstance(func.value, ast.Name)
-            and func.value.id == "structlog"
-        ):
-            return "structlog"
-        # logging.getLogger(...)
-        if (
-            isinstance(func, ast.Attribute)
-            and func.attr == "getLogger"
-            and isinstance(func.value, ast.Name)
-            and func.value.id == "logging"
-        ):
-            return "stdlib"
-        # bare getLogger(...)
-        if isinstance(func, ast.Name) and func.id == "getLogger":
-            return "stdlib"
-        # bare get_logger(...) — only the SDK adapter exports this name
-        if isinstance(func, ast.Name) and func.id == "get_logger":
-            return "sdk_adapter"
+        # Attribute calls: mod.attr(...) matched against FACTORY_PATTERNS
+        if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+            for mod, attr, factory in FACTORY_PATTERNS:
+                if mod and func.value.id == mod and func.attr == attr:
+                    return factory
+        # Bare name calls
+        elif isinstance(func, ast.Name):
+            if func.id == "getLogger":
+                return "stdlib"
+            if func.id == "get_logger":
+                # Aliased from stdlib → treat as stdlib, not SDK adapter
+                return (
+                    "stdlib" if func.id in stdlib_getlogger_aliases else "sdk_adapter"
+                )
 
     return None
 
@@ -180,7 +176,6 @@ def _collect_basicconfig_calls(
     The caller (``scan_all``) promotes the 2nd+ non-main calls to real L016
     findings.  We record position here and filter in the cross-file pass.
     """
-    from ._helpers import main_block_lines
 
     main_lines = main_block_lines(tree)
     calls: list[Finding] = []

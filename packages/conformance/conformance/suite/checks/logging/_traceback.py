@@ -3,9 +3,29 @@
 from __future__ import annotations
 
 import ast
+from collections import deque
 
 from ._base import _MixinBase
+from ._constants import LOG_METHODS_WITH_TRACEBACK
 from ._helpers import has_exc_info_true, is_logger_call
+
+
+def _walk_no_scope(node: ast.AST):
+    """Yield child AST nodes, pruning at nested scope boundaries.
+
+    Stops descending into FunctionDef / AsyncFunctionDef / ClassDef / Lambda
+    so that log calls inside a nested function defined inside an except block
+    are not attributed to the outer except handler.
+    """
+    queue: deque[ast.AST] = deque(ast.iter_child_nodes(node))
+    while queue:
+        child = queue.popleft()
+        yield child
+        if not isinstance(
+            child,
+            (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda),
+        ):
+            queue.extend(ast.iter_child_nodes(child))
 
 
 class TracebackMixin(_MixinBase):
@@ -21,7 +41,7 @@ class TracebackMixin(_MixinBase):
         ``logger.exception()`` (which implicitly sets exc_info) and any call
         that already carries ``exc_info=True``.
         """
-        for node in ast.walk(handler):
+        for node in _walk_no_scope(handler):
             if not isinstance(node, ast.Call):
                 continue
             if not is_logger_call(node):
@@ -32,7 +52,7 @@ class TracebackMixin(_MixinBase):
             method = func.attr
             if method == "exception":
                 continue  # logger.exception() is handled by L017; not relevant here
-            if method not in ("warning", "error"):
+            if method not in LOG_METHODS_WITH_TRACEBACK:
                 continue
             if has_exc_info_true(node):
                 continue

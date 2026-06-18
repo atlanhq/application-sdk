@@ -92,12 +92,11 @@ EXPENSIVE_CALL_ATTRS: frozenset[str] = frozenset(
 EXPENSIVE_CALL_NAMES: frozenset[str] = frozenset({"repr", "str"})
 
 # logger factory patterns used for L002 cross-file detection
-# Each entry is a (module_root, call_attr) tuple as it appears in AST:
-#   logging.getLogger(...)  → module_root="logging", call_attr="getLogger"
-#   structlog.get_logger(...)  → "structlog", "get_logger"
-#   get_logger(...)  → "", "get_logger"   (bare name call, SDK canonical)
-FACTORY_PATTERNS: tuple[tuple[str, str], ...] = (
-    ("logging", "getLogger"),
-    ("structlog", "get_logger"),
-    ("", "get_logger"),  # SDK canonical — also matches structlog.get_logger already
+# Each entry: (module_root, call_attr, factory_type)
+# module_root="" means a bare function call with no attribute receiver.
+# Used by _detect_factory() in __init__.py for the assignment-based detection branch.
+FACTORY_PATTERNS: tuple[tuple[str, str, str], ...] = (
+    ("logging", "getLogger", "stdlib"),
+    ("structlog", "get_logger", "structlog"),
+    ("", "get_logger", "sdk_adapter"),  # SDK canonical bare call
 )

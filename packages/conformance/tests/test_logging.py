@@ -228,6 +228,14 @@ def test_l008_silent_on_plain_debug() -> None:
     assert "L008" not in _ids(src)
 
 
+@pytest.mark.parametrize("level", ["info", "warning", "error", "critical"])
+def test_l008_silent_for_non_debug_level(level: str) -> None:
+    # Expensive calls in non-debug levels are not flagged — the guard
+    # requirement only applies to logger.debug() which is a no-op in production.
+    src = f"from loguru import logger\ndef f(obj):\n    logger.{level}('state', obj.model_dump())\n"
+    assert "L008" not in _ids(src)
+
+
 # ---------------------------------------------------------------------------
 # L009 WarnThenRaiseDuplication
 # ---------------------------------------------------------------------------
@@ -508,11 +516,18 @@ def test_l017_fires_on_exception_call() -> None:
 
 
 def test_l017_silent_in_adapter_file() -> None:
-    # Files that define AtlanLoggerAdapter are the adapter itself — exempt
+    # Files that define AtlanLoggerAdapter are the adapter itself — exempt.
+    # The source includes a real logger.exception() call so the exemption is
+    # actually exercised (vacuous tests that can't fire prove nothing).
     src = (
+        "from loguru import logger\n"
         "class AtlanLoggerAdapter:\n"
         "    def exception(self, msg, *args, **kwargs):\n"
         "        self.error(msg, *args, exc_info=True, **kwargs)\n"
+        "try:\n"
+        "    x()\n"
+        "except Exception:\n"
+        "    logger.exception('failed in adapter')\n"
     )
     assert "L017" not in _ids(src)
 
@@ -544,7 +559,15 @@ def test_l018_silent_for_stdlib() -> None:
 
 
 def test_l018_silent_in_adapter_file() -> None:
-    src = "def get_logger(name):\n    pass\n"
+    # get_logger definition marks this as the adapter file — exempt.
+    # The source includes a real loguru call with non-allowlist kwargs so
+    # the exemption is actually exercised (not a vacuous non-firing test).
+    src = (
+        "from loguru import logger\n"
+        "def get_logger(name):\n"
+        "    return logger.bind(name=name)\n"
+        "logger.info('msg', user_id=123)\n"
+    )
     assert "L018" not in _ids(src)
 
 
@@ -672,6 +695,17 @@ def test_sarif_roundtrip(tmp_path: Path) -> None:
     payload = json.dumps(report.model_dump(by_alias=True, exclude_none=True))
     loaded = SarifReport.model_validate(json.loads(payload))
     assert loaded.runs
+
+    run = loaded.runs[0]
+    # Tool name must identify the L-series checker
+    assert run.tool.driver.name == "atlan-application-sdk-conformance"
+    # At least L001 (f-string) and L007 (critical) must appear
+    result_rule_ids = {r.rule_id for r in (run.results or [])}
+    assert "L001" in result_rule_ids
+    assert "L007" in result_rule_ids
+    # Finding count matches what scan_text returned
+    active = [f for f in findings if not f.suppressed]
+    assert len(run.results or []) == len(active)
 
 
 def test_l001_block_disposition_failing(tmp_path: Path) -> None:

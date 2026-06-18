@@ -5,7 +5,11 @@ from __future__ import annotations
 import ast
 
 from ._base import _MixinBase
-from ._constants import STDLIB_LOG_KWARGS_ALLOWED, STDLIB_LOG_RECORD_RESERVED
+from ._constants import (
+    LOGGER_NAMES,
+    STDLIB_LOG_KWARGS_ALLOWED,
+    STDLIB_LOG_RECORD_RESERVED,
+)
 from ._helpers import is_logger_call
 
 
@@ -13,8 +17,7 @@ class ConfigMixin(_MixinBase):
     """Rule methods for L012, L013, L015, L019 (log-config and log-crash categories).
 
     L016 (BasicConfigNoopAfterFirstCall) requires cross-file context and is
-    implemented in ``scan_all`` inside ``__init__.py``.  This mixin exposes
-    a helper to *collect* basicConfig call locations per file.
+    implemented as a module-level function in ``__init__.py``.
     """
 
     # ── L012 StdlibExtraReservedKeyCollision ──────────────────────────────────
@@ -136,35 +139,25 @@ class ConfigMixin(_MixinBase):
             'Add "disable_existing_loggers": False to the config dict.',
         )
 
-    # ── L016 BasicConfigNoopAfterFirstCall (per-file collector) ───────────────
-
-    def _collect_basicconfig_calls(self, tree: ast.Module) -> list[ast.Call]:
-        """Return all ``logging.basicConfig(...)`` / ``basicConfig(...)`` calls."""
-        calls: list[ast.Call] = []
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            func = node.func
-            if isinstance(func, ast.Attribute) and func.attr == "basicConfig":
-                calls.append(node)
-            elif isinstance(func, ast.Name) and func.id == "basicConfig":
-                calls.append(node)
-        return calls
-
     # ── L019 DiscardedBindResult ──────────────────────────────────────────────
 
     def _check_l019(self, node: ast.Call) -> None:
         """Flag bare ``logger.bind(...)`` calls whose return value is discarded.
 
-        ``structlog`` and ``loguru`` ``bind()`` returns a *new* logger with the
-        bound context — the original is unchanged.  A bare call (result not
+        ``structlog`` and ``loguru`` only: ``bind()`` returns a *new* logger with
+        the bound context — the original is unchanged.  A bare call (result not
         assigned) is always a bug: the context is constructed and immediately
         discarded.
         """
+        if self._framework not in {"structlog", "loguru"}:
+            return
         func = node.func
         if not isinstance(func, ast.Attribute):
             return
         if func.attr != "bind":
+            return
+        obj = func.value
+        if not isinstance(obj, ast.Name) or obj.id not in LOGGER_NAMES:
             return
         # The call is a bare statement — this is checked by the Checker's
         # visit_Expr which calls _check_l019 only for Expr-level calls.
