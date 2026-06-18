@@ -529,7 +529,7 @@ async def _create_infrastructure(
                 components_dir=components_dir,
             )
         )
-        return InfrastructureContext(
+        infra = InfrastructureContext(
             state_store=DaprStateStore(dapr_client, store_name=STATE_STORE_NAME),
             secret_store=DaprSecretStore(dapr_client, store_name=SECRET_STORE_NAME),
             storage=deployment_store,
@@ -543,6 +543,12 @@ async def _create_infrastructure(
             ),
             _dapr_client=dapr_client,
         )
+        from application_sdk.storage.preflight import (  # noqa: PLC0415 — cold path: SDR-gated preflight; only runs when ENABLE_ATLAN_UPLOAD=true
+            verify_object_store_access,
+        )
+
+        await verify_object_store_access(infra)
+        return infra
     else:
         raise DaprNotDetectedError()
 
@@ -1592,7 +1598,14 @@ def main() -> NoReturn:
         sys.exit(1)
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
-    except Exception:
+    except Exception as exc:
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — cold path: lazy import avoids loading storage module on every boot
+            ObjectStorePreflightError,
+        )
+
+        if isinstance(exc, ObjectStorePreflightError):
+            logger.error("SDR object-store preflight failed — cannot start:\n%s", exc)
+            sys.exit(1)
         logger.error("Fatal error", exc_info=True)
         try:
             asyncio.run(_flush_observability())
