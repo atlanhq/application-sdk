@@ -201,7 +201,7 @@ class RedisClient(BaseRedisClient):
             self.redis_client = sentinel.master_for(
                 REDIS_SENTINEL_SERVICE_NAME,
                 password=REDIS_PASSWORD,
-                socket_timeout=None,
+                socket_timeout=5,
             )
 
         except (ConnectionError, TimeoutError, RedisError) as e:
@@ -220,7 +220,7 @@ class RedisClient(BaseRedisClient):
                 host=REDIS_HOST,
                 port=int(REDIS_PORT),
                 password=REDIS_PASSWORD,
-                socket_timeout=None,
+                socket_timeout=5,
             )
 
         except (ConnectionError, TimeoutError, RedisError) as e:
@@ -356,7 +356,7 @@ class RedisClientAsync(BaseRedisClient):
             self.redis_client = sentinel.master_for(
                 REDIS_SENTINEL_SERVICE_NAME,
                 password=REDIS_PASSWORD,
-                socket_timeout=None,
+                socket_timeout=5,
             )
 
         except (ConnectionError, TimeoutError, RedisError) as e:
@@ -375,7 +375,7 @@ class RedisClientAsync(BaseRedisClient):
                 host=REDIS_HOST,
                 port=int(REDIS_PORT),
                 password=REDIS_PASSWORD,
-                socket_timeout=None,
+                socket_timeout=5,
             )
 
         except (ConnectionError, TimeoutError, RedisError) as e:
