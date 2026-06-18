@@ -465,22 +465,63 @@ def _create_s3_store(
 
     access_key = creds.get("username") or ""
     secret_key = creds.get("password") or ""
-    if access_key and secret_key:
-        config["aws_access_key_id"] = access_key
-        config["aws_secret_access_key"] = secret_key
 
+    credential_provider = None
     role_arn = extra.get("aws_role_arn", "")
     if role_arn:
-        config["aws_role_arn"] = role_arn
-        config["aws_role_session_name"] = "cloud-store-session"
-        _log().debug("S3 role-based auth configured")
+        # Cross-account / IRSA assume-role. obstore has no static role_arn
+        # config key (setting one is a silent no-op that leaves the store on
+        # the ambient identity), so wire an STS credential provider — the same
+        # path binding.py uses. Base creds are optional: when omitted, the STS
+        # call uses the pod's ambient chain (IRSA / instance profile) as the
+        # caller identity. Partial base creds (only one of access/secret) are
+        # dropped so we don't hand obstore a half-configured session.
+        from application_sdk.storage._credential_providers import (  # noqa: PLC0415
+            make_s3_assume_role_provider,
+        )
+
+        base_access_key = access_key or None
+        base_secret_key = secret_key or None
+        if bool(base_access_key) != bool(base_secret_key):
+            _log().warning(
+                "S3 assume-role: both username and password are required as base "
+                "credentials; only one was set — dropping both and falling back to "
+                "the ambient credential chain as the STS caller identity."
+            )
+            base_access_key = None
+            base_secret_key = None
+        credential_provider = make_s3_assume_role_provider(
+            role_arn=role_arn,
+            # Distinct from binding.py's "atlan-application-sdk" default so the
+            # two S3 auth paths are distinguishable in CloudTrail AssumeRole logs
+            # (and preserves CloudStore's historical session name).
+            session_name=extra.get("aws_role_session_name") or "cloud-store-session",
+            region=region or None,
+            base_access_key=base_access_key,
+            base_secret_key=base_secret_key,
+            base_session_token=(creds.get("token") or None)
+            if base_access_key
+            else None,
+        )
+        _log().debug("S3 cross-account assume-role auth configured")
+    elif access_key and secret_key:
+        config["aws_access_key_id"] = access_key
+        config["aws_secret_access_key"] = secret_key
 
     storage_class = (extra.get("storageClass") or "").strip()
     put_attrs: dict[str, str] | None = (
         {"Storage-Class": storage_class} if storage_class else None
     )
 
-    return make_s3_store(bucket, config or None, label="cloud-s3"), put_attrs
+    return (
+        make_s3_store(
+            bucket,
+            config or None,
+            label="cloud-s3",
+            credential_provider=credential_provider,
+        ),
+        put_attrs,
+    )
 
 
 def _create_gcs_store(
