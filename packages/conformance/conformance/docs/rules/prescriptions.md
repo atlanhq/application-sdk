@@ -21,17 +21,17 @@ the same topic.  When a domain series takes over an area, the rule is retired in
 (kept documented, no longer firing) and the new rule gets a fresh id — the original id
 is never reused or reassigned.
 
-| ID | Name | Tier | Category | Autofixable | Since |
-|---|---|---|---|---|---|
-| [P001](#p001) | `UnboundedContractFields` | `block` | `contract-payload-safety` | — | 0.3.0 |
-| [P002](#p002) | `CategoryFieldOverride` | `block` | `category-immutability` | — | 0.3.0 |
-| [P003](#p003) | `ErrorCodePrefixMismatch` | `block` | `error-code-shape` | — | 0.3.0 |
+| ID | Name | Tier | Scope | Category | Autofixable | Since |
+|---|---|---|---|---|---|---|
+| [P001](#p001) | `UnboundedContractFields` | `block` | `both` | `contract-payload-safety` | — | 0.3.0 |
+| [P002](#p002) | `CategoryFieldOverride` | `block` | `both` | `category-immutability` | — | 0.3.0 |
+| [P003](#p003) | `ErrorCodePrefixMismatch` | `block` | `both` | `error-code-shape` | — | 0.3.0 |
 
 ---
 
 ## P001 — `UnboundedContractFields` {#p001}
 
-**Tier:** `block` · **Category:** `contract-payload-safety` · **Autofixable:** — · **Since:** 0.3.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `contract-payload-safety` · **Autofixable:** — · **Since:** 0.3.0
 
 > Input/Output contract declared with allow_unbounded_fields=True — opts out of payload safety
 
@@ -56,7 +56,7 @@ sanctioned use is the justified inline suppression above — see BLDX-1428.
 
 ## P002 — `CategoryFieldOverride` {#p002}
 
-**Tier:** `block` · **Category:** `category-immutability` · **Autofixable:** — · **Since:** 0.3.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `category-immutability` · **Autofixable:** — · **Since:** 0.3.0
 
 > AppError subclass redeclares the `category` ClassVar — drifts the canonical taxonomy
 
@@ -87,7 +87,7 @@ sanctioned use is the justified inline suppression `# conformance: ignore[P002]
 
 ## P003 — `ErrorCodePrefixMismatch` {#p003}
 
-**Tier:** `block` · **Category:** `error-code-shape` · **Autofixable:** — · **Since:** 0.3.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `error-code-shape` · **Autofixable:** — · **Since:** 0.3.0
 
 > AppError subclass code missing or doesn't start with the parent leaf's category prefix
 
