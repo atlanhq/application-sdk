@@ -14,6 +14,12 @@ RULES: tuple[RuleDefinition, ...] = (
         category="supply-chain",
         autofixable=True,
         since="3.16.0",
+        rationale=(
+            "A mutable tag (@v4) can be silently re-pointed to any commit after review — "
+            "including malicious code — with no notification to the consumer. Pinning to a "
+            "full commit SHA makes the action content immutable: the code reviewed is the "
+            "code that runs."
+        ),
         short_description="External GitHub Action not pinned to a full commit digest",
         full_description=(
             "External actions reused via `uses:` must be pinned to a full-length "
@@ -32,6 +38,12 @@ RULES: tuple[RuleDefinition, ...] = (
         category="ci-consistency",
         autofixable=True,
         since="0.3.0",
+        rationale=(
+            "Managed CI workflows enforce fleet-wide guarantees: uniform security scanning, "
+            "consistent release gating, current conformance checks. Drift means an app runs "
+            "an older workflow that may lack a recently-added security gate or use a "
+            "deprecated step — invisible until exploited or until the step fails."
+        ),
         short_description="Managed CI workflow is absent or has drifted from the bootstrap canonical",
         full_description=(
             "The `atlan-application-sdk-conformance bootstrap` command installs a "

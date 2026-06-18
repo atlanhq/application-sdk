@@ -26,6 +26,12 @@ RULES: tuple[RuleDefinition, ...] = (
         category="dependency-pinning",
         autofixable=True,
         since="0.4.0",
+        rationale=(
+            "An unbounded specifier lets an automated tool (Renovate) or a manual bump "
+            "pull in a future SDK major without review. The SDK's versioning discipline only "
+            "holds if every app has a bound that stops automatic upgrades past the reviewed "
+            "point."
+        ),
         short_description=(
             "Application SDK dependency is missing or its version specifier is "
             "not bounded on both ends"
@@ -53,6 +59,12 @@ RULES: tuple[RuleDefinition, ...] = (
         category="dependency-pinning",
         autofixable=True,
         since="0.4.0",
+        rationale=(
+            "When an app redeclares a package the SDK already pins, the resolver may pick "
+            "the app's specifier over the SDK's, yielding a version never validated against "
+            "the SDK. This causes resolver conflicts during upgrades and forces touching "
+            "every app that holds a duplicate when the SDK pin changes."
+        ),
         short_description=(
             "Dependency redeclared in the app's pyproject.toml is already "
             "managed by the SDK"
