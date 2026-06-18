@@ -1407,7 +1407,7 @@ class ErrorHandlingConfig {
   maximumInterval: Int(this >= 1)?                  // Retry max interval (seconds)
   maximumAttempts: Int?                             // Retry cap
   nonRetryableErrorTypes: Listing<String>?          // Exact error types to skip retry on
-  startToCloseTimeoutSeconds: Int(isBetween(1, 259200))?  // Total node time budget
+  startToCloseTimeoutSeconds: Int(isBetween(1, 864000))?  // Total node time budget, up to 10 days
   heartbeatTimeoutSeconds: Int(isBetween(1, 3600))?       // Activity-only
 }
 ```
