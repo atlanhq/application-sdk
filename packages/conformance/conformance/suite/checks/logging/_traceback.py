@@ -1,0 +1,44 @@
+"""L004 — missing-traceback rule."""
+
+from __future__ import annotations
+
+import ast
+
+from ._base import _MixinBase
+from ._helpers import has_exc_info_true, is_logger_call
+
+
+class TracebackMixin(_MixinBase):
+    """Rule method for L004 (missing-traceback category)."""
+
+    # ── L004 ExceptBlockMissingExcInfoLog ─────────────────────────────────────
+
+    def _check_l004_in_handler(self, handler: ast.ExceptHandler) -> None:
+        """Flag warning/error calls inside an except block that lack exc_info=True.
+
+        A log call without exc_info=True in an except block produces a message
+        with no stack trace — the root cause is invisible.  Exempt: calls to
+        ``logger.exception()`` (which implicitly sets exc_info) and any call
+        that already carries ``exc_info=True``.
+        """
+        for node in ast.walk(handler):
+            if not isinstance(node, ast.Call):
+                continue
+            if not is_logger_call(node):
+                continue
+            func = node.func
+            if not isinstance(func, ast.Attribute):
+                continue
+            method = func.attr
+            if method == "exception":
+                continue  # logger.exception() is handled by L017; not relevant here
+            if method not in ("warning", "error"):
+                continue
+            if has_exc_info_true(node):
+                continue
+            self._add(
+                "L004",
+                node,
+                f"logger.{method}() in except block is missing exc_info=True — "
+                "the stack trace is silently discarded. Add exc_info=True.",
+            )

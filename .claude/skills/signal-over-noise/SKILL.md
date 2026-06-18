@@ -284,6 +284,42 @@ Then recommend the next step:
 Finds logging anti-patterns that pollute your log stream, obscure structured fields, or create
 security risks.
 
+> **Detection is now delegated to the conformance suite (L-series).** The L001–L020 checks
+> run deterministically via `uv run atlan-application-sdk-conformance detect --repo . --series L`
+> and produce SARIF output with one finding per rule violation. This skill retains its value
+> for the **remediation / fix-authoring** pass (Stage 2) — the suite deliberately does not
+> apply fixes. For a quick detection-only scan, prefer the suite runner; use this skill when
+> you want a plan-mode review and automated fix application.
+
+### Skill ↔ Suite ID crosswalk
+
+The suite renumbers the skill's L-ids. When reading SARIF output and mapping back to the
+fix templates below, use this table:
+
+| Skill ID | Suite ID | Rule name |
+|---|---|---|
+| L1 | L001 | FStringInLogMessage |
+| L2 | L002 | InconsistentLoggerFactory |
+| L3 | L003 | ExtraKwargInNonStdlibCall |
+| L4 | L004 | MissingExcInfo |
+| L5 | L005 | PrintInProductionCode |
+| L6 | L006 | InfoInLoop |
+| L7 | L007 | CriticalCall |
+| L8 | L008 | UnguardedExpensiveDebug |
+| L9 | L009 | WarnThenRaise |
+| L10 | L010 | CredentialInLog |
+| L11 | L011 | StringConcatInLogMessage |
+| L13 | L012 | StdlibExtraReservedKeyCollision |
+| L14 | L013 | StdlibArbitraryKwargs |
+| L15 | L014 | StructlogEventKwargOverwrite |
+| L16 | L015 | DictConfigDisableExistingLoggers |
+| L17 | L016 | BasicConfigNoopAfterFirstCall |
+| L18 | L017 | LoggerExceptionUsage |
+| L24 | L018 | KwargsInApplicationLogCalls |
+| L19 | L019 | DiscardedBindResult |
+| L23 | L020 | DeprecatedLoggingWarn |
+| L12, L20, L21, L22 | — | not ported (%-style, propagate=False, loguru.remove, loguru kwargs) |
+
 Pattern catalogue, severity criteria, fix templates, and linting rules are in:
 
 - `.claude/skills/signal-over-noise/references/logging-patterns.md` — detectable patterns (L1–L23)

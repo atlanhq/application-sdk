@@ -420,4 +420,48 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l018",
     ),
+    RuleDefinition(
+        id="L019",
+        name="DiscardedBindResult",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="log-config",
+        autofixable=False,
+        since="0.3.0",
+        rationale=(
+            "structlog and loguru bind() returns a *new* logger with the bound context — "
+            "the original is unchanged. A bare call (result not assigned) constructs the "
+            "context and immediately discards it; the log call that follows has no extra "
+            "context attached."
+        ),
+        short_description="logger.bind() result discarded — bind() returns a new logger",
+        full_description=(
+            "``structlog`` and ``loguru`` ``bind()`` returns a *new* bound logger;\n"
+            "the original is unchanged.  A bare ``logger.bind(key=value)`` expression\n"
+            "discards the result, so the context is never attached to any log call.\n"
+            "Assign the result: ``log = logger.bind(key=value)``.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l019",
+    ),
+    RuleDefinition(
+        id="L020",
+        name="DeprecatedLoggingWarn",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="log-format",
+        autofixable=True,
+        since="0.3.0",
+        rationale=(
+            "logging.warn() is a long-deprecated alias for logging.warning(). It emits "
+            "DeprecationWarning at import time in newer Python versions and will be removed. "
+            "The fix is a trivial rename."
+        ),
+        short_description="logger.warn() is deprecated — use logger.warning() instead",
+        full_description=(
+            "``logger.warn()`` / ``logging.warn()`` is a deprecated alias for\n"
+            "``logger.warning()`` that will be removed in a future Python version.\n"
+            "Rename every call site to ``logger.warning(...)``.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l020",
+    ),
 )

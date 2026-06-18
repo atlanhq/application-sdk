@@ -92,7 +92,7 @@ _SERIES_META: list[SeriesMeta] = [
         prefix="L",
         source_module="conformance/suite/rules/logging.py",
         output_filename="logging.md",
-        checker="`suite.checks.logging` (AST-based, not yet fully implemented)",
+        checker="`suite.checks.logging` (AST-based)",
         suppression_example="# conformance: ignore[L001] intentional: dynamic message",
     ),
     SeriesMeta(

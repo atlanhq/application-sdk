@@ -5,7 +5,7 @@
 
 # Logging Rules (L-series)
 
-**18 rules** · Checker: `suite.checks.logging` (AST-based, not yet fully implemented)
+**20 rules** · Checker: `suite.checks.logging` (AST-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -33,6 +33,8 @@ Suppress a finding on the violating line or the line directly above it:
 | [L016](#l016) | `BasicConfigNoopAfterFirstCall` | `warn` | `log-config` | — | 0.2.0 |
 | [L017](#l017) | `LoggerExceptionUsage` | `warn` | `log-level` | yes | 0.2.0 |
 | [L018](#l018) | `KwargsInApplicationLogCalls` | `warn` | `log-format` | — | 0.2.0 |
+| [L019](#l019) | `DiscardedBindResult` | `warn` | `log-config` | — | 0.3.0 |
+| [L020](#l020) | `DeprecatedLoggingWarn` | `warn` | `log-format` | yes | 0.3.0 |
 
 ---
 
@@ -341,5 +343,38 @@ Arbitrary kwargs in log calls are an anti-pattern in this project. Framework con
 (Temporal fields, correlation IDs) is auto-injected by the logging adapter; all other
 kwargs land in an unindexed JSON blob invisible in the log stream.  Embed context
 directly in the message body using %-style formatting.
+
+---
+
+## L019 — `DiscardedBindResult` {#l019}
+
+**Tier:** `warn` · **Category:** `log-config` · **Autofixable:** — · **Since:** 0.3.0
+
+> logger.bind() result discarded — bind() returns a new logger
+
+**Rationale:** structlog and loguru bind() returns a *new* logger with the bound context — the original
+is unchanged. A bare call (result not assigned) constructs the context and immediately
+discards it; the log call that follows has no extra context attached.
+
+`structlog` and `loguru` `bind()` returns a *new* bound logger; the original is
+unchanged.  A bare `logger.bind(key=value)` expression discards the result, so the
+context is never attached to any log call. Assign the result: `log =
+logger.bind(key=value)`.
+
+---
+
+## L020 — `DeprecatedLoggingWarn` {#l020}
+
+**Tier:** `warn` · **Category:** `log-format` · **Autofixable:** yes · **Since:** 0.3.0
+
+> logger.warn() is deprecated — use logger.warning() instead
+
+**Rationale:** logging.warn() is a long-deprecated alias for logging.warning(). It emits
+DeprecationWarning at import time in newer Python versions and will be removed. The fix
+is a trivial rename.
+
+`logger.warn()` / `logging.warn()` is a deprecated alias for `logger.warning()` that
+will be removed in a future Python version. Rename every call site to
+`logger.warning(...)`.
 
 ---
