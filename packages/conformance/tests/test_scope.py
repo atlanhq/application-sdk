@@ -71,7 +71,7 @@ def test_series_in_scope_predicate() -> None:
     # D-series is all-APP: out of scope on the SDK, in scope on an app.
     assert not _series_in_scope("D", RuleScope.SDK)
     assert _series_in_scope("D", RuleScope.APP)
-    # C-series is mixed (C001 both, C002/C003 app) -> stays active on the SDK.
+    # C-series is mixed (C001/C003 both, C002 app) -> stays active on the SDK.
     assert _series_in_scope("C", RuleScope.SDK)
 
 

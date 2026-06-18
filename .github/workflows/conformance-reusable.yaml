@@ -22,8 +22,8 @@
 #
 # Scope: the runner auto-detects whether the caller repo is the SDK or a consumer
 # app (from its `[project].name`) and runs only the rules in scope.  D-series and
-# the bootstrap-shim C-rules are app-scoped, so they no-op on the SDK itself with
-# no per-caller configuration.
+# the bootstrap-workflow-drift rule (C002) are app-scoped, so they no-op on the
+# SDK itself with no per-caller configuration.
 #
 # The matrix job is intentionally inline (not delegating to sub-workflows) so
 # GitHub reports the legs at the correct depth — one level of workflow_call from

@@ -17,7 +17,7 @@ Suppress a finding on the violating line or the line directly above it:
 |---|---|---|---|---|---|---|
 | [C001](#c001) | `UnpinnedActionReference` | `block` | `both` | `supply-chain` | yes | 0.2.0 |
 | [C002](#c002) | `BootstrapWorkflowDrift` | `warn` | `app` | `ci-consistency` | yes | 0.3.0 |
-| [C003](#c003) | `GitignoreMissingEntry` | `warn` | `app` | `ci-consistency` | — | 0.4.0 |
+| [C003](#c003) | `GitignoreMissingEntry` | `warn` | `both` | `ci-consistency` | — | 0.4.0 |
 
 ---
 
@@ -59,7 +59,7 @@ choices (e.g. `package_name`, `unit_tests_workflow_file`) are preserved.
 
 ## C003 — `GitignoreMissingEntry` {#c003}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `ci-consistency` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `ci-consistency` · **Autofixable:** — · **Since:** 0.4.0
 
 > .gitignore is absent or missing a standard required entry
 

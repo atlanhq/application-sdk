@@ -78,7 +78,7 @@ class RuleScope(str, Enum):
     * ``SDK``  — only meaningful inside ``atlan-application-sdk`` (and its sibling
       packages); skipped on consumer apps.
     * ``APP``  — only meaningful on a consumer app; skipped on the SDK itself.
-      Example: dependency-pinning (D001/D002) and bootstrap-shim drift (C002/C003),
+      Example: dependency-pinning (D001/D002) and bootstrap-workflow drift (C002),
       where the SDK is the *publisher* of the contract, not a subject of it.
     * ``BOTH`` — applies everywhere (the default posture for code-quality rules
       like error-handling, logging, prescriptions, optimisations).

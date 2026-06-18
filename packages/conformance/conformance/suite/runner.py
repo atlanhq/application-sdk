@@ -118,7 +118,7 @@ def _series_in_scope(series: str, active: RuleScope | None) -> bool:
 
     Used to skip a whole check's discovery+scan when none of its series' rules
     could ever produce an in-scope finding (e.g. the all-APP D-series on the SDK).
-    Series that mix scopes (C001 is ``both`` while C002/C003 are ``app``) stay
+    Series that mix scopes (C001/C003 are ``both`` while C002 is ``app``) stay
     active and rely on the post-scan finding filter for correctness.
     """
     return any(

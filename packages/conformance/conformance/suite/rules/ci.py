@@ -63,7 +63,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="C003",
-        scope=RuleScope.APP,
+        scope=RuleScope.BOTH,
         name="GitignoreMissingEntry",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
