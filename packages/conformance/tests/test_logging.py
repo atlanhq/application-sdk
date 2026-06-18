@@ -697,8 +697,8 @@ def test_sarif_roundtrip(tmp_path: Path) -> None:
     assert loaded.runs
 
     run = loaded.runs[0]
-    # Tool name must identify the L-series checker
-    assert run.tool.driver.name == "atlan-application-sdk-conformance"
+    # Tool name must identify the conformance suite driver
+    assert run.tool.driver.name == "atlan-conformance"
     # At least L001 (f-string) and L007 (critical) must appear
     result_rule_ids = {r.rule_id for r in (run.results or [])}
     assert "L001" in result_rule_ids
