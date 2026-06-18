@@ -53,12 +53,37 @@ jobs:
       force_all: ${{ steps.force.outputs.force_all }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      # No explicit `base`: for pull_request, paths-filter diffs against the PR
-      # base automatically; for merge_group it diffs the queued merge ref
-      # against the default branch.  On a tag push there is no diff base, but
-      # `force_all` is true for v* tags so the area `if:`s fire regardless.
+
+      # Compute force-all FIRST — it needs no diff base, only the ref/head_ref.
+      - name: Compute force-all
+        id: force
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          force=false
+          # Release / version-bump PRs run the full suite before publish.
+          if [[ "$HEAD_REF" == release/* || "$HEAD_REF" == bump-version* ]]; then
+            force=true
+          fi
+          # v* tag pushes (the release itself) run everything.
+          if [[ "$REF_TYPE" == "tag" && "$REF_NAME" == v* ]]; then
+            force=true
+          fi
+          echo "force_all=$force" >> "$GITHUB_OUTPUT"
+          echo "force_all=$force"
+
+      # Per-area change detection. Skipped entirely when forcing: a tag push has
+      # no clean diff base for paths-filter, and when force_all is true the area
+      # `if:`s fire regardless — so we never let a base-less filter run (and
+      # possibly hard-fail, which would skip every area and turn the always()
+      # gate falsely green). For pull_request the filter diffs against the PR
+      # base automatically; for merge_group against the queued merge ref.
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4
         id: filter
+        if: steps.force.outputs.force_all != 'true'
         with:
           filters: |
             sdk:
@@ -82,31 +107,12 @@ jobs:
               - 'pyproject.toml'
               - 'uv.lock'
               - '.github/workflows/contract-toolkit-*.yml'
+              - '.github/workflows/contract-toolkit-*.yaml'
             conformance:
               - '**/*.py'
               - '.github/**'
               - '**/pyproject.toml'
               - '!**/*.md'
-
-      - name: Compute force-all
-        id: force
-        env:
-          HEAD_REF: ${{ github.head_ref }}
-          REF_TYPE: ${{ github.ref_type }}
-          REF_NAME: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          force=false
-          # Release / version-bump PRs run the full suite before publish.
-          if [[ "$HEAD_REF" == release/* || "$HEAD_REF" == bump-version* ]]; then
-            force=true
-          fi
-          # v* tag pushes (the release itself) run everything.
-          if [[ "$REF_TYPE" == "tag" && "$REF_NAME" == v* ]]; then
-            force=true
-          fi
-          echo "force_all=$force" >> "$GITHUB_OUTPUT"
-          echo "force_all=$force"
 
   sdk-tests:
     name: SDK Tests
@@ -147,7 +153,7 @@ jobs:
   # reports `failure`.  success|skipped → pass; failure|cancelled|anything
   # else → fail (do not let `cancelled` slip through).
   gate:
-    name: Gate
+    name: SDK Gate
     needs: [sdk-tests, conformance, toolkit]
     if: always()
     runs-on: ubuntu-latest
