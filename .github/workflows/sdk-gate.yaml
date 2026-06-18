@@ -36,6 +36,12 @@ permissions:
   pull-requests: write
   security-events: write
 
+# Superseded PR pushes / merge-queue churn shouldn't keep the full matrix
+# running. Don't cancel push-to-tag runs (releases) though.
+concurrency:
+  group: sdk-gate-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # Central change detection for the SDK and toolkit areas + the force-all
   # decision.  Conformance is NOT centralized here: conformance-reusable.yaml is
@@ -44,7 +50,7 @@ jobs:
   # touched" gate only — the precise per-series selection still lives in the
   # reusable.
   changes:
-    name: Detect Changes
+    name: Detect Changes (SDK Gate)
     runs-on: ubuntu-latest
     outputs:
       sdk: ${{ steps.filter.outputs.sdk }}
@@ -190,18 +196,29 @@ jobs:
   # else → fail (do not let `cancelled` slip through).
   gate:
     name: SDK Gate
-    needs: [sdk-tests, conformance, toolkit, conformance-suite-tests]
+    # `changes` IS in needs and must succeed: an area's `if:` is implicitly
+    # ANDed with success(needs.changes), so if detection fails every area
+    # skips — and skipped→pass would make this gate falsely green while
+    # NOTHING ran. Fail closed on a non-success `changes` result.
+    needs: [changes, sdk-tests, conformance, toolkit, conformance-suite-tests]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Evaluate composed areas
         env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
           SDK_RESULT: ${{ needs.sdk-tests.result }}
           CONFORMANCE_RESULT: ${{ needs.conformance.result }}
           TOOLKIT_RESULT: ${{ needs.toolkit.result }}
           CONFORMANCE_PKG_RESULT: ${{ needs.conformance-suite-tests.result }}
         run: |
           set -euo pipefail
+          # Detection has no `if:`, so it always runs — anything other than
+          # success means we cannot trust which areas ran. Fail closed.
+          if [[ "$CHANGES_RESULT" != "success" ]]; then
+            echo "::error::Detect Changes did not succeed ($CHANGES_RESULT) — failing the gate closed."
+            exit 1
+          fi
           ok=true
           check() {
             local name="$1" result="$2"
