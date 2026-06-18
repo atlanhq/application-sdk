@@ -83,14 +83,21 @@ def collect_logging_aliases(
 # ---------------------------------------------------------------------------
 
 
-def is_logger_call(node: ast.Call) -> bool:
+def is_logger_call(
+    node: ast.Call,
+    module_names: frozenset[str] = frozenset({"logging"}),
+) -> bool:
     """True if *node* is a recognised ``logger.<method>(...)`` call.
 
     Matches:
     * Named-variable receivers in ``LOGGER_NAMES`` (``logger.info(...)``)
-    * The stdlib module-level form (``logging.info(...)``)
+    * Module-level stdlib form — any name in *module_names*
+      (``logging.info(...)``, ``L.info(...)`` after ``import logging as L``)
     * Attribute receivers whose terminal attr is in ``LOGGER_NAMES``
       (``self.logger.error(...)``, ``cls._logger.warning(...)``)
+
+    Pass ``module_names=self._logging_module_names`` from mixin call sites so
+    that files using ``import logging as L`` are not silently skipped.
 
     Note: receiver must be a simple ``Name`` or a one-level ``Attribute``
     (e.g. ``self.logger``).  Deeper chains (``self.x.y.logger``) are not
@@ -103,22 +110,29 @@ def is_logger_call(node: ast.Call) -> bool:
         return False
     obj = func.value
     if isinstance(obj, ast.Name):
-        return obj.id in LOGGER_NAMES or obj.id == "logging"
+        return obj.id in LOGGER_NAMES or obj.id in module_names
     # Accept self.logger / cls._logger — one-level attribute receiver
     if isinstance(obj, ast.Attribute):
         return obj.attr in LOGGER_NAMES
     return False
 
 
-def get_logger_method(node: ast.Call) -> str | None:
-    """Return the method name when *node* is a logger call, else ``None``."""
+def get_logger_method(
+    node: ast.Call,
+    module_names: frozenset[str] = frozenset({"logging"}),
+) -> str | None:
+    """Return the method name when *node* is a logger call, else ``None``.
+
+    Pass ``module_names=self._logging_module_names`` from mixin call sites so
+    that aliased stdlib imports (``import logging as L``) are not skipped.
+    """
     if not isinstance(node.func, ast.Attribute):
         return None
     attr = node.func.attr
     if attr not in LOG_METHODS:
         return None
     obj = node.func.value
-    if isinstance(obj, ast.Name) and (obj.id in LOGGER_NAMES or obj.id == "logging"):
+    if isinstance(obj, ast.Name) and (obj.id in LOGGER_NAMES or obj.id in module_names):
         return attr
     if isinstance(obj, ast.Attribute) and obj.attr in LOGGER_NAMES:
         return attr

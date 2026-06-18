@@ -32,7 +32,7 @@ class SecurityMixin(_MixinBase):
         Logging a credential *value* is a security vulnerability.
         Requires human review — never auto-fixed.
         """
-        if not is_logger_call(node):
+        if not is_logger_call(node, self._logging_module_names):
             return
 
         # Check 1 — keyword arguments

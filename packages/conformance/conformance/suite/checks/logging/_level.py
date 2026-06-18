@@ -24,7 +24,7 @@ class LevelMixin(_MixinBase):
         """
         if not self._loop_stack:
             return
-        if get_logger_method(node) != "info":
+        if get_logger_method(node, self._logging_module_names) != "info":
             return
         # Check if the innermost loop is clearly bounded
         innermost = self._loop_stack[-1]
@@ -49,7 +49,7 @@ class LevelMixin(_MixinBase):
         Fatal conditions are communicated through process exit codes and Temporal
         workflow failure — use ERROR (with exc_info=True) instead.
         """
-        if get_logger_method(node) != "critical":
+        if get_logger_method(node, self._logging_module_names) != "critical":
             return
         self._add(
             "L007",
@@ -74,7 +74,7 @@ class LevelMixin(_MixinBase):
         """
         if self._is_adapter_file:
             return
-        if get_logger_method(node) == "exception":
+        if get_logger_method(node, self._logging_module_names) == "exception":
             self._add(
                 "L017",
                 node,

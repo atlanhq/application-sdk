@@ -31,7 +31,7 @@ class ConfigMixin(_MixinBase):
         """
         if self._framework != "stdlib":
             return
-        if not is_logger_call(node):
+        if not is_logger_call(node, self._logging_module_names):
             return
         for kw in node.keywords:
             if kw.arg != "extra":
@@ -65,7 +65,7 @@ class ConfigMixin(_MixinBase):
         """
         if self._framework != "stdlib":
             return
-        if not is_logger_call(node):
+        if not is_logger_call(node, self._logging_module_names):
             return
         bad = [
             kw.arg

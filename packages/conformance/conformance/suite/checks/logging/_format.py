@@ -16,7 +16,7 @@ class FormatMixin(_MixinBase):
 
     def _check_l001(self, node: ast.Call) -> None:
         """Flag f-strings used as the first argument to a logger call."""
-        if not is_logger_call(node):
+        if not is_logger_call(node, self._logging_module_names):
             return
         if not node.args:
             return
@@ -41,7 +41,7 @@ class FormatMixin(_MixinBase):
         """
         if self._framework not in ("structlog", "loguru"):
             return
-        if not is_logger_call(node):
+        if not is_logger_call(node, self._logging_module_names):
             return
         if any(kw.arg == "extra" for kw in node.keywords):
             self._add(
@@ -56,7 +56,7 @@ class FormatMixin(_MixinBase):
 
     def _check_l011(self, node: ast.Call) -> None:
         """Flag string concatenation as the first arg to a logger call."""
-        if not is_logger_call(node):
+        if not is_logger_call(node, self._logging_module_names):
             return
         if not node.args:
             return
@@ -80,7 +80,7 @@ class FormatMixin(_MixinBase):
         """
         if self._framework != "structlog":
             return
-        if not is_logger_call(node):
+        if not is_logger_call(node, self._logging_module_names):
             return
         if any(kw.arg == "event" for kw in node.keywords):
             self._add(
@@ -104,7 +104,7 @@ class FormatMixin(_MixinBase):
             return  # stdlib kwargs crash (L013) — a separate rule
         if self._is_adapter_file:
             return
-        if not is_logger_call(node):
+        if not is_logger_call(node, self._logging_module_names):
             return
         extra_kwargs = [
             kw
@@ -136,9 +136,17 @@ class FormatMixin(_MixinBase):
             if func.attr != "warn":
                 return
             obj = func.value
-            if not isinstance(obj, ast.Name):
-                return
-            if obj.id not in LOGGER_NAMES and obj.id not in self._logging_module_names:
+            if isinstance(obj, ast.Name):
+                if (
+                    obj.id not in LOGGER_NAMES
+                    and obj.id not in self._logging_module_names
+                ):
+                    return
+            elif isinstance(obj, ast.Attribute):
+                # self.logger.warn(...) — terminal attr must be a logger name
+                if obj.attr not in LOGGER_NAMES:
+                    return
+            else:
                 return
         elif isinstance(func, ast.Name):
             if func.id not in self._logging_warn_names:

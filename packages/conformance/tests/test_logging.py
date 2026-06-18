@@ -1018,3 +1018,50 @@ def test_l021_partial_coverage_lists_only_missing(tmp_path: Path) -> None:
     assert "G001" not in msg
     assert "G004" not in msg
     assert "LOG009" not in msg
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for bugs fixed after initial review
+# ---------------------------------------------------------------------------
+
+
+def test_l020_fires_on_self_logger_warn() -> None:
+    """self.logger.warn(...) must trigger L020 — one-level Attribute receiver."""
+    src = "class Foo:\n    def bar(self):\n        self.logger.warn('x')\n"
+    assert _ids(src) == ["L020"]
+
+
+def test_l020_fires_on_cls_logger_warn() -> None:
+    """cls._logger.warn(...) must trigger L020 — one-level Attribute receiver."""
+    src = "class Foo:\n    def bar(cls):\n        cls._logger.warn('x')\n"
+    assert _ids(src) == ["L020"]
+
+
+def test_l013_fires_on_aliased_logging_module() -> None:
+    """import logging as L; L.info('hi', custom=1) must fire L013.
+
+    Regression: is_logger_call hard-coded obj.id == 'logging', so aliased
+    imports silently bypassed every rule that routes through it.
+    """
+    src = "import logging as L\nL.info('hi', custom=1)\n"
+    assert "L013" in _ids(src)
+
+
+def test_l004_fires_in_inner_try_body_inside_except() -> None:
+    """logger.error() in an inner try-body inside an outer except must fire L004.
+
+    Regression: _walk_no_scope pruned ast.Try, so an inner try-body inside an
+    outer except handler was unreachable and silently missed.
+    """
+    src = (
+        "import logging\n"
+        "logger = logging.getLogger(__name__)\n"
+        "try:\n"
+        "    pass\n"
+        "except Exception:\n"
+        "    try:\n"
+        "        logger.error('inner')\n"
+        "    finally:\n"
+        "        pass\n"
+    )
+    assert "L004" in _ids(src)

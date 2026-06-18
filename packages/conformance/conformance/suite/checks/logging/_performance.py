@@ -55,7 +55,7 @@ class PerformanceMixin(_MixinBase):
         already inside an ``if logger.isEnabledFor(logging.DEBUG):`` guard (the
         checker cannot detect the guard reliably without parent tracking).
         """
-        if get_logger_method(node) != "debug":
+        if get_logger_method(node, self._logging_module_names) != "debug":
             return
         for arg in node.args[1:]:  # skip format string (args[0])
             if _contains_expensive_call(arg):
