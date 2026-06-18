@@ -6,6 +6,12 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.14.1] - 2026-06-18
+
+### Bug fixes
+
+- allow 10-day timeout cap (#2223) ([4b88b9b](https://github.com/atlanhq/application-sdk/commit/4b88b9b))
+
 ## [0.14.0] - 2026-06-17
 
 ### Features
