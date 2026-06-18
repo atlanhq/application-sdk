@@ -608,10 +608,10 @@ class TestLogDaprComponentsBindingOutcomes:
             "statestore" in m and "declared enabled" in m for m in warning_msgs
         ), f"expected declared-but-missing WARNING; got: {warning_msgs}"
 
-    async def test_missing_with_unset_env_logs_warning_with_guidance(
+    async def test_missing_with_unset_env_logs_info_with_guidance(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Env var unset → WARNING with explicit guidance to set deploy.dapr.* in atlan.yaml."""
+        """Env var unset → INFO with explicit guidance to set deploy.dapr.* in atlan.yaml."""
         self._clear_enable_env(monkeypatch)
 
         dapr_client = AsyncMock()
@@ -619,15 +619,15 @@ class TestLogDaprComponentsBindingOutcomes:
         with patch("application_sdk.main.logger") as mock_log:
             await _log_dapr_components(dapr_client, tmp_path)
 
-        warning_msgs = self._rendered(mock_log.warning.call_args_list)
+        info_msgs = self._rendered(mock_log.info.call_args_list)
         assert any(
             "statestore" in m
             and "ATLAN_ENABLE_STATESTORE" in m
             and "deploy.dapr.statestore" in m
-            for m in warning_msgs
+            for m in info_msgs
         ), (
-            "expected unset-env WARNING naming the env var and atlan.yaml key; "
-            f"got: {warning_msgs}"
+            "expected unset-env INFO naming the env var and atlan.yaml key; "
+            f"got: {info_msgs}"
         )
 
     async def test_registered_with_declared_false_logs_drift_info(
@@ -701,6 +701,7 @@ class TestLogDaprComponentsBindingOutcomes:
         dapr_client.get_metadata.return_value = {
             "components": [
                 {"name": "objectstore", "type": "bindings.gcp.bucket", "version": "v1"},
+                {"name": "eventstore", "type": "bindings.kafka", "version": "v1"},
             ]
         }
         with patch("application_sdk.main.logger") as mock_log:
@@ -715,6 +716,19 @@ class TestLogDaprComponentsBindingOutcomes:
                 f"binding {binding} produced no role-tagged log line; "
                 f"all messages: {all_msgs}"
             )
+
+        # (registered, declared=None): eventstore is in sidecar but ATLAN_ENABLE_EVENTSTORE
+        # is unset — the accepted INFO message must render the env value as <unset>
+        info_msgs = self._rendered(mock_log.info.call_args_list)
+        eventstore_accepted = [
+            m for m in info_msgs if "eventstore" in m and "accepted" in m
+        ]
+        assert (
+            eventstore_accepted
+        ), f"expected eventstore accepted-INFO for registered+unset; got: {all_msgs}"
+        assert any(
+            "<unset>" in m for m in eventstore_accepted
+        ), f"expected <unset> in eventstore accepted message; got: {eventstore_accepted}"
 
 
 class TestCreateInfrastructureEventBinding:

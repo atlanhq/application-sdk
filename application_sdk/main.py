@@ -399,7 +399,7 @@ async def _log_dapr_components(
     * registered + declared disabled        → INFO ("drift")
     * missing    + declared enabled         → WARNING ("declared but missing")
     * missing    + declared disabled        → INFO ("disabled by config")
-    * missing    + declared unset           → WARNING ("legacy/unknown intent")
+    * missing    + declared unset           → INFO ("legacy/unknown intent")
 
     Every binding always produces a log line so operators can see, with a
     reason, how each one was handled. This is best-effort: any failure to
@@ -413,6 +413,7 @@ async def _log_dapr_components(
         EVENT_STORE_NAME,
         SECRET_STORE_NAME,
         STATE_STORE_NAME,
+        _read_enable_tri_state,
     )
 
     try:
@@ -468,10 +469,7 @@ async def _log_dapr_components(
     for comp_name, role, enable_var, yaml_key in expected:
         raw = os.environ.get(enable_var)
         is_registered = comp_name in registered
-        if raw is None:
-            declared: bool | None = None
-        else:
-            declared = raw.strip().lower() == "true"
+        declared = _read_enable_tri_state(enable_var)
 
         if is_registered and declared is not False:
             logger.info(
@@ -506,7 +504,7 @@ async def _log_dapr_components(
                 enable_var,
             )
         else:  # not registered, declared is None
-            logger.warning(
+            logger.info(
                 "Dapr binding %s (role=%s) not registered in sidecar and %s is unset — "
                 "the SDK cannot determine whether your app needs it; "
                 "set deploy.dapr.%s in atlan.yaml (true or false) to silence this",

@@ -460,6 +460,15 @@ SEGMENT_BATCH_TIMEOUT_SECONDS = float(
 #: Production does not yet support traces; default is False.
 ENABLE_OTLP_TRACES = os.getenv("ATLAN_ENABLE_OTLP_TRACES", "false").lower() == "true"
 
+
+def _read_enable_tri_state(name: str) -> bool | None:
+    """Return ``True``/``False`` for "true"/"false" env var value, ``None`` if unset."""
+    raw = os.getenv(name)
+    if raw is None:
+        return None
+    return raw.strip().lower() == "true"
+
+
 # Store Sink Configuration (defaults to enabled)
 ENABLE_OBSERVABILITY_STORE_SINK: bool = (
     os.getenv(
