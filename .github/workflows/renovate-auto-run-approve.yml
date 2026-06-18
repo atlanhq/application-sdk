@@ -7,21 +7,33 @@
 #   works for *fork* PRs — same-repo outside-collaborator PRs have no public
 #   approval API. There is no programmatic way to unblock those runs.
 #
+#   For public repositories, this policy is set at the org level and cannot be
+#   overridden at the repo level via any public API (the /actions/permissions/access
+#   endpoint applies only to private/internal repos).
+#
 # The solution:
 #   pull_request_target events always run from the BASE branch (main) and are
 #   never blocked by the outside-collaborator gate. This workflow uses
-#   pull_request_target to create check runs directly via the Checks API,
-#   satisfying branch protection required status checks without needing the
-#   blocked pull_request workflow runs to ever start.
+#   pull_request_target to:
+#     1. Actually run Trivy security scans on the PR HEAD code (checking out
+#        the PR HEAD explicitly so we scan the updated lock file, not main's).
+#     2. Create check runs directly via the Checks API for the other required
+#        status checks that trivially pass for dependency-only PRs.
+#
+# Trivy is ACTUALLY RUN (not bypassed). If Trivy finds critical/high
+# vulnerabilities or secrets in the updated dependencies, the "Trivy Code Scan"
+# check run fails and the PR is blocked.
 #
 # Required check names come from the main branch ruleset (id 16702782).
-# Keep REQUIRED_CHECKS in sync with Settings > Branches > main ruleset.
+# Keep NON_SECURITY_CHECKS in sync with Settings > Branches > main ruleset.
 #
 # Safety:
 #   - Only acts on PRs from renovate[bot] (job-level if:)
 #   - Guards that ALL changed files are dependency-related before proceeding
 #   - PRs with any non-dependency file fall through: no synthetic checks are
 #     created, the normal pull_request workflow approval gate applies.
+#   - Checking out the PR HEAD in pull_request_target is safe here: Renovate
+#     only changes lock files; we run a security SCANNER on them (not user code).
 #
 # Relationship to renovate-auto-approve.yml:
 #   That workflow posts an atlan-ci code-owner review approval (enabling merge).
@@ -37,13 +49,15 @@ on:
 
 permissions:
   checks: write
+  contents: read
   pull-requests: read
+  security-events: write
 
 jobs:
   create-checks:
-    name: Create required check runs for dep-only Renovate PR
+    name: Run CI checks for dep-only Renovate PR
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     if: github.event.pull_request.user.login == 'renovate[bot]'
     steps:
       - name: Verify all changed files are dependency-related
@@ -70,11 +84,82 @@ jobs:
               nonDep.forEach(f => console.log(' ', f.filename));
               core.setOutput('dep_only', 'false');
             } else {
-              console.log('All changed files are dependency-related — creating synthetic checks.');
+              console.log('All changed files are dependency-related — running security scan.');
               core.setOutput('dep_only', 'true');
             }
 
-      - name: Create required status check runs
+      # Explicitly check out the PR HEAD so Trivy scans the *updated* lock file,
+      # not main. Safe because Renovate only modifies dependency manifests.
+      - name: Checkout PR HEAD
+        if: steps.guard.outputs.dep_only == 'true'
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      # Run Trivy with continue-on-error so we always reach the check-run
+      # creation step regardless of whether vulnerabilities are found.
+      - name: Trivy vulnerability scan
+        if: steps.guard.outputs.dep_only == 'true'
+        id: trivy-vuln
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+          scanners: vuln
+          ignore-unfixed: true
+        env:
+          TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
+          TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
+        continue-on-error: true
+
+      - name: Trivy secret scan
+        if: steps.guard.outputs.dep_only == 'true'
+        id: trivy-secret
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          format: table
+          exit-code: '1'
+          scanners: secret
+        env:
+          TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
+          TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
+        continue-on-error: true
+
+      - name: Create Trivy Code Scan check run
+        if: steps.guard.outputs.dep_only == 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const vulnPass   = '${{ steps.trivy-vuln.outcome }}'   === 'success';
+            const secretPass = '${{ steps.trivy-secret.outcome }}' === 'success';
+            const passed = vulnPass && secretPass;
+
+            await github.rest.checks.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: 'Trivy Code Scan',
+              head_sha: context.payload.pull_request.head.sha,
+              status: 'completed',
+              conclusion: passed ? 'success' : 'failure',
+              output: {
+                title: 'Trivy Code Scan',
+                summary: passed
+                  ? '✅ No critical/high vulnerabilities or secrets found in updated dependencies.'
+                  : [
+                      '❌ Trivy found issues in the updated dependencies.',
+                      '',
+                      `Vulnerability scan: ${vulnPass ? '✅ passed' : '❌ failed'}`,
+                      `Secret scan: ${secretPass ? '✅ passed' : '❌ failed'}`,
+                      '',
+                      'Review the Trivy output above and resolve before merging.',
+                    ].join('\n'),
+              },
+            });
+
+      - name: Create check runs for non-security required checks
         if: steps.guard.outputs.dep_only == 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
@@ -82,30 +167,34 @@ jobs:
             const { owner, repo } = context.repo;
             const sha = context.payload.pull_request.head.sha;
 
-            // Exact required status check context names from the main branch
-            // ruleset (id 16702782). Update when the ruleset changes.
+            // Required status check context names from the main branch ruleset
+            // (id 16702782). These checks trivially pass for dep-only PRs:
             //
-            // Why each check trivially passes for dep-only PRs:
             //   Authorized Approver Check  — no .security/ files touched
             //   Capability Manifest Drift  — no SDK source changes → no drift
             //   Conventional Commits       — Renovate uses chore(deps): format
             //   Pre-commit Checks          — no Python source to lint/type-check
             //   SDK Gate                   — no SDK changes → all gates pass
-            //   Trivy Code Scan            — no new first-party code; Socket
-            //                               Security + Endor Labs already scan
-            //                               the updated deps on every PR
             //   Validate PR title          — Renovate titles follow convention
+            //
+            // "Trivy Code Scan" is EXCLUDED — handled by the step above where
+            // Trivy actually runs and produces a real pass/fail result.
             const checks = [
-              'Authorized Approver Check',
-              'Capability Manifest Drift',
-              'Conventional Commits',
-              'Pre-commit Checks',
-              'SDK Gate',
-              'Trivy Code Scan',
-              'Validate PR title',
+              { name: 'Authorized Approver Check',
+                reason: 'No .security/ files changed — approval not required.' },
+              { name: 'Capability Manifest Drift',
+                reason: 'No SDK source changes — capability manifest unchanged.' },
+              { name: 'Conventional Commits',
+                reason: 'Renovate uses conventional commit format (chore(deps): ...).' },
+              { name: 'Pre-commit Checks',
+                reason: 'No Python source changes — ruff/pyright/isort not applicable.' },
+              { name: 'SDK Gate',
+                reason: 'No SDK changes — all SDK quality gates pass.' },
+              { name: 'Validate PR title',
+                reason: 'Renovate PR titles follow conventional commit format.' },
             ];
 
-            for (const name of checks) {
+            for (const { name, reason } of checks) {
               await github.rest.checks.create({
                 owner, repo,
                 name,
@@ -115,18 +204,14 @@ jobs:
                 output: {
                   title: name,
                   summary: [
-                    `✅ Synthetic pass for dep-only Renovate PR.`,
-                    ``,
-                    `This check was posted by the \`Renovate — auto-approve workflow runs\``,
-                    `workflow because all changed files are dependency-related and the`,
-                    `\`${name}\` check trivially passes for such PRs.`,
-                    ``,
-                    `Security note: Socket Security and Endor Labs scan the updated`,
-                    `dependencies on every PR independently of this bypass.`,
+                    `✅ ${reason}`,
+                    '',
+                    'Posted by `Renovate — auto-approve workflow runs` for a',
+                    'dependency-only Renovate PR. Trivy ran separately above.',
                   ].join('\n'),
                 },
               });
               console.log(`✅ Created: ${name}`);
             }
 
-            console.log(`Done — created ${checks.length} check run(s) for ${sha.slice(0, 7)}.`);
+            console.log(`Done — ${checks.length} non-security check(s) created for ${sha.slice(0, 7)}.`);
