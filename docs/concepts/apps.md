@@ -220,6 +220,64 @@ Two cleanup tasks and two transfer tasks are available on every `App`:
 
 Both are called automatically by the default `on_complete()` implementation. Do not call them directly from `run()` — the cleanup contract is tied to workflow completion, not mid-run state.
 
+### SDR: Object-Store Access Preflight
+
+When an app runs in **Self-Deployed Runtime (SDR) mode** (`ENABLE_ATLAN_UPLOAD=true`), the SDK
+verifies read + write access to every configured object store at boot time, before the Temporal
+worker accepts any connections. This catches misconfigurations that would otherwise cause every
+workflow run to fail deep inside the task graph.
+
+**When it runs:** `verify_object_store_access` is called once inside `_create_infrastructure`
+immediately after the stores are constructed. It is a no-op in all other run modes.
+
+**What it checks:**
+
+| Store | Binding name | Required |
+|---|---|---|
+| Deployment store | `objectstore` | Always |
+| Upstream Atlan store | `atlan-objectstore` | Always in SDR — hard-fail if absent |
+
+For each store a round-trip probe is executed: write a sentinel object → `HEAD` the object →
+delete it. A missing upload permission, wrong credentials, or unreachable endpoint surfaces here
+rather than mid-run. Each probe is bounded by `ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS` (default: 30 s);
+a blackholed endpoint times out instead of stalling the boot indefinitely.
+
+**Failure mode:** any probe failure raises `ObjectStorePreflightError`, which propagates out of
+`_create_infrastructure` and is caught by `main()` before the process exits non-zero. The error
+message lists each failing store with a classified cause and a one-line remediation hint:
+
+```
+Object-store access check failed (1 store(s) with errors):
+  * deployment store (binding: 'objectstore'): write failed [permission denied]
+    Cause: 403 Forbidden ...
+    Hint:  The credentials are valid but lack the required read/write/delete
+           permissions on this bucket. Grant the IAM/ACL permissions needed
+           for get, put, and delete operations.
+```
+
+**Error classification:**
+
+| Classifier | Triggering signals | Meaning |
+|---|---|---|
+| `permission denied` | HTTP 403, `AccessDenied`, `Forbidden`, `not authorized` | Valid credentials, missing IAM/ACL permissions |
+| `invalid credentials` | HTTP 401, `InvalidAccessKeyId`, `SignatureDoesNotMatch`, `unauthenticated` | Wrong/expired access key or secret |
+| `connectivity / unknown` | Timeout, network error, bucket not found | Endpoint URL, bucket name, or network reachable |
+
+**Timeout override:**
+
+```bash
+ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS=60  # increase for slow networks
+```
+
+**Programmatic access:**
+
+```python
+from application_sdk.storage import verify_object_store_access, ObjectStorePreflightError
+```
+
+Both symbols are exported from `application_sdk.storage`. The function is normally called by
+the SDK boot path — connectors do not need to call it manually.
+
 ## Passthrough Modules
 
 If your app imports third-party libraries that must be available inside the Temporal sandbox, declare them as a class-level attribute:

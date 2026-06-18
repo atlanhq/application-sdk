@@ -12,11 +12,19 @@ Public entry point::
     await verify_object_store_access(infra)
 
 This function is a no-op when SDR mode is not active.
+
+Timeout:
+    Each per-store probe is bounded by ``ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS``
+    (default: 30 s).  A blackholed endpoint that would otherwise stall the
+    boot indefinitely is classified as ``connectivity / unknown``.
 """
 
 from __future__ import annotations
 
-import uuid
+import asyncio
+import os
+import re
+import socket
 from typing import TYPE_CHECKING
 
 from application_sdk.observability.logger_adaptor import get_logger
@@ -29,23 +37,41 @@ logger = get_logger(__name__)
 _PREFLIGHT_PREFIX = ".atlan-preflight"
 _PREFLIGHT_PAYLOAD = b"atlan-preflight"
 
+# Per-store probe timeout.  Keeps a blackholed endpoint from stalling boot
+# indefinitely — obstore wraps the Rust object_store crate, whose default
+# connect_timeout and request timeout are both None.
+_PROBE_TIMEOUT_SECS: float = float(
+    os.environ.get("ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS", "30")
+)
+
+# Stable probe key reused across boots on the same host so that a principal
+# with put+head but no delete permission doesn't accumulate one orphaned
+# object per boot.
+_PROBE_KEY = f"{_PREFLIGHT_PREFIX}/probe-{socket.gethostname()}"
+
+# Pre-compiled patterns for HTTP status codes.  Word-boundary anchors prevent
+# false positives from request IDs, byte counts, or longer strings that happen
+# to contain "401" / "403" as a substring.
+_RE_403 = re.compile(r"\b403\b")
+_RE_401 = re.compile(r"\b401\b")
+
 
 def _classify_access_error(exc: BaseException) -> tuple[str, str]:
     """Classify an obstore exception into (error_class, remediation_hint).
 
-    Mirrors the substring-matching pattern used by ``_is_not_found`` and
-    ``_is_azure_container_not_found`` in ``ops.py`` — class-based matching is
-    preferred when available; substring fallback covers generic obstore errors.
+    Uses obstore's structured exception classes when available; falls back to
+    pattern matching on the lowercased error message.  HTTP status codes use
+    word-boundary regex (``\\b403\\b``) to avoid false positives from request
+    IDs or byte counts that happen to contain those digits.
 
     Returns:
         A 2-tuple of (error_class_label, remediation_hint).
     """
     msg = str(exc).lower()
 
-    if any(
+    if _RE_403.search(msg) or any(
         marker in msg
         for marker in (
-            "403",
             "accessdenied",
             "access denied",
             "forbidden",
@@ -60,10 +86,9 @@ def _classify_access_error(exc: BaseException) -> tuple[str, str]:
             "for get, put, and delete operations.",
         )
 
-    if any(
+    if _RE_401.search(msg) or any(
         marker in msg
         for marker in (
-            "401",
             "invalidaccesskeyid",
             "invalid access key",
             "signaturedoesnotmatch",
@@ -88,6 +113,9 @@ def _classify_access_error(exc: BaseException) -> tuple[str, str]:
 async def _probe_store(store: object, label: str, binding_name: str) -> str | None:
     """Run a write → read → delete round-trip against *store*.
 
+    Each operation is unbounded in this function; the caller wraps the whole
+    coroutine in ``asyncio.wait_for`` to enforce the boot-time timeout.
+
     Args:
         store: An obstore-compatible store instance.
         label: Human-readable role label ("deployment" or "upstream").
@@ -98,7 +126,7 @@ async def _probe_store(store: object, label: str, binding_name: str) -> str | No
     """
     import obstore  # noqa: PLC0415 — lazy: obstore is a heavy Rust extension; defer until actually needed
 
-    probe_key = f"{_PREFLIGHT_PREFIX}/{uuid.uuid4()}.probe"
+    probe_key = _PROBE_KEY
     logger.info(
         "SDR preflight: probing %s store (%s) — key=%s",
         label,
@@ -129,7 +157,8 @@ async def _probe_store(store: object, label: str, binding_name: str) -> str | No
             f"    Hint:  {hint}"
         )
 
-    # Delete — best-effort cleanup; a leaked probe object is not fatal
+    # Delete — best-effort cleanup; uses the stable per-host key so a missing
+    # delete permission doesn't accumulate one new object per boot.
     try:
         await obstore.delete_async(store, probe_key)
     except Exception as exc:
@@ -152,6 +181,10 @@ async def verify_object_store_access(infra: InfrastructureContext) -> None:
     when configured, the upstream Atlan store.  Also hard-fails if SDR mode is
     active but the upstream store is absent (which would cause artifacts to
     silently never reach Atlan).
+
+    Each per-store probe is bounded by ``ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS``
+    (default: 30 s).  A probe that times out is classified as
+    ``connectivity / unknown``.
 
     This function is a **no-op when** ``ENABLE_ATLAN_UPLOAD`` **is falsy**
     — it is only meaningful in Self-Deployed Runtime deployments.
@@ -210,7 +243,19 @@ async def verify_object_store_access(infra: InfrastructureContext) -> None:
                 "check that the binding component is present and parseable"
             )
             continue
-        failure = await _probe_store(store, label, binding_name)
+        try:
+            failure = await asyncio.wait_for(
+                _probe_store(store, label, binding_name),
+                timeout=_PROBE_TIMEOUT_SECS,
+            )
+        except TimeoutError:
+            _, hint = _classify_access_error(TimeoutError())
+            failure = (
+                f"  * {label} store (binding: '{binding_name}'): probe timed out "
+                f"after {_PROBE_TIMEOUT_SECS:.0f}s [connectivity / unknown]\n"
+                f"    Hint:  {hint}\n"
+                f"    Tip:   Override timeout via ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS."
+            )
         if failure is not None:
             failures.append(failure)
 
