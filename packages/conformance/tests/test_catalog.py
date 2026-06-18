@@ -113,6 +113,9 @@ def test_catalog_l_series_present() -> None:
     }
     missing = expected - l_ids
     assert not missing, f"Missing L-series rules: {missing}"
+    # Stricter than the other series tests (not-missing only): the L-series was
+    # renumbered in PR #2191 (L013→L012 etc.) and stale suppressions referencing
+    # the old IDs would silently pass a not-missing check.
     extra = l_ids - expected
     assert not extra, f"Unexpected L-series rules: {extra}"
 

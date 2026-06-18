@@ -69,7 +69,7 @@ def assert_registry_consistent(
 
     * ``check_series`` — the runner's registered checkers — must be a **subset**
       of the rule series.  A series may ship rule definitions + docs before its
-      checker is implemented (L, P, O today), so equality would be wrong.
+      checker is implemented (the L-series today), so equality would be wrong.
     * ``meta_series`` — the doc generator's ``SeriesMeta`` prefixes — must
       **equal** the rule series: every defined series is expected to be
       documented, and an orphan ``SeriesMeta`` would render an empty doc.
