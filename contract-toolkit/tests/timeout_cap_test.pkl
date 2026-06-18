@@ -1,0 +1,70 @@
+// Tests for the maximum supported start-to-close timeout in toolkit error handling.
+//
+// The toolkit should allow publish workflows to opt into a 10-day timeout
+// budget while preserving the existing 72h publish default.
+
+amends "pkl:test"
+
+import "pkl:json"
+import "../src/App.pkl" as App
+import "../src/NativeApp.pkl" as NativeApp
+
+local tenDaysSeconds = 864000
+local seventyTwoHoursSeconds = 259200
+
+local appWithTenDayPublishTimeout = (App) {
+  name = "ten-day-timeout"
+  displayName = "Ten Day Timeout"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+
+  pipeline {
+    publish {
+      errorHandling {
+        startToCloseTimeoutSeconds = tenDaysSeconds
+      }
+    }
+  }
+
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Configuration"] {
+        inputs {
+          ["connection"] = new App.ConnectionCreator {
+            placeholderText = "Connection Name"
+          }
+        }
+      }
+    }
+  }
+}
+
+local publishNode = new json.Parser { useMapping = true }.parse(
+  appWithTenDayPublishTimeout.output.files["app/generated/manifest.json"].text
+)["dag"]["publish"]
+
+facts {
+  ["App.ErrorHandlingConfig accepts the 10-day timeout cap"] {
+    new App.ErrorHandlingConfig {
+      startToCloseTimeoutSeconds = tenDaysSeconds
+    }.startToCloseTimeoutSeconds == tenDaysSeconds
+  }
+
+  ["NativeApp.ErrorHandlingConfig accepts the 10-day timeout cap"] {
+    new NativeApp.ErrorHandlingConfig {
+      startToCloseTimeoutSeconds = tenDaysSeconds
+    }.startToCloseTimeoutSeconds == tenDaysSeconds
+  }
+
+  ["App publish node keeps the existing 72h default timeout"] {
+    new App.PublishNode {}.errorHandling.startToCloseTimeoutSeconds == seventyTwoHoursSeconds
+  }
+
+  ["App publish pipeline can render a 10-day timeout override"] {
+    publishNode["error_handling"]["start_to_close_timeout_seconds"] == tenDaysSeconds
+  }
+
+  ["NativeApp publish node keeps the existing 72h default timeout"] {
+    new NativeApp.PublishNode {}.errorHandling.startToCloseTimeoutSeconds == seventyTwoHoursSeconds
+  }
+}
