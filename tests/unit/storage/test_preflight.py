@@ -47,7 +47,10 @@ from application_sdk.storage.preflight import (
         # Must NOT match "1401" or "4010" (false positive guard)
         ("byte count 14010", "connectivity / unknown"),
         # Named strings — 401 bucket
-        ("InvalidAccessKeyId: The AWS Access Key Id you provided does not exist", "invalid credentials"),
+        (
+            "InvalidAccessKeyId: The AWS Access Key Id you provided does not exist",
+            "invalid credentials",
+        ),
         ("invalid access key supplied", "invalid credentials"),
         ("SignatureDoesNotMatch: signature mismatch", "invalid credentials"),
         ("unauthenticated request", "invalid credentials"),
@@ -62,9 +65,9 @@ from application_sdk.storage.preflight import (
 def test_classify_access_error(message: str, expected_class: str) -> None:
     exc = Exception(message)
     error_class, hint = _classify_access_error(exc)
-    assert error_class == expected_class, (
-        f"For message={message!r}: expected {expected_class!r} but got {error_class!r}"
-    )
+    assert (
+        error_class == expected_class
+    ), f"For message={message!r}: expected {expected_class!r} but got {error_class!r}"
     assert isinstance(hint, str) and len(hint) > 0
 
 
@@ -89,7 +92,9 @@ def _fake_store() -> Any:
     return MagicMock()
 
 
-async def _run_probe(store: Any, put_side_effect=None, head_side_effect=None, delete_side_effect=None) -> str | None:
+async def _run_probe(
+    store: Any, put_side_effect=None, head_side_effect=None, delete_side_effect=None
+) -> str | None:
     """Run ``_probe_store`` with obstore functions replaced by async fakes."""
     fake_obstore = MagicMock()
     fake_obstore.put_async = AsyncMock(side_effect=put_side_effect)
