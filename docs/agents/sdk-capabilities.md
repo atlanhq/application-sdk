@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.17.2
-source-sha:    ab591dae78d51bb566d363d51e8223954a1aff91
-source-date:   2026-06-16T23:37:20Z
+sdk-version:   3.17.3
+source-sha:    fb75f4ee42d66dd723c63140ecbaffe5ba04e77d
+source-date:   2026-06-18T16:11:26+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -23,14 +23,14 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 9 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 53 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 54 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 10 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 34 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 24 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 26 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 5 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 15 |
 
@@ -1252,6 +1252,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/errors/__init__.py`
 
+#### `STORAGE_PREFLIGHT`
+
+- **Import:** `from application_sdk.errors import STORAGE_PREFLIGHT`
+- **Signature:** `STORAGE_PREFLIGHT`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/__init__.py`
+
 #### `TASK_NOT_FOUND`
 
 - **Import:** `from application_sdk.errors import TASK_NOT_FOUND`
@@ -1918,6 +1925,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Summary:** Async client for external customer-provided cloud object stores.
 - **Defined in:** `application_sdk/storage/cloud.py`
 
+#### `ObjectStorePreflightError`
+
+- **Import:** `from application_sdk.storage import ObjectStorePreflightError`
+- **Signature:** `class ObjectStorePreflightError(message: str, ...)`
+- **Summary:** One or more object stores failed the SDR boot-time access preflight.
+- **Defined in:** `application_sdk/storage/errors.py`
+
 #### `StorageBindingBrokenError`
 
 - **Import:** `from application_sdk.storage import StorageBindingBrokenError`
@@ -2073,6 +2087,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Signature:** `upload_prefix(local_dir: str | Path, ...)`
 - **Summary:** Upload all files under *local_dir* to the store under *prefix*.
 - **Defined in:** `application_sdk/storage/batch.py`
+
+#### `verify_object_store_access`
+
+- **Import:** `from application_sdk.storage import verify_object_store_access`
+- **Signature:** `verify_object_store_access(infra: InfrastructureContext)`
+- **Summary:** In SDR mode, verify read+write access to every configured object store.
+- **Defined in:** `application_sdk/storage/preflight.py`
 
 ## `application_sdk.templates`
 
