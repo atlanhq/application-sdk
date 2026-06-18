@@ -22,6 +22,22 @@ import pytest
 import pytest_asyncio
 
 
+def pytest_collection_modifyitems(items):
+    """Auto-apply the ``integration`` marker to every test under ``tests/integration/``.
+
+    The unit-test job runs the whole tree (``pytest tests/``) and relies on the
+    default ``addopts`` deselection (``-m 'not integration ...'``) to skip these
+    heavyweight, Temporal-backed tests; the dedicated integration job selects
+    them with ``-m integration``. Marking by directory here makes that the single
+    source of truth, so a file that forgets an explicit ``@pytest.mark.integration``
+    can no longer leak into the unit job and blow its time budget.
+    """
+    integration_root = Path(__file__).parent
+    for item in items:
+        if integration_root in item.path.parents:
+            item.add_marker("integration")
+
+
 @pytest.fixture(autouse=True)
 def _integration_env_vars():
     """Disable interceptors and Dapr sinks for the duration of each integration test.
