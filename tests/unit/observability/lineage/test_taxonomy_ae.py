@@ -1,12 +1,19 @@
 """AE taxonomy additions: the two new categories + the Stage / LineageStatus enums."""
 
 from application_sdk.observability.lineage import (
-    ARS_REASON_CODES,
     LineageStatus,
     ReasonCategory,
+    ReasonCode,
     ReasonCodeRegistry,
     Stage,
 )
+
+# Connector-style subcode fixture (the SDK ships no concrete registry of its own).
+_FIXTURE = {
+    "EXAMPLE_DROPPED": ReasonCode(
+        "EXAMPLE_DROPPED", ReasonCategory.ASSET_NOT_FOUND, "dropped"
+    ),
+}
 
 
 def test_two_new_categories_exist():
@@ -31,24 +38,20 @@ def test_lineage_status_values():
     }
 
 
-def test_ars_registry_codes_map_to_valid_categories():
-    assert ARS_REASON_CODES, "ARS registry must not be empty"
-    for code, rc in ARS_REASON_CODES.items():
-        assert code == rc.code
-        assert isinstance(rc.category, ReasonCategory)
+def test_registry_codes_map_to_valid_categories():
+    registry = ReasonCodeRegistry(_FIXTURE)
+    assert len(registry) == 1
+    assert registry.category("EXAMPLE_DROPPED") == ReasonCategory.ASSET_NOT_FOUND
 
 
 def test_registry_warns_and_defaults_on_unregistered_code(caplog):
-    registry = ReasonCodeRegistry(ARS_REASON_CODES)
-    assert registry.category("ARS_EDGE_DROPPED") == ReasonCategory.ASSET_NOT_FOUND
+    registry = ReasonCodeRegistry(_FIXTURE)
     cat = registry.category("TOTALLY_UNKNOWN_CODE")
     assert cat == ReasonCategory.UNINSTRUMENTED_PATH
     assert any("unregistered" in r.message.lower() for r in caplog.records)
 
 
 def test_registry_rejects_key_code_mismatch():
-    from application_sdk.observability.lineage import ReasonCode
-
     bad = {"WRONG_KEY": ReasonCode("ACTUAL_CODE", ReasonCategory.CACHE_MISS, "x")}
     try:
         ReasonCodeRegistry(bad)

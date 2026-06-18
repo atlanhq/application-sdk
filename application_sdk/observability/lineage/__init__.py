@@ -44,8 +44,6 @@ from application_sdk.observability.lineage.noop_tracker import (
     NoOpLineageObservabilityTracker,
 )
 from application_sdk.observability.lineage.registry import (
-    ARS_REASON_CODES,
-    TABLEAU_REASON_CODES,
     ReasonCodeRegistry,
     get_reason_category,
 )
@@ -127,11 +125,9 @@ __all__ = [
     "Stage",
     "RunContext",
     "IntentEdge",
-    # registry
+    # registry (machinery only — concrete subcode registries live in connectors)
     "ReasonCodeRegistry",
     "get_reason_category",
-    "ARS_REASON_CODES",
-    "TABLEAU_REASON_CODES",
     # identity
     "components_hash",
     "canonical_identity_string",

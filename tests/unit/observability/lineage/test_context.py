@@ -45,13 +45,14 @@ def test_create_tracker_disabled_registers_noop():
 
 def test_create_tracker_attaches_run_context_and_registry():
     from application_sdk.observability.lineage import (
-        ARS_REASON_CODES,
+        ReasonCategory,
+        ReasonCode,
         ReasonCodeRegistry,
         RunContext,
     )
 
     rc = RunContext(connector_type="tableau", workflow_id="wf-1", tenant="acme")
-    reg = ReasonCodeRegistry(ARS_REASON_CODES)
+    reg = ReasonCodeRegistry({"X": ReasonCode("X", ReasonCategory.CACHE_MISS, "x")})
     t = create_tracker(
         "tableau", ObservabilityConfig(enabled=True), run_context=rc, registry=reg
     )

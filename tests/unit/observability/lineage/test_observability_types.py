@@ -1,14 +1,30 @@
+"""Generic taxonomy-machinery tests (SDK owns categories + machinery, not subcodes).
+
+The SDK ships NO concrete reason-code registry, so these tests exercise
+``ReasonCategory`` / ``ReasonCode`` / ``ObservabilityConfig`` / ``get_reason_category``
+against a small local fixture registry that stands in for a connector's subcodes.
+"""
+
 from application_sdk.observability.lineage import (
     ObservabilityConfig,
     ReasonCategory,
     ReasonCode,
-    TABLEAU_REASON_CODES,
     get_reason_category,
 )
 
+# A connector-style subcode registry fixture (the SDK ships none of its own).
+_FIXTURE_REASON_CODES = {
+    "EXAMPLE_CACHE_MISS": ReasonCode(
+        "EXAMPLE_CACHE_MISS", ReasonCategory.CACHE_MISS, "source not in cache"
+    ),
+    "EXAMPLE_NO_UPSTREAM": ReasonCode(
+        "EXAMPLE_NO_UPSTREAM", ReasonCategory.NO_UPSTREAM_DATA, "no upstream refs"
+    ),
+}
+
 
 def test_reason_category_values():
-    """All expected categories exist."""
+    """All argo categories still exist (locked surface)."""
     assert ReasonCategory.PARSER_FAILURE == "PARSER_FAILURE"
     assert ReasonCategory.ASSET_NOT_FOUND == "ASSET_NOT_FOUND"
     assert ReasonCategory.CACHE_MISS == "CACHE_MISS"
@@ -39,54 +55,29 @@ def test_observability_config_defaults():
     assert config.log_successful_lineage is False
 
 
-def test_tableau_reason_codes_registry_not_empty():
-    assert len(TABLEAU_REASON_CODES) >= 30
-
-
-def test_tableau_reason_codes_keys_match_code_field():
+def test_registry_keys_match_code_field():
     """Every registry key matches its ReasonCode.code field."""
-    for key, reason_code in TABLEAU_REASON_CODES.items():
-        assert key == reason_code.code, f"Mismatch: key={key} code={reason_code.code}"
+    for key, reason_code in _FIXTURE_REASON_CODES.items():
+        assert key == reason_code.code
 
 
-def test_tableau_reason_codes_all_have_valid_categories():
-    """Every ReasonCode has a valid ReasonCategory."""
-    for key, reason_code in TABLEAU_REASON_CODES.items():
+def test_registry_codes_have_valid_categories():
+    for key, reason_code in _FIXTURE_REASON_CODES.items():
         assert isinstance(
             reason_code.category, ReasonCategory
-        ), f"{key} has invalid category"
+        ), f"{key} invalid category"
 
 
 def test_get_reason_category_found():
-    cat = get_reason_category("CONNECTION_CACHE_MISS", TABLEAU_REASON_CODES)
-    assert cat == ReasonCategory.CACHE_MISS
+    assert (
+        get_reason_category("EXAMPLE_CACHE_MISS", _FIXTURE_REASON_CODES)
+        == ReasonCategory.CACHE_MISS
+    )
 
 
 def test_get_reason_category_not_found():
-    cat = get_reason_category("NONEXISTENT_CODE", TABLEAU_REASON_CODES)
-    assert cat is None
+    assert get_reason_category("NONEXISTENT_CODE", _FIXTURE_REASON_CODES) is None
 
 
 def test_get_reason_category_no_registry():
-    cat = get_reason_category("CONNECTION_CACHE_MISS", None)
-    assert cat is None
-
-
-def test_known_category_mappings():
-    """Spot-check known Tableau codes map to expected categories."""
-    checks = {
-        "CUSTOM_SQL_PARSER_FAILURE": ReasonCategory.PARSER_FAILURE,
-        "CONNECTION_CACHE_MISS": ReasonCategory.CACHE_MISS,
-        "FIELD_CONNECTION_CACHE_MISS": ReasonCategory.CACHE_MISS,
-        "DATASOURCE_MISSING_SITE_ID": ReasonCategory.MISSING_METADATA,
-        "DATASOURCE_HAS_NO_UPSTREAM_TABLES": ReasonCategory.NO_UPSTREAM_DATA,
-        "NO_SEARCHABLE_DIALECT": ReasonCategory.NO_SEARCHABLE_DIALECT,
-        "MISSING_DATASOURCE_TO_WORKSHEET_PROCESS": ReasonCategory.PROCESS_MAPPING_FAILURE,
-        "DASHBOARD_UNPUBLISHED_UPSTREAM_DISABLED": ReasonCategory.CONNECTOR_LIMITATION,
-        "WORKBOOK_NO_EMBEDDED_DATASOURCE_RELATIONSHIP": ReasonCategory.RELATIONSHIP_FALLBACK,
-        "DATASOURCE_UPSTREAM_DATASOURCE_NOT_FOUND_NO_SQL_FALLBACK": ReasonCategory.ASSET_NOT_FOUND,
-    }
-    for code, expected_category in checks.items():
-        assert (
-            TABLEAU_REASON_CODES[code].category == expected_category
-        ), f"{code} mismatch"
+    assert get_reason_category("EXAMPLE_CACHE_MISS", None) is None
