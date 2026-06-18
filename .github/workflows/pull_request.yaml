@@ -487,6 +487,36 @@ jobs:
           workflow: tests.yaml
           workflow-inputs: ${{ github.event_name == 'merge_group' && format('{{"application_sdk_ref":"{0}"}}', github.sha) || format('{{"application_sdk_ref":"{0}","run_e2e":"true","base_image_ref":"{1}"}}', github.event.pull_request.head.sha, needs.build-sdk-base-image.outputs.image) }}
 
+  # SDR-on-Kubernetes e2e — dispatched cross-repo to atlan-local-marketplace-app,
+  # which owns the orchestrator + charts and runs the hermetic kind e2e. Same
+  # gate as connector-tests (merge queue + 'e2e' label) so it runs once per PR at
+  # merge, not on every commit push. LM git-installs the SDK at application_sdk_ref
+  # (no base image needed), so this job doesn't depend on build-sdk-base-image.
+  # Heavy work happens in the dispatched LM run; this job dispatches + mirrors it.
+  sdr-k8s-e2e:
+    name: SDR K8s E2E (LM)
+    needs: [changes]
+    if: |
+      (needs.changes.outputs.sdk == 'true' || needs.changes.outputs.container == 'true') && (
+        github.event_name == 'merge_group' ||
+        (
+          github.event_name == 'pull_request' &&
+          contains(github.event.pull_request.labels.*.name, 'e2e') &&
+          github.event.pull_request.head.repo.fork != true &&
+          github.event.pull_request.user.login != 'dependabot[bot]'
+        )
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: "./.github/actions/e2e-apps"
+        with:
+          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          repo-name: atlan-local-marketplace-app
+          target-branch: "refs/heads/main"
+          workflow: sdr-k8s-e2e.yaml
+          workflow-inputs: ${{ github.event_name == 'merge_group' && format('{{"application_sdk_ref":"{0}"}}', github.sha) || format('{{"application_sdk_ref":"{0}"}}', github.event.pull_request.head.sha) }}
+
   # (sdr-matrix-builder, sdr-e2e-apps, and e2e-full-mysql removed —
   # superseded by connector-tests + the 'e2e' label on tests.yaml)
 
