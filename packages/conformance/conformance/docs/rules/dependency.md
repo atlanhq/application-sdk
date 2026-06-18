@@ -26,6 +26,10 @@ Suppress a finding on the violating line or the line directly above it:
 
 > Application SDK dependency is missing or its version specifier is not bounded on both ends
 
+**Rationale:** An unbounded specifier lets an automated tool (Renovate) or a manual bump pull in a
+future SDK major without review. The SDK's versioning discipline only holds if every app
+has a bound that stops automatic upgrades past the reviewed point.
+
 Every app must declare `atlan-application-sdk` in `[project.dependencies]` with a
 version specifier that has both a lower bound (`>=` or `==`) and an upper bound (`<` or
 a compatible-release `~=` form). Unbounded specifiers let an automated SDK upgrade pull
@@ -40,6 +44,11 @@ the SDK are also exempt — packages whose `[project].name` starts with
 **Tier:** `warn` · **Category:** `dependency-pinning` · **Autofixable:** yes · **Since:** 0.4.0
 
 > Dependency redeclared in the app's pyproject.toml is already managed by the SDK
+
+**Rationale:** When an app redeclares a package the SDK already pins, the resolver may pick the app's
+specifier over the SDK's, yielding a version never validated against the SDK. This
+causes resolver conflicts during upgrades and forces touching every app that holds a
+duplicate when the SDK pin changes.
 
 Packages pinned by `atlan-application-sdk` (its core `[project.dependencies]`) must not
 be redeclared in the app's `[project.dependencies]` or any

@@ -17,3 +17,5 @@ permissions:
 jobs:
   sync:
     uses: atlanhq/application-sdk/.github/workflows/renovate-pkl-sync.yaml@main
+    secrets:
+      push_token: ${{ secrets.ORG_PAT_GITHUB }}

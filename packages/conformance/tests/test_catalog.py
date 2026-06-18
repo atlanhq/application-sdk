@@ -50,6 +50,15 @@ def test_catalog_all_have_required_fields() -> None:
         assert rule.category, f"Rule {rule.id} missing category"
 
 
+def test_catalog_all_have_rationale() -> None:
+    """Every rule in the catalog must have a non-empty rationale."""
+    rules = load_catalog()
+    missing = [rule.id for rule in rules if not rule.rationale.strip()]
+    assert (
+        not missing
+    ), f"Rules missing rationale (add a rationale= to each RuleDefinition): {missing}"
+
+
 def test_catalog_e_series_present() -> None:
     """The E-series error-handling rules are all present."""
     rules = load_catalog()
@@ -79,7 +88,7 @@ def test_catalog_e_series_present() -> None:
 
 
 def test_catalog_l_series_present() -> None:
-    """The L-series logging rules are all present."""
+    """The L-series logging rules are all present (contiguous L001–L018)."""
     rules = load_catalog()
     l_ids = {r.id for r in rules if r.id.startswith("L")}
     expected = {
@@ -101,19 +110,50 @@ def test_catalog_l_series_present() -> None:
         "L016",
         "L017",
         "L018",
-        "L024",
     }
     missing = expected - l_ids
     assert not missing, f"Missing L-series rules: {missing}"
+    # Stricter than the other series tests (not-missing only): the L-series was
+    # renumbered in PR #2191 (L013→L012 etc.) and stale suppressions referencing
+    # the old IDs would silently pass a not-missing check.
+    extra = l_ids - expected
+    assert not extra, f"Unexpected L-series rules: {extra}"
 
 
 def test_catalog_c_series_present() -> None:
     """The C-series CI/workflow supply-chain rules are all present."""
     rules = load_catalog()
     c_ids = {r.id for r in rules if r.id.startswith("C")}
-    expected = {"C001"}
+    expected = {"C001", "C002"}
     missing = expected - c_ids
     assert not missing, f"Missing C-series rules: {missing}"
+
+
+def test_catalog_d_series_present() -> None:
+    """The D-series dependency rules are all present."""
+    rules = load_catalog()
+    d_ids = {r.id for r in rules if r.id.startswith("D")}
+    expected = {"D001", "D002"}
+    missing = expected - d_ids
+    assert not missing, f"Missing D-series rules: {missing}"
+
+
+def test_catalog_p_series_present() -> None:
+    """The P-series prescription rules are all present."""
+    rules = load_catalog()
+    p_ids = {r.id for r in rules if r.id.startswith("P")}
+    expected = {"P001", "P002", "P003"}
+    missing = expected - p_ids
+    assert not missing, f"Missing P-series rules: {missing}"
+
+
+def test_catalog_o_series_present() -> None:
+    """The O-series optimisation rules are all present."""
+    rules = load_catalog()
+    o_ids = {r.id for r in rules if r.id.startswith("O")}
+    expected = {"O001"}
+    missing = expected - o_ids
+    assert not missing, f"Missing O-series rules: {missing}"
 
 
 def test_catalog_is_mapping_keyed_by_id() -> None:

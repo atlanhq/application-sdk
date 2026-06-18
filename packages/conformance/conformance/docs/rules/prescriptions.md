@@ -35,6 +35,11 @@ is never reused or reassigned.
 
 > Input/Output contract declared with allow_unbounded_fields=True — opts out of payload safety
 
+**Rationale:** Temporal enforces a hard 2MB payload limit on workflow/activity I/O (ADR-0008).
+Unbounded fields can silently grow past it in production, failing the workflow with a
+cryptic size error instead of a type error at import time. A justified inline
+suppression keeps every opt-out visible in review and auditable in SARIF.
+
 An `Input`/`Output` contract subclass declared with the `allow_unbounded_fields=True`
 class keyword opts out of the SDK's payload-safety enforcement: arbitrary, untyped
 fields may cross task boundaries unchecked.  This is intended to be *extremely*
@@ -54,6 +59,11 @@ sanctioned use is the justified inline suppression above — see BLDX-1428.
 **Tier:** `block` · **Category:** `category-immutability` · **Autofixable:** — · **Since:** 0.3.0
 
 > AppError subclass redeclares the `category` ClassVar — drifts the canonical taxonomy
+
+**Rationale:** FailureCategory is consumed as an immutable reporting metric by the Automation Engine,
+SLA dashboards, and on-call routing (ADR-0013). A redeclaration either duplicates the
+parent (drifts on rename) or substitutes a different value (splits one failure mode
+across two buckets), corrupting the reporting layer for every downstream consumer.
 
 `FailureCategory` is the closed, single-axis taxonomy the SDK owns — every value is the
 canonical answer to *what happened* and is consumed as an immutable reporting metric
@@ -80,6 +90,11 @@ sanctioned use is the justified inline suppression `# conformance: ignore[P002]
 **Tier:** `block` · **Category:** `error-code-shape` · **Autofixable:** — · **Since:** 0.3.0
 
 > AppError subclass code missing or doesn't start with the parent leaf's category prefix
+
+**Rationale:** Each categorical leaf owns a prefix that embeds its category into every error code
+(`AUTH_`, `INTERNAL_`, etc.). Without it, the code column is opaque — dashboards must
+join the category column for every query, and subclasses that inherit the bare leaf code
+collapse all their distinct failure modes into one undifferentiated bucket.
 
 Every concrete subclass of an `application_sdk.errors` leaf (`AuthError`,
 `InternalError`, `InvalidInputError`, etc.) must declare its own `code: ClassVar[str]`

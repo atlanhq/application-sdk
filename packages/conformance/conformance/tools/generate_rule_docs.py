@@ -234,6 +234,15 @@ def _render_series(meta: SeriesMeta, rules: list[RuleDefinition]) -> str:
             lines.append(f"> {_rst_to_md(rule.short_description)}")
             lines.append("")
 
+        # Rationale — why the rule exists
+        if rule.rationale:
+            rationale_text = _rst_to_md(rule.rationale)
+            wrapped = textwrap.fill(
+                rationale_text, width=88, break_long_words=False, break_on_hyphens=False
+            )
+            lines.append(f"**Rationale:** {wrapped}")
+            lines.append("")
+
         # Full description — convert RST backticks, preserve paragraph breaks
         if rule.full_description:
             desc = _rst_to_md(rule.full_description.strip())
