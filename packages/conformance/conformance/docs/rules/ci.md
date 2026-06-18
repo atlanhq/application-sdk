@@ -15,14 +15,14 @@ Suppress a finding on the violating line or the line directly above it:
 
 | ID | Name | Tier | Category | Autofixable | Since |
 |---|---|---|---|---|---|
-| [C001](#c001) | `UnpinnedActionReference` | `block` | `supply-chain` | yes | 3.16.0 |
+| [C001](#c001) | `UnpinnedActionReference` | `block` | `supply-chain` | yes | 0.2.0 |
 | [C002](#c002) | `BootstrapWorkflowDrift` | `warn` | `ci-consistency` | yes | 0.3.0 |
 
 ---
 
 ## C001 — `UnpinnedActionReference` {#c001}
 
-**Tier:** `block` · **Category:** `supply-chain` · **Autofixable:** yes · **Since:** 3.16.0
+**Tier:** `block` · **Category:** `supply-chain` · **Autofixable:** yes · **Since:** 0.2.0
 
 > External GitHub Action not pinned to a full commit digest
 

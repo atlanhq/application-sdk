@@ -15,30 +15,30 @@ Suppress a finding on the violating line or the line directly above it:
 
 | ID | Name | Tier | Category | Autofixable | Since |
 |---|---|---|---|---|---|
-| [L001](#l001) | `FStringInLogMessage` | `block` | `log-format` | yes | 3.16.0 |
-| [L002](#l002) | `InconsistentLoggerFactory` | `warn` | `log-format` | yes | 3.16.0 |
-| [L003](#l003) | `ExtraKwargsWrongFramework` | `warn` | `log-format` | — | 3.16.0 |
-| [L004](#l004) | `ExceptBlockMissingExcInfoLog` | `block` | `missing-traceback` | yes | 3.16.0 |
-| [L005](#l005) | `PrintInProductionCode` | `warn` | `log-format` | yes | 3.16.0 |
-| [L006](#l006) | `InfoInTightLoop` | `warn` | `log-level` | — | 3.16.0 |
-| [L007](#l007) | `LoggerCriticalUsage` | `warn` | `log-level` | yes | 3.16.0 |
-| [L008](#l008) | `UnguardedExpensiveDebug` | `warn` | `log-performance` | — | 3.16.0 |
-| [L009](#l009) | `WarnThenRaiseDuplication` | `warn` | `log-noise` | — | 3.16.0 |
-| [L010](#l010) | `CredentialInLogOutput` | `block` | `security` | — | 3.16.0 |
-| [L011](#l011) | `StringConcatenationInLog` | `block` | `log-format` | yes | 3.16.0 |
-| [L012](#l012) | `StdlibExtraReservedKeyCollision` | `block` | `log-crash` | — | 3.16.0 |
-| [L013](#l013) | `StdlibArbitraryKwargs` | `block` | `log-crash` | yes | 3.16.0 |
-| [L014](#l014) | `StructlogEventKwargOverwrite` | `warn` | `log-format` | — | 3.16.0 |
-| [L015](#l015) | `DictConfigDisableExistingLoggers` | `warn` | `log-config` | yes | 3.16.0 |
-| [L016](#l016) | `BasicConfigNoopAfterFirstCall` | `warn` | `log-config` | — | 3.16.0 |
-| [L017](#l017) | `LoggerExceptionUsage` | `warn` | `log-level` | yes | 3.16.0 |
-| [L018](#l018) | `KwargsInApplicationLogCalls` | `warn` | `log-format` | — | 3.16.0 |
+| [L001](#l001) | `FStringInLogMessage` | `block` | `log-format` | yes | 0.2.0 |
+| [L002](#l002) | `InconsistentLoggerFactory` | `warn` | `log-format` | yes | 0.2.0 |
+| [L003](#l003) | `ExtraKwargsWrongFramework` | `warn` | `log-format` | — | 0.2.0 |
+| [L004](#l004) | `ExceptBlockMissingExcInfoLog` | `block` | `missing-traceback` | yes | 0.2.0 |
+| [L005](#l005) | `PrintInProductionCode` | `warn` | `log-format` | yes | 0.2.0 |
+| [L006](#l006) | `InfoInTightLoop` | `warn` | `log-level` | — | 0.2.0 |
+| [L007](#l007) | `LoggerCriticalUsage` | `warn` | `log-level` | yes | 0.2.0 |
+| [L008](#l008) | `UnguardedExpensiveDebug` | `warn` | `log-performance` | — | 0.2.0 |
+| [L009](#l009) | `WarnThenRaiseDuplication` | `warn` | `log-noise` | — | 0.2.0 |
+| [L010](#l010) | `CredentialInLogOutput` | `block` | `security` | — | 0.2.0 |
+| [L011](#l011) | `StringConcatenationInLog` | `block` | `log-format` | yes | 0.2.0 |
+| [L012](#l012) | `StdlibExtraReservedKeyCollision` | `block` | `log-crash` | — | 0.2.0 |
+| [L013](#l013) | `StdlibArbitraryKwargs` | `block` | `log-crash` | yes | 0.2.0 |
+| [L014](#l014) | `StructlogEventKwargOverwrite` | `warn` | `log-format` | — | 0.2.0 |
+| [L015](#l015) | `DictConfigDisableExistingLoggers` | `warn` | `log-config` | yes | 0.2.0 |
+| [L016](#l016) | `BasicConfigNoopAfterFirstCall` | `warn` | `log-config` | — | 0.2.0 |
+| [L017](#l017) | `LoggerExceptionUsage` | `warn` | `log-level` | yes | 0.2.0 |
+| [L018](#l018) | `KwargsInApplicationLogCalls` | `warn` | `log-format` | — | 0.2.0 |
 
 ---
 
 ## L001 — `FStringInLogMessage` {#l001}
 
-**Tier:** `block` · **Category:** `log-format` · **Autofixable:** yes · **Since:** 3.16.0
+**Tier:** `block` · **Category:** `log-format` · **Autofixable:** yes · **Since:** 0.2.0
 
 > f-string in log message — breaks log grouping and aggregation
 
@@ -57,7 +57,7 @@ kwargs.
 
 ## L002 — `InconsistentLoggerFactory` {#l002}
 
-**Tier:** `warn` · **Category:** `log-format` · **Autofixable:** yes · **Since:** 3.16.0
+**Tier:** `warn` · **Category:** `log-format` · **Autofixable:** yes · **Since:** 0.2.0
 
 > Logger factory inconsistent with project canonical factory
 
@@ -73,7 +73,7 @@ occurrence count) in Phase 1 and flags deviations.
 
 ## L003 — `ExtraKwargsWrongFramework` {#l003}
 
-**Tier:** `warn` · **Category:** `log-format` · **Autofixable:** — · **Since:** 3.16.0
+**Tier:** `warn` · **Category:** `log-format` · **Autofixable:** — · **Since:** 0.2.0
 
 > extra={} used where framework expects direct kwargs (or vice versa)
 
@@ -90,7 +90,7 @@ detect the active framework first.
 
 ## L004 — `ExceptBlockMissingExcInfoLog` {#l004}
 
-**Tier:** `block` · **Category:** `missing-traceback` · **Autofixable:** yes · **Since:** 3.16.0
+**Tier:** `block` · **Category:** `missing-traceback` · **Autofixable:** yes · **Since:** 0.2.0
 
 > logger.warning/error in except block without exc_info=True
 
@@ -106,7 +106,7 @@ the root cause is invisible.  Add `exc_info=True` to all `logger.warning()` /
 
 ## L005 — `PrintInProductionCode` {#l005}
 
-**Tier:** `warn` · **Category:** `log-format` · **Autofixable:** yes · **Since:** 3.16.0
+**Tier:** `warn` · **Category:** `log-format` · **Autofixable:** yes · **Since:** 0.2.0
 
 > print() in production code — bypasses logging framework
 
@@ -123,7 +123,7 @@ log lines.  Acceptable in CLI scripts, test/debug scripts, and `if __name__ ==
 
 ## L006 — `InfoInTightLoop` {#l006}
 
-**Tier:** `warn` · **Category:** `log-level` · **Autofixable:** — · **Since:** 3.16.0
+**Tier:** `warn` · **Category:** `log-level` · **Autofixable:** — · **Since:** 0.2.0
 
 > logger.info() inside a tight loop — generates excessive log volume
 
@@ -140,7 +140,7 @@ bounded (≤10 items) before flagging.
 
 ## L007 — `LoggerCriticalUsage` {#l007}
 
-**Tier:** `warn` · **Category:** `log-level` · **Autofixable:** yes · **Since:** 3.16.0
+**Tier:** `warn` · **Category:** `log-level` · **Autofixable:** yes · **Since:** 0.2.0
 
 > logger.critical() — CRITICAL is not a meaningful level here
 
@@ -157,7 +157,7 @@ on the observability platform.
 
 ## L008 — `UnguardedExpensiveDebug` {#l008}
 
-**Tier:** `warn` · **Category:** `log-performance` · **Autofixable:** — · **Since:** 3.16.0
+**Tier:** `warn` · **Category:** `log-performance` · **Autofixable:** — · **Since:** 0.2.0
 
 > Expensive computation in logger.debug() argument — evaluates eagerly
 
@@ -173,7 +173,7 @@ logger.isEnabledFor(logging.DEBUG):`.
 
 ## L009 — `WarnThenRaiseDuplication` {#l009}
 
-**Tier:** `warn` · **Category:** `log-noise` · **Autofixable:** — · **Since:** 3.16.0
+**Tier:** `warn` · **Category:** `log-noise` · **Autofixable:** — · **Since:** 0.2.0
 
 > logger.warning/error immediately before raise — duplicate log records
 
@@ -189,7 +189,7 @@ available to the caller.  Otherwise: just re-raise.
 
 ## L010 — `CredentialInLogOutput` {#l010}
 
-**Tier:** `block` · **Category:** `security` · **Autofixable:** — · **Since:** 3.16.0
+**Tier:** `block` · **Category:** `security` · **Autofixable:** — · **Since:** 0.2.0
 
 > Credential/secret value in log output — security vulnerability
 
@@ -206,7 +206,7 @@ store.  Requires human security review before marking acceptable.  Logging a cre
 
 ## L011 — `StringConcatenationInLog` {#l011}
 
-**Tier:** `block` · **Category:** `log-format` · **Autofixable:** yes · **Since:** 3.16.0
+**Tier:** `block` · **Category:** `log-format` · **Autofixable:** yes · **Since:** 0.2.0
 
 > String concatenation in log message — breaks log grouping
 
@@ -221,7 +221,7 @@ way that breaks log grouping.  Rewrite as %-style message body.
 
 ## L012 — `StdlibExtraReservedKeyCollision` {#l012}
 
-**Tier:** `block` · **Category:** `log-crash` · **Autofixable:** — · **Since:** 3.16.0
+**Tier:** `block` · **Category:** `log-crash` · **Autofixable:** — · **Since:** 0.2.0
 
 > extra={} key collides with stdlib LogRecord attribute — crashes caller
 
@@ -238,7 +238,7 @@ stdlib's `Logger.makeRecord()` raises `KeyError` if any key in `extra={}` matche
 
 ## L013 — `StdlibArbitraryKwargs` {#l013}
 
-**Tier:** `block` · **Category:** `log-crash` · **Autofixable:** yes · **Since:** 3.16.0
+**Tier:** `block` · **Category:** `log-crash` · **Autofixable:** yes · **Since:** 0.2.0
 
 > Arbitrary kwargs in stdlib logger — raises TypeError immediately
 
@@ -254,7 +254,7 @@ from structlog/loguru. Applies to stdlib only.
 
 ## L014 — `StructlogEventKwargOverwrite` {#l014}
 
-**Tier:** `warn` · **Category:** `log-format` · **Autofixable:** — · **Since:** 3.16.0
+**Tier:** `warn` · **Category:** `log-format` · **Autofixable:** — · **Since:** 0.2.0
 
 > event= kwarg in structlog silently overwrites the log message
 
@@ -271,7 +271,7 @@ only.
 
 ## L015 — `DictConfigDisableExistingLoggers` {#l015}
 
-**Tier:** `warn` · **Category:** `log-config` · **Autofixable:** yes · **Since:** 3.16.0
+**Tier:** `warn` · **Category:** `log-config` · **Autofixable:** yes · **Since:** 0.2.0
 
 > dictConfig without disable_existing_loggers=False silently kills loggers
 
@@ -288,7 +288,7 @@ Applies to stdlib only.
 
 ## L016 — `BasicConfigNoopAfterFirstCall` {#l016}
 
-**Tier:** `warn` · **Category:** `log-config` · **Autofixable:** — · **Since:** 3.16.0
+**Tier:** `warn` · **Category:** `log-config` · **Autofixable:** — · **Since:** 0.2.0
 
 > Multiple basicConfig() calls — second+ are silent no-ops
 
@@ -304,7 +304,7 @@ __name__ == "__main__":` blocks. Applies to stdlib only.
 
 ## L017 — `LoggerExceptionUsage` {#l017}
 
-**Tier:** `warn` · **Category:** `log-level` · **Autofixable:** yes · **Since:** 3.16.0
+**Tier:** `warn` · **Category:** `log-level` · **Autofixable:** yes · **Since:** 0.2.0
 
 > logger.exception() used — use logger.error(..., exc_info=True) instead
 
@@ -329,7 +329,7 @@ only to satisfy third-party Temporal callers and immediately delegates to
 
 ## L018 — `KwargsInApplicationLogCalls` {#l018}
 
-**Tier:** `warn` · **Category:** `log-format` · **Autofixable:** — · **Since:** 3.16.0
+**Tier:** `warn` · **Category:** `log-format` · **Autofixable:** — · **Since:** 0.2.0
 
 > kwargs in application log calls — use %-style message body instead
 
