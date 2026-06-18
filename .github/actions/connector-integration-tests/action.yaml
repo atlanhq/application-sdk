@@ -275,7 +275,7 @@ runs:
         # pytest-cov added transiently so callers can opt in to coverage
         # via pytest-args (e.g., `--cov=app --cov-report=xml ...`). No
         # effect when coverage flags aren't passed.
-        uv run --with pytest-xdist --with pytest-cov pytest ${{ inputs.test-paths }} -v \
+        uv run --group test --with pytest-xdist --with pytest-cov pytest ${{ inputs.test-paths }} -v \
           ${{ inputs.pytest-args }} \
           --junit-xml=results/test-results.xml \
           2>&1 | tee results/test-output.txt
