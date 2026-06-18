@@ -284,7 +284,7 @@ Then recommend the next step:
 Finds logging anti-patterns that pollute your log stream, obscure structured fields, or create
 security risks.
 
-> **Detection is now delegated to the conformance suite (L-series).** The L001–L020 checks
+> **Detection is now delegated to the conformance suite (L-series).** The L001–L021 checks
 > run deterministically via `uv run atlan-application-sdk-conformance detect --repo . --series L`
 > and produce SARIF output with one finding per rule violation. This skill retains its value
 > for the **remediation / fix-authoring** pass (Stage 2) — the suite deliberately does not
