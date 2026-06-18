@@ -75,7 +75,7 @@ def test_golden_example_summary() -> None:
 
 def test_report_builder_empty_validates() -> None:
     """An empty report (no results) is still valid SARIF."""
-    builder = ReportBuilder(tool_name="atlan-conformance", tool_version="3.16.0")
+    builder = ReportBuilder(tool_name="atlan-conformance", tool_version="0.4.0")
     report = builder.build()
     validate_sarif(report)
 
@@ -86,7 +86,7 @@ def test_report_builder_with_results_validates() -> None:
     builder = ReportBuilder.from_catalog(
         catalog,
         tool_name="atlan-conformance",
-        tool_version="3.16.0",
+        tool_version="0.4.0",
         repo_uri="https://github.com/atlanhq/test-app",
         commit_sha="abc123",
         branch="main",
@@ -111,7 +111,7 @@ def test_report_builder_suppressed_result_validates() -> None:
     builder = ReportBuilder.from_catalog(
         catalog,
         tool_name="atlan-conformance",
-        tool_version="3.16.0",
+        tool_version="0.4.0",
     )
     suppression = Suppression(
         kind="inSource",
@@ -132,7 +132,7 @@ def test_report_builder_suppressed_result_validates() -> None:
 
 def test_report_builder_pass_only_validates() -> None:
     """A report with only a pass result validates and has exitCode=0."""
-    builder = ReportBuilder(tool_name="atlan-conformance", tool_version="3.16.0")
+    builder = ReportBuilder(tool_name="atlan-conformance", tool_version="0.4.0")
     builder.add_pass(rule_id="L001", file_uri="src/connector/loader.py")
     report = builder.build()
     validate_sarif(report)
@@ -147,7 +147,7 @@ def test_report_builder_warning_only_exit_code() -> None:
     builder = ReportBuilder.from_catalog(
         catalog,
         tool_name="atlan-conformance",
-        tool_version="3.16.0",
+        tool_version="0.4.0",
     )
     # L006 (InfoInTightLoop) is tier=warn → level=warning
     builder.add_result(

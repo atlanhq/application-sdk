@@ -6,8 +6,8 @@
       "tool": {
         "driver": {
           "name": "atlan-conformance",
-          "version": "3.16.0",
-          "semanticVersion": "3.16.0",
+          "version": "0.4.0",
+          "semanticVersion": "0.4.0",
           "rules": [
             {
               "id": "P001",
@@ -26,7 +26,7 @@
                 "atlan/category": "silent-swallow",
                 "atlan/autofixable": false,
                 "atlan/orthogonalGate": "tests",
-                "atlan/since": "3.16.0"
+                "atlan/since": "0.2.0"
               }
             },
             {
@@ -45,7 +45,7 @@
                 "atlan/mechanism": "static",
                 "atlan/category": "log-format",
                 "atlan/autofixable": true,
-                "atlan/since": "3.16.0"
+                "atlan/since": "0.2.0"
               }
             }
           ]

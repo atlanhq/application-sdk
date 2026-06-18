@@ -43,7 +43,7 @@ validation contract.  Every produced document must validate against it via
 | **Proposed fix** | `result.fixes[]` (`artifactChanges`) | populated by the remediation layer (BLDX-1388) |
 | **Rule mechanism** | `properties["atlan/mechanism"]` | `"static"` or `"test"` — lets the loop re-run the narrowest gate |
 | **Remediation hint** | `result.properties["atlan/hint"]` | machine-actionable hint for the model |
-| **Suite version** | `run.tool.driver.version` | = SDK release, e.g. `"3.16.0"` |
+| **Suite version** | `run.tool.driver.version` | = conformance package release, e.g. `"0.4.0"` |
 | **Repo / commit** | `run.versionControlProvenance[]` | `repositoryUri`, `revisionId` (SHA), `branch` |
 | **Gate decision** | `run.invocations[0].exitCode` | `0` = gate passed, `1` = gate failed |
 | **Disposition totals** | `run.properties["atlan/summary"]` | `{passing, failing, warning, suppressed}` counts |

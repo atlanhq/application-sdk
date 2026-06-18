@@ -54,10 +54,10 @@ class RuleDefinition(BaseModel):
     help_uri: str | None = None
     orthogonal_gate: str | None = None
     since: str | None = None
-    """SDK version when the behaviour behind this rule was first enforced.
+    """Conformance suite version when the behaviour behind this rule was first enforced.
     Tracks the behavioural appearance, not when a specific rule ID was assigned —
     so a renumbered rule retains the original ``since`` of the behaviour it
-    describes, e.g. ``"3.16.0"``."""
+    describes, e.g. ``"0.2.0"``."""
     rationale: str = ""
     """Why this rule exists — what risk it avoids, what loop it closes, or what
     value it adds. Surfaced as ``atlan/rationale`` in SARIF ``properties``."""

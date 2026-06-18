@@ -13,7 +13,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="supply-chain",
         autofixable=True,
-        since="3.16.0",
+        since="0.2.0",
         rationale=(
             "A mutable tag (@v4) can be silently re-pointed to any commit after review — "
             "including malicious code — with no notification to the consumer. Pinning to a "

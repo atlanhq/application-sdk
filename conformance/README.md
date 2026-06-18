@@ -31,7 +31,7 @@ uv add --dev atlan-application-sdk-conformance
 ```python
 from conformance.suite.schema import ReportBuilder, Disposition, derive_disposition
 
-builder = ReportBuilder(tool_name="atlan-conformance", tool_version="3.16.0")
+builder = ReportBuilder(tool_name="atlan-conformance", tool_version="0.4.0")
 builder.add_result("P001", "src/foo.py", 42)
 report = builder.build()
 
