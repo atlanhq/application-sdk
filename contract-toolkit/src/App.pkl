@@ -619,7 +619,7 @@ class ErrorHandlingConfig {
 
   nonRetryableErrorTypes: Listing<String>?
 
-  startToCloseTimeoutSeconds: Int(isBetween(1, 259200))?
+  startToCloseTimeoutSeconds: Int(isBetween(1, 864000))?
 
   heartbeatTimeoutSeconds: Int(isBetween(1, 3600))?
 

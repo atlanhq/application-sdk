@@ -19,6 +19,7 @@ from application_sdk.errors import (
     STORAGE_NOT_FOUND,
     STORAGE_OPERATION,
     STORAGE_PERMISSION,
+    STORAGE_PREFLIGHT,
     ErrorCode,
 )
 from application_sdk.errors.categories import Audience
@@ -343,3 +344,45 @@ class StorageEmptyUploadError(DataIntegrityError, StorageError):
         if self.cause:
             parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
         return " | ".join(parts)
+
+
+@dataclass(kw_only=True)
+class ObjectStorePreflightError(StorageError):
+    """One or more object stores failed the SDR boot-time access preflight.
+
+    Raised by ``application_sdk.storage.preflight.verify_object_store_access``
+    when SDR mode is active (``ENABLE_ATLAN_UPLOAD=true``) and at least one
+    configured store fails a write→read→delete round-trip probe, or when the
+    upstream Atlan store is absent.
+
+    The ``message`` contains a human-readable, per-store failure summary
+    intended for an operator reading container logs.  ``failure_count`` is
+    the number of individual store failures found.
+
+    Because the failure may be due to config, credentials, or connectivity,
+    the categorical parent is ``StorageError`` (``DependencyUnavailableError``)
+    rather than any narrower leaf.
+    """
+
+    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_PREFLIGHT
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_STORAGE_PREFLIGHT"
+    default_retryable: ClassVar[bool] = False
+    audience: ClassVar[Audience] = Audience.APP_OWNER
+
+    failure_count: int = 0
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        failure_count: int = 0,
+        cause: Exception | None = None,
+        error_code: ErrorCode | None = None,
+    ) -> None:
+        StorageError.__init__(self, message=message, cause=cause, error_code=error_code)
+        self.failure_count = failure_count
+
+    def __str__(self) -> str:
+        # The message already contains the full per-store report with newlines;
+        # prepend the error code prefix for structured-log searchability.
+        return f"[{self.error_code.code}] {self.message}"
