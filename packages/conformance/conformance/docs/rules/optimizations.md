@@ -21,15 +21,15 @@ the same topic.  When a domain series takes over an area, the rule is retired in
 (kept documented, no longer firing) and the new rule gets a fresh id — the original id
 is never reused or reassigned.
 
-| ID | Name | Tier | Category | Autofixable | Since |
-|---|---|---|---|---|---|
-| [O001](#o001) | `OrjsonOverStdlibJson` | `warn` | `canonical-dependency` | — | 0.3.0 |
+| ID | Name | Tier | Scope | Category | Autofixable | Since |
+|---|---|---|---|---|---|---|
+| [O001](#o001) | `OrjsonOverStdlibJson` | `warn` | `both` | `canonical-dependency` | — | 0.3.0 |
 
 ---
 
 ## O001 — `OrjsonOverStdlibJson` {#o001}
 
-**Tier:** `warn` · **Category:** `canonical-dependency` · **Autofixable:** — · **Since:** 0.3.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `canonical-dependency` · **Autofixable:** — · **Since:** 0.3.0
 
 > json.dumps()/json.loads() — prefer orjson (a core SDK dependency, ~10x faster)
 

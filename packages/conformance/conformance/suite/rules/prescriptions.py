@@ -19,11 +19,16 @@ reassigned.  The same policy applies to O-ids.
 from __future__ import annotations
 
 from conformance.suite.schema.catalog import RuleDefinition
-from conformance.suite.schema.disposition import EnforcementTier, RuleMechanism
+from conformance.suite.schema.disposition import (
+    EnforcementTier,
+    RuleMechanism,
+    RuleScope,
+)
 
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P001",
+        scope=RuleScope.BOTH,
         name="UnboundedContractFields",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
@@ -57,6 +62,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P002",
+        scope=RuleScope.BOTH,
         name="CategoryFieldOverride",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
@@ -98,6 +104,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="P003",
+        scope=RuleScope.BOTH,
         name="ErrorCodePrefixMismatch",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,

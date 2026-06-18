@@ -2,21 +2,28 @@
 #
 # Reusable workflow: full conformance suite gate.
 #
-# Runs each rule series (C, E, P, O) as a separate leg of one matrix job so each
-# appears as its own status check:
+# Runs each rule series (C, E, P, O, D) as a separate leg of one matrix job so
+# each appears as its own status check:
 #   Conformance / suite / CI
 #   Conformance / suite / Error-handling
 #   Conformance / suite / Prescriptions
 #   Conformance / suite / Optimizations
+#   Conformance / suite / Dependency
 #   Conformance / suite / Conformance Gate  (required gate)
 #
 # The series share an identical job body (checkout → changed-files filter → uv →
 # run → upload → Security-tab upload), so they are expressed as a single
-# `strategy.matrix` rather than four copy-pasted jobs.  The only per-series
+# `strategy.matrix` rather than copy-pasted jobs.  The only per-series
 # values are the matrix entries (series letter, display name, sarif slug,
 # changed-files path glob, and the caller's exclude-paths input).  Note C-series
-# watches `.github/**` while the AST series (E/P/O) watch `**/*.py`; that
-# asymmetry is just a matrix field, not a separate job.
+# watches `.github/**`, D-series watches `**/pyproject.toml`, and the AST series
+# (E/P/O) watch `**/*.py`; that asymmetry is just a matrix field, not a separate
+# job.
+#
+# Scope: the runner auto-detects whether the caller repo is the SDK or a consumer
+# app (from its `[project].name`) and runs only the rules in scope.  D-series and
+# the bootstrap-workflow-drift rule (C002) are app-scoped, so they no-op on the
+# SDK itself with no per-caller configuration.
 #
 # The matrix job is intentionally inline (not delegating to sub-workflows) so
 # GitHub reports the legs at the correct depth — one level of workflow_call from
@@ -109,6 +116,13 @@ on:
         required: false
         default: ""
         type: string
+      exclude-paths-d:
+        description: >
+          Comma-separated repo-root-relative path prefixes to exclude from D-series
+          (dependency) checks only, e.g. 'tools/,contract-toolkit/'.  Default: nothing excluded.
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -147,6 +161,11 @@ jobs:
             slug: optimizations
             paths: "**/*.py"
             exclude_paths: ${{ inputs.exclude-paths-o }}
+          - series: D
+            name: "Dependency"
+            slug: dependency
+            paths: "**/pyproject.toml"
+            exclude_paths: ${{ inputs.exclude-paths-d }}
     steps:
       - name: "Checkout caller repo"
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
