@@ -390,11 +390,20 @@ async def _log_dapr_components(
     emits one INFO log line per component showing its type, version, and any
     non-sensitive metadata from the corresponding component YAML.
 
-    Warns about expected components (state store, secret store, object store,
-    event binding) that are not registered in the sidecar.
+    Then emits one outcome line per *expected* binding (state store, secret
+    store, deployment object store, event binding), classifying it against the
+    ``ATLAN_ENABLE_*`` env vars the chart derives from ``atlan.yaml``'s
+    ``deploy.dapr`` block:
 
-    This is best-effort: any failure is logged as a WARNING and never blocks
-    startup.
+    * registered + declared enabled / unset → INFO ("accepted")
+    * registered + declared disabled        → INFO ("drift")
+    * missing    + declared enabled         → WARNING ("declared but missing")
+    * missing    + declared disabled        → INFO ("disabled by config")
+    * missing    + declared unset           → WARNING ("legacy/unknown intent")
+
+    Every binding always produces a log line so operators can see, with a
+    reason, how each one was handled. This is best-effort: any failure to
+    query Dapr metadata is logged as a WARNING and never blocks startup.
 
     Returns:
         Set of registered component names. Empty set if metadata query fails.
@@ -442,18 +451,69 @@ async def _log_dapr_components(
                 comp.get("version", "unknown"),
             )
 
-    expected = {
-        STATE_STORE_NAME: "state_store",
-        SECRET_STORE_NAME: "secret_store",
-        DEPLOYMENT_OBJECT_STORE_NAME: "object_store",
-        EVENT_STORE_NAME: "event_binding",
-    }
-    for comp_name, role in expected.items():
-        if comp_name not in registered:
-            logger.warning(
-                "Expected Dapr component %s (role=%s) not registered in sidecar",
+    # Each expected binding is keyed off the ATLAN_ENABLE_* env var the chart
+    # derives from atlan.yaml's deploy.dapr block. Tuple shape:
+    # (component_name, role_label, enable_env_var, atlan_yaml_key)
+    expected: tuple[tuple[str, str, str, str], ...] = (
+        (STATE_STORE_NAME, "state_store", "ATLAN_ENABLE_STATESTORE", "statestore"),
+        (SECRET_STORE_NAME, "secret_store", "ATLAN_ENABLE_SECRETSTORE", "secretstore"),
+        (
+            DEPLOYMENT_OBJECT_STORE_NAME,
+            "object_store",
+            "ATLAN_ENABLE_OBJECTSTORE",
+            "objectstore",
+        ),
+        (EVENT_STORE_NAME, "event_binding", "ATLAN_ENABLE_EVENTSTORE", "eventstore"),
+    )
+    for comp_name, role, enable_var, yaml_key in expected:
+        raw = os.environ.get(enable_var)
+        is_registered = comp_name in registered
+        if raw is None:
+            declared: bool | None = None
+        else:
+            declared = raw.strip().lower() == "true"
+
+        if is_registered and declared is not False:
+            logger.info(
+                "Dapr binding %s (role=%s) accepted: registered in sidecar (%s=%s)",
                 comp_name,
                 role,
+                enable_var,
+                raw if raw is not None else "<unset>",
+            )
+        elif is_registered and declared is False:
+            logger.info(
+                "Dapr binding %s (role=%s) registered in sidecar despite %s=false — "
+                "possible drift between atlan.yaml deploy.dapr.%s and the deployed chart values",
+                comp_name,
+                role,
+                enable_var,
+                yaml_key,
+            )
+        elif not is_registered and declared is True:
+            logger.warning(
+                "Dapr binding %s (role=%s) declared enabled (%s=true) but not registered in sidecar — "
+                "runtime calls using this component will fail; check chart values and Dapr component templates",
+                comp_name,
+                role,
+                enable_var,
+            )
+        elif not is_registered and declared is False:
+            logger.info(
+                "Dapr binding %s (role=%s) disabled by config (%s=false); not registered in sidecar (expected)",
+                comp_name,
+                role,
+                enable_var,
+            )
+        else:  # not registered, declared is None
+            logger.warning(
+                "Dapr binding %s (role=%s) not registered in sidecar and %s is unset — "
+                "the SDK cannot determine whether your app needs it; "
+                "set deploy.dapr.%s in atlan.yaml (true or false) to silence this",
+                comp_name,
+                role,
+                enable_var,
+                yaml_key,
             )
 
     return set(registered)

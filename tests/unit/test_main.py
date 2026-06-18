@@ -524,6 +524,199 @@ class TestLogDaprComponents:
         assert all(isinstance(name, str) for name in result)
 
 
+class TestLogDaprComponentsBindingOutcomes:
+    """The expected-binding loop classifies each binding against ATLAN_ENABLE_*.
+
+    Source of truth is ``atlan.yaml``'s ``deploy.dapr.{statestore,objectstore,
+    secretstore,eventstore}`` block, which the chart translates into env vars
+    on the pod via ``seed-env.sh``.
+    """
+
+    @staticmethod
+    def _rendered(call_args_list: list) -> list[str]:
+        """Render mock log calls with %-formatting applied so substring assertions work."""
+        out: list[str] = []
+        for c in call_args_list:
+            args = c.args
+            if not args:
+                continue
+            fmt = args[0]
+            rest = args[1:]
+            try:
+                out.append(fmt % rest if rest else fmt)
+            except (TypeError, ValueError):
+                out.append(fmt)
+        return out
+
+    @staticmethod
+    def _clear_enable_env(monkeypatch: pytest.MonkeyPatch) -> None:
+        for var in (
+            "ATLAN_ENABLE_STATESTORE",
+            "ATLAN_ENABLE_SECRETSTORE",
+            "ATLAN_ENABLE_OBJECTSTORE",
+            "ATLAN_ENABLE_EVENTSTORE",
+        ):
+            monkeypatch.delenv(var, raising=False)
+
+    async def test_missing_with_declared_false_logs_info_not_warning(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """statestore=false in atlan.yaml → missing component is INFO, never warning."""
+        self._clear_enable_env(monkeypatch)
+        monkeypatch.setenv("ATLAN_ENABLE_STATESTORE", "false")
+        # Other expected components present so they don't pollute the test
+        monkeypatch.setenv("ATLAN_ENABLE_SECRETSTORE", "true")
+        monkeypatch.setenv("ATLAN_ENABLE_OBJECTSTORE", "true")
+        monkeypatch.setenv("ATLAN_ENABLE_EVENTSTORE", "false")
+
+        dapr_client = AsyncMock()
+        dapr_client.get_metadata.return_value = {
+            "components": [
+                {"name": "secretstore", "type": "bindings.redis", "version": "v1"},
+                {"name": "objectstore", "type": "bindings.gcp.bucket", "version": "v1"},
+            ]
+        }
+        with patch("application_sdk.main.logger") as mock_log:
+            await _log_dapr_components(dapr_client, tmp_path)
+
+        warning_msgs = self._rendered(mock_log.warning.call_args_list)
+        info_msgs = self._rendered(mock_log.info.call_args_list)
+        assert not any(
+            "statestore" in m for m in warning_msgs
+        ), f"statestore disabled-by-config must not warn; got: {warning_msgs}"
+        assert any(
+            "statestore" in m and "disabled by config" in m for m in info_msgs
+        ), f"expected disabled-by-config INFO for statestore; got: {info_msgs}"
+
+    async def test_missing_with_declared_true_logs_warning(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """statestore=true but absent in sidecar → WARNING (genuine config bug)."""
+        self._clear_enable_env(monkeypatch)
+        monkeypatch.setenv("ATLAN_ENABLE_STATESTORE", "true")
+        monkeypatch.setenv("ATLAN_ENABLE_SECRETSTORE", "false")
+        monkeypatch.setenv("ATLAN_ENABLE_OBJECTSTORE", "false")
+        monkeypatch.setenv("ATLAN_ENABLE_EVENTSTORE", "false")
+
+        dapr_client = AsyncMock()
+        dapr_client.get_metadata.return_value = {"components": []}
+        with patch("application_sdk.main.logger") as mock_log:
+            await _log_dapr_components(dapr_client, tmp_path)
+
+        warning_msgs = self._rendered(mock_log.warning.call_args_list)
+        assert any(
+            "statestore" in m and "declared enabled" in m for m in warning_msgs
+        ), f"expected declared-but-missing WARNING; got: {warning_msgs}"
+
+    async def test_missing_with_unset_env_logs_warning_with_guidance(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Env var unset → WARNING with explicit guidance to set deploy.dapr.* in atlan.yaml."""
+        self._clear_enable_env(monkeypatch)
+
+        dapr_client = AsyncMock()
+        dapr_client.get_metadata.return_value = {"components": []}
+        with patch("application_sdk.main.logger") as mock_log:
+            await _log_dapr_components(dapr_client, tmp_path)
+
+        warning_msgs = self._rendered(mock_log.warning.call_args_list)
+        assert any(
+            "statestore" in m
+            and "ATLAN_ENABLE_STATESTORE" in m
+            and "deploy.dapr.statestore" in m
+            for m in warning_msgs
+        ), (
+            "expected unset-env WARNING naming the env var and atlan.yaml key; "
+            f"got: {warning_msgs}"
+        )
+
+    async def test_registered_with_declared_false_logs_drift_info(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Component present but declared disabled → INFO drift signal, never warning."""
+        self._clear_enable_env(monkeypatch)
+        monkeypatch.setenv("ATLAN_ENABLE_STATESTORE", "false")
+        monkeypatch.setenv("ATLAN_ENABLE_SECRETSTORE", "false")
+        monkeypatch.setenv("ATLAN_ENABLE_OBJECTSTORE", "false")
+        monkeypatch.setenv("ATLAN_ENABLE_EVENTSTORE", "false")
+
+        dapr_client = AsyncMock()
+        dapr_client.get_metadata.return_value = {
+            "components": [
+                {"name": "statestore", "type": "state.redis", "version": "v1"},
+            ]
+        }
+        with patch("application_sdk.main.logger") as mock_log:
+            await _log_dapr_components(dapr_client, tmp_path)
+
+        warning_msgs = self._rendered(mock_log.warning.call_args_list)
+        info_msgs = self._rendered(mock_log.info.call_args_list)
+        assert not any(
+            "statestore" in m and "drift" in m for m in warning_msgs
+        ), f"drift case must be INFO not WARNING; got: {warning_msgs}"
+        assert any(
+            "statestore" in m and "drift" in m for m in info_msgs
+        ), f"expected drift INFO for registered+declared-false; got: {info_msgs}"
+
+    async def test_registered_with_declared_true_logs_accepted_info(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Happy path: declared enabled and registered → INFO accepted, no warning."""
+        self._clear_enable_env(monkeypatch)
+        monkeypatch.setenv("ATLAN_ENABLE_STATESTORE", "true")
+        monkeypatch.setenv("ATLAN_ENABLE_SECRETSTORE", "false")
+        monkeypatch.setenv("ATLAN_ENABLE_OBJECTSTORE", "false")
+        monkeypatch.setenv("ATLAN_ENABLE_EVENTSTORE", "false")
+
+        dapr_client = AsyncMock()
+        dapr_client.get_metadata.return_value = {
+            "components": [
+                {"name": "statestore", "type": "state.redis", "version": "v1"},
+            ]
+        }
+        with patch("application_sdk.main.logger") as mock_log:
+            await _log_dapr_components(dapr_client, tmp_path)
+
+        warning_msgs = self._rendered(mock_log.warning.call_args_list)
+        info_msgs = self._rendered(mock_log.info.call_args_list)
+        assert not any(
+            "statestore" in m for m in warning_msgs
+        ), f"happy path must not warn; got: {warning_msgs}"
+        assert any(
+            "statestore" in m and "accepted" in m for m in info_msgs
+        ), f"expected accepted INFO; got: {info_msgs}"
+
+    async def test_every_expected_binding_emits_at_least_one_log_line(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Contract: never silently proceed — each of the 4 bindings produces a log line."""
+        self._clear_enable_env(monkeypatch)
+        # Mix of states across the four expected bindings
+        monkeypatch.setenv("ATLAN_ENABLE_STATESTORE", "false")  # disabled
+        monkeypatch.setenv("ATLAN_ENABLE_SECRETSTORE", "true")  # enabled+missing
+        monkeypatch.setenv("ATLAN_ENABLE_OBJECTSTORE", "true")  # enabled+present
+        # ATLAN_ENABLE_EVENTSTORE deliberately unset
+
+        dapr_client = AsyncMock()
+        dapr_client.get_metadata.return_value = {
+            "components": [
+                {"name": "objectstore", "type": "bindings.gcp.bucket", "version": "v1"},
+            ]
+        }
+        with patch("application_sdk.main.logger") as mock_log:
+            await _log_dapr_components(dapr_client, tmp_path)
+
+        all_msgs = self._rendered(
+            mock_log.warning.call_args_list + mock_log.info.call_args_list
+        )
+        for binding in ("statestore", "secretstore", "objectstore", "eventstore"):
+            matching = [m for m in all_msgs if binding in m and "role=" in m]
+            assert matching, (
+                f"binding {binding} produced no role-tagged log line; "
+                f"all messages: {all_msgs}"
+            )
+
+
 class TestCreateInfrastructureEventBinding:
     """Tests for _create_infrastructure() conditional event_binding."""
 
