@@ -1046,210 +1046,217 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 
 - **Import:** `from application_sdk.errors import APP_ALREADY_REGISTERED`
 - **Signature:** `APP_ALREADY_REGISTERED`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `APP_CONTEXT_ERROR`
 
 - **Import:** `from application_sdk.errors import APP_CONTEXT_ERROR`
 - **Signature:** `APP_CONTEXT_ERROR`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `APP_ERROR`
 
 - **Import:** `from application_sdk.errors import APP_ERROR`
 - **Signature:** `APP_ERROR`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `APP_NON_RETRYABLE`
 
 - **Import:** `from application_sdk.errors import APP_NON_RETRYABLE`
 - **Signature:** `APP_NON_RETRYABLE`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `APP_NOT_FOUND`
 
 - **Import:** `from application_sdk.errors import APP_NOT_FOUND`
 - **Signature:** `APP_NOT_FOUND`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `BINDING_ERROR`
 
 - **Import:** `from application_sdk.errors import BINDING_ERROR`
 - **Signature:** `BINDING_ERROR`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `CONTRACT_VALIDATION`
 
 - **Import:** `from application_sdk.errors import CONTRACT_VALIDATION`
 - **Signature:** `CONTRACT_VALIDATION`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `CREDENTIAL_ERROR`
 
 - **Import:** `from application_sdk.errors import CREDENTIAL_ERROR`
 - **Signature:** `CREDENTIAL_ERROR`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `CREDENTIAL_NOT_FOUND`
 
 - **Import:** `from application_sdk.errors import CREDENTIAL_NOT_FOUND`
 - **Signature:** `CREDENTIAL_NOT_FOUND`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `CREDENTIAL_PARSE_ERROR`
 
 - **Import:** `from application_sdk.errors import CREDENTIAL_PARSE_ERROR`
 - **Signature:** `CREDENTIAL_PARSE_ERROR`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `CREDENTIAL_VALIDATION_ERROR`
 
 - **Import:** `from application_sdk.errors import CREDENTIAL_VALIDATION_ERROR`
 - **Signature:** `CREDENTIAL_VALIDATION_ERROR`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `CREDENTIAL_VAULT_ERROR`
 
 - **Import:** `from application_sdk.errors import CREDENTIAL_VAULT_ERROR`
 - **Signature:** `CREDENTIAL_VAULT_ERROR`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `DISCOVERY_ERROR`
 
 - **Import:** `from application_sdk.errors import DISCOVERY_ERROR`
 - **Signature:** `DISCOVERY_ERROR`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `EVENT_BUS`
 
 - **Import:** `from application_sdk.errors import EVENT_BUS`
 - **Signature:** `EVENT_BUS`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `EVENT_PUBLISH`
 
 - **Import:** `from application_sdk.errors import EVENT_PUBLISH`
 - **Signature:** `EVENT_PUBLISH`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `EXECUTION_ACTIVITY_ERROR`
 
 - **Import:** `from application_sdk.errors import EXECUTION_ACTIVITY_ERROR`
 - **Signature:** `EXECUTION_ACTIVITY_ERROR`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `EXECUTION_ERROR`
 
 - **Import:** `from application_sdk.errors import EXECUTION_ERROR`
 - **Signature:** `EXECUTION_ERROR`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `EXECUTION_WORKER_ERROR`
 
 - **Import:** `from application_sdk.errors import EXECUTION_WORKER_ERROR`
 - **Signature:** `EXECUTION_WORKER_ERROR`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `HANDLER_ERROR`
 
 - **Import:** `from application_sdk.errors import HANDLER_ERROR`
 - **Signature:** `HANDLER_ERROR`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `PAYLOAD_SAFETY`
 
 - **Import:** `from application_sdk.errors import PAYLOAD_SAFETY`
 - **Signature:** `PAYLOAD_SAFETY`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `PUBSUB_ERROR`
 
 - **Import:** `from application_sdk.errors import PUBSUB_ERROR`
 - **Signature:** `PUBSUB_ERROR`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `SECRET_NOT_FOUND`
 
 - **Import:** `from application_sdk.errors import SECRET_NOT_FOUND`
 - **Signature:** `SECRET_NOT_FOUND`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `SECRET_STORE_ERROR`
 
 - **Import:** `from application_sdk.errors import SECRET_STORE_ERROR`
 - **Signature:** `SECRET_STORE_ERROR`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `SEGMENT_ERROR`
 
 - **Import:** `from application_sdk.errors import SEGMENT_ERROR`
 - **Signature:** `SEGMENT_ERROR`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `STATE_STORE_ERROR`
 
 - **Import:** `from application_sdk.errors import STATE_STORE_ERROR`
 - **Signature:** `STATE_STORE_ERROR`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `STORAGE_CONFIG`
 
 - **Import:** `from application_sdk.errors import STORAGE_CONFIG`
 - **Signature:** `STORAGE_CONFIG`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `STORAGE_EMPTY_UPLOAD`
 
 - **Import:** `from application_sdk.errors import STORAGE_EMPTY_UPLOAD`
 - **Signature:** `STORAGE_EMPTY_UPLOAD`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `STORAGE_NOT_FOUND`
 
 - **Import:** `from application_sdk.errors import STORAGE_NOT_FOUND`
 - **Signature:** `STORAGE_NOT_FOUND`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `STORAGE_OPERATION`
 
 - **Import:** `from application_sdk.errors import STORAGE_OPERATION`
 - **Signature:** `STORAGE_OPERATION`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `STORAGE_PERMISSION`
 
 - **Import:** `from application_sdk.errors import STORAGE_PERMISSION`
 - **Signature:** `STORAGE_PERMISSION`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `STORAGE_PREFLIGHT`
+
+- **Import:** `from application_sdk.errors import STORAGE_PREFLIGHT`
+- **Signature:** `STORAGE_PREFLIGHT`
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `STORAGE_PREFLIGHT`
@@ -1263,7 +1270,7 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 
 - **Import:** `from application_sdk.errors import TASK_NOT_FOUND`
 - **Signature:** `TASK_NOT_FOUND`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `WORKER_EVICTED_TYPE`

@@ -246,6 +246,29 @@ def _docstring_summary(obj: Any) -> str:
     return first_line
 
 
+def _constant_fallback_summary(resolved: Any) -> str:
+    """Generate a meaningful fallback summary for a constant with no docstring.
+
+    For legacy ``ErrorCode`` constants (e.g. ``STORAGE_NOT_FOUND = ErrorCode("STR", 1)``)
+    griffe finds no docstring because plain assignments cannot carry one.  Rather than
+    emitting ``_(no docstring)_`` for every legacy code, detect the pattern from the
+    value expression and return a standardised deprecation note.
+    """
+    try:
+        value_str = (
+            str(resolved.value)
+            if (hasattr(resolved, "value") and resolved.value is not None)
+            else ""
+        )
+    except Exception:
+        value_str = ""
+
+    if "ErrorCode" in value_str:
+        return "Deprecated legacy error code — use AppError subclasses (removed in v4.0)."
+
+    return "_(no docstring)_"
+
+
 def _relative_filepath(obj: Any) -> str:
     """Return the filepath relative to REPO_ROOT."""
     try:
@@ -378,6 +401,12 @@ def cmd_dump() -> None:
                 if resolved is not None
                 else "_(no docstring)_"
             )
+            if (
+                summary == "_(no docstring)_"
+                and resolved is not None
+                and kind == KIND_CONSTANT
+            ):
+                summary = _constant_fallback_summary(resolved)
             filepath = _relative_filepath(resolved) if resolved is not None else ""
 
             symbols.append(
