@@ -37,6 +37,26 @@ jobs:
           fail-under: "85"
           python-version: ${{ matrix.python-version }}
 
+  # Retained from the original pull_request.yaml: collapses the OS×Python unit
+  # matrix into one result. Redundant with the outer SDK Gate (which also fails
+  # if any unit cell fails), but kept so no existing check is deleted — it
+  # reports as `SDK Tests / Unit Tests Gate`.
+  unit-gate:
+    name: Unit Tests Gate
+    needs: [unit]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check unit test results
+        run: |
+          result="${{ needs.unit.result }}"
+          if [[ "$result" == "success" || "$result" == "skipped" ]]; then
+            echo "Unit tests passed or were intentionally skipped (result: $result)."
+          else
+            echo "Unit tests failed or were cancelled (result: $result)."
+            exit 1
+          fi
+
   integration:
     name: Integration Tests
     runs-on: ubuntu-latest
