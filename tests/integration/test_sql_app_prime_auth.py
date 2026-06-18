@@ -41,9 +41,13 @@ import time
 from typing import Any, ClassVar
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.templates.contracts.sql_metadata import ExtractionInput
 from application_sdk.templates.sql_app import SqlApp
+
+pytestmark = pytest.mark.integration
 
 
 class _TimingSqlClient(BaseSQLClient):
@@ -78,7 +82,6 @@ class _TimingSqlClient(BaseSQLClient):
         # Yield zero rows — extract activities exit fast.
         if False:
             yield []
-        return
 
     async def get_results(self, query: str):
         # prime_sql_auth issues SELECT 1 through this method; we just

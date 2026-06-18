@@ -160,6 +160,7 @@ Typed Python `AppInputContract` dataclass. SDK-owned fields inherited from `Extr
 The single entry point for all new native app contracts. Amend this module and declare:
 
 - App metadata: `name`, `displayName`, `connector`, `icon`
+- Marketplace metadata: `shortDescription`, `longDescription`, `tags` (emitted top-level into `atlan.yaml`; consumed by the Atlan CLI on `atlan app register` and forwarded to the Global Marketplace App row); `docsUrl` (emitted top-level into `atlan.yaml`)
 - Credential config: `credentialCommonFields`, `credentialAuthOptions`, `credentialConnectorType`
 - Workflow config: `uiConfig` (form steps and fields using `Widgets.*` types)
 - Pipeline: typed `pipeline` block (extract → parseQueries → popularity → lineage → publish)

@@ -9,13 +9,15 @@ from ._constants import _BROAD_EXCEPT_TYPES, _LOG_METHODS, BUILTIN_RAISES
 
 
 def _get_name(node: ast.expr | ast.AST | None) -> str | None:
-    """Extract a simple name string from a Name or Attribute node."""
+    """Extract a simple name string from a Name, Attribute, or Subscript node."""
     if node is None:
         return None
     if isinstance(node, ast.Name):
         return node.id
     if isinstance(node, ast.Attribute):
         return node.attr
+    if isinstance(node, ast.Subscript):
+        return _get_name(node.value)
     return None
 
 

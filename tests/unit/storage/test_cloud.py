@@ -3,6 +3,7 @@
 import base64
 import json
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 from obstore.store import LocalStore, MemoryStore
@@ -146,17 +147,50 @@ class TestFromCredentials:
         )
         assert store.provider == "s3"
 
-    def test_s3_role_arn(self):
+    @patch("application_sdk.storage._credential_providers.StsCredentialProvider")
+    @patch("boto3.Session")
+    @patch("obstore.store.S3Store")
+    def test_s3_role_arn_wires_assume_role_provider(
+        self,
+        mock_s3_cls: MagicMock,
+        mock_session_cls: MagicMock,
+        mock_sts_cls: MagicMock,
+    ):
+        """BLDX-1441: cross-account ``aws_role_arn`` with no base keys must wire
+        an STS assume-role credential provider against the *user-entered* bucket.
+
+        obstore has no static ``aws_role_arn`` config key, so stuffing it into
+        ``config`` is a silent no-op — the store falls back to the pod's ambient
+        (tenant) identity and can't reach the customer's cross-account bucket.
+        The role must be assumed via a credential provider (as ``binding.py`` does).
+        """
+        mock_s3_cls.return_value = MagicMock()
+        mock_sts_cls.return_value = MagicMock()
+        mock_session_cls.return_value = MagicMock()
+
         store = CloudStore.from_credentials(
             {
                 "authType": "s3",
                 "extra": {
-                    "s3_bucket": "test-bucket",
-                    "aws_role_arn": "arn:aws:iam::123:role/MyRole",
+                    "s3_bucket": "customer-cross-account-bucket",
+                    "aws_role_arn": "arn:aws:iam::222222222222:role/CrossAccount",
+                    "region": "us-east-1",
                 },
             }
         )
+
         assert store.provider == "s3"
+        # The STS assume-role provider was actually constructed (not skipped).
+        mock_sts_cls.assert_called_once()
+        call_kwargs = mock_s3_cls.call_args.kwargs
+        # The user-entered bucket is honored, not swapped for a default.
+        assert call_kwargs["bucket"] == "customer-cross-account-bucket"
+        # An assume-role credential provider is wired onto the store.
+        assert call_kwargs.get("credential_provider") is not None
+        # And the role is NOT smuggled in as an inert obstore config key.
+        config = call_kwargs.get("config") or {}
+        assert "aws_role_arn" not in config
+        assert "aws_role_session_name" not in config
 
     def test_adls_account_key_auth(self):
         # Azure requires base64-encoded account keys

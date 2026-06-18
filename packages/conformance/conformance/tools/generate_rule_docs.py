@@ -104,6 +104,16 @@ _SERIES_META: list[SeriesMeta] = [
         suppression_example="# conformance: ignore[C001] intentional: org-internal action",
     ),
     SeriesMeta(
+        title="Dependency Rules (D-series)",
+        prefix="D",
+        source_module="conformance/suite/rules/dependency.py",
+        output_filename="dependency.md",
+        checker="`suite.checks.dependency_conformance` (TOML-based, static)",
+        suppression_example=(
+            "# conformance: ignore[D002] intentional: pinned to pre-release for hotfix"
+        ),
+    ),
+    SeriesMeta(
         title="Prescription Rules (P-series)",
         prefix="P",
         source_module="conformance/suite/rules/prescriptions.py",
@@ -188,14 +198,15 @@ def _render_series(meta: SeriesMeta, rules: list[RuleDefinition]) -> str:
         lines.append("")
 
     # Summary table
-    lines.append("| ID | Name | Tier | Category | Autofixable | Since |")
-    lines.append("|---|---|---|---|---|---|")
+    lines.append("| ID | Name | Tier | Scope | Category | Autofixable | Since |")
+    lines.append("|---|---|---|---|---|---|---|")
     for rule in rules:
         anchor = _rule_anchor(rule)
         since = rule.since or "—"
         lines.append(
             f"| [{rule.id}](#{anchor}) | `{rule.name}` | {_tier_badge(rule.tier)}"
-            f" | `{rule.category}` | {_bool_icon(rule.autofixable)} | {since} |"
+            f" | `{rule.scope.value}` | `{rule.category}`"
+            f" | {_bool_icon(rule.autofixable)} | {since} |"
         )
     lines.append("")
     lines.append("---")
@@ -213,6 +224,7 @@ def _render_series(meta: SeriesMeta, rules: list[RuleDefinition]) -> str:
         # Metadata row
         lines.append(
             f"**Tier:** {_tier_badge(rule.tier)} · "
+            f"**Scope:** `{rule.scope.value}` · "
             f"**Category:** `{rule.category}` · "
             f"**Autofixable:** {autofixable} · "
             f"**Since:** {since}"
@@ -222,6 +234,15 @@ def _render_series(meta: SeriesMeta, rules: list[RuleDefinition]) -> str:
         # Short description as a blockquote
         if rule.short_description:
             lines.append(f"> {_rst_to_md(rule.short_description)}")
+            lines.append("")
+
+        # Rationale — why the rule exists
+        if rule.rationale:
+            rationale_text = _rst_to_md(rule.rationale)
+            wrapped = textwrap.fill(
+                rationale_text, width=88, break_long_words=False, break_on_hyphens=False
+            )
+            lines.append(f"**Rationale:** {wrapped}")
             lines.append("")
 
         # Full description — convert RST backticks, preserve paragraph breaks

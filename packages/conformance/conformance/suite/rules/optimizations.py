@@ -9,11 +9,16 @@ earns mandatory status graduates into a category series or the P-series.
 from __future__ import annotations
 
 from conformance.suite.schema.catalog import RuleDefinition
-from conformance.suite.schema.disposition import EnforcementTier, RuleMechanism
+from conformance.suite.schema.disposition import (
+    EnforcementTier,
+    RuleMechanism,
+    RuleScope,
+)
 
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="O001",
+        scope=RuleScope.BOTH,
         name="OrjsonOverStdlibJson",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -21,6 +26,12 @@ RULES: tuple[RuleDefinition, ...] = (
         autofixable=False,
         orthogonal_gate="tests",
         since="0.3.0",
+        rationale=(
+            "orjson is already a core SDK dependency — zero incremental cost — and on hot "
+            "paths the ~10x throughput advantage compounds at fleet scale. WARN (not block) "
+            "because orjson returns bytes not str and has a different option API, so each "
+            "site needs human judgment before migrating."
+        ),
         short_description="json.dumps()/json.loads() — prefer orjson (a core SDK dependency, ~10x faster)",
         full_description=(
             "``orjson`` is already a core dependency of the application SDK, so it is\n"

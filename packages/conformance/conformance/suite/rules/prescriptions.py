@@ -19,11 +19,16 @@ reassigned.  The same policy applies to O-ids.
 from __future__ import annotations
 
 from conformance.suite.schema.catalog import RuleDefinition
-from conformance.suite.schema.disposition import EnforcementTier, RuleMechanism
+from conformance.suite.schema.disposition import (
+    EnforcementTier,
+    RuleMechanism,
+    RuleScope,
+)
 
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P001",
+        scope=RuleScope.BOTH,
         name="UnboundedContractFields",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
@@ -31,6 +36,12 @@ RULES: tuple[RuleDefinition, ...] = (
         autofixable=False,
         orthogonal_gate="tests",
         since="0.3.0",
+        rationale=(
+            "Temporal enforces a hard 2MB payload limit on workflow/activity I/O (ADR-0008). "
+            "Unbounded fields can silently grow past it in production, failing the workflow "
+            "with a cryptic size error instead of a type error at import time. A justified "
+            "inline suppression keeps every opt-out visible in review and auditable in SARIF."
+        ),
         short_description="Input/Output contract declared with allow_unbounded_fields=True — opts out of payload safety",
         full_description=(
             "An ``Input``/``Output`` contract subclass declared with the\n"
@@ -48,5 +59,83 @@ RULES: tuple[RuleDefinition, ...] = (
             "suppression above — see BLDX-1428.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p001",
+    ),
+    RuleDefinition(
+        id="P002",
+        scope=RuleScope.BOTH,
+        name="CategoryFieldOverride",
+        tier=EnforcementTier.BLOCK,
+        mechanism=RuleMechanism.STATIC,
+        category="category-immutability",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.3.0",
+        rationale=(
+            "FailureCategory is consumed as an immutable reporting metric by the Automation "
+            "Engine, SLA dashboards, and on-call routing (ADR-0013). A redeclaration either "
+            "duplicates the parent (drifts on rename) or substitutes a different value "
+            "(splits one failure mode across two buckets), corrupting the reporting layer "
+            "for every downstream consumer."
+        ),
+        short_description="AppError subclass redeclares the `category` ClassVar — drifts the canonical taxonomy",
+        full_description=(
+            "``FailureCategory`` is the closed, single-axis taxonomy the SDK owns —\n"
+            "every value is the canonical answer to *what happened* and is consumed as\n"
+            "an immutable reporting metric (dashboards, SLA gates, on-call routing).\n"
+            "The 14 categorical leaves in ``application_sdk.errors.leaves`` (and\n"
+            "``AppError`` itself) are the sole defining sites: each leaf binds exactly\n"
+            "one ``FailureCategory`` to its ``category`` ``ClassVar``.\n"
+            "\n"
+            "Domain subclasses MUST inherit ``category`` from their categorical-leaf\n"
+            "parent — never redeclare it.  A redeclaration is either a same-value\n"
+            "duplication (clutter that drifts as soon as the parent is renamed) or a\n"
+            "true override (silent taxonomy drift that splits a metric across\n"
+            "lookalike values).  Both are blocked uniformly: domain subclasses\n"
+            "specialise via ``code`` and evidence fields, not ``category``.\n"
+            "\n"
+            "Suppressed declarations are still emitted to the SARIF report (counted in\n"
+            "their own category), so every opt-out is reported every single time.\n"
+            "This rule is ``BLOCK`` (suppress-only): an unsuppressed redeclaration\n"
+            "fails the conformance gate — the only sanctioned use is the justified\n"
+            "inline suppression ``# conformance: ignore[P002] <reason>`` at the\n"
+            "declaration site — see BLDX-1432.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p002",
+    ),
+    RuleDefinition(
+        id="P003",
+        scope=RuleScope.BOTH,
+        name="ErrorCodePrefixMismatch",
+        tier=EnforcementTier.BLOCK,
+        mechanism=RuleMechanism.STATIC,
+        category="error-code-shape",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.3.0",
+        rationale=(
+            "Each categorical leaf owns a prefix that embeds its category into every error code "
+            "(`AUTH_`, `INTERNAL_`, etc.). Without it, the code column is opaque — dashboards "
+            "must join the category column for every query, and subclasses that inherit the bare "
+            "leaf code collapse all their distinct failure modes into one undifferentiated bucket."
+        ),
+        short_description="AppError subclass code missing or doesn't start with the parent leaf's category prefix",
+        full_description=(
+            "Every concrete subclass of an ``application_sdk.errors`` leaf "
+            "(``AuthError``, ``InternalError``, ``InvalidInputError``, etc.) must\n"
+            "declare its own ``code: ClassVar[str]`` that starts with the leaf's\n"
+            "category prefix and an underscore (``AUTH_``, ``INTERNAL_``,\n"
+            "``INVALID_INPUT_``, etc.).  Without that prefix the code is opaque to\n"
+            "dashboards and on-call routing — the category column has to be joined\n"
+            "for every query.  Without an override, every site of the subclass\n"
+            "collapses into the leaf's bare bucket and is impossible to triage.\n"
+            "\n"
+            "The check resolves inheritance transitively: an intermediate class with\n"
+            "no ``code`` (a 'pass-through' subclass between a leaf and a concrete\n"
+            "leaf) is also flagged so failures don't silently inherit the bare\n"
+            "leaf's code.  Suppress with ``# conformance: ignore[P003] <reason>``\n"
+            "at the declaration when an intermediate is genuinely abstract — see\n"
+            "typed-error-prescription §4 and BLDX-1431.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p003",
     ),
 )

@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**1 rule** · Checker: `suite.checks.prescriptions` (AST-based)
+**3 rules** · Checker: `suite.checks.prescriptions` (AST-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -21,17 +21,24 @@ the same topic.  When a domain series takes over an area, the rule is retired in
 (kept documented, no longer firing) and the new rule gets a fresh id — the original id
 is never reused or reassigned.
 
-| ID | Name | Tier | Category | Autofixable | Since |
-|---|---|---|---|---|---|
-| [P001](#p001) | `UnboundedContractFields` | `block` | `contract-payload-safety` | — | 0.3.0 |
+| ID | Name | Tier | Scope | Category | Autofixable | Since |
+|---|---|---|---|---|---|---|
+| [P001](#p001) | `UnboundedContractFields` | `block` | `both` | `contract-payload-safety` | — | 0.3.0 |
+| [P002](#p002) | `CategoryFieldOverride` | `block` | `both` | `category-immutability` | — | 0.3.0 |
+| [P003](#p003) | `ErrorCodePrefixMismatch` | `block` | `both` | `error-code-shape` | — | 0.3.0 |
 
 ---
 
 ## P001 — `UnboundedContractFields` {#p001}
 
-**Tier:** `block` · **Category:** `contract-payload-safety` · **Autofixable:** — · **Since:** 0.3.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `contract-payload-safety` · **Autofixable:** — · **Since:** 0.3.0
 
 > Input/Output contract declared with allow_unbounded_fields=True — opts out of payload safety
+
+**Rationale:** Temporal enforces a hard 2MB payload limit on workflow/activity I/O (ADR-0008).
+Unbounded fields can silently grow past it in production, failing the workflow with a
+cryptic size error instead of a type error at import time. A justified inline
+suppression keeps every opt-out visible in review and auditable in SARIF.
 
 An `Input`/`Output` contract subclass declared with the `allow_unbounded_fields=True`
 class keyword opts out of the SDK's payload-safety enforcement: arbitrary, untyped
@@ -44,5 +51,63 @@ Suppressed declarations are still emitted to the SARIF report (counted in their 
 category), so every opt-out is reported every single time. This rule is `BLOCK`
 (suppress-only): an unsuppressed declaration fails the conformance gate — the only
 sanctioned use is the justified inline suppression above — see BLDX-1428.
+
+---
+
+## P002 — `CategoryFieldOverride` {#p002}
+
+**Tier:** `block` · **Scope:** `both` · **Category:** `category-immutability` · **Autofixable:** — · **Since:** 0.3.0
+
+> AppError subclass redeclares the `category` ClassVar — drifts the canonical taxonomy
+
+**Rationale:** FailureCategory is consumed as an immutable reporting metric by the Automation Engine,
+SLA dashboards, and on-call routing (ADR-0013). A redeclaration either duplicates the
+parent (drifts on rename) or substitutes a different value (splits one failure mode
+across two buckets), corrupting the reporting layer for every downstream consumer.
+
+`FailureCategory` is the closed, single-axis taxonomy the SDK owns — every value is the
+canonical answer to *what happened* and is consumed as an immutable reporting metric
+(dashboards, SLA gates, on-call routing). The 14 categorical leaves in
+`application_sdk.errors.leaves` (and `AppError` itself) are the sole defining sites:
+each leaf binds exactly one `FailureCategory` to its `category` `ClassVar`.
+
+Domain subclasses MUST inherit `category` from their categorical-leaf parent — never
+redeclare it.  A redeclaration is either a same-value duplication (clutter that drifts
+as soon as the parent is renamed) or a true override (silent taxonomy drift that splits
+a metric across lookalike values).  Both are blocked uniformly: domain subclasses
+specialise via `code` and evidence fields, not `category`.
+
+Suppressed declarations are still emitted to the SARIF report (counted in their own
+category), so every opt-out is reported every single time. This rule is `BLOCK`
+(suppress-only): an unsuppressed redeclaration fails the conformance gate — the only
+sanctioned use is the justified inline suppression `# conformance: ignore[P002]
+<reason>` at the declaration site — see BLDX-1432.
+
+---
+
+## P003 — `ErrorCodePrefixMismatch` {#p003}
+
+**Tier:** `block` · **Scope:** `both` · **Category:** `error-code-shape` · **Autofixable:** — · **Since:** 0.3.0
+
+> AppError subclass code missing or doesn't start with the parent leaf's category prefix
+
+**Rationale:** Each categorical leaf owns a prefix that embeds its category into every error code
+(`AUTH_`, `INTERNAL_`, etc.). Without it, the code column is opaque — dashboards must
+join the category column for every query, and subclasses that inherit the bare leaf code
+collapse all their distinct failure modes into one undifferentiated bucket.
+
+Every concrete subclass of an `application_sdk.errors` leaf (`AuthError`,
+`InternalError`, `InvalidInputError`, etc.) must declare its own `code: ClassVar[str]`
+that starts with the leaf's category prefix and an underscore (`AUTH_`, `INTERNAL_`,
+`INVALID_INPUT_`, etc.).  Without that prefix the code is opaque to dashboards and
+on-call routing — the category column has to be joined for every query.  Without an
+override, every site of the subclass collapses into the leaf's bare bucket and is
+impossible to triage.
+
+The check resolves inheritance transitively: an intermediate class with no `code` (a
+'pass-through' subclass between a leaf and a concrete leaf) is also flagged so failures
+don't silently inherit the bare leaf's code.  Suppress with `# conformance: ignore[P003]
+<reason>` at the declaration when an intermediate is genuinely abstract — see
+typed-error-prescription §4 and BLDX-1431.
 
 ---

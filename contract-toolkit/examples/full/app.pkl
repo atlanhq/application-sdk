@@ -10,6 +10,7 @@
 ///               conditional UIRule, CredentialInput, ConnectionCreator
 ///   - extraNodes: custom DAG node outside the typed pipeline
 ///   - notifications: explicit opt-in to the run-completion notification node
+///   - marketplace metadata: docsUrl, shortDescription, longDescription, tags
 amends "../../src/App.pkl"
 
 import "../../src/Connectors.pkl"
@@ -19,6 +20,20 @@ displayName = "Full-Featured Example"
 connector = Connectors.POSTGRES
 workflowType = "FullFeaturedExampleWorkflow"
 icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
+docsUrl = "https://docs.example.com/apps/full-featured"
+shortDescription = "Reference contract that exercises every App.pkl property."
+longDescription = """
+Full-featured reference contract used by the toolkit's own tests.
+
+Covers JDBC URL auth, every pipeline step, diverse widgets, UIRules,
+extraNodes, run-completion notifications, and the full marketplace
+metadata block emitted into atlan.yaml.
+"""
+tags = new Listing {
+  "reference"
+  "example"
+  "postgres"
+}
 credentialConnectorType = "jdbc"
 notifications = true
 

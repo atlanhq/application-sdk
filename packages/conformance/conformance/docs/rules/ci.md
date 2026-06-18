@@ -5,7 +5,7 @@
 
 # CI/Workflow Supply-Chain Rules (C-series)
 
-**2 rules** · Checker: `suite.checks.actions_pinning` and related workflow checks (static)
+**3 rules** · Checker: `suite.checks.actions_pinning` and related workflow checks (static)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -13,18 +13,23 @@ Suppress a finding on the violating line or the line directly above it:
 # conformance: ignore[C001] intentional: org-internal action
 ```
 
-| ID | Name | Tier | Category | Autofixable | Since |
-|---|---|---|---|---|---|
-| [C001](#c001) | `UnpinnedActionReference` | `block` | `supply-chain` | yes | 3.16.0 |
-| [C002](#c002) | `BootstrapWorkflowDrift` | `warn` | `ci-consistency` | yes | 0.3.0 |
+| ID | Name | Tier | Scope | Category | Autofixable | Since |
+|---|---|---|---|---|---|---|
+| [C001](#c001) | `UnpinnedActionReference` | `block` | `both` | `supply-chain` | yes | 0.2.0 |
+| [C002](#c002) | `BootstrapWorkflowDrift` | `warn` | `app` | `ci-consistency` | yes | 0.3.0 |
+| [C003](#c003) | `GitignoreMissingEntry` | `warn` | `both` | `ci-consistency` | — | 0.4.0 |
 
 ---
 
 ## C001 — `UnpinnedActionReference` {#c001}
 
-**Tier:** `block` · **Category:** `supply-chain` · **Autofixable:** yes · **Since:** 3.16.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `supply-chain` · **Autofixable:** yes · **Since:** 0.2.0
 
 > External GitHub Action not pinned to a full commit digest
+
+**Rationale:** A mutable tag (@v4) can be silently re-pointed to any commit after review — including
+malicious code — with no notification to the consumer. Pinning to a full commit SHA
+makes the action content immutable: the code reviewed is the code that runs.
 
 External actions reused via `uses:` must be pinned to a full-length commit SHA (digest),
 never a mutable tag (@v4) or branch (@main). A tag can be re-pointed to malicious code
@@ -35,14 +40,39 @@ local `./` composite-action refs are exempt (no version to pin).
 
 ## C002 — `BootstrapWorkflowDrift` {#c002}
 
-**Tier:** `warn` · **Category:** `ci-consistency` · **Autofixable:** yes · **Since:** 0.3.0
+**Tier:** `warn` · **Scope:** `app` · **Category:** `ci-consistency` · **Autofixable:** yes · **Since:** 0.3.0
 
 > Managed CI workflow is absent or has drifted from the bootstrap canonical
+
+**Rationale:** Managed CI workflows enforce fleet-wide guarantees: uniform security scanning,
+consistent release gating, current conformance checks. Drift means an app runs an older
+workflow that may lack a recently-added security gate or use a deprecated step —
+invisible until exploited or until the step fails.
 
 The `atlan-application-sdk-conformance bootstrap` command installs a standard set of CI
 workflow shims into `.github/workflows/`. This rule flags any managed file that is
 missing or whose content has diverged from what `bootstrap` would write. Re-run
 `bootstrap` to re-sync; structural drift is flagged while intentional per-repo value
 choices (e.g. `package_name`, `unit_tests_workflow_file`) are preserved.
+
+---
+
+## C003 — `GitignoreMissingEntry` {#c003}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `ci-consistency` · **Autofixable:** — · **Since:** 0.4.0
+
+> .gitignore is absent or missing a standard required entry
+
+**Rationale:** A .gitignore that is missing standard entries risks accidentally committing secrets,
+virtual environments, build artefacts, or IDE noise — each of which has caused incidents
+or review friction. The standard set is the minimal baseline every app repo should
+carry.
+
+The `atlan-application-sdk-conformance bootstrap` command scaffolds a standard
+.gitignore when the file is absent. This rule flags any required entry that is missing
+from the file. One finding is emitted per missing entry so each can be triaged or
+suppressed independently. Equivalences are respected: `.venv` covers `.venv/`, and
+`**/node_modules/**` covers `node_modules/`. Both absent-file and missing-entry findings
+are WARN only — the file is app-editable and must never block CI.
 
 ---

@@ -32,7 +32,7 @@ jobs:
       #          pure docs/, .github-meta, and .security-only PRs.
       scan: ${{ steps.filter.outputs.scan }}
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       # No explicit `base`: for pull_request, paths-filter diffs against the PR
       # base automatically; for merge_group it diffs the queued merge ref against
       # the default branch (the same proven setup the conformance jobs use).
@@ -74,7 +74,7 @@ jobs:
     name: Conventional Commits
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork != true
         with:
           fetch-depth: 0
@@ -92,7 +92,7 @@ jobs:
     if: needs.changes.outputs.sdk == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: "./.github/actions/docstring-coverage"
         with:
           module-name: application_sdk
@@ -111,7 +111,7 @@ jobs:
       - name: Short-circuit when nothing to scan
         if: needs.changes.outputs.scan != 'true'
         run: echo "No first-party source or dependency changes — Trivy code scan not needed."
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         if: needs.changes.outputs.scan == 'true'
       - uses: "./.github/actions/trivy"
         if: needs.changes.outputs.scan == 'true'
@@ -124,7 +124,7 @@ jobs:
     if: needs.changes.outputs.container == 'true' && github.event.pull_request.head.repo.fork != true
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: "./.github/actions/trivy-container"
         with:
           chainguard-username: ${{ secrets.CHAINGUARD_USERNAME }}
@@ -140,14 +140,14 @@ jobs:
     needs: changes
     if: needs.changes.outputs.sdk == 'true'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12", "3.13", "3.14"]
         os: [ubuntu-22.04, macOS-latest, windows-latest]
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: "./.github/actions/unit-tests"
         with:
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
@@ -183,7 +183,7 @@ jobs:
         if: needs.changes.outputs.sdk != 'true'
         run: echo "No SDK change on this PR/merge-group entry — integration tests not needed."
 
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         if: needs.changes.outputs.sdk == 'true'
       - uses: "./.github/actions/setup-deps"
         if: needs.changes.outputs.sdk == 'true'
@@ -200,7 +200,7 @@ jobs:
       # paths across runs so we don't re-download every time.
       - name: Cache embedded runtime binaries
         if: needs.changes.outputs.sdk == 'true'
-        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             ~/.cache/atlan-sdk/temporal
@@ -213,6 +213,77 @@ jobs:
         if: needs.changes.outputs.sdk == 'true'
         run: uv run pytest tests/integration/ -m integration -v --timeout=120
 
+  # Always runs and always concludes; short-circuits its steps when no SDK
+  # change is present (a job-level `if:` reports "skipped", which leaves a
+  # required check pending forever in the merge queue). Mirrors the integration
+  # job above.
+  storage-emulator:
+    name: Storage Emulator Tests
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Short-circuit when no SDK change
+        if: needs.changes.outputs.sdk != 'true'
+        run: echo "No SDK change on this PR/merge-group entry — storage emulator tests not needed."
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        if: needs.changes.outputs.sdk == 'true'
+      - uses: "./.github/actions/setup-deps"
+        if: needs.changes.outputs.sdk == 'true'
+
+      - name: Start object-store emulators
+        if: needs.changes.outputs.sdk == 'true'
+        run: |
+          set -euo pipefail
+          # S3 → MinIO
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+          # Azure → Azurite
+          docker run -d --name azurite -p 10000:10000 \
+            mcr.microsoft.com/azure-storage/azurite:3.31.0 \
+            azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
+          # GCS → storage-testbench behind an nginx proxy that re-injects the
+          # ETag / Last-Modified headers testbench omits (obstore requires them).
+          docker network create gcs-net || true
+          docker run -d --name gcs-testbench --network gcs-net -e PORT=9000 \
+            gcr.io/cloud-devrel-public-resources/storage-testbench:v0.62.0
+          docker run -d --name gcs-proxy --network gcs-net -p 9095:9000 \
+            -v "$PWD/tests/integration/storage/gcs_emulator_proxy.conf:/etc/nginx/conf.d/default.conf:ro" \
+            nginx:1.27-alpine
+
+      - name: Wait for emulators + provision buckets/container
+        if: needs.changes.outputs.sdk == 'true'
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do curl -sf http://localhost:9000/minio/health/live >/dev/null 2>&1 && break; sleep 2; done
+          for i in $(seq 1 30); do curl -s --max-time 2 http://localhost:10000/devstoreaccount1 >/dev/null 2>&1 && break; sleep 2; done
+          for i in $(seq 1 40); do curl -sf "http://localhost:9095/storage/v1/b?project=test" >/dev/null 2>&1 && break; sleep 2; done
+          export AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin AWS_DEFAULT_REGION=us-east-1
+          # Provisioning is idempotent (|| true) so a step re-run on a still-warm
+          # runner doesn't abort on "bucket already exists" under set -e.
+          aws --endpoint-url http://localhost:9000 s3 mb s3://sdk-emulator-test || true
+          # SDR ENABLE_ATLAN_UPLOAD handoff: customer-managed + internal Atlan buckets.
+          aws --endpoint-url http://localhost:9000 s3 mb s3://sdk-customer-objectstore || true
+          aws --endpoint-url http://localhost:9000 s3 mb s3://sdk-atlan-objectstore || true
+          az storage container create --name sdk-emulator-test \
+            --connection-string "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;" || true
+          curl -sf -X POST "http://localhost:9095/storage/v1/b?project=test" \
+            -H "Content-Type: application/json" -d '{"name":"sdk-emulator-test"}' || true
+
+      - name: Run storage emulator tests
+        if: needs.changes.outputs.sdk == 'true'
+        env:
+          AWS_ENDPOINT_URL: http://localhost:9000
+          AZURE_STORAGE_ENDPOINT: http://localhost:10000
+          GCS_EMULATOR_ENDPOINT: http://localhost:9095
+        run: uv run pytest tests/integration/storage -m storage_emulator -v --timeout=300
+
+      - name: Teardown emulators
+        if: always() && needs.changes.outputs.sdk == 'true'
+        run: docker rm -f minio azurite gcs-testbench gcs-proxy 2>/dev/null || true
+
   matrix-builder:
     name: Build Test Matrix
     if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
@@ -221,7 +292,7 @@ jobs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Get PR Labels
         id: get-labels
@@ -328,7 +399,7 @@ jobs:
     outputs:
       image: ${{ steps.ref.outputs.image }}
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Set up Buildx
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
       - name: Compute PR base image ref
@@ -407,7 +478,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.matrix-builder.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: "./.github/actions/e2e-apps"
         with:
           github-token: ${{ secrets.ORG_PAT_GITHUB }}

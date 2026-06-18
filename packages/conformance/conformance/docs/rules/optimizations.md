@@ -21,17 +21,22 @@ the same topic.  When a domain series takes over an area, the rule is retired in
 (kept documented, no longer firing) and the new rule gets a fresh id — the original id
 is never reused or reassigned.
 
-| ID | Name | Tier | Category | Autofixable | Since |
-|---|---|---|---|---|---|
-| [O001](#o001) | `OrjsonOverStdlibJson` | `warn` | `canonical-dependency` | — | 0.3.0 |
+| ID | Name | Tier | Scope | Category | Autofixable | Since |
+|---|---|---|---|---|---|---|
+| [O001](#o001) | `OrjsonOverStdlibJson` | `warn` | `both` | `canonical-dependency` | — | 0.3.0 |
 
 ---
 
 ## O001 — `OrjsonOverStdlibJson` {#o001}
 
-**Tier:** `warn` · **Category:** `canonical-dependency` · **Autofixable:** — · **Since:** 0.3.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `canonical-dependency` · **Autofixable:** — · **Since:** 0.3.0
 
 > json.dumps()/json.loads() — prefer orjson (a core SDK dependency, ~10x faster)
+
+**Rationale:** orjson is already a core SDK dependency — zero incremental cost — and on hot paths the
+~10x throughput advantage compounds at fleet scale. WARN (not block) because orjson
+returns bytes not str and has a different option API, so each site needs human judgment
+before migrating.
 
 `orjson` is already a core dependency of the application SDK, so it is available to
 every app, and it is generally *at least* 10x faster than the stdlib `json` module.

@@ -68,22 +68,6 @@ def _bootstrap_file(dest: pathlib.Path, content: str) -> None:
     print(f"{'updated' if existed else 'installed'}: {dest}")
 
 
-def _ensure_gitignore_entry(root: pathlib.Path, entry: str) -> None:
-    """Append *entry* to .gitignore if not already present; never overwrites."""
-    gitignore = root / ".gitignore"
-    if gitignore.exists():
-        lines = gitignore.read_text(encoding="utf-8").splitlines()
-        if any(line.strip() == entry for line in lines):
-            print(f"ok:        {gitignore}  ({entry!r} already present)")
-            return
-        # Append with a preceding blank line for readability.
-        with gitignore.open("a", encoding="utf-8") as fh:
-            fh.write(f"\n{entry}\n")
-    else:
-        gitignore.write_text(f"{entry}\n", encoding="utf-8")
-    print(f"appended:  {gitignore}  ({entry!r})")
-
-
 def _read_atlan_yaml_name(root: pathlib.Path) -> str:
     """Return the ``name:`` value from ``atlan.yaml`` in *root*, or ``""``."""
 
@@ -213,7 +197,16 @@ def _cmd_bootstrap(argv: list[str]) -> int:
                 f"ok (exists): {scaffold_dest}  (edit freely; C002 tracks drift at WARN)"
             )
 
-    _ensure_gitignore_entry(root, "remediation/")
+    # .gitignore — write-if-absent scaffold.  C003 warns about missing entries.
+    gitignore_dest = root / ".gitignore"
+    if not gitignore_dest.exists():
+        gitignore_dest.write_text(render(".gitignore"), encoding="utf-8")
+        print(f"scaffolded: {gitignore_dest}")
+    else:
+        print(
+            f"ok (exists): {gitignore_dest}  (edit freely; C003 warns on missing entries)"
+        )
+
     return 0
 
 

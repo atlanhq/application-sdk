@@ -20,7 +20,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from conformance.suite.schema.disposition import EnforcementTier, RuleMechanism
+from conformance.suite.schema.disposition import (
+    EnforcementTier,
+    RuleMechanism,
+    RuleScope,
+)
 from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------
@@ -42,6 +46,13 @@ class AtlanRuleProperties(BaseModel):
     Lets the remediation loop re-run only the narrowest gate covering a fix.
     """
 
+    scope: RuleScope = RuleScope.BOTH
+    """``sdk``, ``app``, or ``both`` — the consumer surface the rule governs.
+    Defaulted at the SARIF-projection layer so reading an older or hand-authored
+    report that predates the field is tolerant; the authoring layer
+    (``catalog.RuleDefinition.scope``) is where the field is required.
+    """
+
     category: str
     """Rule family, e.g. ``"silent-swallow"``, ``"log-format"``.
     Used for fleet-level dashboarding and suppression-rate signals.
@@ -58,13 +69,18 @@ class AtlanRuleProperties(BaseModel):
     """
 
     since: str | None = None
-    """Suite (SDK) version when this rule was introduced, e.g. ``"3.16.0"``."""
+    """Conformance suite version when this rule was introduced, e.g. ``"0.2.0"``."""
+
+    rationale: str | None = None
+    """Why this rule exists — what risk it avoids, what loop it closes, or what
+    value it adds.  Surfaced as ``atlan/rationale`` in the ``properties`` bag."""
 
     def to_properties(self) -> dict[str, Any]:
         """Return a ``properties`` dict ready to merge into a SARIF node."""
         out: dict[str, Any] = {
             "atlan/tier": self.tier.value,
             "atlan/mechanism": self.mechanism.value,
+            "atlan/scope": self.scope.value,
             "atlan/category": self.category,
             "atlan/autofixable": self.autofixable,
         }
@@ -72,6 +88,8 @@ class AtlanRuleProperties(BaseModel):
             out["atlan/orthogonalGate"] = self.orthogonal_gate
         if self.since is not None:
             out["atlan/since"] = self.since
+        if self.rationale is not None:
+            out["atlan/rationale"] = self.rationale
         return out
 
     @classmethod
@@ -80,10 +98,12 @@ class AtlanRuleProperties(BaseModel):
         return cls(
             tier=EnforcementTier(props["atlan/tier"]),
             mechanism=RuleMechanism(props["atlan/mechanism"]),
+            scope=RuleScope(props.get("atlan/scope", RuleScope.BOTH.value)),
             category=props["atlan/category"],
             autofixable=bool(props.get("atlan/autofixable", False)),
             orthogonal_gate=props.get("atlan/orthogonalGate"),
             since=props.get("atlan/since"),
+            rationale=props.get("atlan/rationale"),
         )
 
 

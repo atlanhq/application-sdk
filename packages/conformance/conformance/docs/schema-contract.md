@@ -43,7 +43,7 @@ validation contract.  Every produced document must validate against it via
 | **Proposed fix** | `result.fixes[]` (`artifactChanges`) | populated by the remediation layer (BLDX-1388) |
 | **Rule mechanism** | `properties["atlan/mechanism"]` | `"static"` or `"test"` — lets the loop re-run the narrowest gate |
 | **Remediation hint** | `result.properties["atlan/hint"]` | machine-actionable hint for the model |
-| **Suite version** | `run.tool.driver.version` | = SDK release, e.g. `"3.16.0"` |
+| **Suite version** | `run.tool.driver.version` | = conformance package release, e.g. `"0.4.0"` |
 | **Repo / commit** | `run.versionControlProvenance[]` | `repositoryUri`, `revisionId` (SHA), `branch` |
 | **Gate decision** | `run.invocations[0].exitCode` | `0` = gate passed, `1` = gate failed |
 | **Disposition totals** | `run.properties["atlan/summary"]` | `{passing, failing, warning, suppressed}` counts |
@@ -120,7 +120,7 @@ Rule ID namespaces:
 | `L001–L099` | Logging patterns (from `signal-over-noise` tune phase) |
 | `C001–C099` | CI/workflow supply-chain (action-pinning, permissions, trigger hygiene) |
 | `T001–T099` | Test-quality patterns (reserved) |
-| `D001–D099` | Dependency patterns (reserved) |
+| `D001–D099` | Dependency patterns (pyproject.toml conformance against the SDK contract) |
 
 **A new rule is just a new entry in the appropriate series module** — it automatically fans
 out to every consumer app on the next upgrade, and the suite invalidates every app's
@@ -136,7 +136,7 @@ they are up-to-date with `uv run poe generate-rule-docs --check`.
 | `L001–L099` | Logging patterns | [rules/logging.md](rules/logging.md) |
 | `C001–C099` | CI/workflow supply-chain | [rules/ci.md](rules/ci.md) |
 | `T001–T099` | Test-quality patterns (reserved) | — |
-| `D001–D099` | Dependency patterns (reserved) | — |
+| `D001–D099` | Dependency patterns | [rules/dependency.md](rules/dependency.md) |
 
 ---
 

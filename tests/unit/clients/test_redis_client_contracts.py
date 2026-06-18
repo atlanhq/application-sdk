@@ -231,7 +231,7 @@ class TestSyncConnect:
         ):
             standalone_client._connect()
         redis_ctor.assert_called_once_with(
-            host="localhost", port=6379, password="secret"
+            host="localhost", port=6379, password="secret", socket_timeout=5
         )
         fake_redis.ping.assert_called_once()
         assert standalone_client.redis_client is fake_redis
@@ -258,7 +258,9 @@ class TestSyncConnect:
         ):
             sentinel_client._connect()
         sentinel_ctor.assert_called_once()
-        sentinel.master_for.assert_called_once_with("mymaster", password="secret")
+        sentinel.master_for.assert_called_once_with(
+            "mymaster", password="secret", socket_timeout=5
+        )
         master.ping.assert_called_once()
         assert sentinel_client.redis_client is master
 
@@ -296,6 +298,28 @@ class TestSyncConnect:
             with pytest.raises(AppRedisProtocolError) as ei:
                 standalone_client._connect()
         assert ei.value.code == "DEPENDENCY_UNAVAILABLE_REDIS_PROTOCOL"
+
+    def test_socket_timeout_on_acquire_raises_redis_timeout_error(
+        self, standalone_client
+    ):
+        """A socket timeout during lock-acquire must surface as RedisTimeoutError.
+
+        Validates the finite socket_timeout wiring: a Redis hang raises
+        redis.exceptions.TimeoutError which _handle_redis_error maps to
+        AppRedisTimeoutError — the caller can handle it instead of blocking
+        indefinitely.
+        """
+        fake_redis = MagicMock()
+        fake_redis.ping.return_value = True
+        fake_redis.set.side_effect = RedisTimeoutError("socket timed out")
+        with (
+            patch("application_sdk.clients.redis.REDIS_SENTINEL_HOSTS", ""),
+            patch("application_sdk.clients.redis.redis.Redis", return_value=fake_redis),
+        ):
+            standalone_client._connect()
+        with pytest.raises(AppRedisTimeoutError) as ei:
+            standalone_client._acquire_lock("resource-id", "owner-id")
+        assert ei.value.code == "TIMEOUT_REDIS"
 
     def test_connect_standalone_ctor_failure_wrapped(self, standalone_client):
         with (
@@ -438,7 +462,7 @@ class TestAsyncConnect:
         ):
             await standalone_client._connect()
         redis_ctor.assert_called_once_with(
-            host="localhost", port=6379, password="secret"
+            host="localhost", port=6379, password="secret", socket_timeout=5
         )
         fake_redis.ping.assert_awaited_once()
         assert standalone_client.redis_client is fake_redis
@@ -460,7 +484,9 @@ class TestAsyncConnect:
             ),
         ):
             await sentinel_client._connect()
-        sentinel.master_for.assert_called_once_with("mymaster", password="secret")
+        sentinel.master_for.assert_called_once_with(
+            "mymaster", password="secret", socket_timeout=5
+        )
         master.ping.assert_awaited_once()
         assert sentinel_client.redis_client is master
 
@@ -479,6 +505,25 @@ class TestAsyncConnect:
         ):
             await standalone_client._connect()
         assert ei.value.code == "DEPENDENCY_UNAVAILABLE_REDIS"
+
+    async def test_socket_timeout_on_acquire_raises_redis_timeout_error(
+        self, standalone_client
+    ):
+        """A socket timeout during async lock-acquire must surface as RedisTimeoutError."""
+        fake_redis = AsyncMock()
+        fake_redis.ping.return_value = True
+        fake_redis.set.side_effect = RedisTimeoutError("socket timed out")
+        with (
+            patch("application_sdk.clients.redis.REDIS_SENTINEL_HOSTS", ""),
+            patch(
+                "application_sdk.clients.redis.async_redis.Redis",
+                return_value=fake_redis,
+            ),
+        ):
+            await standalone_client._connect()
+        with pytest.raises(AppRedisTimeoutError) as ei:
+            await standalone_client._acquire_lock("resource-id", "owner-id")
+        assert ei.value.code == "TIMEOUT_REDIS"
 
 
 class TestAsyncClose:

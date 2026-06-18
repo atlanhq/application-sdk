@@ -25,23 +25,33 @@ from pathlib import Path
 from conformance.suite.checks import (
     actions_pinning,
     bootstrap_drift,
+    dependency_conformance,
     error_handling,
+    gitignore_entries,
     optimizations,
     prescriptions,
 )
-from conformance.suite.checks._ast_common import TOOL_VERSION
-from conformance.suite.rules import assert_registry_consistent, get_rule
-from conformance.suite.schema.disposition import EnforcementTier
+from conformance.suite.checks._ast_common import TOOL_VERSION, detect_scope
+from conformance.suite.rules import CATALOG, assert_registry_consistent, get_rule
+from conformance.suite.schema.disposition import EnforcementTier, RuleScope
 from conformance.suite.schema.findings import Finding, findings_to_report
 
 
 @dataclass(frozen=True)
 class CheckRegistration:
-    """A registered check module, identified by its rule-series letter."""
+    """A registered check module, identified by its rule-series letter.
+
+    A check supplies either ``scan_path`` (per-file scanning) or ``scan_all``
+    (cross-file scanning that needs to see every file before emitting findings —
+    e.g. transitive inheritance resolution).  When ``scan_all`` is set the
+    runner calls it once with the post-exclusion path list; otherwise it calls
+    ``scan_path`` per file.
+    """
 
     series: str
     discover: Callable[[Path], list[Path]]
     scan_path: Callable[[Path, Path], list[Finding]]
+    scan_all: Callable[[list[Path], Path], list[Finding]] | None = None
 
 
 _CHECKS: list[CheckRegistration] = [
@@ -61,27 +71,61 @@ _CHECKS: list[CheckRegistration] = [
         scan_path=error_handling.scan_path,
     ),
     CheckRegistration(
-        series=prescriptions.SERIES,
-        discover=prescriptions.discover,
-        scan_path=prescriptions.scan_path,
+        series=dependency_conformance.SERIES,
+        discover=dependency_conformance.discover,
+        scan_path=dependency_conformance.scan_path,
     ),
     CheckRegistration(
         series=optimizations.SERIES,
         discover=optimizations.discover,
         scan_path=optimizations.scan_path,
     ),
+    CheckRegistration(
+        series=prescriptions.SERIES,
+        discover=prescriptions.discover,
+        scan_path=prescriptions.scan_path,
+        scan_all=prescriptions.scan_all,
+    ),
+    CheckRegistration(
+        series=gitignore_entries.SERIES,
+        discover=gitignore_entries.discover,
+        scan_path=gitignore_entries.scan_path,
+    ),
 ]
 
 
 # Registry invariant: every registered checker's series must have rule
 # definitions in the catalog (so get_rule() resolves for each finding it emits).
-# Shared with the doc generator via assert_registry_consistent — see its
-# docstring for why this is a subset, not an equality, relation.
 assert_registry_consistent(check_series=frozenset(c.series for c in _CHECKS))
 
 
 def _tier(f: Finding) -> EnforcementTier:
     return get_rule(f.rule_id).tier
+
+
+def _rule_in_scope(rule_scope: RuleScope, active: RuleScope | None) -> bool:
+    """True if a rule with ``rule_scope`` applies under the ``active`` scope.
+
+    ``active`` is ``None`` when the scope could not be determined and ``--scope``
+    was not given — in that case every rule is in scope (the pre-feature
+    behaviour).  Otherwise a rule applies iff its scope is ``BOTH`` or matches.
+    """
+    return active is None or rule_scope == RuleScope.BOTH or rule_scope == active
+
+
+def _series_in_scope(series: str, active: RuleScope | None) -> bool:
+    """True if *any* rule in ``series`` is in scope under ``active``.
+
+    Used to skip a whole check's discovery+scan when none of its series' rules
+    could ever produce an in-scope finding (e.g. the all-APP D-series on the SDK).
+    Series that mix scopes (C001/C003 are ``both`` while C002 is ``app``) stay
+    active and rely on the post-scan finding filter for correctness.
+    """
+    return any(
+        _rule_in_scope(rule.scope, active)
+        for rule in CATALOG.values()
+        if rule.id[0] == series
+    )
 
 
 def _print_human_summary(
@@ -221,6 +265,17 @@ def main(argv: list[str] | None = None) -> int:
             "it works uniformly across every registered series."
         ),
     )
+    parser.add_argument(
+        "--scope",
+        choices=[RuleScope.SDK.value, RuleScope.APP.value],
+        default=None,
+        help=(
+            "Restrict to rules that apply to this consumer surface ('sdk' or "
+            "'app'); 'both'-scoped rules always run.  Default: auto-detected from "
+            "the repo's [project].name (atlan-application-sdk* -> sdk, else app); "
+            "if undetectable, every rule runs."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.series:
@@ -231,31 +286,49 @@ def main(argv: list[str] | None = None) -> int:
 
     # Build the set of excluded prefixes once (normalised, non-empty only).
     # Trailing slashes are stripped so matching is done on path-component
-    # boundaries below — 'tools' excludes 'tools/' and the file 'tools' itself,
+    # boundaries — 'tools' excludes 'tools/' and the file 'tools' itself,
     # but never 'tools_extra/'.
     excluded_prefixes = tuple(
         p.strip().lstrip("/").rstrip("/") for p in args.exclude.split(",") if p.strip()
     )
 
     root = Path(args.repo).resolve()
+
+    # Resolve the active scope: an explicit --scope wins; otherwise auto-detect
+    # from the repo under scan.  ``None`` means "scope unknown — run everything".
+    active_scope = RuleScope(args.scope) if args.scope else detect_scope(root)
+
     all_findings: list[Finding] = []
     for check in active:
+        # Skip a whole check when none of its series' rules could be in scope
+        # (e.g. the all-APP D-series when scanning the SDK itself).
+        if not _series_in_scope(check.series, active_scope):
+            continue
+        paths: list[Path] = []
         for p in check.discover(root):
             if excluded_prefixes:
                 rel = p.relative_to(root).as_posix()
-                # Two match shapes, both anchored on a path-component boundary:
-                #   rel == prefix              → an exact single-file exclude
-                #                                (e.g. --exclude path/to/foo.py)
-                #   rel.startswith(prefix+'/') → a directory-prefix exclude
-                #                                (the common case, e.g. 'tools/')
-                # 'tools' thus excludes tools/ and the file 'tools', never
-                # 'tools_extra/'.
                 if any(
                     rel == prefix or rel.startswith(prefix + "/")
                     for prefix in excluded_prefixes
                 ):
                     continue
-            all_findings.extend(check.scan_path(p, root))
+            paths.append(p)
+        if check.scan_all is not None:
+            all_findings.extend(check.scan_all(paths, root))
+        else:
+            for p in paths:
+                all_findings.extend(check.scan_path(p, root))
+
+    # Drop findings for rules outside the active scope.  This is the
+    # finding-level counterpart to the series-level skip above: it covers
+    # mixed-scope series (e.g. C, where C001 is 'both' but C002/C003 are 'app')
+    # so the SARIF report, counts, and exit code reflect only in-scope rules.
+    all_findings = [
+        f
+        for f in all_findings
+        if _rule_in_scope(get_rule(f.rule_id).scope, active_scope)
+    ]
 
     # Always surface violations in a human-readable form so CI logs are actionable.
     _print_human_summary(all_findings, args.series, excluded_prefixes)

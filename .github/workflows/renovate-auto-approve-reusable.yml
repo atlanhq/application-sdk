@@ -143,8 +143,11 @@ jobs:
             fi
 
             # d. All changed files must be dependency-related.
-            #    Allowed: anything under .github/, or the file roots uv.lock,
-            #    requirements.txt, pyproject.toml.
+            #    Allowed: anything under .github/, or lock/manifest files at
+            #    any depth: uv.lock, package-lock.json, requirements.txt,
+            #    pyproject.toml.  The (.*/)?  prefix in each pattern makes
+            #    -x (full-line) matching work for both root-level and
+            #    workspace-relative paths (e.g. packages/conformance/uv.lock).
             FILENAMES=$(gh api "repos/${REPO}/pulls/${PR_NUM}/files" \
               --paginate --jq '.[].filename')
             if [ -z "$FILENAMES" ]; then
@@ -154,7 +157,7 @@ jobs:
 
             NON_DEP_FILES=$(echo "$FILENAMES" \
               | grep -v '^\.github/' \
-              | grep -vxE 'uv\.lock|requirements\.txt|pyproject\.toml' \
+              | grep -vxE '(.*/)?uv\.lock|(.*/)?package-lock\.json|(.*/)?requirements\.txt|(.*/)?pyproject\.toml' \
               || true)
             if [ -n "$NON_DEP_FILES" ]; then
               echo "PR #${PR_NUM}: contains non-dependency files:"
