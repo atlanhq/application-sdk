@@ -287,9 +287,10 @@ def test_conformance_upload_sarif_passes_ref_and_sha() -> None:
     assert "workflow_run.head_sha" in content
 
 
-def test_conformance_upload_sarif_has_actions_read_permission() -> None:
-    """actions: read is required to download artifacts from the triggering run."""
+def test_conformance_upload_sarif_has_required_permissions() -> None:
+    """security-events: write uploads SARIF; actions: read downloads artifacts from the triggering run."""
     content = render("conformance-upload-sarif.yaml")
+    assert "security-events: write" in content
     assert "actions: read" in content
 
 
