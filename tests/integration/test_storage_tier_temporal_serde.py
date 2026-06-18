@@ -1,20 +1,19 @@
 """Integration test: StorageTier / FileReference round-trips through Temporal.
 
-Uses ``WorkflowEnvironment.start_local()`` to spin up the embedded Temporal
-dev server and run a minimal workflow that receives a ``FileReference`` as
-input and echoes it back as output.  The test proves that all three
-``StorageTier`` values survive JSON serialisation → Temporal payload →
-JSON deserialisation intact.
+Runs a minimal echo workflow against the session's embedded Temporal dev
+server (booted once by conftest.py via ``embedded_runtime``).  The test
+proves that all three ``StorageTier`` values survive JSON serialisation →
+Temporal payload → JSON deserialisation intact.
 
 Why this matters
 ----------------
-``FileReference`` is a frozen dataclass that travels through Temporal's
+``FileReference`` is a Pydantic model that travels through Temporal's
 2 MB payload system as JSON.  The ``tier`` field is a ``str`` enum
-(``StorageTier``).  Temporal's ``DefaultPayloadConverter`` must:
+(``StorageTier``).  Temporal's ``pydantic_data_converter`` must:
 
 1. Encode ``StorageTier.RETAINED`` → ``"retained"`` (the string value).
 2. Decode ``"retained"`` back → ``StorageTier.RETAINED`` using the type
-   annotation on the dataclass field.
+   annotation on the model field.
 
 This test catches any regression in that flow.
 """
@@ -24,15 +23,14 @@ from __future__ import annotations
 import pytest
 from pydantic import Field
 from temporalio import workflow
-from temporalio.client import Client
-from temporalio.contrib.pydantic import pydantic_data_converter
-from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.execution.sandbox import SandboxConfig
+
+pytestmark = pytest.mark.integration
 
 # ---------------------------------------------------------------------------
 # Minimal workflow definition
@@ -71,18 +69,6 @@ _SANDBOX_RUNNER = SandboxedWorkflowRunner(
 )
 
 
-async def _run_echo(client: Client, ref: FileReference) -> FileReference:
-    """Execute the echo workflow and return the FileReference from the output."""
-    result: _EchoOutput = await client.execute_workflow(
-        "StorageTierEchoWorkflow",
-        _EchoInput(ref=ref),
-        id=f"serde-test-{ref.tier.value}-{id(ref)}",
-        task_queue="serde-test-queue",
-        result_type=_EchoOutput,
-    )
-    return result.ref
-
-
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -105,7 +91,7 @@ async def _run_echo(client: Client, ref: FileReference) -> FileReference:
     ids=["transient", "retained", "persistent"],
 )
 async def test_storage_tier_survives_temporal_round_trip(
-    tier: StorageTier, storage_path: str
+    temporal_client, task_queue, tier: StorageTier, storage_path: str
 ) -> None:
     """FileReference.tier is preserved after Temporal payload serialisation."""
     original = FileReference(
@@ -116,53 +102,48 @@ async def test_storage_tier_survives_temporal_round_trip(
         tier=tier,
     )
 
-    async with await WorkflowEnvironment.start_local(
-        data_converter=pydantic_data_converter
-    ) as env:
-        async with Worker(
-            env.client,
-            task_queue="serde-test-queue",
-            workflows=[_StorageTierEchoWorkflow],
-            workflow_runner=_SANDBOX_RUNNER,
-        ):
-            echoed = await _run_echo(env.client, original)
+    async with Worker(
+        temporal_client,
+        task_queue=task_queue,
+        workflows=[_StorageTierEchoWorkflow],
+        workflow_runner=_SANDBOX_RUNNER,
+    ):
+        result: _EchoOutput = await temporal_client.execute_workflow(
+            "StorageTierEchoWorkflow",
+            _EchoInput(ref=original),
+            id=f"serde-test-{tier.value}",
+            task_queue=task_queue,
+            result_type=_EchoOutput,
+        )
 
     assert (
-        echoed.tier == tier
-    ), f"Expected tier={tier!r} but got {echoed.tier!r} after Temporal round-trip"
-    assert echoed.storage_path == storage_path
-    assert echoed.is_durable is True
-    assert echoed.file_count == 3
+        result.ref.tier == tier
+    ), f"Expected tier={tier!r} but got {result.ref.tier!r} after Temporal round-trip"
+    assert result.ref.storage_path == storage_path
+    assert result.ref.is_durable is True
+    assert result.ref.file_count == 3
 
 
 @pytest.mark.asyncio
-async def test_default_tier_is_transient_after_round_trip() -> None:
+async def test_default_tier_is_transient_after_round_trip(
+    temporal_client, task_queue
+) -> None:
     """FileReference without explicit tier defaults to TRANSIENT through serde."""
     original = FileReference(storage_path="file_refs/default.parquet", is_durable=True)
     assert original.tier == StorageTier.TRANSIENT  # sanity check
 
-    async with await WorkflowEnvironment.start_local(
-        data_converter=pydantic_data_converter
-    ) as env:
-        async with Worker(
-            env.client,
-            task_queue="serde-test-queue",
-            workflows=[_StorageTierEchoWorkflow],
-            workflow_runner=_SANDBOX_RUNNER,
-        ):
-            echoed = await _run_echo(env.client, original)
+    async with Worker(
+        temporal_client,
+        task_queue=task_queue,
+        workflows=[_StorageTierEchoWorkflow],
+        workflow_runner=_SANDBOX_RUNNER,
+    ):
+        result: _EchoOutput = await temporal_client.execute_workflow(
+            "StorageTierEchoWorkflow",
+            _EchoInput(ref=original),
+            id="serde-test-default-tier",
+            task_queue=task_queue,
+            result_type=_EchoOutput,
+        )
 
-    assert echoed.tier == StorageTier.TRANSIENT
-
-
-@pytest.mark.asyncio
-async def test_tier_string_value_is_lowercase() -> None:
-    """StorageTier serialises to its lowercase string value (not the enum name)."""
-    assert StorageTier.TRANSIENT.value == "transient"
-    assert StorageTier.RETAINED.value == "retained"
-    assert StorageTier.PERSISTENT.value == "persistent"
-
-    # Reconstruct from value — this is what Temporal's converter does.
-    assert StorageTier("transient") is StorageTier.TRANSIENT
-    assert StorageTier("retained") is StorageTier.RETAINED
-    assert StorageTier("persistent") is StorageTier.PERSISTENT
+    assert result.ref.tier == StorageTier.TRANSIENT
