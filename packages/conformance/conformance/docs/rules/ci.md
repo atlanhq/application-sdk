@@ -26,6 +26,10 @@ Suppress a finding on the violating line or the line directly above it:
 
 > External GitHub Action not pinned to a full commit digest
 
+**Rationale:** A mutable tag (@v4) can be silently re-pointed to any commit after review — including
+malicious code — with no notification to the consumer. Pinning to a full commit SHA
+makes the action content immutable: the code reviewed is the code that runs.
+
 External actions reused via `uses:` must be pinned to a full-length commit SHA (digest),
 never a mutable tag (@v4) or branch (@main). A tag can be re-pointed to malicious code
 after review. Actions in the `atlanhq/` org are exempt (they intentionally track @main);
@@ -38,6 +42,11 @@ local `./` composite-action refs are exempt (no version to pin).
 **Tier:** `warn` · **Category:** `ci-consistency` · **Autofixable:** yes · **Since:** 0.3.0
 
 > Managed CI workflow is absent or has drifted from the bootstrap canonical
+
+**Rationale:** Managed CI workflows enforce fleet-wide guarantees: uniform security scanning,
+consistent release gating, current conformance checks. Drift means an app runs an older
+workflow that may lack a recently-added security gate or use a deprecated step —
+invisible until exploited or until the step fails.
 
 The `atlan-application-sdk-conformance bootstrap` command installs a standard set of CI
 workflow shims into `.github/workflows/`. This rule flags any managed file that is

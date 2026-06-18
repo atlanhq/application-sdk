@@ -42,6 +42,10 @@ Suppress a finding on the violating line or the line directly above it:
 
 > Bare 'except: pass' silently discards every exception
 
+**Rationale:** The hardest class of production bug to debug: no stack trace, no log record, no
+indication anything failed. Every downstream anomaly (wrong results, missing records) is
+diagnosed with no artifact pointing back to the origin.
+
 A bare `except: pass` catches KeyboardInterrupt, SystemExit, and GeneratorExit and
 discards them with no trace.  This is the hardest class of bugs to debug.  Replace with
 a typed catch that at minimum logs the error with `exc_info=True`.  Never acceptable —
@@ -54,6 +58,10 @@ even cleanup paths should log at DEBUG.
 **Tier:** `block` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 3.16.0
 
 > Typed 'except SomeError: pass' discards exception silently
+
+**Rationale:** A typed catch that discards silently still destroys the event record. Stack traces at
+the point of failure are often the only artifact that survives async and service
+boundaries in a distributed system.
 
 A typed catch that still discards silently loses the stack trace entirely. Acceptable
 only for truly trivial best-effort operations where failure is 100% expected AND the
@@ -68,6 +76,10 @@ reasoning.
 
 > contextlib.suppress() — check whether scope is too broad
 
+**Rationale:** suppress(Exception) is semantically identical to except Exception: pass — it absorbs
+every unexpected failure with no trace. A narrow suppress(FileNotFoundError) is safe;
+anything broader is a hidden failure sink.
+
 `contextlib.suppress(Exception)` or `suppress(BaseException)` is HIGH severity; narrow
 `suppress(FileNotFoundError)` on a cleanup path is acceptable.  The checker must inspect
 the suppressed exception type before classifying.
@@ -79,6 +91,10 @@ the suppressed exception type before classifying.
 **Tier:** `warn` · **Category:** `overly-broad-catch` · **Autofixable:** — · **Since:** 3.16.0
 
 > Overly broad 'except Exception/BaseException' without exc_info
+
+**Rationale:** Without exc_info, the stack trace is gone at the point of capture. A broad catch without
+a traceback also masks completely unexpected exceptions from upstream code, making
+root-cause analysis impossible.
 
 Catches everything but the specific type is unknown.  HIGH severity when not logged;
 MEDIUM when logged but missing `exc_info=True`.  Acceptable only at top-level handlers
@@ -92,6 +108,10 @@ MEDIUM when logged but missing `exc_info=True`.  Acceptable only at top-level ha
 
 > except block logs without exc_info=True — stack trace discarded
 
+**Rationale:** Tracebacks are the primary artifact of incident postmortems. A record that says
+something failed but carries no stack trace forces engineers to reproduce the failure —
+often impossible under production data volumes.
+
 The message is logged but the stack trace is lost.  Add `exc_info=True` to every
 `logger.warning()` / `logger.error()` call inside an except block.  `logger.exception()`
 is exempt (it implies `exc_info=True`).
@@ -104,6 +124,10 @@ is exempt (it implies `exc_info=True`).
 
 > Bare 'except:' (no type) — catches SystemExit and KeyboardInterrupt
 
+**Rationale:** A bare except: absorbs KeyboardInterrupt and SystemExit even with a handler body.
+Process-termination signals are silently intercepted and the process may continue in an
+undefined state.
+
 Like P001 but the block may have a body.  Still catches KeyboardInterrupt and
 SystemExit.  Always specify at least `except Exception:`.
 
@@ -114,6 +138,10 @@ SystemExit.  Always specify at least `except Exception:`.
 **Tier:** `warn` · **Category:** `error-to-return-value` · **Autofixable:** — · **Since:** 3.16.0
 
 > except block returns a value without logging — error hidden
+
+**Rationale:** Converting an exception to a falsy return value (None, [], False) shifts the failure
+point: the caller sees a plausible empty result and fails later, often somewhere
+unrelated, making the original failure invisible.
 
 Exception is converted to a return value (None, {}, [], False) with no trace.  Callers
 see a wrong result with no idea why.  At minimum log before returning; prefer raising a
@@ -126,6 +154,10 @@ domain-specific exception instead.
 **Tier:** `warn` · **Category:** `optional-import` · **Autofixable:** — · **Since:** 3.16.0
 
 > except ImportError without logging — environment issues hidden
+
+**Rationale:** Silent optional-import guards mask environment misconfigurations. If a preferred module
+is unexpectedly absent, the fallback runs and produces subtly wrong results with no
+signal in the observability stack.
 
 Optional-dependency guard.  Acceptable when the import is genuinely optional AND the
 fallback path is correct AND there is a comment.  Log at DEBUG if the module is
@@ -140,6 +172,10 @@ later with a confusing AttributeError).
 
 > except block only assigns a variable — error hidden with no log
 
+**Rationale:** The exception sets a flag or default and the event record is destroyed. Callers see
+apparently-normal behaviour until they discover the silent fallback later — typically
+under production conditions where it produces wrong results at scale.
+
 Exception sets a flag or default value with no trace.  Combines P007's error-hiding with
 no logging.  Add a `logger.warning(..., exc_info=True)` before the assignment.
 
@@ -150,6 +186,10 @@ no logging.  Add a `logger.warning(..., exc_info=True)` before the assignment.
 **Tier:** `warn` · **Category:** `asyncio-unexamined` · **Autofixable:** — · **Since:** 3.16.0
 
 > asyncio.gather(return_exceptions=True) results not checked for exceptions
+
+**Rationale:** gather(return_exceptions=True) turns exceptions into values, indistinguishable from
+normal results in the returned list. Every failed sub-task silently disappears unless
+the caller checks each result for Exception.
 
 `return_exceptions=True` returns exception instances as values in the result list.  If
 the list is not subsequently inspected for `Exception` instances, errors vanish
@@ -163,6 +203,10 @@ silently.  The pattern is only a bug when results are not checked;
 **Tier:** `warn` · **Category:** `filter-safety` · **Autofixable:** — · **Since:** 3.17.0
 
 > logging.Filter.filter() body not wrapped in try/except — can crash caller
+
+**Rationale:** logging.Filter.filter() exceptions propagate to the code that called logger.info() — not
+to handleError() like handler exceptions. An unguarded filter body is a production crash
+vector hidden inside observability infra.
 
 `Logger.handle()` calls `self.filter(record)` with no surrounding try/except — unlike
 handler errors, filter exceptions are NOT caught by `handleError()`.  An unguarded
@@ -181,6 +225,10 @@ propagate.
 
 > raise ValueError/RuntimeError/... where a typed AppError applies
 
+**Rationale:** The Automation Engine receives a typed error envelope (category, audience, retryable,
+code). A bare ValueError delivers an opaque string with none of these — dashboards are
+blind, on-call routing can't branch on it, SLA gates can't classify it. (per ADR-0013)
+
 SDK code raises a bare Python builtin.  The Automation Engine receives an opaque string
 — no category, code, audience, or retryable field. Dashboards are blind; on-call routing
 is impossible.  Use the typed error leaf from `application_sdk.errors`.  Acceptable only
@@ -195,6 +243,10 @@ require `TypeError`/`ValueError` for stdlib interoperability.
 
 > raise ClientError/ApiError/... (deprecated AtlanError stack)
 
+**Rationale:** AtlanError subclasses produce no typed wire envelope — they reach AE as opaque strings
+and emit DeprecationWarning at construction. Every new raise site deepens the migration
+debt and blocks the v4.0 removal.
+
 `AtlanError` and its subclasses emit a `DeprecationWarning` at construction time and
 reach AE as opaque strings.  They produce no typed wire envelope.  Scheduled for removal
 in v4.0.  Replace with the appropriate leaf from `application_sdk.errors`.
@@ -206,6 +258,10 @@ in v4.0.  Replace with the appropriate leaf from `application_sdk.errors`.
 **Tier:** `warn` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 3.17.0
 
 > except block exits loop silently (continue/break) without logging
+
+**Rationale:** A loop that silently absorbs per-item exceptions can complete with a full-looking result
+set that silently omits items. Silent partial failure is harder to detect than an
+outright crash — callers may act on the wrong result for a long time.
 
 An `except` block inside a loop whose body is only `continue`, `break`, or `pass` — with
 no logging call — silently swallows the exception and resumes or exits the iteration.
@@ -220,6 +276,11 @@ log at WARNING/ERROR with `exc_info=True`.
 **Tier:** `warn` · **Category:** `error-message-hygiene` · **Autofixable:** — · **Since:** 3.17.0
 
 > Caught exception text interpolated into typed error message= — leaks unsanitised text
+
+**Rationale:** Embedding str(exc) in message= produces a unique string per failure instance — each
+path/value becomes a separate dashboard bucket instead of one countable signal. It also
+leaks unsanitised upstream text into a field shown to operators and indexed by
+aggregation.
 
 A typed `AppError` raise whose `message=` keyword value embeds the caught exception via
 an f-string (`f'…{exc}…'`), `str(exc)`, or `repr(exc)` — see typed-error-prescription.md
@@ -236,6 +297,12 @@ and keep `message=` a stable human summary.
 **Tier:** `warn` · **Category:** `exception-chaining` · **Autofixable:** yes · **Since:** 3.17.0
 
 > raise inside except block missing 'from exc' cause — breaks exception chain
+
+**Rationale:** When the Automation Engine rebuilds the typed wire envelope it walks the
+.cause/__cause__ chain (set by 'raise X from e'); its reconstruction path does not
+follow __context__. Without explicit chaining the original exception — attached only as
+__context__ — is visible at the interpreter level but dropped from the wire envelope and
+every downstream system that reads it.
 
 A non-bare `raise` inside an `except … as e:` block that does not include `from e` (or
 `from None`).  Without explicit chaining, Python attaches the original as `__context__`
@@ -254,6 +321,11 @@ None` (intentional suppression).
 
 > Error evidence kwarg ending in _secret/_password/_token — rejected by wire layer at runtime
 
+**Rationale:** Evidence fields with secret-bearing suffixes are rejected by the wire layer at runtime.
+Static detection catches the pattern before any code runs, eliminating the window
+between deploy and first invocation where live credentials could be serialised into
+logs, dashboards, or SARIF.
+
 An error construction call that passes a keyword argument whose name ends in `_secret`,
 `_password`, or `_token` — see `application_sdk.errors.wire` §6.  The wire layer
 actively rejects these suffixes at runtime (`ValueError`) to prevent credential leakage
@@ -268,6 +340,10 @@ before any code runs.  Rename the evidence field to a safe key (e.g. `credential
 **Tier:** `warn` · **Category:** `untyped-raise` · **Autofixable:** — · **Since:** 3.17.0
 
 > Raising a bare AppError leaf class without a domain subclass overriding code
+
+**Rationale:** Each categorical leaf is a dashboard bucket. Raising the parent directly collapses all
+domain failure modes into one bucket — impossible to count separately, route to the
+right rotation, or alert on per failure mode.
 
 Raising a parent leaf directly (`InternalError(...)`, `InvalidInputError(...)`) without
 a domain-specific subclass that overrides `code` collapses all failure modes for a given

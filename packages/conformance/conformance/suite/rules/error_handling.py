@@ -15,6 +15,11 @@ RULES: tuple[RuleDefinition, ...] = (
         autofixable=False,
         orthogonal_gate="tests",
         since="3.16.0",
+        rationale=(
+            "The hardest class of production bug to debug: no stack trace, no log record, "
+            "no indication anything failed. Every downstream anomaly (wrong results, missing "
+            "records) is diagnosed with no artifact pointing back to the origin."
+        ),
         short_description="Bare 'except: pass' silently discards every exception",
         full_description=(
             "A bare ``except: pass`` catches KeyboardInterrupt, SystemExit, and\n"
@@ -34,6 +39,11 @@ RULES: tuple[RuleDefinition, ...] = (
         autofixable=False,
         orthogonal_gate="tests",
         since="3.16.0",
+        rationale=(
+            "A typed catch that discards silently still destroys the event record. Stack "
+            "traces at the point of failure are often the only artifact that survives async "
+            "and service boundaries in a distributed system."
+        ),
         short_description="Typed 'except SomeError: pass' discards exception silently",
         full_description=(
             "A typed catch that still discards silently loses the stack trace entirely.\n"
@@ -52,6 +62,11 @@ RULES: tuple[RuleDefinition, ...] = (
         autofixable=False,
         orthogonal_gate="tests",
         since="3.16.0",
+        rationale=(
+            "suppress(Exception) is semantically identical to except Exception: pass — it "
+            "absorbs every unexpected failure with no trace. A narrow suppress(FileNotFoundError) "
+            "is safe; anything broader is a hidden failure sink."
+        ),
         short_description="contextlib.suppress() — check whether scope is too broad",
         full_description=(
             "``contextlib.suppress(Exception)`` or ``suppress(BaseException)`` is HIGH\n"
@@ -70,6 +85,11 @@ RULES: tuple[RuleDefinition, ...] = (
         autofixable=False,
         orthogonal_gate="tests",
         since="3.16.0",
+        rationale=(
+            "Without exc_info, the stack trace is gone at the point of capture. A broad "
+            "catch without a traceback also masks completely unexpected exceptions from "
+            "upstream code, making root-cause analysis impossible."
+        ),
         short_description="Overly broad 'except Exception/BaseException' without exc_info",
         full_description=(
             "Catches everything but the specific type is unknown.  HIGH severity when\n"
@@ -88,6 +108,11 @@ RULES: tuple[RuleDefinition, ...] = (
         autofixable=True,
         orthogonal_gate="tests",
         since="3.16.0",
+        rationale=(
+            "Tracebacks are the primary artifact of incident postmortems. A record that "
+            "says something failed but carries no stack trace forces engineers to reproduce "
+            "the failure — often impossible under production data volumes."
+        ),
         short_description="except block logs without exc_info=True — stack trace discarded",
         full_description=(
             "The message is logged but the stack trace is lost.  Add ``exc_info=True``\n"
@@ -105,6 +130,11 @@ RULES: tuple[RuleDefinition, ...] = (
         autofixable=False,
         orthogonal_gate="tests",
         since="3.16.0",
+        rationale=(
+            "A bare except: absorbs KeyboardInterrupt and SystemExit even with a handler "
+            "body. Process-termination signals are silently intercepted and the process may "
+            "continue in an undefined state."
+        ),
         short_description="Bare 'except:' (no type) — catches SystemExit and KeyboardInterrupt",
         full_description=(
             "Like P001 but the block may have a body.  Still catches KeyboardInterrupt\n"
@@ -121,6 +151,11 @@ RULES: tuple[RuleDefinition, ...] = (
         autofixable=False,
         orthogonal_gate="tests",
         since="3.16.0",
+        rationale=(
+            "Converting an exception to a falsy return value (None, [], False) shifts the "
+            "failure point: the caller sees a plausible empty result and fails later, often "
+            "somewhere unrelated, making the original failure invisible."
+        ),
         short_description="except block returns a value without logging — error hidden",
         full_description=(
             "Exception is converted to a return value (None, {}, [], False) with no\n"
@@ -138,6 +173,11 @@ RULES: tuple[RuleDefinition, ...] = (
         autofixable=False,
         orthogonal_gate="tests",
         since="3.16.0",
+        rationale=(
+            "Silent optional-import guards mask environment misconfigurations. If a "
+            "preferred module is unexpectedly absent, the fallback runs and produces subtly "
+            "wrong results with no signal in the observability stack."
+        ),
         short_description="except ImportError without logging — environment issues hidden",
         full_description=(
             "Optional-dependency guard.  Acceptable when the import is genuinely\n"
@@ -156,6 +196,12 @@ RULES: tuple[RuleDefinition, ...] = (
         autofixable=False,
         orthogonal_gate="tests",
         since="3.16.0",
+        rationale=(
+            "The exception sets a flag or default and the event record is destroyed. "
+            "Callers see apparently-normal behaviour until they discover the silent fallback "
+            "later — typically under production conditions where it produces wrong results "
+            "at scale."
+        ),
         short_description="except block only assigns a variable — error hidden with no log",
         full_description=(
             "Exception sets a flag or default value with no trace.  Combines P007's\n"
@@ -173,6 +219,12 @@ RULES: tuple[RuleDefinition, ...] = (
         autofixable=False,
         orthogonal_gate="tests",
         since="3.16.0",
+        rationale=(
+            "gather(return_exceptions=True) turns exceptions into values, "
+            "indistinguishable from normal results in the returned list. Every failed "
+            "sub-task silently disappears unless the caller checks each result for "
+            "Exception."
+        ),
         short_description="asyncio.gather(return_exceptions=True) results not checked for exceptions",
         full_description=(
             "``return_exceptions=True`` returns exception instances as values in the\n"
@@ -191,6 +243,11 @@ RULES: tuple[RuleDefinition, ...] = (
         autofixable=False,
         orthogonal_gate="tests",
         since="3.17.0",
+        rationale=(
+            "logging.Filter.filter() exceptions propagate to the code that called "
+            "logger.info() — not to handleError() like handler exceptions. An unguarded "
+            "filter body is a production crash vector hidden inside observability infra."
+        ),
         short_description="logging.Filter.filter() body not wrapped in try/except — can crash caller",
         full_description=(
             "``Logger.handle()`` calls ``self.filter(record)`` with no surrounding\n"
@@ -214,6 +271,12 @@ RULES: tuple[RuleDefinition, ...] = (
         autofixable=False,
         orthogonal_gate="tests",
         since="3.16.0",
+        rationale=(
+            "The Automation Engine receives a typed error envelope (category, audience, "
+            "retryable, code). A bare ValueError delivers an opaque string with none of "
+            "these — dashboards are blind, on-call routing can't branch on it, SLA gates "
+            "can't classify it. (per ADR-0013)"
+        ),
         short_description="raise ValueError/RuntimeError/... where a typed AppError applies",
         full_description=(
             "SDK code raises a bare Python builtin.  The Automation Engine receives an\n"
@@ -234,6 +297,11 @@ RULES: tuple[RuleDefinition, ...] = (
         autofixable=False,
         orthogonal_gate="tests",
         since="3.16.0",
+        rationale=(
+            "AtlanError subclasses produce no typed wire envelope — they reach AE as opaque "
+            "strings and emit DeprecationWarning at construction. Every new raise site "
+            "deepens the migration debt and blocks the v4.0 removal."
+        ),
         short_description="raise ClientError/ApiError/... (deprecated AtlanError stack)",
         full_description=(
             "``AtlanError`` and its subclasses emit a ``DeprecationWarning`` at\n"
@@ -252,6 +320,12 @@ RULES: tuple[RuleDefinition, ...] = (
         autofixable=False,
         orthogonal_gate="tests",
         since="3.17.0",
+        rationale=(
+            "A loop that silently absorbs per-item exceptions can complete with a "
+            "full-looking result set that silently omits items. Silent partial failure is "
+            "harder to detect than an outright crash — callers may act on the wrong result "
+            "for a long time."
+        ),
         short_description="except block exits loop silently (continue/break) without logging",
         full_description=(
             "An ``except`` block inside a loop whose body is only ``continue``,\n"
@@ -272,6 +346,12 @@ RULES: tuple[RuleDefinition, ...] = (
         autofixable=False,
         orthogonal_gate="tests",
         since="3.17.0",
+        rationale=(
+            "Embedding str(exc) in message= produces a unique string per failure instance — "
+            "each path/value becomes a separate dashboard bucket instead of one countable "
+            "signal. It also leaks unsanitised upstream text into a field shown to operators "
+            "and indexed by aggregation."
+        ),
         short_description="Caught exception text interpolated into typed error message= — leaks unsanitised text",
         full_description=(
             "A typed ``AppError`` raise whose ``message=`` keyword value embeds the\n"
@@ -295,6 +375,13 @@ RULES: tuple[RuleDefinition, ...] = (
         autofixable=True,
         orthogonal_gate="tests",
         since="3.17.0",
+        rationale=(
+            "When the Automation Engine rebuilds the typed wire envelope it walks the "
+            ".cause/__cause__ chain (set by 'raise X from e'); its reconstruction path does "
+            "not follow __context__. Without explicit chaining the original exception — "
+            "attached only as __context__ — is visible at the interpreter level but dropped "
+            "from the wire envelope and every downstream system that reads it."
+        ),
         short_description="raise inside except block missing 'from exc' cause — breaks exception chain",
         full_description=(
             "A non-bare ``raise`` inside an ``except … as e:`` block that does not\n"
@@ -318,6 +405,12 @@ RULES: tuple[RuleDefinition, ...] = (
         autofixable=False,
         orthogonal_gate="tests",
         since="3.17.0",
+        rationale=(
+            "Evidence fields with secret-bearing suffixes are rejected by the wire layer at "
+            "runtime. Static detection catches the pattern before any code runs, eliminating "
+            "the window between deploy and first invocation where live credentials could be "
+            "serialised into logs, dashboards, or SARIF."
+        ),
         short_description="Error evidence kwarg ending in _secret/_password/_token — rejected by wire layer at runtime",
         full_description=(
             "An error construction call that passes a keyword argument whose name ends\n"
@@ -339,6 +432,11 @@ RULES: tuple[RuleDefinition, ...] = (
         autofixable=False,
         orthogonal_gate="tests",
         since="3.17.0",
+        rationale=(
+            "Each categorical leaf is a dashboard bucket. Raising the parent directly "
+            "collapses all domain failure modes into one bucket — impossible to count "
+            "separately, route to the right rotation, or alert on per failure mode."
+        ),
         short_description="Raising a bare AppError leaf class without a domain subclass overriding code",
         full_description=(
             "Raising a parent leaf directly (``InternalError(...)``,\n"

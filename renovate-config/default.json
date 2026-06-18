@@ -8,7 +8,7 @@
     "at any time"
   ],
   "prHourlyLimit": 0,
-  "prConcurrentLimit": 3,
+  "prConcurrentLimit": 5,
   "labels": [
     "dependencies"
   ],
