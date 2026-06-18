@@ -69,6 +69,11 @@ def detect_scope(root: Path) -> RuleScope | None:
     name = _project_name(text)
     if name is None:
         return None
-    if _normalise_name(name).startswith(_normalise_name(SDK_PACKAGE_PREFIX)):
+    norm = _normalise_name(name)
+    prefix = _normalise_name(SDK_PACKAGE_PREFIX)
+    # Hyphen-anchored so the prefix matches the SDK itself and its sibling
+    # packages (``atlan-application-sdk-conformance``) but not an unrelated name
+    # that merely shares the prefix as a substring (``atlan-application-sdk2``).
+    if norm == prefix or norm.startswith(prefix + "-"):
         return RuleScope.SDK
     return RuleScope.APP

@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from conformance.suite.checks._ast_common import detect_scope
 from conformance.suite.runner import _rule_in_scope, _series_in_scope, main
 from conformance.suite.schema.disposition import RuleScope
@@ -52,6 +53,40 @@ def test_detect_scope_no_pyproject(tmp_path: Path) -> None:
 def test_detect_scope_no_project_name(tmp_path: Path) -> None:
     _write_pyproject(tmp_path, None)
     assert detect_scope(tmp_path) is None
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        # SDK: exact name and hyphen-extended sibling packages.
+        ("atlan-application-sdk", RuleScope.SDK),
+        ("atlan-application-sdk-conformance", RuleScope.SDK),
+        ("atlan_application_sdk", RuleScope.SDK),  # PEP 503 underscore form
+        # APP: names that merely share the prefix as a substring must NOT match.
+        ("atlan-application-sdk2", RuleScope.APP),
+        ("atlan-application-sdkk", RuleScope.APP),
+        ("my-connector", RuleScope.APP),
+    ],
+)
+def test_detect_scope_prefix_boundary(
+    tmp_path: Path, name: str, expected: RuleScope
+) -> None:
+    """The SDK prefix is hyphen-anchored, not a loose substring match."""
+    _write_pyproject(tmp_path, name)
+    assert detect_scope(tmp_path) == expected
+
+
+def test_sdk_prefix_matches_dependency_checker() -> None:
+    """Guard the comment-synced duplication of the SDK package name.
+
+    ``_scope.SDK_PACKAGE_PREFIX`` and ``dependency_conformance.SDK_PACKAGE`` encode
+    the same Atlan distribution name in two places (kept in sync by comment rather
+    than a shared module).  This catches drift without taking on that layering cost.
+    """
+    from conformance.suite.checks import dependency_conformance
+    from conformance.suite.checks._ast_common import SDK_PACKAGE_PREFIX
+
+    assert SDK_PACKAGE_PREFIX == dependency_conformance.SDK_PACKAGE
 
 
 # ---------------------------------------------------------------------------
