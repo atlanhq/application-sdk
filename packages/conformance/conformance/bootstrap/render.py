@@ -84,6 +84,7 @@ def render(
       (default derived as ``"atlan-<app_name>-app"``), ``enable_e2e``
       (default ``"true"``), ``services_script`` (default ``""`` — renders the
       services-script line commented out; supply a path to render it active).
+    - ``.gitignore``: static template, no substitution.
 
     All other keyword arguments are accepted but unused, so callers can pass
     the full variable set without knowing which template is parametric.

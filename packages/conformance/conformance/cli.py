@@ -213,7 +213,16 @@ def _cmd_bootstrap(argv: list[str]) -> int:
                 f"ok (exists): {scaffold_dest}  (edit freely; C002 tracks drift at WARN)"
             )
 
-    _ensure_gitignore_entry(root, "remediation/")
+    # .gitignore — write-if-absent scaffold.  C003 warns about missing entries.
+    gitignore_dest = root / ".gitignore"
+    if not gitignore_dest.exists():
+        gitignore_dest.write_text(render(".gitignore"), encoding="utf-8")
+        print(f"scaffolded: {gitignore_dest}")
+    else:
+        print(
+            f"ok (exists): {gitignore_dest}  (edit freely; C003 warns on missing entries)"
+        )
+
     return 0
 
 

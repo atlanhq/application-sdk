@@ -27,6 +27,7 @@ from conformance.suite.checks import (
     bootstrap_drift,
     dependency_conformance,
     error_handling,
+    gitignore_entries,
     optimizations,
     prescriptions,
 )
@@ -84,6 +85,11 @@ _CHECKS: list[CheckRegistration] = [
         discover=prescriptions.discover,
         scan_path=prescriptions.scan_path,
         scan_all=prescriptions.scan_all,
+    ),
+    CheckRegistration(
+        series=gitignore_entries.SERIES,
+        discover=gitignore_entries.discover,
+        scan_path=gitignore_entries.scan_path,
     ),
 ]
 

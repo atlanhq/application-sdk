@@ -234,17 +234,16 @@ def test_cmd_bootstrap_gitignore_not_duplicated_on_rerun(
     assert (tmp_path / ".gitignore").read_text().count("remediation/") == 1
 
 
-def test_cmd_bootstrap_preserves_existing_gitignore_content(
+def test_cmd_bootstrap_does_not_modify_existing_gitignore(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Bootstrap is write-if-absent for .gitignore; it never modifies an existing file."""
     monkeypatch.chdir(tmp_path)
     gi = tmp_path / ".gitignore"
-    gi.write_text("*.pyc\n.env\n")
+    original = "*.pyc\n.env\n"
+    gi.write_text(original)
     _cmd_bootstrap([])
-    content = gi.read_text()
-    assert "*.pyc" in content
-    assert ".env" in content
-    assert "remediation/" in content
+    assert gi.read_text() == original
 
 
 def test_cmd_bootstrap_returns_zero(
