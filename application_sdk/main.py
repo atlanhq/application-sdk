@@ -467,9 +467,8 @@ async def _log_dapr_components(
         (EVENT_STORE_NAME, "event_binding", "ATLAN_ENABLE_EVENTSTORE", "eventstore"),
     )
     for comp_name, role, enable_var, yaml_key in expected:
-        raw = os.environ.get(enable_var)
+        raw, declared = _read_enable_tri_state(enable_var)
         is_registered = comp_name in registered
-        declared = _read_enable_tri_state(enable_var)
 
         if is_registered and declared is not False:
             logger.info(
