@@ -264,7 +264,9 @@ def _constant_fallback_summary(resolved: Any) -> str:
         value_str = ""
 
     if "ErrorCode" in value_str:
-        return "Deprecated legacy error code — use AppError subclasses (removed in v4.0)."
+        return (
+            "Deprecated legacy error code — use AppError subclasses (removed in v4.0)."
+        )
 
     return "_(no docstring)_"
 
