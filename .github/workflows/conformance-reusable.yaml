@@ -83,11 +83,6 @@ on:
         required: false
         default: ""
         type: string
-      upload-sarif:
-        description: "Upload SARIF report to GitHub Security tab (requires security-events: write)"
-        required: false
-        default: true
-        type: boolean
       event_name:
         description: "Caller's github.event_name (push / pull_request / merge_group); reusable workflows always see 'workflow_call' internally"
         required: false
@@ -131,7 +126,6 @@ on:
 
 permissions:
   contents: read
-  security-events: write
 
 jobs:
   # ── Per-series checks (one matrix leg per rule series) ──────────────────────
@@ -218,20 +212,6 @@ jobs:
         with:
           name: conformance-${{ matrix.slug }}-sarif
           path: ${{ matrix.slug }}.sarif
-
-      - name: "Strip suppressed results for Security tab"
-        if: ${{ inputs.upload-sarif && inputs.event_name == 'push' }}
-        env:
-          SARIF_SLUG: ${{ matrix.slug }}
-        run: |
-          jq '.runs[] |= (.results |= map(select(.suppressions == null or (.suppressions | length == 0))))' \
-            "$SARIF_SLUG.sarif" > "$SARIF_SLUG-upload.sarif"
-
-      - name: "Upload SARIF to Security tab"
-        if: ${{ inputs.upload-sarif && inputs.event_name == 'push' }}
-        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
-        with:
-          sarif_file: ${{ matrix.slug }}-upload.sarif
 
   # ── Required gate ─────────────────────────────────────────────────────────
   # Always runs so it can be marked a required check without ever becoming
