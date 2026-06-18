@@ -103,7 +103,7 @@
       "description": "Pkl app-contract-toolkit: track the @<version> URI pinned in contract/PklProject. Uses github-tags datasource against atlanhq/application-sdk, filtering to contract-toolkit-v* tags.",
       "customType": "regex",
       "managerFilePatterns": [
-        "(^|/)contract/PklProject$"
+        "/(^|\\/)contract\\/PklProject$/"
       ],
       "matchStrings": [
         "uri\\s*=\\s*\"package://atlanhq\\.github\\.io/application-sdk/contracts/app-contract-toolkit@(?<currentValue>[^\"]+)\""
