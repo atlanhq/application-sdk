@@ -381,7 +381,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout app
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ inputs.ref || github.ref }}
           path: app
@@ -394,7 +394,7 @@ jobs:
         # of a consumer app repo whose GITHUB_TOKEN is scoped to that repo and
         # cannot read other org repos (even public ones via cross-repo reusable
         # workflow invocations). An org PAT grants the necessary read access.
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: atlanhq/application-sdk
           ref: main
@@ -633,7 +633,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout app
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ inputs.ref || github.ref }}
           path: app
@@ -644,7 +644,7 @@ jobs:
         # gate is self-contained at publish time (no private cross-repo fetch of
         # the connector-pulse nightly skill). ORG_PAT_GITHUB grants the
         # cross-repo read a consumer app's scoped GITHUB_TOKEN cannot.
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: atlanhq/application-sdk
           ref: main
@@ -874,7 +874,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ inputs.ref || github.ref }}
 
@@ -883,7 +883,7 @@ jobs:
         # github.workflow_ref and github.workflow_sha both resolve to the *caller's*
         # ref in a reusable workflow context (GitHub bug) — ref is pinned to main
         # so it always picks up the latest released version of the scripts.
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: atlanhq/application-sdk
           ref: main
@@ -1068,7 +1068,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ inputs.ref || github.ref }}
           lfs: ${{ inputs.lfs }}
