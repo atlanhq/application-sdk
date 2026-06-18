@@ -6,6 +6,12 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.14.0] - 2026-06-17
+
+### Features
+
+- emit marketplace metadata in atlan.yaml (#2187) ([982e2b9](https://github.com/atlanhq/application-sdk/commit/982e2b9))
+
 ## [0.13.0] - 2026-06-16
 
 ### Features
