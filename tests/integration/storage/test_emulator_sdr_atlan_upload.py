@@ -32,10 +32,11 @@ from __future__ import annotations
 
 import os
 
-import obstore
 import pytest
 
+from application_sdk.storage import ops
 from application_sdk.storage.binding import create_store_from_binding
+from application_sdk.storage.cloud import CloudStore
 from tests.integration.storage.conftest import write_dapr_component
 
 pytestmark = pytest.mark.storage_emulator
@@ -97,6 +98,10 @@ async def test_sdr_atlan_upload_handoff_transfers_directory(tmp_path):
     components = tmp_path / "components"
     customer_store = _s3_store("objectstore", _CUSTOMER_BUCKET, components)
     atlan_store = _s3_store("atlan-objectstore", _ATLAN_BUCKET, components)
+    # Seed/verify go through the SDK's CloudStore; the transfer.upload call under
+    # test takes the raw stores it already expects.
+    customer_cs = CloudStore(customer_store, provider="s3")
+    atlan_cs = CloudStore(atlan_store, provider="s3")
 
     # 1. Extract output: several files under the run's extracted/ prefix.
     src_prefix = "artifacts/apps/sdr-app/workflows/run-2/extracted"
@@ -108,7 +113,7 @@ async def test_sdr_atlan_upload_handoff_transfers_directory(tmp_path):
     }
     try:
         for rel, data in files.items():
-            await obstore.put_async(customer_store, f"{src_prefix}/{rel}", data)
+            await customer_cs.upload_bytes(f"{src_prefix}/{rel}", data)
 
         # 2. Directory handoff: customer-store prefix → atlan-store prefix.
         result = await transfer_upload(
@@ -125,8 +130,7 @@ async def test_sdr_atlan_upload_handoff_transfers_directory(tmp_path):
 
         # 3. Every file landed in the Atlan store, byte-for-byte, under dst_prefix.
         for rel, data in files.items():
-            landed = await obstore.get_async(atlan_store, f"{dst_prefix}/{rel}")
-            assert bytes(await landed.bytes_async()) == data
+            assert await atlan_cs.get_bytes(f"{dst_prefix}/{rel}") == data
     finally:
         # Runs on any path (incl. assertion failure) so reruns against a
         # persistent emulator stay idempotent. CI is fresh containers.
@@ -138,4 +142,4 @@ async def test_sdr_atlan_upload_handoff_transfers_directory(tmp_path):
                 (atlan_store, dst_prefix),
             ):
                 with contextlib.suppress(Exception):
-                    await obstore.delete_async(store, f"{prefix}/{rel}")
+                    await ops.delete(f"{prefix}/{rel}", store=store)

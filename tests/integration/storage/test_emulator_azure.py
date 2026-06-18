@@ -1,9 +1,10 @@
 """Hermetic integration test: ``create_store_from_binding`` → Azure Blob via Azurite.
 
-Exercises the SDK's Azure binding wiring + obstore I/O against a local
-**Azurite** emulator — no real Azure, and **no production-code changes**
-(``binding.py`` already maps ``endpoint`` + infers ``allow_http`` for the Azure
-branch). Shared SDK storage logic, tested once.
+Exercises the SDK's Azure binding wiring (``create_store_from_binding``) plus the
+SDK's own storage abstractions — ``CloudStore`` + ``storage.ops`` — against a
+local **Azurite** emulator. No real Azure, no direct ``obstore`` calls, and no
+production-code change (``binding.py`` already maps ``endpoint`` + infers
+``allow_http`` for the Azure branch).
 
 Azurite ships a well-known dev account + key (public; valid only against the
 emulator). Marked ``storage_emulator``. Local (10000 may be taken — any free
@@ -20,10 +21,11 @@ from __future__ import annotations
 
 import os
 
-import obstore
 import pytest
 
+from application_sdk.storage import ops
 from application_sdk.storage.binding import create_store_from_binding
+from application_sdk.storage.cloud import CloudStore
 from tests.integration.storage.conftest import write_dapr_component
 
 pytestmark = pytest.mark.storage_emulator
@@ -56,10 +58,10 @@ def require_azurite() -> None:
         pytest.skip(f"Azurite unhealthy at {_BLOB_ENDPOINT}: HTTP {resp.status_code}")
 
 
-async def test_azure_binding_roundtrip(tmp_path):
-    """An accountKey Azure component pointed at Azurite round-trips put/list/get/delete."""
+def _azure_cloud_store(components_dir) -> CloudStore:
+    """Build a CloudStore from an accountKey Azure Dapr component pointed at Azurite."""
     write_dapr_component(
-        tmp_path / "components",
+        components_dir,
         name="azure-emulator",
         binding_type="bindings.azure.blobstorage",
         metadata={
@@ -69,22 +71,29 @@ async def test_azure_binding_roundtrip(tmp_path):
             "endpoint": _BLOB_ENDPOINT,
         },
     )
-    store = create_store_from_binding(
-        "azure-emulator", components_dir=tmp_path / "components"
-    )
+    store = create_store_from_binding("azure-emulator", components_dir=components_dir)
+    return CloudStore(store, provider="azure")
+
+
+async def test_azure_binding_roundtrip_via_sdk(tmp_path):
+    """Azure binding round-trips through CloudStore (bytes) and ops (file) APIs."""
+    cs = _azure_cloud_store(tmp_path / "components")
 
     key = "sdk-emulator/roundtrip.txt"
     payload = b"hello-from-sdk-azure-emulator-test"
-    await obstore.put_async(store, key, payload)
+    assert await cs.upload_bytes(key, payload) == len(payload)
+    assert key in await cs.list(prefix="sdk-emulator/")
+    assert await cs.get_bytes(key) == payload
 
-    listed = [
-        obj["path"]
-        async for batch in obstore.list(store, prefix="sdk-emulator/")
-        for obj in batch
-    ]
-    assert key in listed
+    src = tmp_path / "ops-src.txt"
+    src.write_bytes(payload)
+    ops_key = "sdk-emulator/ops-roundtrip.txt"
+    await ops.upload_file(ops_key, src, store=cs.store, normalize=False)
+    assert await ops.exists(ops_key, store=cs.store)
+    dl = tmp_path / "ops-dl.txt"
+    await ops.download_file(ops_key, dl, store=cs.store, normalize=False)
+    assert dl.read_bytes() == payload
+    assert await ops.delete(ops_key, store=cs.store) is True
+    assert not await ops.exists(ops_key, store=cs.store)
 
-    result = await obstore.get_async(store, key)
-    assert bytes(await result.bytes_async()) == payload
-
-    await obstore.delete_async(store, key)
+    await ops.delete(key, store=cs.store)

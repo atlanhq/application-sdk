@@ -36,10 +36,10 @@ from __future__ import annotations
 
 import os
 
-import obstore
 import pytest
 
 from application_sdk.storage.binding import create_store_from_binding
+from application_sdk.storage.cloud import CloudStore
 from tests.integration.storage.conftest import write_dapr_component
 
 pytestmark = pytest.mark.storage_emulator
@@ -121,14 +121,14 @@ async def test_gcs_binding_write_read(tmp_path, _redirect_gcs_to_emulator):
     store = create_store_from_binding(
         "gcs-emulator", components_dir=tmp_path / "components"
     )
+    cs = CloudStore(store, provider="gcs")
 
     key = "sdk-emulator/roundtrip.txt"
     payload = b"hello-from-sdk-gcs-emulator-test"
-    await obstore.put_async(store, key, payload)
+    assert await cs.upload_bytes(key, payload) == len(payload)
 
     try:
-        result = await obstore.get_async(store, key)
-        assert bytes(await result.bytes_async()) == payload
+        assert await cs.get_bytes(key) == payload
     finally:
         # obstore's S3-style DELETE isn't served by testbench, but its JSON API is.
         # Keep a long-lived local testbench clean across reruns (CI is fresh).

@@ -1,9 +1,17 @@
-"""Hermetic integration test: ``create_store_from_binding`` → S3 against MinIO.
+"""Hermetic integration test: ``create_store_from_binding`` → S3 (MinIO), via SDK APIs.
 
-Exercises the SDK's S3 binding wiring + obstore I/O against a local **MinIO**
-emulator — no real AWS, and **no production-code changes** (``binding.py``
-already maps the ``endpoint`` metadata key and infers ``allow_http`` from an
-``http://`` scheme). This is the shared SDK storage logic, tested once, here.
+Exercises two SDK layers against a local **MinIO** emulator — no real AWS and
+**no production-code change** (``binding.py`` already maps ``endpoint`` + infers
+``allow_http`` for ``http://``):
+
+1. **Binding wiring** — ``create_store_from_binding`` parses the Dapr component
+   into a working store.
+2. **The SDK's own storage abstractions** on top of that store — ``CloudStore``
+   (``upload_bytes`` / ``list`` / ``get_bytes``) and ``storage.ops``
+   (``upload_file`` / ``download_file`` / ``exists`` / ``delete``). The tests
+   call the SDK as its users would, not ``obstore`` directly, so an ``obstore``
+   API change can't silently pass while the SDK's surface breaks. This also
+   gives ``ops.*`` its first cloud-protocol (vs ``LocalStore``) baseline.
 
 Marked ``storage_emulator`` (deselected by default; run in CI with a MinIO
 sidecar). Local:
@@ -20,10 +28,11 @@ from __future__ import annotations
 
 import os
 
-import obstore
 import pytest
 
+from application_sdk.storage import ops
 from application_sdk.storage.binding import create_store_from_binding
+from application_sdk.storage.cloud import CloudStore
 from tests.integration.storage.conftest import write_dapr_component
 
 pytestmark = pytest.mark.storage_emulator
@@ -48,10 +57,10 @@ def require_minio() -> None:
         pytest.skip(f"MinIO unhealthy at {_ENDPOINT}: HTTP {resp.status_code}")
 
 
-async def test_s3_binding_roundtrip(tmp_path):
-    """A static-key S3 component pointed at MinIO round-trips put/list/get/delete."""
+def _s3_cloud_store(components_dir) -> CloudStore:
+    """Build a CloudStore from a static-key S3 Dapr component pointed at MinIO."""
     write_dapr_component(
-        tmp_path / "components",
+        components_dir,
         name="s3-emulator",
         binding_type="bindings.aws.s3",
         metadata={
@@ -63,22 +72,32 @@ async def test_s3_binding_roundtrip(tmp_path):
             "secretKey": _PASS,
         },
     )
-    store = create_store_from_binding(
-        "s3-emulator", components_dir=tmp_path / "components"
-    )
+    store = create_store_from_binding("s3-emulator", components_dir=components_dir)
+    return CloudStore(store, provider="s3")
 
+
+async def test_s3_binding_roundtrip_via_sdk(tmp_path):
+    """S3 binding round-trips through CloudStore (bytes) and ops (file) APIs."""
+    cs = _s3_cloud_store(tmp_path / "components")
+
+    # CloudStore bytes path: upload_bytes → list → get_bytes.
     key = "sdk-emulator/roundtrip.txt"
     payload = b"hello-from-sdk-s3-emulator-test"
-    await obstore.put_async(store, key, payload)
+    assert await cs.upload_bytes(key, payload) == len(payload)
+    assert key in await cs.list(prefix="sdk-emulator/")
+    assert await cs.get_bytes(key) == payload
 
-    listed = [
-        obj["path"]
-        async for batch in obstore.list(store, prefix="sdk-emulator/")
-        for obj in batch
-    ]
-    assert key in listed
+    # ops file path against a cloud-protocol store (baseline beyond LocalStore):
+    # upload_file (multipart writer) → exists → download_file → delete.
+    src = tmp_path / "ops-src.txt"
+    src.write_bytes(payload)
+    ops_key = "sdk-emulator/ops-roundtrip.txt"
+    await ops.upload_file(ops_key, src, store=cs.store, normalize=False)
+    assert await ops.exists(ops_key, store=cs.store)
+    dl = tmp_path / "ops-dl.txt"
+    await ops.download_file(ops_key, dl, store=cs.store, normalize=False)
+    assert dl.read_bytes() == payload
+    assert await ops.delete(ops_key, store=cs.store) is True
+    assert not await ops.exists(ops_key, store=cs.store)
 
-    result = await obstore.get_async(store, key)
-    assert bytes(await result.bytes_async()) == payload
-
-    await obstore.delete_async(store, key)
+    await ops.delete(key, store=cs.store)

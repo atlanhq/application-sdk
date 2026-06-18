@@ -278,7 +278,7 @@ jobs:
           AWS_ENDPOINT_URL: http://localhost:9000
           AZURE_STORAGE_ENDPOINT: http://localhost:10000
           GCS_EMULATOR_ENDPOINT: http://localhost:9095
-        run: uv run pytest tests/integration/storage -m storage_emulator -v --timeout=120
+        run: uv run pytest tests/integration/storage -m storage_emulator -v --timeout=300
 
       - name: Teardown emulators
         if: always() && needs.changes.outputs.sdk == 'true'
