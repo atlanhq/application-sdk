@@ -674,7 +674,9 @@ class TestCreateInfrastructureUpstreamStore:
 
         assert infra.upstream_storage is upstream_store
         assert infra.storage is deployment_store
-        mock_optional.assert_called_once_with("atlan-objectstore", components_dir=ANY)
+        mock_optional.assert_called_once_with(
+            "atlan-objectstore", components_dir=ANY, required=ANY
+        )
         mock_binding.assert_called_once_with("objectstore", components_dir=ANY)
 
 
