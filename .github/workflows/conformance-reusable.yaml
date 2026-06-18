@@ -123,6 +123,15 @@ on:
         required: false
         default: ""
         type: string
+      force-all:
+        description: >
+          Run every rule series regardless of which paths changed.  Same effect
+          as event_name == 'push'; the SDK's sdk-gate.yaml sets this on
+          release / version-bump branches and v* tags so a release dry-runs the
+          full suite.  Default: false (per-series path selection applies).
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -179,11 +188,11 @@ jobs:
               - "${{ matrix.paths }}"
 
       - name: "Set up uv"
-        if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push'
+        if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
 
       - name: "Run ${{ matrix.series }}-series checks (published package)"
-        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push') && inputs.conformance-ref == ''
+        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && inputs.conformance-ref == ''
         env:
           EXCLUDE_PATHS: ${{ matrix.exclude_paths }}
         run: |
@@ -194,7 +203,7 @@ jobs:
           uvx atlan-application-sdk-conformance detect "${args[@]}"
 
       - name: "Run ${{ matrix.series }}-series checks (from git ref)"
-        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push') && inputs.conformance-ref != ''
+        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && inputs.conformance-ref != ''
         env:
           EXCLUDE_PATHS: ${{ matrix.exclude_paths }}
         run: |
@@ -207,7 +216,7 @@ jobs:
             -- atlan-application-sdk-conformance detect "${args[@]}"
 
       - name: "Upload SARIF artifact"
-        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push') && !cancelled()
+        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && !cancelled()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: conformance-${{ matrix.slug }}-sarif
