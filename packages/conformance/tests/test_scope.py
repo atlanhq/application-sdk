@@ -89,6 +89,38 @@ def test_sdk_prefix_matches_dependency_checker() -> None:
     assert SDK_PACKAGE_PREFIX == dependency_conformance.SDK_PACKAGE
 
 
+@pytest.mark.parametrize(
+    ("name", "is_sdk"),
+    [
+        ("atlan-application-sdk", True),
+        ("atlan-application-sdk-conformance", True),
+        ("atlan_application_sdk", True),  # PEP 503 underscore form
+        ("atlan-application-sdk2", False),  # substring lookalike
+        ("atlan-application-sdkk", False),
+        ("my-connector", False),
+    ],
+)
+def test_is_self_check_matches_shared_helper(name: str, is_sdk: bool) -> None:
+    """`_is_self_check` and the shared `is_sdk_package_name` must agree.
+
+    Both now route through `is_sdk_package_name`, so the matching *semantics*
+    (hyphen-anchored, not just the constant) cannot drift between the D-series
+    self-exemption and the runner-side scope detection.
+    """
+    from conformance.suite.checks import dependency_conformance
+    from conformance.suite.checks._ast_common import is_sdk_package_name
+
+    assert is_sdk_package_name(name) is is_sdk
+    assert dependency_conformance._is_self_check(name) is is_sdk
+
+
+def test_is_self_check_handles_none() -> None:
+    """`_is_self_check(None)` stays False (the original None-guard is preserved)."""
+    from conformance.suite.checks import dependency_conformance
+
+    assert dependency_conformance._is_self_check(None) is False
+
+
 # ---------------------------------------------------------------------------
 # Scope predicates
 # ---------------------------------------------------------------------------

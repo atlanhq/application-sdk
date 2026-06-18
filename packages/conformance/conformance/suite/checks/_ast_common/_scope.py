@@ -49,14 +49,32 @@ def _project_name(pyproject_text: str) -> str | None:
     return str(name) if isinstance(name, str) else None
 
 
+def is_sdk_package_name(name: str) -> bool:
+    """True if *name* is the SDK distribution or a hyphen-extended sibling.
+
+    Hyphen-anchored (after PEP 503 normalisation): matches
+    ``atlan-application-sdk`` exactly and siblings like
+    ``atlan-application-sdk-conformance``, but **not** a substring lookalike such
+    as ``atlan-application-sdk2``.
+
+    This is the single source of truth for "is this the SDK?" — both
+    ``detect_scope`` (runner-side scope detection) and
+    ``dependency_conformance._is_self_check`` (the D-series self-exemption) call
+    it, so the two cannot drift apart on matching semantics.
+    """
+    norm = _normalise_name(name)
+    prefix = _normalise_name(SDK_PACKAGE_PREFIX)
+    return norm == prefix or norm.startswith(prefix + "-")
+
+
 def detect_scope(root: Path) -> RuleScope | None:
     """Resolve the active :class:`RuleScope` for the repo rooted at *root*.
 
     Reads ``<root>/pyproject.toml`` and classifies by ``[project].name``:
 
-    * name starts with ``atlan-application-sdk`` → :attr:`RuleScope.SDK`
-    * any other name                            → :attr:`RuleScope.APP`
-    * no/unparseable pyproject, or no name      → ``None`` (scope unknown)
+    * SDK / sibling package (see :func:`is_sdk_package_name`) → :attr:`RuleScope.SDK`
+    * any other name                                          → :attr:`RuleScope.APP`
+    * no/unparseable pyproject, or no name                    → ``None`` (scope unknown)
 
     ``None`` means "do not filter" — the runner runs every rule, preserving the
     behaviour from before scope existed.
@@ -69,11 +87,4 @@ def detect_scope(root: Path) -> RuleScope | None:
     name = _project_name(text)
     if name is None:
         return None
-    norm = _normalise_name(name)
-    prefix = _normalise_name(SDK_PACKAGE_PREFIX)
-    # Hyphen-anchored so the prefix matches the SDK itself and its sibling
-    # packages (``atlan-application-sdk-conformance``) but not an unrelated name
-    # that merely shares the prefix as a substring (``atlan-application-sdk2``).
-    if norm == prefix or norm.startswith(prefix + "-"):
-        return RuleScope.SDK
-    return RuleScope.APP
+    return RuleScope.SDK if is_sdk_package_name(name) else RuleScope.APP
