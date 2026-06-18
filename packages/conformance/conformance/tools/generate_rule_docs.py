@@ -113,6 +113,28 @@ _SERIES_META: list[SeriesMeta] = [
             "# conformance: ignore[D002] intentional: pinned to pre-release for hotfix"
         ),
     ),
+    SeriesMeta(
+        title="Prescription Rules (P-series)",
+        prefix="P",
+        source_module="conformance/suite/rules/prescriptions.py",
+        output_filename="prescriptions.md",
+        checker="`suite.checks.prescriptions` (AST-based, not yet fully implemented)",
+        suppression_example=(
+            "# conformance: ignore[P001] intentional: dynamic schema for external API"
+        ),
+        stability_note=_ID_STABILITY_NOTE,
+    ),
+    SeriesMeta(
+        title="Optimisation Rules (O-series)",
+        prefix="O",
+        source_module="conformance/suite/rules/optimizations.py",
+        output_filename="optimizations.md",
+        checker="`suite.checks.optimizations` (AST-based, not yet fully implemented)",
+        suppression_example=(
+            "# conformance: ignore[O001] intentional: stdlib json required for compat"
+        ),
+        stability_note=_ID_STABILITY_NOTE,
+    ),
 ]
 
 
@@ -214,6 +236,15 @@ def _render_series(meta: SeriesMeta, rules: list[RuleDefinition]) -> str:
         # Short description as a blockquote
         if rule.short_description:
             lines.append(f"> {_rst_to_md(rule.short_description)}")
+            lines.append("")
+
+        # Rationale — why the rule exists
+        if rule.rationale:
+            rationale_text = _rst_to_md(rule.rationale)
+            wrapped = textwrap.fill(
+                rationale_text, width=88, break_long_words=False, break_on_hyphens=False
+            )
+            lines.append(f"**Rationale:** {wrapped}")
             lines.append("")
 
         # Full description — convert RST backticks, preserve paragraph breaks

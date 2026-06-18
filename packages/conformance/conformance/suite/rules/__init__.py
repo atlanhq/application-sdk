@@ -13,6 +13,8 @@ from conformance.suite.rules.ci import RULES as _CI_RULES
 from conformance.suite.rules.dependency import RULES as _D_RULES
 from conformance.suite.rules.error_handling import RULES as _E_RULES
 from conformance.suite.rules.logging import RULES as _L_RULES
+from conformance.suite.rules.optimizations import RULES as _O_RULES
+from conformance.suite.rules.prescriptions import RULES as _P_RULES
 from conformance.suite.schema.catalog import RuleDefinition
 
 
@@ -32,6 +34,8 @@ _ALL_SERIES: tuple[tuple[RuleDefinition, ...], ...] = (
     _L_RULES,
     _CI_RULES,
     _D_RULES,
+    _P_RULES,
+    _O_RULES,
 )
 
 
@@ -65,7 +69,7 @@ def assert_registry_consistent(
 
     * ``check_series`` — the runner's registered checkers — must be a **subset**
       of the rule series.  A series may ship rule definitions + docs before its
-      checker is implemented (the L-series today), so equality would be wrong.
+      checker is implemented (L, P, O today), so equality would be wrong.
     * ``meta_series`` — the doc generator's ``SeriesMeta`` prefixes — must
       **equal** the rule series: every defined series is expected to be
       documented, and an orphan ``SeriesMeta`` would render an empty doc.

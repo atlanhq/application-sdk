@@ -31,6 +31,12 @@ RULES: tuple[RuleDefinition, ...] = (
         autofixable=False,
         orthogonal_gate="tests",
         since="0.3.0",
+        rationale=(
+            "Temporal enforces a hard 2MB payload limit on workflow/activity I/O (ADR-0008). "
+            "Unbounded fields can silently grow past it in production, failing the workflow "
+            "with a cryptic size error instead of a type error at import time. A justified "
+            "inline suppression keeps every opt-out visible in review and auditable in SARIF."
+        ),
         short_description="Input/Output contract declared with allow_unbounded_fields=True — opts out of payload safety",
         full_description=(
             "An ``Input``/``Output`` contract subclass declared with the\n"
@@ -58,6 +64,13 @@ RULES: tuple[RuleDefinition, ...] = (
         autofixable=False,
         orthogonal_gate="tests",
         since="0.3.0",
+        rationale=(
+            "FailureCategory is consumed as an immutable reporting metric by the Automation "
+            "Engine, SLA dashboards, and on-call routing (ADR-0013). A redeclaration either "
+            "duplicates the parent (drifts on rename) or substitutes a different value "
+            "(splits one failure mode across two buckets), corrupting the reporting layer "
+            "for every downstream consumer."
+        ),
         short_description="AppError subclass redeclares the `category` ClassVar — drifts the canonical taxonomy",
         full_description=(
             "``FailureCategory`` is the closed, single-axis taxonomy the SDK owns —\n"

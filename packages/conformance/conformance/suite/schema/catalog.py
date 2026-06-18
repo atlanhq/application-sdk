@@ -54,6 +54,9 @@ class RuleDefinition(BaseModel):
     help_uri: str | None = None
     orthogonal_gate: str | None = None
     since: str | None = None
+    rationale: str = ""
+    """Why this rule exists — what risk it avoids, what loop it closes, or what
+    value it adds. Surfaced as ``atlan/rationale`` in SARIF ``properties``."""
 
     @model_validator(mode="before")
     @classmethod
@@ -81,6 +84,7 @@ class RuleDefinition(BaseModel):
             autofixable=self.autofixable,
             orthogonal_gate=self.orthogonal_gate,
             since=self.since,
+            rationale=self.rationale,
         )
         return ReportingDescriptor(
             id=self.id,

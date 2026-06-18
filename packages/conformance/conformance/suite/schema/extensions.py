@@ -60,6 +60,10 @@ class AtlanRuleProperties(BaseModel):
     since: str | None = None
     """Suite (SDK) version when this rule was introduced, e.g. ``"3.16.0"``."""
 
+    rationale: str = ""
+    """Why this rule exists — what risk it avoids, what loop it closes, or what
+    value it adds.  Surfaced as ``atlan/rationale`` in the ``properties`` bag."""
+
     def to_properties(self) -> dict[str, Any]:
         """Return a ``properties`` dict ready to merge into a SARIF node."""
         out: dict[str, Any] = {
@@ -72,6 +76,8 @@ class AtlanRuleProperties(BaseModel):
             out["atlan/orthogonalGate"] = self.orthogonal_gate
         if self.since is not None:
             out["atlan/since"] = self.since
+        if self.rationale:
+            out["atlan/rationale"] = self.rationale
         return out
 
     @classmethod
@@ -84,6 +90,7 @@ class AtlanRuleProperties(BaseModel):
             autofixable=bool(props.get("atlan/autofixable", False)),
             orthogonal_gate=props.get("atlan/orthogonalGate"),
             since=props.get("atlan/since"),
+            rationale=props.get("atlan/rationale", ""),
         )
 
 

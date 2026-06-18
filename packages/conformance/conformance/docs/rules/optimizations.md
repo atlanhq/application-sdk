@@ -3,14 +3,14 @@
      To regenerate:  uv run atlan-application-sdk-conformance gen-rule-docs
      To check CI staleness: uv run atlan-application-sdk-conformance gen-rule-docs --check -->
 
-# Optimisation / Recommendation Rules (O-series)
+# Optimisation Rules (O-series)
 
-**1 rule** · Checker: `suite.checks.optimizations` (AST-based)
+**1 rule** · Checker: `suite.checks.optimizations` (AST-based, not yet fully implemented)
 
 Suppress a finding on the violating line or the line directly above it:
 
 ```python
-# conformance: ignore[O001] intentional: stdlib json required here
+# conformance: ignore[O001] intentional: stdlib json required for compat
 ```
 
 **Rule-id stability (non-migration policy):** P-ids and O-ids are a permanent public
@@ -32,6 +32,11 @@ is never reused or reassigned.
 **Tier:** `warn` · **Category:** `canonical-dependency` · **Autofixable:** — · **Since:** 0.3.0
 
 > json.dumps()/json.loads() — prefer orjson (a core SDK dependency, ~10x faster)
+
+**Rationale:** orjson is already a core SDK dependency — zero incremental cost — and on hot paths the
+~10x throughput advantage compounds at fleet scale. WARN (not block) because orjson
+returns bytes not str and has a different option API, so each site needs human judgment
+before migrating.
 
 `orjson` is already a core dependency of the application SDK, so it is available to
 every app, and it is generally *at least* 10x faster than the stdlib `json` module.

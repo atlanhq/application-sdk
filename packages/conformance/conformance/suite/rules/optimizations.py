@@ -21,6 +21,12 @@ RULES: tuple[RuleDefinition, ...] = (
         autofixable=False,
         orthogonal_gate="tests",
         since="0.3.0",
+        rationale=(
+            "orjson is already a core SDK dependency — zero incremental cost — and on hot "
+            "paths the ~10x throughput advantage compounds at fleet scale. WARN (not block) "
+            "because orjson returns bytes not str and has a different option API, so each "
+            "site needs human judgment before migrating."
+        ),
         short_description="json.dumps()/json.loads() — prefer orjson (a core SDK dependency, ~10x faster)",
         full_description=(
             "``orjson`` is already a core dependency of the application SDK, so it is\n"
