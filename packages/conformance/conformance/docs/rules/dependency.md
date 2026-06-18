@@ -13,16 +13,16 @@ Suppress a finding on the violating line or the line directly above it:
 # conformance: ignore[D002] intentional: pinned to pre-release for hotfix
 ```
 
-| ID | Name | Tier | Category | Autofixable | Since |
-|---|---|---|---|---|---|
-| [D001](#d001) | `UnpinnedSdkDependency` | `block` | `dependency-pinning` | yes | 0.4.0 |
-| [D002](#d002) | `RedeclaredSdkManagedDependency` | `warn` | `dependency-pinning` | yes | 0.4.0 |
+| ID | Name | Tier | Scope | Category | Autofixable | Since |
+|---|---|---|---|---|---|---|
+| [D001](#d001) | `UnpinnedSdkDependency` | `block` | `app` | `dependency-pinning` | yes | 0.4.0 |
+| [D002](#d002) | `RedeclaredSdkManagedDependency` | `warn` | `app` | `dependency-pinning` | yes | 0.4.0 |
 
 ---
 
 ## D001 — `UnpinnedSdkDependency` {#d001}
 
-**Tier:** `block` · **Category:** `dependency-pinning` · **Autofixable:** yes · **Since:** 0.4.0
+**Tier:** `block` · **Scope:** `app` · **Category:** `dependency-pinning` · **Autofixable:** yes · **Since:** 0.4.0
 
 > Application SDK dependency is missing or its version specifier is not bounded on both ends
 
@@ -41,7 +41,7 @@ the SDK are also exempt — packages whose `[project].name` starts with
 
 ## D002 — `RedeclaredSdkManagedDependency` {#d002}
 
-**Tier:** `warn` · **Category:** `dependency-pinning` · **Autofixable:** yes · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `app` · **Category:** `dependency-pinning` · **Autofixable:** yes · **Since:** 0.4.0
 
 > Dependency redeclared in the app's pyproject.toml is already managed by the SDK
 

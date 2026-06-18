@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 from conformance.suite.schema.catalog import RuleDefinition
-from conformance.suite.schema.disposition import EnforcementTier, RuleMechanism
+from conformance.suite.schema.disposition import (
+    EnforcementTier,
+    RuleMechanism,
+    RuleScope,
+)
 
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="E001",
+        scope=RuleScope.BOTH,
         name="BareExceptPass",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
@@ -32,6 +37,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E002",
+        scope=RuleScope.BOTH,
         name="TypedExceptPass",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
@@ -55,6 +61,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E003",
+        scope=RuleScope.BOTH,
         name="BroadContextlibSuppress",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -78,6 +85,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E004",
+        scope=RuleScope.BOTH,
         name="BroadExceptClause",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -101,6 +109,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E005",
+        scope=RuleScope.BOTH,
         name="ExceptBlockMissingExcInfo",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -123,6 +132,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E006",
+        scope=RuleScope.BOTH,
         name="BareExceptWithBody",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
@@ -144,6 +154,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E007",
+        scope=RuleScope.BOTH,
         name="ErrorToReturnValue",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -166,6 +177,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E008",
+        scope=RuleScope.BOTH,
         name="ImportErrorWithoutLogging",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -189,6 +201,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E009",
+        scope=RuleScope.BOTH,
         name="ExceptBlockOnlyAssigns",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -212,6 +225,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E010",
+        scope=RuleScope.BOTH,
         name="AsyncioGatherExceptionsUnexamined",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -236,6 +250,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E011",
+        scope=RuleScope.BOTH,
         name="LoggingFilterUnsafeBody",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -264,6 +279,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E012",
+        scope=RuleScope.BOTH,
         name="UntypedBuiltinRaise",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -290,6 +306,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E013",
+        scope=RuleScope.BOTH,
         name="LegacyAtlanErrorRaise",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
@@ -313,6 +330,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E014",
+        scope=RuleScope.BOTH,
         name="ExceptLoopControlSwallow",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -339,6 +357,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E015",
+        scope=RuleScope.BOTH,
         name="ExceptionTextInErrorMessage",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -368,6 +387,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E016",
+        scope=RuleScope.BOTH,
         name="MissingExceptionChaining",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -398,6 +418,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E017",
+        scope=RuleScope.BOTH,
         name="SecretNamedEvidenceKey",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
@@ -425,6 +446,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="E018",
+        scope=RuleScope.BOTH,
         name="BareParentLeafRaise",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,

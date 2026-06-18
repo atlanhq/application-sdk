@@ -68,6 +68,31 @@ class RuleMechanism(str, Enum):
     TEST = "test"
 
 
+class RuleScope(str, Enum):
+    """Where a rule applies — the consumer surface it governs.
+
+    The conformance suite runs against two kinds of repo: the SDK itself and the
+    consumer apps built on it.  Most rules apply to any Python in the fleet, but
+    some are inherently one-sided:
+
+    * ``SDK``  — only meaningful inside ``atlan-application-sdk`` (and its sibling
+      packages); skipped on consumer apps.
+    * ``APP``  — only meaningful on a consumer app; skipped on the SDK itself.
+      Example: dependency-pinning (D001/D002) and bootstrap-shim drift (C002/C003),
+      where the SDK is the *publisher* of the contract, not a subject of it.
+    * ``BOTH`` — applies everywhere (the default posture for code-quality rules
+      like error-handling, logging, prescriptions, optimisations).
+
+    The active scope is resolved at runtime from the repo under scan (see
+    ``checks._ast_common.detect_scope``) or set explicitly via ``--scope``; a rule
+    is in scope iff its scope is ``BOTH`` or equals the active scope.
+    """
+
+    SDK = "sdk"
+    APP = "app"
+    BOTH = "both"
+
+
 # ---------------------------------------------------------------------------
 # Disposition
 # ---------------------------------------------------------------------------

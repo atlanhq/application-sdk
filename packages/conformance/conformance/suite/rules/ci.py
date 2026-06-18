@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 from conformance.suite.schema.catalog import RuleDefinition
-from conformance.suite.schema.disposition import EnforcementTier, RuleMechanism
+from conformance.suite.schema.disposition import (
+    EnforcementTier,
+    RuleMechanism,
+    RuleScope,
+)
 
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="C001",
+        scope=RuleScope.BOTH,
         name="UnpinnedActionReference",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
@@ -32,6 +37,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="C002",
+        scope=RuleScope.APP,
         name="BootstrapWorkflowDrift",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
@@ -57,6 +63,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="C003",
+        scope=RuleScope.APP,
         name="GitignoreMissingEntry",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,

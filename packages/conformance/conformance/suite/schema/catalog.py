@@ -18,7 +18,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from conformance.suite.schema.disposition import EnforcementTier, RuleMechanism
+from conformance.suite.schema.disposition import (
+    EnforcementTier,
+    RuleMechanism,
+    RuleScope,
+)
 from pydantic import BaseModel, Field, model_validator
 
 # ---------------------------------------------------------------------------
@@ -44,6 +48,11 @@ class RuleDefinition(BaseModel):
 
     mechanism: RuleMechanism
     """``static`` or ``test``."""
+
+    scope: RuleScope
+    """Where the rule applies — ``sdk``, ``app``, or ``both``.  Required (no
+    default) so every rule must declare its surface explicitly; the meta-test
+    ``test_catalog_all_have_scope`` enforces this for present and future rules."""
 
     category: str
     """Rule family, e.g. ``"silent-swallow"``."""
@@ -71,6 +80,8 @@ class RuleDefinition(BaseModel):
                 data["tier"] = EnforcementTier(data["tier"].lower())
             if "mechanism" in data and isinstance(data["mechanism"], str):
                 data["mechanism"] = RuleMechanism(data["mechanism"].lower())
+            if "scope" in data and isinstance(data["scope"], str):
+                data["scope"] = RuleScope(data["scope"].lower())
         return data
 
     def to_reporting_descriptor(self) -> ReportingDescriptor:  # type: ignore[name-defined]  # noqa: F821
@@ -84,6 +95,7 @@ class RuleDefinition(BaseModel):
         rule_props = AtlanRuleProperties(
             tier=self.tier,
             mechanism=self.mechanism,
+            scope=self.scope,
             category=self.category,
             autofixable=self.autofixable,
             orthogonal_gate=self.orthogonal_gate,

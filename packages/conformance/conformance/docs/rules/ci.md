@@ -13,17 +13,17 @@ Suppress a finding on the violating line or the line directly above it:
 # conformance: ignore[C001] intentional: org-internal action
 ```
 
-| ID | Name | Tier | Category | Autofixable | Since |
-|---|---|---|---|---|---|
-| [C001](#c001) | `UnpinnedActionReference` | `block` | `supply-chain` | yes | 3.16.0 |
-| [C002](#c002) | `BootstrapWorkflowDrift` | `warn` | `ci-consistency` | yes | 0.3.0 |
-| [C003](#c003) | `GitignoreMissingEntry` | `warn` | `ci-consistency` | — | 0.4.0 |
+| ID | Name | Tier | Scope | Category | Autofixable | Since |
+|---|---|---|---|---|---|---|
+| [C001](#c001) | `UnpinnedActionReference` | `block` | `both` | `supply-chain` | yes | 3.16.0 |
+| [C002](#c002) | `BootstrapWorkflowDrift` | `warn` | `app` | `ci-consistency` | yes | 0.3.0 |
+| [C003](#c003) | `GitignoreMissingEntry` | `warn` | `app` | `ci-consistency` | — | 0.4.0 |
 
 ---
 
 ## C001 — `UnpinnedActionReference` {#c001}
 
-**Tier:** `block` · **Category:** `supply-chain` · **Autofixable:** yes · **Since:** 3.16.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `supply-chain` · **Autofixable:** yes · **Since:** 3.16.0
 
 > External GitHub Action not pinned to a full commit digest
 
@@ -40,7 +40,7 @@ local `./` composite-action refs are exempt (no version to pin).
 
 ## C002 — `BootstrapWorkflowDrift` {#c002}
 
-**Tier:** `warn` · **Category:** `ci-consistency` · **Autofixable:** yes · **Since:** 0.3.0
+**Tier:** `warn` · **Scope:** `app` · **Category:** `ci-consistency` · **Autofixable:** yes · **Since:** 0.3.0
 
 > Managed CI workflow is absent or has drifted from the bootstrap canonical
 
@@ -59,7 +59,7 @@ choices (e.g. `package_name`, `unit_tests_workflow_file`) are preserved.
 
 ## C003 — `GitignoreMissingEntry` {#c003}
 
-**Tier:** `warn` · **Category:** `ci-consistency` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `app` · **Category:** `ci-consistency` · **Autofixable:** — · **Since:** 0.4.0
 
 > .gitignore is absent or missing a standard required entry
 
