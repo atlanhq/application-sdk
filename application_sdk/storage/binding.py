@@ -781,6 +781,7 @@ def _create_store_from_binding_optional_with_put_attrs(
     name: str,
     *,
     components_dir: Path | str = Path("./components"),
+    required: bool = False,
 ) -> tuple[ObjectStore, dict[str, str] | None] | tuple[None, None]:
     """Create an obstore store and put attributes from a Dapr binding, or ``(None, None)`` if absent.
 
@@ -793,12 +794,18 @@ def _create_store_from_binding_optional_with_put_attrs(
     Args:
         name: The Dapr component name (e.g. ``"atlan-objectstore"``).
         components_dir: Directory containing Dapr component YAML files.
+        required: When ``True``, re-raises ``StorageBindingNotFoundError``
+            instead of returning ``(None, None)``.  Use when the binding is
+            mandatory (e.g. upstream store in SDR mode) so the failure surfaces
+            at construction time rather than later in the preflight probe.
 
     Returns:
         ``(store, put_attributes)`` on success, or ``(None, None)`` if the
         component is absent or has unresolvable configuration.
 
     Raises:
+        StorageBindingNotFoundError: If the component is absent and
+            ``required=True``.
         StorageConfigError: If the component exists but is genuinely
             misconfigured (unsupported binding type, missing required options,
             etc.).  Broken components are treated as absent and return
@@ -814,6 +821,8 @@ def _create_store_from_binding_optional_with_put_attrs(
             name, components_dir=components_dir
         )
     except StorageBindingNotFoundError:
+        if required:
+            raise
         _get_logger().info(
             "No Dapr component named '%s' found — App.upload/download will use "
             "the deployment store. Configure this binding in SDR deployments to "

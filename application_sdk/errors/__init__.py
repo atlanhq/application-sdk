@@ -82,6 +82,7 @@ STORAGE_PERMISSION = ErrorCode("STR", 2)
 STORAGE_CONFIG = ErrorCode("STR", 3)
 STORAGE_OPERATION = ErrorCode("STR", 4)
 STORAGE_EMPTY_UPLOAD = ErrorCode("STR", 5)
+STORAGE_PREFLIGHT = ErrorCode("STR", 6)
 
 # CTR - Contract errors
 CONTRACT_VALIDATION = ErrorCode("CTR", 1)
