@@ -50,6 +50,7 @@ jobs:
       sdk: ${{ steps.filter.outputs.sdk }}
       toolkit: ${{ steps.filter.outputs.toolkit }}
       conformance: ${{ steps.filter.outputs.conformance }}
+      container: ${{ steps.filter.outputs.container }}
       force_all: ${{ steps.force.outputs.force_all }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -113,18 +114,25 @@ jobs:
               - '.github/**'
               - '**/pyproject.toml'
               - '!**/*.md'
+            # A container change (base image / daprd / system deps / entrypoint)
+            # can alter SDK runtime behaviour, so it runs ALL three gate areas —
+            # in addition to the orthogonal Trivy container scan + connector e2e
+            # that live in pull_request.yaml.
+            container:
+              - 'Dockerfile'
+              - 'entrypoint.sh'
 
   sdk-tests:
     name: SDK Tests
     needs: changes
-    if: needs.changes.outputs.sdk == 'true' || needs.changes.outputs.force_all == 'true'
+    if: needs.changes.outputs.sdk == 'true' || needs.changes.outputs.container == 'true' || needs.changes.outputs.force_all == 'true'
     uses: ./.github/workflows/sdk-tests-reusable.yaml
     secrets: inherit
 
   conformance:
     name: Conformance
     needs: changes
-    if: needs.changes.outputs.conformance == 'true' || needs.changes.outputs.force_all == 'true'
+    if: needs.changes.outputs.conformance == 'true' || needs.changes.outputs.container == 'true' || needs.changes.outputs.force_all == 'true'
     uses: ./.github/workflows/conformance-reusable.yaml
     with:
       # Dogfood the in-flight suite: run the PR's own conformance package, not
@@ -136,13 +144,16 @@ jobs:
       # uses stdlib json for SARIF string output (orjson returns bytes).
       exclude-paths-o: "tools/,contract-toolkit/,packages/conformance/"
       event_name: ${{ github.event_name }}
-      force-all: ${{ needs.changes.outputs.force_all == 'true' }}
+      # force-all the inner per-series run for releases AND container changes —
+      # a Dockerfile/entrypoint diff isn't .py/.github/pyproject, so without this
+      # every series would self-skip and the area would no-op.
+      force-all: ${{ needs.changes.outputs.force_all == 'true' || needs.changes.outputs.container == 'true' }}
     secrets: inherit
 
   toolkit:
     name: Contract Toolkit
     needs: changes
-    if: needs.changes.outputs.toolkit == 'true' || needs.changes.outputs.force_all == 'true'
+    if: needs.changes.outputs.toolkit == 'true' || needs.changes.outputs.container == 'true' || needs.changes.outputs.force_all == 'true'
     uses: ./.github/workflows/contract-toolkit-reusable.yaml
     secrets: inherit
 
