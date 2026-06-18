@@ -23,7 +23,6 @@ import json
 import os
 import secrets
 
-import obstore
 import pytest
 
 from application_sdk.storage import ops
@@ -48,8 +47,8 @@ _LARGE_BYTES = int(os.environ.get("SDK_LARGE_PAYLOAD_MIB", "101")) * 1024 * 1024
 
 async def _assert_auth(store) -> None:
     """Confirm auth works by listing the bucket root (no blobs required)."""
-    async for _batch in obstore.list(store, prefix="integ-auth-probe/"):
-        break
+    cs = CloudStore(store, provider="gcs")
+    await cs.list(prefix="integ-auth-probe/")
 
 
 def _load_sa_key() -> dict:
