@@ -30,7 +30,7 @@ runs:
 
     - name: Cache uv binary
       id: cache-uv-bin
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
       with:
         path: ${{ runner.tool_cache }}/uv
         key: uv-bin-${{ runner.os }}-${{ runner.arch }}-0.11.21
@@ -46,7 +46,7 @@ runs:
 
     - name: Cache virtual environment
       id: cache-venv
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
       with:
         path: .venv
         key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('uv.lock') }}
