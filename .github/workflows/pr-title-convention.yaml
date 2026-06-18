@@ -24,7 +24,8 @@
 #      changes carry that exact scope.
 #
 #   3. Any change to `packages/conformance/` *core* (anything under
-#      packages/conformance/ that is NOT in its tests/ subfolder)
+#      packages/conformance/ that is NOT in its tests/ subfolder or a lock
+#      file — uv.lock, package-lock.json, yarn.lock)
 #      ->  title must be `feat(conformance):` or `fix(conformance):`.
 #      The conformance package ships independently and owns its own changelog.
 #
@@ -111,6 +112,9 @@ jobs:
                   contract-toolkit/docs/*|contract-toolkit/examples/*|contract-toolkit/scripts/*|contract-toolkit/tests/*|contract-toolkit/.github/*) : ;;
                   contract-toolkit/*) ct_core=true ;;
                   packages/conformance/tests/*) : ;;
+                  packages/conformance/uv.lock) : ;;
+                  packages/conformance/*/package-lock.json) : ;;
+                  packages/conformance/*/yarn.lock) : ;;
                   packages/conformance/*) cf_core=true ;;
                   *) : ;;
                 esac
@@ -184,8 +188,8 @@ jobs:
           - `feat(conformance): …`
           - `fix(conformance): …`
 
-          (Changes confined to `packages/conformance/tests/`
-          should instead be `chore:`/`ci:`.)
+          (Changes confined to `packages/conformance/tests/` or lock files
+          such as `uv.lock`/`package-lock.json` should instead be `chore:`/`ci:`.)
 
           Editing the PR title re-runs this check and clears this comment automatically.
           EOF

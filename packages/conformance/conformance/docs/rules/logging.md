@@ -5,7 +5,7 @@
 
 # Logging Rules (L-series)
 
-**19 rules** · Checker: `suite.checks.logging` (AST-based, not yet fully implemented)
+**18 rules** · Checker: `suite.checks.logging` (AST-based, not yet fully implemented)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -26,14 +26,13 @@ Suppress a finding on the violating line or the line directly above it:
 | [L009](#l009) | `WarnThenRaiseDuplication` | `warn` | `log-noise` | — | 3.16.0 |
 | [L010](#l010) | `CredentialInLogOutput` | `block` | `security` | — | 3.16.0 |
 | [L011](#l011) | `StringConcatenationInLog` | `block` | `log-format` | yes | 3.16.0 |
-| [L012](#l012) | `PctStyleInNonStdlibLogger` | `warn` | `log-format` | — | 3.16.0 |
-| [L013](#l013) | `StdlibExtraReservedKeyCollision` | `block` | `log-crash` | — | 3.16.0 |
-| [L014](#l014) | `StdlibArbitraryKwargs` | `block` | `log-crash` | yes | 3.16.0 |
-| [L015](#l015) | `StructlogEventKwargOverwrite` | `warn` | `log-format` | — | 3.16.0 |
-| [L016](#l016) | `DictConfigDisableExistingLoggers` | `warn` | `log-config` | yes | 3.16.0 |
-| [L017](#l017) | `BasicConfigNoopAfterFirstCall` | `warn` | `log-config` | — | 3.16.0 |
-| [L018](#l018) | `LoggerExceptionOutsideExcept` | `warn` | `log-level` | — | 3.16.0 |
-| [L024](#l024) | `KwargsInApplicationLogCalls` | `warn` | `log-format` | — | 3.16.0 |
+| [L012](#l012) | `StdlibExtraReservedKeyCollision` | `block` | `log-crash` | — | 3.16.0 |
+| [L013](#l013) | `StdlibArbitraryKwargs` | `block` | `log-crash` | yes | 3.16.0 |
+| [L014](#l014) | `StructlogEventKwargOverwrite` | `warn` | `log-format` | — | 3.16.0 |
+| [L015](#l015) | `DictConfigDisableExistingLoggers` | `warn` | `log-config` | yes | 3.16.0 |
+| [L016](#l016) | `BasicConfigNoopAfterFirstCall` | `warn` | `log-config` | — | 3.16.0 |
+| [L017](#l017) | `LoggerExceptionUsage` | `warn` | `log-level` | yes | 3.16.0 |
+| [L018](#l018) | `KwargsInApplicationLogCalls` | `warn` | `log-format` | — | 3.16.0 |
 
 ---
 
@@ -42,6 +41,12 @@ Suppress a finding on the violating line or the line directly above it:
 **Tier:** `block` · **Category:** `log-format` · **Autofixable:** yes · **Since:** 3.16.0
 
 > f-string in log message — breaks log grouping and aggregation
+
+**Rationale:** %-style message bodies are the fleet-wide logging convention: one consistent call-site
+style keeps log statements legible and reviewable, and the SDK's loguru bridge renders
+the values in. f-strings render identically here — the %-bridge is eager — so this is
+about consistency and readability, not lazy evaluation; when a hot path genuinely needs
+deferred rendering, use opt(lazy=True) with {}-style.
 
 Using an f-string creates a unique message string per call, breaking log grouping and
 aggregation in Grafana/ClickHouse.  It also always evaluates eagerly.  Rewrite as
@@ -56,6 +61,10 @@ kwargs.
 
 > Logger factory inconsistent with project canonical factory
 
+**Rationale:** Mixed logger factories produce incompatible record formats. The adapter that injects
+Temporal context only activates for the canonical factory; records from other factories
+arrive without correlation IDs, breaking cross-service traces.
+
 Mixing logger factories produces inconsistent log formats, loses structured fields, and
 breaks log correlation.  The checker discovers the canonical factory (dominant by
 occurrence count) in Phase 1 and flags deviations.
@@ -67,6 +76,10 @@ occurrence count) in Phase 1 and flags deviations.
 **Tier:** `warn` · **Category:** `log-format` · **Autofixable:** — · **Since:** 3.16.0
 
 > extra={} used where framework expects direct kwargs (or vice versa)
+
+**Rationale:** Whether kwargs land in indexed top-level fields or an unindexed nested dict depends on
+the framework. The wrong form routes context where aggregation queries can't reach —
+present in the record but invisible to GROUP BY/filter.
 
 Whether `extra={}` is correct depends on the logging framework.  For structlog and
 loguru, `extra={}` is usually wrong — the data lands in an unindexed nested dict
@@ -81,6 +94,10 @@ detect the active framework first.
 
 > logger.warning/error in except block without exc_info=True
 
+**Rationale:** Same failure as E005 at the logging layer: the message appears in the stream but the
+stack trace is absent, so every postmortem hitting this pattern must reproduce the
+failure to find root cause.
+
 Logging an exception without `exc_info=True` produces a message with no stack trace —
 the root cause is invisible.  Add `exc_info=True` to all `logger.warning()` /
 `logger.error()` calls within an except block. `.exception()` is exempt.
@@ -92,6 +109,10 @@ the root cause is invisible.  Add `exc_info=True` to all `logger.warning()` /
 **Tier:** `warn` · **Category:** `log-format` · **Autofixable:** yes · **Since:** 3.16.0
 
 > print() in production code — bypasses logging framework
+
+**Rationale:** print() bypasses the logging adapter entirely: no level, no correlation ID, no
+structured fields, no OTel forwarding. In containers, stdout may route to a different
+sink or interleave with structured lines, invisible to observability.
 
 `print()` produces no level, no structured fields, no correlation IDs. In production
 services, output may go to stdout unformatted, be lost, or interleave with structured
@@ -106,6 +127,10 @@ log lines.  Acceptable in CLI scripts, test/debug scripts, and `if __name__ ==
 
 > logger.info() inside a tight loop — generates excessive log volume
 
+**Rationale:** Per-item INFO in a large loop emits O(N) records at the level operators monitor,
+drowning lifecycle signals in noise and inflating storage cost. INFO is for milestones;
+per-item progress belongs at DEBUG.
+
 Per-item INFO logging in a large loop drowns meaningful signals and degrades
 performance.  INFO is for lifecycle milestones, not per-item events.  Use DEBUG per-item
 and INFO for the loop summary.  The checker should inspect whether the loop is clearly
@@ -119,6 +144,11 @@ bounded (≤10 items) before flagging.
 
 > logger.critical() — CRITICAL is not a meaningful level here
 
+**Rationale:** ADR-0011 codifies exactly four levels (DEBUG/INFO/WARNING/ERROR) — there is no CRITICAL.
+Fatal conditions are communicated through process exit codes and Temporal workflow
+failure, not a log level, so a CRITICAL record adds a fifth level nothing in the stack
+is built to consume. Use ERROR (with exc_info=True) and let the failure propagate.
+
 CRITICAL is not a meaningful level in distributed systems — every service failure is
 "critical" from some perspective.  Use ERROR and handle severity through alerting rules
 on the observability platform.
@@ -130,6 +160,10 @@ on the observability platform.
 **Tier:** `warn` · **Category:** `log-performance` · **Autofixable:** — · **Since:** 3.16.0
 
 > Expensive computation in logger.debug() argument — evaluates eagerly
+
+**Rationale:** Log-call arguments evaluate eagerly regardless of level. An unguarded expensive
+serialisation inside logger.debug() runs on every call in production — invisible
+CPU/memory overhead that compounds on hot paths.
 
 Arguments to log calls are evaluated eagerly regardless of whether the level is enabled.
 Guard expensive serialization / computation with `if
@@ -143,6 +177,10 @@ logger.isEnabledFor(logging.DEBUG):`.
 
 > logger.warning/error immediately before raise — duplicate log records
 
+**Rationale:** Logging immediately before re-raising creates two records for one event (raise site +
+handler), inflating error counts and making 'how many times did this fail?' unanswerable
+without dedup logic.
+
 Logging an error immediately before re-raising creates duplicate records in the log
 stream, inflating error counts in dashboards.  Acceptable only when adding context not
 available to the caller.  Otherwise: just re-raise.
@@ -154,6 +192,10 @@ available to the caller.  Otherwise: just re-raise.
 **Tier:** `block` · **Category:** `security` · **Autofixable:** — · **Since:** 3.16.0
 
 > Credential/secret value in log output — security vulnerability
+
+**Rationale:** Log aggregation stores records in plaintext accessible to more people and systems than
+the credential store. A credential value in a log is a persistent exposure that survives
+rotation and is indexed for search.
 
 Credentials in log output are a security vulnerability — logs are often stored in
 plaintext in log aggregation systems, accessible to more people than the credential
@@ -168,29 +210,24 @@ store.  Requires human security review before marking acceptable.  Logging a cre
 
 > String concatenation in log message — breaks log grouping
 
+**Rationale:** Same convention as L001: string concatenation is an ad-hoc alternative to the standard
+%-style message body. It reads worse at the call site and breaks fleet-wide consistency
+for no benefit; rewrite as a %-style message body.
+
 Like f-strings (L001), string concatenation embeds values into the message string in a
 way that breaks log grouping.  Rewrite as %-style message body.
 
 ---
 
-## L012 — `PctStyleInNonStdlibLogger` {#l012}
-
-**Tier:** `warn` · **Category:** `log-format` · **Autofixable:** — · **Since:** 3.16.0
-
-> %-style formatting in non-stdlib logger — silently produces wrong output
-
-%-style is a stdlib feature.  In structlog, `%s` appears literally in output.  In loguru
-(without a bridge adapter), the positional arg is silently ignored.
-Framework-dependent: ACCEPTABLE for stdlib, MEDIUM for structlog, LOW-to-HIGH for loguru
-depending on whether a bridge adapter is present.
-
----
-
-## L013 — `StdlibExtraReservedKeyCollision` {#l013}
+## L012 — `StdlibExtraReservedKeyCollision` {#l012}
 
 **Tier:** `block` · **Category:** `log-crash` · **Autofixable:** — · **Since:** 3.16.0
 
 > extra={} key collides with stdlib LogRecord attribute — crashes caller
+
+**Rationale:** stdlib's Logger.makeRecord() raises KeyError when an extra={} key collides with a
+LogRecord attribute, propagating to the caller's logger.info() site and crashing it. The
+22 forbidden keys include natural choices: name, message, module, args, filename.
 
 stdlib's `Logger.makeRecord()` raises `KeyError` if any key in `extra={}` matches a
 `LogRecord` attribute.  This crash propagates directly to the caller — NOT caught by
@@ -199,11 +236,15 @@ stdlib's `Logger.makeRecord()` raises `KeyError` if any key in `extra={}` matche
 
 ---
 
-## L014 — `StdlibArbitraryKwargs` {#l014}
+## L013 — `StdlibArbitraryKwargs` {#l013}
 
 **Tier:** `block` · **Category:** `log-crash` · **Autofixable:** yes · **Since:** 3.16.0
 
 > Arbitrary kwargs in stdlib logger — raises TypeError immediately
+
+**Rationale:** stdlib logger.info() raises TypeError immediately for any kwarg outside its short
+allowlist. The most common breakage when migrating from structlog (which accepts
+arbitrary kwargs) — call sites look identical but fail at runtime.
 
 stdlib `logger.info()` only accepts `exc_info`, `extra`, `stack_info`, and `stacklevel`.
 Any other kwarg raises `TypeError` and crashes the caller.  Very common when migrating
@@ -211,11 +252,15 @@ from structlog/loguru. Applies to stdlib only.
 
 ---
 
-## L015 — `StructlogEventKwargOverwrite` {#l015}
+## L014 — `StructlogEventKwargOverwrite` {#l014}
 
 **Tier:** `warn` · **Category:** `log-format` · **Autofixable:** — · **Since:** 3.16.0
 
 > event= kwarg in structlog silently overwrites the log message
+
+**Rationale:** In structlog the first positional arg is the message (stored as 'event'). Passing event=
+as a keyword silently replaces the message with the domain value, corrupting both
+message and field in one call.
 
 In structlog, the first positional argument is stored as the `event` key — it IS the log
 message.  Passing `event=` as a keyword argument silently overwrites the message with
@@ -224,11 +269,15 @@ only.
 
 ---
 
-## L016 — `DictConfigDisableExistingLoggers` {#l016}
+## L015 — `DictConfigDisableExistingLoggers` {#l015}
 
 **Tier:** `warn` · **Category:** `log-config` · **Autofixable:** yes · **Since:** 3.16.0
 
 > dictConfig without disable_existing_loggers=False silently kills loggers
+
+**Rationale:** dictConfig() defaults disable_existing_loggers=True, silently disabling every logger
+created before the call. SDK components create loggers at import — before any app
+dictConfig() — so a misconfigured call makes all library logging vanish with no error.
 
 `logging.config.dictConfig()`'s `disable_existing_loggers` defaults to `True`, which
 silently disables all loggers created before the call.  This is the most common source
@@ -237,11 +286,14 @@ Applies to stdlib only.
 
 ---
 
-## L017 — `BasicConfigNoopAfterFirstCall` {#l017}
+## L016 — `BasicConfigNoopAfterFirstCall` {#l016}
 
 **Tier:** `warn` · **Category:** `log-config` · **Autofixable:** — · **Since:** 3.16.0
 
 > Multiple basicConfig() calls — second+ are silent no-ops
+
+**Rationale:** basicConfig() is silently ignored if the root logger already has handlers. Multiple
+calls rely on import order to decide which wins; the rest are silently dropped.
 
 `logging.basicConfig()` is silently ignored if the root logger already has handlers.
 Multiple calls across the codebase mean whichever runs first wins; the rest are dropped
@@ -250,24 +302,40 @@ __name__ == "__main__":` blocks. Applies to stdlib only.
 
 ---
 
-## L018 — `LoggerExceptionOutsideExcept` {#l018}
+## L017 — `LoggerExceptionUsage` {#l017}
 
-**Tier:** `warn` · **Category:** `log-level` · **Autofixable:** — · **Since:** 3.16.0
+**Tier:** `warn` · **Category:** `log-level` · **Autofixable:** yes · **Since:** 3.16.0
 
-> logger.exception() called outside an except block
+> logger.exception() used — use logger.error(..., exc_info=True) instead
 
-`logger.exception()` captures the current exception info via `sys.exc_info()`.  Called
-outside an except block, it captures nothing (or a stale exception from a previous
-except clause), producing a misleading traceback or no traceback.  Use
-`logger.error(..., exc_info=True)` only inside except blocks.
+**Rationale:** logger.exception() is rejected outright. ADR-0011 restricts logging to four levels with
+exc_info=True as the sanctioned way to attach a traceback; logger.exception() implies a
+distinct level, reads sys.exc_info() implicitly (empty/stale outside an active except
+block), and overlaps the explicit exc_info rules. Use logger.error(..., exc_info=True)
+instead.
+
+`logger.exception()` is not a sanctioned logging method in this project. ADR-0011
+restricts app logging to four levels (DEBUG/INFO/WARNING/ERROR) and `exc_info=True` is
+the canonical way to attach a traceback.  Beyond that, `logger.exception()` reads
+`sys.exc_info()` implicitly — capturing nothing (or a stale exception) when called
+outside an active except block. Replace every call site with `logger.error(...,
+exc_info=True)`.
+
+Checker note: the `AtlanLoggerAdapter`'s own `exception()` shim is exempt — it exists
+only to satisfy third-party Temporal callers and immediately delegates to
+`self.error(..., exc_info=True)`.
 
 ---
 
-## L024 — `KwargsInApplicationLogCalls` {#l024}
+## L018 — `KwargsInApplicationLogCalls` {#l018}
 
 **Tier:** `warn` · **Category:** `log-format` · **Autofixable:** — · **Since:** 3.16.0
 
 > kwargs in application log calls — use %-style message body instead
+
+**Rationale:** The adapter auto-injects Temporal context (workflow/run/activity IDs) as the only
+top-level indexed columns in ClickHouse/Grafana. App kwargs land in an unindexed JSON
+blob aggregation can't reach — context belongs in the message body via %-style.
 
 Arbitrary kwargs in log calls are an anti-pattern in this project. Framework context
 (Temporal fields, correlation IDs) is auto-injected by the logging adapter; all other
