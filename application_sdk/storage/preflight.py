@@ -40,9 +40,26 @@ _PREFLIGHT_PAYLOAD = b"atlan-preflight"
 # Per-store probe timeout.  Keeps a blackholed endpoint from stalling boot
 # indefinitely — obstore wraps the Rust object_store crate, whose default
 # connect_timeout and request timeout are both None.
-_PROBE_TIMEOUT_SECS: float = float(
-    os.environ.get("ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS", "30")
-)
+_PROBE_TIMEOUT_SECS: float = 30.0
+_raw_timeout = os.environ.get("ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS")
+if _raw_timeout is not None:
+    try:
+        _parsed_timeout = float(_raw_timeout)
+        if _parsed_timeout > 0:
+            _PROBE_TIMEOUT_SECS = _parsed_timeout
+        else:
+            logger.warning(
+                "ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS=%r is non-positive; using default %.0f s",
+                _raw_timeout,
+                _PROBE_TIMEOUT_SECS,
+            )
+    except ValueError:
+        logger.warning(
+            "ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS=%r is not a valid number; using default %.0f s",
+            _raw_timeout,
+            _PROBE_TIMEOUT_SECS,
+        )
+del _raw_timeout
 
 # Stable probe key reused across boots on the same host so that a principal
 # with put+head but no delete permission doesn't accumulate one orphaned
@@ -54,6 +71,13 @@ _PROBE_KEY = f"{_PREFLIGHT_PREFIX}/probe-{socket.gethostname()}"
 # to contain "401" / "403" as a substring.
 _RE_403 = re.compile(r"\b403\b")
 _RE_401 = re.compile(r"\b401\b")
+
+# Connectivity/unknown hint — shared between the classifier's fallback bucket
+# and the timeout branch so a future classifier change cannot silently diverge.
+_CONNECTIVITY_HINT = (
+    "Could not reach the object store. Check the endpoint URL, "
+    "bucket/container name, and network connectivity from this pod/host."
+)
 
 
 def _classify_access_error(exc: BaseException) -> tuple[str, str]:
@@ -105,8 +129,7 @@ def _classify_access_error(exc: BaseException) -> tuple[str, str]:
 
     return (
         "connectivity / unknown",
-        "Could not reach the object store. Check the endpoint URL, "
-        "bucket/container name, and network connectivity from this pod/host.",
+        _CONNECTIVITY_HINT,
     )
 
 
@@ -115,6 +138,8 @@ async def _probe_store(store: object, label: str, binding_name: str) -> str | No
 
     Each operation is unbounded in this function; the caller wraps the whole
     coroutine in ``asyncio.wait_for`` to enforce the boot-time timeout.
+
+    Delete is best-effort: a delete failure logs a warning but does not raise.
 
     Args:
         store: An obstore-compatible store instance.
@@ -178,9 +203,8 @@ async def verify_object_store_access(infra: InfrastructureContext) -> None:
     """In SDR mode, verify read+write access to every configured object store.
 
     Performs a write → read → delete round-trip on the deployment store and,
-    when configured, the upstream Atlan store.  Also hard-fails if SDR mode is
-    active but the upstream store is absent (which would cause artifacts to
-    silently never reach Atlan).
+    when present, the upstream Atlan store.  Absent upstream store in SDR mode
+    is caught earlier at construction (``StorageBindingNotFoundError``).
 
     Each per-store probe is bounded by ``ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS``
     (default: 30 s).  A probe that times out is classified as
@@ -194,8 +218,7 @@ async def verify_object_store_access(infra: InfrastructureContext) -> None:
             ``_create_infrastructure`` in ``main.py``.
 
     Raises:
-        ObjectStorePreflightError: If any store is inaccessible or the upstream
-            store is absent while SDR mode is enabled.
+        ObjectStorePreflightError: If any configured store is inaccessible.
     """
     from application_sdk.constants import (  # noqa: PLC0415 — cold path: SDR-gated; constants only loaded when needed
         DEPLOYMENT_OBJECT_STORE_NAME,
@@ -214,18 +237,6 @@ async def verify_object_store_access(infra: InfrastructureContext) -> None:
     )
 
     failures: list[str] = []
-
-    # Hard-fail if upstream store absent: in SDR mode every artifact must be
-    # uploaded to the Atlan bucket; a missing upstream store means silent data loss.
-    if infra.upstream_storage is None:
-        failures.append(
-            f"  * upstream store (binding: '{UPSTREAM_OBJECT_STORE_NAME}'): not configured\n"
-            "    SDR mode is enabled (ENABLE_ATLAN_UPLOAD=true) but the upstream Atlan\n"
-            "    object store is absent — artifacts produced by this connector would\n"
-            "    never reach Atlan.\n"
-            f"    Hint:  Add a Dapr component named '{UPSTREAM_OBJECT_STORE_NAME}' to\n"
-            "           the components directory and ensure its credentials are resolvable."
-        )
 
     # Round-trip probe each store
     stores_to_probe: list[tuple[str, str, object]] = [
@@ -249,11 +260,10 @@ async def verify_object_store_access(infra: InfrastructureContext) -> None:
                 timeout=_PROBE_TIMEOUT_SECS,
             )
         except TimeoutError:
-            _, hint = _classify_access_error(TimeoutError())
             failure = (
                 f"  * {label} store (binding: '{binding_name}'): probe timed out "
                 f"after {_PROBE_TIMEOUT_SECS:.0f}s [connectivity / unknown]\n"
-                f"    Hint:  {hint}\n"
+                f"    Hint:  {_CONNECTIVITY_HINT}\n"
                 f"    Tip:   Override timeout via ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS."
             )
         if failure is not None:

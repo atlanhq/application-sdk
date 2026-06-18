@@ -139,12 +139,11 @@ async def test_probe_store_write_fails_invalid_credentials() -> None:
 @pytest.mark.asyncio
 async def test_probe_store_head_fails_after_write_succeeds() -> None:
     """Write succeeds, HEAD fails → read failure returned; delete still attempted."""
-    delete_mock = AsyncMock()
     result = await _run_probe(
         _fake_store(),
         put_side_effect=None,
         head_side_effect=Exception("403 Forbidden"),
-        delete_side_effect=None,  # delete should still be called
+        delete_side_effect=None,
     )
     assert result is not None
     assert "read/head failed" in result
@@ -190,14 +189,18 @@ async def test_verify_noop_when_sdr_disabled(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_verify_fails_when_upstream_absent_in_sdr(monkeypatch) -> None:
-    """SDR mode + upstream_storage=None → ObjectStorePreflightError mentioning upstream."""
+async def test_verify_skips_upstream_probe_when_upstream_absent(monkeypatch) -> None:
+    """SDR mode + upstream_storage=None → upstream probe skipped; no error raised.
+
+    Absent upstream binding in SDR mode is caught earlier at construction time
+    by ``_create_store_from_binding_optional_with_put_attrs(required=True)``,
+    which raises ``StorageBindingNotFoundError``.  ``verify_object_store_access``
+    itself only probes stores that are present.
+    """
     import application_sdk.constants as constants_mod
-    from application_sdk.storage.errors import ObjectStorePreflightError
 
     monkeypatch.setattr(constants_mod, "ENABLE_ATLAN_UPLOAD", True)
 
-    # Make the deployment probe succeed via async fakes
     fake_store = _fake_store()
     fake_obstore = MagicMock()
     fake_obstore.put_async = AsyncMock()
@@ -207,14 +210,7 @@ async def test_verify_fails_when_upstream_absent_in_sdr(monkeypatch) -> None:
     infra = _make_infra(storage=fake_store, upstream_storage=None)
 
     with patch.dict("sys.modules", {"obstore": fake_obstore}):
-        with pytest.raises(ObjectStorePreflightError) as exc_info:
-            await verify_object_store_access(infra)
-
-    err = exc_info.value
-    assert err.failure_count >= 1
-    msg = str(err)
-    assert "upstream" in msg
-    assert "ENABLE_ATLAN_UPLOAD" in msg
+        await verify_object_store_access(infra)  # must not raise
 
 
 @pytest.mark.asyncio
@@ -291,3 +287,31 @@ async def test_verify_timeout_classified_as_connectivity(monkeypatch) -> None:
 
     msg = str(exc_info.value).lower()
     assert "timed out" in msg or "connectivity" in msg
+
+
+@pytest.mark.asyncio
+async def test_verify_probe_failure_propagates_to_preflight_error(monkeypatch) -> None:
+    """A non-None failure string from _probe_store propagates into ObjectStorePreflightError."""
+    import application_sdk.constants as constants_mod
+    from application_sdk.constants import DEPLOYMENT_OBJECT_STORE_NAME
+    from application_sdk.storage.errors import ObjectStorePreflightError
+
+    monkeypatch.setattr(constants_mod, "ENABLE_ATLAN_UPLOAD", True)
+
+    fake_store = _fake_store()
+    fake_obstore = MagicMock()
+    # put_async raises 403 → _probe_store returns a non-None failure string
+    fake_obstore.put_async = AsyncMock(side_effect=Exception("403 Forbidden"))
+    fake_obstore.head_async = AsyncMock()
+    fake_obstore.delete_async = AsyncMock()
+
+    infra = _make_infra(storage=fake_store, upstream_storage=fake_store)
+
+    with patch.dict("sys.modules", {"obstore": fake_obstore}):
+        with pytest.raises(ObjectStorePreflightError) as exc_info:
+            await verify_object_store_access(infra)
+
+    msg = str(exc_info.value)
+    assert "write failed" in msg
+    assert "permission denied" in msg
+    assert DEPLOYMENT_OBJECT_STORE_NAME in msg

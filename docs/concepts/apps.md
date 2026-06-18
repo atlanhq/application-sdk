@@ -238,7 +238,8 @@ immediately after the stores are constructed. It is a no-op in all other run mod
 | Upstream Atlan store | `atlan-objectstore` | Always in SDR — hard-fail if absent |
 
 For each store a round-trip probe is executed: write a sentinel object → `HEAD` the object →
-delete it. A missing upload permission, wrong credentials, or unreachable endpoint surfaces here
+delete it. Delete is best-effort — a delete failure is logged at WARNING but does not fail the
+probe. A missing upload permission, wrong credentials, or unreachable endpoint surfaces here
 rather than mid-run. Each probe is bounded by `ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS` (default: 30 s);
 a blackholed endpoint times out instead of stalling the boot indefinitely.
 
@@ -261,7 +262,7 @@ Object-store access check failed (1 store(s) with errors):
 |---|---|---|
 | `permission denied` | HTTP 403, `AccessDenied`, `Forbidden`, `not authorized` | Valid credentials, missing IAM/ACL permissions |
 | `invalid credentials` | HTTP 401, `InvalidAccessKeyId`, `SignatureDoesNotMatch`, `unauthenticated` | Wrong/expired access key or secret |
-| `connectivity / unknown` | Timeout, network error, bucket not found | Endpoint URL, bucket name, or network reachable |
+| `connectivity / unknown` | Timeout, network error, bucket not found | Endpoint URL, bucket name, or network unreachable from this pod/host |
 
 **Timeout override:**
 

@@ -489,6 +489,7 @@ async def _create_infrastructure(
 
         from application_sdk.constants import (  # noqa: PLC0415 — cold path: lazy access to env-var-derived constants
             DEPLOYMENT_OBJECT_STORE_NAME,
+            ENABLE_ATLAN_UPLOAD,
             EVENT_STORE_NAME,
             SECRET_STORE_NAME,
             STATE_STORE_NAME,
@@ -520,6 +521,7 @@ async def _create_infrastructure(
             _create_store_from_binding_optional_with_put_attrs(
                 UPSTREAM_OBJECT_STORE_NAME,
                 components_dir=components_dir,
+                required=ENABLE_ATLAN_UPLOAD,
             )
         )
 
@@ -529,7 +531,7 @@ async def _create_infrastructure(
                 components_dir=components_dir,
             )
         )
-        infra = InfrastructureContext(
+        return InfrastructureContext(
             state_store=DaprStateStore(dapr_client, store_name=STATE_STORE_NAME),
             secret_store=DaprSecretStore(dapr_client, store_name=SECRET_STORE_NAME),
             storage=deployment_store,
@@ -543,12 +545,6 @@ async def _create_infrastructure(
             ),
             _dapr_client=dapr_client,
         )
-        from application_sdk.storage.preflight import (  # noqa: PLC0415 — cold path: SDR-gated preflight; only runs when ENABLE_ATLAN_UPLOAD=true
-            verify_object_store_access,
-        )
-
-        await verify_object_store_access(infra)
-        return infra
     else:
         raise DaprNotDetectedError()
 
@@ -789,6 +785,11 @@ async def run_worker_mode(config: AppConfig) -> None:
     )
 
     infra = await _create_infrastructure()
+    from application_sdk.storage.preflight import (  # noqa: PLC0415 — cold path: SDR-gated; only runs when ENABLE_ATLAN_UPLOAD=true
+        verify_object_store_access,
+    )
+
+    await verify_object_store_access(infra)
     set_infrastructure(infra)
 
     app_class = load_app_class(config.app_module)
@@ -932,6 +933,11 @@ def run_handler_mode(config: AppConfig) -> None:
     )
 
     infra = asyncio.run(_create_infrastructure())
+    from application_sdk.storage.preflight import (  # noqa: PLC0415 — cold path: SDR-gated; only runs when ENABLE_ATLAN_UPLOAD=true
+        verify_object_store_access,
+    )
+
+    asyncio.run(verify_object_store_access(infra))
     set_infrastructure(infra)
 
     logger.info(
@@ -1038,6 +1044,11 @@ async def run_combined_mode(config: AppConfig) -> None:
     _existing_infra = get_infrastructure()
     if _existing_infra is None:
         infra = await _create_infrastructure()
+        from application_sdk.storage.preflight import (  # noqa: PLC0415 — cold path: SDR-gated; only runs when ENABLE_ATLAN_UPLOAD=true
+            verify_object_store_access,
+        )
+
+        await verify_object_store_access(infra)
         set_infrastructure(infra)
     else:
         infra = _existing_infra
@@ -1380,6 +1391,11 @@ async def _run_dev_combined_inner(
     )
 
     infra = await _create_infrastructure(credential_stores=credential_stores)
+    from application_sdk.storage.preflight import (  # noqa: PLC0415 — cold path: SDR-gated; only runs when ENABLE_ATLAN_UPLOAD=true
+        verify_object_store_access,
+    )
+
+    await verify_object_store_access(infra)
     set_infrastructure(infra)
 
     # Auto-provision credentials if provided (mimics Heracles writing to
@@ -1605,6 +1621,11 @@ def main() -> NoReturn:
 
         if isinstance(exc, ObjectStorePreflightError):
             logger.error("SDR object-store preflight failed — cannot start:\n%s", exc)
+            try:
+                asyncio.run(_flush_observability())
+            # conformance: ignore[E002,E004] best-effort flush on fatal exit; fatal error already logged above
+            except Exception:  # noqa: S110 — best-effort flush on fatal exit; error already logged above
+                pass
             sys.exit(1)
         logger.error("Fatal error", exc_info=True)
         try:
