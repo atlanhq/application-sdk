@@ -1,0 +1,79 @@
+# Automatically approve GitHub Actions workflow runs for Renovate dep-only PRs.
+#
+# GitHub's outside-collaborator policy blocks all pull_request workflow runs
+# from renovate[bot] until a maintainer clicks "Approve workflows to run."
+# The REST API endpoint for approving runs requires a token with sufficient
+# org-level permissions; this workflow uses ORG_PAT_GITHUB (atlan-ci) — the
+# same PAT used by renovate-auto-approve-reusable.yml for code-owner reviews.
+#
+# Trigger: pull_request_target so this workflow always runs from the BASE
+# branch (main) and is never blocked by the outside-collaborator gate itself.
+#
+# Timing: pull_request workflow runs are created concurrently with this
+# pull_request_target workflow. By the time a runner picks up our job, the
+# blocked runs are already in action_required state. A short poll loop handles
+# the rare case where runs haven't appeared yet.
+#
+# Relationship to renovate-auto-approve.yml:
+#   That workflow posts an atlan-ci code-owner review approval (for merge).
+#   This workflow unblocks CI from starting. Both are needed; independent.
+
+name: Renovate — auto-approve workflow runs
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  approve-runs:
+    name: Approve pending workflow runs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event.pull_request.user.login == 'renovate[bot]'
+    steps:
+      - name: Approve all action_required runs for this HEAD SHA
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # Poll up to ~40s for the action_required runs to appear.
+          # They are created concurrently with this workflow so may not exist
+          # on the first check, but are reliably present within a few seconds.
+          APPROVED=0
+          for attempt in $(seq 1 8); do
+            RUN_IDS=$(gh api "repos/${REPO}/actions/runs" \
+              --method GET \
+              -f head_sha="${SHA}" \
+              -f status=action_required \
+              -f per_page=100 \
+              --jq '.workflow_runs[].id' 2>/dev/null || true)
+
+            if [ -z "$RUN_IDS" ]; then
+              if [ "$attempt" -lt 8 ]; then
+                echo "Attempt ${attempt}: no action_required runs yet — retrying in 5s"
+                sleep 5
+                continue
+              fi
+              echo "No action_required runs found after 8 attempts — nothing to approve."
+              break
+            fi
+
+            for RUN_ID in $RUN_IDS; do
+              if gh api --method POST "repos/${REPO}/actions/runs/${RUN_ID}/approve" 2>&1; then
+                echo "✅ Approved run ${RUN_ID}"
+                APPROVED=$((APPROVED + 1))
+              else
+                echo "⚠️  Could not approve run ${RUN_ID} (see above)"
+              fi
+            done
+            break
+          done
+
+          echo "Done — approved ${APPROVED} workflow run(s) for ${SHA:0:7}"
