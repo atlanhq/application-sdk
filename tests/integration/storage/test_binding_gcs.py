@@ -18,19 +18,28 @@ no monkey-patching of the SDK factory.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import secrets
 
 import obstore
 import pytest
 
+from application_sdk.storage import ops
 from application_sdk.storage.binding import create_store_from_binding
+from application_sdk.storage.cloud import CloudStore
 from tests.integration.storage.conftest import (
     GCS_BUCKET,
     GCS_PROJECT_ID,
     GOOGLE_APPLICATION_CREDENTIALS,
     write_dapr_component,
 )
+
+# >=100 MiB so obstore's GCS multipart/resumable upload + streaming range-GET
+# actually engage — the paths the hermetic storage-testbench emulator can't
+# serve, so GCS large-payload coverage lives here (real GCS, on-demand).
+_LARGE_BYTES = int(os.environ.get("SDK_LARGE_PAYLOAD_MIB", "101")) * 1024 * 1024
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -108,6 +117,78 @@ async def test_adc_auth(tmp_path):
         "gcs-adc-store", components_dir=tmp_path / "components"
     )
     await _assert_auth(store)
+
+
+@pytest.mark.gcs_integration
+async def test_large_payload_round_trip(tmp_path):
+    """>=100 MiB round-trip against real GCS — the multipart/streaming paths the
+    storage-testbench emulator can't serve (hermetic GCS test stays write+read).
+
+    Exercises both SDK entry points end-to-end with SHA-256: CloudStore.upload/
+    download (single PUT/GET) and ops.upload_file/download_file (obstore
+    multipart writer + streaming range-GET).
+    """
+    sa = _load_sa_key()
+    write_dapr_component(
+        tmp_path / "components",
+        name="gcs-large-store",
+        binding_type="bindings.gcp.bucket",
+        metadata={
+            "bucket": GCS_BUCKET,
+            "project_id": sa.get("project_id", GCS_PROJECT_ID),
+            "type": sa.get("type", "service_account"),
+            "private_key_id": sa["private_key_id"],
+            "private_key": sa["private_key"],
+            "client_email": sa["client_email"],
+        },
+    )
+    cs = CloudStore(
+        create_store_from_binding(
+            "gcs-large-store", components_dir=tmp_path / "components"
+        ),
+        provider="gcs",
+    )
+
+    # Generate a >=100 MiB file once.
+    src = tmp_path / "payload.bin"
+    block = secrets.token_bytes(8 * 1024 * 1024)
+    h = hashlib.sha256()
+    written = 0
+    with src.open("wb") as f:
+        while written < _LARGE_BYTES:
+            f.write(block)
+            h.update(block)
+            written += len(block)
+    src_sha, src_size = h.hexdigest(), written
+
+    cs_key = "integ-large/cloudstore.bin"
+    ops_key = "integ-large/ops-chunked.bin"
+    try:
+        # CloudStore single PUT/GET.
+        assert await cs.upload(local_path=src, key=cs_key) == src_size
+        dl = await cs.download(key=cs_key, output_dir=str(tmp_path / "cs-dl"))
+        assert len(dl) == 1 and dl[0].stat().st_size == src_size
+        assert hashlib.sha256(dl[0].read_bytes()).hexdigest() == src_sha
+
+        # ops multipart writer + streaming range-GET.
+        assert (
+            await ops.upload_file(ops_key, src, store=cs.store, normalize=False)
+            == src_sha
+        )
+        ops_dl = tmp_path / "ops-dl.bin"
+        assert (
+            await ops.download_file(
+                ops_key, ops_dl, store=cs.store, compute_hash=True, normalize=False
+            )
+            == src_sha
+        )
+        assert ops_dl.stat().st_size == src_size
+    finally:
+        import contextlib
+
+        for k in (cs_key, ops_key):
+            with contextlib.suppress(Exception):
+                await ops.delete(k, store=cs.store)
 
 
 @pytest.mark.gcs_integration
