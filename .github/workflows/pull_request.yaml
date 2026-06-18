@@ -493,6 +493,12 @@ jobs:
   # merge, not on every commit push. LM git-installs the SDK at application_sdk_ref
   # (no base image needed), so this job doesn't depend on build-sdk-base-image.
   # Heavy work happens in the dispatched LM run; this job dispatches + mirrors it.
+  # NOTE: the `changes` filters (sdk/container) deliberately exclude
+  # .github/workflows/**, so a PR that ONLY edits this dispatch glue won't
+  # self-trigger here — add the `e2e` label to validate workflow-only changes on
+  # the PR (or rely on the merge-queue path). Extending the filter to cover
+  # pull_request.yaml is intentionally avoided: it would fire this heavy e2e on
+  # every unrelated CI-file change.
   sdr-k8s-e2e:
     name: SDR K8s E2E (LM)
     needs: [changes]
