@@ -12,7 +12,7 @@
   "labels": [
     "dependencies"
   ],
-  "dependencyDashboard": true,
+  "dependencyDashboard": false,
   "ignorePaths": [
     "requirements.txt"
   ],
