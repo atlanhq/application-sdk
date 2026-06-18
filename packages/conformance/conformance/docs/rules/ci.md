@@ -15,7 +15,7 @@ Suppress a finding on the violating line or the line directly above it:
 
 | ID | Name | Tier | Scope | Category | Autofixable | Since |
 |---|---|---|---|---|---|---|
-| [C001](#c001) | `UnpinnedActionReference` | `block` | `both` | `supply-chain` | yes | 3.16.0 |
+| [C001](#c001) | `UnpinnedActionReference` | `block` | `both` | `supply-chain` | yes | 0.2.0 |
 | [C002](#c002) | `BootstrapWorkflowDrift` | `warn` | `app` | `ci-consistency` | yes | 0.3.0 |
 | [C003](#c003) | `GitignoreMissingEntry` | `warn` | `app` | `ci-consistency` | — | 0.4.0 |
 
@@ -23,7 +23,7 @@ Suppress a finding on the violating line or the line directly above it:
 
 ## C001 — `UnpinnedActionReference` {#c001}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `supply-chain` · **Autofixable:** yes · **Since:** 3.16.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `supply-chain` · **Autofixable:** yes · **Since:** 0.2.0
 
 > External GitHub Action not pinned to a full commit digest
 

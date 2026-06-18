@@ -69,7 +69,7 @@ class AtlanRuleProperties(BaseModel):
     """
 
     since: str | None = None
-    """Suite (SDK) version when this rule was introduced, e.g. ``"3.16.0"``."""
+    """Conformance suite version when this rule was introduced, e.g. ``"0.2.0"``."""
 
     rationale: str | None = None
     """Why this rule exists — what risk it avoids, what loop it closes, or what

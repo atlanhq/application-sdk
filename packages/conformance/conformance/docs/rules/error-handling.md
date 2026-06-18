@@ -15,30 +15,30 @@ Suppress a finding on the violating line or the line directly above it:
 
 | ID | Name | Tier | Scope | Category | Autofixable | Since |
 |---|---|---|---|---|---|---|
-| [E001](#e001) | `BareExceptPass` | `block` | `both` | `silent-swallow` | — | 3.16.0 |
-| [E002](#e002) | `TypedExceptPass` | `block` | `both` | `silent-swallow` | — | 3.16.0 |
-| [E003](#e003) | `BroadContextlibSuppress` | `warn` | `both` | `silent-swallow` | — | 3.16.0 |
-| [E004](#e004) | `BroadExceptClause` | `warn` | `both` | `overly-broad-catch` | — | 3.16.0 |
-| [E005](#e005) | `ExceptBlockMissingExcInfo` | `warn` | `both` | `missing-traceback` | yes | 3.16.0 |
-| [E006](#e006) | `BareExceptWithBody` | `block` | `both` | `silent-swallow` | — | 3.16.0 |
-| [E007](#e007) | `ErrorToReturnValue` | `warn` | `both` | `error-to-return-value` | — | 3.16.0 |
-| [E008](#e008) | `ImportErrorWithoutLogging` | `warn` | `both` | `optional-import` | — | 3.16.0 |
-| [E009](#e009) | `ExceptBlockOnlyAssigns` | `warn` | `both` | `error-to-return-value` | — | 3.16.0 |
-| [E010](#e010) | `AsyncioGatherExceptionsUnexamined` | `warn` | `both` | `asyncio-unexamined` | — | 3.16.0 |
-| [E011](#e011) | `LoggingFilterUnsafeBody` | `warn` | `both` | `filter-safety` | — | 3.17.0 |
-| [E012](#e012) | `UntypedBuiltinRaise` | `warn` | `both` | `untyped-raise` | — | 3.16.0 |
-| [E013](#e013) | `LegacyAtlanErrorRaise` | `block` | `both` | `legacy-raise` | — | 3.16.0 |
-| [E014](#e014) | `ExceptLoopControlSwallow` | `warn` | `both` | `silent-swallow` | — | 3.17.0 |
-| [E015](#e015) | `ExceptionTextInErrorMessage` | `warn` | `both` | `error-message-hygiene` | — | 3.17.0 |
-| [E016](#e016) | `MissingExceptionChaining` | `warn` | `both` | `exception-chaining` | yes | 3.17.0 |
-| [E017](#e017) | `SecretNamedEvidenceKey` | `block` | `both` | `security` | — | 3.17.0 |
-| [E018](#e018) | `BareParentLeafRaise` | `warn` | `both` | `untyped-raise` | — | 3.17.0 |
+| [E001](#e001) | `BareExceptPass` | `block` | `both` | `silent-swallow` | — | 0.2.0 |
+| [E002](#e002) | `TypedExceptPass` | `block` | `both` | `silent-swallow` | — | 0.2.0 |
+| [E003](#e003) | `BroadContextlibSuppress` | `warn` | `both` | `silent-swallow` | — | 0.2.0 |
+| [E004](#e004) | `BroadExceptClause` | `warn` | `both` | `overly-broad-catch` | — | 0.2.0 |
+| [E005](#e005) | `ExceptBlockMissingExcInfo` | `warn` | `both` | `missing-traceback` | yes | 0.2.0 |
+| [E006](#e006) | `BareExceptWithBody` | `block` | `both` | `silent-swallow` | — | 0.2.0 |
+| [E007](#e007) | `ErrorToReturnValue` | `warn` | `both` | `error-to-return-value` | — | 0.2.0 |
+| [E008](#e008) | `ImportErrorWithoutLogging` | `warn` | `both` | `optional-import` | — | 0.2.0 |
+| [E009](#e009) | `ExceptBlockOnlyAssigns` | `warn` | `both` | `error-to-return-value` | — | 0.2.0 |
+| [E010](#e010) | `AsyncioGatherExceptionsUnexamined` | `warn` | `both` | `asyncio-unexamined` | — | 0.2.0 |
+| [E011](#e011) | `LoggingFilterUnsafeBody` | `warn` | `both` | `filter-safety` | — | 0.2.0 |
+| [E012](#e012) | `UntypedBuiltinRaise` | `warn` | `both` | `untyped-raise` | — | 0.2.0 |
+| [E013](#e013) | `LegacyAtlanErrorRaise` | `block` | `both` | `legacy-raise` | — | 0.2.0 |
+| [E014](#e014) | `ExceptLoopControlSwallow` | `warn` | `both` | `silent-swallow` | — | 0.2.0 |
+| [E015](#e015) | `ExceptionTextInErrorMessage` | `warn` | `both` | `error-message-hygiene` | — | 0.2.0 |
+| [E016](#e016) | `MissingExceptionChaining` | `warn` | `both` | `exception-chaining` | yes | 0.2.0 |
+| [E017](#e017) | `SecretNamedEvidenceKey` | `block` | `both` | `security` | — | 0.2.0 |
+| [E018](#e018) | `BareParentLeafRaise` | `warn` | `both` | `untyped-raise` | — | 0.2.0 |
 
 ---
 
 ## E001 — `BareExceptPass` {#e001}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 3.16.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 0.2.0
 
 > Bare 'except: pass' silently discards every exception
 
@@ -55,7 +55,7 @@ even cleanup paths should log at DEBUG.
 
 ## E002 — `TypedExceptPass` {#e002}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 3.16.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 0.2.0
 
 > Typed 'except SomeError: pass' discards exception silently
 
@@ -72,7 +72,7 @@ reasoning.
 
 ## E003 — `BroadContextlibSuppress` {#e003}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 3.16.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 0.2.0
 
 > contextlib.suppress() — check whether scope is too broad
 
@@ -88,7 +88,7 @@ the suppressed exception type before classifying.
 
 ## E004 — `BroadExceptClause` {#e004}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `overly-broad-catch` · **Autofixable:** — · **Since:** 3.16.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `overly-broad-catch` · **Autofixable:** — · **Since:** 0.2.0
 
 > Overly broad 'except Exception/BaseException' without exc_info
 
@@ -104,7 +104,7 @@ MEDIUM when logged but missing `exc_info=True`.  Acceptable only at top-level ha
 
 ## E005 — `ExceptBlockMissingExcInfo` {#e005}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `missing-traceback` · **Autofixable:** yes · **Since:** 3.16.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `missing-traceback` · **Autofixable:** yes · **Since:** 0.2.0
 
 > except block logs without exc_info=True — stack trace discarded
 
@@ -120,7 +120,7 @@ is exempt (it implies `exc_info=True`).
 
 ## E006 — `BareExceptWithBody` {#e006}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 3.16.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 0.2.0
 
 > Bare 'except:' (no type) — catches SystemExit and KeyboardInterrupt
 
@@ -135,7 +135,7 @@ SystemExit.  Always specify at least `except Exception:`.
 
 ## E007 — `ErrorToReturnValue` {#e007}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `error-to-return-value` · **Autofixable:** — · **Since:** 3.16.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `error-to-return-value` · **Autofixable:** — · **Since:** 0.2.0
 
 > except block returns a value without logging — error hidden
 
@@ -151,7 +151,7 @@ domain-specific exception instead.
 
 ## E008 — `ImportErrorWithoutLogging` {#e008}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `optional-import` · **Autofixable:** — · **Since:** 3.16.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `optional-import` · **Autofixable:** — · **Since:** 0.2.0
 
 > except ImportError without logging — environment issues hidden
 
@@ -168,7 +168,7 @@ later with a confusing AttributeError).
 
 ## E009 — `ExceptBlockOnlyAssigns` {#e009}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `error-to-return-value` · **Autofixable:** — · **Since:** 3.16.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `error-to-return-value` · **Autofixable:** — · **Since:** 0.2.0
 
 > except block only assigns a variable — error hidden with no log
 
@@ -183,7 +183,7 @@ no logging.  Add a `logger.warning(..., exc_info=True)` before the assignment.
 
 ## E010 — `AsyncioGatherExceptionsUnexamined` {#e010}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `asyncio-unexamined` · **Autofixable:** — · **Since:** 3.16.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `asyncio-unexamined` · **Autofixable:** — · **Since:** 0.2.0
 
 > asyncio.gather(return_exceptions=True) results not checked for exceptions
 
@@ -200,7 +200,7 @@ silently.  The pattern is only a bug when results are not checked;
 
 ## E011 — `LoggingFilterUnsafeBody` {#e011}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `filter-safety` · **Autofixable:** — · **Since:** 3.17.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `filter-safety` · **Autofixable:** — · **Since:** 0.2.0
 
 > logging.Filter.filter() body not wrapped in try/except — can crash caller
 
@@ -221,7 +221,7 @@ propagate.
 
 ## E012 — `UntypedBuiltinRaise` {#e012}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `untyped-raise` · **Autofixable:** — · **Since:** 3.16.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `untyped-raise` · **Autofixable:** — · **Since:** 0.2.0
 
 > raise ValueError/RuntimeError/... where a typed AppError applies
 
@@ -239,7 +239,7 @@ require `TypeError`/`ValueError` for stdlib interoperability.
 
 ## E013 — `LegacyAtlanErrorRaise` {#e013}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `legacy-raise` · **Autofixable:** — · **Since:** 3.16.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `legacy-raise` · **Autofixable:** — · **Since:** 0.2.0
 
 > raise ClientError/ApiError/... (deprecated AtlanError stack)
 
@@ -255,7 +255,7 @@ in v4.0.  Replace with the appropriate leaf from `application_sdk.errors`.
 
 ## E014 — `ExceptLoopControlSwallow` {#e014}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 3.17.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `silent-swallow` · **Autofixable:** — · **Since:** 0.2.0
 
 > except block exits loop silently (continue/break) without logging
 
@@ -273,7 +273,7 @@ log at WARNING/ERROR with `exc_info=True`.
 
 ## E015 — `ExceptionTextInErrorMessage` {#e015}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `error-message-hygiene` · **Autofixable:** — · **Since:** 3.17.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `error-message-hygiene` · **Autofixable:** — · **Since:** 0.2.0
 
 > Caught exception text interpolated into typed error message= — leaks unsanitised text
 
@@ -294,7 +294,7 @@ and keep `message=` a stable human summary.
 
 ## E016 — `MissingExceptionChaining` {#e016}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `exception-chaining` · **Autofixable:** yes · **Since:** 3.17.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `exception-chaining` · **Autofixable:** yes · **Since:** 0.2.0
 
 > raise inside except block missing 'from exc' cause — breaks exception chain
 
@@ -317,7 +317,7 @@ None` (intentional suppression).
 
 ## E017 — `SecretNamedEvidenceKey` {#e017}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `security` · **Autofixable:** — · **Since:** 3.17.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `security` · **Autofixable:** — · **Since:** 0.2.0
 
 > Error evidence kwarg ending in _secret/_password/_token — rejected by wire layer at runtime
 
@@ -337,7 +337,7 @@ before any code runs.  Rename the evidence field to a safe key (e.g. `credential
 
 ## E018 — `BareParentLeafRaise` {#e018}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `untyped-raise` · **Autofixable:** — · **Since:** 3.17.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `untyped-raise` · **Autofixable:** — · **Since:** 0.2.0
 
 > Raising a bare AppError leaf class without a domain subclass overriding code
 

@@ -19,7 +19,7 @@ RULES: tuple[RuleDefinition, ...] = (
         category="silent-swallow",
         autofixable=False,
         orthogonal_gate="tests",
-        since="3.16.0",
+        since="0.2.0",
         rationale=(
             "The hardest class of production bug to debug: no stack trace, no log record, "
             "no indication anything failed. Every downstream anomaly (wrong results, missing "
@@ -44,7 +44,7 @@ RULES: tuple[RuleDefinition, ...] = (
         category="silent-swallow",
         autofixable=False,
         orthogonal_gate="tests",
-        since="3.16.0",
+        since="0.2.0",
         rationale=(
             "A typed catch that discards silently still destroys the event record. Stack "
             "traces at the point of failure are often the only artifact that survives async "
@@ -68,7 +68,7 @@ RULES: tuple[RuleDefinition, ...] = (
         category="silent-swallow",
         autofixable=False,
         orthogonal_gate="tests",
-        since="3.16.0",
+        since="0.2.0",
         rationale=(
             "suppress(Exception) is semantically identical to except Exception: pass — it "
             "absorbs every unexpected failure with no trace. A narrow suppress(FileNotFoundError) "
@@ -92,7 +92,7 @@ RULES: tuple[RuleDefinition, ...] = (
         category="overly-broad-catch",
         autofixable=False,
         orthogonal_gate="tests",
-        since="3.16.0",
+        since="0.2.0",
         rationale=(
             "Without exc_info, the stack trace is gone at the point of capture. A broad "
             "catch without a traceback also masks completely unexpected exceptions from "
@@ -116,7 +116,7 @@ RULES: tuple[RuleDefinition, ...] = (
         category="missing-traceback",
         autofixable=True,
         orthogonal_gate="tests",
-        since="3.16.0",
+        since="0.2.0",
         rationale=(
             "Tracebacks are the primary artifact of incident postmortems. A record that "
             "says something failed but carries no stack trace forces engineers to reproduce "
@@ -139,7 +139,7 @@ RULES: tuple[RuleDefinition, ...] = (
         category="silent-swallow",
         autofixable=False,
         orthogonal_gate="tests",
-        since="3.16.0",
+        since="0.2.0",
         rationale=(
             "A bare except: absorbs KeyboardInterrupt and SystemExit even with a handler "
             "body. Process-termination signals are silently intercepted and the process may "
@@ -161,7 +161,7 @@ RULES: tuple[RuleDefinition, ...] = (
         category="error-to-return-value",
         autofixable=False,
         orthogonal_gate="tests",
-        since="3.16.0",
+        since="0.2.0",
         rationale=(
             "Converting an exception to a falsy return value (None, [], False) shifts the "
             "failure point: the caller sees a plausible empty result and fails later, often "
@@ -184,7 +184,7 @@ RULES: tuple[RuleDefinition, ...] = (
         category="optional-import",
         autofixable=False,
         orthogonal_gate="tests",
-        since="3.16.0",
+        since="0.2.0",
         rationale=(
             "Silent optional-import guards mask environment misconfigurations. If a "
             "preferred module is unexpectedly absent, the fallback runs and produces subtly "
@@ -208,7 +208,7 @@ RULES: tuple[RuleDefinition, ...] = (
         category="error-to-return-value",
         autofixable=False,
         orthogonal_gate="tests",
-        since="3.16.0",
+        since="0.2.0",
         rationale=(
             "The exception sets a flag or default and the event record is destroyed. "
             "Callers see apparently-normal behaviour until they discover the silent fallback "
@@ -232,7 +232,7 @@ RULES: tuple[RuleDefinition, ...] = (
         category="asyncio-unexamined",
         autofixable=False,
         orthogonal_gate="tests",
-        since="3.16.0",
+        since="0.2.0",
         rationale=(
             "gather(return_exceptions=True) turns exceptions into values, "
             "indistinguishable from normal results in the returned list. Every failed "
@@ -257,7 +257,7 @@ RULES: tuple[RuleDefinition, ...] = (
         category="filter-safety",
         autofixable=False,
         orthogonal_gate="tests",
-        since="3.17.0",
+        since="0.2.0",
         rationale=(
             "logging.Filter.filter() exceptions propagate to the code that called "
             "logger.info() — not to handleError() like handler exceptions. An unguarded "
@@ -286,7 +286,7 @@ RULES: tuple[RuleDefinition, ...] = (
         category="untyped-raise",
         autofixable=False,
         orthogonal_gate="tests",
-        since="3.16.0",
+        since="0.2.0",
         rationale=(
             "The Automation Engine receives a typed error envelope (category, audience, "
             "retryable, code). A bare ValueError delivers an opaque string with none of "
@@ -313,7 +313,7 @@ RULES: tuple[RuleDefinition, ...] = (
         category="legacy-raise",
         autofixable=False,
         orthogonal_gate="tests",
-        since="3.16.0",
+        since="0.2.0",
         rationale=(
             "AtlanError subclasses produce no typed wire envelope — they reach AE as opaque "
             "strings and emit DeprecationWarning at construction. Every new raise site "
@@ -337,7 +337,7 @@ RULES: tuple[RuleDefinition, ...] = (
         category="silent-swallow",
         autofixable=False,
         orthogonal_gate="tests",
-        since="3.17.0",
+        since="0.2.0",
         rationale=(
             "A loop that silently absorbs per-item exceptions can complete with a "
             "full-looking result set that silently omits items. Silent partial failure is "
@@ -364,7 +364,7 @@ RULES: tuple[RuleDefinition, ...] = (
         category="error-message-hygiene",
         autofixable=False,
         orthogonal_gate="tests",
-        since="3.17.0",
+        since="0.2.0",
         rationale=(
             "Embedding str(exc) in message= produces a unique string per failure instance — "
             "each path/value becomes a separate dashboard bucket instead of one countable "
@@ -394,7 +394,7 @@ RULES: tuple[RuleDefinition, ...] = (
         category="exception-chaining",
         autofixable=True,
         orthogonal_gate="tests",
-        since="3.17.0",
+        since="0.2.0",
         rationale=(
             "When the Automation Engine rebuilds the typed wire envelope it walks the "
             ".cause/__cause__ chain (set by 'raise X from e'); its reconstruction path does "
@@ -425,7 +425,7 @@ RULES: tuple[RuleDefinition, ...] = (
         category="security",
         autofixable=False,
         orthogonal_gate="tests",
-        since="3.17.0",
+        since="0.2.0",
         rationale=(
             "Evidence fields with secret-bearing suffixes are rejected by the wire layer at "
             "runtime. Static detection catches the pattern before any code runs, eliminating "
@@ -453,7 +453,7 @@ RULES: tuple[RuleDefinition, ...] = (
         category="untyped-raise",
         autofixable=False,
         orthogonal_gate="tests",
-        since="3.17.0",
+        since="0.2.0",
         rationale=(
             "Each categorical leaf is a dashboard bucket. Raising the parent directly "
             "collapses all domain failure modes into one bucket — impossible to count "
