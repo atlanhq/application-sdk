@@ -48,6 +48,8 @@ ENV UV_NO_CACHE=1 \
     DAFT_ANALYTICS_ENABLED=0 \
     ATLAN_CONTRACT_GENERATED_DIR=/app/app/generated
 
+COPY --chown=appuser:appuser CHANGELOG.md /opt/atlan/application-sdk/CHANGELOG.md
+
 # Copy entrypoint script for graceful shutdown handling
 COPY --chown=appuser:appuser entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
