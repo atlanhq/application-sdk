@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from application_sdk.contracts.types import FileReference, MaxItems
+from application_sdk.contracts.types import FileReference, MaxItems, StorageTier
 
 # =============================================================================
 # MaxItems
@@ -228,3 +228,20 @@ class TestUploadDownloadRefSymmetry:
 
         ref = FileReference(local_path="/tmp/x.jsonl", storage_path="artifacts/x.jsonl")
         assert UploadInput(ref=ref).ref == DownloadInput(ref=ref).ref
+
+
+# =============================================================================
+# StorageTier
+# =============================================================================
+
+
+class TestStorageTier:
+    def test_string_values_are_lowercase(self) -> None:
+        assert StorageTier.TRANSIENT.value == "transient"
+        assert StorageTier.RETAINED.value == "retained"
+        assert StorageTier.PERSISTENT.value == "persistent"
+
+    def test_reconstruct_from_value(self) -> None:
+        assert StorageTier("transient") is StorageTier.TRANSIENT
+        assert StorageTier("retained") is StorageTier.RETAINED
+        assert StorageTier("persistent") is StorageTier.PERSISTENT
