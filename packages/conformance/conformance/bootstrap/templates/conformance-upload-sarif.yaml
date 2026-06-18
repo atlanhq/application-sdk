@@ -1,0 +1,59 @@
+name: "Conformance SARIF Upload"
+# Uploads SARIF results from the Conformance workflow to the GitHub Security
+# tab.  Runs as a separate workflow triggered by workflow_run so that it always
+# exits 0 — GitHub Code Scanning marks a tool as "reporting errors" whenever
+# the workflow that uploads SARIF fails, so the upload must be decoupled from
+# the gate (which intentionally exits 1 on blocking violations).
+
+on:
+  workflow_run:
+    workflows: ["Conformance"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  security-events: write
+  actions: read  # required to download artifacts from the triggering run
+
+jobs:
+  upload:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion != 'cancelled'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - slug: ci
+            name: "Upload CI SARIF"
+          - slug: error-handling
+            name: "Upload Error-handling SARIF"
+          - slug: prescriptions
+            name: "Upload Prescriptions SARIF"
+          - slug: optimizations
+            name: "Upload Optimizations SARIF"
+    steps:
+      - name: "Download SARIF artifact"
+        id: download
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: conformance-${{ matrix.slug }}-sarif
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+        continue-on-error: true  # absent when series had no relevant changes
+
+      - name: "Strip suppressed results"
+        if: steps.download.outcome == 'success'
+        env:
+          SARIF_SLUG: ${{ matrix.slug }}
+        run: |
+          jq '.runs[] |= (.results |= map(select(.suppressions == null or (.suppressions | length == 0))))' \
+            "$SARIF_SLUG.sarif" > "$SARIF_SLUG-upload.sarif"
+
+      - name: "Upload SARIF to Security tab"
+        if: steps.download.outcome == 'success'
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        with:
+          sarif_file: ${{ matrix.slug }}-upload.sarif
+          ref: ${{ github.event.workflow_run.head_branch }}
+          sha: ${{ github.event.workflow_run.head_sha }}

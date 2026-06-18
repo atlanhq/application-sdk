@@ -41,6 +41,7 @@ _ENV = jinja2.Environment(
 # ``.github/workflows/``).  The C002 drift check iterates this registry.
 MANAGED_WORKFLOWS: tuple[str, ...] = (
     "conformance.yaml",
+    "conformance-upload-sarif.yaml",
     "checks.yml",
     "commits.yaml",
     "release-gate.yaml",
