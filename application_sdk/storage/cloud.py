@@ -496,7 +496,9 @@ def _create_s3_store(
             region=region or None,
             base_access_key=base_access_key,
             base_secret_key=base_secret_key,
-            base_session_token=(creds.get("token") or None) if base_access_key else None,
+            base_session_token=(creds.get("token") or None)
+            if base_access_key
+            else None,
         )
         _log().debug("S3 cross-account assume-role auth configured")
     elif access_key and secret_key:
