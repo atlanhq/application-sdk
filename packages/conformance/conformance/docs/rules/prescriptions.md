@@ -5,12 +5,12 @@
 
 # Prescription Rules (P-series)
 
-**2 rules** · Checker: `suite.checks.prescriptions` (AST-based, not yet fully implemented)
+**3 rules** · Checker: `suite.checks.prescriptions` (AST-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
 ```python
-# conformance: ignore[P001] intentional: dynamic schema for external API
+# conformance: ignore[P001] intentional: generic cleanup payload
 ```
 
 **Rule-id stability (non-migration policy):** P-ids and O-ids are a permanent public
@@ -25,6 +25,7 @@ is never reused or reassigned.
 |---|---|---|---|---|---|
 | [P001](#p001) | `UnboundedContractFields` | `block` | `contract-payload-safety` | — | 0.3.0 |
 | [P002](#p002) | `CategoryFieldOverride` | `block` | `category-immutability` | — | 0.3.0 |
+| [P003](#p003) | `ErrorCodePrefixMismatch` | `block` | `error-code-shape` | — | 0.3.0 |
 
 ---
 
@@ -81,5 +82,32 @@ category), so every opt-out is reported every single time. This rule is `BLOCK`
 (suppress-only): an unsuppressed redeclaration fails the conformance gate — the only
 sanctioned use is the justified inline suppression `# conformance: ignore[P002]
 <reason>` at the declaration site — see BLDX-1432.
+
+---
+
+## P003 — `ErrorCodePrefixMismatch` {#p003}
+
+**Tier:** `block` · **Category:** `error-code-shape` · **Autofixable:** — · **Since:** 0.3.0
+
+> AppError subclass code missing or doesn't start with the parent leaf's category prefix
+
+**Rationale:** Each categorical leaf owns a prefix that embeds its category into every error code
+(`AUTH_`, `INTERNAL_`, etc.). Without it, the code column is opaque — dashboards must
+join the category column for every query, and subclasses that inherit the bare leaf code
+collapse all their distinct failure modes into one undifferentiated bucket.
+
+Every concrete subclass of an `application_sdk.errors` leaf (`AuthError`,
+`InternalError`, `InvalidInputError`, etc.) must declare its own `code: ClassVar[str]`
+that starts with the leaf's category prefix and an underscore (`AUTH_`, `INTERNAL_`,
+`INVALID_INPUT_`, etc.).  Without that prefix the code is opaque to dashboards and
+on-call routing — the category column has to be joined for every query.  Without an
+override, every site of the subclass collapses into the leaf's bare bucket and is
+impossible to triage.
+
+The check resolves inheritance transitively: an intermediate class with no `code` (a
+'pass-through' subclass between a leaf and a concrete leaf) is also flagged so failures
+don't silently inherit the bare leaf's code.  Suppress with `# conformance: ignore[P003]
+<reason>` at the declaration when an intermediate is genuinely abstract — see
+typed-error-prescription §4 and BLDX-1431.
 
 ---

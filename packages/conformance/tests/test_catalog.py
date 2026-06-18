@@ -139,7 +139,7 @@ def test_catalog_p_series_present() -> None:
     """The P-series prescription rules are all present."""
     rules = load_catalog()
     p_ids = {r.id for r in rules if r.id.startswith("P")}
-    expected = {"P001", "P002"}
+    expected = {"P001", "P002", "P003"}
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
 

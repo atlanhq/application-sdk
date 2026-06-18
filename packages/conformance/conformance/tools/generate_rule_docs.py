@@ -118,21 +118,17 @@ _SERIES_META: list[SeriesMeta] = [
         prefix="P",
         source_module="conformance/suite/rules/prescriptions.py",
         output_filename="prescriptions.md",
-        checker="`suite.checks.prescriptions` (AST-based, not yet fully implemented)",
-        suppression_example=(
-            "# conformance: ignore[P001] intentional: dynamic schema for external API"
-        ),
+        checker="`suite.checks.prescriptions` (AST-based)",
+        suppression_example="# conformance: ignore[P001] intentional: generic cleanup payload",
         stability_note=_ID_STABILITY_NOTE,
     ),
     SeriesMeta(
-        title="Optimisation Rules (O-series)",
+        title="Optimisation / Recommendation Rules (O-series)",
         prefix="O",
         source_module="conformance/suite/rules/optimizations.py",
         output_filename="optimizations.md",
-        checker="`suite.checks.optimizations` (AST-based, not yet fully implemented)",
-        suppression_example=(
-            "# conformance: ignore[O001] intentional: stdlib json required for compat"
-        ),
+        checker="`suite.checks.optimizations` (AST-based)",
+        suppression_example="# conformance: ignore[O001] intentional: stdlib json required here",
         stability_note=_ID_STABILITY_NOTE,
     ),
 ]

@@ -3,14 +3,14 @@
      To regenerate:  uv run atlan-application-sdk-conformance gen-rule-docs
      To check CI staleness: uv run atlan-application-sdk-conformance gen-rule-docs --check -->
 
-# Optimisation Rules (O-series)
+# Optimisation / Recommendation Rules (O-series)
 
-**1 rule** · Checker: `suite.checks.optimizations` (AST-based, not yet fully implemented)
+**1 rule** · Checker: `suite.checks.optimizations` (AST-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
 ```python
-# conformance: ignore[O001] intentional: stdlib json required for compat
+# conformance: ignore[O001] intentional: stdlib json required here
 ```
 
 **Rule-id stability (non-migration policy):** P-ids and O-ids are a permanent public

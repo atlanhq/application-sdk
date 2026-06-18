@@ -34,8 +34,8 @@ _ALL_SERIES: tuple[tuple[RuleDefinition, ...], ...] = (
     _L_RULES,
     _CI_RULES,
     _D_RULES,
-    _P_RULES,
     _O_RULES,
+    _P_RULES,
 )
 
 
