@@ -15,8 +15,6 @@ from datetime import timedelta
 
 import pytest
 from temporalio.client import WorkflowUpdateFailedError
-from temporalio.contrib.pydantic import pydantic_data_converter
-from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 
@@ -25,6 +23,8 @@ from application_sdk.app.base import App, generate_workflow_class
 from application_sdk.app.entrypoint import EntryPointMetadata
 from application_sdk.contracts.base import Input, Output
 from application_sdk.execution.sandbox import SandboxConfig
+
+pytestmark = pytest.mark.integration
 
 _SANDBOX_RUNNER = SandboxedWorkflowRunner(
     restrictions=SandboxConfig().to_temporal_restrictions()
@@ -102,20 +102,15 @@ _PAUSE_RESUME_WF = generate_workflow_class(
 )
 
 
-async def test_cookbook_pause_resume_cycle() -> None:
+async def test_cookbook_pause_resume_cycle(temporal_client) -> None:
     """Customer pauses mid-extract, then resumes; run completes with full progress."""
-    async with (
-        await WorkflowEnvironment.start_local(
-            data_converter=pydantic_data_converter
-        ) as env,
-        Worker(
-            env.client,
-            task_queue="cookbook-pause-resume",
-            workflows=[_PAUSE_RESUME_WF],
-            workflow_runner=_SANDBOX_RUNNER,
-        ),
+    async with Worker(
+        temporal_client,
+        task_queue="cookbook-pause-resume",
+        workflows=[_PAUSE_RESUME_WF],
+        workflow_runner=_SANDBOX_RUNNER,
     ):
-        handle = await env.client.start_workflow(
+        handle = await temporal_client.start_workflow(
             _PAUSE_RESUME_WF.run,
             _ExtractInput(total_batches=3),
             id="cookbook-pause-resume",
@@ -134,21 +129,16 @@ async def test_cookbook_pause_resume_cycle() -> None:
     assert result.rows_extracted == 300  # 3 batches × 100 rows
 
 
-async def test_cookbook_graceful_cancel_short_circuits_run() -> None:
+async def test_cookbook_graceful_cancel_short_circuits_run(temporal_client) -> None:
     """graceful_cancel flips state; run() exits its loop without processing
     remaining batches, but with partial progress preserved."""
-    async with (
-        await WorkflowEnvironment.start_local(
-            data_converter=pydantic_data_converter
-        ) as env,
-        Worker(
-            env.client,
-            task_queue="cookbook-graceful-cancel",
-            workflows=[_PAUSE_RESUME_WF],
-            workflow_runner=_SANDBOX_RUNNER,
-        ),
+    async with Worker(
+        temporal_client,
+        task_queue="cookbook-graceful-cancel",
+        workflows=[_PAUSE_RESUME_WF],
+        workflow_runner=_SANDBOX_RUNNER,
     ):
-        handle = await env.client.start_workflow(
+        handle = await temporal_client.start_workflow(
             _PAUSE_RESUME_WF.run,
             _ExtractInput(total_batches=100),
             id="cookbook-graceful-cancel",
@@ -203,20 +193,15 @@ class _MetricsApp(App):
 _METRICS_WF = generate_workflow_class(_MetricsApp, _ep(_ExtractInput, _ExtractOutput))
 
 
-async def test_cookbook_progress_query_returns_live_state() -> None:
+async def test_cookbook_progress_query_returns_live_state(temporal_client) -> None:
     """Operator queries get_progress mid-run; query reads live App state."""
-    async with (
-        await WorkflowEnvironment.start_local(
-            data_converter=pydantic_data_converter
-        ) as env,
-        Worker(
-            env.client,
-            task_queue="cookbook-progress",
-            workflows=[_METRICS_WF],
-            workflow_runner=_SANDBOX_RUNNER,
-        ),
+    async with Worker(
+        temporal_client,
+        task_queue="cookbook-progress",
+        workflows=[_METRICS_WF],
+        workflow_runner=_SANDBOX_RUNNER,
     ):
-        handle = await env.client.start_workflow(
+        handle = await temporal_client.start_workflow(
             _METRICS_WF.run,
             _ExtractInput(total_batches=7),
             id="cookbook-progress",
@@ -273,21 +258,18 @@ _RATE_LIMITED_WF = generate_workflow_class(
 )
 
 
-async def test_cookbook_rate_limit_validator_rejects_out_of_range() -> None:
+async def test_cookbook_rate_limit_validator_rejects_out_of_range(
+    temporal_client,
+) -> None:
     """Out-of-range rate limit is rejected by the validator before the
     interaction body runs; in-range update succeeds and mutates state."""
-    async with (
-        await WorkflowEnvironment.start_local(
-            data_converter=pydantic_data_converter
-        ) as env,
-        Worker(
-            env.client,
-            task_queue="cookbook-rate-limit",
-            workflows=[_RATE_LIMITED_WF],
-            workflow_runner=_SANDBOX_RUNNER,
-        ),
+    async with Worker(
+        temporal_client,
+        task_queue="cookbook-rate-limit",
+        workflows=[_RATE_LIMITED_WF],
+        workflow_runner=_SANDBOX_RUNNER,
     ):
-        handle = await env.client.start_workflow(
+        handle = await temporal_client.start_workflow(
             _RATE_LIMITED_WF.run,
             _ExtractInput(),
             id="cookbook-rate-limit",
@@ -345,20 +327,15 @@ _INCREMENTAL_WF = generate_workflow_class(
 )
 
 
-async def test_cookbook_external_update_advances_watermark() -> None:
+async def test_cookbook_external_update_advances_watermark(temporal_client) -> None:
     """An external service sends a watermark update; run() observes it on the same instance."""
-    async with (
-        await WorkflowEnvironment.start_local(
-            data_converter=pydantic_data_converter
-        ) as env,
-        Worker(
-            env.client,
-            task_queue="cookbook-watermark",
-            workflows=[_INCREMENTAL_WF],
-            workflow_runner=_SANDBOX_RUNNER,
-        ),
+    async with Worker(
+        temporal_client,
+        task_queue="cookbook-watermark",
+        workflows=[_INCREMENTAL_WF],
+        workflow_runner=_SANDBOX_RUNNER,
     ):
-        handle = await env.client.start_workflow(
+        handle = await temporal_client.start_workflow(
             _INCREMENTAL_WF.run,
             _ExtractInput(),
             id="cookbook-watermark",
@@ -409,20 +386,15 @@ _CHECKPOINTED_WF = generate_workflow_class(
 )
 
 
-async def test_cookbook_checkpoint_query_returns_position() -> None:
+async def test_cookbook_checkpoint_query_returns_position(temporal_client) -> None:
     """Oncall queries the live checkpoint without restarting the run."""
-    async with (
-        await WorkflowEnvironment.start_local(
-            data_converter=pydantic_data_converter
-        ) as env,
-        Worker(
-            env.client,
-            task_queue="cookbook-checkpoint",
-            workflows=[_CHECKPOINTED_WF],
-            workflow_runner=_SANDBOX_RUNNER,
-        ),
+    async with Worker(
+        temporal_client,
+        task_queue="cookbook-checkpoint",
+        workflows=[_CHECKPOINTED_WF],
+        workflow_runner=_SANDBOX_RUNNER,
     ):
-        handle = await env.client.start_workflow(
+        handle = await temporal_client.start_workflow(
             _CHECKPOINTED_WF.run,
             _ExtractInput(),
             id="cookbook-checkpoint",
