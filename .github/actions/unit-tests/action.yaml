@@ -9,7 +9,6 @@ description: |
   - Running pytest for all test files in the tests/ directory
   - Generating code coverage reports in XML and HTML formats
   - Enforcing a minimum coverage threshold of 60%
-  - Publishing coverage reports to S3 for easy access
   - Adding coverage report comments to pull requests
 
 inputs:
@@ -28,8 +27,6 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-
     - uses: "./.github/actions/setup-deps"
       with:
         python-version: ${{ inputs.python-version }}
@@ -65,25 +62,3 @@ runs:
         coverageFile: coverage.xml
         token: ${{ inputs.github-token }}
 
-    - name: Setup AWS Credentials
-      uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6
-      continue-on-error: true
-      id: aws-creds
-      with:
-        aws-region: ap-south-1
-        # Only usable in atlanhq repositories
-        role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess
-
-    - name: Upload Coverage Report to Kryptonite Bucket
-      if: steps.aws-creds.outcome == 'success'
-      shell: bash
-      run: |
-        aws s3 sync ./htmlcov s3://kryptonite-store/coverage/application-sdk/pr/${{ github.event.number }} --delete
-
-    - name: Comment Coverage Report URL on PR
-      uses: mshick/add-pr-comment@8e4927817251f1ff60c001f04568532b38e0b4a0 # v3
-      if: ${{ github.event_name == 'pull_request' }}
-      with:
-        message-id: "coverage"
-        message: |
-          🛠 Full Test Coverage Report: https://k.atlan.dev/coverage/application-sdk/pr/${{ github.event.number }}

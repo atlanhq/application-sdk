@@ -22,19 +22,35 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from conformance.suite.checks import actions_pinning, bootstrap_drift, error_handling
-from conformance.suite.rules import get_rule
+from conformance.suite.checks import (
+    actions_pinning,
+    bootstrap_drift,
+    dependency_conformance,
+    error_handling,
+    optimizations,
+    prescriptions,
+)
+from conformance.suite.checks._ast_common import TOOL_VERSION
+from conformance.suite.rules import assert_registry_consistent, get_rule
 from conformance.suite.schema.disposition import EnforcementTier
 from conformance.suite.schema.findings import Finding, findings_to_report
 
 
 @dataclass(frozen=True)
 class CheckRegistration:
-    """A registered check module, identified by its rule-series letter."""
+    """A registered check module, identified by its rule-series letter.
+
+    A check supplies either ``scan_path`` (per-file scanning) or ``scan_all``
+    (cross-file scanning that needs to see every file before emitting findings —
+    e.g. transitive inheritance resolution).  When ``scan_all`` is set the
+    runner calls it once with the post-exclusion path list; otherwise it calls
+    ``scan_path`` per file.
+    """
 
     series: str
     discover: Callable[[Path], list[Path]]
     scan_path: Callable[[Path, Path], list[Finding]]
+    scan_all: Callable[[list[Path], Path], list[Finding]] | None = None
 
 
 _CHECKS: list[CheckRegistration] = [
@@ -53,7 +69,28 @@ _CHECKS: list[CheckRegistration] = [
         discover=error_handling.discover,
         scan_path=error_handling.scan_path,
     ),
+    CheckRegistration(
+        series=dependency_conformance.SERIES,
+        discover=dependency_conformance.discover,
+        scan_path=dependency_conformance.scan_path,
+    ),
+    CheckRegistration(
+        series=optimizations.SERIES,
+        discover=optimizations.discover,
+        scan_path=optimizations.scan_path,
+    ),
+    CheckRegistration(
+        series=prescriptions.SERIES,
+        discover=prescriptions.discover,
+        scan_path=prescriptions.scan_path,
+        scan_all=prescriptions.scan_all,
+    ),
 ]
+
+
+# Registry invariant: every registered checker's series must have rule
+# definitions in the catalog (so get_rule() resolves for each finding it emits).
+assert_registry_consistent(check_series=frozenset(c.series for c in _CHECKS))
 
 
 def _tier(f: Finding) -> EnforcementTier:
@@ -178,7 +215,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--output", metavar="FILE", help="Write SARIF to FILE (default: stdout)"
     )
-    parser.add_argument("--tool-version", default="3.16.0", metavar="VERSION")
+    parser.add_argument("--tool-version", default=TOOL_VERSION, metavar="VERSION")
     parser.add_argument(
         "--series",
         metavar="LETTERS",
@@ -206,19 +243,31 @@ def main(argv: list[str] | None = None) -> int:
         active = list(_CHECKS)
 
     # Build the set of excluded prefixes once (normalised, non-empty only).
+    # Trailing slashes are stripped so matching is done on path-component
+    # boundaries — 'tools' excludes 'tools/' and the file 'tools' itself,
+    # but never 'tools_extra/'.
     excluded_prefixes = tuple(
-        p.strip().lstrip("/") for p in args.exclude.split(",") if p.strip()
+        p.strip().lstrip("/").rstrip("/") for p in args.exclude.split(",") if p.strip()
     )
 
     root = Path(args.repo).resolve()
     all_findings: list[Finding] = []
     for check in active:
+        paths: list[Path] = []
         for p in check.discover(root):
             if excluded_prefixes:
                 rel = p.relative_to(root).as_posix()
-                if any(rel.startswith(prefix) for prefix in excluded_prefixes):
+                if any(
+                    rel == prefix or rel.startswith(prefix + "/")
+                    for prefix in excluded_prefixes
+                ):
                     continue
-            all_findings.extend(check.scan_path(p, root))
+            paths.append(p)
+        if check.scan_all is not None:
+            all_findings.extend(check.scan_all(paths, root))
+        else:
+            for p in paths:
+                all_findings.extend(check.scan_path(p, root))
 
     # Always surface violations in a human-readable form so CI logs are actionable.
     _print_human_summary(all_findings, args.series, excluded_prefixes)
