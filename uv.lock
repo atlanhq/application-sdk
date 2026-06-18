@@ -385,7 +385,7 @@ requires-dist = [
     { name = "pytest-order", marker = "extra == 'tests'", specifier = ">=1.3.0,<2.0.0" },
     { name = "python-dotenv", specifier = ">=1.1.0,<2.0.0" },
     { name = "pyyaml", specifier = ">=6.0.2,<7.0.0" },
-    { name = "redis", extras = ["hiredis"], marker = "extra == 'distributed-lock'", specifier = ">=5.2.0,<8.0.0" },
+    { name = "redis", extras = ["hiredis"], marker = "extra == 'distributed-lock'", specifier = ">=5.2.0,<9.0.0" },
     { name = "rocksdict", marker = "extra == 'storage'", specifier = ">=0.3.0" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'incremental'", specifier = ">=2.0.36,<3.0.0" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'sql'", specifier = ">=2.0.36,<3.0.0" },

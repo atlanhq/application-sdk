@@ -5,8 +5,6 @@ from typing import NoReturn
 
 import redis
 import redis.asyncio as async_redis
-from redis.exceptions import ConnectionError, RedisError, TimeoutError
-
 from application_sdk.clients.redis_errors import (
     RedisConfigError,
     RedisConnectionError,
@@ -23,6 +21,7 @@ from application_sdk.constants import (
 )
 from application_sdk.errors import AppError
 from application_sdk.observability.logger_adaptor import get_logger
+from redis.exceptions import ConnectionError, RedisError, TimeoutError
 
 logger = get_logger(__name__)
 
@@ -199,7 +198,9 @@ class RedisClient(BaseRedisClient):
 
             # Create master client with password
             self.redis_client = sentinel.master_for(
-                REDIS_SENTINEL_SERVICE_NAME, password=REDIS_PASSWORD
+                REDIS_SENTINEL_SERVICE_NAME,
+                password=REDIS_PASSWORD,
+                socket_timeout=None,
             )
 
         except (ConnectionError, TimeoutError, RedisError) as e:
@@ -215,7 +216,10 @@ class RedisClient(BaseRedisClient):
 
         try:
             self.redis_client = redis.Redis(
-                host=REDIS_HOST, port=int(REDIS_PORT), password=REDIS_PASSWORD
+                host=REDIS_HOST,
+                port=int(REDIS_PORT),
+                password=REDIS_PASSWORD,
+                socket_timeout=None,
             )
 
         except (ConnectionError, TimeoutError, RedisError) as e:
@@ -349,7 +353,9 @@ class RedisClientAsync(BaseRedisClient):
 
             # Create master client with password
             self.redis_client = sentinel.master_for(
-                REDIS_SENTINEL_SERVICE_NAME, password=REDIS_PASSWORD
+                REDIS_SENTINEL_SERVICE_NAME,
+                password=REDIS_PASSWORD,
+                socket_timeout=None,
             )
 
         except (ConnectionError, TimeoutError, RedisError) as e:
@@ -365,7 +371,10 @@ class RedisClientAsync(BaseRedisClient):
 
         try:
             self.redis_client = async_redis.Redis(
-                host=REDIS_HOST, port=int(REDIS_PORT), password=REDIS_PASSWORD
+                host=REDIS_HOST,
+                port=int(REDIS_PORT),
+                password=REDIS_PASSWORD,
+                socket_timeout=None,
             )
 
         except (ConnectionError, TimeoutError, RedisError) as e:
