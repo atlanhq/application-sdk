@@ -231,7 +231,7 @@ class TestSyncConnect:
         ):
             standalone_client._connect()
         redis_ctor.assert_called_once_with(
-            host="localhost", port=6379, password="secret"
+            host="localhost", port=6379, password="secret", socket_timeout=None
         )
         fake_redis.ping.assert_called_once()
         assert standalone_client.redis_client is fake_redis
@@ -258,7 +258,9 @@ class TestSyncConnect:
         ):
             sentinel_client._connect()
         sentinel_ctor.assert_called_once()
-        sentinel.master_for.assert_called_once_with("mymaster", password="secret")
+        sentinel.master_for.assert_called_once_with(
+            "mymaster", password="secret", socket_timeout=None
+        )
         master.ping.assert_called_once()
         assert sentinel_client.redis_client is master
 
@@ -438,7 +440,7 @@ class TestAsyncConnect:
         ):
             await standalone_client._connect()
         redis_ctor.assert_called_once_with(
-            host="localhost", port=6379, password="secret"
+            host="localhost", port=6379, password="secret", socket_timeout=None
         )
         fake_redis.ping.assert_awaited_once()
         assert standalone_client.redis_client is fake_redis
@@ -460,7 +462,9 @@ class TestAsyncConnect:
             ),
         ):
             await sentinel_client._connect()
-        sentinel.master_for.assert_called_once_with("mymaster", password="secret")
+        sentinel.master_for.assert_called_once_with(
+            "mymaster", password="secret", socket_timeout=None
+        )
         master.ping.assert_awaited_once()
         assert sentinel_client.redis_client is master
 
