@@ -19,7 +19,7 @@ RULES: tuple[RuleDefinition, ...] = (
         category="log-format",
         autofixable=True,
         orthogonal_gate="tests",
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "%-style message bodies are the fleet-wide logging convention: one consistent "
             "call-site style keeps log statements legible and reviewable, and the SDK's "
@@ -45,7 +45,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="log-format",
         autofixable=True,
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "The SDK adapter (application_sdk.observability.logger_adaptor.get_logger) "
             "is the only sanctioned way to obtain a logger. It injects Temporal context "
@@ -89,7 +89,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="log-format",
         autofixable=False,
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "Whether kwargs land in indexed top-level fields or an unindexed nested dict "
             "depends on the framework. The wrong form routes context where aggregation "
@@ -113,7 +113,7 @@ RULES: tuple[RuleDefinition, ...] = (
         category="missing-traceback",
         autofixable=True,
         orthogonal_gate="tests",
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "Same failure as E005 at the logging layer: the message appears in the stream "
             "but the stack trace is absent, so every postmortem hitting this pattern must "
@@ -136,7 +136,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="log-format",
         autofixable=True,
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "print() bypasses the logging adapter entirely: no level, no correlation ID, "
             "no structured fields, no OTel forwarding. In containers, stdout may route to a "
@@ -159,7 +159,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="log-level",
         autofixable=False,
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "Per-item INFO in a large loop emits O(N) records at the level operators "
             "monitor, drowning lifecycle signals in noise and inflating storage cost. INFO "
@@ -183,7 +183,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="log-level",
         autofixable=True,
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "ADR-0011 codifies exactly four levels (DEBUG/INFO/WARNING/ERROR) — there is no "
             "CRITICAL. Fatal conditions are communicated through process exit codes and "
@@ -207,7 +207,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="log-performance",
         autofixable=False,
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "Log-call arguments evaluate eagerly regardless of level. An unguarded expensive "
             "serialisation inside logger.debug() runs on every call in production — invisible "
@@ -229,7 +229,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="log-noise",
         autofixable=False,
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "Logging immediately before re-raising creates two records for one event (raise "
             "site + handler), inflating error counts and making 'how many times did this "
@@ -252,7 +252,7 @@ RULES: tuple[RuleDefinition, ...] = (
         category="security",
         autofixable=False,
         orthogonal_gate="tests",
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "Log aggregation stores records in plaintext accessible to more people and "
             "systems than the credential store. A credential value in a log is a persistent "
@@ -276,7 +276,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="log-format",
         autofixable=True,
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "Same convention as L001: string concatenation is an ad-hoc alternative to the "
             "standard %-style message body. It reads worse at the call site and breaks "
@@ -297,7 +297,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="log-crash",
         autofixable=False,
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "stdlib's Logger.makeRecord() raises KeyError when an extra={} key collides "
             "with a LogRecord attribute, propagating to the caller's logger.info() site and "
@@ -322,7 +322,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="log-crash",
         autofixable=True,
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "stdlib logger.info() raises TypeError immediately for any kwarg outside its "
             "short allowlist. The most common breakage when migrating from structlog (which "
@@ -345,7 +345,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="log-format",
         autofixable=False,
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "In structlog the first positional arg is the message (stored as 'event'). "
             "Passing event= as a keyword silently replaces the message with the domain "
@@ -368,7 +368,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="log-config",
         autofixable=True,
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "dictConfig() defaults disable_existing_loggers=True, silently disabling every "
             "logger created before the call. SDK components create loggers at import — before "
@@ -392,7 +392,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="log-config",
         autofixable=False,
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "basicConfig() is silently ignored if the root logger already has handlers. "
             "Multiple calls rely on import order to decide which wins; the rest are silently "
@@ -416,7 +416,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="log-level",
         autofixable=True,
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "logger.exception() is rejected outright. ADR-0011 restricts logging to four "
             "levels with exc_info=True as the sanctioned way to attach a traceback; "
@@ -447,7 +447,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="log-format",
         autofixable=False,
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "The adapter auto-injects Temporal context (workflow/run/activity IDs) as the "
             "only top-level indexed columns in ClickHouse/Grafana. App kwargs land in an "
@@ -472,7 +472,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="log-config",
         autofixable=False,
-        since="0.3.0",
+        since="0.4.0",
         rationale=(
             "structlog and loguru bind() returns a *new* logger with the bound context — "
             "the original is unchanged. A bare call (result not assigned) constructs the "
@@ -496,7 +496,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="log-format",
         autofixable=True,
-        since="0.3.0",
+        since="0.4.0",
         rationale=(
             "logging.warn() is a long-deprecated alias for logging.warning(). It emits "
             "DeprecationWarning at import time in newer Python versions and will be removed. "
@@ -518,7 +518,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="log-config",
         autofixable=True,
-        since="0.3.0",
+        since="0.4.0",
         rationale=(
             "The conformance suite catches logging anti-patterns at review time; ruff "
             "catches the same issues at edit time and in pre-commit. The two are "
