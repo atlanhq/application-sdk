@@ -55,4 +55,31 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/ci.md#c002",
     ),
+    RuleDefinition(
+        id="C003",
+        name="GitignoreMissingEntry",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="ci-consistency",
+        autofixable=False,
+        since="0.4.0",
+        rationale=(
+            "A .gitignore that is missing standard entries risks accidentally committing "
+            "secrets, virtual environments, build artefacts, or IDE noise — each of which "
+            "has caused incidents or review friction. The standard set is the minimal "
+            "baseline every app repo should carry."
+        ),
+        short_description=".gitignore is absent or missing a standard required entry",
+        full_description=(
+            "The `atlan-application-sdk-conformance bootstrap` command scaffolds a "
+            "standard .gitignore when the file is absent. This rule flags any required "
+            "entry that is missing from the file. One finding is emitted per missing "
+            "entry so each can be triaged or suppressed independently. "
+            "Equivalences are respected: `.venv` covers `.venv/`, and "
+            "`**/node_modules/**` covers `node_modules/`. "
+            "Both absent-file and missing-entry findings are WARN only — the file is "
+            "app-editable and must never block CI."
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/ci.md#c003",
+    ),
 )

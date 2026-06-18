@@ -5,7 +5,7 @@
 
 # CI/Workflow Supply-Chain Rules (C-series)
 
-**2 rules** · Checker: `suite.checks.actions_pinning` and related workflow checks (static)
+**3 rules** · Checker: `suite.checks.actions_pinning` and related workflow checks (static)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -17,6 +17,7 @@ Suppress a finding on the violating line or the line directly above it:
 |---|---|---|---|---|---|
 | [C001](#c001) | `UnpinnedActionReference` | `block` | `supply-chain` | yes | 3.16.0 |
 | [C002](#c002) | `BootstrapWorkflowDrift` | `warn` | `ci-consistency` | yes | 0.3.0 |
+| [C003](#c003) | `GitignoreMissingEntry` | `warn` | `ci-consistency` | — | 0.4.0 |
 
 ---
 
@@ -53,5 +54,25 @@ workflow shims into `.github/workflows/`. This rule flags any managed file that 
 missing or whose content has diverged from what `bootstrap` would write. Re-run
 `bootstrap` to re-sync; structural drift is flagged while intentional per-repo value
 choices (e.g. `package_name`, `unit_tests_workflow_file`) are preserved.
+
+---
+
+## C003 — `GitignoreMissingEntry` {#c003}
+
+**Tier:** `warn` · **Category:** `ci-consistency` · **Autofixable:** — · **Since:** 0.4.0
+
+> .gitignore is absent or missing a standard required entry
+
+**Rationale:** A .gitignore that is missing standard entries risks accidentally committing secrets,
+virtual environments, build artefacts, or IDE noise — each of which has caused incidents
+or review friction. The standard set is the minimal baseline every app repo should
+carry.
+
+The `atlan-application-sdk-conformance bootstrap` command scaffolds a standard
+.gitignore when the file is absent. This rule flags any required entry that is missing
+from the file. One finding is emitted per missing entry so each can be triaged or
+suppressed independently. Equivalences are respected: `.venv` covers `.venv/`, and
+`**/node_modules/**` covers `node_modules/`. Both absent-file and missing-entry findings
+are WARN only — the file is app-editable and must never block CI.
 
 ---

@@ -1,8 +1,8 @@
 """Tests for the bootstrap command and its helpers.
 
-Covers _bootstrap_file and _ensure_gitignore_entry in isolation, and the full
-_cmd_bootstrap dispatch (SKILL.md + CI workflow shims + .gitignore) via the
-CLI entrypoint so the tests exercise the same code path a caller would use.
+Covers _bootstrap_file in isolation, and the full _cmd_bootstrap dispatch
+(SKILL.md + CI workflow shims + .gitignore) via the CLI entrypoint so the
+tests exercise the same code path a caller would use.
 """
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ from conformance.cli import (
     _bootstrap_file,
     _cmd_bootstrap,
     _derive_app_name_from_dir,
-    _ensure_gitignore_entry,
     _parse_bootstrap_args,
 )
 
@@ -58,64 +57,6 @@ def test_bootstrap_file_prints_updated_for_overwrite(
     dest.write_text("old")
     _bootstrap_file(dest, "new")
     assert "updated" in capsys.readouterr().out
-
-
-# ---------------------------------------------------------------------------
-# _ensure_gitignore_entry
-# ---------------------------------------------------------------------------
-
-
-def test_gitignore_appends_entry_to_existing_file(tmp_path: pathlib.Path) -> None:
-    gi = tmp_path / ".gitignore"
-    gi.write_text("# existing\n*.pyc\n")
-    _ensure_gitignore_entry(tmp_path, "remediation/")
-    assert "remediation/" in gi.read_text()
-
-
-def test_gitignore_creates_file_if_absent(tmp_path: pathlib.Path) -> None:
-    _ensure_gitignore_entry(tmp_path, "remediation/")
-    assert (tmp_path / ".gitignore").read_text().strip() == "remediation/"
-
-
-def test_gitignore_does_not_duplicate_existing_entry(tmp_path: pathlib.Path) -> None:
-    gi = tmp_path / ".gitignore"
-    gi.write_text("remediation/\n")
-    _ensure_gitignore_entry(tmp_path, "remediation/")
-    assert gi.read_text().count("remediation/") == 1
-
-
-def test_gitignore_does_not_clobber_existing_content(tmp_path: pathlib.Path) -> None:
-    gi = tmp_path / ".gitignore"
-    original = "# my rules\n*.log\n.env\n"
-    gi.write_text(original)
-    _ensure_gitignore_entry(tmp_path, "remediation/")
-    result = gi.read_text()
-    assert result.startswith(original)
-    assert "remediation/" in result
-
-
-def test_gitignore_no_op_prints_ok(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    (tmp_path / ".gitignore").write_text("remediation/\n")
-    _ensure_gitignore_entry(tmp_path, "remediation/")
-    assert "ok" in capsys.readouterr().out
-
-
-def test_gitignore_append_prints_appended(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    (tmp_path / ".gitignore").write_text("*.pyc\n")
-    _ensure_gitignore_entry(tmp_path, "remediation/")
-    assert "appended" in capsys.readouterr().out
-
-
-def test_gitignore_entry_match_is_exact_line(tmp_path: pathlib.Path) -> None:
-    """'remediation/' must not be considered present just because 'remediation/runs/' exists."""
-    gi = tmp_path / ".gitignore"
-    gi.write_text("remediation/runs/\n")
-    _ensure_gitignore_entry(tmp_path, "remediation/")
-    assert gi.read_text().count("remediation/") == 2
 
 
 # ---------------------------------------------------------------------------
@@ -234,17 +175,16 @@ def test_cmd_bootstrap_gitignore_not_duplicated_on_rerun(
     assert (tmp_path / ".gitignore").read_text().count("remediation/") == 1
 
 
-def test_cmd_bootstrap_preserves_existing_gitignore_content(
+def test_cmd_bootstrap_does_not_modify_existing_gitignore(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Bootstrap is write-if-absent for .gitignore; it never modifies an existing file."""
     monkeypatch.chdir(tmp_path)
     gi = tmp_path / ".gitignore"
-    gi.write_text("*.pyc\n.env\n")
+    original = "*.pyc\n.env\n"
+    gi.write_text(original)
     _cmd_bootstrap([])
-    content = gi.read_text()
-    assert "*.pyc" in content
-    assert ".env" in content
-    assert "remediation/" in content
+    assert gi.read_text() == original
 
 
 def test_cmd_bootstrap_returns_zero(
