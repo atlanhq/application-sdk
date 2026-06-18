@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 
 from ._base import _MixinBase
-from ._constants import STDLIB_LOG_KWARGS_ALLOWED
+from ._constants import LOGGER_NAMES, STDLIB_LOG_KWARGS_ALLOWED
 from ._helpers import is_logger_call
 
 
@@ -97,8 +97,8 @@ class FormatMixin(_MixinBase):
 
         The SDK logging adapter auto-injects Temporal context as the only
         top-level indexed columns.  All other kwargs land in an unindexed JSON
-        blob invisible to aggregation queries.  Exempt: exc_info=, the adapter
-        file itself.
+        blob invisible to aggregation queries.  Exempt: exc_info=, and adapter
+        files (the entire file, not just the shim method — see ``is_adapter_file``).
         """
         if self._framework == "stdlib":
             return  # stdlib kwargs crash (L013) — a separate rule
@@ -123,21 +123,27 @@ class FormatMixin(_MixinBase):
     # ── L020 DeprecatedLoggingWarn ────────────────────────────────────────────
 
     def _check_l020(self, node: ast.Call) -> None:
-        """Flag ``logger.warn(...)`` — deprecated alias for ``logger.warning(...)``."""
-        if not isinstance(node.func, ast.Attribute):
-            return
-        if node.func.attr != "warn":
-            return
-        # Match both ``logger.warn(...)`` and ``logging.warn(...)``
-        obj = node.func.value
-        is_logger_var = isinstance(obj, ast.Name) and obj.id in (
-            "logger",
-            "log",
-            "_logger",
-            "_log",
-            "logging",
-        )
-        if not is_logger_var:
+        """Flag ``logger.warn(...)`` — deprecated alias for ``logger.warning(...)``.
+
+        Covers three forms:
+        * ``logger.warn(...)``   — receiver in ``LOGGER_NAMES``
+        * ``logging.warn(...)``  — receiver is any name bound to the logging module
+          (including aliases like ``import logging as L; L.warn(...)``)
+        * ``warn(...)``          — bare call after ``from logging import warn``
+        """
+        func = node.func
+        if isinstance(func, ast.Attribute):
+            if func.attr != "warn":
+                return
+            obj = func.value
+            if not isinstance(obj, ast.Name):
+                return
+            if obj.id not in LOGGER_NAMES and obj.id not in self._logging_module_names:
+                return
+        elif isinstance(func, ast.Name):
+            if func.id not in self._logging_warn_names:
+                return
+        else:
             return
         self._add(
             "L020",

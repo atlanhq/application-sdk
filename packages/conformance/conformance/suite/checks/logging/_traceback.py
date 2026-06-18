@@ -11,11 +11,13 @@ from ._helpers import has_exc_info_true, is_logger_call
 
 
 def _walk_no_scope(node: ast.AST):
-    """Yield child AST nodes, pruning at nested scope boundaries.
+    """Yield child AST nodes, pruning at nested scope and handler boundaries.
 
     Stops descending into FunctionDef / AsyncFunctionDef / ClassDef / Lambda
-    so that log calls inside a nested function defined inside an except block
-    are not attributed to the outer except handler.
+    (nested scope) and into Try / ExceptHandler (nested handler) so that log
+    calls inside a nested except block are not double-counted: the Checker
+    calls _check_l004_in_handler on each ExceptHandler separately, so walking
+    into a nested handler here would attribute its calls to the outer handler.
     """
     queue: deque[ast.AST] = deque(ast.iter_child_nodes(node))
     while queue:
@@ -23,7 +25,14 @@ def _walk_no_scope(node: ast.AST):
         yield child
         if not isinstance(
             child,
-            (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda),
+            (
+                ast.FunctionDef,
+                ast.AsyncFunctionDef,
+                ast.ClassDef,
+                ast.Lambda,
+                ast.Try,
+                ast.ExceptHandler,
+            ),
         ):
             queue.extend(ast.iter_child_nodes(child))
 

@@ -68,8 +68,9 @@ class LevelMixin(_MixinBase):
         ``sys.exc_info()`` implicitly — capturing nothing (or a stale exception)
         outside an active except block.
 
-        Exempt: the ``AtlanLoggerAdapter.exception`` shim that exists only to
-        satisfy third-party Temporal callers; detected via ``_is_adapter_file``.
+        Exempt: files that define ``AtlanLoggerAdapter`` or ``get_logger`` at
+        module top-level (the logging infrastructure itself).  The exemption is
+        whole-file, not method-scoped — see ``is_adapter_file`` in ``_helpers.py``.
         """
         if self._is_adapter_file:
             return

@@ -51,6 +51,33 @@ def detect_framework(tree: ast.Module) -> Framework:
     return "unknown"
 
 
+def collect_logging_aliases(
+    tree: ast.Module,
+) -> tuple[frozenset[str], frozenset[str]]:
+    """Return ``(logging_module_names, warn_function_names)`` for *tree*.
+
+    *logging_module_names* — all names bound to the ``logging`` module itself,
+    e.g. ``{"logging", "L"}`` after ``import logging as L``.  Always includes
+    ``"logging"``.
+
+    *warn_function_names* — all names bound to ``logging.warn`` via a
+    ``from logging import warn [as X]`` import, e.g. ``{"warn", "log_warn"}``.
+    """
+    module_names: set[str] = {"logging"}
+    warn_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split(".")[0] == "logging":
+                    module_names.add(alias.asname or alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            if (node.module or "").split(".")[0] == "logging":
+                for alias in node.names:
+                    if alias.name == "warn":
+                        warn_names.add(alias.asname or "warn")
+    return frozenset(module_names), frozenset(warn_names)
+
+
 # ---------------------------------------------------------------------------
 # Logger-call recognition
 # ---------------------------------------------------------------------------
@@ -59,9 +86,15 @@ def detect_framework(tree: ast.Module) -> Framework:
 def is_logger_call(node: ast.Call) -> bool:
     """True if *node* is a recognised ``logger.<method>(...)`` call.
 
-    Matches both named-variable receivers (``LOGGER_NAMES``) and the stdlib
-    module-level form (``logging.info(...)``), so L012/L013/L015 catch
-    calls like ``logging.info("…", custom=1)``.
+    Matches:
+    * Named-variable receivers in ``LOGGER_NAMES`` (``logger.info(...)``)
+    * The stdlib module-level form (``logging.info(...)``)
+    * Attribute receivers whose terminal attr is in ``LOGGER_NAMES``
+      (``self.logger.error(...)``, ``cls._logger.warning(...)``)
+
+    Note: receiver must be a simple ``Name`` or a one-level ``Attribute``
+    (e.g. ``self.logger``).  Deeper chains (``self.x.y.logger``) are not
+    matched to keep false-positive risk low.
     """
     func = node.func
     if not isinstance(func, ast.Attribute):
@@ -69,9 +102,12 @@ def is_logger_call(node: ast.Call) -> bool:
     if func.attr not in LOG_METHODS:
         return False
     obj = func.value
-    if not isinstance(obj, ast.Name):
-        return False
-    return obj.id in LOGGER_NAMES or obj.id == "logging"
+    if isinstance(obj, ast.Name):
+        return obj.id in LOGGER_NAMES or obj.id == "logging"
+    # Accept self.logger / cls._logger — one-level attribute receiver
+    if isinstance(obj, ast.Attribute):
+        return obj.attr in LOGGER_NAMES
+    return False
 
 
 def get_logger_method(node: ast.Call) -> str | None:
@@ -83,6 +119,8 @@ def get_logger_method(node: ast.Call) -> str | None:
         return None
     obj = node.func.value
     if isinstance(obj, ast.Name) and (obj.id in LOGGER_NAMES or obj.id == "logging"):
+        return attr
+    if isinstance(obj, ast.Attribute) and obj.attr in LOGGER_NAMES:
         return attr
     return None
 
@@ -110,8 +148,9 @@ def is_adapter_file(tree: ast.Module) -> bool:
     """True if this file defines the logging adapter.
 
     Files that define ``AtlanLoggerAdapter`` or ``get_logger`` at module
-    top-level are the logging infrastructure itself and are exempt from
-    L017 (.exception() shim) and L018 (kwargs in the factory / adapter body).
+    top-level are the logging infrastructure itself and are entirely exempt
+    from L017 (.exception() shim) and L018 (kwargs in the factory / adapter
+    body).  The exemption is whole-file, not method-scoped.
 
     Only top-level definitions are checked (``tree.body``): a nested method
     named ``get_logger`` inside an unrelated class must not exempt the file.

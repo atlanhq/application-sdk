@@ -29,5 +29,9 @@ class _MixinBase:
     _loop_stack: list[ast.For | ast.AsyncFor | ast.While]
     _except_stack: list[ast.ExceptHandler]
     _in_main_block: int
+    # Names bound to the logging module (e.g. "logging", "L" after import logging as L)
+    _logging_module_names: frozenset[str]
+    # Names bound to logging.warn directly (e.g. "warn" after from logging import warn)
+    _logging_warn_names: frozenset[str]
 
     def _add(self, rule_id: str, node: ast.AST, message: str) -> None: ...

@@ -13,9 +13,17 @@ from pathlib import Path
 
 import pytest
 from conformance.suite.checks.logging import scan_all, scan_path, scan_text
+from conformance.suite.checks.logging._constants import (
+    CREDENTIAL_LABEL_SUFFIXES,
+    CREDENTIAL_VALUE_SUFFIXES,
+)
 from conformance.suite.rules import get_rule
 from conformance.suite.schema import SarifReport, derive_disposition, validate_sarif
 from conformance.suite.schema.disposition import Disposition, EnforcementTier
+
+# Smoke-check that the constants are tuples (guards against silent import errors)
+assert isinstance(CREDENTIAL_VALUE_SUFFIXES, tuple)
+assert isinstance(CREDENTIAL_LABEL_SUFFIXES, tuple)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -314,9 +322,31 @@ def test_l010_fires_on_token_positional_arg() -> None:
     assert "L010" in _ids(src)
 
 
+@pytest.mark.parametrize("suffix", CREDENTIAL_VALUE_SUFFIXES)
+def test_l010_fires_on_all_value_suffixes(suffix: str) -> None:
+    # Every entry in CREDENTIAL_VALUE_SUFFIXES must trigger L010 as a kwarg.
+    src = f"from loguru import logger\nlogger.error('auth failed', {suffix}=val)\n"
+    assert "L010" in _ids(src)
+
+
 def test_l010_silent_on_credential_name_label() -> None:
     # token_name is a label, not a value
     src = "from loguru import logger\nlogger.info('using credential %s', token_name)\n"
+    assert "L010" not in _ids(src)
+
+
+@pytest.mark.parametrize("suffix", CREDENTIAL_LABEL_SUFFIXES)
+def test_l010_silent_on_all_label_suffixes(suffix: str) -> None:
+    # Every entry in CREDENTIAL_LABEL_SUFFIXES must NOT trigger L010.
+    name = f"credential{suffix}"
+    src = f"from loguru import logger\nlogger.info('using %s', {name})\n"
+    assert "L010" not in _ids(src)
+
+
+def test_l010_silent_for_non_logger_call() -> None:
+    # L010 must only fire on recognised logger calls; arbitrary function calls
+    # that happen to carry credential-named kwargs must not produce findings.
+    src = "db.connect(password=secret)\n"
     assert "L010" not in _ids(src)
 
 
@@ -334,9 +364,29 @@ def test_l011_fires_on_concat_in_info() -> None:
     assert "L011" in _ids(src)
 
 
+def test_l011_fires_on_chained_concat_in_error() -> None:
+    # Chained concat (BinOp whose left is also a BinOp) must still fire.
+    src = 'from loguru import logger\nlogger.error("val: " + x + " end")\n'
+    assert "L011" in _ids(src)
+
+
+def test_l011_silent_for_concat_in_non_first_arg() -> None:
+    # Concat in a format argument (not the message itself) must NOT fire —
+    # L011 only targets the message/format string position (args[0]).
+    src = 'from loguru import logger\nlogger.info("msg: %s", "prefix" + x)\n'
+    assert "L011" not in _ids(src)
+
+
 def test_l011_silent_on_pct_style() -> None:
     src = 'from loguru import logger\nlogger.info("val: %s", x)\n'
     assert "L011" not in _ids(src)
+
+
+def test_l011_suppressed_by_inline_directive() -> None:
+    src = 'from loguru import logger\nlogger.info("val: " + x)  # conformance: ignore[L011] intentional\n'
+    findings = scan_text(src, "x.py")
+    l011 = [f for f in findings if f.rule_id == "L011"]
+    assert l011 and all(f.suppressed for f in l011)
 
 
 def test_l011_block_tier() -> None:
@@ -607,9 +657,44 @@ def test_l020_fires_on_logging_warn() -> None:
     assert "L020" in _ids(src)
 
 
+def test_l020_fires_on_logging_module_alias() -> None:
+    # import logging as L; L.warn(...) must fire — L is an alias for logging
+    src = "import logging as L\nL.warn('deprecated')\n"
+    assert "L020" in _ids(src)
+
+
+def test_l020_fires_on_bare_warn_from_import() -> None:
+    # from logging import warn; warn(...) must fire
+    src = "from logging import warn\nwarn('deprecated')\n"
+    assert "L020" in _ids(src)
+
+
 def test_l020_silent_on_warning() -> None:
     src = "from loguru import logger\nlogger.warning('correct')\n"
     assert "L020" not in _ids(src)
+
+
+# ---------------------------------------------------------------------------
+# L004 duplicate-finding regression
+# ---------------------------------------------------------------------------
+
+
+def test_l004_no_duplicate_in_nested_try() -> None:
+    # A logger.error() inside a nested try/except within an outer except block
+    # must produce exactly one L004 finding, not two (one from each handler).
+    src = (
+        "import logging\n"
+        "logger = logging.getLogger(__name__)\n"
+        "try:\n"
+        "    x()\n"
+        "except ValueError:\n"
+        "    try:\n"
+        "        y()\n"
+        "    except TypeError:\n"
+        "        logger.error('inner')\n"
+    )
+    findings = [f for f in scan_text(src, "x.py") if f.rule_id == "L004"]
+    assert len(findings) == 1
 
 
 # ---------------------------------------------------------------------------

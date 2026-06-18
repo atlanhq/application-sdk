@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+from collections import deque
 
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.schema.findings import Finding
@@ -17,15 +18,23 @@ from ._helpers import get_logger_method
 
 
 def _contains_expensive_call(node: ast.AST) -> bool:
-    """True if *node* (or any descendant) is a call to an expensive function."""
-    for child in ast.walk(node):
-        if not isinstance(child, ast.Call):
-            continue
-        func = child.func
-        if isinstance(func, ast.Name) and func.id in EXPENSIVE_CALL_NAMES:
-            return True
-        if isinstance(func, ast.Attribute) and func.attr in EXPENSIVE_CALL_ATTRS:
-            return True
+    """True if *node* (or any non-scope descendant) is a call to an expensive function.
+
+    Prunes Lambda / FunctionDef / AsyncFunctionDef so that a lambda *value*
+    passed as a logger argument does not trigger L008 — the lambda body is not
+    evaluated at the call site.
+    """
+    queue: deque[ast.AST] = deque([node])
+    while queue:
+        current = queue.popleft()
+        if isinstance(current, ast.Call):
+            func = current.func
+            if isinstance(func, ast.Name) and func.id in EXPENSIVE_CALL_NAMES:
+                return True
+            if isinstance(func, ast.Attribute) and func.attr in EXPENSIVE_CALL_ATTRS:
+                return True
+        if not isinstance(current, (ast.Lambda, ast.FunctionDef, ast.AsyncFunctionDef)):
+            queue.extend(ast.iter_child_nodes(current))
     return False
 
 
@@ -188,3 +197,7 @@ class WarnThenRaiseVisitor(ast.NodeVisitor):
         self._scan_stmts(node.orelse)
         self._scan_stmts(node.finalbody)
         self.generic_visit(node)
+
+    # Python 3.11+ try/except* blocks have the same structure as Try.
+    # The type: ignore is needed because TryStar and Try are sibling AST nodes.
+    visit_TryStar = visit_Try  # type: ignore[assignment]

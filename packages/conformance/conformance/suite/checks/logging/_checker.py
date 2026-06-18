@@ -9,7 +9,12 @@ from conformance.suite.schema.findings import Finding
 
 from ._config import ConfigMixin
 from ._format import FormatMixin
-from ._helpers import detect_framework, is_adapter_file
+from ._helpers import (
+    Framework,
+    collect_logging_aliases,
+    detect_framework,
+    is_adapter_file,
+)
 from ._level import LevelMixin
 from ._performance import PerformanceMixin
 from ._print import PrintMixin
@@ -50,13 +55,17 @@ class Checker(
         self,
         filename: str,
         directives: dict[int, _IgnoreDirective],
-        framework: str,
+        framework: Framework,
         adapter_file: bool,
+        logging_module_names: frozenset[str],
+        logging_warn_names: frozenset[str],
     ) -> None:
         self._filename = filename
         self._directives = directives
         self._framework = framework
         self._is_adapter_file = adapter_file
+        self._logging_module_names = logging_module_names
+        self._logging_warn_names = logging_warn_names
         self._findings: list[Finding] = []
         # Context stacks — managed by visit_* methods
         self._loop_stack: list[ast.For | ast.AsyncFor | ast.While] = []
@@ -189,10 +198,13 @@ def build_checker(
         return None
     framework = detect_framework(tree)
     adapter = is_adapter_file(tree)
+    logging_module_names, logging_warn_names = collect_logging_aliases(tree)
     checker = Checker(
         filename=file,
         directives=directives,
         framework=framework,
         adapter_file=adapter,
+        logging_module_names=logging_module_names,
+        logging_warn_names=logging_warn_names,
     )
     return checker, tree
