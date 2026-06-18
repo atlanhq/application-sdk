@@ -79,7 +79,11 @@ def scan_text(text: str, file: str) -> list[Finding]:
     findings = list(checker._findings)
 
     # L009 uses its own visitor (needs statement-list context)
-    l009_visitor = WarnThenRaiseVisitor(filename=file, directives=directives)
+    l009_visitor = WarnThenRaiseVisitor(
+        filename=file,
+        directives=directives,
+        logging_module_names=checker._logging_module_names,
+    )
     l009_visitor.visit(tree)
     findings.extend(l009_visitor._findings)
 
@@ -150,7 +154,11 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
             checker.visit(tree_parsed)
             findings.extend(checker._findings)
 
-            l009_visitor = WarnThenRaiseVisitor(filename=rel_str, directives=directives)
+            l009_visitor = WarnThenRaiseVisitor(
+                filename=rel_str,
+                directives=directives,
+                logging_module_names=checker._logging_module_names,
+            )
             l009_visitor.visit(tree_parsed)
             findings.extend(l009_visitor._findings)
 

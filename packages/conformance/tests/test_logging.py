@@ -1047,6 +1047,22 @@ def test_l013_fires_on_aliased_logging_module() -> None:
     assert "L013" in _ids(src)
 
 
+def test_l009_fires_on_aliased_logging_module() -> None:
+    """import logging as L; L.error('failed'); raise must fire L009.
+
+    Regression: WarnThenRaiseVisitor / _is_warn_or_error_log_stmt fell back to
+    the default frozenset({'logging'}), so aliased module names were silently
+    skipped by get_logger_method.
+    """
+    src = (
+        "import logging as L\n"
+        "def f():\n"
+        "    L.error('failed')\n"
+        "    raise ValueError('x')\n"
+    )
+    assert "L009" in _ids(src)
+
+
 def test_l004_fires_in_inner_try_body_inside_except() -> None:
     """logger.error() in an inner try-body inside an outer except must fire L004.
 

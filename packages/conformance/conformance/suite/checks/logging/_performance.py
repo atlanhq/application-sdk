@@ -88,7 +88,10 @@ class PerformanceMixin(_MixinBase):
 # ---------------------------------------------------------------------------
 
 
-def _is_warn_or_error_log_stmt(stmt: ast.stmt) -> ast.Call | None:
+def _is_warn_or_error_log_stmt(
+    stmt: ast.stmt,
+    module_names: frozenset[str] = frozenset({"logging"}),
+) -> ast.Call | None:
     """Return the Call node if *stmt* is a ``logger.warning/error(...)`` expression."""
     if not isinstance(stmt, ast.Expr):
         return None
@@ -97,7 +100,7 @@ def _is_warn_or_error_log_stmt(stmt: ast.stmt) -> ast.Call | None:
         call = call.value
     if not isinstance(call, ast.Call):
         return None
-    method = get_logger_method(call)
+    method = get_logger_method(call, module_names)
     if method in ("warning", "error"):
         return call
     return None
@@ -116,9 +119,15 @@ class WarnThenRaiseVisitor(ast.NodeVisitor):
     with justification in that case.
     """
 
-    def __init__(self, filename: str, directives: dict[int, _IgnoreDirective]) -> None:
+    def __init__(
+        self,
+        filename: str,
+        directives: dict[int, _IgnoreDirective],
+        logging_module_names: frozenset[str] = frozenset({"logging"}),
+    ) -> None:
         self._filename = filename
         self._directives = directives
+        self._logging_module_names = logging_module_names
         self._findings: list[Finding] = []
 
     def _scan_stmts(self, stmts: list[ast.stmt]) -> None:
@@ -127,7 +136,7 @@ class WarnThenRaiseVisitor(ast.NodeVisitor):
                 continue
             # Look back up to 3 statements for a warning/error log call
             for prev in reversed(stmts[max(0, i - 3) : i]):
-                call = _is_warn_or_error_log_stmt(prev)
+                call = _is_warn_or_error_log_stmt(prev, self._logging_module_names)
                 if call is None:
                     continue
                 method = (
