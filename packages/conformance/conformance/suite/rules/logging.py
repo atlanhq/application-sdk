@@ -34,22 +34,44 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L002",
-        name="InconsistentLoggerFactory",
+        name="NonCanonicalLoggerFactory",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="log-format",
         autofixable=True,
         since="0.2.0",
         rationale=(
-            "Mixed logger factories produce incompatible record formats. The adapter that "
-            "injects Temporal context only activates for the canonical factory; records from "
-            "other factories arrive without correlation IDs, breaking cross-service traces."
+            "The SDK adapter (application_sdk.observability.logger_adaptor.get_logger) "
+            "is the only sanctioned way to obtain a logger. It injects Temporal context "
+            "(workflow_id, run_id, activity_type) as top-level indexed columns in "
+            "ClickHouse/Grafana and routes records through OTel. Direct use of "
+            "logging.getLogger(), structlog.get_logger(), or loguru's logger bypasses "
+            "all of this — correlation IDs are lost and records may not reach the "
+            "observability store."
         ),
-        short_description="Logger factory inconsistent with project canonical factory",
+        short_description=(
+            "Non-canonical logger factory — use "
+            "`from application_sdk.observability.logger_adaptor import get_logger`"
+        ),
         full_description=(
-            "Mixing logger factories produces inconsistent log formats, loses structured\n"
-            "fields, and breaks log correlation.  The checker discovers the canonical\n"
-            "factory (dominant by occurrence count) in Phase 1 and flags deviations.\n"
+            "Every module must obtain its logger via the SDK adapter::\n"
+            "\n"
+            "    from application_sdk.observability.logger_adaptor import get_logger\n"
+            "    logger = get_logger(__name__)\n"
+            "\n"
+            "Direct use of ``logging.getLogger()``, ``structlog.get_logger()``, or\n"
+            "``from loguru import logger`` bypasses the adapter that:\n"
+            "\n"
+            "* injects Temporal context fields (``workflow_id``, ``run_id``,\n"
+            "  ``activity_type``, ``task_queue``, ``attempt``) as top-level indexed\n"
+            "  columns in ClickHouse/Grafana;\n"
+            "* routes log records through OTel so they appear in the observability\n"
+            "  store;\n"
+            "* enforces the project's five-level model\n"
+            "  (DEBUG/INFO/WARNING/ERROR/CRITICAL).\n"
+            "\n"
+            "Adapter definition files are exempt — the file that defines\n"
+            "``AtlanLoggerAdapter`` or ``get_logger`` itself is skipped.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l002",
     ),
@@ -463,5 +485,44 @@ RULES: tuple[RuleDefinition, ...] = (
             "Rename every call site to ``logger.warning(...)``.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l020",
+    ),
+    RuleDefinition(
+        id="L021",
+        name="MissingLoggingLintRules",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="log-config",
+        autofixable=True,
+        since="0.3.0",
+        rationale=(
+            "The conformance suite catches logging anti-patterns at review time; ruff "
+            "catches the same issues at edit time and in pre-commit. The two are "
+            "complementary — ruff gives faster feedback in the IDE, conformance gives "
+            "auditable SARIF output. Without the ruff rules enabled, engineers get no "
+            "in-editor signal for L001/L005/L011/L020 equivalents."
+        ),
+        short_description=(
+            "pyproject.toml ruff config is missing logging lint rules (G001, G003, "
+            "G004, T201, LOG009)"
+        ),
+        full_description=(
+            "The project's ``[tool.ruff.lint]`` ``select`` / ``extend-select`` must\n"
+            "cover the following rules (or their category prefixes, or ``ALL``):\n"
+            "\n"
+            "* ``G001`` — ``logging.warn()`` deprecated (overlaps L020)\n"
+            "* ``G003`` — string concatenation in log message (overlaps L011)\n"
+            "* ``G004`` — f-string in log message (overlaps L001)\n"
+            "* ``T201`` — ``print()`` statement (overlaps L005)\n"
+            "* ``LOG009`` — ``logging.warn()`` deprecated (overlaps L020)\n"
+            "\n"
+            "A rule is covered if its full ID, any prefix (e.g. ``G`` covers all\n"
+            "``G``-prefixed rules), or ``ALL`` appears in ``select`` or\n"
+            "``extend-select`` and is not in ``ignore`` / ``extend-ignore``.\n"
+            "\n"
+            "Self-check exemption: ``pyproject.toml`` files whose\n"
+            "``[project].name`` starts with ``atlan-application-sdk`` are skipped\n"
+            "(the SDK's own tooling config is managed separately).\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l021",
     ),
 )

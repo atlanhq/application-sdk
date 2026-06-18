@@ -1,6 +1,6 @@
-"""L-series logging checks — AST-based.
+"""L-series logging checks — AST-based and TOML-based.
 
-Scans Python source files for logging anti-patterns defined in the L001–L020
+Scans Python source files for logging anti-patterns defined in the L001–L021
 rule catalog.  Every check is purely deterministic: the same source text always
 produces the same set of findings.
 
@@ -26,12 +26,14 @@ Rule implementations are split by category:
 * ``_config``      — L012, L013, L015, L019 (per-file config/crash rules)
 * ``_print``       — L005 (print bypass)
 
-Cross-file rules (require seeing all files before emitting findings):
+Cross-file and TOML rules (require seeing all files / project config):
 
 * ``L002`` InconsistentLoggerFactory — implemented in :func:`scan_all`
 * ``L016`` BasicConfigNoopAfterFirstCall — implemented in :func:`scan_all`
+* ``L021`` MissingLoggingLintRules — TOML check in :func:`scan_all` (``_toml.py``)
 
 ``_checker.py`` assembles the per-file mixins into a single ``Checker`` visitor.
+``_toml.py`` implements the ``pyproject.toml`` ruff-config check (L021).
 ``__init__.py`` (this file) exposes the public scan + CLI API.
 """
 
@@ -52,7 +54,9 @@ from conformance.suite.schema.findings import Finding
 
 from ._checker import build_checker
 from ._constants import SERIES
+from ._helpers import is_adapter_file
 from ._performance import WarnThenRaiseVisitor
+from ._toml import check_ruff_config
 
 __all__ = ["SERIES", "discover", "main", "scan_all", "scan_path", "scan_text"]
 
@@ -103,18 +107,28 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
 
 
 def _detect_factory(tree: ast.Module) -> str | None:
-    """Return a factory-type string for the logger factory used in *tree*.
+    """Return the logger factory type for *tree*.
 
-    Returns ``None`` when no logger factory call or loguru import is found —
-    the file is not a logger-using module.
+    Returns ``None`` when no logger acquisition is detected — the file does
+    not obtain a logger object and should not be checked by L002.
 
-    Factory types:
-    * ``"stdlib"``   — ``logging.getLogger(...)`` / ``getLogger(...)``
-    * ``"structlog"`` — ``structlog.get_logger(...)``
-    * ``"sdk"``      — bare ``get_logger(...)`` (SDK canonical adapter)
-    * ``"loguru"``   — ``from loguru import logger``
+    Factory types (first match wins):
+    * ``"sdk_adapter"`` — ``from application_sdk... import get_logger`` (canonical)
+    * ``"loguru"``      — ``from loguru import logger`` (direct loguru)
+    * ``"structlog"``   — ``structlog.get_logger(...)`` in an assignment
+    * ``"stdlib"``      — ``logging.getLogger(...)`` / ``getLogger(...)`` in an assignment
+    * ``"sdk_adapter"`` — bare ``get_logger(...)`` in an assignment with no other match
+                          (only the SDK adapter exports ``get_logger`` in this ecosystem)
     """
-    # Check for loguru import first (no factory call needed)
+    # 1. SDK adapter import — most specific, check before anything else
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if "application_sdk" in (node.module or ""):
+                for alias in node.names:
+                    if alias.name == "get_logger":
+                        return "sdk_adapter"
+
+    # 2. Loguru direct import (from loguru import logger)
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             if (node.module or "").split(".")[0] == "loguru":
@@ -122,18 +136,14 @@ def _detect_factory(tree: ast.Module) -> str | None:
                     if alias.name == "logger":
                         return "loguru"
 
-    # Check for factory calls in assignments: logger = X.get_logger(...)
+    # 3–5. Factory calls in assignments
     for node in ast.walk(tree):
         if not isinstance(node, (ast.Assign, ast.AnnAssign)):
             continue
-        rhs: ast.expr | None = None
-        if isinstance(node, ast.Assign):
-            rhs = node.value
-        elif isinstance(node, ast.AnnAssign):
-            rhs = node.value
-        if rhs is None:
-            continue
-        if not isinstance(rhs, ast.Call):
+        rhs: ast.expr | None = (
+            node.value if isinstance(node, ast.Assign) else node.value
+        )
+        if rhs is None or not isinstance(rhs, ast.Call):
             continue
         func = rhs.func
         # structlog.get_logger(...)
@@ -152,12 +162,13 @@ def _detect_factory(tree: ast.Module) -> str | None:
             and func.value.id == "logging"
         ):
             return "stdlib"
-        # bare get_logger(...) — SDK canonical
-        if isinstance(func, ast.Name) and func.id == "get_logger":
-            return "sdk"
-        # bare getLogger(...) — stdlib without module prefix
+        # bare getLogger(...)
         if isinstance(func, ast.Name) and func.id == "getLogger":
             return "stdlib"
+        # bare get_logger(...) — only the SDK adapter exports this name
+        if isinstance(func, ast.Name) and func.id == "get_logger":
+            return "sdk_adapter"
+
     return None
 
 
@@ -209,20 +220,23 @@ def _collect_basicconfig_calls(
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     """Multi-pass scan over *paths*, emitting all L-series findings.
 
-    Pass 1 — parse every file, run per-file checks (L001–L015, L017–L020),
+    Pass 1 — parse every file, run per-file checks (L001–L015, L017–L021),
     and collect data for cross-file rules (factory types, basicConfig calls).
 
-    Pass 2 — emit L002 for files deviating from the dominant logger factory,
-    and L016 for 2nd+ non-main basicConfig() calls.
+    Pass 2a — L002: flag every file that obtains a logger via a non-SDK factory
+    (``logging.getLogger``, ``structlog.get_logger``, direct loguru import)
+    instead of the canonical SDK adapter.
+
+    Pass 2b — L016: flag 2nd+ non-main basicConfig() calls.
+
+    Pass 3  — L021: check pyproject.toml for required ruff logging lint rules.
     """
     findings: list[Finding] = []
 
     # Pass 1 — per-file rules + data collection
-    factory_counts: dict[str, int] = {}
     factory_by_file: dict[str, str] = {}  # rel_path -> factory_type
-    factory_node_by_file: dict[
-        str, tuple[ast.AST, str]
-    ] = {}  # rel_path -> (node, filename)
+    adapter_by_file: dict[str, bool] = {}  # rel_path -> is adapter/definition file
+    directives_by_file: dict[str, dict[int, _IgnoreDirective]] = {}
     basicconfig_calls: list[Finding] = []  # placeholder findings for L016
 
     for path in paths:
@@ -240,6 +254,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
             rel = path
         rel_str = str(rel)
         directives = _parse_directives(text)
+        directives_by_file[rel_str] = directives
 
         # Per-file rules
         result = build_checker(text, rel_str, directives)
@@ -254,49 +269,58 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
 
             tree = tree_parsed  # use the already-parsed tree for cross-file data
 
-        # L002 — collect factory type for this file
+        # L002 — collect factory type and adapter status for this file
         factory = _detect_factory(tree)
         if factory is not None:
-            factory_counts[factory] = factory_counts.get(factory, 0) + 1
             factory_by_file[rel_str] = factory
-            # Record the first matching AST node for the finding location
-            factory_node_by_file[rel_str] = (tree, rel_str)
+        adapter_by_file[rel_str] = is_adapter_file(tree)
 
         # L016 — collect basicConfig calls from this file
         basicconfig_calls.extend(_collect_basicconfig_calls(tree, rel_str, directives))
 
-    # Pass 2a — L002 InconsistentLoggerFactory
-    if len(factory_counts) > 1:
-        dominant = max(factory_counts, key=lambda k: factory_counts[k])
-        for rel_str, factory in factory_by_file.items():
-            if factory == dominant:
-                continue
-            tree_ref, fname = factory_node_by_file[rel_str]
-            # Emit a file-level finding (line 1, col 1)
-            fake_node = ast.Module(body=[], type_ignores=[])
-            fake_node.lineno = 1  # type: ignore[attr-defined]
-            fake_node.col_offset = 0  # type: ignore[attr-defined]
-            directives_empty: dict[int, _IgnoreDirective] = {}
-            findings.append(
-                make_finding(
-                    filename=rel_str,
-                    rule_id="L002",
-                    node=fake_node,
-                    message=(
-                        f"Logger factory '{factory}' differs from the dominant factory "
-                        f"'{dominant}' ({factory_counts[dominant]} files). "
-                        "Mixed factories produce incompatible record formats and break "
-                        "correlation IDs. Switch to the canonical factory."
-                    ),
-                    directives=directives_empty,
-                )
+    # Pass 2a — L002 NonCanonicalLoggerFactory
+    # Emit a finding for every file that uses a non-SDK logger factory.
+    # Adapter/definition files are exempt (they implement the factory itself).
+    _FACTORY_LABEL = {
+        "stdlib": "stdlib logging.getLogger()",
+        "structlog": "structlog.get_logger()",
+        "loguru": "from loguru import logger",
+    }
+    for rel_str, factory in factory_by_file.items():
+        if factory == "sdk_adapter":
+            continue
+        if adapter_by_file.get(rel_str, False):
+            continue
+        label = _FACTORY_LABEL.get(factory, factory)
+        fake_node = ast.Module(body=[], type_ignores=[])
+        fake_node.lineno = 1  # type: ignore[attr-defined]
+        fake_node.col_offset = 0  # type: ignore[attr-defined]
+        findings.append(
+            make_finding(
+                filename=rel_str,
+                rule_id="L002",
+                node=fake_node,
+                message=(
+                    f"Non-canonical logger factory ({label}) — use "
+                    "`from application_sdk.observability.logger_adaptor import "
+                    "get_logger` instead. Direct use of stdlib logging, structlog, "
+                    "or loguru bypasses the adapter that injects Temporal correlation "
+                    "IDs and routes records through OTel."
+                ),
+                directives=directives_by_file.get(rel_str, {}),
             )
+        )
 
     # Pass 2b — L016 BasicConfigNoopAfterFirstCall
     if len(basicconfig_calls) > 1:
         # The first call is acceptable; flag all subsequent ones
         for finding in basicconfig_calls[1:]:
             findings.append(finding)
+
+    # Pass 3 — L021 MissingLoggingLintRules (pyproject.toml TOML check)
+    toml_path = root / "pyproject.toml"
+    if toml_path.exists():
+        findings.extend(check_ruff_config(toml_path, root))
 
     return findings
 

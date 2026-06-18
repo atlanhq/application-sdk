@@ -5,7 +5,7 @@
 
 # Logging Rules (L-series)
 
-**20 rules** · Checker: `suite.checks.logging` (AST-based)
+**21 rules** · Checker: `suite.checks.logging` (AST-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -16,7 +16,7 @@ Suppress a finding on the violating line or the line directly above it:
 | ID | Name | Tier | Category | Autofixable | Since |
 |---|---|---|---|---|---|
 | [L001](#l001) | `FStringInLogMessage` | `block` | `log-format` | yes | 0.2.0 |
-| [L002](#l002) | `InconsistentLoggerFactory` | `warn` | `log-format` | yes | 0.2.0 |
+| [L002](#l002) | `NonCanonicalLoggerFactory` | `warn` | `log-format` | yes | 0.2.0 |
 | [L003](#l003) | `ExtraKwargsWrongFramework` | `warn` | `log-format` | — | 0.2.0 |
 | [L004](#l004) | `ExceptBlockMissingExcInfoLog` | `block` | `missing-traceback` | yes | 0.2.0 |
 | [L005](#l005) | `PrintInProductionCode` | `warn` | `log-format` | yes | 0.2.0 |
@@ -35,6 +35,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [L018](#l018) | `KwargsInApplicationLogCalls` | `warn` | `log-format` | — | 0.2.0 |
 | [L019](#l019) | `DiscardedBindResult` | `warn` | `log-config` | — | 0.3.0 |
 | [L020](#l020) | `DeprecatedLoggingWarn` | `warn` | `log-format` | yes | 0.3.0 |
+| [L021](#l021) | `MissingLoggingLintRules` | `warn` | `log-config` | yes | 0.3.0 |
 
 ---
 
@@ -57,19 +58,34 @@ kwargs.
 
 ---
 
-## L002 — `InconsistentLoggerFactory` {#l002}
+## L002 — `NonCanonicalLoggerFactory` {#l002}
 
 **Tier:** `warn` · **Category:** `log-format` · **Autofixable:** yes · **Since:** 0.2.0
 
-> Logger factory inconsistent with project canonical factory
+> Non-canonical logger factory — use `from application_sdk.observability.logger_adaptor import get_logger`
 
-**Rationale:** Mixed logger factories produce incompatible record formats. The adapter that injects
-Temporal context only activates for the canonical factory; records from other factories
-arrive without correlation IDs, breaking cross-service traces.
+**Rationale:** The SDK adapter (application_sdk.observability.logger_adaptor.get_logger) is the only
+sanctioned way to obtain a logger. It injects Temporal context (workflow_id, run_id,
+activity_type) as top-level indexed columns in ClickHouse/Grafana and routes records
+through OTel. Direct use of logging.getLogger(), structlog.get_logger(), or loguru's
+logger bypasses all of this — correlation IDs are lost and records may not reach the
+observability store.
 
-Mixing logger factories produces inconsistent log formats, loses structured fields, and
-breaks log correlation.  The checker discovers the canonical factory (dominant by
-occurrence count) in Phase 1 and flags deviations.
+Every module must obtain its logger via the SDK adapter::
+
+    from application_sdk.observability.logger_adaptor import get_logger     logger =
+get_logger(__name__)
+
+Direct use of `logging.getLogger()`, `structlog.get_logger()`, or `from loguru import
+logger` bypasses the adapter that:
+
+* injects Temporal context fields (`workflow_id`, `run_id`,   `activity_type`,
+`task_queue`, `attempt`) as top-level indexed   columns in ClickHouse/Grafana; * routes
+log records through OTel so they appear in the observability   store; * enforces the
+project's five-level model   (DEBUG/INFO/WARNING/ERROR/CRITICAL).
+
+Adapter definition files are exempt — the file that defines `AtlanLoggerAdapter` or
+`get_logger` itself is skipped.
 
 ---
 
@@ -376,5 +392,34 @@ is a trivial rename.
 `logger.warn()` / `logging.warn()` is a deprecated alias for `logger.warning()` that
 will be removed in a future Python version. Rename every call site to
 `logger.warning(...)`.
+
+---
+
+## L021 — `MissingLoggingLintRules` {#l021}
+
+**Tier:** `warn` · **Category:** `log-config` · **Autofixable:** yes · **Since:** 0.3.0
+
+> pyproject.toml ruff config is missing logging lint rules (G001, G003, G004, T201, LOG009)
+
+**Rationale:** The conformance suite catches logging anti-patterns at review time; ruff catches the
+same issues at edit time and in pre-commit. The two are complementary — ruff gives
+faster feedback in the IDE, conformance gives auditable SARIF output. Without the ruff
+rules enabled, engineers get no in-editor signal for L001/L005/L011/L020 equivalents.
+
+The project's `[tool.ruff.lint]` `select` / `extend-select` must cover the following
+rules (or their category prefixes, or `ALL`):
+
+* `G001` — `logging.warn()` deprecated (overlaps L020) * `G003` — string concatenation
+in log message (overlaps L011) * `G004` — f-string in log message (overlaps L001) *
+`T201` — `print()` statement (overlaps L005) * `LOG009` — `logging.warn()` deprecated
+(overlaps L020)
+
+A rule is covered if its full ID, any prefix (e.g. `G` covers all `G`-prefixed rules),
+or `ALL` appears in `select` or `extend-select` and is not in `ignore` /
+`extend-ignore`.
+
+Self-check exemption: `pyproject.toml` files whose `[project].name` starts with
+`atlan-application-sdk` are skipped (the SDK's own tooling config is managed
+separately).
 
 ---

@@ -1,4 +1,4 @@
-"""Tests for the L-series logging checks (L001–L020).
+"""Tests for the L-series logging checks (L001–L021).
 
 These checks are shipped in the conformance package and fanned out across the
 fleet — a buggy check false-positives across hundreds of apps and triggers
@@ -708,27 +708,74 @@ def test_l007_warn_disposition(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# L002 InconsistentLoggerFactory — cross-file
+# L002 NonCanonicalLoggerFactory — absolute SDK adapter enforcement
 # ---------------------------------------------------------------------------
 
+_SDK_LOGGER = (
+    "from application_sdk.observability.logger_adaptor import get_logger\n"
+    "logger = get_logger(__name__)\n"
+)
 
-def test_l002_silent_single_factory(tmp_path: Path) -> None:
-    files = {
-        "a.py": "import logging\nlogger = logging.getLogger(__name__)\n",
-        "b.py": "import logging\nlogger = logging.getLogger(__name__)\n",
-    }
+
+def test_l002_silent_sdk_adapter(tmp_path: Path) -> None:
+    files = {"a.py": _SDK_LOGGER, "b.py": _SDK_LOGGER}
     findings = _scan_files(tmp_path, files)
     assert not any(f.rule_id == "L002" for f in findings)
 
 
-def test_l002_fires_on_mixed_factories(tmp_path: Path) -> None:
+def test_l002_fires_stdlib_getlogger(tmp_path: Path) -> None:
+    src = "import logging\nlogger = logging.getLogger(__name__)\n"
+    findings = _scan_files(tmp_path, {"a.py": src})
+    l002 = [f for f in findings if f.rule_id == "L002"]
+    assert l002
+    assert "stdlib" in l002[0].message
+
+
+def test_l002_fires_structlog(tmp_path: Path) -> None:
+    src = "import structlog\nlogger = structlog.get_logger()\n"
+    findings = _scan_files(tmp_path, {"a.py": src})
+    assert any(f.rule_id == "L002" for f in findings)
+
+
+def test_l002_fires_loguru_direct(tmp_path: Path) -> None:
+    src = "from loguru import logger\n"
+    findings = _scan_files(tmp_path, {"a.py": src})
+    assert any(f.rule_id == "L002" for f in findings)
+
+
+def test_l002_silent_adapter_definition_file(tmp_path: Path) -> None:
+    """The file defining get_logger is exempt even though it uses loguru."""
+    src = (
+        "from loguru import logger\n"
+        "def get_logger(name: str):\n"
+        "    return logger.bind(name=name)\n"
+    )
+    findings = _scan_files(tmp_path, {"logger_adaptor.py": src})
+    assert not any(f.rule_id == "L002" for f in findings)
+
+
+def test_l002_fires_mixed_only_non_sdk_flagged(tmp_path: Path) -> None:
+    """SDK-adapter files are silent; non-canonical files are each flagged."""
     files = {
-        "a.py": "import logging\nlogger = logging.getLogger(__name__)\n",
-        "b.py": "import logging\nlogger = logging.getLogger(__name__)\n",
-        "c.py": "import structlog\nlogger = structlog.get_logger()\n",
+        "a.py": _SDK_LOGGER,
+        "b.py": _SDK_LOGGER,
+        "c.py": "import logging\nlogger = logging.getLogger(__name__)\n",
     }
     findings = _scan_files(tmp_path, files)
-    assert any(f.rule_id == "L002" for f in findings)
+    l002 = [f for f in findings if f.rule_id == "L002"]
+    assert len(l002) == 1
+    assert "c.py" in l002[0].file
+
+
+def test_l002_suppression_directive(tmp_path: Path) -> None:
+    src = (
+        "# conformance: ignore[L002] legacy module, migrating in next sprint\n"
+        "import logging\n"
+        "logger = logging.getLogger(__name__)\n"
+    )
+    findings = _scan_files(tmp_path, {"legacy.py": src})
+    l002 = [f for f in findings if f.rule_id == "L002"]
+    assert all(f.suppressed for f in l002)
 
 
 # ---------------------------------------------------------------------------
@@ -743,3 +790,112 @@ def test_scan_path_matches_scan_text(tmp_path: Path) -> None:
     from_path = scan_path(path, tmp_path)
     from_text = scan_text(src, "m.py")
     assert [f.rule_id for f in from_path] == [f.rule_id for f in from_text]
+
+
+# ---------------------------------------------------------------------------
+# L021 MissingLoggingLintRules — pyproject.toml ruff config
+# ---------------------------------------------------------------------------
+
+
+def _l021_findings(tmp_path: Path, toml_content: str) -> list:
+    """Write a pyproject.toml and run scan_all with no Python files."""
+    (tmp_path / "pyproject.toml").write_text(toml_content)
+    return [f for f in scan_all([], tmp_path) if f.rule_id == "L021"]
+
+
+def test_l021_fires_when_no_ruff_config(tmp_path: Path) -> None:
+    toml = '[project]\nname = "my-app"\n'
+    findings = _l021_findings(tmp_path, toml)
+    assert findings
+    assert findings[0].rule_id == "L021"
+
+
+def test_l021_fires_when_rules_missing(tmp_path: Path) -> None:
+    toml = '[project]\nname = "my-app"\n[tool.ruff.lint]\nselect = ["E", "F"]\n'
+    findings = _l021_findings(tmp_path, toml)
+    assert findings
+    msg = findings[0].message
+    assert "G001" in msg
+    assert "G004" in msg
+    assert "T201" in msg
+
+
+def test_l021_silent_all_in_select(tmp_path: Path) -> None:
+    toml = (
+        '[project]\nname = "my-app"\n'
+        "[tool.ruff.lint]\n"
+        'select = ["ALL"]\n'
+        'ignore = ["ANN"]\n'
+    )
+    assert not _l021_findings(tmp_path, toml)
+
+
+def test_l021_silent_category_prefix(tmp_path: Path) -> None:
+    """Selecting a category prefix (G, T2, LOG) covers all rules in that group."""
+    toml = (
+        '[project]\nname = "my-app"\n'
+        "[tool.ruff.lint]\n"
+        'select = ["E", "F", "G", "T2", "LOG"]\n'
+    )
+    assert not _l021_findings(tmp_path, toml)
+
+
+def test_l021_silent_exact_rule_ids(tmp_path: Path) -> None:
+    toml = (
+        '[project]\nname = "my-app"\n'
+        "[tool.ruff.lint]\n"
+        'select = ["E", "F", "G001", "G003", "G004", "T201", "LOG009"]\n'
+    )
+    assert not _l021_findings(tmp_path, toml)
+
+
+def test_l021_fires_when_rule_explicitly_ignored(tmp_path: Path) -> None:
+    """A rule that is selected but then ignored is not covered."""
+    toml = (
+        '[project]\nname = "my-app"\n'
+        "[tool.ruff.lint]\n"
+        'select = ["ALL"]\n'
+        'ignore = ["G004"]\n'
+    )
+    findings = _l021_findings(tmp_path, toml)
+    assert findings
+    assert "G004" in findings[0].message
+
+
+def test_l021_silent_extend_select(tmp_path: Path) -> None:
+    """Rules in extend-select also count as covered."""
+    toml = (
+        '[project]\nname = "my-app"\n'
+        "[tool.ruff.lint]\n"
+        'select = ["E", "F"]\n'
+        'extend-select = ["G001", "G003", "G004", "T201", "LOG009"]\n'
+    )
+    assert not _l021_findings(tmp_path, toml)
+
+
+def test_l021_silent_sdk_self_check_exempt(tmp_path: Path) -> None:
+    """The SDK's own pyproject.toml is exempt from L021."""
+    toml = '[project]\nname = "atlan-application-sdk"\n'
+    assert not _l021_findings(tmp_path, toml)
+
+
+def test_l021_silent_no_pyproject(tmp_path: Path) -> None:
+    """No pyproject.toml → no L021 finding (not every repo has one)."""
+    findings = [f for f in scan_all([], tmp_path) if f.rule_id == "L021"]
+    assert not findings
+
+
+def test_l021_partial_coverage_lists_only_missing(tmp_path: Path) -> None:
+    """When some rules are present, only the missing ones are reported."""
+    toml = (
+        '[project]\nname = "my-app"\n'
+        "[tool.ruff.lint]\n"
+        'select = ["E", "G", "LOG"]\n'  # covers G001/G003/G004 and LOG009, missing T201
+    )
+    findings = _l021_findings(tmp_path, toml)
+    assert findings
+    msg = findings[0].message
+    assert "T201" in msg
+    assert "G001" not in msg
+    assert "G004" not in msg
+    assert "LOG009" not in msg
