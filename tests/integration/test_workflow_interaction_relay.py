@@ -19,8 +19,6 @@ from datetime import timedelta
 
 import pytest
 from temporalio.client import WorkflowUpdateFailedError
-from temporalio.contrib.pydantic import pydantic_data_converter
-from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 
@@ -29,6 +27,8 @@ from application_sdk.app.base import App, generate_workflow_class
 from application_sdk.app.entrypoint import EntryPointMetadata
 from application_sdk.contracts.base import Input, Output
 from application_sdk.execution.sandbox import SandboxConfig
+
+pytestmark = pytest.mark.integration
 
 # Production sandbox passthrough config — same one the SDK worker uses, so
 # loguru / application_sdk imports work inside the workflow sandbox.
@@ -125,20 +125,15 @@ _WF_CLS = generate_workflow_class(
 # ---------------------------------------------------------------------------
 
 
-async def test_update_interaction_mutates_run_state() -> None:
+async def test_update_interaction_mutates_run_state(temporal_client) -> None:
     """Update fired mid-run reaches the same App instance ``run`` observes."""
-    async with (
-        await WorkflowEnvironment.start_local(
-            data_converter=pydantic_data_converter
-        ) as env,
-        Worker(
-            env.client,
-            task_queue="interaction-relay-queue",
-            workflows=[_WF_CLS],
-            workflow_runner=_SANDBOX_RUNNER,
-        ),
+    async with Worker(
+        temporal_client,
+        task_queue="interaction-relay-queue",
+        workflows=[_WF_CLS],
+        workflow_runner=_SANDBOX_RUNNER,
     ):
-        handle = await env.client.start_workflow(
+        handle = await temporal_client.start_workflow(
             _WF_CLS.run,
             _InteractionInput(timeout_seconds=5.0),
             id="interaction-relay-update",
@@ -157,20 +152,15 @@ async def test_update_interaction_mutates_run_state() -> None:
     assert result.final_state == "stopped:operator-request"
 
 
-async def test_signal_interaction_increments_state() -> None:
+async def test_signal_interaction_increments_state(temporal_client) -> None:
     """Multiple signals accumulate on the same per-run App instance."""
-    async with (
-        await WorkflowEnvironment.start_local(
-            data_converter=pydantic_data_converter
-        ) as env,
-        Worker(
-            env.client,
-            task_queue="interaction-relay-queue-2",
-            workflows=[_WF_CLS],
-            workflow_runner=_SANDBOX_RUNNER,
-        ),
+    async with Worker(
+        temporal_client,
+        task_queue="interaction-relay-queue-2",
+        workflows=[_WF_CLS],
+        workflow_runner=_SANDBOX_RUNNER,
     ):
-        handle = await env.client.start_workflow(
+        handle = await temporal_client.start_workflow(
             _WF_CLS.run,
             _InteractionInput(timeout_seconds=5.0),
             id="interaction-relay-signal",
@@ -187,20 +177,15 @@ async def test_signal_interaction_increments_state() -> None:
     assert result.signals_received == 3
 
 
-async def test_query_interaction_returns_live_state() -> None:
+async def test_query_interaction_returns_live_state(temporal_client) -> None:
     """Query reads state from the same instance ``run`` is mutating."""
-    async with (
-        await WorkflowEnvironment.start_local(
-            data_converter=pydantic_data_converter
-        ) as env,
-        Worker(
-            env.client,
-            task_queue="interaction-relay-queue-3",
-            workflows=[_WF_CLS],
-            workflow_runner=_SANDBOX_RUNNER,
-        ),
+    async with Worker(
+        temporal_client,
+        task_queue="interaction-relay-queue-3",
+        workflows=[_WF_CLS],
+        workflow_runner=_SANDBOX_RUNNER,
     ):
-        handle = await env.client.start_workflow(
+        handle = await temporal_client.start_workflow(
             _WF_CLS.run,
             _InteractionInput(timeout_seconds=5.0),
             id="interaction-relay-query",
@@ -213,21 +198,16 @@ async def test_query_interaction_returns_live_state() -> None:
         await handle.result()
 
 
-async def test_validator_rejects_invalid_update() -> None:
+async def test_validator_rejects_invalid_update(temporal_client) -> None:
     """Validator decorated on the App method propagates through the relay,
     causing the runtime to reject the update before it reaches the interaction body."""
-    async with (
-        await WorkflowEnvironment.start_local(
-            data_converter=pydantic_data_converter
-        ) as env,
-        Worker(
-            env.client,
-            task_queue="interaction-relay-queue-4",
-            workflows=[_WF_CLS],
-            workflow_runner=_SANDBOX_RUNNER,
-        ),
+    async with Worker(
+        temporal_client,
+        task_queue="interaction-relay-queue-4",
+        workflows=[_WF_CLS],
+        workflow_runner=_SANDBOX_RUNNER,
     ):
-        handle = await env.client.start_workflow(
+        handle = await temporal_client.start_workflow(
             _WF_CLS.run,
             _InteractionInput(timeout_seconds=5.0),
             id="interaction-relay-validator",
