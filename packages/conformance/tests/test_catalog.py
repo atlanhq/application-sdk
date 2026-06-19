@@ -89,17 +89,31 @@ def test_scope_is_required_field() -> None:
 def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     """The publisher-side rules are app-scoped; everything else is 'both'.
 
-    APP-scoped rules (dependency pinning, managed-workflow drift) must never fire
-    on the SDK itself, which publishes the contract.  Pin the exact set so a new
-    rule has to make a deliberate scope decision rather than silently inheriting.
+    APP-scoped rules (dependency pinning, managed-workflow drift, Dockerfile
+    conformance) must never fire on the SDK itself, which publishes the
+    contract.  Pin the exact set so a new rule has to make a deliberate scope
+    decision rather than silently inheriting.
 
     Note C003 (.gitignore entries) is *both*, not app: the SDK has its own
     .gitignore sharing the standard baseline, so the rule is useful there too —
     only C002 (bootstrap workflow drift) is genuinely 0%-applicable to the SDK.
+
+    I001–I005 (Dockerfile conformance) are app-scoped because the SDK Dockerfile
+    *builds* the base image that these rules enforce, so the rules are meaningless
+    and noisy when applied to the SDK itself.
     """
     rules = load_catalog()
     app_scoped = {r.id for r in rules if r.scope == RuleScope.APP}
-    assert app_scoped == {"C002", "D001", "D002"}, app_scoped
+    assert app_scoped == {
+        "C002",
+        "D001",
+        "D002",
+        "I001",
+        "I002",
+        "I003",
+        "I004",
+        "I005",
+    }, app_scoped
     # No rule is currently SDK-only; the rest are 'both'.
     assert not {r.id for r in rules if r.scope == RuleScope.SDK}
     both = {r.id for r in rules if r.scope == RuleScope.BOTH}

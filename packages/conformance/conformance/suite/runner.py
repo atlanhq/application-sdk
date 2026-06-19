@@ -27,6 +27,7 @@ from conformance.suite.checks import (
     actions_pinning,
     bootstrap_drift,
     dependency_conformance,
+    dockerfile_conformance,
     error_handling,
     gitignore_entries,
     integration_marking,
@@ -104,6 +105,11 @@ _CHECKS: list[CheckRegistration] = [
         series=integration_marking.SERIES,
         discover=integration_marking.discover,
         scan_path=integration_marking.scan_path,
+    ),
+    CheckRegistration(
+        series=dockerfile_conformance.SERIES,
+        discover=dockerfile_conformance.discover,
+        scan_path=dockerfile_conformance.scan_path,
     ),
 ]
 
