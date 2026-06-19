@@ -45,23 +45,49 @@ def _is_private_package(rel: str) -> bool:
     return any(p.startswith("_") for p in parts)
 
 
+def _rel_to_module(rel: str) -> str:
+    """Convert a repo-relative ``.py`` path to its dotted module path."""
+    p = _norm(rel)
+    for suffix in ("/__init__.py", ".py"):
+        if p.endswith(suffix):
+            p = p[: -len(suffix)]
+            break
+    return p.replace("/", ".").strip(".")
+
+
+def _binding_module(origin: str | None) -> str | None:
+    """Drop the trailing attribute from an import origin to get its module path.
+
+    ``"application_sdk.execution._temporal.backend.create_temporal_client"`` ->
+    ``"application_sdk.execution._temporal.backend"``.
+    """
+    if not origin:
+        return None
+    return origin.rsplit(".", 1)[0] if "." in origin else origin
+
+
 def emit_p007(
     files: list[tuple[str, ast.Module]],
     directives_by_rel: dict[str, dict[int, _IgnoreDirective]],
 ) -> list[Finding]:
     """Emit P007 findings over the whole parsed file set.
 
-    Pass A — walk every public package ``__init__`` and collect the set of
-    publicly re-exported names; flag any that re-export a raw ``temporalio`` symbol.
+    Pass A — walk every public package ``__init__`` and collect each publicly
+    re-exported name together with the module(s) it could be defined in (the
+    binding's origin module, plus the ``__init__``'s own module for names defined
+    inline); flag any that re-export a raw ``temporalio`` symbol.
 
-    Pass B — for every publicly re-exported name, find its function definition
-    anywhere in the file set and flag it if the signature exposes a temporalio type.
+    Pass B — for a re-exported name, inspect only function definitions in its
+    recorded origin module(s) and flag a signature that exposes a temporalio type.
+    Matching on origin (not bare name) avoids flagging an unrelated function that
+    merely shares a name with a re-exported symbol.
 
     Test files are skipped: they are never part of the public API surface, and the
     SDK's own tests legitimately exercise raw Temporal types.
     """
     findings: list[Finding] = []
-    reexported: set[str] = set()
+    # name -> set of candidate defining modules (dotted).
+    reexported_origins: dict[str, set[str]] = {}
 
     # Pass A — public re-export surface
     for rel, tree in files:
@@ -75,8 +101,15 @@ def emit_p007(
         bindings = collect_import_bindings(tree)
         directives = directives_by_rel.get(rel, {})
         blessed = _norm(rel).endswith(_BLESSED_PRIMITIVE_INIT)
+        init_module = _rel_to_module(rel)
         for name in all_names:
-            reexported.add(name)
+            origins = reexported_origins.setdefault(name, set())
+            # The name may be defined inline in this __init__, or imported from
+            # another module — record both as candidate defining modules.
+            origins.add(init_module)
+            origin_module = _binding_module(bindings.get(name))
+            if origin_module:
+                origins.add(origin_module)
             if blessed:
                 continue
             if origin_is_temporal(bindings.get(name)):
@@ -101,12 +134,15 @@ def emit_p007(
     for rel, tree in files:
         if is_test_file(rel):
             continue
+        module = _rel_to_module(rel)
         bindings = collect_import_bindings(tree)
         directives = directives_by_rel.get(rel, {})
         for node in tree.body:
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
-            if node.name.startswith("_") or node.name not in reexported:
+            if node.name.startswith("_") or module not in reexported_origins.get(
+                node.name, set()
+            ):
                 continue
             if signature_refs_temporal(node, bindings):
                 findings.append(

@@ -155,7 +155,7 @@ def is_test_file(file: str) -> bool:
     this — an app's test harness must still go through the SDK seam (BLDX-1417).
     """
     parts = _norm(file).split("/")
-    if any(p in {"tests", "test"} for p in parts):
+    if "tests" in parts:
         return True
     name = parts[-1] if parts else file
     return name.startswith("test_") or name.endswith("_test.py")
@@ -222,14 +222,19 @@ def signature_refs_temporal(
 
 
 def dunder_all_names(tree: ast.Module) -> set[str]:
-    """Return the string members of a module-level ``__all__`` assignment."""
+    """Return the string members of module-level ``__all__`` assignments.
+
+    Handles ``__all__ = [...]`` (Assign), ``__all__: list[str] = [...]``
+    (AnnAssign), and ``__all__ += [...]`` (AugAssign) — the last so an extended
+    export list is not silently missed.
+    """
     names: set[str] = set()
     for node in tree.body:
         targets = (
             node.targets
             if isinstance(node, ast.Assign)
             else [node.target]
-            if isinstance(node, ast.AnnAssign)
+            if isinstance(node, (ast.AnnAssign, ast.AugAssign))
             else []
         )
         if not any(isinstance(t, ast.Name) and t.id == "__all__" for t in targets):

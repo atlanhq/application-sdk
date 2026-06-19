@@ -200,12 +200,19 @@ def test_catalog_d_series_present() -> None:
 
 
 def test_catalog_p_series_present() -> None:
-    """The P-series prescription rules are all present."""
+    """The P-series prescription rules are exactly P001–P007.
+
+    Strict equality (not just not-missing): P004–P007 are the orchestration-seam
+    rules (BLDX-1417); a stray or renumbered P-id would slip past a subset check
+    while breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
+    """
     rules = load_catalog()
     p_ids = {r.id for r in rules if r.id.startswith("P")}
-    expected = {"P001", "P002", "P003"}
+    expected = {"P001", "P002", "P003", "P004", "P005", "P006", "P007"}
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
+    extra = p_ids - expected
+    assert not extra, f"Unexpected P-series rules: {extra}"
 
 
 def test_catalog_o_series_present() -> None:

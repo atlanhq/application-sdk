@@ -244,3 +244,42 @@ def test_conftest_violations_are_caught(tmp_path: Path) -> None:
     findings = _scan_files(tmp_path, {"tests/integration/conftest.py": conftest})
     ids = sorted(f.rule_id for f in findings)
     assert ids == ["P004", "P005"], ids
+
+
+# ── P007 robustness: origin matching + __all__ += ───────────────────────────
+
+
+def test_p007_no_collision_on_unrelated_name(tmp_path: Path) -> None:
+    # 'build' is re-exported from a non-temporal module; an unrelated module
+    # defines a different 'build' with a temporal signature. Only the re-export's
+    # actual origin is inspected, so the unrelated function is not flagged.
+    files = {
+        "application_sdk/execution/__init__.py": (
+            'from application_sdk.execution._real import build\n__all__ = ["build"]\n'
+        ),
+        "application_sdk/execution/_real.py": (
+            "from application_sdk.app import App\ndef build() -> App:\n    ...\n"
+        ),
+        "application_sdk/unrelated.py": (
+            "from temporalio.client import Client\ndef build(c: Client) -> None:\n    ...\n"
+        ),
+    }
+    assert _p007(tmp_path, files) == []
+
+
+def test_p007_picks_up_augmented_all(tmp_path: Path) -> None:
+    # __all__ += [...] must be honoured, else a re-export added this way is missed.
+    files = {
+        "application_sdk/execution/__init__.py": (
+            "from application_sdk.execution._temporal.backend import create_x\n"
+            "__all__ = []\n"
+            '__all__ += ["create_x"]\n'
+        ),
+        "application_sdk/execution/_temporal/backend.py": (
+            "from temporalio.client import Client\n"
+            "async def create_x() -> Client:\n"
+            "    ...\n"
+        ),
+    }
+    fs = _p007(tmp_path, files)
+    assert len(fs) == 1 and fs[0].file.endswith("backend.py")
