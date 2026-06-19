@@ -34,10 +34,10 @@ Derive the series letter from the first character of `rule_id`.
 uv run atlan-application-sdk-conformance detect \
   --repo <scope> \
   --series <series_letter> \
-  --output - 2>/dev/null
+  --output remediation/runs/recheck.sarif
 ```
 
-Parse the SARIF output.  Filter results to those whose
+Parse `remediation/runs/recheck.sarif`.  Filter results to those whose
 `locations[0].physicalLocation.artifactLocation.uri` matches `file`.
 
 `clear` is true when no result with `partialFingerprints["atlanConformance/v1"]

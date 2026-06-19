@@ -1,5 +1,22 @@
 # Changelog
 
+## v3.18.0 (June 19, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.17.3...v3.18.0
+
+### Features
+
+- fail-fast object-store access preflight for SDR mode (#2217) (by @cmgrote in [63ca79d](https://github.com/atlanhq/application-sdk/commit/63ca79d))
+
+### Bug Fixes
+
+- bump redis pin to <9.0.0 and pin socket_timeout=5 (#2203) (by @cmgrote in [4a41412](https://github.com/atlanhq/application-sdk/commit/4a41412))
+- assume cross-account S3 role via STS provider in CloudStore (BLDX-1441) (#2195) (by @adityachoudhury-cloud in [5bea953](https://github.com/atlanhq/application-sdk/commit/5bea953))
+- drive Dapr-component log level from ATLAN_ENABLE_* env vars (#2212) (by @mothership-ai[bot] in [9a22d26](https://github.com/atlanhq/application-sdk/commit/9a22d26))
+- remediate blocking L004 violations (#2234) (by @cmgrote in [c1b0beb](https://github.com/atlanhq/application-sdk/commit/c1b0beb))
+- use artifacts/apps/ prefix for SDR preflight probe key (#2239) (by @cmgrote in [85d45b3](https://github.com/atlanhq/application-sdk/commit/85d45b3))
+
+
 ## v3.17.3 (June 17, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.17.2...v3.17.3

@@ -398,6 +398,64 @@ jobs:
           workflow: sdr-k8s-e2e.yaml
           workflow-inputs: ${{ github.event_name == 'merge_group' && format('{{"application_sdk_ref":"{0}"}}', github.sha) || format('{{"application_sdk_ref":"{0}"}}', github.event.pull_request.head.sha) }}
 
+  # ── The single required check for the connector e2e area ────────────────────
+  # Always runs and always concludes, so branch protection / the merge queue can
+  # require exactly this one stable context instead of the matrix legs
+  # (whose names are label-driven: "Connector Tests (<repo>)"). Without this,
+  # the matrix legs are not required, so the merge queue (ALLGREEN) merges as
+  # soon as the OTHER required contexts (SDK Gate, Trivy, …) conclude — even
+  # while the connector legs are still running. This gate closes that window.
+  #
+  # Fail-closed, mirroring SDK Gate: connector-tests is skipped both legitimately
+  # (docs-only PR: sdk==false && container==false) AND on upstream failure
+  # (matrix-builder failed, or the e2e-path base build failed). A naive
+  # "skipped → pass" would go green when ZERO connector tests ran because an
+  # upstream job died. So we require changes + matrix-builder to have SUCCEEDED
+  # and build-sdk-base-image to be success|skipped (never failure) before
+  # treating a skipped connector-tests as the genuine docs-only skip.
+  connector-gate:
+    name: Connector Tests Gate
+    needs: [changes, matrix-builder, build-sdk-base-image, connector-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate connector e2e area
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          MATRIX_RESULT: ${{ needs.matrix-builder.result }}
+          BASE_IMAGE_RESULT: ${{ needs.build-sdk-base-image.result }}
+          CONNECTOR_RESULT: ${{ needs.connector-tests.result }}
+        run: |
+          set -euo pipefail
+          # Detection / matrix build have no path-skip — anything other than
+          # success means we cannot trust whether the connector legs ran. A
+          # connector-tests skip downstream of these would then be an
+          # upstream-failure skip, not the docs-only skip. Fail closed.
+          if [[ "$CHANGES_RESULT" != "success" ]]; then
+            echo "::error::Detect Changes did not succeed ($CHANGES_RESULT) — failing the gate closed."
+            exit 1
+          fi
+          if [[ "$MATRIX_RESULT" != "success" ]]; then
+            echo "::error::Build Test Matrix did not succeed ($MATRIX_RESULT) — failing the gate closed."
+            exit 1
+          fi
+          # build-sdk-base-image is legitimately skipped on merge_group and on
+          # non-e2e PRs; only a genuine build FAILURE must block (a base that
+          # won't build is the signal, per the connector-tests if: comment).
+          if [[ "$BASE_IMAGE_RESULT" != "success" && "$BASE_IMAGE_RESULT" != "skipped" ]]; then
+            echo "::error::Build SDK base image did not succeed ($BASE_IMAGE_RESULT) — failing the gate closed."
+            exit 1
+          fi
+          # With upstream proven healthy, a skipped connector-tests is the
+          # genuine docs-only skip (sdk==false && container==false) → pass.
+          if [[ "$CONNECTOR_RESULT" == "success" || "$CONNECTOR_RESULT" == "skipped" ]]; then
+            echo "✓ Connector Tests: $CONNECTOR_RESULT"
+            echo "Connector gate passed."
+          else
+            echo "::error::Connector Tests did not pass ($CONNECTOR_RESULT) — failing the gate."
+            exit 1
+          fi
+
   # (sdr-matrix-builder, sdr-e2e-apps, and e2e-full-mysql removed —
   # superseded by connector-tests + the 'e2e' label on tests.yaml)
 
