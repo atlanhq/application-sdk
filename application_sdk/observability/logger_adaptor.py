@@ -166,6 +166,13 @@ def _make_log_record_dict(message: Any) -> dict[str, Any]:
         "timestamp": message.record["time"].timestamp(),
         "level": message.record["level"].name,
         "logger_name": message.record["extra"].get("logger_name", ""),
+        # Promote app_name to a top-level key (like logger_name) so the
+        # objectstore json.gz sink carries it as a top-level field. The OTLP
+        # path flattens it via the resource attribute / extra map, but the
+        # objectstore-sink ingestion only lifts top-level keys — so without
+        # this, app_name (nested only under ``extra``) lands null on records
+        # ingested from the store sink (e.g. SDR worker logs).
+        "app_name": message.record["extra"].get("app_name", APPLICATION_NAME),
         "message": message.record["message"],
         "file": str(message.record["file"].path),
         "line": message.record["line"],

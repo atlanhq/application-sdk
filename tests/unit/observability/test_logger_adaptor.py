@@ -827,6 +827,56 @@ def test_log_record_model_extracts_nested_exception_type():
     )
 
 
+def test_log_record_promotes_app_name_to_top_level():
+    """``app_name`` must be a top-level key, not only nested under ``extra``.
+
+    The objectstore (json.gz) log sink serializes the record verbatim and its
+    ingestion lifts only top-level keys into columns. Without top-level
+    ``app_name`` it lands null for store-sink-ingested records (e.g. SDR worker
+    logs on customer infra, which have no remote OTLP collector). ``logger_name``
+    is promoted the same way."""
+    test_message = mock.MagicMock()
+    level_mock = mock.MagicMock()
+    level_mock.name = "INFO"
+    test_message.record = {
+        "time": datetime.now(),
+        "level": level_mock,
+        "extra": {"logger_name": "test_logger", "app_name": "oracle-app"},
+        "message": "extract",
+        "file": mock.MagicMock(path="worker.py"),
+        "line": 10,
+        "function": "run",
+        "exception": None,
+    }
+
+    model = _make_log_record_dict(test_message)
+    assert model["app_name"] == "oracle-app"
+
+
+def test_log_record_app_name_falls_back_to_application_name():
+    """When ``extra`` carries no ``app_name`` (e.g. a raw loguru record), the
+    top-level field falls back to the configured ``APPLICATION_NAME`` rather
+    than an empty string."""
+    from application_sdk.constants import APPLICATION_NAME
+
+    test_message = mock.MagicMock()
+    level_mock = mock.MagicMock()
+    level_mock.name = "INFO"
+    test_message.record = {
+        "time": datetime.now(),
+        "level": level_mock,
+        "extra": {"logger_name": "test_logger"},
+        "message": "no app_name in extra",
+        "file": mock.MagicMock(path="worker.py"),
+        "line": 10,
+        "function": "run",
+        "exception": None,
+    }
+
+    model = _make_log_record_dict(test_message)
+    assert model["app_name"] == APPLICATION_NAME
+
+
 def test_otel_stacktrace_in_attributes_not_body_from_loguru_record(
     logger_adapter: AtlanLoggerAdapter,
 ):
