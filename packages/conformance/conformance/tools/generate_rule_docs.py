@@ -134,6 +134,16 @@ _SERIES_META: list[SeriesMeta] = [
         suppression_example="# conformance: ignore[O001] intentional: stdlib json required here",
         stability_note=_ID_STABILITY_NOTE,
     ),
+    SeriesMeta(
+        title="Test-Quality Rules (T-series)",
+        prefix="T",
+        source_module="conformance/suite/rules/tests.py",
+        output_filename="tests.md",
+        checker="`suite.checks.integration_marking` (AST-based)",
+        suppression_example=(
+            "# conformance: ignore[T001] intentional: marked dynamically via add_marker"
+        ),
+    ),
 ]
 
 

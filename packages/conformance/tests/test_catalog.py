@@ -217,6 +217,15 @@ def test_catalog_o_series_present() -> None:
     assert not missing, f"Missing O-series rules: {missing}"
 
 
+def test_catalog_t_series_present() -> None:
+    """The T-series test-quality rules are all present."""
+    rules = load_catalog()
+    t_ids = {r.id for r in rules if r.id.startswith("T")}
+    expected = {"T001"}
+    missing = expected - t_ids
+    assert not missing, f"Missing T-series rules: {missing}"
+
+
 def test_catalog_is_mapping_keyed_by_id() -> None:
     """CATALOG is a Mapping whose keys equal each rule's id."""
     from collections.abc import Mapping
