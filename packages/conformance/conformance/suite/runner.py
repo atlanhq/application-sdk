@@ -75,6 +75,7 @@ _CHECKS: list[CheckRegistration] = [
         series=dependency_conformance.SERIES,
         discover=dependency_conformance.discover,
         scan_path=dependency_conformance.scan_path,
+        scan_all=dependency_conformance.scan_all,
     ),
     CheckRegistration(
         series=optimizations.SERIES,

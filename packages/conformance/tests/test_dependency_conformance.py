@@ -13,6 +13,7 @@ from conformance.suite.checks.dependency_conformance import (
     _parse_requirement,
     _parse_suppressions,
     main,
+    scan_all,
     scan_text,
 )
 from conformance.suite.schema import SarifReport, derive_disposition, validate_sarif
@@ -368,9 +369,13 @@ def test_main_exit_0_when_clean(tmp_path: Path) -> None:
 
 def test_main_sarif_output_validates(tmp_path: Path) -> None:
     """Emitted SARIF validates against the official schema."""
+    # Use an unresolvable dependency name so D003 (which inspects installed
+    # metadata) treats it as unanalysable and stays silent — keeping this an
+    # exactly-one-D001 scenario regardless of what is installed in the test env.
     _scratch_pyproject(
         tmp_path,
-        '[project]\nname = "x"\nversion = "0"\ndependencies = ["rich>=13,<14"]\n',
+        '[project]\nname = "x"\nversion = "0"\n'
+        'dependencies = ["nonexistent-fixture-pkg-zzz>=1,<2"]\n',
     )
     sarif_file = tmp_path / "out.sarif"
     main(
@@ -394,11 +399,16 @@ def test_main_sarif_output_validates(tmp_path: Path) -> None:
 
 
 def test_self_check_passes_via_main(tmp_path: Path) -> None:
-    """Running against the SDK's own pyproject.toml emits zero findings."""
+    """SDK self-check emits no D001/D002 findings via the CLI.
+
+    D001/D002 are app-only and exempt the SDK. D003 is scope=both and does apply
+    to the SDK, but the declared dependency here is unresolvable, so D003 skips
+    it — leaving zero findings overall.
+    """
     _scratch_pyproject(
         tmp_path,
         '[project]\nname = "atlan-application-sdk"\nversion = "3.17.2"\n'
-        'dependencies = ["pydantic>=2.10.6,<3.0.0"]\n',
+        'dependencies = ["nonexistent-fixture-pkg-zzz>=1,<2"]\n',
     )
     sarif_file = tmp_path / "out.sarif"
     main(
@@ -413,3 +423,127 @@ def test_self_check_passes_via_main(tmp_path: Path) -> None:
     payload = json.loads(sarif_file.read_text(encoding="utf-8"))
     report = SarifReport.model_validate(payload)
     assert (report.runs[0].results or []) == []
+
+
+# ── D003 UnusedDependency ────────────────────────────────────────────────────
+
+
+def _d003_scan(
+    tmp_path: Path,
+    deps: str,
+    *,
+    imported_modules: set[str],
+    dist_import_map: dict[str, set[str] | None],
+    name: str = "my-connector",
+) -> list:
+    """Write a pyproject and run scan_all with injected import data (no env/AST).
+
+    Returns only the D003 findings so D001/D002 noise is filtered out.
+    """
+    pp = tmp_path / "pyproject.toml"
+    pp.write_text(
+        f'[project]\nname = "{name}"\nversion = "0.1.0"\n{deps}',
+        encoding="utf-8",
+    )
+    findings = scan_all(
+        [pp],
+        tmp_path,
+        imported_modules=imported_modules,
+        dist_import_map=dist_import_map,
+    )
+    return [f for f in findings if f.rule_id == "D003"]
+
+
+def test_d003_flags_unused_dependency(tmp_path: Path) -> None:
+    findings = _d003_scan(
+        tmp_path,
+        'dependencies = [\n    "atlan-application-sdk>=3.17.2,<4.0.0",\n    "requests>=2,<3",\n]\n',
+        imported_modules={"os", "sys"},
+        dist_import_map={"requests": {"requests"}},
+    )
+    assert len(findings) == 1
+    assert findings[0].rule_id == "D003"
+    assert "requests" in findings[0].message
+    assert not findings[0].suppressed
+
+
+def test_d003_not_flagged_when_imported(tmp_path: Path) -> None:
+    findings = _d003_scan(
+        tmp_path,
+        'dependencies = [\n    "atlan-application-sdk>=3.17.2,<4.0.0",\n    "requests>=2,<3",\n]\n',
+        imported_modules={"requests", "os"},
+        dist_import_map={"requests": {"requests"}},
+    )
+    assert findings == []
+
+
+def test_d003_maps_dist_name_to_import_name(tmp_path: Path) -> None:
+    """A dependency whose import name differs (pyyaml -> yaml) is not flagged
+    when that import name appears in source."""
+    findings = _d003_scan(
+        tmp_path,
+        'dependencies = [\n    "atlan-application-sdk>=3.17.2,<4.0.0",\n    "pyyaml>=6,<7",\n]\n',
+        imported_modules={"yaml"},
+        dist_import_map={"pyyaml": {"yaml"}},
+    )
+    assert findings == []
+
+
+def test_d003_skips_unresolvable_dependency_and_reports_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A dependency that cannot be resolved (map value None) is never flagged,
+    and is surfaced on stderr (no silent caps)."""
+    findings = _d003_scan(
+        tmp_path,
+        'dependencies = [\n    "atlan-application-sdk>=3.17.2,<4.0.0",\n    "mystery-pkg>=1,<2",\n]\n',
+        imported_modules={"os"},
+        dist_import_map={"mystery-pkg": None},
+    )
+    assert findings == []
+    assert "mystery-pkg" in capsys.readouterr().err
+
+
+def test_d003_suppression(tmp_path: Path) -> None:
+    findings = _d003_scan(
+        tmp_path,
+        'dependencies = [\n    "atlan-application-sdk>=3.17.2,<4.0.0",\n'
+        '    "requests>=2,<3",  # conformance: ignore[D003] used via plugin loader\n]\n',
+        imported_modules={"os"},
+        dist_import_map={"requests": {"requests"}},
+    )
+    assert len(findings) == 1
+    assert findings[0].suppressed
+    assert findings[0].suppression_justification == "used via plugin loader"
+
+
+def test_d003_runs_on_sdk_but_d001_d002_do_not(tmp_path: Path) -> None:
+    """scope=both: D003 fires on the SDK's own repo, while the app-only D001/D002
+    stay self-exempt (the SDK is a publisher of that contract, not subject to it)."""
+    pp = tmp_path / "pyproject.toml"
+    pp.write_text(
+        '[project]\nname = "atlan-application-sdk"\nversion = "3.17.2"\n'
+        'dependencies = [\n    "requests>=2,<3",\n]\n',
+        encoding="utf-8",
+    )
+    findings = scan_all(
+        [pp],
+        tmp_path,
+        imported_modules={"os"},
+        dist_import_map={"requests": {"requests"}},
+    )
+    rule_ids = {f.rule_id for f in findings}
+    assert rule_ids == {"D003"}  # no D001 despite the missing SDK self-dep
+
+
+def test_d003_ignores_optional_dependency_extras(tmp_path: Path) -> None:
+    """Only core [project.dependencies] is analysed; an unused extra is not D003."""
+    findings = _d003_scan(
+        tmp_path,
+        'dependencies = [\n    "atlan-application-sdk>=3.17.2,<4.0.0",\n]\n'
+        "\n[project.optional-dependencies]\n"
+        'sql = [\n    "requests>=2,<3",\n]\n',
+        imported_modules={"os"},
+        dist_import_map={"requests": {"requests"}},
+    )
+    assert findings == []
