@@ -141,6 +141,17 @@ _SERIES_META: list[SeriesMeta] = [
             "# conformance: ignore[T001] intentional: marked dynamically via add_marker"
         ),
     ),
+    SeriesMeta(
+        title="Backwards-Compatibility / Deprecation Rules (B-series)",
+        prefix="B",
+        source_module="conformance/suite/rules/deprecation.py",
+        output_filename="deprecation.md",
+        checker="`suite.checks.deprecation` (AST-based)",
+        suppression_example=(
+            "# conformance: ignore[B001] intentional: migration deferred to next sprint"
+        ),
+        stability_note=_ID_STABILITY_NOTE,
+    ),
 ]
 
 

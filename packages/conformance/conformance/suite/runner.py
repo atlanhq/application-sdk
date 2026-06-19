@@ -27,6 +27,7 @@ from conformance.suite.checks import (
     actions_pinning,
     bootstrap_drift,
     dependency_conformance,
+    deprecation,
     error_handling,
     gitignore_entries,
     integration_marking,
@@ -103,6 +104,12 @@ _CHECKS: list[CheckRegistration] = [
         series=integration_marking.SERIES,
         discover=integration_marking.discover,
         scan_path=integration_marking.scan_path,
+    ),
+    CheckRegistration(
+        series=deprecation.SERIES,
+        discover=deprecation.discover,
+        scan_path=deprecation.scan_path,
+        scan_all=deprecation.scan_all,
     ),
 ]
 

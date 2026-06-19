@@ -11,6 +11,7 @@ from types import MappingProxyType
 
 from conformance.suite.rules.ci import RULES as _CI_RULES
 from conformance.suite.rules.dependency import RULES as _D_RULES
+from conformance.suite.rules.deprecation import RULES as _B_RULES
 from conformance.suite.rules.error_handling import RULES as _E_RULES
 from conformance.suite.rules.logging import RULES as _L_RULES
 from conformance.suite.rules.optimizations import RULES as _O_RULES
@@ -38,6 +39,7 @@ _ALL_SERIES: tuple[tuple[RuleDefinition, ...], ...] = (
     _O_RULES,
     _P_RULES,
     _T_RULES,
+    _B_RULES,
 )
 
 

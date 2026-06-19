@@ -87,23 +87,26 @@ def test_scope_is_required_field() -> None:
 
 
 def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
-    """The publisher-side rules are app-scoped; everything else is 'both'.
+    """The one-sided rules declare app/sdk scope; everything else is 'both'.
 
-    APP-scoped rules (dependency pinning, managed-workflow drift) must never fire
-    on the SDK itself, which publishes the contract.  Pin the exact set so a new
-    rule has to make a deliberate scope decision rather than silently inheriting.
+    APP-scoped rules must never fire on the SDK, which publishes the contract:
+    dependency pinning (D001/D002), managed-workflow drift (C002), and consuming a
+    deprecated SDK symbol (B001 — the SDK deliberately retains and internally uses
+    its own deprecated shims).  SDK-scoped rules are the deprecation-authoring
+    hygiene checks (B002/B003/B004), which only make sense on the publisher.  Pin
+    the exact sets so a new rule has to make a deliberate scope decision rather
+    than silently inheriting.
 
     Note C003 (.gitignore entries) is *both*, not app: the SDK has its own
-    .gitignore sharing the standard baseline, so the rule is useful there too —
-    only C002 (bootstrap workflow drift) is genuinely 0%-applicable to the SDK.
+    .gitignore sharing the standard baseline, so the rule is useful there too.
     """
     rules = load_catalog()
     app_scoped = {r.id for r in rules if r.scope == RuleScope.APP}
-    assert app_scoped == {"C002", "D001", "D002"}, app_scoped
-    # No rule is currently SDK-only; the rest are 'both'.
-    assert not {r.id for r in rules if r.scope == RuleScope.SDK}
+    assert app_scoped == {"B001", "C002", "D001", "D002"}, app_scoped
+    sdk_scoped = {r.id for r in rules if r.scope == RuleScope.SDK}
+    assert sdk_scoped == {"B002", "B003", "B004"}, sdk_scoped
     both = {r.id for r in rules if r.scope == RuleScope.BOTH}
-    assert both == {r.id for r in rules} - app_scoped
+    assert both == {r.id for r in rules} - app_scoped - sdk_scoped
 
 
 def test_scope_emitted_in_sarif_properties() -> None:
@@ -221,6 +224,17 @@ def test_catalog_t_series_present() -> None:
     expected = {"T001"}
     missing = expected - t_ids
     assert not missing, f"Missing T-series rules: {missing}"
+
+
+def test_catalog_b_series_present() -> None:
+    """The B-series backwards-compatibility / deprecation rules are all present."""
+    rules = load_catalog()
+    b_ids = {r.id for r in rules if r.id.startswith("B")}
+    expected = {"B001", "B002", "B003", "B004"}
+    missing = expected - b_ids
+    assert not missing, f"Missing B-series rules: {missing}"
+    extra = b_ids - expected
+    assert not extra, f"Unexpected B-series rules: {extra}"
 
 
 def test_catalog_is_mapping_keyed_by_id() -> None:
