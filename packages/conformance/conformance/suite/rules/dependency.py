@@ -131,7 +131,16 @@ RULES: tuple[RuleDefinition, ...] = (
             "``[project.dependencies]`` is analysed — optional-dependency extras and "
             "dependency groups routinely carry tools and plugins that are legitimately "
             "never imported.  A dependency that cannot be resolved in the analysis "
-            "environment is skipped (and reported), never flagged.  See BLDX-1462."
+            "environment is skipped (and reported), never flagged.  "
+            "**Operating note:** resolution maps a distribution to its import "
+            "name(s) via installed package metadata, so the analysed repo's "
+            "dependencies must be importable in the running interpreter — run "
+            "``uv sync`` first.  In an isolated runner (e.g. ``uvx "
+            "atlan-application-sdk-conformance detect --series D``) no dependency "
+            "is installed, so every one is skipped to stderr and the rule reports "
+            "nothing; that is an unresolved environment, not a clean repo.  The "
+            "conformance CI runs the D-series leg in a synced environment for this "
+            "reason.  See BLDX-1462."
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"

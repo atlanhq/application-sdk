@@ -606,12 +606,15 @@ def _collect_top_level_imports(py_files: Iterable[Path]) -> set[str]:
     modules: set[str] = set()
     for path in py_files:
         try:
-            text = path.read_text(encoding="utf-8")
+            raw = path.read_bytes()
         except OSError:
             continue
         try:
-            tree = ast.parse(text)
-        except SyntaxError:
+            # Parse from bytes so ``ast`` honours a PEP 263 coding cookie; a
+            # legacy non-UTF-8 source (e.g. ``# -*- coding: latin-1 -*-``) is
+            # decoded correctly instead of crashing on a UTF-8 decode.
+            tree = ast.parse(raw)
+        except (SyntaxError, ValueError):
             continue
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -644,7 +647,10 @@ def _dist_import_names(dist_name: str) -> set[str] | None:
         names.update(line.strip() for line in top_level.splitlines() if line.strip())
 
     # Derive top-levels from the installed file list as a fallback / supplement
-    # (namespace packages and wheels without top_level.txt rely on this).
+    # (namespace packages and wheels without top_level.txt rely on this).  Each
+    # candidate is gated on ``isidentifier`` so non-module RECORD entries — data
+    # files (``share/…``), scripts installed via ``..`` / ``bin``, ``LICENSE`` —
+    # never leak into the provided-names set.
     for file in dist.files or ():
         parts = file.parts
         if not parts:
@@ -655,12 +661,13 @@ def _dist_import_names(dist_name: str) -> set[str] | None:
         if len(parts) == 1:
             # A single top-level module file: ``foo.py`` -> ``foo``.
             if head.endswith(".py"):
-                names.add(head[:-3])
-        else:
+                stem = head[:-3]
+                if stem.isidentifier():
+                    names.add(stem)
+        elif head.isidentifier():
             # A package directory: ``foo/__init__.py`` -> ``foo``.
             names.add(head)
 
-    names.discard("")
     return names
 
 

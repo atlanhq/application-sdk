@@ -547,3 +547,108 @@ def test_d003_ignores_optional_dependency_extras(tmp_path: Path) -> None:
         dist_import_map={"requests": {"requests"}},
     )
     assert findings == []
+
+
+def test_d003_flags_multiple_unused_with_line_numbers(tmp_path: Path) -> None:
+    """Two unused deps -> two findings anchored to their own source lines."""
+    findings = _d003_scan(
+        tmp_path,
+        "dependencies = [\n"
+        '    "atlan-application-sdk>=3.17.2,<4.0.0",\n'  # line 5
+        '    "requests>=2,<3",\n'  # line 6
+        '    "click>=8,<9",\n'  # line 7
+        "]\n",
+        imported_modules={"os"},
+        dist_import_map={"requests": {"requests"}, "click": {"click"}},
+    )
+    by_line = {f.line: f for f in findings}
+    assert set(by_line) == {6, 7}
+    assert "requests" in by_line[6].message
+    assert "click" in by_line[7].message
+
+
+def test_d003_mixed_flagged_and_unresolved(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A resolvable-unused dep is flagged while an unresolvable one is reported
+    to stderr — both happen in the same scan."""
+    findings = _d003_scan(
+        tmp_path,
+        "dependencies = [\n"
+        '    "atlan-application-sdk>=3.17.2,<4.0.0",\n'
+        '    "requests>=2,<3",\n'
+        '    "mystery-pkg>=1,<2",\n'
+        "]\n",
+        imported_modules={"os"},
+        dist_import_map={"requests": {"requests"}, "mystery-pkg": None},
+    )
+    assert [f.message for f in findings if "requests" in f.message]
+    assert len(findings) == 1
+    err = capsys.readouterr().err
+    assert "mystery-pkg" in err and "requests" not in err
+
+
+def test_d003_empty_provided_set_is_unresolved(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An empty provided-names set (distinct code path from None) is treated as
+    unresolvable: skipped, reported, never flagged."""
+    findings = _d003_scan(
+        tmp_path,
+        'dependencies = [\n    "atlan-application-sdk>=3.17.2,<4.0.0",\n    "ghost>=1,<2",\n]\n',
+        imported_modules={"os"},
+        dist_import_map={"ghost": set()},
+    )
+    assert findings == []
+    assert "ghost" in capsys.readouterr().err
+
+
+def test_d003_end_to_end_real_ast_and_metadata(tmp_path: Path) -> None:
+    """Exercise the real discover() -> AST import walk -> importlib.metadata path
+    end to end (no injection), including a source file in a subdirectory.
+
+    ``pydantic`` and ``jinja2`` are direct conformance dependencies, so both
+    resolve from real installed metadata; only ``jinja2`` is never imported.
+    """
+    from conformance.suite.checks.dependency_conformance import discover
+
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "my-connector"\nversion = "0.1.0"\n'
+        "dependencies = [\n"
+        '    "atlan-application-sdk>=3.17.2,<4.0.0",\n'
+        '    "pydantic>=2,<3",\n'  # imported below -> used
+        '    "jinja2>=3,<4",\n'  # never imported -> flagged
+        "]\n",
+        encoding="utf-8",
+    )
+    pkg = tmp_path / "my_connector"
+    (pkg / "sub").mkdir(parents=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "models.py").write_text(
+        "import pydantic\nfrom pydantic import BaseModel\n", encoding="utf-8"
+    )
+    (pkg / "sub" / "deep.py").write_text("import os\n", encoding="utf-8")
+
+    findings = [
+        f for f in scan_all(discover(tmp_path), tmp_path) if f.rule_id == "D003"
+    ]
+    assert len(findings) == 1
+    assert "jinja2" in findings[0].message
+    assert all("pydantic" not in f.message for f in findings)
+
+
+def test_d003_skips_non_utf8_source_without_crashing(tmp_path: Path) -> None:
+    """A latin-1 source with a PEP 263 coding cookie is parsed (not skipped) and
+    its imports counted, so a dep imported only there is not falsely flagged."""
+    from conformance.suite.checks.dependency_conformance import (
+        _collect_top_level_imports,
+    )
+
+    src = tmp_path / "legacy.py"
+    src.write_bytes(
+        b"# -*- coding: latin-1 -*-\n"
+        b"# comment with a latin-1 byte: \xe9\n"
+        b"import requests\n"
+    )
+    modules = _collect_top_level_imports([src])
+    assert "requests" in modules

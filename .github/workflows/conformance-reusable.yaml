@@ -187,15 +187,21 @@ jobs:
             slug: optimizations
             paths: "**/*.py"
             exclude_paths: ${{ inputs.exclude-paths-o }}
+          # D003 (UnusedDependency) reads source imports too, but the changed-files
+          # filter watches only `**/pyproject.toml` to keep this (env-syncing,
+          # heavier) leg off every `*.py` PR.  A PR that removes the last import of
+          # a still-declared dependency therefore won't re-run this leg — that
+          # staleness is caught on push to main, where every leg runs
+          # unconditionally.  Acceptable at WARN tier (mirrors the T-series above).
           - series: D
             name: "Dependency"
             slug: dependency
             paths: "**/pyproject.toml"
             exclude_paths: ${{ inputs.exclude-paths-d }}
-            # D003 (UnusedDependency) maps each declared dependency to the import
-            # name(s) it provides via installed package metadata, so the check
-            # must run in an environment where the caller's dependencies are
-            # installed — not the isolated `uvx` env used by the other series.
+            # D001/D002/D003 all map declared dependencies to import name(s) via
+            # installed package metadata, so the leg must run in an environment
+            # where the caller's dependencies are installed — not the isolated
+            # `uvx` env used by the other series.
             needs_env: "true"
           - series: L
             name: "Logging"
