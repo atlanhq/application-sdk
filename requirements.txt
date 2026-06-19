@@ -120,7 +120,7 @@ httpx-retries==0.4.6
     # via
     #   atlan-application-sdk
     #   pyatlan
-hypothesis==6.155.5
+hypothesis==6.155.6
 identify==2.6.19
     # via pre-commit
 idna==3.18
@@ -272,7 +272,7 @@ pydantic-core==2.41.5
     # via pydantic
 pydantic-extra-types==2.11.1
     # via fastapi
-pydantic-settings==2.14.1
+pydantic-settings==2.14.2
     # via fastapi
 pygments==2.20.0
     # via
