@@ -489,7 +489,7 @@ def test_f001_rule_metadata() -> None:
     assert rule.name == "DockerfileWrongBaseImage"
     assert rule.tier == EnforcementTier.BLOCK
     assert rule.scope == RuleScope.APP
-    assert rule.autofixable is False
+    assert rule.autofixable is True
     assert rule.rationale.strip()
 
 
