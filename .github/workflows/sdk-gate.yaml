@@ -14,6 +14,10 @@ name: SDK Gate
 #     three areas and the gate goes green in seconds.
 #   - Force-all: release/* and bump-version* head refs, and v* tags, run every
 #     area regardless of changed paths (release safety net).
+#   - Merge-queue escalation: merge_group entries that touch SDK code (or the
+#     container image) run ALL three areas — conformance and toolkit included —
+#     regardless of which of those files actually changed. Conformance-only and
+#     toolkit-only merge queue entries remain selective (path-filtered as usual).
 #   - Required-safe: the `gate` job always runs (`if: always()`) and concludes,
 #     applying "success or skipped → pass, anything else → fail".  It is the
 #     SOLE required status check for these three areas; the individual area
@@ -58,10 +62,10 @@ jobs:
       conformance: ${{ steps.filter.outputs.conformance }}
       conformance_pkg: ${{ steps.filter.outputs.conformance_pkg }}
       container: ${{ steps.filter.outputs.container }}
-      force_all: ${{ steps.force.outputs.force_all }}
-      force_sdk: ${{ steps.force.outputs.force_sdk }}
-      force_conformance: ${{ steps.force.outputs.force_conformance }}
-      force_toolkit: ${{ steps.force.outputs.force_toolkit }}
+      force_all: ${{ steps.final-force.outputs.force_all }}
+      force_sdk: ${{ steps.final-force.outputs.force_sdk }}
+      force_conformance: ${{ steps.final-force.outputs.force_conformance }}
+      force_toolkit: ${{ steps.final-force.outputs.force_toolkit }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -204,6 +208,39 @@ jobs:
             exit 0
           fi
           python3 .github/scripts/sdk_changes_non_md.py
+
+      # Merge-queue escalation: if SDK code (or the container image) changed in
+      # a merge_group run, force all three areas regardless of which other paths
+      # matched.  Conformance-only and toolkit-only merge queue entries keep their
+      # selective path-filtered behaviour — only SDK changes escalate to force-all.
+      # On PR events the flag is not set so PR checks remain targeted as before.
+      - name: Synthesize final force flags
+        id: final-force
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SDK: ${{ steps.sdk-refine.outputs.sdk }}
+          CONTAINER: ${{ steps.filter.outputs.container }}
+          FORCE_ALL: ${{ steps.force.outputs.force_all }}
+          FORCE_SDK: ${{ steps.force.outputs.force_sdk }}
+          FORCE_CONFORMANCE: ${{ steps.force.outputs.force_conformance }}
+          FORCE_TOOLKIT: ${{ steps.force.outputs.force_toolkit }}
+        run: |
+          set -euo pipefail
+          force_all="$FORCE_ALL"
+          force_sdk="$FORCE_SDK"
+          force_conformance="$FORCE_CONFORMANCE"
+          force_toolkit="$FORCE_TOOLKIT"
+          if [[ "$EVENT_NAME" == "merge_group" && ( "$SDK" == "true" || "$CONTAINER" == "true" ) ]]; then
+            force_all=true
+            force_sdk=true
+            force_conformance=true
+            force_toolkit=true
+          fi
+          echo "force_all=$force_all" >> "$GITHUB_OUTPUT"
+          echo "force_sdk=$force_sdk" >> "$GITHUB_OUTPUT"
+          echo "force_conformance=$force_conformance" >> "$GITHUB_OUTPUT"
+          echo "force_toolkit=$force_toolkit" >> "$GITHUB_OUTPUT"
+          echo "Final force flags: force_all=$force_all (force_sdk=$force_sdk force_conformance=$force_conformance force_toolkit=$force_toolkit)"
 
   sdk-tests:
     name: SDK Tests
