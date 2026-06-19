@@ -280,7 +280,7 @@ pygments==2.20.0
     #   rich
 pyjwt==2.13.0
     # via msal
-pytest==9.1.0
+pytest==9.1.1
     # via
     #   pytest-asyncio
     #   pytest-timeout
