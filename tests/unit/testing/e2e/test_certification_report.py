@@ -25,6 +25,16 @@ class _Conn(BaseE2ETest):
     expect_lineage = False
 
 
+class _ConnLineage(BaseE2ETest):
+    """Same connector, but lineage IS asserted (expect_lineage = True)."""
+
+    connector_short_name = "mysql"
+    argo_package_name = "@atlan/mysql"
+    argo_template_name = "t"
+    expected_min_asset_counts = {"Table": 5}
+    expect_lineage = True
+
+
 def _node(name: str, ok: bool) -> DAGNodeResult:
     return DAGNodeResult(
         name=name,
@@ -35,7 +45,13 @@ def _node(name: str, ok: bool) -> DAGNodeResult:
     )
 
 
-def _outcome(*, nodes_ok: bool, conn: bool, counts: dict[str, int]) -> FullDAGOutcome:
+def _outcome(
+    *,
+    nodes_ok: bool,
+    conn: bool,
+    counts: dict[str, int],
+    lineage_present: bool = False,
+) -> FullDAGOutcome:
     return FullDAGOutcome(
         ae_result=DAGRunResult(
             run_id="r1",
@@ -47,6 +63,7 @@ def _outcome(*, nodes_ok: bool, conn: bool, counts: dict[str, int]) -> FullDAGOu
         connection_in_atlas=conn,
         asset_counts=counts,
         total_assets=sum(counts.values()),
+        lineage_present=lineage_present,
     )
 
 
@@ -84,3 +101,27 @@ def test_combo_label_from_env(monkeypatch) -> None:
     outcome = _outcome(nodes_ok=True, conn=True, counts={"Table": 7})
     report = _Conn()._build_certification_report(outcome, asset_failures=[])
     assert report["combo"] == "aws/s3"
+
+
+# --- lineage-required path (expect_lineage = True) -------------------------
+# Guards the lineage half of the certified verdict, which the expect_lineage=False
+# classes above can't exercise — a typo flipping `or` to `and` would slip past them.
+
+
+def test_lineage_required_and_present_is_certified() -> None:
+    outcome = _outcome(
+        nodes_ok=True, conn=True, counts={"Table": 7}, lineage_present=True
+    )
+    report = _ConnLineage()._build_certification_report(outcome, asset_failures=[])
+    assert report["certified"] is True
+    assert report["checks"]["lineage_present"] is True
+
+
+def test_lineage_required_but_absent_is_not_certified() -> None:
+    # Everything else green; only lineage missing → NOT certified.
+    outcome = _outcome(
+        nodes_ok=True, conn=True, counts={"Table": 7}, lineage_present=False
+    )
+    report = _ConnLineage()._build_certification_report(outcome, asset_failures=[])
+    assert report["certified"] is False
+    assert report["checks"]["lineage_present"] is False
