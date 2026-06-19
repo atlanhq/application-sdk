@@ -29,3 +29,33 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: "./.github/actions/trivy"
+
+  # Nightly real-cloud storage integration tests against main (no PR context →
+  # no label gate). Same suites as the label-gated job in pull_request.yaml;
+  # conftest skips any cloud whose creds aren't set, so this stays green until
+  # all nine secrets are registered.
+  storage-integration:
+    name: Storage Integration Tests — nightly (S3 / Azure / GCS)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: "./.github/actions/setup-deps"
+      - name: Write GCS service-account key
+        run: printf '%s' '${{ secrets.GCS_SERVICE_ACCOUNT_JSON }}' > /tmp/gcs-sa-key.json
+      - name: Run storage integration tests
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+          AZURE_STORAGE_ACCOUNT: ${{ secrets.AZURE_STORAGE_ACCOUNT }}
+          AZURE_STORAGE_KEY: ${{ secrets.AZURE_STORAGE_KEY }}
+          AZURE_STORAGE_CONTAINER: ${{ secrets.AZURE_STORAGE_CONTAINER }}
+          GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
+          GCS_PROJECT_ID: ${{ secrets.GCS_PROJECT_ID }}
+          GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcs-sa-key.json
+        run: |
+          uv run pytest tests/integration/storage/ \
+            -m "s3_integration or azure_integration or gcs_integration" \
+            -v --timeout=60

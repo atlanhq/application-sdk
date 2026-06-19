@@ -468,6 +468,43 @@ jobs:
             exit 1
           fi
 
+  # Real-cloud storage integration tests (S3 / Azure / GCS) — exercise
+  # create_store_from_binding + CloudStore against real buckets/vaults using the
+  # *_integration markers (excluded from default addopts; conftest skips when a
+  # cloud's creds are absent). Label-gated ('storage-integration') so it only
+  # runs on demand; the heavy/credentialed path stays off the per-PR hot path.
+  # Fork PRs are excluded (no secrets). Nightly counterpart lives in schedule.yaml.
+  storage-integration:
+    name: Storage Integration Tests (S3 / Azure / GCS)
+    if: |
+      (
+        (github.event.action == 'labeled' && github.event.label.name == 'storage-integration') ||
+        contains(github.event.pull_request.labels.*.name, 'storage-integration')
+      ) && github.event.pull_request.head.repo.fork != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: "./.github/actions/setup-deps"
+      - name: Write GCS service-account key
+        run: printf '%s' '${{ secrets.GCS_SERVICE_ACCOUNT_JSON }}' > /tmp/gcs-sa-key.json
+      - name: Run storage integration tests
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+          AZURE_STORAGE_ACCOUNT: ${{ secrets.AZURE_STORAGE_ACCOUNT }}
+          AZURE_STORAGE_KEY: ${{ secrets.AZURE_STORAGE_KEY }}
+          AZURE_STORAGE_CONTAINER: ${{ secrets.AZURE_STORAGE_CONTAINER }}
+          GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
+          GCS_PROJECT_ID: ${{ secrets.GCS_PROJECT_ID }}
+          GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcs-sa-key.json
+        run: |
+          uv run pytest tests/integration/storage/ \
+            -m "s3_integration or azure_integration or gcs_integration" \
+            -v --timeout=60
+
   # (sdr-matrix-builder, sdr-e2e-apps, and e2e-full-mysql removed —
   # superseded by connector-tests + the 'e2e' label on tests.yaml)
 
