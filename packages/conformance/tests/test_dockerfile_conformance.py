@@ -251,6 +251,19 @@ def test_i003_fires_when_module_only_in_builder_stage() -> None:
     assert "I003" in _ids(src)
 
 
+def test_i003_builder_only_message_mentions_builder_stage() -> None:
+    # When the module is set only in a builder stage, the message should say so
+    # rather than the generic "is not set" — more actionable for the developer.
+    src = (
+        "FROM python:3.11 AS builder\n"
+        "ENV ATLAN_APP_MODULE=myapp:MyApp\n"
+        "FROM registry.atlan.com/public/app-runtime-base:3\n"
+    )
+    findings = [f for f in scan_text(src, _FILE) if f.rule_id == "I003"]
+    assert findings
+    assert "builder stage" in findings[0].message
+
+
 def test_i003_fires_when_env_set_empty() -> None:
     src = "FROM registry.atlan.com/public/app-runtime-base:3\nENV ATLAN_APP_MODULE=\n"
     assert "I003" in _ids(src)
@@ -298,6 +311,17 @@ def test_i003_silent_when_redefined_to_good() -> None:
         "ENV ATLAN_APP_MODULE=myapp:MyApp\n"
     )
     assert "I003" not in _ids(src)
+
+
+def test_i003_uses_last_write_when_same_instruction_multi_pair() -> None:
+    # When the same key appears twice in one ENV instruction, dict overwrite in
+    # _env_vars means the last pair wins.  good ATLAN_APP_MODULE=bad on one
+    # line must fire because bad is the effective value.
+    src = (
+        "FROM registry.atlan.com/public/app-runtime-base:3\n"
+        "ENV ATLAN_APP_MODULE=myapp:MyApp ATLAN_APP_MODULE=$UNDEFINED\n"
+    )
+    assert "I003" in _ids(src)
 
 
 def test_i003_silent_on_key_value_form() -> None:

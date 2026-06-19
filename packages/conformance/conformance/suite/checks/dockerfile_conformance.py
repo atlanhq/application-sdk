@@ -376,29 +376,39 @@ def _check_i003(
     final_start = _final_stage_start_idx(instructions)
 
     # Accumulate to find the effective (last) value Docker will use.
-    last_value: str | None = None
-    last_line: int = 1
+    # A single tuple keeps value and line together so pyright can track that
+    # last_line is always assigned alongside last_value — no dead initializer.
+    last: tuple[str, int] | None = None
     for instr in instructions[final_start:]:
         if instr.keyword == "ENV":
             env = _env_vars(instr.args)
             if "ATLAN_APP_MODULE" in env:
-                last_value = env["ATLAN_APP_MODULE"]
-                last_line = instr.line
+                last = (env["ATLAN_APP_MODULE"], instr.line)
 
-    if last_value is None:
-        return [
-            _make_finding(
-                RULE_I003,
-                file,
-                1,
+    if last is None:
+        # Distinguish "never set anywhere" from "builder-stage only" for
+        # slightly more actionable diagnostics.
+        builder_has_module = any(
+            "ATLAN_APP_MODULE" in _env_vars(instr.args)
+            for instr in instructions[:final_start]
+            if instr.keyword == "ENV"
+        )
+        if builder_has_module:
+            msg = (
+                "ENV ATLAN_APP_MODULE is set in a builder stage but not in the "
+                "final stage. ENV values from builder stages do not carry over — "
+                "add 'ENV ATLAN_APP_MODULE=<module>:<AppClass>' after the final FROM."
+            )
+        else:
+            msg = (
                 "ENV ATLAN_APP_MODULE is not set. The platform runtime uses this "
                 "variable to locate and instantiate the application class "
                 "(e.g. 'ENV ATLAN_APP_MODULE=myapp.app:MyApp'). "
-                "The container will fail to start without it.",
-                directives,
+                "The container will fail to start without it."
             )
-        ]
+        return [_make_finding(RULE_I003, file, 1, msg, directives)]
 
+    last_value, last_line = last
     value = last_value.strip()
     if not value:
         return [
