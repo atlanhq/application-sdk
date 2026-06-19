@@ -280,6 +280,26 @@ def test_i003_fires_on_bad_shape_empty_class() -> None:
     assert "I003" in _ids(src)
 
 
+def test_i003_uses_last_write_when_redefined_to_bad() -> None:
+    # Docker uses the last assignment; good → $UNDEFINED must fire.
+    src = (
+        "FROM registry.atlan.com/public/app-runtime-base:3\n"
+        "ENV ATLAN_APP_MODULE=myapp:MyApp\n"
+        "ENV ATLAN_APP_MODULE=$UNDEFINED\n"
+    )
+    assert "I003" in _ids(src)
+
+
+def test_i003_silent_when_redefined_to_good() -> None:
+    # Docker uses the last assignment; empty → valid must be silent.
+    src = (
+        "FROM registry.atlan.com/public/app-runtime-base:3\n"
+        "ENV ATLAN_APP_MODULE=\n"
+        "ENV ATLAN_APP_MODULE=myapp:MyApp\n"
+    )
+    assert "I003" not in _ids(src)
+
+
 def test_i003_silent_on_key_value_form() -> None:
     src = "FROM registry.atlan.com/public/app-runtime-base:3\nENV ATLAN_APP_MODULE=myapp.app:MyApp\n"
     assert "I003" not in _ids(src)

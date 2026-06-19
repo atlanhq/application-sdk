@@ -361,52 +361,90 @@ def _check_i003(
 ) -> list[Finding]:
     """I003: ENV ATLAN_APP_MODULE=<module>:<class> must be set in the final stage.
 
-    Rejects:
-    - missing entirely from the final stage (builder-stage ENV doesn't carry over)
-    - empty string or whitespace-only (``ENV ATLAN_APP_MODULE=" "``)
-    - unresolved build-arg reference (``ENV ATLAN_APP_MODULE=$UNDEFINED_ARG``)
-    - value that doesn't follow the ``module:Class`` shape
+    Docker uses the *last* assignment when the same ENV key is set multiple
+    times in a stage.  The check therefore accumulates all occurrences and
+    evaluates only the effective (last) value — early-exit on the first match
+    would produce false negatives (``good → $UNDEFINED`` passes) and false
+    positives (``empty → valid`` fires).
+
+    Rejects the effective value when it is:
+    - absent from the final stage entirely (builder-stage ENV doesn't carry over)
+    - empty or whitespace-only (``ENV ATLAN_APP_MODULE=" "``)
+    - an unresolved build-arg reference (``ENV ATLAN_APP_MODULE=$UNDEFINED_ARG``)
+    - not in ``module:Class`` shape
     """
     final_start = _final_stage_start_idx(instructions)
+
+    # Accumulate to find the effective (last) value Docker will use.
+    last_value: str | None = None
+    last_line: int = 1
     for instr in instructions[final_start:]:
         if instr.keyword == "ENV":
             env = _env_vars(instr.args)
-            if "ATLAN_APP_MODULE" not in env:
-                continue
-            value = env["ATLAN_APP_MODULE"].strip()
-            if not value:
-                # Whitespace-only value — same as missing.
-                break
-            if value.startswith("$"):
-                # Unresolved build-arg reference; the variable will be empty at
-                # runtime unless ARG/--build-arg provides a default.
-                msg = (
-                    f"ENV ATLAN_APP_MODULE='{value}' looks like an unresolved "
-                    "build-arg reference.  The runtime needs a concrete "
-                    "'module:ClassName' value, not a shell variable.  Set a "
-                    "literal value (e.g. 'ENV ATLAN_APP_MODULE=myapp.app:MyApp') "
-                    "or ensure the ARG default is always defined."
-                )
-                return [_make_finding(RULE_I003, file, instr.line, msg, directives)]
-            # Soft shape check: must contain ':' with non-empty parts on both sides.
-            parts = value.split(":", 1)
-            if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
-                msg = (
-                    f"ENV ATLAN_APP_MODULE='{value}' does not follow the required "
-                    "'module:ClassName' format (e.g. 'myapp.app:MyApp').  "
-                    "The platform runtime splits on ':' to locate the module and "
-                    "instantiate the named class."
-                )
-                return [_make_finding(RULE_I003, file, instr.line, msg, directives)]
-            return []
-    msg = (
-        "ENV ATLAN_APP_MODULE is not set. The platform runtime uses this "
-        "variable to locate and instantiate the application class "
-        "(e.g. 'ENV ATLAN_APP_MODULE=myapp.app:MyApp'). "
-        "The container will fail to start without it."
-    )
-    # File-level finding — line 1 by convention.
-    return [_make_finding(RULE_I003, file, 1, msg, directives)]
+            if "ATLAN_APP_MODULE" in env:
+                last_value = env["ATLAN_APP_MODULE"]
+                last_line = instr.line
+
+    if last_value is None:
+        return [
+            _make_finding(
+                RULE_I003,
+                file,
+                1,
+                "ENV ATLAN_APP_MODULE is not set. The platform runtime uses this "
+                "variable to locate and instantiate the application class "
+                "(e.g. 'ENV ATLAN_APP_MODULE=myapp.app:MyApp'). "
+                "The container will fail to start without it.",
+                directives,
+            )
+        ]
+
+    value = last_value.strip()
+    if not value:
+        return [
+            _make_finding(
+                RULE_I003,
+                file,
+                last_line,
+                "ENV ATLAN_APP_MODULE is set to an empty value. The platform "
+                "runtime needs a concrete 'module:ClassName' value to start "
+                "(e.g. 'ENV ATLAN_APP_MODULE=myapp.app:MyApp').",
+                directives,
+            )
+        ]
+
+    if value.startswith("$"):
+        return [
+            _make_finding(
+                RULE_I003,
+                file,
+                last_line,
+                f"ENV ATLAN_APP_MODULE='{value}' looks like an unresolved "
+                "build-arg reference.  The runtime needs a concrete "
+                "'module:ClassName' value, not a shell variable.  Set a "
+                "literal value (e.g. 'ENV ATLAN_APP_MODULE=myapp.app:MyApp') "
+                "or ensure the ARG default is always defined.",
+                directives,
+            )
+        ]
+
+    # Soft shape check: must contain ':' with non-empty parts on both sides.
+    parts = value.split(":", 1)
+    if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
+        return [
+            _make_finding(
+                RULE_I003,
+                file,
+                last_line,
+                f"ENV ATLAN_APP_MODULE='{value}' does not follow the required "
+                "'module:ClassName' format (e.g. 'myapp.app:MyApp').  "
+                "The platform runtime splits on ':' to locate the module and "
+                "instantiate the named class.",
+                directives,
+            )
+        ]
+
+    return []
 
 
 def _check_i004(
