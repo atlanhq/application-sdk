@@ -27,6 +27,11 @@ jobs:
       #          harness itself (the unit/integration deps + docstring-coverage
       #          wrappers), so changing *how* those checks run still re-runs them.
       sdk: ${{ steps.sdk-refine.outputs.sdk }}
+      # 'ci'   — pull_request.yaml itself changed. Self-referential entry
+      #          (mirrors sdk-gate.yaml's own self-test pattern) so that editing
+      #          the connector / sdr-k8s-e2e dispatch glue re-runs those jobs
+      #          in the merge queue — otherwise workflow-only PRs merge blind.
+      ci: ${{ steps.filter.outputs.ci }}
       # 'scan' — wider net for the Trivy filesystem scan: every first-party
       #          source tree + the dependency lockfiles. Still short-circuits on
       #          pure docs/, .github-meta, and .security-only PRs.
@@ -59,6 +64,8 @@ jobs:
               # "match any file that is not a .md file" — a near-catch-all that
               # makes sdk=true for every non-markdown change in the repo. Markdown
               # exclusion is handled in the sdk-refine step below instead.
+            ci:
+              - '.github/workflows/pull_request.yaml'
             scan:
               - 'application_sdk/**'
               - 'contract-toolkit/**'
@@ -337,10 +344,12 @@ jobs:
     # back to the released base.
     if: |
       always() &&
-      (needs.changes.outputs.sdk == 'true' || needs.changes.outputs.container == 'true') &&
       needs.matrix-builder.result == 'success' &&
       (needs.build-sdk-base-image.result == 'success' || needs.build-sdk-base-image.result == 'skipped') && (
-        github.event_name == 'merge_group' ||
+        (
+          (needs.changes.outputs.sdk == 'true' || needs.changes.outputs.container == 'true' || needs.changes.outputs.ci == 'true') &&
+          github.event_name == 'merge_group'
+        ) ||
         (
           github.event_name == 'pull_request' &&
           contains(github.event.pull_request.labels.*.name, 'e2e') &&
@@ -363,29 +372,32 @@ jobs:
           workflow-inputs: ${{ github.event_name == 'merge_group' && format('{{"application_sdk_ref":"{0}"}}', github.sha) || format('{{"application_sdk_ref":"{0}","run_e2e":"true","base_image_ref":"{1}"}}', github.event.pull_request.head.sha, needs.build-sdk-base-image.outputs.image) }}
 
   # SDR-on-Kubernetes e2e — dispatched cross-repo to atlan-local-marketplace-app,
-  # which owns the orchestrator + charts and runs the hermetic kind e2e. Same
-  # gate as connector-tests (merge queue + 'e2e' label) so it runs once per PR at
-  # merge, not on every commit push. LM git-installs the SDK at application_sdk_ref
-  # (no base image needed), so this job doesn't depend on build-sdk-base-image.
-  # Heavy work happens in the dispatched LM run; this job dispatches + mirrors it.
-  # NOTE: the `changes` filters (sdk/container) deliberately exclude
-  # .github/workflows/**, so a PR that ONLY edits this dispatch glue won't
-  # self-trigger here — add the `e2e` label to validate workflow-only changes on
-  # the PR (or rely on the merge-queue path). Extending the filter to cover
-  # pull_request.yaml is intentionally avoided: it would fire this heavy e2e on
-  # every unrelated CI-file change.
+  # which owns the orchestrator + charts and runs the hermetic kind e2e. LM
+  # git-installs the SDK at application_sdk_ref (no base image needed), so this
+  # job doesn't depend on build-sdk-base-image. Heavy work happens in the
+  # dispatched LM run; this job dispatches + mirrors it.
+  #
+  # Gate design (mirrors the sdk-gate.yaml self-test pattern):
+  #   merge_group — fires on sdk/container/ci changes. The 'ci' entry covers
+  #     pull_request.yaml itself, so editing this dispatch glue re-runs the job
+  #     in the merge queue — workflow-only PRs no longer merge blind.
+  #   pull_request + 'e2e' label — opt-in regardless of what changed. The label
+  #     is the operator's explicit decision; it is NOT subordinated to the
+  #     sdk/container/ci filter (decoupled so workflow-only PRs can be validated
+  #     by adding the label without touching SDK code).
   sdr-k8s-e2e:
     name: SDR K8s E2E (LM)
     needs: [changes]
     if: |
-      (needs.changes.outputs.sdk == 'true' || needs.changes.outputs.container == 'true') && (
-        github.event_name == 'merge_group' ||
-        (
-          github.event_name == 'pull_request' &&
-          contains(github.event.pull_request.labels.*.name, 'e2e') &&
-          github.event.pull_request.head.repo.fork != true &&
-          github.event.pull_request.user.login != 'dependabot[bot]'
-        )
+      (
+        (needs.changes.outputs.sdk == 'true' || needs.changes.outputs.container == 'true' || needs.changes.outputs.ci == 'true') &&
+        github.event_name == 'merge_group'
+      ) ||
+      (
+        github.event_name == 'pull_request' &&
+        contains(github.event.pull_request.labels.*.name, 'e2e') &&
+        github.event.pull_request.head.repo.fork != true &&
+        github.event.pull_request.user.login != 'dependabot[bot]'
       )
     runs-on: ubuntu-latest
     steps:
