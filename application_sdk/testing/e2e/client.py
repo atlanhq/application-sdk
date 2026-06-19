@@ -322,6 +322,7 @@ class AEWorkflowClient:
                         total_attempts,
                         exc,
                         sleep_seconds,
+                        exc_info=True,
                     )
                     time.sleep(sleep_seconds)
                     continue
