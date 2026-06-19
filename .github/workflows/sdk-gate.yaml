@@ -53,7 +53,7 @@ jobs:
     name: Detect Changes (SDK Gate)
     runs-on: ubuntu-latest
     outputs:
-      sdk: ${{ steps.filter.outputs.sdk }}
+      sdk: ${{ steps.sdk-refine.outputs.sdk }}
       toolkit: ${{ steps.filter.outputs.toolkit }}
       conformance: ${{ steps.filter.outputs.conformance }}
       conformance_pkg: ${{ steps.filter.outputs.conformance_pkg }}
@@ -93,6 +93,9 @@ jobs:
         id: filter
         if: steps.force.outputs.force_all != 'true'
         with:
+          # list-files: json is required so the sdk-refine step below can inspect
+          # which files actually matched and suppress markdown-only false positives.
+          list-files: json
           filters: |
             # Dependency routing (Renovate auto-bumps these lockfiles within
             # range pins): ROOT pyproject.toml / uv.lock are the SDK's own deps,
@@ -114,10 +117,12 @@ jobs:
               # gate would stay green because the area it governs never ran.
               - '.github/workflows/sdk-tests-reusable.yaml'
               - '.github/workflows/sdk-gate.yaml'
-              # Markdown-only changes never affect SDK behaviour. Listed LAST so
-              # paths-filter's last-match-wins excludes e.g.
-              # application_sdk/README.md while application_sdk/foo.py still runs.
-              - '!**/*.md'
+              # NOTE: do NOT add '!**/*.md' here. dorny/paths-filter passes '!'
+              # patterns straight to picomatch, which interprets '!**/*.md' as
+              # "match any file that is not a .md file" — a near-catch-all that
+              # makes sdk=true for every non-markdown change in the repo (e.g. all
+              # packages/conformance/**/*.py files). Markdown exclusion is handled
+              # in the sdk-refine step below instead.
             toolkit:
               - 'contract-toolkit/**'
               - 'application_sdk/contracts/**'
@@ -132,7 +137,9 @@ jobs:
             conformance:
               - '**/*.py'
               - '.github/**'
-              - '!**/*.md'
+              # NOTE: '!**/*.md' intentionally omitted — same picomatch catch-all
+              # issue as sdk above; neither **/*.py nor .github/** match .md files,
+              # so the exclusion is not needed and the pattern would be harmful.
             # The conformance PACKAGE itself (its source, pyproject.toml, uv.lock,
             # and own pytest tests). A Renovate bump to packages/conformance/uv.lock
             # re-runs the package's unit tests here — conformance-only, never SDK.
@@ -148,6 +155,29 @@ jobs:
             container:
               - 'Dockerfile'
               - 'entrypoint.sh'
+
+      # paths-filter sdk=true is necessary but not sufficient: the broad
+      # application_sdk/** pattern also matches .md files, so a PR that only
+      # touches e.g. application_sdk/README.md would incorrectly trigger the
+      # full SDK test matrix. Check whether ANY matched file is non-.md; if all
+      # matched files are .md, suppress sdk to false.
+      - name: Refine sdk — suppress markdown-only matches
+        id: sdk-refine
+        env:
+          SDK_RESULT: ${{ steps.filter.outputs.sdk }}
+          SDK_FILES: ${{ steps.filter.outputs.sdk_files }}
+          FORCE_ALL: ${{ steps.force.outputs.force_all }}
+        run: |
+          set -euo pipefail
+          if [[ "$FORCE_ALL" == "true" ]]; then
+            echo "sdk=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "$SDK_RESULT" != "true" ]]; then
+            echo "sdk=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python3 .github/scripts/sdk_changes_non_md.py
 
   sdk-tests:
     name: SDK Tests
