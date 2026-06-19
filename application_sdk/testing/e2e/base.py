@@ -737,6 +737,122 @@ class BaseE2ETest:
         return failures
 
     # ------------------------------------------------------------------
+    # Per-combo certification report
+    # ------------------------------------------------------------------
+
+    def _build_certification_report(
+        self, outcome: FullDAGOutcome, asset_failures: list[str]
+    ) -> dict[str, Any]:
+        """Build the per-combo "SDR-ready" certification record.
+
+        Pure function of the run *outcome* + the precomputed *asset_failures*
+        (reuses ``_evaluate_asset_expectations`` — no duplicated thresholds).
+        Captures the three certification dimensions Distribution agreed on:
+        workflow status, asset-type presence, and count parity — so an app can
+        be declared "<cloud> ready" per combo without a human in the loop.
+
+        The combo label comes from ``SDR_CERT_COMBO`` / ``STORAGE_PROFILE``
+        (e.g. ``aws/s3``); it defaults to ``default`` for a single-combo run.
+        """
+        combo = (
+            os.environ.get("SDR_CERT_COMBO")
+            or os.environ.get("STORAGE_PROFILE")
+            or "default"
+        )
+        nodes_ok = outcome.ae_result.all_nodes_succeeded
+        assets_ok = not asset_failures
+        lineage_ok = (not self.expect_lineage) or outcome.lineage_present
+        certified = (
+            nodes_ok and outcome.connection_in_atlas and assets_ok and lineage_ok
+        )
+        return {
+            "combo": combo,
+            "connector": self.connector_short_name,
+            "mode": self.mode.value,
+            "connection_qualified_name": outcome.connection_qualified_name,
+            "workflow": {
+                "status": outcome.ae_result.status.value,
+                "run_id": outcome.ae_result.run_id,
+                "slug": outcome.ae_result.workflow_slug,
+                "all_nodes_succeeded": nodes_ok,
+                "failed_nodes": [n.name for n in outcome.ae_result.failed_nodes],
+            },
+            "checks": {
+                "workflow_nodes_succeeded": nodes_ok,
+                "connection_in_atlas": outcome.connection_in_atlas,
+                "asset_expectations_met": assets_ok,
+                # None = not asserted for this connector (expect_lineage False).
+                "lineage_present": (
+                    outcome.lineage_present if self.expect_lineage else None
+                ),
+            },
+            "asset_counts": outcome.asset_counts,
+            "total_assets": outcome.total_assets,
+            "asset_failures": asset_failures,
+            "certified": certified,
+        }
+
+    def _emit_certification_report(
+        self, outcome: FullDAGOutcome, asset_failures: list[str]
+    ) -> None:
+        """Emit the per-combo cert report — best-effort, never fails the test.
+
+        Writes a readable markdown section to ``$GITHUB_STEP_SUMMARY`` (when in
+        CI) and a machine-readable JSON record to ``SDR_CERT_REPORT_PATH`` (or a
+        per-combo default file in cwd) so CI can collect it as an artifact.
+        Emitted on BOTH pass and fail — the report is most useful when a combo
+        is NOT certified.
+        """
+        try:
+            report = self._build_certification_report(outcome, asset_failures)
+
+            def _mark(value: bool | None) -> str:
+                if value is None:
+                    return "—"
+                return "✅" if value else "❌"
+
+            checks = report["checks"]
+            header = "✅ CERTIFIED" if report["certified"] else "❌ NOT CERTIFIED"
+            lines = [
+                f"### SDR certification — {report['connector']} [{report['combo']}]",
+                "",
+                f"**Result: {header}**",
+                "",
+                "| Check | Result |",
+                "| --- | --- |",
+                f"| Workflow nodes succeeded (status=`{report['workflow']['status']}`) "
+                f"| {_mark(checks['workflow_nodes_succeeded'])} |",
+                f"| Connection in Atlas | {_mark(checks['connection_in_atlas'])} |",
+                f"| Asset expectations (M1 non-empty / M2 floors / M3 parity) "
+                f"| {_mark(checks['asset_expectations_met'])} |",
+                f"| Lineage present | {_mark(checks['lineage_present'])} |",
+                "",
+                f"Asset counts: `{report['asset_counts']}` (total {report['total_assets']})",
+            ]
+            if asset_failures:
+                lines += ["", "Asset expectation failures:", *asset_failures]
+            markdown = "\n".join(lines) + "\n"
+
+            summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+            if summary_path:
+                with open(summary_path, "a", encoding="utf-8") as fh:
+                    fh.write(markdown)
+
+            json_path = os.environ.get("SDR_CERT_REPORT_PATH")
+            if not json_path:
+                safe_combo = report["combo"].replace("/", "-")
+                json_path = f"e2e-cert-report-{report['connector']}-{safe_combo}.json"
+            Path(json_path).write_bytes(orjson.dumps(report, option=orjson.OPT_INDENT_2))
+            logger.info(
+                "Certification report [%s/%s]: %s",
+                report["connector"],
+                report["combo"],
+                "CERTIFIED" if report["certified"] else "NOT CERTIFIED",
+            )
+        except Exception as e:  # noqa: BLE001 — reporting must never fail the test
+            logger.warning("Failed to emit certification report: %s", e)
+
+    # ------------------------------------------------------------------
     # Default test method
     # ------------------------------------------------------------------
 
@@ -753,6 +869,13 @@ class BaseE2ETest:
              is False).
         """
         outcome = self.run_full_dag()
+        asset_failures = self._evaluate_asset_expectations(
+            outcome.asset_counts, total_assets=outcome.total_assets
+        )
+        # Emit the per-combo certification report BEFORE any assertion, so it is
+        # recorded on failures too — exactly when an operator needs it most.
+        self._emit_certification_report(outcome, asset_failures)
+
         if not outcome.succeeded:
             failed = outcome.ae_result.failed_nodes
             failures_msg = (
@@ -772,9 +895,6 @@ class BaseE2ETest:
                 f"Failed nodes:\n{failures_msg}"
             )
 
-        asset_failures = self._evaluate_asset_expectations(
-            outcome.asset_counts, total_assets=outcome.total_assets
-        )
         if asset_failures:
             raise AssertionError(
                 "Atlas inventory under "
