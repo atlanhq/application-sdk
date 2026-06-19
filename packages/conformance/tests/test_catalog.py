@@ -26,9 +26,9 @@ def test_catalog_no_duplicate_ids() -> None:
     """Every rule ID in the catalog is unique."""
     rules = load_catalog()
     ids = [r.id for r in rules]
-    assert len(ids) == len(
-        set(ids)
-    ), f"Duplicate rule IDs: {[x for x in ids if ids.count(x) > 1]}"
+    assert len(ids) == len(set(ids)), (
+        f"Duplicate rule IDs: {[x for x in ids if ids.count(x) > 1]}"
+    )
 
 
 def test_catalog_ids_match_pattern() -> None:
@@ -45,12 +45,12 @@ def test_catalog_all_have_required_fields() -> None:
     for rule in rules:
         assert rule.id, f"Rule missing id: {rule}"
         assert rule.name, f"Rule {rule.id} missing name"
-        assert isinstance(
-            rule.tier, EnforcementTier
-        ), f"Rule {rule.id} has invalid tier"
-        assert isinstance(
-            rule.mechanism, RuleMechanism
-        ), f"Rule {rule.id} has invalid mechanism"
+        assert isinstance(rule.tier, EnforcementTier), (
+            f"Rule {rule.id} has invalid tier"
+        )
+        assert isinstance(rule.mechanism, RuleMechanism), (
+            f"Rule {rule.id} has invalid mechanism"
+        )
         assert rule.category, f"Rule {rule.id} missing category"
 
 
@@ -58,9 +58,9 @@ def test_catalog_all_have_rationale() -> None:
     """Every rule in the catalog must have a non-empty rationale."""
     rules = load_catalog()
     missing = [rule.id for rule in rules if not rule.rationale.strip()]
-    assert (
-        not missing
-    ), f"Rules missing rationale (add a rationale= to each RuleDefinition): {missing}"
+    assert not missing, (
+        f"Rules missing rationale (add a rationale= to each RuleDefinition): {missing}"
+    )
 
 
 def test_catalog_all_have_scope() -> None:
@@ -90,9 +90,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     """The publisher-side rules are app-scoped; everything else is 'both'.
 
     APP-scoped rules (dependency pinning, managed-workflow drift, Dockerfile
-    conformance) must never fire on the SDK itself, which publishes the
-    contract.  Pin the exact set so a new rule has to make a deliberate scope
-    decision rather than silently inheriting.
+    conformance, orchestration-seam P004/P005) must never fire on the SDK
+    itself, which publishes the contract.  Pin the exact set so a new rule
+    has to make a deliberate scope decision rather than silently inheriting.
 
     Note C003 (.gitignore entries) is *both*, not app: the SDK has its own
     .gitignore sharing the standard baseline, so the rule is useful there too —
@@ -101,23 +101,33 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     I001–I005 (Dockerfile conformance) are app-scoped because the SDK Dockerfile
     *builds* the base image that these rules enforce, so the rules are meaningless
     and noisy when applied to the SDK itself.
+
+    P004–P005 (orchestration-seam) are app-scoped: apps must reach Temporal
+    through the SDK seam (BLDX-1417).  P006–P007 are SDK-only: the SDK must
+    keep Temporal contained behind its seam.
     """
     rules = load_catalog()
     app_scoped = {r.id for r in rules if r.scope == RuleScope.APP}
+    # C002/D001/D002: publisher-side contract. P004/P005: apps must reach the
+    # orchestration layer through the SDK seam, not Temporal/SDK-internals (BLDX-1417).
+    # I001–I005: Dockerfile conformance (SDK builds the base image, not consuming it).
     assert app_scoped == {
         "C002",
         "D001",
         "D002",
+        "P004",
+        "P005",
         "I001",
         "I002",
         "I003",
         "I004",
         "I005",
     }, app_scoped
-    # No rule is currently SDK-only; the rest are 'both'.
-    assert not {r.id for r in rules if r.scope == RuleScope.SDK}
+    # SDK-only rules: the SDK must keep Temporal contained behind its seam (BLDX-1417).
+    sdk_scoped = {r.id for r in rules if r.scope == RuleScope.SDK}
+    assert sdk_scoped == {"P006", "P007"}, sdk_scoped
     both = {r.id for r in rules if r.scope == RuleScope.BOTH}
-    assert both == {r.id for r in rules} - app_scoped
+    assert both == {r.id for r in rules} - app_scoped - sdk_scoped
 
 
 def test_scope_emitted_in_sarif_properties() -> None:
@@ -211,12 +221,19 @@ def test_catalog_d_series_present() -> None:
 
 
 def test_catalog_p_series_present() -> None:
-    """The P-series prescription rules are all present."""
+    """The P-series prescription rules are exactly P001–P007.
+
+    Strict equality (not just not-missing): P004–P007 are the orchestration-seam
+    rules (BLDX-1417); a stray or renumbered P-id would slip past a subset check
+    while breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
+    """
     rules = load_catalog()
     p_ids = {r.id for r in rules if r.id.startswith("P")}
-    expected = {"P001", "P002", "P003"}
+    expected = {"P001", "P002", "P003", "P004", "P005", "P006", "P007"}
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
+    extra = p_ids - expected
+    assert not extra, f"Unexpected P-series rules: {extra}"
 
 
 def test_catalog_o_series_present() -> None:

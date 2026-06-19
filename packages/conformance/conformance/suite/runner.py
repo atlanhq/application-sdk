@@ -32,6 +32,7 @@ from conformance.suite.checks import (
     gitignore_entries,
     integration_marking,
     optimizations,
+    orchestration,
     prescriptions,
 )
 from conformance.suite.checks._ast_common import TOOL_VERSION, detect_scope
@@ -94,6 +95,12 @@ _CHECKS: list[CheckRegistration] = [
         series=gitignore_entries.SERIES,
         discover=gitignore_entries.discover,
         scan_path=gitignore_entries.scan_path,
+    ),
+    CheckRegistration(
+        series=orchestration.SERIES,
+        discover=orchestration.discover,
+        scan_path=orchestration.scan_path,
+        scan_all=orchestration.scan_all,
     ),
     CheckRegistration(
         series=logging_checks.SERIES,

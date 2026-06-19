@@ -67,7 +67,7 @@ class SeriesMeta:
 # of rules/prescriptions.py and rules/optimizations.py so the policy is visible
 # to consumers reading the rule catalog, not only to code readers.
 _ID_STABILITY_NOTE = (
-    "**Rule-id stability (non-migration policy):** P-ids and O-ids are a "
+    "**Rule-id stability (non-migration policy):** rule ids are a "
     "permanent public contract — each is exposed in the SARIF ``help_uri`` and "
     "referenced by inline ``# conformance: ignore[...]`` suppressions across the "
     "fleet.  An id therefore **never migrates and never changes**, even if a "
@@ -118,7 +118,10 @@ _SERIES_META: list[SeriesMeta] = [
         prefix="P",
         source_module="conformance/suite/rules/prescriptions.py",
         output_filename="prescriptions.md",
-        checker="`suite.checks.prescriptions` (AST-based)",
+        checker=(
+            "`suite.checks.prescriptions` and `suite.checks.orchestration` "
+            "(AST-based; the orchestration-seam rules P004–P007 scan test files too)"
+        ),
         suppression_example="# conformance: ignore[P001] intentional: generic cleanup payload",
         stability_note=_ID_STABILITY_NOTE,
     ),
