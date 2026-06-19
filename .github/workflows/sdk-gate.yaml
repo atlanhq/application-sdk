@@ -5,7 +5,7 @@ name: SDK Gate
 # Composes the three SDK test areas behind one always-concluding required
 # check:
 #   - SDK Tests        (sdk-tests-reusable.yaml)         — unit / integration / storage
-#   - Conformance      (conformance-reusable.yaml)       — C/E/P/O/D rule series
+#   - Conformance      (conformance-reusable.yaml)       — C/E/P/O/D/L rule series
 #   - Contract Toolkit (contract-toolkit-reusable.yaml)  — PKL generate / lint / docs
 #
 # Design:
@@ -200,6 +200,9 @@ jobs:
       # O-series excludes the conformance package itself: the suite legitimately
       # uses stdlib json for SARIF string output (orjson returns bytes).
       exclude-paths-o: "tools/,contract-toolkit/,packages/conformance/"
+      # L-series excludes the conformance package itself: it has no dependency on
+      # application_sdk and therefore legitimately does not use the SDK logger adapter.
+      exclude-paths-l: "tools/,contract-toolkit/,packages/conformance/"
       event_name: ${{ github.event_name }}
       # force-all the inner per-series run for releases AND container changes —
       # a Dockerfile/entrypoint diff isn't .py/.github/pyproject, so without this

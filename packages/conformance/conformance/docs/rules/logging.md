@@ -5,7 +5,7 @@
 
 # Logging Rules (L-series)
 
-**18 rules** · Checker: `suite.checks.logging` (AST-based, not yet fully implemented)
+**21 rules** · Checker: `suite.checks.logging` (AST-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -15,30 +15,33 @@ Suppress a finding on the violating line or the line directly above it:
 
 | ID | Name | Tier | Scope | Category | Autofixable | Since |
 |---|---|---|---|---|---|---|
-| [L001](#l001) | `FStringInLogMessage` | `block` | `both` | `log-format` | yes | 0.2.0 |
-| [L002](#l002) | `InconsistentLoggerFactory` | `warn` | `both` | `log-format` | yes | 0.2.0 |
-| [L003](#l003) | `ExtraKwargsWrongFramework` | `warn` | `both` | `log-format` | — | 0.2.0 |
-| [L004](#l004) | `ExceptBlockMissingExcInfoLog` | `block` | `both` | `missing-traceback` | yes | 0.2.0 |
-| [L005](#l005) | `PrintInProductionCode` | `warn` | `both` | `log-format` | yes | 0.2.0 |
-| [L006](#l006) | `InfoInTightLoop` | `warn` | `both` | `log-level` | — | 0.2.0 |
-| [L007](#l007) | `LoggerCriticalUsage` | `warn` | `both` | `log-level` | yes | 0.2.0 |
-| [L008](#l008) | `UnguardedExpensiveDebug` | `warn` | `both` | `log-performance` | — | 0.2.0 |
-| [L009](#l009) | `WarnThenRaiseDuplication` | `warn` | `both` | `log-noise` | — | 0.2.0 |
-| [L010](#l010) | `CredentialInLogOutput` | `block` | `both` | `security` | — | 0.2.0 |
-| [L011](#l011) | `StringConcatenationInLog` | `block` | `both` | `log-format` | yes | 0.2.0 |
-| [L012](#l012) | `StdlibExtraReservedKeyCollision` | `block` | `both` | `log-crash` | — | 0.2.0 |
-| [L013](#l013) | `StdlibArbitraryKwargs` | `block` | `both` | `log-crash` | yes | 0.2.0 |
-| [L014](#l014) | `StructlogEventKwargOverwrite` | `warn` | `both` | `log-format` | — | 0.2.0 |
-| [L015](#l015) | `DictConfigDisableExistingLoggers` | `warn` | `both` | `log-config` | yes | 0.2.0 |
-| [L016](#l016) | `BasicConfigNoopAfterFirstCall` | `warn` | `both` | `log-config` | — | 0.2.0 |
-| [L017](#l017) | `LoggerExceptionUsage` | `warn` | `both` | `log-level` | yes | 0.2.0 |
-| [L018](#l018) | `KwargsInApplicationLogCalls` | `warn` | `both` | `log-format` | — | 0.2.0 |
+| [L001](#l001) | `FStringInLogMessage` | `block` | `both` | `log-format` | yes | 0.4.0 |
+| [L002](#l002) | `NonCanonicalLoggerFactory` | `warn` | `both` | `log-format` | yes | 0.4.0 |
+| [L003](#l003) | `ExtraKwargsWrongFramework` | `warn` | `both` | `log-format` | — | 0.4.0 |
+| [L004](#l004) | `ExceptBlockMissingExcInfoLog` | `block` | `both` | `missing-traceback` | yes | 0.4.0 |
+| [L005](#l005) | `PrintInProductionCode` | `warn` | `both` | `log-format` | yes | 0.4.0 |
+| [L006](#l006) | `InfoInTightLoop` | `warn` | `both` | `log-level` | — | 0.4.0 |
+| [L007](#l007) | `LoggerCriticalUsage` | `warn` | `both` | `log-level` | yes | 0.4.0 |
+| [L008](#l008) | `UnguardedExpensiveDebug` | `warn` | `both` | `log-performance` | — | 0.4.0 |
+| [L009](#l009) | `WarnThenRaiseDuplication` | `warn` | `both` | `log-noise` | — | 0.4.0 |
+| [L010](#l010) | `CredentialInLogOutput` | `block` | `both` | `security` | — | 0.4.0 |
+| [L011](#l011) | `StringConcatenationInLog` | `block` | `both` | `log-format` | yes | 0.4.0 |
+| [L012](#l012) | `StdlibExtraReservedKeyCollision` | `block` | `both` | `log-crash` | — | 0.4.0 |
+| [L013](#l013) | `StdlibArbitraryKwargs` | `block` | `both` | `log-crash` | yes | 0.4.0 |
+| [L014](#l014) | `StructlogEventKwargOverwrite` | `warn` | `both` | `log-format` | — | 0.4.0 |
+| [L015](#l015) | `DictConfigDisableExistingLoggers` | `warn` | `both` | `log-config` | yes | 0.4.0 |
+| [L016](#l016) | `BasicConfigNoopAfterFirstCall` | `warn` | `both` | `log-config` | — | 0.4.0 |
+| [L017](#l017) | `LoggerExceptionUsage` | `warn` | `both` | `log-level` | yes | 0.4.0 |
+| [L018](#l018) | `KwargsInApplicationLogCalls` | `warn` | `both` | `log-format` | — | 0.4.0 |
+| [L019](#l019) | `DiscardedBindResult` | `warn` | `both` | `log-config` | — | 0.4.0 |
+| [L020](#l020) | `DeprecatedLoggingWarn` | `warn` | `both` | `log-format` | yes | 0.4.0 |
+| [L021](#l021) | `MissingLoggingLintRules` | `warn` | `both` | `log-config` | yes | 0.4.0 |
 
 ---
 
 ## L001 — `FStringInLogMessage` {#l001}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** yes · **Since:** 0.2.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** yes · **Since:** 0.4.0
 
 > f-string in log message — breaks log grouping and aggregation
 
@@ -55,25 +58,40 @@ kwargs.
 
 ---
 
-## L002 — `InconsistentLoggerFactory` {#l002}
+## L002 — `NonCanonicalLoggerFactory` {#l002}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** yes · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** yes · **Since:** 0.4.0
 
-> Logger factory inconsistent with project canonical factory
+> Non-canonical logger factory — use `from application_sdk.observability.logger_adaptor import get_logger`
 
-**Rationale:** Mixed logger factories produce incompatible record formats. The adapter that injects
-Temporal context only activates for the canonical factory; records from other factories
-arrive without correlation IDs, breaking cross-service traces.
+**Rationale:** The SDK adapter (application_sdk.observability.logger_adaptor.get_logger) is the only
+sanctioned way to obtain a logger. It injects Temporal context (workflow_id, run_id,
+activity_type) as top-level indexed columns in ClickHouse/Grafana and routes records
+through OTel. Direct use of logging.getLogger(), structlog.get_logger(), or loguru's
+logger bypasses all of this — correlation IDs are lost and records may not reach the
+observability store.
 
-Mixing logger factories produces inconsistent log formats, loses structured fields, and
-breaks log correlation.  The checker discovers the canonical factory (dominant by
-occurrence count) in Phase 1 and flags deviations.
+Every module must obtain its logger via the SDK adapter::
+
+    from application_sdk.observability.logger_adaptor import get_logger     logger =
+get_logger(__name__)
+
+Direct use of `logging.getLogger()`, `structlog.get_logger()`, or `from loguru import
+logger` bypasses the adapter that:
+
+* injects Temporal context fields (`workflow_id`, `run_id`,   `activity_type`,
+`task_queue`, `attempt`) as top-level indexed   columns in ClickHouse/Grafana; * routes
+log records through OTel so they appear in the observability   store; * enforces the
+project's five-level model   (DEBUG/INFO/WARNING/ERROR/CRITICAL).
+
+Adapter definition files are exempt — the file that defines `AtlanLoggerAdapter` or
+`get_logger` itself is skipped.
 
 ---
 
 ## L003 — `ExtraKwargsWrongFramework` {#l003}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** — · **Since:** 0.4.0
 
 > extra={} used where framework expects direct kwargs (or vice versa)
 
@@ -90,7 +108,7 @@ detect the active framework first.
 
 ## L004 — `ExceptBlockMissingExcInfoLog` {#l004}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `missing-traceback` · **Autofixable:** yes · **Since:** 0.2.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `missing-traceback` · **Autofixable:** yes · **Since:** 0.4.0
 
 > logger.warning/error in except block without exc_info=True
 
@@ -106,7 +124,7 @@ the root cause is invisible.  Add `exc_info=True` to all `logger.warning()` /
 
 ## L005 — `PrintInProductionCode` {#l005}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** yes · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** yes · **Since:** 0.4.0
 
 > print() in production code — bypasses logging framework
 
@@ -123,7 +141,7 @@ log lines.  Acceptable in CLI scripts, test/debug scripts, and `if __name__ ==
 
 ## L006 — `InfoInTightLoop` {#l006}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-level` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-level` · **Autofixable:** — · **Since:** 0.4.0
 
 > logger.info() inside a tight loop — generates excessive log volume
 
@@ -140,7 +158,7 @@ bounded (≤10 items) before flagging.
 
 ## L007 — `LoggerCriticalUsage` {#l007}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-level` · **Autofixable:** yes · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-level` · **Autofixable:** yes · **Since:** 0.4.0
 
 > logger.critical() — CRITICAL is not a meaningful level here
 
@@ -157,7 +175,7 @@ on the observability platform.
 
 ## L008 — `UnguardedExpensiveDebug` {#l008}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-performance` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-performance` · **Autofixable:** — · **Since:** 0.4.0
 
 > Expensive computation in logger.debug() argument — evaluates eagerly
 
@@ -173,7 +191,7 @@ logger.isEnabledFor(logging.DEBUG):`.
 
 ## L009 — `WarnThenRaiseDuplication` {#l009}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-noise` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-noise` · **Autofixable:** — · **Since:** 0.4.0
 
 > logger.warning/error immediately before raise — duplicate log records
 
@@ -189,7 +207,7 @@ available to the caller.  Otherwise: just re-raise.
 
 ## L010 — `CredentialInLogOutput` {#l010}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `security` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `security` · **Autofixable:** — · **Since:** 0.4.0
 
 > Credential/secret value in log output — security vulnerability
 
@@ -206,7 +224,7 @@ store.  Requires human security review before marking acceptable.  Logging a cre
 
 ## L011 — `StringConcatenationInLog` {#l011}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** yes · **Since:** 0.2.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** yes · **Since:** 0.4.0
 
 > String concatenation in log message — breaks log grouping
 
@@ -221,7 +239,7 @@ way that breaks log grouping.  Rewrite as %-style message body.
 
 ## L012 — `StdlibExtraReservedKeyCollision` {#l012}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `log-crash` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `log-crash` · **Autofixable:** — · **Since:** 0.4.0
 
 > extra={} key collides with stdlib LogRecord attribute — crashes caller
 
@@ -238,7 +256,7 @@ stdlib's `Logger.makeRecord()` raises `KeyError` if any key in `extra={}` matche
 
 ## L013 — `StdlibArbitraryKwargs` {#l013}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `log-crash` · **Autofixable:** yes · **Since:** 0.2.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `log-crash` · **Autofixable:** yes · **Since:** 0.4.0
 
 > Arbitrary kwargs in stdlib logger — raises TypeError immediately
 
@@ -254,7 +272,7 @@ from structlog/loguru. Applies to stdlib only.
 
 ## L014 — `StructlogEventKwargOverwrite` {#l014}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** — · **Since:** 0.4.0
 
 > event= kwarg in structlog silently overwrites the log message
 
@@ -271,7 +289,7 @@ only.
 
 ## L015 — `DictConfigDisableExistingLoggers` {#l015}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-config` · **Autofixable:** yes · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-config` · **Autofixable:** yes · **Since:** 0.4.0
 
 > dictConfig without disable_existing_loggers=False silently kills loggers
 
@@ -288,7 +306,7 @@ Applies to stdlib only.
 
 ## L016 — `BasicConfigNoopAfterFirstCall` {#l016}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-config` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-config` · **Autofixable:** — · **Since:** 0.4.0
 
 > Multiple basicConfig() calls — second+ are silent no-ops
 
@@ -304,7 +322,7 @@ __name__ == "__main__":` blocks. Applies to stdlib only.
 
 ## L017 — `LoggerExceptionUsage` {#l017}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-level` · **Autofixable:** yes · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-level` · **Autofixable:** yes · **Since:** 0.4.0
 
 > logger.exception() used — use logger.error(..., exc_info=True) instead
 
@@ -329,7 +347,7 @@ only to satisfy third-party Temporal callers and immediately delegates to
 
 ## L018 — `KwargsInApplicationLogCalls` {#l018}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** — · **Since:** 0.2.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** — · **Since:** 0.4.0
 
 > kwargs in application log calls — use %-style message body instead
 
@@ -341,5 +359,67 @@ Arbitrary kwargs in log calls are an anti-pattern in this project. Framework con
 (Temporal fields, correlation IDs) is auto-injected by the logging adapter; all other
 kwargs land in an unindexed JSON blob invisible in the log stream.  Embed context
 directly in the message body using %-style formatting.
+
+---
+
+## L019 — `DiscardedBindResult` {#l019}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-config` · **Autofixable:** — · **Since:** 0.4.0
+
+> logger.bind() result discarded — bind() returns a new logger
+
+**Rationale:** structlog and loguru bind() returns a *new* logger with the bound context — the original
+is unchanged. A bare call (result not assigned) constructs the context and immediately
+discards it; the log call that follows has no extra context attached.
+
+`structlog` and `loguru` `bind()` returns a *new* bound logger; the original is
+unchanged.  A bare `logger.bind(key=value)` expression discards the result, so the
+context is never attached to any log call. Assign the result: `log =
+logger.bind(key=value)`.
+
+---
+
+## L020 — `DeprecatedLoggingWarn` {#l020}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-format` · **Autofixable:** yes · **Since:** 0.4.0
+
+> logger.warn() is deprecated — use logger.warning() instead
+
+**Rationale:** logging.warn() is a long-deprecated alias for logging.warning(). It emits
+DeprecationWarning at import time in newer Python versions and will be removed. The fix
+is a trivial rename.
+
+`logger.warn()` / `logging.warn()` is a deprecated alias for `logger.warning()` that
+will be removed in a future Python version. Rename every call site to
+`logger.warning(...)`.
+
+---
+
+## L021 — `MissingLoggingLintRules` {#l021}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `log-config` · **Autofixable:** yes · **Since:** 0.4.0
+
+> pyproject.toml ruff config is missing logging lint rules (G001, G003, G004, T201, LOG009)
+
+**Rationale:** The conformance suite catches logging anti-patterns at review time; ruff catches the
+same issues at edit time and in pre-commit. The two are complementary — ruff gives
+faster feedback in the IDE, conformance gives auditable SARIF output. Without the ruff
+rules enabled, engineers get no in-editor signal for L001/L005/L011/L020 equivalents.
+
+The project's `[tool.ruff.lint]` `select` / `extend-select` must cover the following
+rules (or their category prefixes, or `ALL`):
+
+* `G001` — `logging.warn()` deprecated (overlaps L020) * `G003` — string concatenation
+in log message (overlaps L011) * `G004` — f-string in log message (overlaps L001) *
+`T201` — `print()` statement (overlaps L005) * `LOG009` — `logging.warn()` deprecated
+(overlaps L020)
+
+A rule is covered if its full ID, any prefix (e.g. `G` covers all `G`-prefixed rules),
+or `ALL` appears in `select` or `extend-select` and is not in `ignore` /
+`extend-ignore`.
+
+Self-check exemption: `pyproject.toml` files whose `[project].name` starts with
+`atlan-application-sdk` are skipped (the SDK's own tooling config is managed
+separately).
 
 ---

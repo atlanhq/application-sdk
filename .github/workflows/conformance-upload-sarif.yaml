@@ -32,6 +32,8 @@ jobs:
             name: "Upload Prescriptions SARIF"
           - slug: optimizations
             name: "Upload Optimizations SARIF"
+          - slug: logging
+            name: "Upload Logging SARIF"
     steps:
       - name: "Download SARIF artifact"
         id: download

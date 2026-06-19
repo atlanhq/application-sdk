@@ -22,6 +22,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+import conformance.suite.checks.logging as logging_checks
 from conformance.suite.checks import (
     actions_pinning,
     bootstrap_drift,
@@ -90,6 +91,12 @@ _CHECKS: list[CheckRegistration] = [
         series=gitignore_entries.SERIES,
         discover=gitignore_entries.discover,
         scan_path=gitignore_entries.scan_path,
+    ),
+    CheckRegistration(
+        series=logging_checks.SERIES,
+        discover=logging_checks.discover,
+        scan_path=logging_checks.scan_path,
+        scan_all=logging_checks.scan_all,
     ),
 ]
 
