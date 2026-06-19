@@ -681,11 +681,10 @@ def _scan_unused_dependencies(
     """
     findings: list[Finding] = []
     unresolved: list[str] = []
-    sdk_norm = _normalise_name(SDK_PACKAGE)
 
+    # The caller filters out the SDK self-dependency when building dep_entries,
+    # so every entry here is a third-party package eligible for the unused check.
     for entry in dep_entries:
-        if entry.name == sdk_norm:
-            continue  # the SDK itself is D001's concern
         provided = dist_import_map.get(entry.name)
         if not provided:
             # None (not installed) or empty (no resolvable import names) -> we
@@ -788,10 +787,10 @@ def scan_all(
         # No silent caps: a dependency we cannot resolve in this environment is
         # not analysed; surface it (to stderr, so SARIF on stdout stays clean)
         # rather than letting "0 D003 findings" imply full coverage.
+        noun = "dependency" if len(unresolved) == 1 else "dependencies"
         print(
-            f"conformance (D003): skipped {len(unresolved)} dependency"
-            f"{'ies' if len(unresolved) != 1 else 'y'} not importable in this "
-            f"environment (unused status undetermined): "
+            f"conformance (D003): skipped {len(unresolved)} {noun} not importable "
+            f"in this environment (unused status undetermined): "
             f"{', '.join(sorted(unresolved))}",
             file=sys.stderr,
         )
