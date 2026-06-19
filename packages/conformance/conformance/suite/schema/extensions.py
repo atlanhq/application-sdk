@@ -20,7 +20,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from conformance.suite.schema.disposition import EnforcementTier, RuleMechanism
+from conformance.suite.schema.disposition import (
+    EnforcementTier,
+    RuleMechanism,
+    RuleScope,
+)
 from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------
@@ -40,6 +44,13 @@ class AtlanRuleProperties(BaseModel):
     mechanism: RuleMechanism
     """``static`` (AST/regex, fast) or ``test`` (execution-required, slow).
     Lets the remediation loop re-run only the narrowest gate covering a fix.
+    """
+
+    scope: RuleScope = RuleScope.BOTH
+    """``sdk``, ``app``, or ``both`` — the consumer surface the rule governs.
+    Defaulted at the SARIF-projection layer so reading an older or hand-authored
+    report that predates the field is tolerant; the authoring layer
+    (``catalog.RuleDefinition.scope``) is where the field is required.
     """
 
     category: str
@@ -69,6 +80,7 @@ class AtlanRuleProperties(BaseModel):
         out: dict[str, Any] = {
             "atlan/tier": self.tier.value,
             "atlan/mechanism": self.mechanism.value,
+            "atlan/scope": self.scope.value,
             "atlan/category": self.category,
             "atlan/autofixable": self.autofixable,
         }
@@ -86,6 +98,7 @@ class AtlanRuleProperties(BaseModel):
         return cls(
             tier=EnforcementTier(props["atlan/tier"]),
             mechanism=RuleMechanism(props["atlan/mechanism"]),
+            scope=RuleScope(props.get("atlan/scope", RuleScope.BOTH.value)),
             category=props["atlan/category"],
             autofixable=bool(props.get("atlan/autofixable", False)),
             orthogonal_gate=props.get("atlan/orthogonalGate"),

@@ -92,7 +92,7 @@ _SERIES_META: list[SeriesMeta] = [
         prefix="L",
         source_module="conformance/suite/rules/logging.py",
         output_filename="logging.md",
-        checker="`suite.checks.logging` (AST-based, not yet fully implemented)",
+        checker="`suite.checks.logging` (AST-based)",
         suppression_example="# conformance: ignore[L001] intentional: dynamic message",
     ),
     SeriesMeta(
@@ -198,14 +198,15 @@ def _render_series(meta: SeriesMeta, rules: list[RuleDefinition]) -> str:
         lines.append("")
 
     # Summary table
-    lines.append("| ID | Name | Tier | Category | Autofixable | Since |")
-    lines.append("|---|---|---|---|---|---|")
+    lines.append("| ID | Name | Tier | Scope | Category | Autofixable | Since |")
+    lines.append("|---|---|---|---|---|---|---|")
     for rule in rules:
         anchor = _rule_anchor(rule)
         since = rule.since or "—"
         lines.append(
             f"| [{rule.id}](#{anchor}) | `{rule.name}` | {_tier_badge(rule.tier)}"
-            f" | `{rule.category}` | {_bool_icon(rule.autofixable)} | {since} |"
+            f" | `{rule.scope.value}` | `{rule.category}`"
+            f" | {_bool_icon(rule.autofixable)} | {since} |"
         )
     lines.append("")
     lines.append("---")
@@ -223,6 +224,7 @@ def _render_series(meta: SeriesMeta, rules: list[RuleDefinition]) -> str:
         # Metadata row
         lines.append(
             f"**Tier:** {_tier_badge(rule.tier)} · "
+            f"**Scope:** `{rule.scope.value}` · "
             f"**Category:** `{rule.category}` · "
             f"**Autofixable:** {autofixable} · "
             f"**Since:** {since}"

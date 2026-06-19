@@ -1,0 +1,282 @@
+name: SDK Gate
+
+# Single composing gate for the SDK repo — NOT reused by app repos.
+#
+# Composes the three SDK test areas behind one always-concluding required
+# check:
+#   - SDK Tests        (sdk-tests-reusable.yaml)         — unit / integration / storage
+#   - Conformance      (conformance-reusable.yaml)       — C/E/P/O/D/L rule series
+#   - Contract Toolkit (contract-toolkit-reusable.yaml)  — PKL generate / lint / docs
+#
+# Design:
+#   - Selective: each area is gated on a paths-filter output, so a PR that
+#     touches only docs / .claude / .agents / .vscode / .github-meta skips all
+#     three areas and the gate goes green in seconds.
+#   - Force-all: release/* and bump-version* head refs, and v* tags, run every
+#     area regardless of changed paths (release safety net).
+#   - Required-safe: the `gate` job always runs (`if: always()`) and concludes,
+#     applying "success or skipped → pass, anything else → fail".  It is the
+#     SOLE required status check for these three areas; the individual area
+#     checks must NOT be marked required (a path-skipped reusable would leave
+#     them pending forever — the exact failure mode this replaces).
+#
+# Orthogonal checks (Trivy code/container scans, Conventional Commits, PR-title,
+# docstring coverage) stay in pull_request.yaml and remain independently
+# required — they are intentionally not folded into this gate.
+
+on:
+  pull_request:
+    branches: [main]
+  merge_group:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  pull-requests: write
+  security-events: write
+
+# Superseded PR pushes / merge-queue churn shouldn't keep the full matrix
+# running. Don't cancel push-to-tag runs (releases) though.
+concurrency:
+  group: sdk-gate-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Central change detection for the SDK and toolkit areas + the force-all
+  # decision.  Conformance is NOT centralized here: conformance-reusable.yaml is
+  # shared with app repos and self-selects per rule series internally, so the
+  # `conformance` filter below is a coarse "is anything conformance-relevant
+  # touched" gate only — the precise per-series selection still lives in the
+  # reusable.
+  changes:
+    name: Detect Changes (SDK Gate)
+    runs-on: ubuntu-latest
+    outputs:
+      sdk: ${{ steps.sdk-refine.outputs.sdk }}
+      toolkit: ${{ steps.filter.outputs.toolkit }}
+      conformance: ${{ steps.filter.outputs.conformance }}
+      conformance_pkg: ${{ steps.filter.outputs.conformance_pkg }}
+      container: ${{ steps.filter.outputs.container }}
+      force_all: ${{ steps.force.outputs.force_all }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # Compute force-all FIRST — it needs no diff base, only the ref/head_ref.
+      - name: Compute force-all
+        id: force
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          force=false
+          # Release / version-bump PRs run the full suite before publish.
+          if [[ "$HEAD_REF" == release/* || "$HEAD_REF" == bump-version* ]]; then
+            force=true
+          fi
+          # v* tag pushes (the release itself) run everything.
+          if [[ "$REF_TYPE" == "tag" && "$REF_NAME" == v* ]]; then
+            force=true
+          fi
+          echo "force_all=$force" >> "$GITHUB_OUTPUT"
+          echo "force_all=$force"
+
+      # Per-area change detection. Skipped entirely when forcing: a tag push has
+      # no clean diff base for paths-filter, and when force_all is true the area
+      # `if:`s fire regardless — so we never let a base-less filter run (and
+      # possibly hard-fail, which would skip every area and turn the always()
+      # gate falsely green). For pull_request the filter diffs against the PR
+      # base automatically; for merge_group against the queued merge ref.
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4
+        id: filter
+        if: steps.force.outputs.force_all != 'true'
+        with:
+          # list-files: json is required so the sdk-refine step below can inspect
+          # which files actually matched and suppress markdown-only false positives.
+          list-files: json
+          filters: |
+            # Dependency routing (Renovate auto-bumps these lockfiles within
+            # range pins): ROOT pyproject.toml / uv.lock are the SDK's own deps,
+            # so they route to SDK-ONLY. packages/conformance/ has its OWN
+            # pyproject.toml / uv.lock (and tests), so it routes to
+            # CONFORMANCE-ONLY (see conformance_pkg). Neither bleeds into the
+            # other area.
+            sdk:
+              - 'application_sdk/**'
+              - 'tests/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - '.github/actions/unit-tests/**'
+              - '.github/actions/setup-deps/**'
+              - '.github/actions/docstring-coverage/**'
+              # Self-test the SDK-test harness itself: editing the reusable that
+              # runs these tests, or the gate that composes them, must re-run the
+              # SDK Tests area — otherwise a PR could break the harness and the
+              # gate would stay green because the area it governs never ran.
+              - '.github/workflows/sdk-tests-reusable.yaml'
+              - '.github/workflows/sdk-gate.yaml'
+              # NOTE: do NOT add '!**/*.md' here. dorny/paths-filter passes '!'
+              # patterns straight to picomatch, which interprets '!**/*.md' as
+              # "match any file that is not a .md file" — a near-catch-all that
+              # makes sdk=true for every non-markdown change in the repo (e.g. all
+              # packages/conformance/**/*.py files). Markdown exclusion is handled
+              # in the sdk-refine step below instead.
+            toolkit:
+              - 'contract-toolkit/**'
+              - 'application_sdk/contracts/**'
+              - 'application_sdk/credentials/**'
+              - 'application_sdk/handler/**'
+              - 'application_sdk/templates/contracts/**'
+              - '.github/workflows/contract-toolkit-*.yml'
+              - '.github/workflows/contract-toolkit-*.yaml'
+            # Conformance RULE detection (C/E/P/O). Deliberately NOT triggered by
+            # pyproject.toml: D-series is app-scoped and no-ops on the SDK, and
+            # E/P/O scan .py — so a root pyproject/uv.lock bump is SDK-only.
+            conformance:
+              - '**/*.py'
+              - '.github/**'
+              # NOTE: '!**/*.md' intentionally omitted — same picomatch catch-all
+              # issue as sdk above; neither **/*.py nor .github/** match .md files,
+              # so the exclusion is not needed and the pattern would be harmful.
+            # The conformance PACKAGE itself (its source, pyproject.toml, uv.lock,
+            # and own pytest tests). A Renovate bump to packages/conformance/uv.lock
+            # re-runs the package's unit tests here — conformance-only, never SDK.
+            conformance_pkg:
+              - 'packages/conformance/**'
+              # Self-test the suite-test harness: editing the reusable that runs
+              # the package's pytest must re-run it (same reasoning as `sdk`).
+              - '.github/workflows/conformance-suite-tests-reusable.yaml'
+            # A container change (base image / daprd / system deps / entrypoint)
+            # can alter SDK runtime behaviour, so it runs ALL gate areas — in
+            # addition to the orthogonal Trivy container scan + connector e2e
+            # that live in pull_request.yaml.
+            container:
+              - 'Dockerfile'
+              - 'entrypoint.sh'
+
+      # paths-filter sdk=true is necessary but not sufficient: the broad
+      # application_sdk/** pattern also matches .md files, so a PR that only
+      # touches e.g. application_sdk/README.md would incorrectly trigger the
+      # full SDK test matrix. Check whether ANY matched file is non-.md; if all
+      # matched files are .md, suppress sdk to false.
+      - name: Refine sdk — suppress markdown-only matches
+        id: sdk-refine
+        env:
+          SDK_RESULT: ${{ steps.filter.outputs.sdk }}
+          SDK_FILES: ${{ steps.filter.outputs.sdk_files }}
+          FORCE_ALL: ${{ steps.force.outputs.force_all }}
+        run: |
+          set -euo pipefail
+          if [[ "$FORCE_ALL" == "true" ]]; then
+            echo "sdk=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "$SDK_RESULT" != "true" ]]; then
+            echo "sdk=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python3 .github/scripts/sdk_changes_non_md.py
+
+  sdk-tests:
+    name: SDK Tests
+    needs: changes
+    if: needs.changes.outputs.sdk == 'true' || needs.changes.outputs.container == 'true' || needs.changes.outputs.force_all == 'true'
+    uses: ./.github/workflows/sdk-tests-reusable.yaml
+    secrets: inherit
+
+  conformance:
+    name: Conformance
+    needs: changes
+    if: needs.changes.outputs.conformance == 'true' || needs.changes.outputs.container == 'true' || needs.changes.outputs.force_all == 'true'
+    uses: ./.github/workflows/conformance-reusable.yaml
+    with:
+      # Dogfood the in-flight suite: run the PR's own conformance package, not
+      # the published one. (merge_group / tag have no PR head — fall back to sha.)
+      conformance-ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      exclude-paths-e: "tools/,contract-toolkit/"
+      exclude-paths-p: "tools/,contract-toolkit/"
+      # O-series excludes the conformance package itself: the suite legitimately
+      # uses stdlib json for SARIF string output (orjson returns bytes).
+      exclude-paths-o: "tools/,contract-toolkit/,packages/conformance/"
+      # L-series excludes the conformance package itself: it has no dependency on
+      # application_sdk and therefore legitimately does not use the SDK logger adapter.
+      exclude-paths-l: "tools/,contract-toolkit/,packages/conformance/"
+      event_name: ${{ github.event_name }}
+      # force-all the inner per-series run for releases AND container changes —
+      # a Dockerfile/entrypoint diff isn't .py/.github/pyproject, so without this
+      # every series would self-skip and the area would no-op.
+      force-all: ${{ needs.changes.outputs.force_all == 'true' || needs.changes.outputs.container == 'true' }}
+    secrets: inherit
+
+  toolkit:
+    name: Contract Toolkit
+    needs: changes
+    if: needs.changes.outputs.toolkit == 'true' || needs.changes.outputs.container == 'true' || needs.changes.outputs.force_all == 'true'
+    uses: ./.github/workflows/contract-toolkit-reusable.yaml
+    secrets: inherit
+
+  # The conformance PACKAGE's own pytest unit tests (packages/conformance/tests).
+  # Distinct from the `conformance` area above, which runs rule DETECTION
+  # (`detect --series`). Gated on packages/conformance/** so a change to the
+  # package's source OR its pyproject.toml / uv.lock (e.g. a Renovate dep bump)
+  # re-runs its tests — closing the gap where these were only exercised on
+  # merge/publish, never on PRs.
+  conformance-suite-tests:
+    name: Conformance Suite Tests
+    needs: changes
+    if: needs.changes.outputs.conformance_pkg == 'true' || needs.changes.outputs.force_all == 'true'
+    uses: ./.github/workflows/conformance-suite-tests-reusable.yaml
+    secrets: inherit
+
+  # ── The single required check ───────────────────────────────────────────────
+  # Always runs and always concludes, so branch protection can require exactly
+  # this one context for all three areas.  A reusable-workflow call that was
+  # skipped (its area was untouched) reports `skipped`; a call whose jobs failed
+  # reports `failure`.  success|skipped → pass; failure|cancelled|anything
+  # else → fail (do not let `cancelled` slip through).
+  gate:
+    name: SDK Gate
+    # `changes` IS in needs and must succeed: an area's `if:` is implicitly
+    # ANDed with success(needs.changes), so if detection fails every area
+    # skips — and skipped→pass would make this gate falsely green while
+    # NOTHING ran. Fail closed on a non-success `changes` result.
+    needs: [changes, sdk-tests, conformance, toolkit, conformance-suite-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate composed areas
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          SDK_RESULT: ${{ needs.sdk-tests.result }}
+          CONFORMANCE_RESULT: ${{ needs.conformance.result }}
+          TOOLKIT_RESULT: ${{ needs.toolkit.result }}
+          CONFORMANCE_PKG_RESULT: ${{ needs.conformance-suite-tests.result }}
+        run: |
+          set -euo pipefail
+          # Detection has no `if:`, so it always runs — anything other than
+          # success means we cannot trust which areas ran. Fail closed.
+          if [[ "$CHANGES_RESULT" != "success" ]]; then
+            echo "::error::Detect Changes did not succeed ($CHANGES_RESULT) — failing the gate closed."
+            exit 1
+          fi
+          ok=true
+          check() {
+            local name="$1" result="$2"
+            if [[ "$result" == "success" || "$result" == "skipped" ]]; then
+              echo "✓ $name: $result"
+            else
+              echo "✗ $name: $result"
+              ok=false
+            fi
+          }
+          check "SDK Tests"             "$SDK_RESULT"
+          check "Conformance"           "$CONFORMANCE_RESULT"
+          check "Contract Toolkit"      "$TOOLKIT_RESULT"
+          check "Conformance Suite Tests" "$CONFORMANCE_PKG_RESULT"
+          if [[ "$ok" != "true" ]]; then
+            echo "::error::SDK gate FAILED — one or more areas did not pass."
+            exit 1
+          fi
+          echo "SDK gate passed."

@@ -26,7 +26,7 @@ from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any
 
-from conformance.suite.checks._ast_common import make_cli_main
+from conformance.suite.checks._ast_common import is_sdk_package_name, make_cli_main
 from conformance.suite.schema.findings import Finding
 
 SERIES = "D"
@@ -423,10 +423,13 @@ def _project_name(text: str) -> str | None:
 
 
 def _is_self_check(name: str | None) -> bool:
-    """Return True for the SDK and its sibling packages (exempt from D-series)."""
-    if name is None:
-        return False
-    return _normalise_name(name).startswith(_normalise_name(SDK_PACKAGE))
+    """Return True for the SDK and its sibling packages (exempt from D-series).
+
+    Delegates to the shared ``is_sdk_package_name`` so this self-exemption and the
+    runner-side ``detect_scope`` answer "is this the SDK?" with identical
+    (hyphen-anchored) semantics — see ``_ast_common._scope``.
+    """
+    return name is not None and is_sdk_package_name(name)
 
 
 def scan_text(

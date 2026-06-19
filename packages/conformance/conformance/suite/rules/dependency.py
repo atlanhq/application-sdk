@@ -15,11 +15,16 @@ SDK upgrades.  These rules enforce two invariants:
 from __future__ import annotations
 
 from conformance.suite.schema.catalog import RuleDefinition
-from conformance.suite.schema.disposition import EnforcementTier, RuleMechanism
+from conformance.suite.schema.disposition import (
+    EnforcementTier,
+    RuleMechanism,
+    RuleScope,
+)
 
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="D001",
+        scope=RuleScope.APP,
         name="UnpinnedSdkDependency",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
@@ -53,6 +58,7 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="D002",
+        scope=RuleScope.APP,
         name="RedeclaredSdkManagedDependency",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,

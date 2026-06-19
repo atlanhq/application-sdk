@@ -8,7 +8,11 @@ import pytest
 from conformance.suite.rules import CATALOG, _combine_rules, get_rule
 from conformance.suite.schema import load_catalog
 from conformance.suite.schema.catalog import RuleDefinition, validate_catalog
-from conformance.suite.schema.disposition import EnforcementTier, RuleMechanism
+from conformance.suite.schema.disposition import (
+    EnforcementTier,
+    RuleMechanism,
+    RuleScope,
+)
 from pydantic import ValidationError
 
 
@@ -57,6 +61,57 @@ def test_catalog_all_have_rationale() -> None:
     assert (
         not missing
     ), f"Rules missing rationale (add a rationale= to each RuleDefinition): {missing}"
+
+
+def test_catalog_all_have_scope() -> None:
+    """Every rule must declare a valid RuleScope (sdk / app / both)."""
+    rules = load_catalog()
+    bad = [rule.id for rule in rules if not isinstance(rule.scope, RuleScope)]
+    assert not bad, f"Rules with invalid/missing scope: {bad}"
+
+
+def test_scope_is_required_field() -> None:
+    """``scope`` has no default: constructing a rule without it must fail.
+
+    This is what makes ``test_catalog_all_have_scope`` an enforceable guarantee
+    — a new rule that forgets ``scope=`` cannot even be constructed.
+    """
+    with pytest.raises(ValidationError):
+        RuleDefinition(  # pyright: ignore[reportCallIssue]  # scope deliberately omitted
+            id="E999",
+            name="NoScope",
+            tier=EnforcementTier.WARN,
+            mechanism=RuleMechanism.STATIC,
+            category="test",
+        )
+
+
+def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
+    """The publisher-side rules are app-scoped; everything else is 'both'.
+
+    APP-scoped rules (dependency pinning, managed-workflow drift) must never fire
+    on the SDK itself, which publishes the contract.  Pin the exact set so a new
+    rule has to make a deliberate scope decision rather than silently inheriting.
+
+    Note C003 (.gitignore entries) is *both*, not app: the SDK has its own
+    .gitignore sharing the standard baseline, so the rule is useful there too —
+    only C002 (bootstrap workflow drift) is genuinely 0%-applicable to the SDK.
+    """
+    rules = load_catalog()
+    app_scoped = {r.id for r in rules if r.scope == RuleScope.APP}
+    assert app_scoped == {"C002", "D001", "D002"}, app_scoped
+    # No rule is currently SDK-only; the rest are 'both'.
+    assert not {r.id for r in rules if r.scope == RuleScope.SDK}
+    both = {r.id for r in rules if r.scope == RuleScope.BOTH}
+    assert both == {r.id for r in rules} - app_scoped
+
+
+def test_scope_emitted_in_sarif_properties() -> None:
+    """The rule's scope is surfaced as ``atlan/scope`` in SARIF properties."""
+    descriptor = get_rule("D001").to_reporting_descriptor()
+    assert descriptor.properties["atlan/scope"] == "app"
+    descriptor = get_rule("E001").to_reporting_descriptor()
+    assert descriptor.properties["atlan/scope"] == "both"
 
 
 def test_catalog_e_series_present() -> None:
@@ -110,6 +165,9 @@ def test_catalog_l_series_present() -> None:
         "L016",
         "L017",
         "L018",
+        "L019",
+        "L020",
+        "L021",
     }
     missing = expected - l_ids
     assert not missing, f"Missing L-series rules: {missing}"
@@ -216,6 +274,7 @@ def test_duplicate_id_raises() -> None:
         name="R1",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
+        scope=RuleScope.BOTH,
         category="test",
     )
     r2 = RuleDefinition(
@@ -223,6 +282,7 @@ def test_duplicate_id_raises() -> None:
         name="R2",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
+        scope=RuleScope.BOTH,
         category="test",
     )
     with pytest.raises(ValueError, match="duplicate rule ID"):
@@ -237,6 +297,7 @@ def test_invalid_rule_id_raises() -> None:
             name="BadRule",
             tier=EnforcementTier.BLOCK,
             mechanism=RuleMechanism.STATIC,
+            scope=RuleScope.BOTH,
             category="test",
         )
 
@@ -248,6 +309,7 @@ def test_validate_catalog_raises_on_duplicate() -> None:
         name="R1",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
+        scope=RuleScope.BOTH,
         category="test",
     )
     r2 = RuleDefinition(
@@ -255,6 +317,7 @@ def test_validate_catalog_raises_on_duplicate() -> None:
         name="R2",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
+        scope=RuleScope.BOTH,
         category="test",
     )
     with pytest.raises(ValueError, match="duplicate rule ID"):

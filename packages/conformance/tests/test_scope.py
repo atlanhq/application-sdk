@@ -1,0 +1,220 @@
+"""Tests for rule scope: runtime detection + runner filtering.
+
+Covers:
+- ``detect_scope`` classifying a repo as SDK / app / unknown from pyproject.
+- The runner skipping an all-APP series (D) when scope is SDK.
+- The runner honouring an explicit ``--scope`` over auto-detection.
+- ``--scope app`` surfacing app-scoped findings (D001) on a consumer app.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+from conformance.suite.checks._ast_common import detect_scope
+from conformance.suite.runner import _rule_in_scope, _series_in_scope, main
+from conformance.suite.schema.disposition import RuleScope
+
+# ---------------------------------------------------------------------------
+# detect_scope
+# ---------------------------------------------------------------------------
+
+
+def _write_pyproject(root: Path, name: str | None) -> None:
+    if name is None:
+        (root / "pyproject.toml").write_text("[build-system]\n", encoding="utf-8")
+    else:
+        (root / "pyproject.toml").write_text(
+            f'[project]\nname = "{name}"\nversion = "0.1.0"\n', encoding="utf-8"
+        )
+
+
+def test_detect_scope_sdk(tmp_path: Path) -> None:
+    _write_pyproject(tmp_path, "atlan-application-sdk")
+    assert detect_scope(tmp_path) == RuleScope.SDK
+
+
+def test_detect_scope_sdk_sibling(tmp_path: Path) -> None:
+    _write_pyproject(tmp_path, "atlan-application-sdk-conformance")
+    assert detect_scope(tmp_path) == RuleScope.SDK
+
+
+def test_detect_scope_app(tmp_path: Path) -> None:
+    _write_pyproject(tmp_path, "my-connector")
+    assert detect_scope(tmp_path) == RuleScope.APP
+
+
+def test_detect_scope_no_pyproject(tmp_path: Path) -> None:
+    assert detect_scope(tmp_path) is None
+
+
+def test_detect_scope_no_project_name(tmp_path: Path) -> None:
+    _write_pyproject(tmp_path, None)
+    assert detect_scope(tmp_path) is None
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        # SDK: exact name and hyphen-extended sibling packages.
+        ("atlan-application-sdk", RuleScope.SDK),
+        ("atlan-application-sdk-conformance", RuleScope.SDK),
+        ("atlan_application_sdk", RuleScope.SDK),  # PEP 503 underscore form
+        # APP: names that merely share the prefix as a substring must NOT match.
+        ("atlan-application-sdk2", RuleScope.APP),
+        ("atlan-application-sdkk", RuleScope.APP),
+        ("my-connector", RuleScope.APP),
+    ],
+)
+def test_detect_scope_prefix_boundary(
+    tmp_path: Path, name: str, expected: RuleScope
+) -> None:
+    """The SDK prefix is hyphen-anchored, not a loose substring match."""
+    _write_pyproject(tmp_path, name)
+    assert detect_scope(tmp_path) == expected
+
+
+def test_sdk_prefix_matches_dependency_checker() -> None:
+    """Guard the comment-synced duplication of the SDK package name.
+
+    ``_scope.SDK_PACKAGE_PREFIX`` and ``dependency_conformance.SDK_PACKAGE`` encode
+    the same Atlan distribution name in two places (kept in sync by comment rather
+    than a shared module).  This catches drift without taking on that layering cost.
+    """
+    from conformance.suite.checks import dependency_conformance
+    from conformance.suite.checks._ast_common import SDK_PACKAGE_PREFIX
+
+    assert SDK_PACKAGE_PREFIX == dependency_conformance.SDK_PACKAGE
+
+
+@pytest.mark.parametrize(
+    ("name", "is_sdk"),
+    [
+        ("atlan-application-sdk", True),
+        ("atlan-application-sdk-conformance", True),
+        ("atlan_application_sdk", True),  # PEP 503 underscore form
+        ("atlan-application-sdk2", False),  # substring lookalike
+        ("atlan-application-sdkk", False),
+        ("my-connector", False),
+    ],
+)
+def test_is_self_check_matches_shared_helper(name: str, is_sdk: bool) -> None:
+    """`_is_self_check` and the shared `is_sdk_package_name` must agree.
+
+    Both now route through `is_sdk_package_name`, so the matching *semantics*
+    (hyphen-anchored, not just the constant) cannot drift between the D-series
+    self-exemption and the runner-side scope detection.
+    """
+    from conformance.suite.checks import dependency_conformance
+    from conformance.suite.checks._ast_common import is_sdk_package_name
+
+    assert is_sdk_package_name(name) is is_sdk
+    assert dependency_conformance._is_self_check(name) is is_sdk
+
+
+def test_is_self_check_handles_none() -> None:
+    """`_is_self_check(None)` stays False (the original None-guard is preserved)."""
+    from conformance.suite.checks import dependency_conformance
+
+    assert dependency_conformance._is_self_check(None) is False
+
+
+# ---------------------------------------------------------------------------
+# Scope predicates
+# ---------------------------------------------------------------------------
+
+
+def test_rule_in_scope_predicate() -> None:
+    assert _rule_in_scope(RuleScope.BOTH, RuleScope.SDK)
+    assert _rule_in_scope(RuleScope.APP, RuleScope.APP)
+    assert not _rule_in_scope(RuleScope.APP, RuleScope.SDK)
+    # Unknown active scope -> everything is in scope.
+    assert _rule_in_scope(RuleScope.APP, None)
+
+
+def test_series_in_scope_predicate() -> None:
+    # D-series is all-APP: out of scope on the SDK, in scope on an app.
+    assert not _series_in_scope("D", RuleScope.SDK)
+    assert _series_in_scope("D", RuleScope.APP)
+    # C-series is mixed (C001/C003 both, C002 app) -> stays active on the SDK.
+    assert _series_in_scope("C", RuleScope.SDK)
+
+
+# ---------------------------------------------------------------------------
+# Runner end-to-end (D-series: app-scoped)
+# ---------------------------------------------------------------------------
+
+
+def _make_app_repo(root: Path) -> None:
+    """An app pyproject with no atlan-application-sdk dependency -> triggers D001."""
+    (root / "pyproject.toml").write_text(
+        '[project]\nname = "my-connector"\nversion = "0.1.0"\n'
+        'dependencies = ["requests>=2,<3"]\n',
+        encoding="utf-8",
+    )
+
+
+def _rule_ids(sarif_path: Path) -> set[str]:
+    data = json.loads(sarif_path.read_text(encoding="utf-8"))
+    return {r["ruleId"] for r in data["runs"][0]["results"]}
+
+
+def test_runner_app_scope_surfaces_d001(tmp_path: Path) -> None:
+    _make_app_repo(tmp_path)
+    out = tmp_path / "report.sarif"
+    exit_code = main(
+        [
+            "--repo",
+            str(tmp_path),
+            "--series",
+            "D",
+            "--scope",
+            "app",
+            "--output",
+            str(out),
+        ]
+    )
+    assert "D001" in _rule_ids(out)
+    assert exit_code == 1  # D001 is block-tier
+
+
+def test_runner_sdk_scope_skips_d_series(tmp_path: Path) -> None:
+    _make_app_repo(tmp_path)  # same repo, but force SDK scope
+    out = tmp_path / "report.sarif"
+    exit_code = main(
+        [
+            "--repo",
+            str(tmp_path),
+            "--series",
+            "D",
+            "--scope",
+            "sdk",
+            "--output",
+            str(out),
+        ]
+    )
+    assert _rule_ids(out) == set()
+    assert exit_code == 0
+
+
+def test_runner_autodetects_app_scope(tmp_path: Path) -> None:
+    """No --scope: the app's pyproject name auto-detects to app, so D001 fires."""
+    _make_app_repo(tmp_path)
+    out = tmp_path / "report.sarif"
+    main(["--repo", str(tmp_path), "--series", "D", "--output", str(out)])
+    assert "D001" in _rule_ids(out)
+
+
+def test_runner_autodetects_sdk_scope_skips_d(tmp_path: Path) -> None:
+    """An SDK-named repo auto-detects to sdk, so the app-scoped D-series is skipped."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "atlan-application-sdk"\nversion = "0.1.0"\n'
+        'dependencies = ["requests>=2,<3"]\n',
+        encoding="utf-8",
+    )
+    out = tmp_path / "report.sarif"
+    exit_code = main(["--repo", str(tmp_path), "--series", "D", "--output", str(out)])
+    assert _rule_ids(out) == set()
+    assert exit_code == 0

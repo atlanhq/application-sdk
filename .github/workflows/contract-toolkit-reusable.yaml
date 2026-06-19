@@ -1,18 +1,24 @@
-name: Contract Toolkit Validation
+name: Contract Toolkit Validation (reusable)
+
+# Reusable workflow: contract-toolkit validation (generated-output freshness,
+# PKL tests/invariants, generated-Python lint + SDK-import, changelog guard,
+# docs reminder).
+#
+# Invoked only by sdk-gate.yaml, which gates the *whole call* on
+# "toolkit area changed OR force-all".  This replaces the old
+# contract-toolkit-validate.yml top-level `paths:` trigger: a path-filtered
+# workflow simply does not run when its paths are untouched, so any job inside
+# it that branch protection marks "required" sits pending forever.  Folding the
+# jobs into a reusable behind the always-concluding gate fixes that.
+#
+# The changelog-guard / docs-check jobs use pull_request context
+# (base/head sha, head_ref) and are guarded on `github.event_name ==
+# 'pull_request'`, so they self-skip on merge_group and tag-push entries where
+# that context is absent.  Reusable workflows see the *caller's* event context,
+# so these guards keep working unchanged.
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - "contract-toolkit/**"
-      - "application_sdk/contracts/**"
-      - "application_sdk/credentials/**"
-      - "application_sdk/handler/**"
-      - "application_sdk/templates/contracts/**"
-      - "pyproject.toml"
-      - "uv.lock"
-      - ".github/workflows/contract-toolkit-*.yml"
-  workflow_dispatch:
+  workflow_call: {}
 
 permissions:
   contents: read
