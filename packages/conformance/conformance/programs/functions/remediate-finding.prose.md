@@ -366,58 +366,52 @@ for human audit regardless.
 
 #### Area: dockerfile (I-series) — PHASE 1 (suggest-only)
 
-Proposes edits to the root `Dockerfile`.  All I-series rules are
-`autofixable = false` and `classification = "judgment"` — the remediator
-drafts the change but does **not** apply it; the area records the proposal in
-residue for human review.
+Proposes edits to the root `Dockerfile`.  Read the full Dockerfile context
+before applying any edit; changes to one instruction may interact with others.
 
-Read the full Dockerfile context before proposing; changes to one instruction
-may interact with others (e.g. removing `USER root` that guards a `RUN pip
-install` step requires understanding what that install needs).
+**Mechanical rules** (`autofixable = true`, `classification = "mechanical"`):
 
-- **I001 DockerfileWrongBaseImage** — the final `FROM` line uses a disallowed
-  base image.  Draft a replacement of the full `FROM` line:
+- **I001 DockerfileWrongBaseImage** — replace the final `FROM` line with the
+  exact approved image:
 
   ```
   FROM registry.atlan.com/public/app-runtime-base:3
   ```
 
-  Preserve any `AS <alias>` suffix if the image is referenced later in the
-  file (unusual in a single-stage app Dockerfile; drop it otherwise).  Note in
-  residue if the image being replaced was a dev or scratch image (may indicate
-  the Dockerfile isn't the app's production image at all).
+  Preserve any `AS <alias>` suffix if present (uncommon in single-stage
+  Dockerfiles; drop it otherwise).  This is a single-line substitution with a
+  known constant — no judgment needed.
 
-- **I002 DockerfileEntrypointOverride** — a `CMD` or `ENTRYPOINT` instruction
-  overrides the base image's launcher.  Draft a removal of the offending line
-  and note why: the base image co-launches the Dapr sidecar and handles
-  graceful drain; overriding it silently bypasses both.  If the removed command
-  was the app's start command (e.g. `CMD ["python", "-m", "myapp"]`), note in
-  residue that the app must instead be wired via `ENV ATLAN_APP_MODULE`.
+- **I002 DockerfileEntrypointOverride** — delete the `CMD` or `ENTRYPOINT`
+  line.  The base image's entrypoint script handles launch and graceful drain;
+  the line serves no purpose once the app is wired via `ATLAN_APP_MODULE`.  If
+  the removed instruction was the app's only start command, note in residue
+  that `ENV ATLAN_APP_MODULE` must also be present (I003 will flag it
+  independently if not).
+
+- **I004 DockerfileAppModeHardcoded** — delete the `ENV ATLAN_APP_MODE=…`
+  line.  No replacement is needed; the variable is supplied at deploy time by
+  the deployment manifest.
+
+- **I005 DockerfileRootUser** — delete the `USER root` or `USER 0` line.  The
+  base image already runs as `appuser`; the line is always wrong in the final
+  stage.  If a `RUN` step immediately follows that depends on root access
+  (e.g. `apt-get install`), note in residue that the install must move to an
+  earlier build stage — do **not** add a compensating `USER appuser` to hide
+  the `USER root`.
+
+**Judgment rules** (`autofixable = false`, `classification = "judgment"`):
 
 - **I003 DockerfileAppModuleMissing** — no `ENV ATLAN_APP_MODULE=…` is set.
-  Draft an addition after the `FROM` line (or after the last `ENV` block if
-  one exists):
+  Draft an addition after the `FROM` line (or after the last `ENV` block):
 
   ```
   ENV ATLAN_APP_MODULE=<module>:<AppClass>
   ```
 
   Do **not** invent a module path; leave `<module>:<AppClass>` as a literal
-  placeholder and instruct the developer to substitute the real value.
-  `classification = "judgment"` — only the developer knows the correct path.
-
-- **I004 DockerfileAppModeHardcoded** — `ENV ATLAN_APP_MODE=…` is present.
-  Draft a removal of the line.  Note in residue that `ATLAN_APP_MODE` must
-  be supplied by the deployment manifest (Helm values, K8s env, etc.), not
-  baked into the image, because the same image may run in different modes.
-
-- **I005 DockerfileRootUser** — `USER root` or `USER 0` appears in the final
-  stage.  Draft a removal of the line and note that the base image already
-  establishes `appuser`; switching to root in the final stage violates the
-  non-root policy.  If a subsequent `RUN` step depends on root (e.g. `apt-get
-  install`), note in residue that the install must move to a build stage or be
-  achieved another way; do **not** add a compensating `USER appuser` — that
-  merely hides the `USER root` rather than eliminating it.
+  placeholder and instruct the developer to substitute the real value.  Only
+  the developer knows the correct path — this cannot be inferred statically.
 
 **Suppress outcome** is not available for I-series (all rules are BLOCK-tier).
 

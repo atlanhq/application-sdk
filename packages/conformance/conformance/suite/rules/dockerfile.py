@@ -46,7 +46,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="dockerfile-base",
-        autofixable=False,
+        autofixable=True,
         since="0.5.0",
         rationale=(
             "Only registry.atlan.com/public/app-runtime-base:3 carries the "
@@ -85,7 +85,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="dockerfile-entrypoint",
-        autofixable=False,
+        autofixable=True,
         since="0.5.0",
         rationale=(
             "The base image entrypoint script co-launches the Dapr sidecar "
@@ -161,7 +161,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="dockerfile-env",
-        autofixable=False,
+        autofixable=True,
         since="0.5.0",
         rationale=(
             "The same image may be deployed as a worker or a server depending "
@@ -197,7 +197,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="dockerfile-security",
-        autofixable=False,
+        autofixable=True,
         since="0.5.0",
         rationale=(
             "The base image already establishes appuser as the container user.  "
