@@ -1677,7 +1677,11 @@ def main() -> NoReturn:
         )
 
         if isinstance(exc, ObjectStorePreflightError):
-            logger.error("SDR object-store preflight failed — cannot start:\n%s", exc)
+            logger.error(
+                "SDR object-store preflight failed — cannot start:\n%s",
+                exc,
+                exc_info=True,
+            )
             try:
                 asyncio.run(_flush_observability())
             # conformance: ignore[E002,E004] best-effort flush on fatal exit; fatal error already logged above

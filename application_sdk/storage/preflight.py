@@ -58,6 +58,7 @@ if _raw_timeout is not None:
             "ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS=%r is not a valid number; using default %.0f s",
             _raw_timeout,
             _PROBE_TIMEOUT_SECS,
+            exc_info=True,
         )
 del _raw_timeout
 
@@ -194,6 +195,7 @@ async def _probe_store(store: object, label: str, binding_name: str) -> str | No
             binding_name,
             probe_key,
             exc,
+            exc_info=True,
         )
 
     return read_failure
