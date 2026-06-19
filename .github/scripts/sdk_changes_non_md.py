@@ -1,11 +1,12 @@
 """
 Reads the JSON file list emitted by dorny/paths-filter (list-files: json) from
-the SDK_FILES environment variable and exits 0 (sdk=true) when at least one
-matched file is not a Markdown file, or exits 1 (sdk=false) when every matched
-file is Markdown.
+the SDK_FILES environment variable and writes sdk=true|false to $GITHUB_OUTPUT.
 
-Called by the 'Refine sdk — suppress markdown-only matches' step in
-pull_request.yaml and sdk-gate.yaml.
+sdk=true  when at least one matched file is not a Markdown file.
+sdk=false when every matched file is Markdown (or the list is empty).
+
+Always exits 0. Called by the 'Refine sdk — suppress markdown-only matches'
+step in pull_request.yaml and sdk-gate.yaml.
 """
 
 import json
