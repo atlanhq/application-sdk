@@ -360,6 +360,36 @@ def test_i005_fires_on_root_case_insensitive() -> None:
     assert "I005" in _ids(src)
 
 
+def test_i005_fires_on_user_zero_zero() -> None:
+    # USER 0:0 — group-qualified root; user part is still 0.
+    src = _VALID_DOCKERFILE + "\nUSER 0:0\n"
+    assert "I005" in _ids(src)
+
+
+def test_i005_fires_on_root_root() -> None:
+    # USER root:root — group-qualified; user part is root.
+    src = _VALID_DOCKERFILE + "\nUSER root:root\n"
+    assert "I005" in _ids(src)
+
+
+def test_i005_fires_on_root_zero() -> None:
+    # USER root:0 — root user with gid 0.
+    src = _VALID_DOCKERFILE + "\nUSER root:0\n"
+    assert "I005" in _ids(src)
+
+
+def test_i005_fires_on_zero_with_nonroot_group() -> None:
+    # USER 0:1000 — uid 0 (root) even though gid is non-root.
+    src = _VALID_DOCKERFILE + "\nUSER 0:1000\n"
+    assert "I005" in _ids(src)
+
+
+def test_i005_silent_on_nonroot_with_group() -> None:
+    # USER appuser:appgroup — neither part is root/0.
+    src = _VALID_DOCKERFILE + "\nUSER appuser:appgroup\n"
+    assert "I005" not in _ids(src)
+
+
 def test_i005_silent_on_user_appuser() -> None:
     # Explicit USER appuser is fine (base already sets it; no harm in being explicit).
     src = _VALID_DOCKERFILE + "\nUSER appuser\n"

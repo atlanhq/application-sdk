@@ -95,22 +95,32 @@ class _Instruction:
     line: int  # 1-based line number where the keyword starts
 
 
+def _normalise_text(text: str) -> str:
+    """Strip a leading UTF-8 BOM and normalise CRLF/CR line endings to LF.
+
+    Called once in ``scan_text`` so both ``_parse_dockerfile`` and
+    ``_parse_directives`` always receive the same normalised string —
+    keeping instruction line numbers and directive line numbers in sync.
+
+    Without BOM stripping, a BOM-prefixed first line causes
+    ``parts[0].upper()`` to return ``"\\ufeffFROM"`` and all I-series rules
+    silently no-op.  Without CRLF normalisation, ``\\r`` leaks into shlex
+    tokens, breaking keyword matching and ENV parsing.
+    """
+    text = text.lstrip("﻿")
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
 def _parse_dockerfile(text: str) -> list[_Instruction]:
-    """Parse Dockerfile text into a flat list of instructions.
+    """Parse a normalised Dockerfile text into a flat list of instructions.
 
     Handles line continuations (``\\``) and skips blank lines and comment
     lines.  Parser directives (``# syntax=``) are not handled — the default
     backslash escape character is assumed.
 
-    Normalises CRLF line endings and strips a leading UTF-8 BOM so that
-    Windows-authored Dockerfiles parse correctly.  Without this, a BOM-prefixed
-    first line causes ``parts[0].upper()`` to return ``"\\ufeffFROM"`` and the
-    I001/I002/I004/I005 rules silently no-op.
+    Expects text already normalised by ``_normalise_text`` (BOM stripped,
+    CRLF → LF).
     """
-    # Strip UTF-8 BOM (U+FEFF) that some editors/tools prepend.
-    text = text.lstrip("﻿")
-    # Normalise CRLF and bare CR to LF so shlex tokens never contain \r.
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
     instructions: list[_Instruction] = []
     raw_lines = text.splitlines()
     i = 0
@@ -422,17 +432,25 @@ def _check_i005(
     file: str,
     directives: dict[int, tuple[frozenset[str] | None, str | None]],
 ) -> list[Finding]:
-    """I005: USER root or USER 0 must not appear in the final stage."""
+    """I005: USER root or USER 0 must not appear in the final stage.
+
+    The user spec may include a group component (``user:group``), e.g.
+    ``USER 0:0``, ``USER root:root``, ``USER root:0``, ``USER 0:1000``.
+    Only the user portion (before the first ``:``) is checked so that
+    group-qualified root specs are not silently bypassed.
+    """
     final_start = _final_stage_start_idx(instructions)
     findings: list[Finding] = []
     for instr in instructions[final_start:]:
         if instr.keyword == "USER":
-            user = instr.args.split()[0] if instr.args.split() else ""
+            token = instr.args.split()[0] if instr.args.split() else ""
+            # Split user:group — only the user part determines identity.
+            user = token.split(":", 1)[0]
             if user.lower() in ("root", "0"):
                 msg = (
-                    f"USER {user} is not permitted in the final stage. "
+                    f"USER {token} is not permitted in the final stage. "
                     "The base image (app-runtime-base) already runs as 'appuser'; "
-                    f"'USER {user}' reverses that and exposes the container to "
+                    f"'USER {token}' reverses that and exposes the container to "
                     "privilege-escalation risks, violating the non-root policy."
                 )
                 findings.append(
@@ -448,6 +466,7 @@ def _check_i005(
 
 def scan_text(text: str, file: str) -> list[Finding]:
     """Scan a Dockerfile and return all I-series findings."""
+    text = _normalise_text(text)
     instructions = _parse_dockerfile(text)
     directives = _parse_directives(text)
     findings: list[Finding] = []
