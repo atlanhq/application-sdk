@@ -26,7 +26,7 @@ jobs:
       #          test matrix. The .github/actions/* entries are the test
       #          harness itself (the unit/integration deps + docstring-coverage
       #          wrappers), so changing *how* those checks run still re-runs them.
-      sdk: ${{ steps.filter.outputs.sdk }}
+      sdk: ${{ steps.sdk-refine.outputs.sdk }}
       # 'scan' — wider net for the Trivy filesystem scan: every first-party
       #          source tree + the dependency lockfiles. Still short-circuits on
       #          pure docs/, .github-meta, and .security-only PRs.
@@ -39,6 +39,9 @@ jobs:
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4
         id: filter
         with:
+          # list-files: json is required so the sdk-refine step below can inspect
+          # which files actually matched and suppress markdown-only false positives.
+          list-files: json
           filters: |
             container:
               - 'Dockerfile'
@@ -51,10 +54,11 @@ jobs:
               - '.github/actions/unit-tests/**'
               - '.github/actions/setup-deps/**'
               - '.github/actions/docstring-coverage/**'
-              # Markdown-only changes never affect SDK behaviour. Listed LAST so
-              # paths-filter's gitignore-style last-match-wins excludes e.g.
-              # application_sdk/README.md while application_sdk/foo.py still runs.
-              - '!**/*.md'
+              # NOTE: do NOT add '!**/*.md' here. dorny/paths-filter passes '!'
+              # patterns straight to picomatch, which interprets '!**/*.md' as
+              # "match any file that is not a .md file" — a near-catch-all that
+              # makes sdk=true for every non-markdown change in the repo. Markdown
+              # exclusion is handled in the sdk-refine step below instead.
             scan:
               - 'application_sdk/**'
               - 'contract-toolkit/**'
@@ -62,6 +66,24 @@ jobs:
               - 'pyproject.toml'
               - 'uv.lock'
               - '.github/actions/trivy/**'
+
+      # paths-filter sdk=true is necessary but not sufficient: the broad
+      # application_sdk/** pattern also matches .md files, so a PR that only
+      # touches e.g. application_sdk/README.md would incorrectly trigger the
+      # docstring-coverage check and the SDK test matrix. Check whether ANY
+      # matched file is non-.md; if all matched files are .md, suppress sdk=false.
+      - name: Refine sdk — suppress markdown-only matches
+        id: sdk-refine
+        env:
+          SDK_RESULT: ${{ steps.filter.outputs.sdk }}
+          SDK_FILES: ${{ steps.filter.outputs.sdk_files }}
+        run: |
+          set -euo pipefail
+          if [[ "$SDK_RESULT" != "true" ]]; then
+            echo "sdk=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python3 .github/scripts/sdk_changes_non_md.py
 
   # Required status check — the JOB has no `if:` so it always runs and always
   # concludes. The real validation step is gated to PR (non-fork) events: the
