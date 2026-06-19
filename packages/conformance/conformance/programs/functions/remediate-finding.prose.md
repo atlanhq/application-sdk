@@ -33,10 +33,12 @@ description: >
 
 ### Write-scope constraint
 
-This function may **only** propose edits to Python source files under the
-repository root — never to `tests/`, `.github/`, `conformance/`, or any CI /
-gate configuration.  This is the §6.1 "no self-judging changes" discipline:
-the remediator may not touch the gate it is judged against.
+This function may **only** propose edits to Python source files and the root
+`Dockerfile` — never to `tests/`, `.github/`, `conformance/`, or any CI / gate
+configuration.  This is the §6.1 "no self-judging changes" discipline: the
+remediator may not touch the gate it is judged against.  The `Dockerfile`
+exception is limited to I-series findings; no other area may propose Dockerfile
+edits.
 
 ### Dispatch by area
 
@@ -359,6 +361,65 @@ The suppression edit is an inline directive on the line above the violation:
 The justification must describe *why* the pattern is acceptable here, not
 merely that the rule is being suppressed.  Route every suppression to residue
 for human audit regardless.
+
+---
+
+#### Area: dockerfile (I-series) — PHASE 1 (suggest-only)
+
+Proposes edits to the root `Dockerfile`.  All I-series rules are
+`autofixable = false` and `classification = "judgment"` — the remediator
+drafts the change but does **not** apply it; the area records the proposal in
+residue for human review.
+
+Read the full Dockerfile context before proposing; changes to one instruction
+may interact with others (e.g. removing `USER root` that guards a `RUN pip
+install` step requires understanding what that install needs).
+
+- **I001 DockerfileWrongBaseImage** — the final `FROM` line uses a disallowed
+  base image.  Draft a replacement of the full `FROM` line:
+
+  ```
+  FROM registry.atlan.com/public/app-runtime-base:3
+  ```
+
+  Preserve any `AS <alias>` suffix if the image is referenced later in the
+  file (unusual in a single-stage app Dockerfile; drop it otherwise).  Note in
+  residue if the image being replaced was a dev or scratch image (may indicate
+  the Dockerfile isn't the app's production image at all).
+
+- **I002 DockerfileEntrypointOverride** — a `CMD` or `ENTRYPOINT` instruction
+  overrides the base image's launcher.  Draft a removal of the offending line
+  and note why: the base image co-launches the Dapr sidecar and handles
+  graceful drain; overriding it silently bypasses both.  If the removed command
+  was the app's start command (e.g. `CMD ["python", "-m", "myapp"]`), note in
+  residue that the app must instead be wired via `ENV ATLAN_APP_MODULE`.
+
+- **I003 DockerfileAppModuleMissing** — no `ENV ATLAN_APP_MODULE=…` is set.
+  Draft an addition after the `FROM` line (or after the last `ENV` block if
+  one exists):
+
+  ```
+  ENV ATLAN_APP_MODULE=<module>:<AppClass>
+  ```
+
+  Do **not** invent a module path; leave `<module>:<AppClass>` as a literal
+  placeholder and instruct the developer to substitute the real value.
+  `classification = "judgment"` — only the developer knows the correct path.
+
+- **I004 DockerfileAppModeHardcoded** — `ENV ATLAN_APP_MODE=…` is present.
+  Draft a removal of the line.  Note in residue that `ATLAN_APP_MODE` must
+  be supplied by the deployment manifest (Helm values, K8s env, etc.), not
+  baked into the image, because the same image may run in different modes.
+
+- **I005 DockerfileRootUser** — `USER root` or `USER 0` appears in the final
+  stage.  Draft a removal of the line and note that the base image already
+  establishes `appuser`; switching to root in the final stage violates the
+  non-root policy.  If a subsequent `RUN` step depends on root (e.g. `apt-get
+  install`), note in residue that the install must move to a build stage or be
+  achieved another way; do **not** add a compensating `USER appuser` — that
+  merely hides the `USER root` rather than eliminating it.
+
+**Suppress outcome** is not available for I-series (all rules are BLOCK-tier).
 
 ---
 
