@@ -40,11 +40,11 @@ Dockerfile.  Justification text after the rule ID is required; a bare
 
 Known coverage limits (intentional):
 
-* **Multi-stage builds (I001):** only the last ``FROM`` is checked.  Builder
-  stages may use any base image; they are out of scope for I001.
-* **Multi-stage builds (I005):** only USER instructions in the final stage
-  (after the last ``FROM``) are checked.  Builder stages routinely run as root
-  for package installation and are not flagged.
+* **Multi-stage builds:** all rules (I001–I005) operate only on the final
+  stage (instructions after the last ``FROM``).  Builder stages may use any
+  base image, CMD/ENTRYPOINT, ENV values, or root USER — Docker discards all
+  of those at stage boundary and only the final stage determines the runtime
+  container.
 * **ENV parsing:** the key=value form and the deprecated space-separated form
   are both recognised.  Heredoc values and dynamically computed values are not
   resolved.
@@ -334,9 +334,14 @@ def _check_i002(
     file: str,
     directives: dict[int, tuple[frozenset[str] | None, str | None]],
 ) -> list[Finding]:
-    """I002: CMD and ENTRYPOINT must not be overridden."""
+    """I002: CMD and ENTRYPOINT must not be overridden in the final stage.
+
+    Builder-stage CMD/ENTRYPOINT are discarded by Docker at stage boundary
+    and must not be flagged.
+    """
+    final_start = _final_stage_start_idx(instructions)
     findings: list[Finding] = []
-    for instr in instructions:
+    for instr in instructions[final_start:]:
         if instr.keyword in ("CMD", "ENTRYPOINT"):
             msg = (
                 f"{instr.keyword} must not be overridden in the app Dockerfile. "
@@ -354,15 +359,16 @@ def _check_i003(
     file: str,
     directives: dict[int, tuple[frozenset[str] | None, str | None]],
 ) -> list[Finding]:
-    """I003: ENV ATLAN_APP_MODULE=<module>:<class> must be set to a valid value.
+    """I003: ENV ATLAN_APP_MODULE=<module>:<class> must be set in the final stage.
 
     Rejects:
-    - missing entirely
+    - missing entirely from the final stage (builder-stage ENV doesn't carry over)
     - empty string or whitespace-only (``ENV ATLAN_APP_MODULE=" "``)
     - unresolved build-arg reference (``ENV ATLAN_APP_MODULE=$UNDEFINED_ARG``)
     - value that doesn't follow the ``module:Class`` shape
     """
-    for instr in instructions:
+    final_start = _final_stage_start_idx(instructions)
+    for instr in instructions[final_start:]:
         if instr.keyword == "ENV":
             env = _env_vars(instr.args)
             if "ATLAN_APP_MODULE" not in env:
@@ -408,9 +414,14 @@ def _check_i004(
     file: str,
     directives: dict[int, tuple[frozenset[str] | None, str | None]],
 ) -> list[Finding]:
-    """I004: ENV ATLAN_APP_MODE must not be hardcoded in the Dockerfile."""
+    """I004: ENV ATLAN_APP_MODE must not be hardcoded in the final stage.
+
+    Builder-stage ENV does not cross stage boundaries, so only the final
+    stage is checked.
+    """
+    final_start = _final_stage_start_idx(instructions)
     findings: list[Finding] = []
-    for instr in instructions:
+    for instr in instructions[final_start:]:
         if instr.keyword == "ENV":
             env = _env_vars(instr.args)
             if "ATLAN_APP_MODE" in env:

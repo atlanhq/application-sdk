@@ -203,6 +203,18 @@ def test_i002_silent_on_clean_dockerfile() -> None:
     assert "I002" not in _ids(_VALID_DOCKERFILE)
 
 
+def test_i002_silent_on_builder_stage_cmd_entrypoint() -> None:
+    # CMD/ENTRYPOINT in a builder stage are discarded by Docker — must not fire.
+    src = (
+        "FROM python:3.11 AS builder\n"
+        'CMD ["build"]\n'
+        'ENTRYPOINT ["/bin/sh"]\n'
+        "FROM registry.atlan.com/public/app-runtime-base:3\n"
+        "ENV ATLAN_APP_MODULE=myapp:MyApp\n"
+    )
+    assert "I002" not in _ids(src)
+
+
 def test_i002_pointing_at_instruction_line() -> None:
     src = 'FROM registry.atlan.com/public/app-runtime-base:3\nENV ATLAN_APP_MODULE=myapp:MyApp\nCMD ["x"]\n'
     findings = [f for f in scan_text(src, _FILE) if f.rule_id == "I002"]
@@ -226,6 +238,16 @@ def test_i002_suppressed_by_preceding_comment() -> None:
 
 def test_i003_fires_when_env_absent() -> None:
     src = "FROM registry.atlan.com/public/app-runtime-base:3\nRUN echo hi\n"
+    assert "I003" in _ids(src)
+
+
+def test_i003_fires_when_module_only_in_builder_stage() -> None:
+    # ENV in the builder stage doesn't carry into the final image — must fire.
+    src = (
+        "FROM python:3.11 AS builder\n"
+        "ENV ATLAN_APP_MODULE=myapp:MyApp\n"
+        "FROM registry.atlan.com/public/app-runtime-base:3\n"
+    )
     assert "I003" in _ids(src)
 
 
@@ -337,6 +359,17 @@ def test_i004_suppressed_by_preceding_comment() -> None:
     findings = [f for f in scan_text(src, _FILE) if f.rule_id == "I004"]
     assert findings[0].suppressed is True
     assert "I004" not in _active(src)
+
+
+def test_i004_silent_on_builder_stage_mode() -> None:
+    # ENV ATLAN_APP_MODE in a builder stage doesn't cross stage boundaries — must not fire.
+    src = (
+        "FROM python:3.11 AS builder\n"
+        "ENV ATLAN_APP_MODE=worker\n"
+        "FROM registry.atlan.com/public/app-runtime-base:3\n"
+        "ENV ATLAN_APP_MODULE=myapp:MyApp\n"
+    )
+    assert "I004" not in _ids(src)
 
 
 # ── I005 — DockerfileRootUser ─────────────────────────────────────────────────
