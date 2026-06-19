@@ -842,7 +842,9 @@ class BaseE2ETest:
             if not json_path:
                 safe_combo = report["combo"].replace("/", "-")
                 json_path = f"e2e-cert-report-{report['connector']}-{safe_combo}.json"
-            Path(json_path).write_bytes(orjson.dumps(report, option=orjson.OPT_INDENT_2))
+            Path(json_path).write_bytes(
+                orjson.dumps(report, option=orjson.OPT_INDENT_2)
+            )
             logger.info(
                 "Certification report [%s/%s]: %s",
                 report["connector"],
@@ -850,7 +852,7 @@ class BaseE2ETest:
                 "CERTIFIED" if report["certified"] else "NOT CERTIFIED",
             )
         except Exception as e:  # noqa: BLE001 — reporting must never fail the test
-            logger.warning("Failed to emit certification report: %s", e)
+            logger.warning("Failed to emit certification report: %s", e, exc_info=True)
 
     # ------------------------------------------------------------------
     # Default test method
