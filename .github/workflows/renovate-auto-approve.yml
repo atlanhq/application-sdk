@@ -14,10 +14,16 @@ name: Renovate — auto-approve dependency-only PRs
 
 on:
   workflow_run:
-    # PR Checks provides most required contexts; Conformance provides the rest.
-    # Capability Manifest Check is informational (see its own header) but
-    # included so we re-evaluate promptly if it is later added to the ruleset.
-    workflows: [PR Checks, Conformance, Capability Manifest Check]
+    # SDK Gate is the composing required check (SDK tests + conformance +
+    # contract toolkit). PR Checks provides the orthogonal required contexts
+    # (Trivy, commits, docstring). Conformance is retained for the push-to-main
+    # baseline run (it no longer fires on PRs). Capability Manifest Check is
+    # informational (see its own header) but included so we re-evaluate promptly
+    # if it is later added to the ruleset. CodeQL Advanced hosts the
+    # Pre-commit Checks job (a required status check) — without it, the
+    # auto-approve workflow never re-fires after Pre-commit Checks completes,
+    # leaving the PR permanently waiting for approval.
+    workflows: [SDK Gate, PR Checks, Conformance, Capability Manifest Check, CodeQL Advanced]
     types: [completed]
     # Limit to Renovate branches at trigger level — avoids spending a runner on
     # every workflow completion across the repo.

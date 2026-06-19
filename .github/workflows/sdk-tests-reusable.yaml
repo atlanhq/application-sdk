@@ -1,0 +1,126 @@
+name: SDK tests (reusable)
+
+# Reusable workflow: the SDK's own unit + integration + storage-emulator tests.
+#
+# Invoked only by sdk-gate.yaml, which gates the *whole call* on
+# "SDK area changed OR force-all (release / version-bump / v* tag)".  Because
+# the call is gated upstream, the jobs here carry no per-job change-detection
+# `if:` guards — when the SDK area is untouched the orchestrator skips this
+# entire reusable and the composing gate counts a skipped area as a pass.
+#
+# Deliberately NOT built on tests-reusable.yaml: that workflow is
+# connector-shaped (app-name required, e2e scaffold, no OS matrix).  The SDK's
+# own tests need the OS x Python matrix + object-store emulators, so they live
+# here as a dedicated SDK reusable.
+
+on:
+  workflow_call: {}
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Unit Tests
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        os: [ubuntu-22.04, macOS-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: "./.github/actions/unit-tests"
+        with:
+          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          fail-under: "85"
+          python-version: ${{ matrix.python-version }}
+
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: "./.github/actions/setup-deps"
+
+      # Temporal and Dapr are provisioned in-process by the SDK's own embedded
+      # dev helpers (application_sdk.dev.embedded_runtime / embedded_dapr) — the
+      # same code path local development uses — so this job no longer installs
+      # or starts a standalone Temporal CLI or daprd. The Temporal dev-server
+      # version now follows the `temporalio` dep in uv.lock and the daprd
+      # version follows `__dapr_version` (application_sdk/version.py), so there
+      # is no separate CLI version pin to keep in sync.
+      #
+      # Both helpers fetch their binary to ~/.cache on first use; cache those
+      # paths across runs so we don't re-download every time.
+      - name: Cache embedded runtime binaries
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.cache/atlan-sdk/temporal
+            ~/.cache/atlan-sdk/dapr
+          key: embedded-runtimes-${{ runner.os }}-${{ hashFiles('uv.lock', 'application_sdk/version.py') }}
+          restore-keys: |
+            embedded-runtimes-${{ runner.os }}-
+
+      - name: Run integration tests
+        run: uv run pytest tests/integration/ -m integration -v --timeout=120
+
+  storage-emulator:
+    name: Storage Emulator Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: "./.github/actions/setup-deps"
+
+      - name: Start object-store emulators
+        run: |
+          set -euo pipefail
+          # S3 → MinIO
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+          # Azure → Azurite
+          docker run -d --name azurite -p 10000:10000 \
+            mcr.microsoft.com/azure-storage/azurite:3.31.0 \
+            azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
+          # GCS → storage-testbench behind an nginx proxy that re-injects the
+          # ETag / Last-Modified headers testbench omits (obstore requires them).
+          docker network create gcs-net || true
+          docker run -d --name gcs-testbench --network gcs-net -e PORT=9000 \
+            gcr.io/cloud-devrel-public-resources/storage-testbench:v0.62.0
+          docker run -d --name gcs-proxy --network gcs-net -p 9095:9000 \
+            -v "$PWD/tests/integration/storage/gcs_emulator_proxy.conf:/etc/nginx/conf.d/default.conf:ro" \
+            nginx:1.27-alpine
+
+      - name: Wait for emulators + provision buckets/container
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do curl -sf http://localhost:9000/minio/health/live >/dev/null 2>&1 && break; sleep 2; done
+          for i in $(seq 1 30); do curl -s --max-time 2 http://localhost:10000/devstoreaccount1 >/dev/null 2>&1 && break; sleep 2; done
+          for i in $(seq 1 40); do curl -sf "http://localhost:9095/storage/v1/b?project=test" >/dev/null 2>&1 && break; sleep 2; done
+          export AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin AWS_DEFAULT_REGION=us-east-1
+          # Provisioning is idempotent (|| true) so a step re-run on a still-warm
+          # runner doesn't abort on "bucket already exists" under set -e.
+          aws --endpoint-url http://localhost:9000 s3 mb s3://sdk-emulator-test || true
+          # SDR ENABLE_ATLAN_UPLOAD handoff: customer-managed + internal Atlan buckets.
+          aws --endpoint-url http://localhost:9000 s3 mb s3://sdk-customer-objectstore || true
+          aws --endpoint-url http://localhost:9000 s3 mb s3://sdk-atlan-objectstore || true
+          az storage container create --name sdk-emulator-test \
+            --connection-string "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;" || true
+          curl -sf -X POST "http://localhost:9095/storage/v1/b?project=test" \
+            -H "Content-Type: application/json" -d '{"name":"sdk-emulator-test"}' || true
+
+      - name: Run storage emulator tests
+        env:
+          AWS_ENDPOINT_URL: http://localhost:9000
+          AZURE_STORAGE_ENDPOINT: http://localhost:10000
+          GCS_EMULATOR_ENDPOINT: http://localhost:9095
+        run: uv run pytest tests/integration/storage -m storage_emulator -v --timeout=300
+
+      - name: Teardown emulators
+        if: always()
+        run: docker rm -f minio azurite gcs-testbench gcs-proxy 2>/dev/null || true

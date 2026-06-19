@@ -1,0 +1,113 @@
+# .github/workflows/conformance-logging.yaml
+#
+# Reusable workflow: Python logging checks (L-series) via
+# `suite.runner --series L`.  Enforces:
+#   L001  FStringInLogMessage           — f-string in log call
+#   L003  ExtraKwargsWrongFramework     — extra={} in structlog/loguru call
+#   L004  ExceptBlockMissingExcInfoLog  — missing exc_info in except block
+#   L005  PrintBypass                   — print() instead of logger
+#   L006  InfoInTightLoop               — logger.info() in unbounded loop
+#   L007  LoggerCriticalUsage           — logger.critical() (unsanctioned)
+#   L008  UnguardedExpensiveDebug       — expensive call in debug args
+#   L009  WarnThenRaise                 — logger.warning/error before raise
+#   L010  CredentialInLogOutput         — credential value in log
+#   L011  StringConcatenationInLog      — string concat in log message
+#   L012  StdlibExtraReservedKeyCollision — extra key collides with LogRecord
+#   L013  StdlibArbitraryKwargs         — non-allowlist kwargs crash stdlib
+#   L014  StructlogEventKwargOverwrite  — event= overwrites structlog message
+#   L015  DictConfigDisableExistingLoggers — dictConfig disables existing loggers
+#   L016  BasicConfigNoopAfterFirstCall — multiple basicConfig() calls
+#   L017  LoggerExceptionUsage          — logger.exception() (unsanctioned)
+#   L018  KwargsInApplicationLogCalls   — kwargs in non-stdlib log calls
+#   L019  DiscardedBindResult           — discarded logger.bind() result
+#   L020  DeprecatedLoggingWarn         — logger.warn() deprecated alias
+#   L021  MissingLoggingLintRules       — missing ruff logging lint config
+#
+# New L-series checks added to suite/checks/ are picked up automatically.
+#
+# Usage from a connector app:
+#   uses: atlanhq/application-sdk/.github/workflows/conformance-logging.yaml@main
+#   # No inputs needed — published PyPI package is used by default.
+#   # To test an unreleased version: with: { conformance-ref: '<branch-or-sha>' }
+
+name: "Conformance — Logging series (L)"
+
+on:
+  workflow_call:
+    inputs:
+      conformance-ref:
+        description: "Git ref for unreleased suite testing (empty = use published PyPI package)"
+        required: false
+        default: ""
+        type: string
+      upload-sarif:
+        description: "Upload SARIF report to GitHub Security tab (requires security-events: write)"
+        required: false
+        default: true
+        type: boolean
+      event_name:
+        description: "Caller's github.event_name (push / pull_request / merge_group); reusable workflows always see 'workflow_call' internally"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  logging:
+    name: "Logging"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout caller repo"
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: "Detect changed files"
+        id: changes
+        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4
+        with:
+          filters: |
+            relevant:
+              - '**/*.py'
+
+      - name: "Set up uv"
+        if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push'
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+      - name: "Run L-series checks (published package)"
+        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push') && inputs.conformance-ref == ''
+        run: |
+          uvx atlan-application-sdk-conformance detect \
+            --repo . \
+            --series L \
+            --output logging.sarif
+
+      - name: "Run L-series checks (from git ref)"
+        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push') && inputs.conformance-ref != ''
+        run: |
+          uv run \
+            --with "atlan-application-sdk-conformance @ git+https://github.com/atlanhq/application-sdk@${{ inputs.conformance-ref }}#subdirectory=packages/conformance" \
+            -- atlan-application-sdk-conformance detect \
+            --repo . \
+            --series L \
+            --output logging.sarif
+
+      - name: "Upload SARIF artifact"
+        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push') && !cancelled()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-logging-sarif
+          path: logging.sarif
+
+      - name: "Strip suppressed results for Security tab"
+        if: ${{ inputs.upload-sarif && inputs.event_name == 'push' }}
+        run: |
+          jq '.runs[] |= (.results |= map(select(.suppressions == null or (.suppressions | length == 0))))' \
+            logging.sarif > logging-upload.sarif
+
+      - name: "Upload SARIF to Security tab"
+        if: ${{ inputs.upload-sarif && inputs.event_name == 'push' }}
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        with:
+          sarif_file: logging-upload.sarif

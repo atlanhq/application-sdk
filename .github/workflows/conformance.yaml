@@ -1,8 +1,13 @@
 name: "Conformance"
 
+# PR / merge_group conformance gating now lives in sdk-gate.yaml (the composing
+# SDK gate), which calls conformance-reusable.yaml as one of its three areas.
+# This workflow is kept ONLY for the push-to-main run: with event_name == 'push'
+# the reusable runs every series and publishes the per-series SARIF artifacts.
+# conformance-upload-sarif.yaml then picks those up via `workflow_run` on this
+# workflow's name ("Conformance") and uploads the branch baseline to the GitHub
+# Security tab — so the workflow NAME and the push-to-main trigger must stay.
 on:
-  pull_request: {}
-  merge_group: {}
   push:
     branches: [main]
 
