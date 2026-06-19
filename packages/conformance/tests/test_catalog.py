@@ -99,11 +99,14 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     """
     rules = load_catalog()
     app_scoped = {r.id for r in rules if r.scope == RuleScope.APP}
-    assert app_scoped == {"C002", "D001", "D002"}, app_scoped
-    # No rule is currently SDK-only; the rest are 'both'.
-    assert not {r.id for r in rules if r.scope == RuleScope.SDK}
+    # C002/D001/D002: publisher-side contract. P004/P005: apps must reach the
+    # orchestration layer through the SDK seam, not Temporal/SDK-internals (BLDX-1417).
+    assert app_scoped == {"C002", "D001", "D002", "P004", "P005"}, app_scoped
+    # SDK-only rules: the SDK must keep Temporal contained behind its seam (BLDX-1417).
+    sdk_scoped = {r.id for r in rules if r.scope == RuleScope.SDK}
+    assert sdk_scoped == {"P006", "P007"}, sdk_scoped
     both = {r.id for r in rules if r.scope == RuleScope.BOTH}
-    assert both == {r.id for r in rules} - app_scoped
+    assert both == {r.id for r in rules} - app_scoped - sdk_scoped
 
 
 def test_scope_emitted_in_sarif_properties() -> None:
