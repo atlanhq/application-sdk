@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-_PREFLIGHT_PREFIX = "artifacts/.atlan-preflight"
+_PREFLIGHT_PREFIX = "artifacts/apps/.atlan-sdk-preflight"
 _PREFLIGHT_PAYLOAD = b"atlan-preflight"
 
 # Per-store probe timeout.  Keeps a blackholed endpoint from stalling boot
@@ -63,7 +63,9 @@ del _raw_timeout
 
 # Stable probe key reused across boots on the same host so that a principal
 # with put+head but no delete permission doesn't accumulate one orphaned
-# object per boot.
+# object per boot.  Must stay under ``artifacts/apps/`` (or another allowed
+# prefix) — the Kong s3proxy plugin enforces an upstream_path_prefixes
+# allowlist and rejects anything outside it with 403 code 1009.
 _PROBE_KEY = f"{_PREFLIGHT_PREFIX}/probe-{socket.gethostname()}"
 
 # Pre-compiled patterns for HTTP status codes.  Word-boundary anchors prevent
