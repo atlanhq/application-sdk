@@ -99,11 +99,14 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     """
     rules = load_catalog()
     app_scoped = {r.id for r in rules if r.scope == RuleScope.APP}
-    assert app_scoped == {"C002", "D001", "D002"}, app_scoped
-    # No rule is currently SDK-only; the rest are 'both'.
-    assert not {r.id for r in rules if r.scope == RuleScope.SDK}
+    # C002/D001/D002: publisher-side contract. P004/P005: apps must reach the
+    # orchestration layer through the SDK seam, not Temporal/SDK-internals (BLDX-1417).
+    assert app_scoped == {"C002", "D001", "D002", "P004", "P005"}, app_scoped
+    # SDK-only rules: the SDK must keep Temporal contained behind its seam (BLDX-1417).
+    sdk_scoped = {r.id for r in rules if r.scope == RuleScope.SDK}
+    assert sdk_scoped == {"P006", "P007"}, sdk_scoped
     both = {r.id for r in rules if r.scope == RuleScope.BOTH}
-    assert both == {r.id for r in rules} - app_scoped
+    assert both == {r.id for r in rules} - app_scoped - sdk_scoped
 
 
 def test_scope_emitted_in_sarif_properties() -> None:
@@ -197,12 +200,19 @@ def test_catalog_d_series_present() -> None:
 
 
 def test_catalog_p_series_present() -> None:
-    """The P-series prescription rules are all present."""
+    """The P-series prescription rules are exactly P001–P007.
+
+    Strict equality (not just not-missing): P004–P007 are the orchestration-seam
+    rules (BLDX-1417); a stray or renumbered P-id would slip past a subset check
+    while breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
+    """
     rules = load_catalog()
     p_ids = {r.id for r in rules if r.id.startswith("P")}
-    expected = {"P001", "P002", "P003"}
+    expected = {"P001", "P002", "P003", "P004", "P005", "P006", "P007"}
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
+    extra = p_ids - expected
+    assert not extra, f"Unexpected P-series rules: {extra}"
 
 
 def test_catalog_o_series_present() -> None:

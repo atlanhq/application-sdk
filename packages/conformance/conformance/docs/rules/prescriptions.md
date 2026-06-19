@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**3 rules** · Checker: `suite.checks.prescriptions` (AST-based)
+**7 rules** · Checker: `suite.checks.prescriptions` and `suite.checks.orchestration` (AST-based; the orchestration-seam rules P004–P007 scan test files too)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -13,19 +13,23 @@ Suppress a finding on the violating line or the line directly above it:
 # conformance: ignore[P001] intentional: generic cleanup payload
 ```
 
-**Rule-id stability (non-migration policy):** P-ids and O-ids are a permanent public
-contract — each is exposed in the SARIF `help_uri` and referenced by inline `#
-conformance: ignore[...]` suppressions across the fleet.  An id therefore **never
-migrates and never changes**, even if a future domain series (S/B/T/A/…) later subsumes
-the same topic.  When a domain series takes over an area, the rule is retired in place
-(kept documented, no longer firing) and the new rule gets a fresh id — the original id
-is never reused or reassigned.
+**Rule-id stability (non-migration policy):** rule ids are a permanent public contract —
+each is exposed in the SARIF `help_uri` and referenced by inline `# conformance:
+ignore[...]` suppressions across the fleet.  An id therefore **never migrates and never
+changes**, even if a future domain series (S/B/T/A/…) later subsumes the same topic.
+When a domain series takes over an area, the rule is retired in place (kept documented,
+no longer firing) and the new rule gets a fresh id — the original id is never reused or
+reassigned.
 
 | ID | Name | Tier | Scope | Category | Autofixable | Since |
 |---|---|---|---|---|---|---|
 | [P001](#p001) | `UnboundedContractFields` | `block` | `both` | `contract-payload-safety` | — | 0.3.0 |
 | [P002](#p002) | `CategoryFieldOverride` | `block` | `both` | `category-immutability` | — | 0.3.0 |
 | [P003](#p003) | `ErrorCodePrefixMismatch` | `block` | `both` | `error-code-shape` | — | 0.3.0 |
+| [P004](#p004) | `DirectTemporalImport` | `warn` | `app` | `orchestration-seam` | — | 0.5.0 |
+| [P005](#p005) | `PrivateOrchestrationInternalImport` | `warn` | `app` | `orchestration-seam` | — | 0.5.0 |
+| [P006](#p006) | `TemporalImportOutsideAdapter` | `warn` | `sdk` | `orchestration-seam` | — | 0.5.0 |
+| [P007](#p007) | `RawTemporalInPublicSurface` | `warn` | `sdk` | `orchestration-seam` | — | 0.5.0 |
 
 ---
 
@@ -109,5 +113,106 @@ The check resolves inheritance transitively: an intermediate class with no `code
 don't silently inherit the bare leaf's code.  Suppress with `# conformance: ignore[P003]
 <reason>` at the declaration when an intermediate is genuinely abstract — see
 typed-error-prescription §4 and BLDX-1431.
+
+---
+
+## P004 — `DirectTemporalImport` {#p004}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `orchestration-seam` · **Autofixable:** — · **Since:** 0.5.0
+
+> App imports 'temporalio' directly instead of the SDK orchestration seam
+
+**Rationale:** Apps must interact with the orchestration layer only through the SDK's wrappers, never
+the underlying Temporal engine. Keeping the SDK as the single seam lets the
+orchestration layer evolve (Temporal upgrades, engine swaps, interceptor changes)
+without breaking every app. A direct 'temporalio' import couples the app to the engine
+and bypasses that seam (BLDX-1417).
+
+A consumer app imports `temporalio` (the raw orchestration engine) directly.  Everything
+an app needs is re-exported through the SDK seam: runtime primitives and decorators via
+`application_sdk.app` (`task`, `signal`, `query`, `update`, `now`, `sleep`, `uuid4`,
+`wait_condition`), and client/worker/converter construction via
+`application_sdk.execution` (`create_temporal_client`, `create_worker`, `AppWorker`).
+Importing `temporalio` directly couples the app to the engine and defeats the
+single-seam contract — see BLDX-1417.  This rule scans test/harness files too: an
+integration conftest that connects to Temporal directly is exactly the case to catch.
+
+Land as `WARN`: a justified inline `# conformance: ignore[P004] <reason>` records any
+unavoidable exception and stays visible in SARIF.
+
+---
+
+## P005 — `PrivateOrchestrationInternalImport` {#p005}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `orchestration-seam` · **Autofixable:** — · **Since:** 0.5.0
+
+> App imports SDK-private orchestration internals instead of the public seam
+
+**Rationale:** The SDK's public orchestration seam is `application_sdk.app` and
+`application_sdk.execution`. Importing past it into private internals
+(`application_sdk.execution._temporal.*` and other `_`-prefixed modules) couples the app
+to implementation details that change without a deprecation cycle, so the SDK can no
+longer evolve the seam safely (BLDX-1417).
+
+A consumer app imports from an SDK-private module — anything with a `_`-prefixed segment
+under `application_sdk` (most commonly `application_sdk.execution._temporal.*`) — or
+imports a private (`_`-prefixed) name from a public SDK module.  These internals are not
+a stable contract: the public re-exports in `application_sdk.execution`
+(`create_temporal_client`, `create_worker`, `AppWorker`, `create_data_converter`) and
+`application_sdk.app` are the supported surface.  Where no public equivalent exists,
+raise it with the SDK team — see BLDX-1417.
+
+Land as `WARN`: a justified inline `# conformance: ignore[P005] <reason>` records any
+unavoidable exception and stays visible in SARIF.
+
+---
+
+## P006 — `TemporalImportOutsideAdapter` {#p006}
+
+**Tier:** `warn` · **Scope:** `sdk` · **Category:** `orchestration-seam` · **Autofixable:** — · **Since:** 0.5.0
+
+> SDK imports 'temporalio' outside the execution/_temporal adapter
+
+**Rationale:** For the SDK to stay the single seam, Temporal must be contained behind one adapter
+(`application_sdk/execution/_temporal/`). When 'temporalio' is imported elsewhere in the
+SDK the engine bleeds across the codebase, and a future orchestration change has to be
+made in many places instead of one — the exact coupling this contract exists to prevent
+(BLDX-1417).
+
+`temporalio` is imported in an SDK module outside the orchestration adapter
+`application_sdk/execution/_temporal/`.  The adapter is the one place that may touch the
+engine directly; the curated primitive re-export site `application_sdk/app/__init__.py`
+(the seam apps consume) and test files are exempt.  Everywhere else, relocate the
+Temporal usage into the adapter (or behind it) so the SDK keeps a single seam — see
+BLDX-1417.
+
+Land as `WARN`: the current spread of in-SDK Temporal usage is the backlog this rule
+surfaces; some sites (e.g. workflow-class generation) are structural and stay until
+refactored.  Suppress a deliberate exception with `# conformance: ignore[P006]
+<reason>`.
+
+---
+
+## P007 — `RawTemporalInPublicSurface` {#p007}
+
+**Tier:** `warn` · **Scope:** `sdk` · **Category:** `orchestration-seam` · **Autofixable:** — · **Since:** 0.5.0
+
+> SDK public API re-exports or exposes a raw 'temporalio' type
+
+**Rationale:** If the SDK's public API hands callers raw Temporal objects (re-exports a 'temporalio'
+symbol, or returns/accepts a 'temporalio' type), apps are coupled to the engine through
+the very surface meant to insulate them, and the seam leaks. The public contract must
+trade only in SDK-owned types so the engine can change underneath it (BLDX-1417).
+
+The SDK's public surface leaks Temporal in one of two ways: a public package `__init__`
+lists a name in `__all__` that was imported straight from `temporalio`, or a publicly
+re-exported function exposes a raw `temporalio` type in a parameter/return annotation
+(e.g. `create_temporal_client() -> Client`, `create_worker(client: Client)`). The
+curated runtime-primitive re-exports in `application_sdk/app/__init__` are the
+sanctioned seam and are exempt, as are test files.  Closing a leak means wrapping the
+value in an opaque SDK type (a refactor) — see BLDX-1417.
+
+Land as `WARN`: this rule detects the leaks; closing them is tracked separately.
+Suppress a reviewed exception with `# conformance: ignore[P007] <reason>`.
 
 ---

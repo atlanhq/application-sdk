@@ -192,6 +192,57 @@ a payload-size behavioural check).
 
 ---
 
+**Orchestration-seam rules (P004–P007, BLDX-1417).** These are also prescriptions
+(area `prescriptions`) and stay suggest-only: the P004/P005 violations are usually
+under `tests/` where this function may not write, the app-side rewrites carry
+judgment, and P006/P007 are refactors. `classification` is always `"judgment"`.
+
+- **P004 DirectTemporalImport** (app) — the app imports `temporalio` directly.
+  Draft a rewrite to the SDK seam by mapping the imported symbol:
+  - workflow primitives `now`/`sleep`/`uuid4`/`wait_condition` and the
+    interaction decorators `signal`/`query`/`update` (and `task` in place of
+    `activity`) → `from application_sdk.app import …`;
+  - `temporalio.client.Client` / `Client.connect(...)` →
+    `from application_sdk.execution import create_temporal_client`
+    (`client = await create_temporal_client(host=...)`);
+  - `temporalio.worker.Worker` →
+    `from application_sdk.execution import AppWorker, create_worker`;
+  - `temporalio.converter` data-converter use →
+    `from application_sdk.execution import create_data_converter`.
+
+  **Annotation hole — route to residue, do not fabricate a fix:** if the only
+  use of a `temporalio` symbol is to *annotate* a value the public seam returns
+  (e.g. `Client` for the result of `create_temporal_client`), there is no public
+  opaque type to swap to yet — this is the P007 leak the SDK must close first.
+  Note the P007 dependency in residue rather than inventing an import.
+
+- **P005 PrivateOrchestrationInternalImport** (app) — the app reaches into an
+  SDK-private module. Draft a rewrite to the public re-export when one exists:
+  - `application_sdk.execution._temporal.worker.{create_worker,AppWorker}` →
+    `application_sdk.execution.{create_worker,AppWorker}`;
+  - `application_sdk.execution._temporal.backend.create_temporal_client` →
+    `application_sdk.execution.create_temporal_client`;
+  - `application_sdk.execution._temporal.converter.create_data_converter` →
+    `application_sdk.execution.create_data_converter`.
+
+  **No public twin — route to residue:** some internals have no public
+  equivalent today (e.g. `create_data_converter_for_app`,
+  `TemporalExecutorBackend`). Do **not** invent a public import; note that the
+  SDK must expose a public equivalent (or the app must drop the dependency).
+
+- **P006 TemporalImportOutsideAdapter** (sdk) — `temporalio` is imported outside
+  the `execution/_temporal/` adapter. The fix is a structural relocation of the
+  Temporal usage behind the adapter, which no import rewrite can perform. Route
+  to residue with a note that an SDK refactor is required. Do not attempt a
+  mechanical edit.
+
+- **P007 RawTemporalInPublicSurface** (sdk) — a public API re-exports or exposes
+  a raw `temporalio` type. The fix is to wrap the value in an opaque SDK type (or
+  stop re-exporting it) — a public-contract refactor. Route to residue with that
+  guidance. Do not attempt a mechanical edit.
+
+---
+
 #### Area: logging (L-series) — PHASE 2
 
 Consult the finding's `hint` and `message`, then read the actual source lines
