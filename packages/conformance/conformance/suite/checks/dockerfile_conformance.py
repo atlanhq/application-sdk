@@ -101,7 +101,16 @@ def _parse_dockerfile(text: str) -> list[_Instruction]:
     Handles line continuations (``\\``) and skips blank lines and comment
     lines.  Parser directives (``# syntax=``) are not handled — the default
     backslash escape character is assumed.
+
+    Normalises CRLF line endings and strips a leading UTF-8 BOM so that
+    Windows-authored Dockerfiles parse correctly.  Without this, a BOM-prefixed
+    first line causes ``parts[0].upper()`` to return ``"\\ufeffFROM"`` and the
+    I001/I002/I004/I005 rules silently no-op.
     """
+    # Strip UTF-8 BOM (U+FEFF) that some editors/tools prepend.
+    text = text.lstrip("﻿")
+    # Normalise CRLF and bare CR to LF so shlex tokens never contain \r.
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
     instructions: list[_Instruction] = []
     raw_lines = text.splitlines()
     i = 0
@@ -279,7 +288,13 @@ def _check_i001(
     ).strip()
     image = args_clean.split()[0] if args_clean.split() else ""
 
-    if image == _REQUIRED_BASE:
+    # Accept the canonical base image with or without a digest pin.
+    # Digest pinning is strictly stronger than the v3 major tag alone —
+    # it still guarantees the same base while adding content-addressability.
+    _DIGEST_RE = re.compile(r"@sha256:[a-f0-9]{64}$", re.IGNORECASE)
+    if image == _REQUIRED_BASE or (
+        image.startswith(_REQUIRED_BASE + "@") and _DIGEST_RE.search(image)
+    ):
         return []
 
     image_lower = image.lower()
@@ -329,12 +344,45 @@ def _check_i003(
     file: str,
     directives: dict[int, tuple[frozenset[str] | None, str | None]],
 ) -> list[Finding]:
-    """I003: ENV ATLAN_APP_MODULE=<module>:<class> must be set to a non-empty value."""
+    """I003: ENV ATLAN_APP_MODULE=<module>:<class> must be set to a valid value.
+
+    Rejects:
+    - missing entirely
+    - empty string or whitespace-only (``ENV ATLAN_APP_MODULE=" "``)
+    - unresolved build-arg reference (``ENV ATLAN_APP_MODULE=$UNDEFINED_ARG``)
+    - value that doesn't follow the ``module:Class`` shape
+    """
     for instr in instructions:
         if instr.keyword == "ENV":
             env = _env_vars(instr.args)
-            if "ATLAN_APP_MODULE" in env and env["ATLAN_APP_MODULE"]:
-                return []
+            if "ATLAN_APP_MODULE" not in env:
+                continue
+            value = env["ATLAN_APP_MODULE"].strip()
+            if not value:
+                # Whitespace-only value — same as missing.
+                break
+            if value.startswith("$"):
+                # Unresolved build-arg reference; the variable will be empty at
+                # runtime unless ARG/--build-arg provides a default.
+                msg = (
+                    f"ENV ATLAN_APP_MODULE='{value}' looks like an unresolved "
+                    "build-arg reference.  The runtime needs a concrete "
+                    "'module:ClassName' value, not a shell variable.  Set a "
+                    "literal value (e.g. 'ENV ATLAN_APP_MODULE=myapp.app:MyApp') "
+                    "or ensure the ARG default is always defined."
+                )
+                return [_make_finding(RULE_I003, file, instr.line, msg, directives)]
+            # Soft shape check: must contain ':' with non-empty parts on both sides.
+            parts = value.split(":", 1)
+            if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
+                msg = (
+                    f"ENV ATLAN_APP_MODULE='{value}' does not follow the required "
+                    "'module:ClassName' format (e.g. 'myapp.app:MyApp').  "
+                    "The platform runtime splits on ':' to locate the module and "
+                    "instantiate the named class."
+                )
+                return [_make_finding(RULE_I003, file, instr.line, msg, directives)]
+            return []
     msg = (
         "ENV ATLAN_APP_MODULE is not set. The platform runtime uses this "
         "variable to locate and instantiate the application class "

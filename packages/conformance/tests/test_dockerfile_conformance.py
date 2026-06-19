@@ -52,60 +52,80 @@ def test_valid_dockerfile_produces_no_findings() -> None:
 # ── I001 — DockerfileWrongBaseImage ──────────────────────────────────────────
 
 
-def test_f001_fires_on_wrong_registry() -> None:
+def test_i001_fires_on_wrong_registry() -> None:
     src = "FROM python:3.11\nENV ATLAN_APP_MODULE=myapp:MyApp\n"
     assert "I001" in _ids(src)
 
 
-def test_f001_fires_on_cgr_image() -> None:
+def test_i001_fires_on_cgr_image() -> None:
     src = "FROM cgr.dev/atlan.com/app-framework-golden:3.13\nENV ATLAN_APP_MODULE=myapp:MyApp\n"
     assert "I001" in _ids(src)
 
 
-def test_f001_fires_on_latest_tag() -> None:
+def test_i001_fires_on_latest_tag() -> None:
     src = "FROM registry.atlan.com/public/app-runtime-base:latest\nENV ATLAN_APP_MODULE=myapp:MyApp\n"
     findings = [f for f in scan_text(src, _FILE) if f.rule_id == "I001"]
     assert len(findings) == 1
     assert ":latest" in findings[0].message
 
 
-def test_f001_fires_on_dev_branch_tag() -> None:
+def test_i001_fires_on_dev_branch_tag() -> None:
     src = "FROM registry.atlan.com/public/app-runtime-base:main\nENV ATLAN_APP_MODULE=myapp:MyApp\n"
     assert "I001" in _ids(src)
 
 
-def test_f001_fires_on_pinned_patch_version() -> None:
+def test_i001_fires_on_pinned_patch_version() -> None:
     src = "FROM registry.atlan.com/public/app-runtime-base:3.2.1\nENV ATLAN_APP_MODULE=myapp:MyApp\n"
     assert "I001" in _ids(src)
 
 
-def test_f001_fires_on_v2_major_tag() -> None:
+def test_i001_fires_on_v2_major_tag() -> None:
     src = "FROM registry.atlan.com/public/app-runtime-base:2\nENV ATLAN_APP_MODULE=myapp:MyApp\n"
     assert "I001" in _ids(src)
 
 
-def test_f001_fires_on_no_tag() -> None:
+def test_i001_fires_on_no_tag() -> None:
     # No tag implies :latest
     src = "FROM registry.atlan.com/public/app-runtime-base\nENV ATLAN_APP_MODULE=myapp:MyApp\n"
     assert "I001" in _ids(src)
 
 
-def test_f001_silent_on_correct_base() -> None:
+def test_i001_silent_on_correct_base() -> None:
     src = "FROM registry.atlan.com/public/app-runtime-base:3\nENV ATLAN_APP_MODULE=myapp:MyApp\n"
     assert "I001" not in _ids(src)
 
 
-def test_f001_silent_on_correct_base_with_as_alias() -> None:
+def test_i001_silent_on_digest_pinned_base() -> None:
+    # Digest pinning is strictly stronger than the major tag; must be accepted.
+    digest = "a" * 64
+    src = (
+        f"FROM registry.atlan.com/public/app-runtime-base:3@sha256:{digest}\n"
+        "ENV ATLAN_APP_MODULE=myapp:MyApp\n"
+    )
+    assert "I001" not in _ids(src)
+
+
+def test_i001_fires_on_wrong_digest_prefix() -> None:
+    # Digest on wrong base image must still fire.
+    digest = "a" * 64
+    src = (
+        f"FROM registry.atlan.com/public/app-runtime-base:2@sha256:{digest}\n"
+        "ENV ATLAN_APP_MODULE=myapp:MyApp\n"
+    )
+    assert "I001" in _ids(src)
+
+
+def test_i001_silent_on_correct_base_with_as_alias() -> None:
     src = "FROM registry.atlan.com/public/app-runtime-base:3 AS app\nENV ATLAN_APP_MODULE=myapp:MyApp\n"
     assert "I001" not in _ids(src)
 
 
-def test_f001_silent_on_correct_base_with_platform() -> None:
+def test_i001_silent_on_correct_base_with_platform() -> None:
     src = "FROM --platform=linux/amd64 registry.atlan.com/public/app-runtime-base:3\nENV ATLAN_APP_MODULE=myapp:MyApp\n"
     assert "I001" not in _ids(src)
 
 
-def test_f001_checks_final_from_in_multistage() -> None:
+def test_i001_checks_final_from_in_multistage() -> None:
     # Intermediate builder stage may use any image; final stage must be correct.
     src = (
         "FROM python:3.11 AS builder\n"
@@ -118,7 +138,7 @@ def test_f001_checks_final_from_in_multistage() -> None:
     assert "I001" not in _ids(src)
 
 
-def test_f001_fires_when_final_from_is_wrong_in_multistage() -> None:
+def test_i001_fires_when_final_from_is_wrong_in_multistage() -> None:
     src = (
         "FROM registry.atlan.com/public/app-runtime-base:3 AS base\n"
         "RUN echo first\n"
@@ -129,13 +149,13 @@ def test_f001_fires_when_final_from_is_wrong_in_multistage() -> None:
     assert "I001" in _ids(src)
 
 
-def test_f001_pointing_at_from_line() -> None:
+def test_i001_pointing_at_from_line() -> None:
     src = "FROM python:3.11\nENV ATLAN_APP_MODULE=myapp:MyApp\n"
     findings = [f for f in scan_text(src, _FILE) if f.rule_id == "I001"]
     assert findings[0].line == 1
 
 
-def test_f001_suppressed_by_preceding_comment() -> None:
+def test_i001_suppressed_by_preceding_comment() -> None:
     src = (
         "# conformance: ignore[I001] SDK is the base image builder, not a consumer\n"
         "FROM cgr.dev/atlan.com/app-framework-golden:3.13\n"
@@ -147,7 +167,7 @@ def test_f001_suppressed_by_preceding_comment() -> None:
     assert "I001" not in _active(src)
 
 
-def test_f001_bare_suppress_without_reason_not_accepted() -> None:
+def test_i001_bare_suppress_without_reason_not_accepted() -> None:
     src = (
         "# conformance: ignore[I001]\n"
         "FROM python:3.11\n"
@@ -159,37 +179,37 @@ def test_f001_bare_suppress_without_reason_not_accepted() -> None:
 # ── I002 — DockerfileEntrypointOverride ──────────────────────────────────────
 
 
-def test_f002_fires_on_cmd() -> None:
+def test_i002_fires_on_cmd() -> None:
     src = _VALID_DOCKERFILE + '\nCMD ["python", "-m", "myapp"]\n'
     findings = [f for f in scan_text(src, _FILE) if f.rule_id == "I002"]
     assert len(findings) == 1
     assert "CMD" in findings[0].message
 
 
-def test_f002_fires_on_entrypoint() -> None:
+def test_i002_fires_on_entrypoint() -> None:
     src = _VALID_DOCKERFILE + '\nENTRYPOINT ["/entrypoint.sh"]\n'
     findings = [f for f in scan_text(src, _FILE) if f.rule_id == "I002"]
     assert len(findings) == 1
     assert "ENTRYPOINT" in findings[0].message
 
 
-def test_f002_fires_on_both_cmd_and_entrypoint() -> None:
+def test_i002_fires_on_both_cmd_and_entrypoint() -> None:
     src = _VALID_DOCKERFILE + '\nCMD ["app"]\nENTRYPOINT ["/ep.sh"]\n'
     rule_ids = [f.rule_id for f in scan_text(src, _FILE) if f.rule_id == "I002"]
     assert len(rule_ids) == 2
 
 
-def test_f002_silent_on_clean_dockerfile() -> None:
+def test_i002_silent_on_clean_dockerfile() -> None:
     assert "I002" not in _ids(_VALID_DOCKERFILE)
 
 
-def test_f002_pointing_at_instruction_line() -> None:
+def test_i002_pointing_at_instruction_line() -> None:
     src = 'FROM registry.atlan.com/public/app-runtime-base:3\nENV ATLAN_APP_MODULE=myapp:MyApp\nCMD ["x"]\n'
     findings = [f for f in scan_text(src, _FILE) if f.rule_id == "I002"]
     assert findings[0].line == 3
 
 
-def test_f002_suppressed_by_preceding_comment() -> None:
+def test_i002_suppressed_by_preceding_comment() -> None:
     src = (
         "FROM registry.atlan.com/public/app-runtime-base:3\n"
         "ENV ATLAN_APP_MODULE=myapp:MyApp\n"
@@ -204,27 +224,51 @@ def test_f002_suppressed_by_preceding_comment() -> None:
 # ── I003 — DockerfileAppModuleMissing ────────────────────────────────────────
 
 
-def test_f003_fires_when_env_absent() -> None:
+def test_i003_fires_when_env_absent() -> None:
     src = "FROM registry.atlan.com/public/app-runtime-base:3\nRUN echo hi\n"
     assert "I003" in _ids(src)
 
 
-def test_f003_fires_when_env_set_empty() -> None:
+def test_i003_fires_when_env_set_empty() -> None:
     src = "FROM registry.atlan.com/public/app-runtime-base:3\nENV ATLAN_APP_MODULE=\n"
     assert "I003" in _ids(src)
 
 
-def test_f003_silent_on_key_value_form() -> None:
+def test_i003_fires_on_whitespace_only_value() -> None:
+    # "ENV ATLAN_APP_MODULE=\" \"" must not pass — whitespace-only is empty.
+    src = (
+        'FROM registry.atlan.com/public/app-runtime-base:3\nENV ATLAN_APP_MODULE=" "\n'
+    )
+    assert "I003" in _ids(src)
+
+
+def test_i003_fires_on_unresolved_build_arg() -> None:
+    # "$UNDEFINED_ARG" is truthy as a Python string but unresolved at runtime.
+    src = "FROM registry.atlan.com/public/app-runtime-base:3\nENV ATLAN_APP_MODULE=$UNDEFINED_ARG\n"
+    assert "I003" in _ids(src)
+
+
+def test_i003_fires_on_bad_shape_no_colon() -> None:
+    src = "FROM registry.atlan.com/public/app-runtime-base:3\nENV ATLAN_APP_MODULE=myapp\n"
+    assert "I003" in _ids(src)
+
+
+def test_i003_fires_on_bad_shape_empty_class() -> None:
+    src = "FROM registry.atlan.com/public/app-runtime-base:3\nENV ATLAN_APP_MODULE=myapp:\n"
+    assert "I003" in _ids(src)
+
+
+def test_i003_silent_on_key_value_form() -> None:
     src = "FROM registry.atlan.com/public/app-runtime-base:3\nENV ATLAN_APP_MODULE=myapp.app:MyApp\n"
     assert "I003" not in _ids(src)
 
 
-def test_f003_silent_on_space_separated_form() -> None:
+def test_i003_silent_on_space_separated_form() -> None:
     src = "FROM registry.atlan.com/public/app-runtime-base:3\nENV ATLAN_APP_MODULE myapp.app:MyApp\n"
     assert "I003" not in _ids(src)
 
 
-def test_f003_silent_on_multi_pair_env() -> None:
+def test_i003_silent_on_multi_pair_env() -> None:
     src = (
         "FROM registry.atlan.com/public/app-runtime-base:3\n"
         "ENV OTHER=val ATLAN_APP_MODULE=myapp:MyApp\n"
@@ -232,13 +276,13 @@ def test_f003_silent_on_multi_pair_env() -> None:
     assert "I003" not in _ids(src)
 
 
-def test_f003_finding_at_line_1() -> None:
+def test_i003_finding_at_line_1() -> None:
     src = "FROM registry.atlan.com/public/app-runtime-base:3\n"
     findings = [f for f in scan_text(src, _FILE) if f.rule_id == "I003"]
     assert findings[0].line == 1
 
 
-def test_f003_suppressed_by_first_line_comment() -> None:
+def test_i003_suppressed_by_first_line_comment() -> None:
     # For a file-level missing finding, a directive at line 1 suppresses it.
     src = (
         "# conformance: ignore[I003] module set via deployment env var injection\n"
@@ -253,27 +297,27 @@ def test_f003_suppressed_by_first_line_comment() -> None:
 # ── I004 — DockerfileAppModeHardcoded ────────────────────────────────────────
 
 
-def test_f004_fires_on_hardcoded_mode() -> None:
+def test_i004_fires_on_hardcoded_mode() -> None:
     src = _VALID_DOCKERFILE + "\nENV ATLAN_APP_MODE=worker\n"
     findings = [f for f in scan_text(src, _FILE) if f.rule_id == "I004"]
     assert len(findings) == 1
 
 
-def test_f004_fires_on_server_mode() -> None:
+def test_i004_fires_on_server_mode() -> None:
     src = _VALID_DOCKERFILE + "\nENV ATLAN_APP_MODE=server\n"
     assert "I004" in _ids(src)
 
 
-def test_f004_fires_on_mode_in_multi_pair_env() -> None:
+def test_i004_fires_on_mode_in_multi_pair_env() -> None:
     src = _VALID_DOCKERFILE + "\nENV SOME_VAR=val ATLAN_APP_MODE=worker\n"
     assert "I004" in _ids(src)
 
 
-def test_f004_silent_when_mode_not_set() -> None:
+def test_i004_silent_when_mode_not_set() -> None:
     assert "I004" not in _ids(_VALID_DOCKERFILE)
 
 
-def test_f004_pointing_at_env_line() -> None:
+def test_i004_pointing_at_env_line() -> None:
     src = (
         "FROM registry.atlan.com/public/app-runtime-base:3\n"
         "ENV ATLAN_APP_MODULE=myapp:MyApp\n"
@@ -283,7 +327,7 @@ def test_f004_pointing_at_env_line() -> None:
     assert findings[0].line == 3
 
 
-def test_f004_suppressed_by_preceding_comment() -> None:
+def test_i004_suppressed_by_preceding_comment() -> None:
     src = (
         "FROM registry.atlan.com/public/app-runtime-base:3\n"
         "ENV ATLAN_APP_MODULE=myapp:MyApp\n"
@@ -298,35 +342,35 @@ def test_f004_suppressed_by_preceding_comment() -> None:
 # ── I005 — DockerfileRootUser ─────────────────────────────────────────────────
 
 
-def test_f005_fires_on_user_root() -> None:
+def test_i005_fires_on_user_root() -> None:
     src = _VALID_DOCKERFILE + "\nUSER root\n"
     findings = [f for f in scan_text(src, _FILE) if f.rule_id == "I005"]
     assert len(findings) == 1
     assert "root" in findings[0].message
 
 
-def test_f005_fires_on_user_zero() -> None:
+def test_i005_fires_on_user_zero() -> None:
     src = _VALID_DOCKERFILE + "\nUSER 0\n"
     findings = [f for f in scan_text(src, _FILE) if f.rule_id == "I005"]
     assert len(findings) == 1
 
 
-def test_f005_fires_on_root_case_insensitive() -> None:
+def test_i005_fires_on_root_case_insensitive() -> None:
     src = _VALID_DOCKERFILE + "\nUSER ROOT\n"
     assert "I005" in _ids(src)
 
 
-def test_f005_silent_on_user_appuser() -> None:
+def test_i005_silent_on_user_appuser() -> None:
     # Explicit USER appuser is fine (base already sets it; no harm in being explicit).
     src = _VALID_DOCKERFILE + "\nUSER appuser\n"
     assert "I005" not in _ids(src)
 
 
-def test_f005_silent_when_no_user_instruction() -> None:
+def test_i005_silent_when_no_user_instruction() -> None:
     assert "I005" not in _ids(_VALID_DOCKERFILE)
 
 
-def test_f005_ignores_builder_stage_root_user() -> None:
+def test_i005_ignores_builder_stage_root_user() -> None:
     # USER root in an intermediate builder stage is not flagged.
     src = (
         "FROM python:3.11 AS builder\n"
@@ -340,7 +384,7 @@ def test_f005_ignores_builder_stage_root_user() -> None:
     assert "I005" not in _ids(src)
 
 
-def test_f005_fires_on_root_in_final_stage_of_multistage() -> None:
+def test_i005_fires_on_root_in_final_stage_of_multistage() -> None:
     src = (
         "FROM python:3.11 AS builder\n"
         "USER root\n"
@@ -354,7 +398,7 @@ def test_f005_fires_on_root_in_final_stage_of_multistage() -> None:
     assert findings[0].line == 6
 
 
-def test_f005_pointing_at_user_line() -> None:
+def test_i005_pointing_at_user_line() -> None:
     src = (
         "FROM registry.atlan.com/public/app-runtime-base:3\n"
         "ENV ATLAN_APP_MODULE=myapp:MyApp\n"
@@ -364,7 +408,7 @@ def test_f005_pointing_at_user_line() -> None:
     assert findings[0].line == 3
 
 
-def test_f005_suppressed_by_preceding_comment() -> None:
+def test_i005_suppressed_by_preceding_comment() -> None:
     src = (
         "FROM registry.atlan.com/public/app-runtime-base:3\n"
         "ENV ATLAN_APP_MODULE=myapp:MyApp\n"
@@ -427,6 +471,34 @@ def test_env_vars_empty_value() -> None:
     assert _env_vars("ATLAN_APP_MODULE=") == {"ATLAN_APP_MODULE": ""}
 
 
+# ── BOM and CRLF normalisation ───────────────────────────────────────────────
+
+
+def test_parser_strips_utf8_bom() -> None:
+    # A UTF-8 BOM on the first line must not corrupt the FROM keyword.
+    bom = "﻿"
+    src = f"{bom}FROM registry.atlan.com/public/app-runtime-base:3\nENV ATLAN_APP_MODULE=myapp:MyApp\n"
+    assert _ids(src) == []
+
+
+def test_parser_normalises_crlf() -> None:
+    # Windows CRLF line endings must not leak \r into shlex tokens.
+    src = "FROM registry.atlan.com/public/app-runtime-base:3\r\nENV ATLAN_APP_MODULE=myapp:MyApp\r\n"
+    assert _ids(src) == []
+
+
+def test_parser_normalises_bare_cr() -> None:
+    src = "FROM registry.atlan.com/public/app-runtime-base:3\rENV ATLAN_APP_MODULE=myapp:MyApp\r"
+    assert _ids(src) == []
+
+
+def test_bom_does_not_bypass_i001() -> None:
+    # A BOM before a wrong base image must still produce an I001 finding.
+    bom = "﻿"
+    src = f"{bom}FROM python:3.11\nENV ATLAN_APP_MODULE=myapp:MyApp\n"
+    assert "I001" in _ids(src)
+
+
 # ── _parse_directives internals ──────────────────────────────────────────────
 
 
@@ -484,7 +556,7 @@ def test_discover_empty_when_no_dockerfile(tmp_path: Path) -> None:
 # ── Rule metadata wiring ──────────────────────────────────────────────────────
 
 
-def test_f001_rule_metadata() -> None:
+def test_i001_rule_metadata() -> None:
     rule = get_rule("I001")
     assert rule.name == "DockerfileWrongBaseImage"
     assert rule.tier == EnforcementTier.BLOCK
@@ -493,28 +565,28 @@ def test_f001_rule_metadata() -> None:
     assert rule.rationale.strip()
 
 
-def test_f002_rule_metadata() -> None:
+def test_i002_rule_metadata() -> None:
     rule = get_rule("I002")
     assert rule.name == "DockerfileEntrypointOverride"
     assert rule.tier == EnforcementTier.BLOCK
     assert rule.scope == RuleScope.APP
 
 
-def test_f003_rule_metadata() -> None:
+def test_i003_rule_metadata() -> None:
     rule = get_rule("I003")
     assert rule.name == "DockerfileAppModuleMissing"
     assert rule.tier == EnforcementTier.BLOCK
     assert rule.scope == RuleScope.APP
 
 
-def test_f004_rule_metadata() -> None:
+def test_i004_rule_metadata() -> None:
     rule = get_rule("I004")
     assert rule.name == "DockerfileAppModeHardcoded"
     assert rule.tier == EnforcementTier.BLOCK
     assert rule.scope == RuleScope.APP
 
 
-def test_f005_rule_metadata() -> None:
+def test_i005_rule_metadata() -> None:
     rule = get_rule("I005")
     assert rule.name == "DockerfileRootUser"
     assert rule.tier == EnforcementTier.BLOCK
