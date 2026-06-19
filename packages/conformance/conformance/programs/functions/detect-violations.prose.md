@@ -31,7 +31,8 @@ description: >
 - `findings` — list of findings, each with:
   - `rule_id` — e.g. `"E002"`.
   - `area` — series letter mapped to area name: `E` → `error-handling`,
-    `L` → `logging`, `C` → `ci`, `P` → `prescriptions`, `O` → `optimizations`.
+    `L` → `logging`, `C` → `ci`, `P` → `prescriptions`, `O` → `optimizations`,
+    `D` → `dependency`.
   - `file` — repo-relative path.
   - `line`, `column` — location.
   - `fingerprint` — value of `partial_fingerprints["atlanConformance/v1"]`;
@@ -90,7 +91,7 @@ comparing so that `"./application_sdk/foo.py"` matches `"application_sdk"`).
 
 Tag each result's area by reading the first letter of `result.rule_id`:
 `E` → `error-handling`, `L` → `logging`, `C` → `ci`, `P` → `prescriptions`,
-`O` → `optimizations`.
+`O` → `optimizations`, `D` → `dependency`.
 
 Extract `atlan/mechanism`, `atlan/autofixable`, `atlan/orthogonalGate` from
 `run.tool.driver.rules[result.rule_index].properties`, and `atlan/hint` from

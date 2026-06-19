@@ -99,7 +99,16 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     """
     rules = load_catalog()
     app_scoped = {r.id for r in rules if r.scope == RuleScope.APP}
-    assert app_scoped == {"C002", "D001", "D002"}, app_scoped
+    assert app_scoped == {
+        "C002",
+        "D001",
+        "D002",
+        "D004",
+        "D005",
+        "D006",
+        "D007",
+        "D008",
+    }, app_scoped
     # No rule is currently SDK-only; the rest are 'both'.
     assert not {r.id for r in rules if r.scope == RuleScope.SDK}
     both = {r.id for r in rules if r.scope == RuleScope.BOTH}
@@ -191,7 +200,7 @@ def test_catalog_d_series_present() -> None:
     """The D-series dependency rules are all present."""
     rules = load_catalog()
     d_ids = {r.id for r in rules if r.id.startswith("D")}
-    expected = {"D001", "D002"}
+    expected = {"D001", "D002", "D004", "D005", "D006", "D007", "D008"}
     missing = expected - d_ids
     assert not missing, f"Missing D-series rules: {missing}"
 
