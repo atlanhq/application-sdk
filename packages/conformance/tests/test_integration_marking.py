@@ -64,7 +64,8 @@ def test_t001_one_finding_per_unmarked_item() -> None:
 def test_t001_finding_points_at_def_line() -> None:
     src = "import pytest\n\n\ndef test_alpha():\n    pass\n"
     [finding] = scan_text(src, _FILE)
-    assert finding.line == 4  # the `def` line
+    expected = src.splitlines().index("def test_alpha():") + 1  # 1-based def line
+    assert finding.line == expected
     assert "test_alpha" in finding.message
 
 
@@ -111,6 +112,28 @@ def test_t001_silent_on_class_decorator_covers_methods() -> None:
         "class TestX:\n"
         "    def test_a(self):\n        pass\n"
         "    def test_b(self):\n        pass\n"
+    )
+    assert _ids(src) == []
+
+
+def test_t001_silent_on_class_body_pytestmark_bare() -> None:
+    # `pytestmark` in a Test* class body is equivalent to decorating the class.
+    src = (
+        "import pytest\n\n\n"
+        "class TestX:\n"
+        "    pytestmark = pytest.mark.integration\n\n"
+        "    def test_a(self):\n        pass\n"
+        "    def test_b(self):\n        pass\n"
+    )
+    assert _ids(src) == []
+
+
+def test_t001_silent_on_class_body_pytestmark_list() -> None:
+    src = (
+        "import pytest\n\n\n"
+        "class TestX:\n"
+        "    pytestmark = [pytest.mark.asyncio, pytest.mark.integration]\n\n"
+        "    def test_a(self):\n        pass\n"
     )
     assert _ids(src) == []
 
@@ -270,6 +293,16 @@ def test_deselected_markers_from_list_addopts() -> None:
 def test_deselected_markers_empty_without_dash_m() -> None:
     assert _deselected_markers("-v --tb=short") == frozenset()
     assert _deselected_markers(None) == frozenset()
+
+
+def test_deselected_markers_ignores_not_in_other_flags() -> None:
+    # A `not <ident>` outside the `-m` expression must not leak in as a marker.
+    assert _deselected_markers("-m 'not integration' --foo 'not relevant'") == {
+        "integration"
+    }
+    assert _deselected_markers(["-m", "not integration", "-k", "not slow"]) == {
+        "integration"
+    }
 
 
 def test_accepted_markers_for_repo_reads_pyproject(tmp_path: Path) -> None:

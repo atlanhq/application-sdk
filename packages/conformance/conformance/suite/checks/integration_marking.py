@@ -16,9 +16,10 @@ back to ``{"integration"}`` when no such expression is found.
 
 This checker mirrors pytest's collection + marker hierarchy: a test is considered
 marked when the **module** declares ``pytestmark`` containing an accepted marker
-(bare or in a list/tuple), when its **enclosing ``Test*`` class** is decorated
-with one, or when the **test function/method itself** carries one.  One finding
-is emitted per unmarked test item.
+(bare or in a list/tuple), when its **enclosing ``Test*`` class** carries one
+(either as a class decorator or as a ``pytestmark`` in the class body), or when
+the **test function/method itself** carries one.  One finding is emitted per
+unmarked test item.
 
 Discovery
 ---------
@@ -53,6 +54,7 @@ from __future__ import annotations
 
 import ast
 import re
+import shlex
 import sys
 import tomllib
 from collections.abc import Iterable
@@ -90,21 +92,45 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 
+def _marker_expression(addopts: object) -> str | None:
+    """Return the value of the pytest ``-m`` flag in an ``addopts`` value, if any.
+
+    ``addopts`` may be a string (``"-m 'not a and not b'"``) or a list of tokens
+    (``["-m", "not a and not b"]``).  The string form is split with ``shlex`` so a
+    quoted expression survives as one token; the list form is already tokenised by
+    the TOML author.  Both ``-m <expr>`` (two tokens) and ``-m<expr>`` (glued) are
+    handled.  Returns ``None`` when there is no ``-m`` flag.
+    """
+    if addopts is None:
+        return None
+    if isinstance(addopts, list):
+        tokens = [str(t) for t in addopts]
+    else:
+        try:
+            tokens = shlex.split(str(addopts))
+        except ValueError:
+            tokens = str(addopts).split()
+    for i, tok in enumerate(tokens):
+        if tok == "-m":
+            return tokens[i + 1] if i + 1 < len(tokens) else None
+        if tok.startswith("-m") and len(tok) > 2:
+            return tok[2:]
+    return None
+
+
 def _deselected_markers(addopts: object) -> frozenset[str]:
     """Return the ``not <marker>`` names from a pytest ``addopts`` value.
 
-    ``addopts`` may be a string (``"-m 'not a and not b'"``) or a list of tokens
-    (``["-m", "not a and not b"]``); both are flattened and scanned.  Returns an
-    empty set when there is no ``-m`` expression (caller falls back to the
-    default).
+    Only the ``-m`` selection expression is scanned (not the whole ``addopts``
+    text), so a stray ``not <ident>`` in some other flag — e.g. a
+    ``--reason 'not enough memory'`` — can't leak in as an accepted marker.
+    Returns an empty set when there is no ``-m`` expression (caller falls back to
+    the default).
     """
-    if addopts is None:
+    expr = _marker_expression(addopts)
+    if expr is None:
         return frozenset()
-    tokens = addopts if isinstance(addopts, list) else [addopts]
-    text = " ".join(str(t) for t in tokens)
-    if "-m" not in text:
-        return frozenset()
-    return frozenset(_NOT_MARKER_RE.findall(text))
+    return frozenset(_NOT_MARKER_RE.findall(expr))
 
 
 def accepted_markers_for_repo(root: Path) -> frozenset[str]:
@@ -163,14 +189,16 @@ def _pytestmark_value_markers(value: ast.expr) -> set[str]:
     return {name} if name else set()
 
 
-def _module_pytestmark_markers(tree: ast.Module) -> set[str]:
-    """All marker names in module-level ``pytestmark`` assignments.
+def _pytestmark_markers_in_body(body: list[ast.stmt]) -> set[str]:
+    """All marker names in ``pytestmark`` assignments directly in *body*.
 
     Covers both ``pytestmark = pytest.mark.integration`` and
-    ``pytestmark = [pytest.mark.integration, …]`` (and the annotated form).
+    ``pytestmark = [pytest.mark.integration, …]`` (and the annotated form).  Used
+    for both the module body and a ``Test*`` class body — the latter is a
+    documented pytest idiom equivalent to decorating the class.
     """
     names: set[str] = set()
-    for node in tree.body:
+    for node in body:
         if isinstance(node, ast.Assign):
             targets: list[ast.expr] = list(node.targets)
             value: ast.expr | None = node.value
@@ -250,7 +278,7 @@ def scan_text(
         return []
 
     # A module-level accepted marker covers every test in the file.
-    if _module_pytestmark_markers(tree) & accepted:
+    if _pytestmark_markers_in_body(tree.body) & accepted:
         return []
 
     directives = _parse_directives(text)
@@ -279,8 +307,13 @@ def scan_text(
                     )
                 )
         elif _is_test_class(node):
-            # A class-level marker covers every method it contains.
-            if _decorator_markers(node) & accepted:
+            # A class-level marker covers every method it contains — whether
+            # applied as a class decorator or as a `pytestmark` in the class body
+            # (a documented pytest idiom equivalent to the decorator).
+            class_markers = _decorator_markers(node) | _pytestmark_markers_in_body(
+                node.body
+            )
+            if class_markers & accepted:
                 continue
             for sub in node.body:
                 if _is_test_function(sub) and not (_decorator_markers(sub) & accepted):
