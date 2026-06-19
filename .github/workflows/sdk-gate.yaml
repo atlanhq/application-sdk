@@ -59,11 +59,14 @@ jobs:
       conformance_pkg: ${{ steps.filter.outputs.conformance_pkg }}
       container: ${{ steps.filter.outputs.container }}
       force_all: ${{ steps.force.outputs.force_all }}
+      force_sdk: ${{ steps.force.outputs.force_sdk }}
+      force_conformance: ${{ steps.force.outputs.force_conformance }}
+      force_toolkit: ${{ steps.force.outputs.force_toolkit }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       # Compute force-all FIRST — it needs no diff base, only the ref/head_ref.
-      - name: Compute force-all
+      - name: Compute force flags
         id: force
         env:
           HEAD_REF: ${{ github.head_ref }}
@@ -71,17 +74,40 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          force=false
-          # Release / version-bump PRs run the full suite before publish.
-          if [[ "$HEAD_REF" == release/* || "$HEAD_REF" == bump-version* ]]; then
-            force=true
+          force_all=false
+          force_sdk=false
+          force_conformance=false
+          force_toolkit=false
+          # release/* branches and v* tag pushes run every area (true full-suite gate).
+          if [[ "$HEAD_REF" == release/* ]] || [[ "$REF_TYPE" == "tag" && "$REF_NAME" == v* ]]; then
+            force_all=true
           fi
-          # v* tag pushes (the release itself) run everything.
-          if [[ "$REF_TYPE" == "tag" && "$REF_NAME" == v* ]]; then
-            force=true
+          # bump-version-* release PRs: each only forces its own test area so the
+          # gate confirms exactly what will be published without running unrelated suites.
+          #   bump-version-main              → SDK tests
+          #   bump-version-conformance       → conformance rules + conformance package tests
+          #   bump-version-contract-toolkit  → contract toolkit
+          # Unknown bump-version-* patterns fall back to force_all as a safe default.
+          if [[ "$HEAD_REF" == bump-version-main* ]]; then
+            force_sdk=true
+          elif [[ "$HEAD_REF" == bump-version-conformance* ]]; then
+            force_conformance=true
+          elif [[ "$HEAD_REF" == bump-version-contract-toolkit* ]]; then
+            force_toolkit=true
+          elif [[ "$HEAD_REF" == bump-version* ]]; then
+            force_all=true
           fi
-          echo "force_all=$force" >> "$GITHUB_OUTPUT"
-          echo "force_all=$force"
+          # force_all fans out to every individual area.
+          if [[ "$force_all" == "true" ]]; then
+            force_sdk=true
+            force_conformance=true
+            force_toolkit=true
+          fi
+          echo "force_all=$force_all" >> "$GITHUB_OUTPUT"
+          echo "force_sdk=$force_sdk" >> "$GITHUB_OUTPUT"
+          echo "force_conformance=$force_conformance" >> "$GITHUB_OUTPUT"
+          echo "force_toolkit=$force_toolkit" >> "$GITHUB_OUTPUT"
+          echo "force_all=$force_all (force_sdk=$force_sdk force_conformance=$force_conformance force_toolkit=$force_toolkit)"
 
       # Per-area change detection. Skipped entirely when forcing: a tag push has
       # no clean diff base for paths-filter, and when force_all is true the area
@@ -182,14 +208,14 @@ jobs:
   sdk-tests:
     name: SDK Tests
     needs: changes
-    if: needs.changes.outputs.sdk == 'true' || needs.changes.outputs.container == 'true' || needs.changes.outputs.force_all == 'true'
+    if: needs.changes.outputs.sdk == 'true' || needs.changes.outputs.container == 'true' || needs.changes.outputs.force_sdk == 'true'
     uses: ./.github/workflows/sdk-tests-reusable.yaml
     secrets: inherit
 
   conformance:
     name: Conformance
     needs: changes
-    if: needs.changes.outputs.conformance == 'true' || needs.changes.outputs.container == 'true' || needs.changes.outputs.force_all == 'true'
+    if: needs.changes.outputs.conformance == 'true' || needs.changes.outputs.container == 'true' || needs.changes.outputs.force_conformance == 'true'
     uses: ./.github/workflows/conformance-reusable.yaml
     with:
       # Dogfood the in-flight suite: run the PR's own conformance package, not
@@ -204,16 +230,16 @@ jobs:
       # application_sdk and therefore legitimately does not use the SDK logger adapter.
       exclude-paths-l: "tools/,contract-toolkit/,packages/conformance/"
       event_name: ${{ github.event_name }}
-      # force-all the inner per-series run for releases AND container changes —
-      # a Dockerfile/entrypoint diff isn't .py/.github/pyproject, so without this
-      # every series would self-skip and the area would no-op.
-      force-all: ${{ needs.changes.outputs.force_all == 'true' || needs.changes.outputs.container == 'true' }}
+      # force-all the inner per-series run for conformance releases AND container
+      # changes — a Dockerfile/entrypoint diff isn't .py/.github/pyproject, so
+      # without this every series would self-skip and the area would no-op.
+      force-all: ${{ needs.changes.outputs.force_conformance == 'true' || needs.changes.outputs.container == 'true' }}
     secrets: inherit
 
   toolkit:
     name: Contract Toolkit
     needs: changes
-    if: needs.changes.outputs.toolkit == 'true' || needs.changes.outputs.container == 'true' || needs.changes.outputs.force_all == 'true'
+    if: needs.changes.outputs.toolkit == 'true' || needs.changes.outputs.container == 'true' || needs.changes.outputs.force_toolkit == 'true'
     uses: ./.github/workflows/contract-toolkit-reusable.yaml
     secrets: inherit
 
@@ -226,7 +252,7 @@ jobs:
   conformance-suite-tests:
     name: Conformance Suite Tests
     needs: changes
-    if: needs.changes.outputs.conformance_pkg == 'true' || needs.changes.outputs.force_all == 'true'
+    if: needs.changes.outputs.conformance_pkg == 'true' || needs.changes.outputs.force_conformance == 'true'
     uses: ./.github/workflows/conformance-suite-tests-reusable.yaml
     secrets: inherit
 
