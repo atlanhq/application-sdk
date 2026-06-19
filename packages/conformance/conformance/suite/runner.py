@@ -29,6 +29,7 @@ from conformance.suite.checks import (
     dependency_conformance,
     error_handling,
     gitignore_entries,
+    integration_marking,
     optimizations,
     prescriptions,
 )
@@ -98,6 +99,11 @@ _CHECKS: list[CheckRegistration] = [
         discover=logging_checks.discover,
         scan_path=logging_checks.scan_path,
         scan_all=logging_checks.scan_all,
+    ),
+    CheckRegistration(
+        series=integration_marking.SERIES,
+        discover=integration_marking.discover,
+        scan_path=integration_marking.scan_path,
     ),
 ]
 
