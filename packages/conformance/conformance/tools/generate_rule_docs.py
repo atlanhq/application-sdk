@@ -116,11 +116,16 @@ _SERIES_META: list[SeriesMeta] = [
     SeriesMeta(
         title="Prescription Rules (P-series)",
         prefix="P",
-        source_module="conformance/suite/rules/prescriptions.py",
+        source_module=(
+            "conformance/suite/rules/prescriptions.py, "
+            "conformance/suite/rules/orchestration.py, "
+            "conformance/suite/rules/storage.py"
+        ),
         output_filename="prescriptions.md",
         checker=(
-            "`suite.checks.prescriptions` and `suite.checks.orchestration` "
-            "(AST-based; the orchestration-seam rules P004–P007 scan test files too)"
+            "`suite.checks.prescriptions` (P001–P003, P008–P012), "
+            "`suite.checks.orchestration` (P004–P007, scans test files too) "
+            "(all AST-based)"
         ),
         suppression_example="# conformance: ignore[P001] intentional: generic cleanup payload",
         stability_note=_ID_STABILITY_NOTE,

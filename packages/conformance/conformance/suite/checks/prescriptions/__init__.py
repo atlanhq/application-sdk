@@ -25,6 +25,16 @@ Currently implemented:
   declaration or declares one that does not start with the leaf's category prefix.
   This check resolves inheritance across files via a multi-pass scan, so
   intermediate pass-through classes are flagged too.
+* ``P008`` FrameworkTransferInTask — ``self.upload()``/``self.download()`` called
+  inside a ``@task``-decorated method (a framework task nested in another task).
+* ``P009`` ManualStoreConstruction — direct ``boto3`` import, ad-hoc ``obstore``
+  store construction, or a ``create_store_from_binding`` call in app code.
+* ``P010`` FileReferenceManagedField — ``FileReference(...)`` constructed with an
+  SDK-managed durability field (``storage_path``/``is_durable``/``file_count``).
+* ``P011`` ContractBytesField — a ``bytes`` field on an ``Input``/``Output``
+  contract that would embed a raw payload across the task boundary.
+* ``P012`` ContractPathField — a ``str`` field on a contract whose name or doc
+  marks it as a filesystem path (a worker-local reference).
 
 Inline suppression
 ------------------
@@ -55,6 +65,7 @@ from ._category_override import (
     CategoryOverrideChecker,
     _collect_apperror_subclasses,
 )
+from ._contract_fields import check_p011, check_p012
 from ._error_code_prefix import (
     LEAF_PREFIX_MAP,
     ClassRecord,
@@ -63,6 +74,9 @@ from ._error_code_prefix import (
     emit_p003,
     resolve_leaf_prefix,
 )
+from ._file_reference import check_p010
+from ._framework_transfer import check_p008
+from ._store_construction import check_p009
 from ._unbounded_fields import UnboundedContractFieldsChecker
 
 SERIES = "P"
@@ -71,10 +85,11 @@ __all__ = ["SERIES", "discover", "main", "scan_all", "scan_path", "scan_text"]
 
 
 def scan_text(text: str, file: str) -> list[Finding]:
-    """Scan a single Python source *text* for P001 and P002 findings.
+    """Scan a single Python source *text* for per-file findings.
 
-    P003 needs cross-file context; use :func:`scan_all` for full-suite runs.
-    Kept for symmetry with the per-file ``scan_path`` runner contract.
+    Runs P001, P002, and P008–P012 — every rule that needs only a single file's
+    AST.  P003 needs cross-file context; use :func:`scan_all` for full-suite
+    runs.  Kept for symmetry with the per-file ``scan_path`` runner contract.
     """
     try:
         tree = ast.parse(text, filename=file)
@@ -94,7 +109,21 @@ def scan_text(text: str, file: str) -> list[Finding]:
     )
     p002.visit(tree)
 
-    return p001._findings + p002._findings
+    findings_p008 = check_p008(tree, file, directives)
+    findings_p009 = check_p009(tree, file, directives)
+    findings_p010 = check_p010(tree, file, directives)
+    findings_p011 = check_p011(tree, file, directives)
+    findings_p012 = check_p012(tree, file, directives)
+
+    return (
+        p001._findings
+        + p002._findings
+        + findings_p008
+        + findings_p009
+        + findings_p010
+        + findings_p011
+        + findings_p012
+    )
 
 
 def scan_path(path: Path, root: Path) -> list[Finding]:
@@ -169,6 +198,13 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         )
         p002_checker.visit(tree)
         findings.extend(p002_checker._findings)
+
+        # P008–P012 (per-file)
+        findings.extend(check_p008(tree, rel_str, directives))
+        findings.extend(check_p009(tree, rel_str, directives))
+        findings.extend(check_p010(tree, rel_str, directives))
+        findings.extend(check_p011(tree, rel_str, directives))
+        findings.extend(check_p012(tree, rel_str, directives))
 
         # Class registry for P003 — de-alias base names so aliased imports
         # of leaf classes don't hide the real ancestry.

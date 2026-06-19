@@ -100,8 +100,21 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     rules = load_catalog()
     app_scoped = {r.id for r in rules if r.scope == RuleScope.APP}
     # C002/D001/D002: publisher-side contract. P004/P005: apps must reach the
-    # orchestration layer through the SDK seam, not Temporal/SDK-internals (BLDX-1417).
-    assert app_scoped == {"C002", "D001", "D002", "P004", "P005"}, app_scoped
+    # orchestration layer through the SDK seam (BLDX-1417). P008–P012: apps must
+    # use the SDK's storage seam, not hand-roll object stores or bare path fields
+    # (BLDX-1398).
+    assert app_scoped == {
+        "C002",
+        "D001",
+        "D002",
+        "P004",
+        "P005",
+        "P008",
+        "P009",
+        "P010",
+        "P011",
+        "P012",
+    }, app_scoped
     # SDK-only rules: the SDK must keep Temporal contained behind its seam (BLDX-1417).
     sdk_scoped = {r.id for r in rules if r.scope == RuleScope.SDK}
     assert sdk_scoped == {"P006", "P007"}, sdk_scoped
@@ -200,15 +213,29 @@ def test_catalog_d_series_present() -> None:
 
 
 def test_catalog_p_series_present() -> None:
-    """The P-series prescription rules are exactly P001–P007.
+    """The P-series prescription rules are exactly P001–P012.
 
     Strict equality (not just not-missing): P004–P007 are the orchestration-seam
-    rules (BLDX-1417); a stray or renumbered P-id would slip past a subset check
-    while breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
+    rules (BLDX-1417); P008–P012 are the storage-seam rules (BLDX-1398).  A
+    stray or renumbered P-id would slip past a subset check while breaking
+    fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
     rules = load_catalog()
     p_ids = {r.id for r in rules if r.id.startswith("P")}
-    expected = {"P001", "P002", "P003", "P004", "P005", "P006", "P007"}
+    expected = {
+        "P001",
+        "P002",
+        "P003",
+        "P004",
+        "P005",
+        "P006",
+        "P007",
+        "P008",
+        "P009",
+        "P010",
+        "P011",
+        "P012",
+    }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
     extra = p_ids - expected
