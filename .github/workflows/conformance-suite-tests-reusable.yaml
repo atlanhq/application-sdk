@@ -1,0 +1,41 @@
+name: Conformance suite tests (reusable)
+
+# Reusable workflow: the conformance PACKAGE's own pytest unit tests
+# (packages/conformance/tests/).
+#
+# This is distinct from conformance-reusable.yaml, which runs the conformance
+# RULE detection (`detect --series …`) against a repo. This workflow runs the
+# suite package's *own* unit tests.
+#
+# Invoked only by sdk-gate.yaml, gated on packages/conformance/** — so a change
+# to the package's source OR its own pyproject.toml / uv.lock (e.g. a Renovate
+# dependency bump within range pins) re-runs these tests. Previously they were
+# only exercised on merge/publish (conformance-publish.yml), never on PRs.
+#
+# SDK-private: no consumer app references this workflow.
+
+on:
+  workflow_call: {}
+
+permissions:
+  contents: read
+
+jobs:
+  suite-tests:
+    name: Suite unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+      - name: Run conformance package unit tests
+        working-directory: packages/conformance
+        run: |
+          set -euo pipefail
+          # The package pins its own pyproject.toml / uv.lock; sync all extras +
+          # groups so the `test` deps (pytest, pytest-asyncio) are present, then
+          # run its suite (testpaths = ["tests"], asyncio_mode = auto).
+          uv sync --all-extras --all-groups
+          uv run pytest -v

@@ -41,6 +41,7 @@ from application_sdk.storage.binding import (
 )
 from application_sdk.storage.cloud import CloudStore
 from application_sdk.storage.errors import (
+    ObjectStorePreflightError,
     StorageBindingBrokenError,
     StorageBindingNotFoundError,
     StorageConfigError,
@@ -58,6 +59,7 @@ from application_sdk.storage.ops import (
     put_json,
     upload_file,
 )
+from application_sdk.storage.preflight import verify_object_store_access
 
 __all__ = [
     # Cloud store (external customer buckets)
@@ -88,5 +90,8 @@ __all__ = [
     "StorageConfigError",
     "StorageBindingNotFoundError",
     "StorageBindingBrokenError",
+    "ObjectStorePreflightError",
     "create_store_from_binding_with_put_attrs",
+    # SDR preflight
+    "verify_object_store_access",
 ]

@@ -2,13 +2,14 @@
 #
 # Reusable workflow: full conformance suite gate.
 #
-# Runs each rule series (C, E, P, O, D) as a separate leg of one matrix job so
+# Runs each rule series (C, E, P, O, D, L) as a separate leg of one matrix job so
 # each appears as its own status check:
 #   Conformance / suite / CI
 #   Conformance / suite / Error-handling
 #   Conformance / suite / Prescriptions
 #   Conformance / suite / Optimizations
 #   Conformance / suite / Dependency
+#   Conformance / suite / Logging
 #   Conformance / suite / Conformance Gate  (required gate)
 #
 # The series share an identical job body (checkout → changed-files filter → uv →
@@ -123,6 +124,22 @@ on:
         required: false
         default: ""
         type: string
+      exclude-paths-l:
+        description: >
+          Comma-separated repo-root-relative path prefixes to exclude from L-series
+          (logging) checks only, e.g. 'tools/,contract-toolkit/'.  Default: nothing excluded.
+        required: false
+        default: ""
+        type: string
+      force-all:
+        description: >
+          Run every rule series regardless of which paths changed.  Same effect
+          as event_name == 'push'; the SDK's sdk-gate.yaml sets this on
+          release / version-bump branches and v* tags so a release dry-runs the
+          full suite.  Default: false (per-series path selection applies).
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -166,12 +183,24 @@ jobs:
             slug: dependency
             paths: "**/pyproject.toml"
             exclude_paths: ${{ inputs.exclude-paths-d }}
+          - series: L
+            name: "Logging"
+            slug: logging
+            paths: "**/*.py"
+            exclude_paths: ${{ inputs.exclude-paths-l }}
     steps:
       - name: "Checkout caller repo"
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: "Detect changed files"
         id: changes
+        # Skip when forcing (release/version-bump/tag) or on push-to-main: in
+        # all those cases the downstream steps fire regardless (their `if:`s OR
+        # in `inputs.event_name == 'push' || inputs.force-all`), and a tag push
+        # has no clean diff base for paths-filter — running it could hard-fail
+        # the leg and turn the gate red on a release. Mirrors sdk-gate.yaml,
+        # which skips its own outer filter for the same reason.
+        if: inputs.event_name != 'push' && !inputs.force-all
         uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4
         with:
           filters: |
@@ -179,11 +208,11 @@ jobs:
               - "${{ matrix.paths }}"
 
       - name: "Set up uv"
-        if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push'
+        if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
 
       - name: "Run ${{ matrix.series }}-series checks (published package)"
-        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push') && inputs.conformance-ref == ''
+        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && inputs.conformance-ref == ''
         env:
           EXCLUDE_PATHS: ${{ matrix.exclude_paths }}
         run: |
@@ -194,7 +223,7 @@ jobs:
           uvx atlan-application-sdk-conformance detect "${args[@]}"
 
       - name: "Run ${{ matrix.series }}-series checks (from git ref)"
-        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push') && inputs.conformance-ref != ''
+        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && inputs.conformance-ref != ''
         env:
           EXCLUDE_PATHS: ${{ matrix.exclude_paths }}
         run: |
@@ -207,7 +236,7 @@ jobs:
             -- atlan-application-sdk-conformance detect "${args[@]}"
 
       - name: "Upload SARIF artifact"
-        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push') && !cancelled()
+        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && !cancelled()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: conformance-${{ matrix.slug }}-sarif
@@ -224,9 +253,19 @@ jobs:
     if: always()
     steps:
       - name: "Evaluate conformance results"
+        env:
+          SUITE_RESULT: ${{ needs.suite.result }}
         run: |
-          if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" ]]; then
-            echo "::error::Conformance gate FAILED — one or more series found violations."
+          set -euo pipefail
+          # Fail closed on anything that is not a clean pass. The matrix job's
+          # aggregate result is 'failure' if any leg failed, 'cancelled' if a
+          # run was cancelled, 'skipped' if every series self-skipped (nothing
+          # relevant changed), 'success' otherwise. Only success|skipped pass —
+          # 'cancelled' must NOT slip through (the old contains(...,'failure')
+          # rule let it).
+          if [[ "$SUITE_RESULT" == "success" || "$SUITE_RESULT" == "skipped" ]]; then
+            echo "Conformance gate passed (suite result: $SUITE_RESULT)."
+          else
+            echo "::error::Conformance gate FAILED — suite result: $SUITE_RESULT."
             exit 1
           fi
-          echo "Conformance gate passed (suite result: ${{ join(needs.*.result, ', ') }})."

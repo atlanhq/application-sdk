@@ -874,10 +874,10 @@ class ErrorHandlingConfig {
   /// Error types that should not be retried (exact type/class names).
   nonRetryableErrorTypes: Listing<String>?
 
-  /// Maximum time from start to completion in seconds (1-259200).
+  /// Maximum time from start to completion in seconds (1-864000).
   /// AE remaps to `execution_timeout` for workflow nodes (default 2 hours)
   /// or `start_to_close_timeout` for activity nodes (default 30 minutes).
-  startToCloseTimeoutSeconds: Int(isBetween(1, 259200))?
+  startToCloseTimeoutSeconds: Int(isBetween(1, 864000))?
 
   /// Maximum time between heartbeats in seconds (1-3600). Activity nodes only —
   /// AE rejects this on workflow nodes (see DAGNode.nodeType).
