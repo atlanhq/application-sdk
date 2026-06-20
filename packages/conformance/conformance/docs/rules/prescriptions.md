@@ -313,7 +313,7 @@ unavoidable exception and stays visible in SARIF.
 
 **Tier:** `warn` · **Scope:** `app` · **Category:** `storage-seam` · **Autofixable:** — · **Since:** 0.6.0
 
-> Input/Output contract field annotated `bytes` — risks the 2MB payload limit
+> Input/Output contract field annotated bytes/bytearray/memoryview — risks the 2MB payload limit
 
 **Rationale:** Temporal enforces a hard 2MB payload limit on workflow/activity I/O. A contract field
 carrying raw bytes can silently grow past it in production, causing truncation or a
@@ -321,10 +321,11 @@ serialization error at runtime instead of a clear failure. Store the data as a f
 pass a FileReference, which crosses the task boundary as a small durable handle
 (BLDX-1398).
 
-An `Input`/`Output` contract subclass declares a field annotated `bytes`, `bytes |
-None`, or `Optional[bytes]`.  A raw byte blob on a contract crosses the task boundary as
-a Temporal payload, which has a hard 2MB limit; a blob that grows past it in production
-fails the workflow with a serialization or size error rather than a clear, early signal.
+An `Input`/`Output` contract subclass declares a field annotated `bytes`, `bytearray`,
+`memoryview`, or their `| None` / `Optional[…]` variants.  A raw binary blob on a
+contract crosses the task boundary as a Temporal payload, which has a hard 2MB limit; a
+blob that grows past it in production fails the workflow with a serialization or size
+error rather than a clear, early signal.
 
 Store the data as a file and pass a `FileReference` instead: the bytes live in the
 object store and only a small durable handle travels on the contract, well under the

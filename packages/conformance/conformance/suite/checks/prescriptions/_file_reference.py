@@ -1,4 +1,4 @@
-"""P010 FileReferenceManagedField — ``FileReference(...)`` set with SDK-managed fields.
+"""P010 ManualFileReferenceConstruction — ``FileReference(...)`` set with SDK-managed fields.
 
 ``storage_path``, ``is_durable`` and ``file_count`` are populated by the SDK's
 activity interceptor as a ref is durably stored.  Setting them by hand at

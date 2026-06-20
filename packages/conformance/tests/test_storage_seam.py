@@ -21,6 +21,7 @@ hand-stitch their own file-based durability management.
 
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 
 import pytest
@@ -62,6 +63,26 @@ def test_storage_rules_have_category(rule_id: str) -> None:
     assert get_rule(rule_id).category == "storage-seam"
 
 
+@pytest.mark.parametrize(
+    "module_path,rule_id",
+    [
+        ("conformance.suite.checks.prescriptions._framework_transfer", "P008"),
+        ("conformance.suite.checks.prescriptions._store_construction", "P009"),
+        ("conformance.suite.checks.prescriptions._file_reference", "P010"),
+        ("conformance.suite.checks.prescriptions._contract_fields", "P011"),
+        ("conformance.suite.checks.prescriptions._contract_fields", "P012"),
+    ],
+)
+def test_checker_module_docstring_contains_canonical_rule_name(
+    module_path: str, rule_id: str
+) -> None:
+    mod = importlib.import_module(module_path)
+    rule = get_rule(rule_id)
+    assert rule.name in (
+        mod.__doc__ or ""
+    ), f"{module_path} docstring missing canonical rule name '{rule.name}'"
+
+
 # ── P008 FrameworkTransferInsideTask ────────────────────────────────────────
 
 
@@ -84,6 +105,7 @@ def test_p008_fires_on_download_inside_task() -> None:
     )
     fs = _rule(src, "P008")
     assert len(fs) == 1
+    assert fs[0].line == 3
 
 
 def test_p008_fires_on_attribute_task_decorator() -> None:
@@ -95,6 +117,20 @@ def test_p008_fires_on_attribute_task_decorator() -> None:
     )
     fs = _rule(src, "P008")
     assert len(fs) == 1
+    assert fs[0].line == 3
+
+
+def test_p008_fires_on_upload_in_list_comprehension_inside_task() -> None:
+    # List comprehension does NOT create a nested-function scope boundary —
+    # self.upload(...) inside a listcomp inside a @task is still in-task.
+    src = (
+        "@task\n"
+        "async def my_task(self, items):\n"
+        "    results = [self.upload(x) for x in items]\n"
+    )
+    fs = _rule(src, "P008")
+    assert len(fs) == 1
+    assert fs[0].line == 3
 
 
 def test_p008_silent_when_upload_called_from_run() -> None:
@@ -119,6 +155,40 @@ def test_p008_silent_on_non_task_method() -> None:
     assert _rule(src, "P008") == []
 
 
+def test_p008_silent_nested_function_inside_task() -> None:
+    # A self.upload() inside a *nested function* defined inside @task belongs
+    # to the inner function, not the task — _iter_own_scope must not cross it.
+    src = (
+        "@task\n"
+        "async def my_task(self, inp):\n"
+        "    async def _inner():\n"
+        "        await self.upload(inp.ref)\n"
+    )
+    assert _rule(src, "P008") == []
+
+
+def test_p008_silent_for_non_sdk_task_name_decorator() -> None:
+    # @celery.task is not the SDK's @task — import provenance excludes it
+    src = (
+        "import celery\n"
+        "@celery.task\n"
+        "def process(self, inp):\n"
+        "    self.upload(inp.ref)\n"
+    )
+    assert _rule(src, "P008") == []
+
+
+def test_p008_silent_for_explicit_non_sdk_task_import() -> None:
+    # `from huey import task` re-exports task; the name must be excluded
+    src = (
+        "from huey import task\n"
+        "@task\n"
+        "def process(self, inp):\n"
+        "    self.upload(inp.ref)\n"
+    )
+    assert _rule(src, "P008") == []
+
+
 def test_p008_suppressed_inline() -> None:
     src = (
         "@task\n"
@@ -137,12 +207,22 @@ def test_p009_fires_on_import_boto3() -> None:
     src = "import boto3\n"
     fs = _rule(src, "P009")
     assert len(fs) == 1
+    assert fs[0].line == 1
+
+
+def test_p009_fires_on_aliased_boto3_import() -> None:
+    # `import boto3 as b3` — alias doesn't hide the origin module name
+    src = "import boto3 as b3\n"
+    fs = _rule(src, "P009")
+    assert len(fs) == 1
+    assert fs[0].line == 1
 
 
 def test_p009_fires_on_from_boto3_import() -> None:
     src = "from boto3 import client\n"
     fs = _rule(src, "P009")
     assert len(fs) == 1
+    assert fs[0].line == 1
 
 
 def test_p009_fires_on_boto3_submodule() -> None:
@@ -158,16 +238,42 @@ def test_p009_fires_on_s3store_construction() -> None:
     assert any("S3Store" in f.message for f in fs)
 
 
+def test_p009_fires_on_aliased_s3store_construction() -> None:
+    # from obstore.store import S3Store as S3 — alias is tracked in provenance
+    src = "from obstore.store import S3Store as S3\nstore = S3(bucket='my-bucket')\n"
+    fs = _rule(src, "P009")
+    assert any(f.rule_id == "P009" for f in fs)
+
+
 def test_p009_fires_on_gcsstore_construction() -> None:
     src = "from obstore.store import GCSStore\nstore = GCSStore(bucket='my-bucket')\n"
     fs = _rule(src, "P009")
     assert any("GCSStore" in f.message for f in fs)
 
 
+def test_p009_fires_on_attribute_call_obstore_form() -> None:
+    # import obstore.store; obstore.store.S3Store(...) — qualified attribute call
+    src = "import obstore.store\nstore = obstore.store.S3Store(bucket='my-bucket')\n"
+    fs = _rule(src, "P009")
+    assert len(fs) == 1
+    assert fs[0].line == 2
+    assert "S3Store" in fs[0].message
+
+
 def test_p009_fires_on_create_store_from_binding() -> None:
     src = (
         "from application_sdk.storage import create_store_from_binding\n"
         "store = create_store_from_binding('objectstore')\n"
+    )
+    fs = _rule(src, "P009")
+    assert any(f.rule_id == "P009" for f in fs)
+
+
+def test_p009_fires_on_aliased_binding_factory() -> None:
+    # Aliased import: local name tracked in provenance
+    src = (
+        "from application_sdk.storage import create_store_from_binding as csfb\n"
+        "store = csfb('objectstore')\n"
     )
     fs = _rule(src, "P009")
     assert any(f.rule_id == "P009" for f in fs)
@@ -215,6 +321,7 @@ def test_p010_fires_on_storage_path_kwarg() -> None:
     )
     fs = _rule(src, "P010")
     assert len(fs) == 1
+    assert fs[0].line == 1
     assert "storage_path" in fs[0].message
 
 
@@ -222,6 +329,7 @@ def test_p010_fires_on_is_durable_kwarg() -> None:
     src = "ref = FileReference(local_path='/tmp/f.json', is_durable=True)\n"
     fs = _rule(src, "P010")
     assert len(fs) == 1
+    assert fs[0].line == 1
     assert "is_durable" in fs[0].message
 
 
@@ -241,6 +349,20 @@ def test_p010_fires_on_multiple_managed_kwargs() -> None:
     assert "file_count" in fs[0].message
 
 
+def test_p010_fires_on_qualified_filereference() -> None:
+    # types.FileReference(...) — single attribute prefix
+    src = "ref = types.FileReference(storage_path='a/b', is_durable=True)\n"
+    fs = _rule(src, "P010")
+    assert len(fs) == 1
+
+
+def test_p010_fires_on_deep_qualified_filereference() -> None:
+    # sdk.types.FileReference(...) — two-level attribute prefix, attr == "FileReference"
+    src = "ref = sdk.types.FileReference(storage_path='a/b', is_durable=True)\n"
+    fs = _rule(src, "P010")
+    assert len(fs) == 1
+
+
 def test_p010_silent_on_from_local() -> None:
     # FileReference.from_local(...) is the sanctioned constructor
     src = "ref = FileReference.from_local('/tmp/output.json', tier=StorageTier.TRANSIENT)\n"
@@ -251,13 +373,6 @@ def test_p010_silent_on_safe_kwargs() -> None:
     # local_path and tier are app-managed — not flagged
     src = "ref = FileReference(local_path='/tmp/f', tier=StorageTier.TRANSIENT)\n"
     assert _rule(src, "P010") == []
-
-
-def test_p010_fires_on_qualified_filereference() -> None:
-    # types.FileReference(...) form
-    src = "ref = types.FileReference(storage_path='a/b', is_durable=True)\n"
-    fs = _rule(src, "P010")
-    assert len(fs) == 1
 
 
 def test_p010_suppressed() -> None:
@@ -274,7 +389,24 @@ def test_p011_fires_on_bytes_field_in_input() -> None:
     src = "class MyInput(Input):\n    data: bytes\n"
     fs = _rule(src, "P011")
     assert len(fs) == 1
+    assert fs[0].line == 2
     assert "data" in fs[0].message
+
+
+def test_p011_fires_on_bytearray_field() -> None:
+    # bytearray carries the same Temporal payload-size risk as bytes
+    src = "class MyInput(Input):\n    blob: bytearray\n"
+    fs = _rule(src, "P011")
+    assert len(fs) == 1
+    assert fs[0].line == 2
+    assert "bytearray" in fs[0].message
+
+
+def test_p011_fires_on_memoryview_field() -> None:
+    src = "class MyOutput(Output):\n    view: memoryview\n"
+    fs = _rule(src, "P011")
+    assert len(fs) == 1
+    assert "memoryview" in fs[0].message
 
 
 def test_p011_fires_on_optional_bytes_in_output() -> None:
@@ -310,6 +442,12 @@ def test_p011_silent_on_filereference_field() -> None:
     assert _rule(src, "P011") == []
 
 
+def test_p011_silent_when_output_imported_from_third_party() -> None:
+    # `Output` from pydantic_ai is not the SDK contract base — must not fire
+    src = "from pydantic_ai import Output\nclass MyOut(Output):\n    data: bytes\n"
+    assert _rule(src, "P011") == []
+
+
 def test_p011_suppressed() -> None:
     src = (
         "class MyInput(Input):\n"
@@ -327,6 +465,7 @@ def test_p012_fires_on_path_named_str_field_in_input() -> None:
     src = "class MyInput(Input):\n    output_path: str\n"
     fs = _rule(src, "P012")
     assert len(fs) == 1
+    assert fs[0].line == 2
     assert "output_path" in fs[0].message
 
 
@@ -334,6 +473,7 @@ def test_p012_fires_on_file_named_field() -> None:
     src = "class MyInput(Input):\n    input_file: str\n"
     fs = _rule(src, "P012")
     assert len(fs) == 1
+    assert fs[0].line == 2
 
 
 def test_p012_fires_on_directory_field() -> None:
@@ -356,12 +496,26 @@ def test_p012_fires_via_doc_text_signal() -> None:
     )
     fs = _rule(src, "P012")
     assert len(fs) == 1
+    assert fs[0].line == 2
 
 
 def test_p012_fires_via_pep257_attribute_docstring() -> None:
     src = (
         "class MyInput(Input):\n"
         "    source: str\n"
+        '    """Local path to the CSV export."""\n'
+    )
+    fs = _rule(src, "P012")
+    assert len(fs) == 1
+    assert fs[0].line == 2
+
+
+def test_p012_field_description_and_pep257_each_fire_once() -> None:
+    # Both Field(description=) and a PEP-257 docstring are present on the same
+    # field — the finding must still be emitted exactly once (no duplication).
+    src = (
+        "class MyInput(Input):\n"
+        '    source: str = Field(description="path to the dump file")\n'
         '    """Local path to the CSV export."""\n'
     )
     fs = _rule(src, "P012")
@@ -403,6 +557,17 @@ def test_p012_silent_on_non_contract_class() -> None:
 def test_p012_silent_ambiguous_field_no_doc_signal() -> None:
     # 'source' has no path doc — not flagged by either signal
     src = "class MyInput(Input):\n    source: str\n"
+    assert _rule(src, "P012") == []
+
+
+def test_p012_silent_when_output_imported_from_third_party() -> None:
+    # `Output` from strawberry is not the SDK contract base — must not fire
+    src = (
+        "from strawberry import type as strawberry_type\n"
+        "from strawberry_django.types import Output\n"
+        "class MyOut(Output):\n"
+        "    output_path: str\n"
+    )
     assert _rule(src, "P012") == []
 
 

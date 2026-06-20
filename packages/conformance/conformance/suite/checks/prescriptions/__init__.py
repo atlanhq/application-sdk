@@ -25,16 +25,20 @@ Currently implemented:
   declaration or declares one that does not start with the leaf's category prefix.
   This check resolves inheritance across files via a multi-pass scan, so
   intermediate pass-through classes are flagged too.
-* ``P008`` FrameworkTransferInTask — ``self.upload()``/``self.download()`` called
-  inside a ``@task``-decorated method (a framework task nested in another task).
-* ``P009`` ManualStoreConstruction — direct ``boto3`` import, ad-hoc ``obstore``
-  store construction, or a ``create_store_from_binding`` call in app code.
-* ``P010`` FileReferenceManagedField — ``FileReference(...)`` constructed with an
-  SDK-managed durability field (``storage_path``/``is_durable``/``file_count``).
-* ``P011`` ContractBytesField — a ``bytes`` field on an ``Input``/``Output``
-  contract that would embed a raw payload across the task boundary.
-* ``P012`` ContractPathField — a ``str`` field on a contract whose name or doc
-  marks it as a filesystem path (a worker-local reference).
+* ``P008`` FrameworkTransferInsideTask — ``self.upload()``/``self.download()``
+  called inside a ``@task``-decorated method (a framework task nested in another
+  task).
+* ``P009`` ManualObjectStoreConstruction — direct ``boto3`` import, ad-hoc
+  ``obstore`` store construction, or a ``create_store_from_binding`` call in app
+  code.
+* ``P010`` ManualFileReferenceConstruction — ``FileReference(...)`` constructed
+  with an SDK-managed durability field
+  (``storage_path``/``is_durable``/``file_count``).
+* ``P011`` RawBytesInContract — a ``bytes``/``bytearray``/``memoryview`` field on
+  an ``Input``/``Output`` contract that would embed raw binary data across the
+  task boundary.
+* ``P012`` FilePathStringInContract — a ``str`` field on a contract whose name or
+  doc marks it as a filesystem path (a worker-local reference).
 
 Inline suppression
 ------------------
@@ -127,7 +131,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
 
 
 def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan a single Python file (P001 + P002 only).  P003 requires :func:`scan_all`."""
+    """Scan a single Python file (P001 + P002 + P008–P012).  P003 requires :func:`scan_all`."""
     try:
         text = path.read_text(encoding="utf-8")
     except OSError:

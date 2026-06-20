@@ -178,13 +178,14 @@ RULES: tuple[RuleDefinition, ...] = (
             "failure. Store the data as a file and pass a FileReference, which crosses "
             "the task boundary as a small durable handle (BLDX-1398)."
         ),
-        short_description="Input/Output contract field annotated `bytes` — risks the 2MB payload limit",
+        short_description="Input/Output contract field annotated bytes/bytearray/memoryview — risks the 2MB payload limit",
         full_description=(
             "An ``Input``/``Output`` contract subclass declares a field annotated\n"
-            "``bytes``, ``bytes | None``, or ``Optional[bytes]``.  A raw byte blob on\n"
-            "a contract crosses the task boundary as a Temporal payload, which has a\n"
-            "hard 2MB limit; a blob that grows past it in production fails the workflow\n"
-            "with a serialization or size error rather than a clear, early signal.\n"
+            "``bytes``, ``bytearray``, ``memoryview``, or their ``| None`` /\n"
+            "``Optional[…]`` variants.  A raw binary blob on a contract crosses the\n"
+            "task boundary as a Temporal payload, which has a hard 2MB limit; a blob\n"
+            "that grows past it in production fails the workflow with a serialization\n"
+            "or size error rather than a clear, early signal.\n"
             "\n"
             "Store the data as a file and pass a ``FileReference`` instead: the bytes\n"
             "live in the object store and only a small durable handle travels on the\n"

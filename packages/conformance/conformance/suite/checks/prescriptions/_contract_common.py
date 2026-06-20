@@ -1,9 +1,19 @@
-"""Shared AST helpers for contract-field inspection (P011, P012).
+"""Shared AST helpers for contract-field inspection (P011 RawBytesInContract, P012 FilePathStringInContract).
 
-A *contract class* is a class whose base list names ``Input`` or ``Output`` —
-the SDK's typed task-boundary contracts.  P011/P012 inspect the annotated
-fields of such classes, so the type-annotation recognisers and field-doc
-extraction live here, away from any single rule module.
+A *contract class* is a class whose base list names ``Input`` or ``Output``
+imported from ``application_sdk.*`` — the SDK's typed task-boundary contracts.
+P011/P012 inspect the annotated fields of such classes, so the
+type-annotation recognisers and field-doc extraction live here, away from any
+single rule module.
+
+Import provenance
+-----------------
+``iter_contract_classes`` gates on import provenance: a class is only
+considered a contract when its ``Input``/``Output`` base is *not* explicitly
+imported from a non-SDK module (e.g. pydantic_ai, strawberry, graphene).  If a
+file imports ``Output`` from a third-party library, classes extending that
+``Output`` are silently skipped.  Classes with no import for the base name are
+assumed SDK (common in real apps that have the import elsewhere in the tree).
 """
 
 from __future__ import annotations
@@ -12,6 +22,10 @@ import ast
 from typing import Iterator
 
 _CONTRACT_BASE_NAMES: frozenset[str] = frozenset({"Input", "Output"})
+_SDK_MODULE_PREFIX = "application_sdk"
+
+# Builtin bytes-like types that carry the same Temporal payload-size risk.
+_BYTES_LIKE_NAMES: frozenset[str] = frozenset({"bytes", "bytearray", "memoryview"})
 
 
 def _base_name(node: ast.expr) -> str | None:
@@ -23,15 +37,45 @@ def _base_name(node: ast.expr) -> str | None:
     return None
 
 
-def is_contract_class(node: ast.ClassDef) -> bool:
-    """True if any base name is in :data:`_CONTRACT_BASE_NAMES`."""
-    return any(_base_name(base) in _CONTRACT_BASE_NAMES for base in node.bases)
+def collect_foreign_contract_names(tree: ast.AST) -> frozenset[str]:
+    """Return local names bound to ``Input``/``Output`` imported from non-SDK modules.
+
+    E.g. ``from pydantic_ai import Output`` → ``frozenset({"Output"})``.
+    Used to avoid false-positives when apps use third-party types with the same
+    terminal name.
+    """
+    foreign: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        module = node.module or ""
+        is_sdk = module == _SDK_MODULE_PREFIX or module.startswith(
+            _SDK_MODULE_PREFIX + "."
+        )
+        if not is_sdk:
+            for alias in node.names:
+                if alias.name in _CONTRACT_BASE_NAMES:
+                    foreign.add(alias.asname or alias.name)
+    return frozenset(foreign)
 
 
-def iter_contract_classes(tree: ast.AST) -> Iterator[ast.ClassDef]:
+def is_contract_class(
+    node: ast.ClassDef, foreign_names: frozenset[str] = frozenset()
+) -> bool:
+    """True if any base name is in :data:`_CONTRACT_BASE_NAMES` and not in *foreign_names*."""
+    return any(
+        _base_name(base) in _CONTRACT_BASE_NAMES
+        and _base_name(base) not in foreign_names
+        for base in node.bases
+    )
+
+
+def iter_contract_classes(
+    tree: ast.AST, foreign_names: frozenset[str] = frozenset()
+) -> Iterator[ast.ClassDef]:
     """Yield every ``ClassDef`` in *tree* that looks like a contract class."""
     for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef) and is_contract_class(node):
+        if isinstance(node, ast.ClassDef) and is_contract_class(node, foreign_names):
             yield node
 
 
@@ -74,9 +118,17 @@ def _is_annotation(node: ast.expr, target: str) -> bool:
     )
 
 
+def bytes_type_name(node: ast.expr) -> str | None:
+    """Return the matched bytes-like type name, or ``None`` if not a bytes-like annotation."""
+    for name in _BYTES_LIKE_NAMES:
+        if _is_annotation(node, name):
+            return name
+    return None
+
+
 def is_bytes_annotation(node: ast.expr) -> bool:
-    """True for ``bytes``, ``bytes | None``, ``Optional[bytes]``."""
-    return _is_annotation(node, "bytes")
+    """True for ``bytes``/``bytearray``/``memoryview`` (bare, ``| None``, or ``Optional[…]``)."""
+    return bytes_type_name(node) is not None
 
 
 def is_str_annotation(node: ast.expr) -> bool:

@@ -1,11 +1,17 @@
-"""P011/P012 — payload-unsafe field types on ``Input``/``Output`` contracts.
+"""P011 RawBytesInContract / P012 FilePathStringInContract — payload-unsafe field types.
 
-* ``P011`` flags ``bytes`` fields: raw bytes embedded in a contract ride the
-  Temporal payload and hit its 2 MB limit.
-* ``P012`` flags ``str`` fields that look like filesystem paths: a bare path is
-  a worker-local reference that is invalid on a different worker.
+* ``P011`` RawBytesInContract — flags ``bytes``, ``bytearray``, and
+  ``memoryview`` fields: raw binary data embedded in a contract rides the
+  Temporal payload and hits its 2 MB limit.
+* ``P012`` FilePathStringInContract — flags ``str`` fields that look like
+  filesystem paths: a bare path is a worker-local reference that is invalid on
+  a different worker.
 
 Both should instead carry a ``FileReference`` field.
+
+Only classes that extend ``Input``/``Output`` imported from ``application_sdk.*``
+are inspected; third-party types with the same terminal name are excluded via
+import-provenance tracking (see ``collect_foreign_contract_names``).
 """
 
 from __future__ import annotations
@@ -17,6 +23,8 @@ from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.schema.findings import Finding
 
 from ._contract_common import (
+    bytes_type_name,
+    collect_foreign_contract_names,
     field_doc_text,
     is_bytes_annotation,
     is_str_annotation,
@@ -52,25 +60,28 @@ def check_p011(
     filename: str,
     directives: dict[int, _IgnoreDirective],
 ) -> list[Finding]:
-    """Emit P011 for ``bytes`` fields on contract classes."""
+    """Emit P011 for bytes-like fields on contract classes."""
     findings: list[Finding] = []
-    for classdef in iter_contract_classes(tree):
+    foreign = collect_foreign_contract_names(tree)
+    for classdef in iter_contract_classes(tree, foreign):
         for name, ann_node in _iter_field_annassigns(classdef):
-            if is_bytes_annotation(ann_node.annotation):
-                findings.append(
-                    make_finding(
-                        filename=filename,
-                        rule_id="P011",
-                        node=ann_node,
-                        message=(
-                            f"Contract field '{name}: bytes' embeds raw bytes — "
-                            "large payloads hit Temporal's 2 MB limit. Use a "
-                            "FileReference field to store the data as a file and "
-                            "pass the ref instead."
-                        ),
-                        directives=directives,
-                    )
+            if not is_bytes_annotation(ann_node.annotation):
+                continue
+            matched_type = bytes_type_name(ann_node.annotation) or "bytes"
+            findings.append(
+                make_finding(
+                    filename=filename,
+                    rule_id="P011",
+                    node=ann_node,
+                    message=(
+                        f"Contract field '{name}: {matched_type}' embeds raw binary "
+                        "data — large payloads hit Temporal's 2 MB limit. Use a "
+                        "FileReference field to store the data as a file and "
+                        "pass the ref instead."
+                    ),
+                    directives=directives,
                 )
+            )
     return findings
 
 
@@ -88,7 +99,8 @@ def check_p012(
 ) -> list[Finding]:
     """Emit P012 for ``str`` fields that look like filesystem paths."""
     findings: list[Finding] = []
-    for classdef in iter_contract_classes(tree):
+    foreign = collect_foreign_contract_names(tree)
+    for classdef in iter_contract_classes(tree, foreign):
         for name, ann_node in _iter_field_annassigns(classdef):
             if not is_str_annotation(ann_node.annotation):
                 continue
