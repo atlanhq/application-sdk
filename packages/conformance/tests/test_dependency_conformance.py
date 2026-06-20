@@ -13,6 +13,7 @@ from conformance.suite.checks.dependency_conformance import (
     _parse_requirement,
     _parse_suppressions,
     main,
+    scan_all,
     scan_text,
 )
 from conformance.suite.schema import SarifReport, derive_disposition, validate_sarif
@@ -368,9 +369,13 @@ def test_main_exit_0_when_clean(tmp_path: Path) -> None:
 
 def test_main_sarif_output_validates(tmp_path: Path) -> None:
     """Emitted SARIF validates against the official schema."""
+    # Use an unresolvable dependency name so D003 (which inspects installed
+    # metadata) treats it as unanalysable and stays silent — keeping this an
+    # exactly-one-D001 scenario regardless of what is installed in the test env.
     _scratch_pyproject(
         tmp_path,
-        '[project]\nname = "x"\nversion = "0"\ndependencies = ["rich>=13,<14"]\n',
+        '[project]\nname = "x"\nversion = "0"\n'
+        'dependencies = ["nonexistent-fixture-pkg-zzz>=1,<2"]\n',
     )
     sarif_file = tmp_path / "out.sarif"
     main(
@@ -394,11 +399,16 @@ def test_main_sarif_output_validates(tmp_path: Path) -> None:
 
 
 def test_self_check_passes_via_main(tmp_path: Path) -> None:
-    """Running against the SDK's own pyproject.toml emits zero findings."""
+    """SDK self-check emits no D001/D002 findings via the CLI.
+
+    D001/D002 are app-only and exempt the SDK. D003 is scope=both and does apply
+    to the SDK, but the declared dependency here is unresolvable, so D003 skips
+    it — leaving zero findings overall.
+    """
     _scratch_pyproject(
         tmp_path,
         '[project]\nname = "atlan-application-sdk"\nversion = "3.17.2"\n'
-        'dependencies = ["pydantic>=2.10.6,<3.0.0"]\n',
+        'dependencies = ["nonexistent-fixture-pkg-zzz>=1,<2"]\n',
     )
     sarif_file = tmp_path / "out.sarif"
     main(
@@ -413,3 +423,232 @@ def test_self_check_passes_via_main(tmp_path: Path) -> None:
     payload = json.loads(sarif_file.read_text(encoding="utf-8"))
     report = SarifReport.model_validate(payload)
     assert (report.runs[0].results or []) == []
+
+
+# ── D003 UnusedDependency ────────────────────────────────────────────────────
+
+
+def _d003_scan(
+    tmp_path: Path,
+    deps: str,
+    *,
+    imported_modules: set[str],
+    dist_import_map: dict[str, set[str] | None],
+    name: str = "my-connector",
+) -> list:
+    """Write a pyproject and run scan_all with injected import data (no env/AST).
+
+    Returns only the D003 findings so D001/D002 noise is filtered out.
+    """
+    pp = tmp_path / "pyproject.toml"
+    pp.write_text(
+        f'[project]\nname = "{name}"\nversion = "0.1.0"\n{deps}',
+        encoding="utf-8",
+    )
+    findings = scan_all(
+        [pp],
+        tmp_path,
+        imported_modules=imported_modules,
+        dist_import_map=dist_import_map,
+    )
+    return [f for f in findings if f.rule_id == "D003"]
+
+
+def test_d003_flags_unused_dependency(tmp_path: Path) -> None:
+    findings = _d003_scan(
+        tmp_path,
+        'dependencies = [\n    "atlan-application-sdk>=3.17.2,<4.0.0",\n    "requests>=2,<3",\n]\n',
+        imported_modules={"os", "sys"},
+        dist_import_map={"requests": {"requests"}},
+    )
+    assert len(findings) == 1
+    assert findings[0].rule_id == "D003"
+    assert "requests" in findings[0].message
+    assert not findings[0].suppressed
+
+
+def test_d003_not_flagged_when_imported(tmp_path: Path) -> None:
+    findings = _d003_scan(
+        tmp_path,
+        'dependencies = [\n    "atlan-application-sdk>=3.17.2,<4.0.0",\n    "requests>=2,<3",\n]\n',
+        imported_modules={"requests", "os"},
+        dist_import_map={"requests": {"requests"}},
+    )
+    assert findings == []
+
+
+def test_d003_maps_dist_name_to_import_name(tmp_path: Path) -> None:
+    """A dependency whose import name differs (pyyaml -> yaml) is not flagged
+    when that import name appears in source."""
+    findings = _d003_scan(
+        tmp_path,
+        'dependencies = [\n    "atlan-application-sdk>=3.17.2,<4.0.0",\n    "pyyaml>=6,<7",\n]\n',
+        imported_modules={"yaml"},
+        dist_import_map={"pyyaml": {"yaml"}},
+    )
+    assert findings == []
+
+
+def test_d003_skips_unresolvable_dependency_and_reports_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A dependency that cannot be resolved (map value None) is never flagged,
+    and is surfaced on stderr (no silent caps)."""
+    findings = _d003_scan(
+        tmp_path,
+        'dependencies = [\n    "atlan-application-sdk>=3.17.2,<4.0.0",\n    "mystery-pkg>=1,<2",\n]\n',
+        imported_modules={"os"},
+        dist_import_map={"mystery-pkg": None},
+    )
+    assert findings == []
+    assert "mystery-pkg" in capsys.readouterr().err
+
+
+def test_d003_suppression(tmp_path: Path) -> None:
+    findings = _d003_scan(
+        tmp_path,
+        'dependencies = [\n    "atlan-application-sdk>=3.17.2,<4.0.0",\n'
+        '    "requests>=2,<3",  # conformance: ignore[D003] used via plugin loader\n]\n',
+        imported_modules={"os"},
+        dist_import_map={"requests": {"requests"}},
+    )
+    assert len(findings) == 1
+    assert findings[0].suppressed
+    assert findings[0].suppression_justification == "used via plugin loader"
+
+
+def test_d003_runs_on_sdk_but_d001_d002_do_not(tmp_path: Path) -> None:
+    """scope=both: D003 fires on the SDK's own repo, while the app-only D001/D002
+    stay self-exempt (the SDK is a publisher of that contract, not subject to it)."""
+    pp = tmp_path / "pyproject.toml"
+    pp.write_text(
+        '[project]\nname = "atlan-application-sdk"\nversion = "3.17.2"\n'
+        'dependencies = [\n    "requests>=2,<3",\n]\n',
+        encoding="utf-8",
+    )
+    findings = scan_all(
+        [pp],
+        tmp_path,
+        imported_modules={"os"},
+        dist_import_map={"requests": {"requests"}},
+    )
+    rule_ids = {f.rule_id for f in findings}
+    assert rule_ids == {"D003"}  # no D001 despite the missing SDK self-dep
+
+
+def test_d003_ignores_optional_dependency_extras(tmp_path: Path) -> None:
+    """Only core [project.dependencies] is analysed; an unused extra is not D003."""
+    findings = _d003_scan(
+        tmp_path,
+        'dependencies = [\n    "atlan-application-sdk>=3.17.2,<4.0.0",\n]\n'
+        "\n[project.optional-dependencies]\n"
+        'sql = [\n    "requests>=2,<3",\n]\n',
+        imported_modules={"os"},
+        dist_import_map={"requests": {"requests"}},
+    )
+    assert findings == []
+
+
+def test_d003_flags_multiple_unused_with_line_numbers(tmp_path: Path) -> None:
+    """Two unused deps -> two findings anchored to their own source lines."""
+    findings = _d003_scan(
+        tmp_path,
+        "dependencies = [\n"
+        '    "atlan-application-sdk>=3.17.2,<4.0.0",\n'  # line 5
+        '    "requests>=2,<3",\n'  # line 6
+        '    "click>=8,<9",\n'  # line 7
+        "]\n",
+        imported_modules={"os"},
+        dist_import_map={"requests": {"requests"}, "click": {"click"}},
+    )
+    by_line = {f.line: f for f in findings}
+    assert set(by_line) == {6, 7}
+    assert "requests" in by_line[6].message
+    assert "click" in by_line[7].message
+
+
+def test_d003_mixed_flagged_and_unresolved(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A resolvable-unused dep is flagged while an unresolvable one is reported
+    to stderr — both happen in the same scan."""
+    findings = _d003_scan(
+        tmp_path,
+        "dependencies = [\n"
+        '    "atlan-application-sdk>=3.17.2,<4.0.0",\n'
+        '    "requests>=2,<3",\n'
+        '    "mystery-pkg>=1,<2",\n'
+        "]\n",
+        imported_modules={"os"},
+        dist_import_map={"requests": {"requests"}, "mystery-pkg": None},
+    )
+    assert [f.message for f in findings if "requests" in f.message]
+    assert len(findings) == 1
+    err = capsys.readouterr().err
+    assert "mystery-pkg" in err and "requests" not in err
+
+
+def test_d003_empty_provided_set_is_unresolved(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An empty provided-names set (distinct code path from None) is treated as
+    unresolvable: skipped, reported, never flagged."""
+    findings = _d003_scan(
+        tmp_path,
+        'dependencies = [\n    "atlan-application-sdk>=3.17.2,<4.0.0",\n    "ghost>=1,<2",\n]\n',
+        imported_modules={"os"},
+        dist_import_map={"ghost": set()},
+    )
+    assert findings == []
+    assert "ghost" in capsys.readouterr().err
+
+
+def test_d003_end_to_end_real_ast_and_metadata(tmp_path: Path) -> None:
+    """Exercise the real discover() -> AST import walk -> importlib.metadata path
+    end to end (no injection), including a source file in a subdirectory.
+
+    ``pydantic`` and ``jinja2`` are direct conformance dependencies, so both
+    resolve from real installed metadata; only ``jinja2`` is never imported.
+    """
+    from conformance.suite.checks.dependency_conformance import discover
+
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "my-connector"\nversion = "0.1.0"\n'
+        "dependencies = [\n"
+        '    "atlan-application-sdk>=3.17.2,<4.0.0",\n'
+        '    "pydantic>=2,<3",\n'  # imported below -> used
+        '    "jinja2>=3,<4",\n'  # never imported -> flagged
+        "]\n",
+        encoding="utf-8",
+    )
+    pkg = tmp_path / "my_connector"
+    (pkg / "sub").mkdir(parents=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "models.py").write_text(
+        "import pydantic\nfrom pydantic import BaseModel\n", encoding="utf-8"
+    )
+    (pkg / "sub" / "deep.py").write_text("import os\n", encoding="utf-8")
+
+    findings = [
+        f for f in scan_all(discover(tmp_path), tmp_path) if f.rule_id == "D003"
+    ]
+    assert len(findings) == 1
+    assert "jinja2" in findings[0].message
+    assert all("pydantic" not in f.message for f in findings)
+
+
+def test_d003_skips_non_utf8_source_without_crashing(tmp_path: Path) -> None:
+    """A latin-1 source with a PEP 263 coding cookie is parsed (not skipped) and
+    its imports counted, so a dep imported only there is not falsely flagged."""
+    from conformance.suite.checks.dependency_conformance import (
+        _collect_top_level_imports,
+    )
+
+    src = tmp_path / "legacy.py"
+    src.write_bytes(
+        b"# -*- coding: latin-1 -*-\n"
+        b"# comment with a latin-1 byte: \xe9\n"
+        b"import requests\n"
+    )
+    modules = _collect_top_level_imports([src])
+    assert "requests" in modules

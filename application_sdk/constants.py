@@ -349,6 +349,36 @@ _HTTP_POOL_TIMEOUT_SECONDS = 30.0
 
 #: Whether to enable Atlan storage upload
 ENABLE_ATLAN_UPLOAD = os.getenv("ENABLE_ATLAN_UPLOAD", "false").lower() == "true"
+
+# Dual-write — BLDX-1464: when both stores are configured (SDR), App.upload writes
+# to the deployment (customer) store first, then to upstream (Atlan), at the same
+# run-scoped key.  See ADR-0014 §"App.upload() — dual-write when both stores are
+# configured (BLDX-1464)" for the full rationale.
+#
+# ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE accepts three values:
+#   disabled    — upstream only; pre-BLDX-1464 behaviour.
+#   best_effort — dual-write; deployment failure logs WARNING and run succeeds.
+#   required    — dual-write; deployment failure logs ERROR, upstream still runs,
+#                 then the run fails (customer copy missing is surfaced).
+_DEPLOYMENT_ARTIFACT_DUAL_WRITE: str = os.getenv(
+    "ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE", "best_effort"
+).lower()
+#: True when dual-write is active (best_effort or required).
+DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED: bool = (
+    _DEPLOYMENT_ARTIFACT_DUAL_WRITE != "disabled"
+)
+#: True only when dual-write is required (a failed deployment write fails the run).
+DEPLOYMENT_ARTIFACT_DUAL_WRITE_REQUIRED: bool = (
+    _DEPLOYMENT_ARTIFACT_DUAL_WRITE == "required"
+)
+if DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED:
+    import logging as _logging  # stdlib: constants.py cannot import from observability
+
+    _logging.getLogger(__name__).info(
+        "BLDX-1464 dual-write active (ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE=%s): "
+        "App.upload writes to both deployment and upstream stores per run.",
+        _DEPLOYMENT_ARTIFACT_DUAL_WRITE,
+    )
 # Dapr Client Configuration
 #: Maximum gRPC message length in bytes for Dapr client.
 #:
