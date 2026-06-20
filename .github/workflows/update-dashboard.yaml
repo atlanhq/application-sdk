@@ -362,15 +362,15 @@ jobs:
           # "Conformance". Conformance artifacts live in a separate run —
           # discover the latest completed one on the default branch.
           RUN_ID=$(gh run list \
-            --workflow="Conformance" \
+            --workflow=conformance.yaml \
             --status=completed \
             --branch="${{ github.event.repository.default_branch || 'main' }}" \
-            --limit=5 \
+            --limit=20 \
             --json databaseId,conclusion \
             --jq '[.[] | select(.conclusion=="success" or .conclusion=="failure")] | .[0].databaseId')
 
           if [ -z "${RUN_ID:-}" ] || [ "$RUN_ID" = "null" ]; then
-            echo "::warning::No completed Conformance run found — skipping conformance dashboard update"
+            echo "::warning::No completed (success/failure) Conformance run found in the last 20 runs — all recent runs may be cancelled; skipping conformance dashboard update"
             echo "has_run=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -423,7 +423,7 @@ jobs:
           commit_sha  = os.environ.get("CONFORMANCE_SHA", "")
           branch      = os.environ.get("CONFORMANCE_BRANCH", "")
 
-          tool_version   = "unknown"
+          tool_versions: set  = set()
           profile_version = "v1"
           rule_catalog: dict = {}
           summary        = {"failing": 0, "warning": 0, "suppressing": 0}
@@ -441,8 +441,8 @@ jobs:
 
               for run in sarif.get("runs", []):
                   driver = run.get("tool", {}).get("driver", {})
-                  if driver.get("version") and tool_version == "unknown":
-                      tool_version = driver["version"]
+                  if driver.get("version"):
+                      tool_versions.add(driver["version"])
 
                   # Build rule catalog from the embedded descriptors — carry
                   # tier/category/series/since so connector-pulse never needs
@@ -485,6 +485,16 @@ jobs:
                                   suppressions_list.append({"ruleId": rule_id, "justification": just})
                       else:
                           entry["failing"] += 1
+
+          # Emit a single toolVersion when all series agree; surface the
+          # disagreement explicitly when they don't (partial publish, two
+          # artifacts from different runs) so connector-pulse can flag it.
+          if len(tool_versions) == 1:
+              tool_version = next(iter(tool_versions))
+          elif len(tool_versions) > 1:
+              tool_version = "skew:" + ",".join(sorted(tool_versions))
+          else:
+              tool_version = "unknown"
 
           repo_slug = repo_name.replace("/", "_")
           repo_data = {
