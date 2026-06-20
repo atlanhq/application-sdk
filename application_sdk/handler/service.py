@@ -55,8 +55,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
 from temporalio.client import WorkflowFailureError
 
+from application_sdk.constants import APPLICATION_NAME
 from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
-from application_sdk.constants import APPLICATION_NAME, DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
+from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
 from application_sdk.errors import AppError
 from application_sdk.errors.categories import FailureCategory
 from application_sdk.handler.base import Handler, HandlerError
