@@ -56,7 +56,7 @@ from pydantic import BaseModel as PydanticBaseModel
 from temporalio.client import WorkflowFailureError
 
 from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
-from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
+from application_sdk.constants import APPLICATION_NAME, DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
 from application_sdk.errors import AppError
 from application_sdk.errors.categories import FailureCategory
 from application_sdk.handler.base import Handler, HandlerError
@@ -837,10 +837,6 @@ def _config_objectstore_key(config_id: str, config_type: str = "workflows") -> s
         raise InvalidConfigIdError(config_id=config_id)
     if not _CONFIG_KEY_RE.match(config_type):
         raise InvalidConfigTypeError(config_type=config_type)
-    from application_sdk.constants import (  # noqa: PLC0415 — cold path: only when computing app paths
-        APPLICATION_NAME,
-    )
-
     return f"persistent-artifacts/apps/{APPLICATION_NAME}/{config_type}/{config_id}/config.json"
 
 
@@ -1788,7 +1784,10 @@ def _register_workflow_routes(
             )
         raw = ep_manifest.read_bytes()
         raw = raw.replace(b"{deployment_name}", deployment)
-        raw = raw.replace(b"{app_name}", (app_name or "").encode())
+        # Log-identity: the manifest app_name (what the UI filters logs by) must
+        # equal APPLICATION_NAME — the value the SDK tags log rows with — not the
+        # runtime app class name, which can differ and silently hide logs (HYP-1678).
+        raw = raw.replace(b"{app_name}", APPLICATION_NAME.encode())
 
         # Dynamic-manifest hook: if the app defines
         # `app.<entrypoint_snake>.core.compute_manifest`, hand the
@@ -1855,7 +1854,8 @@ def _register_workflow_routes(
             # validated at build time by the contract tooling.
             raw = manifest_path.read_bytes()
             raw = raw.replace(b"{deployment_name}", deployment)
-            raw = raw.replace(b"{app_name}", (app_name or "").encode())
+            # See note above: log-read identity must equal APPLICATION_NAME (HYP-1678).
+            raw = raw.replace(b"{app_name}", APPLICATION_NAME.encode())
             return Response(content=raw, media_type="application/json")
 
         # Default-entrypoint fallback (aligns with PR #1965 semantics used

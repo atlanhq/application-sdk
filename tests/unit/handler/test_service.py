@@ -2183,18 +2183,25 @@ class TestManifestEndpoint:
 
         original_dir = svc_module.CONTRACT_GENERATED_DIR
         original_dep = svc_module.DEPLOYMENT_NAME
+        original_app = svc_module.APPLICATION_NAME
         svc_module.CONTRACT_GENERATED_DIR = tmp_path
         svc_module.DEPLOYMENT_NAME = "prod-deploy"
+        # The manifest app_name (what the UI filters logs by) is filled from
+        # APPLICATION_NAME — the same value the SDK tags log rows with — and NOT
+        # from the app class name ("test-app" here). Using a distinct value proves
+        # read-identity == write-identity regardless of the class name (HYP-1678).
+        svc_module.APPLICATION_NAME = "contract-name"
         try:
             client = _make_client()
             response = client.get("/workflows/v1/manifest")
             assert response.status_code == 200
             body = response.json()
-            assert body["dag"]["extract"]["app_name"] == "test-app"
+            assert body["dag"]["extract"]["app_name"] == "contract-name"
             assert body["dag"]["extract"]["inputs"]["task_queue"] == "prod-deploy-queue"
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original_dir
             svc_module.DEPLOYMENT_NAME = original_dep
+            svc_module.APPLICATION_NAME = original_app
 
     def test_manifest_programmatic_takes_priority(self, tmp_path: Path) -> None:
         """When both programmatic and disk manifest exist, programmatic wins."""
