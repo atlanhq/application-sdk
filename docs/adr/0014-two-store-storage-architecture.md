@@ -87,14 +87,15 @@ from the tier, run prefix, and app name — not from the store itself (see
 returned `UploadOutput` reflects the upstream write; because keys are identical,
 the `FileReference` it carries is valid for reading from either store.
 
-Two flags control the behaviour (see `docs/configuration.md`, `## Storage`):
+One tri-state flag controls the behaviour (see `docs/configuration.md`, `## Storage`):
 
-| Flag (`ATLAN_*`) | Default | Meaning |
-|---|---|---|
-| `ENABLE_DEPLOYMENT_ARTIFACT_MIRROR` | `true` | Enable dual-write when both stores are configured. |
-| `DEPLOYMENT_ARTIFACT_MIRROR_REQUIRED` | `false` | Make a failed deployment write fatal (after upstream still completes). |
+| `ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE` | Meaning |
+|---|---|
+| `best_effort` (default) | Dual-write enabled; deployment failure logs `WARNING`, run succeeds. |
+| `required` | Dual-write enabled; deployment failure fails the run after upstream completes. |
+| `disabled` | Upstream-only write (pre-BLDX-1464 behaviour). |
 
-When `ENABLE_DEPLOYMENT_ARTIFACT_MIRROR=false`, or in non-SDR deployments where
+When `ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE=disabled`, or in non-SDR deployments where
 `upstream_storage` is `None`, `App.upload()` writes to a single store as before.
 
 The deployment-write failure is **never** allowed to suppress the upstream
@@ -177,8 +178,8 @@ async def run(self, input: ExtractionInput) -> ExtractionOutput:
 
 - `application_sdk.constants.DEPLOYMENT_OBJECT_STORE_NAME` — `"objectstore"`
 - `application_sdk.constants.UPSTREAM_OBJECT_STORE_NAME` — `"atlan-objectstore"`
-- `application_sdk.constants.ENABLE_DEPLOYMENT_ARTIFACT_MIRROR` — dual-write flag (default `True`)
-- `application_sdk.constants.DEPLOYMENT_ARTIFACT_MIRROR_REQUIRED` — fatal-mirror flag (default `False`)
+- `application_sdk.constants.DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED` — `True` when dual-write is active
+- `application_sdk.constants.DEPLOYMENT_ARTIFACT_DUAL_WRITE_REQUIRED` — `True` when a deployment failure is fatal
 - `application_sdk.app.base.App.upload()` — dual-write fan-out (deployment first, upstream second)
 - `application_sdk.execution._temporal.activities` — interceptor persist step uses `infra.storage`
 - [ADR-0007: Apps as the Unit of Inter-App Coordination](0007-apps-as-coordination-unit.md)

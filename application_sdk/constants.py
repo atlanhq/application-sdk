@@ -350,24 +350,34 @@ _HTTP_POOL_TIMEOUT_SECONDS = 30.0
 #: Whether to enable Atlan storage upload
 ENABLE_ATLAN_UPLOAD = os.getenv("ENABLE_ATLAN_UPLOAD", "false").lower() == "true"
 
-# Artifact mirror — BLDX-1464: retain a copy of every App.upload artifact in the
-# deployment (customer) object store as well as the upstream (Atlan) store when
-# both are configured (SDR deployments only; ignored when only one store exists).
+# Dual-write — BLDX-1464: when both stores are configured (SDR), App.upload writes
+# to the deployment (customer) store first, then to upstream (Atlan), at the same
+# run-scoped key.  See ADR-0014 §"BLDX-1464 rollout" for the write-count delta.
 #
-#: Write App.upload artifacts to the deployment (customer) bucket first, then to
-#: the upstream (Atlan) bucket, when both stores are configured.  Default: True.
-#: Set ``ATLAN_ENABLE_DEPLOYMENT_ARTIFACT_MIRROR=false`` to disable (upstream-only,
-#: pre-BLDX-1464 behaviour).
-ENABLE_DEPLOYMENT_ARTIFACT_MIRROR: bool = (
-    os.getenv("ATLAN_ENABLE_DEPLOYMENT_ARTIFACT_MIRROR", "true").lower() == "true"
+# ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE accepts three values:
+#   disabled    — upstream only; pre-BLDX-1464 behaviour.
+#   best_effort — dual-write; deployment failure logs ERROR and run succeeds.
+#   required    — dual-write; deployment failure logs ERROR, upstream still runs,
+#                 then the run fails (customer copy missing is surfaced).
+_DEPLOYMENT_ARTIFACT_DUAL_WRITE: str = os.getenv(
+    "ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE", "best_effort"
+).lower()
+#: True when dual-write is active (best_effort or required).
+DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED: bool = (
+    _DEPLOYMENT_ARTIFACT_DUAL_WRITE != "disabled"
 )
-#: When True, a failed deployment-bucket mirror write causes the run to fail
-#: (after the upstream write still completes, so a copy always lands somewhere).
-#: Default: False — deployment write is best-effort; a WARNING is logged and the
-#: run succeeds even if the customer-bucket copy could not be written.
-DEPLOYMENT_ARTIFACT_MIRROR_REQUIRED: bool = (
-    os.getenv("ATLAN_DEPLOYMENT_ARTIFACT_MIRROR_REQUIRED", "false").lower() == "true"
+#: True only when dual-write is required (a failed deployment write fails the run).
+DEPLOYMENT_ARTIFACT_DUAL_WRITE_REQUIRED: bool = (
+    _DEPLOYMENT_ARTIFACT_DUAL_WRITE == "required"
 )
+if DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED:
+    import logging as _logging  # stdlib: constants.py cannot import from observability
+
+    _logging.getLogger(__name__).info(
+        "BLDX-1464 dual-write active (ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE=%s): "
+        "App.upload writes to both deployment and upstream stores per run.",
+        _DEPLOYMENT_ARTIFACT_DUAL_WRITE,
+    )
 # Dapr Client Configuration
 #: Maximum gRPC message length in bytes for Dapr client.
 #:

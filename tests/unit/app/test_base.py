@@ -1626,7 +1626,7 @@ class TestUploadStoreRouting:
         mock_result = UploadOutput()
         with (
             mock.patch(
-                "application_sdk.constants.ENABLE_DEPLOYMENT_ARTIFACT_MIRROR",
+                "application_sdk.constants.DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED",
                 True,
             ),
             mock.patch(
@@ -1675,7 +1675,7 @@ class TestUploadStoreRouting:
         mock_result = UploadOutput()
         with (
             mock.patch(
-                "application_sdk.constants.ENABLE_DEPLOYMENT_ARTIFACT_MIRROR",
+                "application_sdk.constants.DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED",
                 False,
             ),
             mock.patch(
