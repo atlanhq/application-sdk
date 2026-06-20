@@ -144,6 +144,16 @@ _SERIES_META: list[SeriesMeta] = [
             "# conformance: ignore[T001] intentional: marked dynamically via add_marker"
         ),
     ),
+    SeriesMeta(
+        title="Container Image Conformance Rules (I-series)",
+        prefix="I",
+        source_module="conformance/suite/rules/dockerfile.py",
+        output_filename="dockerfile.md",
+        checker="`suite.checks.dockerfile_conformance` (Dockerfile static analysis)",
+        suppression_example=(
+            "# conformance: ignore[I001] SDK builds the base image, not consuming it"
+        ),
+    ),
 ]
 
 

@@ -89,19 +89,40 @@ def test_scope_is_required_field() -> None:
 def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     """The publisher-side rules are app-scoped; everything else is 'both'.
 
-    APP-scoped rules (dependency pinning, managed-workflow drift) must never fire
-    on the SDK itself, which publishes the contract.  Pin the exact set so a new
-    rule has to make a deliberate scope decision rather than silently inheriting.
+    APP-scoped rules (dependency pinning, managed-workflow drift, Dockerfile
+    conformance, orchestration-seam P004/P005) must never fire on the SDK
+    itself, which publishes the contract.  Pin the exact set so a new rule
+    has to make a deliberate scope decision rather than silently inheriting.
 
     Note C003 (.gitignore entries) is *both*, not app: the SDK has its own
     .gitignore sharing the standard baseline, so the rule is useful there too —
     only C002 (bootstrap workflow drift) is genuinely 0%-applicable to the SDK.
+
+    I001–I005 (Dockerfile conformance) are app-scoped because the SDK Dockerfile
+    *builds* the base image that these rules enforce, so the rules are meaningless
+    and noisy when applied to the SDK itself.
+
+    P004–P005 (orchestration-seam) are app-scoped: apps must reach Temporal
+    through the SDK seam (BLDX-1417).  P006–P007 are SDK-only: the SDK must
+    keep Temporal contained behind its seam.
     """
     rules = load_catalog()
     app_scoped = {r.id for r in rules if r.scope == RuleScope.APP}
     # C002/D001/D002: publisher-side contract. P004/P005: apps must reach the
     # orchestration layer through the SDK seam, not Temporal/SDK-internals (BLDX-1417).
-    assert app_scoped == {"C002", "D001", "D002", "P004", "P005"}, app_scoped
+    # I001–I005: Dockerfile conformance (SDK builds the base image, not consuming it).
+    assert app_scoped == {
+        "C002",
+        "D001",
+        "D002",
+        "P004",
+        "P005",
+        "I001",
+        "I002",
+        "I003",
+        "I004",
+        "I005",
+    }, app_scoped
     # SDK-only rules: the SDK must keep Temporal contained behind its seam (BLDX-1417).
     sdk_scoped = {r.id for r in rules if r.scope == RuleScope.SDK}
     assert sdk_scoped == {"P006", "P007"}, sdk_scoped
