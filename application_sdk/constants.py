@@ -349,6 +349,25 @@ _HTTP_POOL_TIMEOUT_SECONDS = 30.0
 
 #: Whether to enable Atlan storage upload
 ENABLE_ATLAN_UPLOAD = os.getenv("ENABLE_ATLAN_UPLOAD", "false").lower() == "true"
+
+# Artifact mirror — BLDX-1464: retain a copy of every App.upload artifact in the
+# deployment (customer) object store as well as the upstream (Atlan) store when
+# both are configured (SDR deployments only; ignored when only one store exists).
+#
+#: Write App.upload artifacts to the deployment (customer) bucket first, then to
+#: the upstream (Atlan) bucket, when both stores are configured.  Default: True.
+#: Set ``ATLAN_ENABLE_DEPLOYMENT_ARTIFACT_MIRROR=false`` to disable (upstream-only,
+#: pre-BLDX-1464 behaviour).
+ENABLE_DEPLOYMENT_ARTIFACT_MIRROR: bool = (
+    os.getenv("ATLAN_ENABLE_DEPLOYMENT_ARTIFACT_MIRROR", "true").lower() == "true"
+)
+#: When True, a failed deployment-bucket mirror write causes the run to fail
+#: (after the upstream write still completes, so a copy always lands somewhere).
+#: Default: False — deployment write is best-effort; a WARNING is logged and the
+#: run succeeds even if the customer-bucket copy could not be written.
+DEPLOYMENT_ARTIFACT_MIRROR_REQUIRED: bool = (
+    os.getenv("ATLAN_DEPLOYMENT_ARTIFACT_MIRROR_REQUIRED", "false").lower() == "true"
+)
 # Dapr Client Configuration
 #: Maximum gRPC message length in bytes for Dapr client.
 #:

@@ -1599,7 +1599,11 @@ class TestUploadStoreRouting:
         AppRegistry.reset()
         TaskRegistry.reset()
 
-    async def test_upload_uses_upstream_when_configured(self) -> None:
+    async def test_upload_dual_writes_when_both_stores_configured(self) -> None:
+        """When both stores are distinct and mirror is enabled (default), _upload is
+        called twice: once with store=deployment, once with store=upstream.
+        The deployment write comes first; the upstream write is last (authoritative).
+        """
         from application_sdk.app.context import AppContext
         from application_sdk.contracts.storage import UploadInput, UploadOutput
 
@@ -1620,13 +1624,69 @@ class TestUploadStoreRouting:
         )
 
         mock_result = UploadOutput()
-        with mock.patch(
-            "application_sdk.storage.transfer.upload",
-            new_callable=mock.AsyncMock,
-            return_value=mock_result,
-        ) as mock_upload:
+        with (
+            mock.patch(
+                "application_sdk.constants.ENABLE_DEPLOYMENT_ARTIFACT_MIRROR",
+                True,
+            ),
+            mock.patch(
+                "application_sdk.storage.transfer.upload",
+                new_callable=mock.AsyncMock,
+                return_value=mock_result,
+            ) as mock_upload,
+        ):
+            result = await app.upload(UploadInput(local_path="/tmp/out"))
+
+        # Called once per target store: deployment first, then upstream.
+        assert (
+            mock_upload.call_count == 2
+        ), f"Expected 2 _upload calls (deployment + upstream); got {mock_upload.call_count}"
+        stores_in_order = [call.kwargs["store"] for call in mock_upload.call_args_list]
+        assert stores_in_order == [
+            deployment_sentinel,
+            upstream_sentinel,
+        ], f"Expected [deployment, upstream] call order; got {stores_in_order}"
+        # Returned result is the upstream (last) write.
+        assert result is mock_result
+
+    async def test_upload_mirror_disabled_uses_upstream_only(self) -> None:
+        """When ENABLE_DEPLOYMENT_ARTIFACT_MIRROR=False, only one _upload call is made
+        and it targets the upstream store.
+        """
+        from application_sdk.app.context import AppContext
+        from application_sdk.contracts.storage import UploadInput, UploadOutput
+
+        upstream_sentinel = object()
+        deployment_sentinel = object()
+
+        class _UpAppMirrorOff(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+        app = _UpAppMirrorOff()
+        app._context = AppContext(
+            app_name=app._app_name,
+            app_version="1",
+            run_id="run-1",
+            _storage=deployment_sentinel,  # type: ignore[arg-type]
+            _upstream_storage=upstream_sentinel,  # type: ignore[arg-type]
+        )
+
+        mock_result = UploadOutput()
+        with (
+            mock.patch(
+                "application_sdk.constants.ENABLE_DEPLOYMENT_ARTIFACT_MIRROR",
+                False,
+            ),
+            mock.patch(
+                "application_sdk.storage.transfer.upload",
+                new_callable=mock.AsyncMock,
+                return_value=mock_result,
+            ) as mock_upload,
+        ):
             await app.upload(UploadInput(local_path="/tmp/out"))
 
+        assert mock_upload.call_count == 1
         assert mock_upload.call_args.kwargs["store"] is upstream_sentinel
 
     async def test_upload_falls_back_to_deployment_when_no_upstream(self) -> None:

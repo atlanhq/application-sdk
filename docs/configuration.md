@@ -150,6 +150,8 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 |----------|---------|-------------|
 | `ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS` | `4` | Maximum concurrent object-store uploads/downloads. |
 | `ENABLE_ATLAN_UPLOAD` | `false` | Enable uploading processed artifacts to the Atlan platform object store. |
+| `ATLAN_ENABLE_DEPLOYMENT_ARTIFACT_MIRROR` | `true` | Mirror every `App.upload` artifact to the deployment (customer) object store in addition to the upstream (Atlan) store, when both stores are configured (SDR only). Set to `false` to restore single-target (upstream-only) behaviour. |
+| `ATLAN_DEPLOYMENT_ARTIFACT_MIRROR_REQUIRED` | `false` | When `true`, a failed deployment-bucket mirror write causes the run to fail after the upstream write completes (a copy is guaranteed somewhere). When `false` (default) the deployment write is best-effort: failures are logged as `WARNING` and the run succeeds. Only meaningful when `ATLAN_ENABLE_DEPLOYMENT_ARTIFACT_MIRROR=true`. |
 | `SSL_CERT_DIR` | _(empty)_ | Directory of custom CA certificates (`.pem`, `.crt`, `.cer`, `.ca-bundle`). Used by `httpx` and `aiohttp` clients when set. |
 
 ---

@@ -896,6 +896,10 @@ class App(ABC):
             # up.ref.file_count == number of files in the directory
         """
 
+        from application_sdk.constants import (  # noqa: PLC0415 — import here to avoid module-level circular import (same pattern as normalize_key)
+            DEPLOYMENT_ARTIFACT_MIRROR_REQUIRED,
+            ENABLE_DEPLOYMENT_ARTIFACT_MIRROR,
+        )
         from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: app.base is imported by execution which imports storage
             normalize_key,
         )
@@ -903,11 +907,39 @@ class App(ABC):
             upload as _upload,
         )
 
-        # Prefer the upstream store (SDR: Atlan's bucket for the extract→publish
-        # handoff); fall back to the deployment store (standard deployments).
-        store = self.context.upstream_storage or self.context.storage
-        if store is None:
-            raise ObjectStoreNotConfiguredError()
+        deployment = self.context.storage
+        upstream = self.context.upstream_storage
+
+        # Build the ordered list of upload targets.
+        #
+        # SDR (both stores distinct + mirror enabled): write deployment store
+        # (customer bucket) first, then upstream (Atlan) — matching the
+        # documented flow "object store → Atlan SaaS" (BLDX-1464).
+        # Non-SDR / mirror disabled: single target (upstream or deployment),
+        # preserving pre-BLDX-1464 behaviour.
+        #
+        # Each entry is (store, label, fatal) where fatal controls whether a
+        # failure defers-and-re-raises (True) or logs a WARNING and continues
+        # (False = best-effort).  A fatal failure is always deferred until all
+        # remaining targets have run so a copy lands somewhere.
+        if (
+            ENABLE_DEPLOYMENT_ARTIFACT_MIRROR
+            and upstream is not None
+            and deployment is not None
+            and upstream is not deployment
+        ):
+            targets = [
+                (deployment, "deployment", DEPLOYMENT_ARTIFACT_MIRROR_REQUIRED),
+                (upstream, "upstream", True),
+            ]
+        else:
+            single = upstream or deployment
+            if single is None:
+                raise ObjectStoreNotConfiguredError()
+            targets = [
+                (single, "upstream" if single is upstream else "deployment", True)
+            ]
+
         run_prefix = f"artifacts/apps/{self._app_name}/workflows/{self.context.run_id}"
         app_prefix = input.tier.upload_prefix(
             run_prefix=run_prefix, app_name=self._app_name
@@ -929,18 +961,45 @@ class App(ABC):
             else None
         )
 
-        return await _upload(
-            input.local_path,
-            input.storage_path,
-            storage_subdir=input.storage_subdir,
-            skip_if_exists=input.skip_if_exists,
-            raise_on_empty=input.raise_on_empty,
-            store=store,
-            _source_ref=source_ref,
-            _source_store=self.context.storage,
-            _app_prefix=app_prefix,
-            _tier=input.tier,
-        )
+        # Fan-out upload: iterate targets in order, deferring required failures
+        # until all targets have been attempted so the last target (upstream)
+        # always runs and a copy lands somewhere even when a required write fails.
+        result: UploadOutput | None = None
+        deferred_required_error: Exception | None = None
+        for target_store, label, fatal in targets:
+            try:
+                out = await _upload(
+                    input.local_path,
+                    input.storage_path,
+                    storage_subdir=input.storage_subdir,
+                    skip_if_exists=input.skip_if_exists,
+                    raise_on_empty=input.raise_on_empty,
+                    store=target_store,
+                    _source_ref=source_ref,
+                    _source_store=self.context.storage,
+                    _app_prefix=app_prefix,
+                    _tier=input.tier,
+                )
+            except Exception as exc:
+                _task_logger.warning(
+                    "Object-store upload to %s store failed for prefix %s%s",
+                    label,
+                    app_prefix,
+                    "; will fail run after remaining targets complete"
+                    if fatal
+                    else " (non-fatal); continuing to next target",
+                    exc_info=True,
+                )
+                if fatal:
+                    deferred_required_error = exc
+                continue
+            result = out  # last successful write is authoritative (upstream in SDR)
+
+        if deferred_required_error is not None:
+            raise deferred_required_error
+        if result is None:
+            raise ObjectStoreNotConfiguredError()
+        return result
 
     @task(timeout_seconds=600, retry_max_attempts=3)
     async def download(

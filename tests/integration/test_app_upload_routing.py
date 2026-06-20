@@ -1,8 +1,14 @@
 """Integration tests pinning two-store routing for App.upload() (ADR-0014).
 
-Three existing invariants:
+Invariants:
 
-(a) App.upload() routes to upstream_storage when an upstream store is wired.
+(a) App.upload() dual-writes to BOTH stores when both are configured and mirror
+    is enabled (BLDX-1464 default).  The file lands in deployment first, then in
+    upstream, at the **identical key**.  The returned ref reflects the upstream
+    (authoritative) write.
+(a2) Mirror disabled (ATLAN_ENABLE_DEPLOYMENT_ARTIFACT_MIRROR=false) → upstream
+    only (pre-BLDX-1464 behaviour).
+(a3) Same-store guard (upstream is deployment object) → single write, no double.
 (b) App.upload() falls back to storage when upstream_storage is None.
 (c) persist_file_reference always writes to the deployment store, never upstream.
 
@@ -17,6 +23,13 @@ New invariants added for BLDX-1377 (FileReference / cross-pod safety):
 (g) normalize_key(local_path) == "" guard: no fallback attempted, existing
     StorageError raised (prevents accidental full-store queries).
 (h) UploadInput.ref is symmetric with DownloadInput.ref.
+
+New invariants added for BLDX-1464 (artifact mirror):
+
+(i_fail_soft) Deployment write fails + best-effort (default) → WARNING logged,
+    upstream still written, run succeeds.
+(i_fail_hard) Deployment write fails + DEPLOYMENT_ARTIFACT_MIRROR_REQUIRED=true
+    → upstream still written first, then run fails.
 
 See:
   docs/concepts/file-reference.md   (decision matrix and lifecycle)
@@ -66,18 +79,26 @@ def _make_app(
 
 
 # ---------------------------------------------------------------------------
-# (a) App.upload() routes to upstream_storage when present
+# (a) App.upload() dual-writes to BOTH stores when both are configured (BLDX-1464)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.integration
-async def test_app_upload_routes_to_upstream_when_present(tmp_path):
-    """App.upload() must land the file in upstream_storage, not in storage.
+async def test_app_upload_dual_writes_when_both_stores_present(tmp_path, monkeypatch):
+    """App.upload() must write to BOTH stores at the identical key when both are configured.
 
-    This is the SDR case: upstream_storage is the Atlan-owned atlan-objectstore,
-    storage is the customer-owned objectstore. Published artifacts must reach
-    Atlan's bucket so the publish app can index them.
+    BLDX-1464: the deployment (customer) bucket receives a mirror copy alongside
+    the upstream (Atlan) bucket.  The returned ref reflects the upstream write;
+    because keys are identical the ref is valid for reading from either store.
     """
+    monkeypatch.setenv("ATLAN_ENABLE_DEPLOYMENT_ARTIFACT_MIRROR", "true")
+    # Re-read the constant so the env-var is picked up for this process.
+    import importlib
+
+    import application_sdk.constants as _c
+
+    importlib.reload(_c)
+
     deployment_root = tmp_path / "deployment"
     upstream_root = tmp_path / "upstream"
     deployment_store = create_local_store(deployment_root)
@@ -94,25 +115,133 @@ async def test_app_upload_routes_to_upstream_when_present(tmp_path):
     storage_path = result.ref.storage_path
     assert storage_path is not None
 
-    # The file must be findable in upstream (excluding .sha256 sidecars)
-    upstream_keys = await list_keys("", store=upstream_store)
-    non_sidecar_upstream = [k for k in upstream_keys if not k.endswith(".sha256")]
-    assert any(
-        storage_path in key or key in storage_path for key in non_sidecar_upstream
-    ), (
-        f"App.upload() did not route to upstream_storage. "
+    def _non_sidecar(keys: list[str]) -> list[str]:
+        return [k for k in keys if not k.endswith(".sha256")]
+
+    # The file must be in upstream (Atlan authoritative handoff).
+    upstream_keys = _non_sidecar(await list_keys("", store=upstream_store))
+    assert any(storage_path in key or key in storage_path for key in upstream_keys), (
+        f"App.upload() did not write to upstream_storage. "
         f"Expected key containing '{storage_path}' in upstream, found: {upstream_keys}"
     )
 
-    # The same key must NOT be in the deployment store
-    deployment_keys = await list_keys("", store=deployment_store)
+    # The file must ALSO be in the deployment store (customer audit copy) at the
+    # IDENTICAL key — this is the BLDX-1464 guarantee.
+    deployment_keys = _non_sidecar(await list_keys("", store=deployment_store))
+    assert any(storage_path in key or key in storage_path for key in deployment_keys), (
+        f"App.upload() did not write the mirror copy to deployment store. "
+        f"Expected key containing '{storage_path}' in deployment, found: {deployment_keys}"
+    )
+
+    # Keys must match exactly (not just overlap).
+    upstream_artifact_keys = sorted(
+        k for k in upstream_keys if storage_path in k or k in storage_path
+    )
+    deployment_artifact_keys = sorted(
+        k for k in deployment_keys if storage_path in k or k in storage_path
+    )
+    assert upstream_artifact_keys == deployment_artifact_keys, (
+        f"Artifact keys differ between stores — must be identical for audit copy. "
+        f"upstream={upstream_artifact_keys}, deployment={deployment_artifact_keys}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# (a2) Mirror disabled → upstream only
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_app_upload_mirror_disabled_writes_upstream_only(tmp_path, monkeypatch):
+    """When ATLAN_ENABLE_DEPLOYMENT_ARTIFACT_MIRROR=false, upload goes to upstream only.
+
+    This preserves pre-BLDX-1464 behaviour for operators who opt out.
+    """
+    monkeypatch.setenv("ATLAN_ENABLE_DEPLOYMENT_ARTIFACT_MIRROR", "false")
+    import importlib
+
+    import application_sdk.constants as _c
+
+    importlib.reload(_c)
+
+    deployment_root = tmp_path / "deployment"
+    upstream_root = tmp_path / "upstream"
+    deployment_store = create_local_store(deployment_root)
+    upstream_store = create_local_store(upstream_root)
+
+    src = tmp_path / "artifact.jsonl"
+    src.write_text('{"name": "test-entity"}\n')
+
+    app = _make_app(deployment_store, upstream_store=upstream_store)
+    result = await app.upload(
+        UploadInput(local_path=str(src), tier=StorageTier.RETAINED)
+    )
+
+    storage_path = result.ref.storage_path
+    assert storage_path is not None
+
+    # File must be in upstream.
+    upstream_keys = [
+        k
+        for k in await list_keys("", store=upstream_store)
+        if not k.endswith(".sha256")
+    ]
+    assert any(
+        storage_path in key or key in storage_path for key in upstream_keys
+    ), f"File not in upstream when mirror disabled. upstream_keys={upstream_keys}"
+
+    # File must NOT be in deployment store when mirror is disabled.
+    deployment_keys = [
+        k
+        for k in await list_keys("", store=deployment_store)
+        if not k.endswith(".sha256")
+    ]
     assert not any(
-        storage_path in key or key in storage_path
-        for key in deployment_keys
-        if not key.endswith(".sha256")
+        storage_path in key or key in storage_path for key in deployment_keys
     ), (
-        f"App.upload() incorrectly wrote to deployment store when upstream was present. "
-        f"deployment_keys: {deployment_keys}"
+        f"App.upload() wrote to deployment store when mirror was disabled. "
+        f"deployment_keys={deployment_keys}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# (a3) Same-store guard: upstream is deployment → single write only
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_app_upload_same_store_guard_prevents_double_write(tmp_path, monkeypatch):
+    """When upstream_storage is the same object as storage, only one write occurs.
+
+    The identity guard (``upstream is not deployment``) prevents the SDK from
+    uploading the file twice to the same store.
+    """
+    monkeypatch.setenv("ATLAN_ENABLE_DEPLOYMENT_ARTIFACT_MIRROR", "true")
+    import importlib
+
+    import application_sdk.constants as _c
+
+    importlib.reload(_c)
+
+    store = create_local_store(tmp_path / "store")
+
+    src = tmp_path / "artifact.jsonl"
+    src.write_text('{"name": "test-entity"}\n')
+
+    # Pass the same store object as both deployment and upstream.
+    app = _make_app(store, upstream_store=store)
+    result = await app.upload(
+        UploadInput(local_path=str(src), tier=StorageTier.RETAINED)
+    )
+
+    assert result.ref.storage_path is not None
+    all_keys = [
+        k for k in await list_keys("", store=store) if not k.endswith(".sha256")
+    ]
+    # Exactly one copy — no duplicate keys.
+    assert len(all_keys) == 1, (
+        f"Expected exactly one artifact key when both stores are identical, "
+        f"got: {all_keys}"
     )
 
 
@@ -433,3 +562,116 @@ async def test_app_upload_blocks_sensitive_path_when_local_absent(tmp_path):
         await app.upload(
             UploadInput(local_path="/etc/passwd", ref=ref, tier=StorageTier.RETAINED)
         )
+
+
+# ---------------------------------------------------------------------------
+# (i_fail_soft) Deployment mirror fails + best-effort → WARNING, upstream succeeds
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_app_upload_mirror_failure_best_effort(tmp_path, monkeypatch):
+    """When the deployment-bucket mirror write fails, a WARNING is logged and the
+    run continues.  The upstream write must still succeed and the returned
+    UploadOutput must reflect the upstream copy.
+
+    Invariant: ATLAN_DEPLOYMENT_ARTIFACT_MIRROR_REQUIRED=false (default)
+    → a failed deployment write is non-fatal.
+    """
+    import importlib
+
+    import application_sdk.constants as _c
+
+    monkeypatch.setenv("ATLAN_ENABLE_DEPLOYMENT_ARTIFACT_MIRROR", "true")
+    monkeypatch.setenv("ATLAN_DEPLOYMENT_ARTIFACT_MIRROR_REQUIRED", "false")
+    importlib.reload(_c)
+
+    upstream_root = tmp_path / "upstream"
+    upstream_store = create_local_store(upstream_root)
+
+    # Use a read-only deployment store path to force a write failure.
+    import os
+
+    readonly_root = tmp_path / "readonly"
+    readonly_root.mkdir(mode=0o555)
+    deployment_store = create_local_store(readonly_root)
+
+    src = tmp_path / "artifact.jsonl"
+    src.write_text('{"name": "test-entity"}\n')
+
+    app = _make_app(deployment_store, upstream_store=upstream_store)
+
+    # The upload must succeed (non-fatal deployment failure).
+    result = await app.upload(
+        UploadInput(local_path=str(src), tier=StorageTier.RETAINED)
+    )
+
+    # Restore permissions so tmp_path cleanup can remove the directory.
+    readonly_root.chmod(0o755)
+
+    assert result.ref.storage_path is not None
+
+    # The upstream copy must exist.
+    upstream_keys = [
+        k
+        for k in await list_keys("", store=upstream_store)
+        if not k.endswith(".sha256")
+    ]
+    assert upstream_keys, (
+        f"Upstream write did not succeed after best-effort deployment failure. "
+        f"upstream_keys={upstream_keys}"
+    )
+
+    # Restore so cleanup can proceed.
+    os.chmod(readonly_root, 0o755)
+
+
+# ---------------------------------------------------------------------------
+# (i_fail_hard) Deployment mirror fails + required → upstream writes, then raises
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_app_upload_mirror_failure_required_raises_after_upstream(
+    tmp_path, monkeypatch
+):
+    """When ATLAN_DEPLOYMENT_ARTIFACT_MIRROR_REQUIRED=true and the deployment
+    write fails, the upstream write must still complete before the exception is
+    raised — ensuring a copy always lands somewhere.
+    """
+    import importlib
+
+    import application_sdk.constants as _c
+
+    monkeypatch.setenv("ATLAN_ENABLE_DEPLOYMENT_ARTIFACT_MIRROR", "true")
+    monkeypatch.setenv("ATLAN_DEPLOYMENT_ARTIFACT_MIRROR_REQUIRED", "true")
+    importlib.reload(_c)
+
+    upstream_root = tmp_path / "upstream"
+    upstream_store = create_local_store(upstream_root)
+
+    readonly_root = tmp_path / "readonly"
+    readonly_root.mkdir(mode=0o555)
+    deployment_store = create_local_store(readonly_root)
+
+    src = tmp_path / "artifact.jsonl"
+    src.write_text('{"name": "test-entity"}\n')
+
+    app = _make_app(deployment_store, upstream_store=upstream_store)
+
+    with pytest.raises(Exception):
+        await app.upload(UploadInput(local_path=str(src), tier=StorageTier.RETAINED))
+
+    # Restore permissions before asserting so cleanup works even on failure.
+    readonly_root.chmod(0o755)
+
+    # The upstream write must have completed before the raise — a copy exists.
+    upstream_keys = [
+        k
+        for k in await list_keys("", store=upstream_store)
+        if not k.endswith(".sha256")
+    ]
+    assert upstream_keys, (
+        f"Upstream write did not complete before the required-mirror exception. "
+        f"upstream_keys={upstream_keys}"
+    )

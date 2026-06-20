@@ -69,18 +69,37 @@ and must not change:
   availability and access model, even for data that never needs to leave the
   deployment.
 
-### App.upload() — routes through upstream_storage when present
+### App.upload() — dual-write when both stores are configured (BLDX-1464)
 
-`App.upload()` uses `upstream_storage or storage`:
+In SDR deployments, `App.upload()` writes artifacts to **both** stores at the
+identical key/prefix — deployment (customer) store first, then upstream (Atlan) —
+matching the documented flow "extracted metadata is first written to configured
+storage … then transferred to Atlan SaaS":
 
-```python
-store = self.context.upstream_storage or self.context.storage
+```
+deployment store (objectstore)   ← written first; retained audit copy
+upstream store (atlan-objectstore) ← written second; authoritative handoff to publish app
 ```
 
-In SDR deployments `upstream_storage` is the `atlan-objectstore` S3 binding, so
-`App.upload()` routes to Atlan's bucket. In local dev and Atlan-hosted
-deployments `upstream_storage` is `None` and `App.upload()` falls back to the
-deployment store.
+The destination key is **identical** in both stores because it is derived purely
+from the tier, run prefix, and app name — not from the store itself (see
+`StorageTier.upload_prefix`, `storage/transfer._derive_target_key`). The
+returned `UploadOutput` reflects the upstream write; because keys are identical,
+the `FileReference` it carries is valid for reading from either store.
+
+Two flags control the behaviour (see `docs/configuration.md`, `## Storage`):
+
+| Flag (`ATLAN_*`) | Default | Meaning |
+|---|---|---|
+| `ENABLE_DEPLOYMENT_ARTIFACT_MIRROR` | `true` | Enable dual-write when both stores are configured. |
+| `DEPLOYMENT_ARTIFACT_MIRROR_REQUIRED` | `false` | Make a failed deployment write fatal (after upstream still completes). |
+
+When `ENABLE_DEPLOYMENT_ARTIFACT_MIRROR=false`, or in non-SDR deployments where
+`upstream_storage` is `None`, `App.upload()` writes to a single store as before.
+
+The deployment-write failure is **never** allowed to suppress the upstream
+write — the upstream write (Atlan handoff) always runs even if the customer-bucket
+mirror failed, so a copy lands somewhere regardless.
 
 ### Connector responsibility
 
@@ -126,6 +145,10 @@ async def run(self, input: ExtractionInput) -> ExtractionOutput:
   `upstream_storage` is `None` and `App.upload()` silently falls back to the
   deployment store. Local dev and integration tests work without any special
   configuration.
+- **Retained audit copy (BLDX-1464).** In SDR deployments the customer's bucket
+  receives a mirror copy of every metadata artifact at the identical run-scoped
+  key (`artifacts/apps/{app}/workflows/{run_id}/…`). Customers can apply their
+  own lifecycle/rollover policies on this prefix to manage retention.
 
 ### Negative / Tradeoffs
 
@@ -154,8 +177,11 @@ async def run(self, input: ExtractionInput) -> ExtractionOutput:
 
 - `application_sdk.constants.DEPLOYMENT_OBJECT_STORE_NAME` — `"objectstore"`
 - `application_sdk.constants.UPSTREAM_OBJECT_STORE_NAME` — `"atlan-objectstore"`
-- `application_sdk.app.base.App.upload()` — routes through `upstream_storage or storage`
+- `application_sdk.constants.ENABLE_DEPLOYMENT_ARTIFACT_MIRROR` — dual-write flag (default `True`)
+- `application_sdk.constants.DEPLOYMENT_ARTIFACT_MIRROR_REQUIRED` — fatal-mirror flag (default `False`)
+- `application_sdk.app.base.App.upload()` — dual-write fan-out (deployment first, upstream second)
 - `application_sdk.execution._temporal.activities` — interceptor persist step uses `infra.storage`
 - [ADR-0007: Apps as the Unit of Inter-App Coordination](0007-apps-as-coordination-unit.md)
 - [docs/concepts/file-reference.md](../concepts/file-reference.md)
 - [docs/concepts/storage.md](../concepts/storage.md)
+- [docs/configuration.md](../configuration.md) — `## Storage` table for env-var reference
