@@ -26,17 +26,33 @@
 # status checks — leaving the check permanently pending and blocking the merge.
 # Running the job unconditionally ensures the conclusion is always "success" or
 # "failure", never the ambiguous "skipped".
+#
+# WHY labeled/unlabeled are NOT in the trigger types:
+# On bot PRs (Renovate, Dependabot), the auto-approve workflow adds labels
+# within milliseconds of the synchronize event from the commit push.  That
+# fires two pull_request events for the same SHA simultaneously, creating two
+# check runs with the same name.  cancel-in-progress then cancels one of them,
+# leaving a CANCELLED check run on the commit.  GitHub branch protection treats
+# ALL check runs for the required check name as part of the gate — a single
+# CANCELLED run blocks the merge permanently even though a SUCCESS run for the
+# same SHA also exists.  Labels have no bearing on whether the manifest has
+# drifted, so there is no value in re-running on label changes.
 
 name: Capability Manifest Check
 
 on:
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    types: [opened, synchronize, reopened]
   merge_group:
 
 # Cancel in-flight runs when the PR receives a new push, so we don't
 # post duplicate sticky comments or waste runner time on stale SHAs.
+# IMPORTANT: because GitHub branch protection evaluates ALL check runs for a
+# required check name on a given SHA (not just the latest), cancel-in-progress
+# must only fire when there is exactly one in-flight run (i.e. only one event
+# can trigger a run at a time).  The labeled/unlabeled types are excluded above
+# precisely to guarantee this — each push creates exactly one pull_request event.
 concurrency:
   group: capability-manifest-check-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true

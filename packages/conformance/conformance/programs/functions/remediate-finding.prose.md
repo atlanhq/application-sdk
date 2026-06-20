@@ -33,10 +33,12 @@ description: >
 
 ### Write-scope constraint
 
-This function may **only** propose edits to Python source files under the
-repository root — never to `tests/`, `.github/`, `conformance/`, or any CI /
-gate configuration.  This is the §6.1 "no self-judging changes" discipline:
-the remediator may not touch the gate it is judged against.
+This function may **only** propose edits to Python source files and the root
+`Dockerfile` — never to `tests/`, `.github/`, `conformance/`, or any CI / gate
+configuration.  This is the §6.1 "no self-judging changes" discipline: the
+remediator may not touch the gate it is judged against.  The `Dockerfile`
+exception is limited to I-series findings; no other area may propose Dockerfile
+edits.
 
 ### Dispatch by area
 
@@ -359,6 +361,59 @@ The suppression edit is an inline directive on the line above the violation:
 The justification must describe *why* the pattern is acceptable here, not
 merely that the rule is being suppressed.  Route every suppression to residue
 for human audit regardless.
+
+---
+
+#### Area: dockerfile (I-series) — PHASE 1 (suggest-only)
+
+Proposes edits to the root `Dockerfile`.  Read the full Dockerfile context
+before applying any edit; changes to one instruction may interact with others.
+
+**Mechanical rules** (`autofixable = true`, `classification = "mechanical"`):
+
+- **I001 DockerfileWrongBaseImage** — replace the final `FROM` line with the
+  exact approved image:
+
+  ```
+  FROM registry.atlan.com/public/app-runtime-base:3
+  ```
+
+  Preserve any `AS <alias>` suffix if present (uncommon in single-stage
+  Dockerfiles; drop it otherwise).  This is a single-line substitution with a
+  known constant — no judgment needed.
+
+- **I002 DockerfileEntrypointOverride** — delete the `CMD` or `ENTRYPOINT`
+  line.  The base image's entrypoint script handles launch and graceful drain;
+  the line serves no purpose once the app is wired via `ATLAN_APP_MODULE`.  If
+  the removed instruction was the app's only start command, note in residue
+  that `ENV ATLAN_APP_MODULE` must also be present (I003 will flag it
+  independently if not).
+
+- **I004 DockerfileAppModeHardcoded** — delete the `ENV ATLAN_APP_MODE=…`
+  line.  No replacement is needed; the variable is supplied at deploy time by
+  the deployment manifest.
+
+- **I005 DockerfileRootUser** — delete the `USER root` or `USER 0` line.  The
+  base image already runs as `appuser`; the line is always wrong in the final
+  stage.  If a `RUN` step immediately follows that depends on root access
+  (e.g. `apt-get install`), note in residue that the install must move to an
+  earlier build stage — do **not** add a compensating `USER appuser` to hide
+  the `USER root`.
+
+**Judgment rules** (`autofixable = false`, `classification = "judgment"`):
+
+- **I003 DockerfileAppModuleMissing** — no `ENV ATLAN_APP_MODULE=…` is set.
+  Draft an addition after the `FROM` line (or after the last `ENV` block):
+
+  ```
+  ENV ATLAN_APP_MODULE=<module>:<AppClass>
+  ```
+
+  Do **not** invent a module path; leave `<module>:<AppClass>` as a literal
+  placeholder and instruct the developer to substitute the real value.  Only
+  the developer knows the correct path — this cannot be inferred statically.
+
+**Suppress outcome** is not available for I-series (all rules are BLOCK-tier).
 
 ---
 
