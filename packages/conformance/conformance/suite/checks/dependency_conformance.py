@@ -17,21 +17,24 @@ are *publishers* of the contract, not apps subject to it).
 
 from __future__ import annotations
 
+import ast
 import re
 import sys
 import tomllib
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any
 
+from conformance.suite.checks._ast_common import discover as _discover_sources
 from conformance.suite.checks._ast_common import is_sdk_package_name, make_cli_main
 from conformance.suite.schema.findings import Finding
 
 SERIES = "D"
 RULE_D001 = "D001"
 RULE_D002 = "D002"
+RULE_D003 = "D003"
 
 SDK_PACKAGE = "atlan-application-sdk"
 
@@ -587,10 +590,234 @@ def scan_path(
     return scan_text(text, str(rel), sdk_managed_packages=sdk_managed_packages)
 
 
+# ---------------------------------------------------------------------------
+# D003 — unused dependency (cross-file: pyproject deps vs. source imports)
+# ---------------------------------------------------------------------------
+
+
+def _collect_top_level_imports(py_files: Iterable[Path]) -> set[str]:
+    """Return the set of top-level module names imported across *py_files*.
+
+    Only the first dotted component of each import target is kept (``import
+    a.b.c`` and ``from a.b import x`` both contribute ``a``).  Relative imports
+    (``from . import x``) are skipped — they target the app's own package, never
+    a declared third-party distribution.
+    """
+    modules: set[str] = set()
+    for path in py_files:
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            continue
+        try:
+            # Parse from bytes so ``ast`` honours a PEP 263 coding cookie; a
+            # legacy non-UTF-8 source (e.g. ``# -*- coding: latin-1 -*-``) is
+            # decoded correctly instead of crashing on a UTF-8 decode.
+            tree = ast.parse(raw)
+        except (SyntaxError, ValueError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    modules.add(alias.name.split(".", 1)[0])
+            elif isinstance(node, ast.ImportFrom):
+                if node.level == 0 and node.module:
+                    modules.add(node.module.split(".", 1)[0])
+    return modules
+
+
+def _dist_import_names(dist_name: str) -> set[str] | None:
+    """Return the top-level import names a distribution provides, or ``None``.
+
+    Resolved from installed package metadata: ``top_level.txt`` when present,
+    plus top-level entries derived from the distribution's file list (RECORD).
+    Returns ``None`` when the distribution is not importable in the current
+    environment — the caller then *skips* the dependency (never flags it) and
+    reports it as unanalysed, so a missing env can never produce a false
+    "unused" finding.
+    """
+    try:
+        dist = importlib_metadata.distribution(dist_name)
+    except importlib_metadata.PackageNotFoundError:
+        return None
+
+    names: set[str] = set()
+    top_level = dist.read_text("top_level.txt")
+    if top_level:
+        names.update(line.strip() for line in top_level.splitlines() if line.strip())
+
+    # Derive top-levels from the installed file list as a fallback / supplement
+    # (namespace packages and wheels without top_level.txt rely on this).  Each
+    # candidate is gated on ``isidentifier`` so non-module RECORD entries — data
+    # files (``share/…``), scripts installed via ``..`` / ``bin``, ``LICENSE`` —
+    # never leak into the provided-names set.
+    for file in dist.files or ():
+        parts = file.parts
+        if not parts:
+            continue
+        head = parts[0]
+        if head.endswith((".dist-info", ".data", ".egg-info")):
+            continue
+        if len(parts) == 1:
+            # A single top-level module file: ``foo.py`` -> ``foo``.
+            if head.endswith(".py"):
+                stem = head[:-3]
+                if stem.isidentifier():
+                    names.add(stem)
+        elif head.isidentifier():
+            # A package directory: ``foo/__init__.py`` -> ``foo``.
+            names.add(head)
+
+    return names
+
+
+def _scan_unused_dependencies(
+    dep_entries: list[_DepEntry],
+    imported_modules: set[str],
+    suppressions: dict[int, tuple[frozenset[str] | None, str]],
+    file: str,
+    *,
+    dist_import_map: Mapping[str, set[str] | None],
+) -> tuple[list[Finding], list[str]]:
+    """Return (D003 findings, names of dependencies skipped as unresolvable).
+
+    A dependency is flagged when the import names it provides are all absent
+    from *imported_modules*.  A dependency whose ``dist_import_map`` value is
+    ``None`` (not importable in this environment) is skipped and returned in the
+    second list so the caller can surface it — never silently dropped.
+    """
+    findings: list[Finding] = []
+    unresolved: list[str] = []
+
+    # The caller filters out the SDK self-dependency when building dep_entries,
+    # so every entry here is a third-party package eligible for the unused check.
+    for entry in dep_entries:
+        provided = dist_import_map.get(entry.name)
+        if not provided:
+            # None (not installed) or empty (no resolvable import names) -> we
+            # cannot prove it is unused, so skip and report rather than flag.
+            unresolved.append(entry.name)
+            continue
+        if provided & imported_modules:
+            continue  # at least one provided module is imported -> used
+        provided_list = ", ".join(sorted(provided))
+        findings.append(
+            _make_finding(
+                rule_id=RULE_D003,
+                file=file,
+                line=entry.line,
+                column=entry.column,
+                message=(
+                    f"'{entry.name}' is declared in [project.dependencies] but none "
+                    f"of the modules it provides ({provided_list}) are imported "
+                    f"anywhere in source. If it is unused, remove it. Otherwise it may "
+                    f"be loaded dynamically (importlib), pulled in via an entry "
+                    f"point/plugin, or required by a framework/server it is not "
+                    f"directly imported by — verify before removing, or annotate the "
+                    f"line with '# conformance: ignore[D003] <reason>'."
+                ),
+                suppressions=suppressions,
+            )
+        )
+
+    return findings, unresolved
+
+
+def scan_all(
+    paths: list[Path],
+    root: Path,
+    *,
+    dist_import_map: Mapping[str, set[str] | None] | None = None,
+    imported_modules: set[str] | None = None,
+) -> list[Finding]:
+    """Run the full D-series over *paths*: per-file D001/D002 + cross-file D003.
+
+    ``paths`` is the post-exclusion discovery list (the root ``pyproject.toml``
+    plus the repo's Python sources — see :func:`discover`).
+
+    D001/D002 run per ``pyproject.toml`` via :func:`scan_path` (the SDK and its
+    sibling packages remain self-exempt).  D003 is computed here *outside* that
+    self-check guard — it is ``scope=both`` and so applies to the SDK itself —
+    by mapping each core dependency to the import names it provides and flagging
+    any whose modules never appear in the collected source imports.
+
+    Test seams: ``dist_import_map`` injects the dependency -> import-name map
+    (default: resolved from installed metadata) and ``imported_modules`` injects
+    the set of imported top-levels (default: parsed from the discovered sources).
+    """
+    pyprojects = [p for p in paths if p.name == "pyproject.toml"]
+    py_files = [p for p in paths if p.suffix == ".py"]
+
+    findings: list[Finding] = []
+    for pyproject in pyprojects:
+        findings.extend(scan_path(pyproject, root))
+
+    # ── D003 ────────────────────────────────────────────────────────────────
+    root_pyproject = root / "pyproject.toml"
+    if not root_pyproject.is_file():
+        return findings
+    text = root_pyproject.read_text(encoding="utf-8")
+    try:
+        tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return findings
+
+    dep_entries = [
+        e
+        for e in _iter_dep_entries(text)
+        if e.array_path == "project.dependencies"
+        and e.name != _normalise_name(SDK_PACKAGE)
+    ]
+    if not dep_entries:
+        return findings
+
+    if imported_modules is None:
+        imported_modules = _collect_top_level_imports(py_files)
+    if dist_import_map is None:
+        dist_import_map = {e.name: _dist_import_names(e.name) for e in dep_entries}
+
+    try:
+        rel = root_pyproject.relative_to(root)
+    except ValueError:
+        rel = root_pyproject
+
+    d003_findings, unresolved = _scan_unused_dependencies(
+        dep_entries,
+        imported_modules,
+        _parse_suppressions(text),
+        str(rel),
+        dist_import_map=dist_import_map,
+    )
+    findings.extend(d003_findings)
+
+    if unresolved:
+        # No silent caps: a dependency we cannot resolve in this environment is
+        # not analysed; surface it (to stderr, so SARIF on stdout stays clean)
+        # rather than letting "0 D003 findings" imply full coverage.
+        noun = "dependency" if len(unresolved) == 1 else "dependencies"
+        print(
+            f"conformance (D003): skipped {len(unresolved)} {noun} not importable "
+            f"in this environment (unused status undetermined): "
+            f"{', '.join(sorted(unresolved))}",
+            file=sys.stderr,
+        )
+
+    return findings
+
+
 def discover(root: Path) -> list[Path]:
-    """Return ``[root/pyproject.toml]`` if it exists, else ``[]``."""
+    """Return the root ``pyproject.toml`` (if any) plus the repo's Python sources.
+
+    D001/D002 need the ``pyproject.toml``; D003 additionally needs every source
+    file's imports.  Source discovery reuses the shared AST walk, which already
+    excludes tests, build dirs, virtualenvs, and dot-directories.
+    """
+    paths: list[Path] = []
     candidate = root / "pyproject.toml"
-    return [candidate] if candidate.is_file() else []
+    if candidate.is_file():
+        paths.append(candidate)
+    paths.extend(_discover_sources(root))
+    return paths
 
 
 # ---------------------------------------------------------------------------
@@ -598,10 +825,10 @@ def discover(root: Path) -> list[Path]:
 # ---------------------------------------------------------------------------
 
 main = make_cli_main(
-    scan_text,
-    description="D001/D002: scan pyproject.toml against the application-sdk contract.",
+    scan_all=scan_all,
+    description="D001/D002/D003: scan a repo against the application-sdk dependency contract.",
     discover=discover,
-    default_scan_paths=("pyproject.toml",),
+    default_scan_paths=(".",),
 )
 """CLI entry point for the D-series check."""
 
