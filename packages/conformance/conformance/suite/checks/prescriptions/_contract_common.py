@@ -43,10 +43,25 @@ def collect_foreign_contract_names(tree: ast.AST) -> frozenset[str]:
     E.g. ``from pydantic_ai import Output`` → ``frozenset({"Output"})``.
     Used to avoid false-positives when apps use third-party types with the same
     terminal name.
+
+    **Relative imports are skipped** (``from . import Output``,
+    ``from .contracts import Output``).  These are app-internal re-exports that
+    almost always wrap the SDK's own ``Output``; tagging them as foreign would
+    silently suppress P011/P012 on every class in that file.
+
+    **Absolute non-SDK imports are deliberately treated as foreign** (e.g.
+    ``from strawberry import Output``).  An app that imports a third-party
+    ``Output`` and re-exports it under an absolute path accepts that P011/P012
+    will be silent for classes extending that name; they should use relative
+    imports (``from . import Output``) to avoid this.
     """
     foreign: set[str] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.ImportFrom):
+            continue
+        # Relative imports (from . / from .sub) are app-internal re-exports;
+        # skip them so we don't suppress checks on the files that use them.
+        if node.level > 0:
             continue
         module = node.module or ""
         is_sdk = module == _SDK_MODULE_PREFIX or module.startswith(

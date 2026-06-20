@@ -442,8 +442,17 @@ def test_p011_silent_on_filereference_field() -> None:
     assert _rule(src, "P011") == []
 
 
+def test_p011_fires_when_output_re_exported_via_relative_import() -> None:
+    # `from . import Output` is an app-internal re-export; relative imports are
+    # NOT treated as foreign, so P011 must still fire.
+    src = "from . import Output\nclass MyOut(Output):\n    data: bytes\n"
+    fs = _rule(src, "P011")
+    assert len(fs) == 1
+
+
 def test_p011_silent_when_output_imported_from_third_party() -> None:
-    # `Output` from pydantic_ai is not the SDK contract base — must not fire
+    # Absolute non-SDK import: `Output` from pydantic_ai is deliberately
+    # treated as foreign — must not fire.
     src = "from pydantic_ai import Output\nclass MyOut(Output):\n    data: bytes\n"
     assert _rule(src, "P011") == []
 
