@@ -1649,9 +1649,9 @@ class TestUploadStoreRouting:
         # Returned result is the upstream (last) write.
         assert result is mock_result
 
-    async def test_upload_mirror_disabled_uses_upstream_only(self) -> None:
-        """When ENABLE_DEPLOYMENT_ARTIFACT_MIRROR=False, only one _upload call is made
-        and it targets the upstream store.
+    async def test_upload_dual_write_disabled_uses_upstream_only(self) -> None:
+        """When ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE=disabled, only one _upload call is
+        made and it targets the upstream store.
         """
         from application_sdk.app.context import AppContext
         from application_sdk.contracts.storage import UploadInput, UploadOutput
@@ -1659,11 +1659,11 @@ class TestUploadStoreRouting:
         upstream_sentinel = object()
         deployment_sentinel = object()
 
-        class _UpAppMirrorOff(App):
+        class _UpAppDualWriteOff(App):
             async def run(self, input: _BLDXInput) -> _BLDXOutput:
                 return _BLDXOutput()
 
-        app = _UpAppMirrorOff()
+        app = _UpAppDualWriteOff()
         app._context = AppContext(
             app_name=app._app_name,
             app_version="1",

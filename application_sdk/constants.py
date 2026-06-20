@@ -352,11 +352,12 @@ ENABLE_ATLAN_UPLOAD = os.getenv("ENABLE_ATLAN_UPLOAD", "false").lower() == "true
 
 # Dual-write — BLDX-1464: when both stores are configured (SDR), App.upload writes
 # to the deployment (customer) store first, then to upstream (Atlan), at the same
-# run-scoped key.  See ADR-0014 §"BLDX-1464 rollout" for the write-count delta.
+# run-scoped key.  See ADR-0014 §"App.upload() — dual-write when both stores are
+# configured (BLDX-1464)" for the full rationale.
 #
 # ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE accepts three values:
 #   disabled    — upstream only; pre-BLDX-1464 behaviour.
-#   best_effort — dual-write; deployment failure logs ERROR and run succeeds.
+#   best_effort — dual-write; deployment failure logs WARNING and run succeeds.
 #   required    — dual-write; deployment failure logs ERROR, upstream still runs,
 #                 then the run fails (customer copy missing is surfaced).
 _DEPLOYMENT_ARTIFACT_DUAL_WRITE: str = os.getenv(
