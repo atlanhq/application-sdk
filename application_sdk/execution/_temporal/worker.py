@@ -204,6 +204,7 @@ async def _emit_worker_start_event(
         RELEASE_CHANNEL,
         RELEASE_ID,
         SECRET_STORE_NAME,
+        UPSTREAM_OBJECT_STORE_NAME,
     )
     from application_sdk.contracts.events import (  # noqa: PLC0415 — circular: contracts.events imports execution.errors
         ApplicationEventNames,
@@ -249,6 +250,9 @@ async def _emit_worker_start_event(
         app_type=APP_TYPE,
         published_at=PUBLISHED_AT,
         objectstore_binding_type=component_types.get(DEPLOYMENT_OBJECT_STORE_NAME, ""),
+        upstream_objectstore_binding_type=component_types.get(
+            UPSTREAM_OBJECT_STORE_NAME, ""
+        ),
         secretstore_binding_type=component_types.get(SECRET_STORE_NAME, ""),
     )
     event = Event(
