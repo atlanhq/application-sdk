@@ -278,3 +278,30 @@ class AsyncDaprClient:
         resp = await self._client.get(METADATA_PATH)
         resp.raise_for_status()
         return resp.json()
+
+
+async def get_dapr_component_types() -> dict[str, str]:
+    """Return a ``{component_name: component_type}`` map from the Dapr sidecar.
+
+    Reads ``/v1.0/metadata`` and projects each registered component to its
+    type, e.g. ``{"objectstore": "bindings.aws.s3", "secretstore":
+    "secretstores.hashicorp.vault"}``. This lets a worker self-report which
+    object/secret store binding it is actually wired to, independent of how it
+    was deployed.
+
+    Best-effort: returns ``{}`` if the sidecar is unreachable or the response
+    is malformed. Never raises — callers treat a missing entry as unknown.
+    """
+    try:
+        async with AsyncDaprClient() as client:
+            meta = await client.get_metadata()
+    except Exception:
+        logger.debug("Could not read Dapr component metadata", exc_info=True)
+        return {}
+
+    types: dict[str, str] = {}
+    for component in meta.get("components") or []:
+        name = component.get("name")
+        if name:
+            types[name] = component.get("type", "")
+    return types
