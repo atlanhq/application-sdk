@@ -168,9 +168,9 @@ class WidgetValidation {
   /// checks it matches [pattern].
   type: "json"|"regex"
 
-  /// Regex the value must match. Required when [type] is `"regex"`; unused for
-  /// `"json"`.
-  pattern: String?(if (type == "regex") this != null else true)
+  /// Regex the value must match. Required when [type] is `"regex"`; must be null
+  /// for `"json"` (a pattern has no meaning there).
+  pattern: String?(if (type == "regex") this != null else this == null)
 
   /// Custom error message shown when validation fails. When unset the frontend
   /// falls back to a generic message (`"Invalid JSON"` / `"Invalid value"`).

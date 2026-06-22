@@ -1139,7 +1139,7 @@ which the frontend reads directly to build an Ant Design validation rule.
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `type` | `"json"` \| `"regex"` | (required) | `"json"` rejects values that do not parse as JSON; `"regex"` rejects values that do not match `pattern`. |
-| `pattern` | `String?` | null | Required when `type = "regex"`; unused for `"json"`. |
+| `pattern` | `String?` | null | Required when `type = "regex"`; must be null for `"json"` (rejected otherwise). |
 | `message` | `String?` | null | Custom error message. When unset the frontend shows a generic message. |
 | `formatOnBlur` | `Boolean?` | null | Only meaningful for `"json"`. Frontend defaults to pretty-printing on blur; set `false` to disable while keeping validation. |
 

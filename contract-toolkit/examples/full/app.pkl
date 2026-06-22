@@ -231,6 +231,11 @@ uiConfig = new UIConfig {
           title = "Table prefix"
           helpText = "Only extract tables whose name starts with this prefix."
           width = 4
+          // `validationRules` (ui.rules) and `validation` (ui.validation) are
+          // independent pipelines; both can be set on the same widget.
+          validationRules {
+            new { required = false; max = 63; message = "Keep the prefix under 64 characters." }
+          }
           // Regex validation: reject anything but lowercase alphanumerics and underscores.
           validation = new {
             type = "regex"

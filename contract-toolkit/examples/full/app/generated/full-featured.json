@@ -150,6 +150,13 @@
           "help": "Only extract tables whose name starts with this prefix.",
           "placeholder": "",
           "grid": 4,
+          "rules": [
+            {
+              "required": false,
+              "max": 63,
+              "message": "Keep the prefix under 64 characters."
+            }
+          ],
           "validation": {
             "type": "regex",
             "pattern": "^[a-z0-9_]+$",

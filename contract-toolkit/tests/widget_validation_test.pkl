@@ -43,6 +43,15 @@ facts {
     jsonUi["validation"]["formatOnBlur"] == true
   }
 
+  // `validationRules` (ui.rules) and `validation` (ui.validation) are separate
+  // pipelines; setting both on table_prefix must emit both, untouched.
+  ["validationRules and validation coexist in generated output"] {
+    regexUi["rules"][0]["max"] == 63
+    regexUi["rules"][0]["message"] == "Keep the prefix under 64 characters."
+    regexUi["validation"]["type"] == "regex"
+    regexUi["validation"]["pattern"] == "^[a-z0-9_]+$"
+  }
+
   // Opt-in: unset validation must not change existing output.
   ["TextInput without validation omits the ui.validation key"] {
     !plainUi.containsKey("validation")
@@ -113,5 +122,9 @@ facts {
 
   ["json validation does not require a pattern"] {
     new App.WidgetValidation { type = "json" }.pattern == null
+  }
+
+  ["json validation rejects a pattern"] {
+    module.catchOrNull(() -> new App.WidgetValidation { type = "json"; pattern = "^x$" }.pattern) != null
   }
 }
