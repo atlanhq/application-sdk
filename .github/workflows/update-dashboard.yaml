@@ -45,7 +45,13 @@ permissions:
 jobs:
   update:
     name: Update Dashboard
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.head_branch == github.event.repository.default_branch
+    # Skip when triggered by the Conformance workflow — it produces no Trivy
+    # artifacts, so the security dashboard job has nothing to download.
+    # The conformance job below runs for all triggers on the default branch.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (github.event.workflow_run.head_branch == github.event.repository.default_branch
+          && github.event.workflow_run.name != 'Conformance')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
