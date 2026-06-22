@@ -362,6 +362,7 @@ jobs:
           # "Conformance". Conformance artifacts live in a separate run —
           # discover the latest completed one on the default branch.
           RUN_ID=$(gh run list \
+            --repo "${{ github.repository }}" \
             --workflow=conformance.yaml \
             --status=completed \
             --branch="${{ github.event.repository.default_branch || 'main' }}" \
@@ -375,8 +376,8 @@ jobs:
             exit 0
           fi
 
-          COMMIT_SHA=$(gh run view "$RUN_ID" --json headSha  --jq '.headSha')
-          BRANCH=$(gh run view "$RUN_ID"     --json headBranch --jq '.headBranch')
+          COMMIT_SHA=$(gh run view "$RUN_ID" --repo "${{ github.repository }}" --json headSha  --jq '.headSha')
+          BRANCH=$(gh run view "$RUN_ID"     --repo "${{ github.repository }}" --json headBranch --jq '.headBranch')
           echo "Conformance run: $RUN_ID  sha=$COMMIT_SHA  branch=$BRANCH"
           echo "run_id=$RUN_ID"         >> "$GITHUB_OUTPUT"
           echo "commit_sha=$COMMIT_SHA" >> "$GITHUB_OUTPUT"
