@@ -2356,13 +2356,17 @@ local function generateExtractNode(): Mapping<String, Any> =
   new Mapping {
     ["activity_name"] = "execute_workflow"
     ["activity_display_name"] = step.displayName ?? "Extract \(displayName) Metadata"
-    ["app_name"] = "{app_name}"
+    // Log identity: bake the contract `name` directly. This is the value that
+    // becomes ATLAN_APPLICATION_NAME (via atlan.yaml) and that logs are tagged
+    // with, so the Workflow Center's log filter matches. Must equal `name` (not
+    // the runtime app class name) or failure logs won't surface (HYP-1678).
+    ["app_name"] = name
     ["inputs"] = new Mapping {
       ["workflow_type"] = workflowType
           .replaceAll(Regex("([A-Z]+)([A-Z][a-z])"), "$1-$2")
           .replaceAll(Regex("([a-z0-9])([A-Z])"), "$1-$2")
           .toLowerCase()
-      ["app_name"] = "{app_name}"
+      ["app_name"] = name
       ["app_id"] = ""
       ["argo_workflow_slug"] = ""
       ["task_queue"] = "\(taskQueuePrefix)-{deployment_name}"

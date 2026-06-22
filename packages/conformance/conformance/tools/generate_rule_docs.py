@@ -159,6 +159,17 @@ _SERIES_META: list[SeriesMeta] = [
             "# conformance: ignore[I001] SDK builds the base image, not consuming it"
         ),
     ),
+    SeriesMeta(
+        title="Backwards-Compatibility / Deprecation Rules (B-series)",
+        prefix="B",
+        source_module="conformance/suite/rules/deprecation.py",
+        output_filename="deprecation.md",
+        checker="`suite.checks.deprecation` (AST-based)",
+        suppression_example=(
+            "# conformance: ignore[B001] intentional: migration deferred to next sprint"
+        ),
+        stability_note=_ID_STABILITY_NOTE,
+    ),
 ]
 
 
