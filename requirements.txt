@@ -28,10 +28,10 @@ azure-core==1.41.0
     # via azure-identity
 azure-identity==1.25.3
     # via atlan-application-sdk
-boto3==1.43.33
+boto3==1.43.34
     # via atlan-application-sdk
-boto3-stubs==1.43.33
-botocore==1.43.33
+boto3-stubs==1.43.34
+botocore==1.43.34
     # via
     #   boto3
     #   s3transfer
@@ -60,7 +60,7 @@ colorama==0.4.6 ; sys_platform == 'win32'
     #   pytest
     #   typer
     #   uvicorn
-coverage==7.14.1
+coverage==7.14.2
 cryptography==49.0.0
     # via
     #   authlib
@@ -78,7 +78,7 @@ email-validator==2.3.0
     # via
     #   fastapi
     #   pydantic
-fastapi==0.137.2
+fastapi==0.138.0
     # via atlan-application-sdk
 fastapi-cli==0.0.27
     # via fastapi
@@ -120,7 +120,7 @@ httpx-retries==0.4.6
     # via
     #   atlan-application-sdk
     #   pyatlan
-hypothesis==6.155.5
+hypothesis==6.155.7
 identify==2.6.19
     # via pre-commit
 idna==3.18
@@ -272,7 +272,7 @@ pydantic-core==2.41.5
     # via pydantic
 pydantic-extra-types==2.11.1
     # via fastapi
-pydantic-settings==2.14.1
+pydantic-settings==2.14.2
     # via fastapi
 pygments==2.20.0
     # via
@@ -280,7 +280,7 @@ pygments==2.20.0
     #   rich
 pyjwt==2.13.0
     # via msal
-pytest==9.1.0
+pytest==9.1.1
     # via
     #   pytest-asyncio
     #   pytest-timeout
@@ -406,7 +406,7 @@ websockets==16.0
     # via uvicorn
 win32-setctime==1.2.0 ; sys_platform == 'win32'
     # via loguru
-wrapt==2.2.1
+wrapt==2.2.2
     # via opentelemetry-instrumentation
 yarl==1.24.2
     # via aiohttp

@@ -10,8 +10,9 @@ Rule ID namespaces:
 * ``E###``  — error-handling patterns (E001–E099)
 * ``L###``  — logging patterns (L001–L099)
 * ``C###``  — CI/workflow supply-chain patterns (C001–C099)
-* (reserved) ``T###`` — test-quality patterns
-* (reserved) ``D###`` — dependency patterns
+* ``D###``  — dependency patterns (D001–D099)
+* ``I###``  — container image conformance patterns (I001–I099)
+* ``T###``  — test-quality patterns (T001–T099)
 """
 
 from __future__ import annotations

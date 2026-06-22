@@ -55,5 +55,5 @@ jobs:
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
         with:
           sarif_file: ${{ matrix.slug }}-upload.sarif
-          ref: ${{ github.event.workflow_run.head_branch }}
+          ref: refs/heads/${{ github.event.workflow_run.head_branch }}
           sha: ${{ github.event.workflow_run.head_sha }}

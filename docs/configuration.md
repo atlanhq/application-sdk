@@ -150,6 +150,7 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 |----------|---------|-------------|
 | `ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS` | `4` | Maximum concurrent object-store uploads/downloads. |
 | `ENABLE_ATLAN_UPLOAD` | `false` | Enable uploading processed artifacts to the Atlan platform object store. |
+| `ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE` | `best_effort` | Controls dual-write behaviour when both stores are configured (SDR only). `best_effort` (default): artifact is written to the deployment (customer) store and the upstream (Atlan) store; a deployment-write failure logs a `WARNING` and the run continues. `required`: same dual-write, but a deployment-write failure causes the run to fail after the upstream write completes (a copy is guaranteed somewhere). `disabled`: upstream-only write (pre-BLDX-1464 behaviour). |
 | `SSL_CERT_DIR` | _(empty)_ | Directory of custom CA certificates (`.pem`, `.crt`, `.cer`, `.ca-bundle`). Used by `httpx` and `aiohttp` clients when set. |
 
 ---

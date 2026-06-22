@@ -896,6 +896,10 @@ class App(ABC):
             # up.ref.file_count == number of files in the directory
         """
 
+        from application_sdk.constants import (  # noqa: PLC0415 — import here to avoid module-level circular import (same pattern as normalize_key)
+            DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED,
+            DEPLOYMENT_ARTIFACT_DUAL_WRITE_REQUIRED,
+        )
         from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: app.base is imported by execution which imports storage
             normalize_key,
         )
@@ -903,25 +907,37 @@ class App(ABC):
             upload as _upload,
         )
 
-        # Prefer the upstream store (SDR: Atlan's bucket for the extract→publish
-        # handoff); fall back to the deployment store (standard deployments).
-        store = self.context.upstream_storage or self.context.storage
-        if store is None:
-            raise ObjectStoreNotConfiguredError()
+        deployment = self.context.storage
+        upstream = self.context.upstream_storage
+
+        # Build the ordered list of (store, label, fatal) upload targets.
+        # See ADR-0014 §"BLDX-1464 dual-write" for the full routing decision.
+        if (
+            DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED
+            and upstream is not None
+            and deployment is not None
+            and upstream is not deployment
+        ):
+            targets = [
+                (deployment, "deployment", DEPLOYMENT_ARTIFACT_DUAL_WRITE_REQUIRED),
+                (upstream, "upstream", True),
+            ]
+        else:
+            single = upstream or deployment
+            if single is None:
+                raise ObjectStoreNotConfiguredError()
+            targets = [
+                (single, "upstream" if single is upstream else "deployment", True)
+            ]
+
         run_prefix = f"artifacts/apps/{self._app_name}/workflows/{self.context.run_id}"
         app_prefix = input.tier.upload_prefix(
             run_prefix=run_prefix, app_name=self._app_name
         )
 
-        # Derive the internal FileReference used for cross-store dedup and the
-        # deployment-store fallback (step 3).  When input.ref is set explicitly
-        # the caller already has a durable FileReference (e.g. from a @task
-        # output); otherwise derive it from local_path.
-        # normalize_key strips TEMPORARY_PATH to yield the canonical
-        # deployment-store key — the same key written by extract tasks.
-        # Guard: if normalize_key returns "" (local_path resolved to the store
-        # root), skip creating source_ref so we don't inadvertently query the
-        # entire store.
+        # Derive the FileReference for cross-store dedup / deployment-store fallback.
+        # normalize_key strips TEMPORARY_PATH → canonical deployment-store key.
+        # Guard: "" means local_path resolved to the store root — skip source_ref.
         _store_key = normalize_key(input.local_path) if input.local_path else ""
         source_ref = input.ref or (
             FileReference(local_path=input.local_path, storage_path=_store_key)
@@ -929,18 +945,64 @@ class App(ABC):
             else None
         )
 
-        return await _upload(
-            input.local_path,
-            input.storage_path,
-            storage_subdir=input.storage_subdir,
-            skip_if_exists=input.skip_if_exists,
-            raise_on_empty=input.raise_on_empty,
-            store=store,
-            _source_ref=source_ref,
-            _source_store=self.context.storage,
-            _app_prefix=app_prefix,
-            _tier=input.tier,
-        )
+        # Fan-out: iterate targets in order. Fatal failures are deferred until all
+        # remaining targets complete so the upstream write always runs and a copy
+        # lands somewhere. If both writes fail the deployment error is chained as
+        # __cause__ of the upstream error so neither traceback is lost.
+        result: UploadOutput | None = None
+        deferred_required_error: Exception | None = None
+        for target_store, label, fatal in targets:
+            # When writing to the deployment store, it is already the source for the
+            # cross-store fallback — passing it as _source_store would add a redundant
+            # SHA-256 sidecar lookup against itself. Skip it in that case.
+            source_store = None if target_store is deployment else self.context.storage
+            try:
+                out = await _upload(
+                    input.local_path,
+                    input.storage_path,
+                    storage_subdir=input.storage_subdir,
+                    skip_if_exists=input.skip_if_exists,
+                    raise_on_empty=input.raise_on_empty,
+                    store=target_store,
+                    _source_ref=source_ref,
+                    _source_store=source_store,
+                    _app_prefix=app_prefix,
+                    _tier=input.tier,
+                )
+            except Exception as exc:
+                if fatal:
+                    _task_logger.error(
+                        "Object-store upload to %s store failed for prefix %s; "
+                        "will fail run after remaining targets complete",
+                        label,
+                        app_prefix,
+                        exc_info=True,
+                    )
+                    if deferred_required_error is not None:
+                        # Both writes failed: chain the earlier error as __cause__ so
+                        # neither traceback is lost when the exception is surfaced.
+                        exc.__cause__ = deferred_required_error
+                    deferred_required_error = exc
+                else:
+                    _task_logger.warning(
+                        "Object-store upload to %s store failed for prefix %s "
+                        "(non-fatal); continuing to next target",
+                        label,
+                        app_prefix,
+                        exc_info=True,
+                    )
+                continue
+            result = out  # last successful write is authoritative (upstream in SDR)
+
+        if deferred_required_error is not None:
+            raise deferred_required_error
+        if result is None:
+            # Unreachable under current target-construction logic (the single-target
+            # branch is always fatal=True), but guards against future changes.
+            raise RuntimeError(
+                "App.upload fan-out captured no result — this is a programming error"
+            )
+        return result
 
     @task(timeout_seconds=600, retry_max_attempts=3)
     async def download(

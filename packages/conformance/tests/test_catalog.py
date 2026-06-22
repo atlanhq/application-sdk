@@ -87,23 +87,71 @@ def test_scope_is_required_field() -> None:
 
 
 def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
-    """The publisher-side rules are app-scoped; everything else is 'both'.
+    """The one-sided rules declare app/sdk scope; everything else is 'both'.
 
-    APP-scoped rules (dependency pinning, managed-workflow drift) must never fire
-    on the SDK itself, which publishes the contract.  Pin the exact set so a new
-    rule has to make a deliberate scope decision rather than silently inheriting.
+    APP-scoped rules (dependency pinning, managed-workflow drift, Dockerfile
+    conformance, orchestration-seam P004/P005, deprecated-symbol usage B001)
+    must never fire on the SDK itself, which publishes the contract.  Pin the
+    exact set so a new rule has to make a deliberate scope decision rather than
+    silently inheriting.
 
     Note C003 (.gitignore entries) is *both*, not app: the SDK has its own
     .gitignore sharing the standard baseline, so the rule is useful there too —
     only C002 (bootstrap workflow drift) is genuinely 0%-applicable to the SDK.
+
+    I001–I005 (Dockerfile conformance) are app-scoped because the SDK Dockerfile
+    *builds* the base image that these rules enforce, so the rules are meaningless
+    and noisy when applied to the SDK itself.
+
+    P004–P005 (orchestration-seam) are app-scoped: apps must reach Temporal
+    through the SDK seam (BLDX-1417).  P006–P007 are SDK-only: the SDK must
+    keep Temporal contained behind its seam.
+
+    B001 (deprecated-symbol usage) is app-scoped: the SDK deliberately retains
+    and internally uses its own deprecated shims.  B002–B004 (deprecation
+    authoring hygiene) are SDK-only — they grade how the SDK *declares* its
+    deprecations, which is only meaningful on the publisher.
     """
     rules = load_catalog()
     app_scoped = {r.id for r in rules if r.scope == RuleScope.APP}
-    assert app_scoped == {"C002", "D001", "D002"}, app_scoped
-    # No rule is currently SDK-only; the rest are 'both'.
-    assert not {r.id for r in rules if r.scope == RuleScope.SDK}
+    # C002/D001/D002: publisher-side contract. D004/D005: the same
+    # redeclaration/extra contract on dependency-groups and SDK extras.
+    # D006/D007/D008: the app pyproject baseline (python floor, build backend,
+    # type-checking) the SDK publishes. P004/P005: apps must reach the
+    # orchestration layer through the SDK seam, not Temporal/SDK-internals
+    # (BLDX-1417). P008–P012: apps must use the SDK's storage seam, not
+    # hand-roll object stores or bare path fields (BLDX-1398).
+    # I001–I005: Dockerfile conformance (SDK builds the base image, not consuming it).
+    # B001: consuming a deprecated SDK symbol (BLDX-1418).
+    assert app_scoped == {
+        "B001",
+        "C002",
+        "D001",
+        "D002",
+        "D004",
+        "D005",
+        "D006",
+        "D007",
+        "D008",
+        "P004",
+        "P005",
+        "P008",
+        "P009",
+        "P010",
+        "P011",
+        "P012",
+        "I001",
+        "I002",
+        "I003",
+        "I004",
+        "I005",
+    }, app_scoped
+    # SDK-only rules: the SDK must keep Temporal contained behind its seam
+    # (P006/P007, BLDX-1417) and declare its deprecations correctly (B002–B004).
+    sdk_scoped = {r.id for r in rules if r.scope == RuleScope.SDK}
+    assert sdk_scoped == {"B002", "B003", "B004", "P006", "P007"}, sdk_scoped
     both = {r.id for r in rules if r.scope == RuleScope.BOTH}
-    assert both == {r.id for r in rules} - app_scoped
+    assert both == {r.id for r in rules} - app_scoped - sdk_scoped
 
 
 def test_scope_emitted_in_sarif_properties() -> None:
@@ -191,18 +239,39 @@ def test_catalog_d_series_present() -> None:
     """The D-series dependency rules are all present."""
     rules = load_catalog()
     d_ids = {r.id for r in rules if r.id.startswith("D")}
-    expected = {"D001", "D002"}
+    expected = {"D001", "D002", "D003", "D004", "D005", "D006", "D007", "D008"}
     missing = expected - d_ids
     assert not missing, f"Missing D-series rules: {missing}"
 
 
 def test_catalog_p_series_present() -> None:
-    """The P-series prescription rules are all present."""
+    """The P-series prescription rules are exactly P001–P012.
+
+    Strict equality (not just not-missing): P004–P007 are the orchestration-seam
+    rules (BLDX-1417); P008–P012 are the storage-seam rules (BLDX-1398).  A
+    stray or renumbered P-id would slip past a subset check while breaking
+    fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
+    """
     rules = load_catalog()
     p_ids = {r.id for r in rules if r.id.startswith("P")}
-    expected = {"P001", "P002", "P003"}
+    expected = {
+        "P001",
+        "P002",
+        "P003",
+        "P004",
+        "P005",
+        "P006",
+        "P007",
+        "P008",
+        "P009",
+        "P010",
+        "P011",
+        "P012",
+    }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
+    extra = p_ids - expected
+    assert not extra, f"Unexpected P-series rules: {extra}"
 
 
 def test_catalog_o_series_present() -> None:
@@ -212,6 +281,26 @@ def test_catalog_o_series_present() -> None:
     expected = {"O001"}
     missing = expected - o_ids
     assert not missing, f"Missing O-series rules: {missing}"
+
+
+def test_catalog_t_series_present() -> None:
+    """The T-series test-quality rules are all present."""
+    rules = load_catalog()
+    t_ids = {r.id for r in rules if r.id.startswith("T")}
+    expected = {"T001"}
+    missing = expected - t_ids
+    assert not missing, f"Missing T-series rules: {missing}"
+
+
+def test_catalog_b_series_present() -> None:
+    """The B-series backwards-compatibility / deprecation rules are all present."""
+    rules = load_catalog()
+    b_ids = {r.id for r in rules if r.id.startswith("B")}
+    expected = {"B001", "B002", "B003", "B004"}
+    missing = expected - b_ids
+    assert not missing, f"Missing B-series rules: {missing}"
+    extra = b_ids - expected
+    assert not extra, f"Unexpected B-series rules: {extra}"
 
 
 def test_catalog_is_mapping_keyed_by_id() -> None:
