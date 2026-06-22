@@ -17,7 +17,7 @@ findings in the working tree, as reported by `suite.runner --series D`.
 #### violations-dependency
 
 The fingerprint-set of all unsuppressed FAILING D-series results.  Extends to
-include WARNING results in strict mode — D002/D004/D005/D006/D007/D008 are
+include WARNING results in strict mode — D002/D003/D004/D005/D006/D007/D008 are
 WARN-tier, so they are processed in strict mode; D001 is BLOCK-tier and
 processed in both modes.
 
@@ -87,19 +87,21 @@ fix.  The re-detection gate is authoritative for this area — see
 
 **Mechanical rules** (`classification = "mechanical"`, `outcome = "fix"`):
 
-- **D001 UnpinnedSdkDependency** — the `atlan-application-sdk` entry in
-  `[project.dependencies]` has a lower bound but no upper bound (e.g.
-  `"atlan-application-sdk>=3.17"` or `"atlan-application-sdk[sql]>=2.3.1"`).
-  Add an upper bound at **(lower-bound major + 1).0.0** so the cap *includes*
-  the pinned version and stops the next major: read the major from the
-  existing lower bound (`>=3.x` → major 3 → `,<4.0.0`) and append it to the
-  specifier, preserving any `[extras]`.
+- **D001 UnpinnedSdkDependency** (`classification = "mechanical"`) — the
+  `atlan-application-sdk` entry in `[project.dependencies]` has a lower bound
+  but no upper bound (e.g. `"atlan-application-sdk>=3.17"` or
+  `"atlan-application-sdk[sql]>=2.3.1"`).  Add an upper bound at
+  **(lower-bound major + 1).0.0** so the cap *includes* the pinned version and
+  stops the next major: read the major from the existing lower bound
+  (`>=3.x` → major 3 → `,<4.0.0`) and append it to the specifier, preserving
+  any `[extras]`.
   `"atlan-application-sdk[sql]>=3.17"` → `"atlan-application-sdk[sql]>=3.17,<4.0.0"`.
-  **Exception — bare pin with no lower bound** (`"atlan-application-sdk"` or
-  `"atlan-application-sdk[workflows]"` with no version at all): there is no
-  major to infer, so the correct supported range is a human call →
-  `classification = "judgment"`, route to residue with a proposed
-  `">=<current>,<<next-major>.0.0"` for the maintainer to confirm.
+
+  **Bare-pin exception** (`classification = "judgment"`): if the entry has no
+  version at all (`"atlan-application-sdk"` or `"atlan-application-sdk[workflows]"`),
+  there is no major to infer — the correct supported range is a human call.
+  Route to residue with a proposed `">=<current>,<<next-major>.0.0"` for the
+  maintainer to confirm.
 
 - **D002 RedeclaredSdkManagedDependency** — the named package is already
   pinned by the SDK and redeclared in the app's `[project.dependencies]` or a
@@ -167,15 +169,23 @@ to residue):
 
 **Suppress outcome (strict mode only, WARNING-tier findings)**:
 
-When `mode == "strict"` and `finding.disposition == "warning"` (D002 / D004 /
-D006 / D007 / D008), the model may propose an inline suppression instead of a
-fix if the deviation is a deliberate, justified exception for this app.  TOML
-uses `#` for comments, so the directive trails the entry or sits on the line
-above it:
+When `mode == "strict"` and `finding.disposition == "warning"`, the model may
+propose an inline suppression instead of a fix if the deviation is a deliberate,
+justified exception for this app.  Applicable rules and notes:
 
-```
-"pyyaml>=6.0,<7",  # conformance: ignore[D002] <concise justification, 8–40 words>
-```
+- **D002 / D004 / D005 / D006 / D007 / D008** — standard inline suppression.
+  TOML uses `#` for comments, so the directive trails the entry or sits on the
+  line above it:
+
+  ```
+  "pyyaml>=6.0,<7",  # conformance: ignore[D002] <concise justification, 8–40 words>
+  ```
+
+- **D003** — the suppress path is **option 3 in the D003 advisory section
+  above** (an inline `# conformance: ignore[D003] <reason>` on the entry line
+  explaining the dynamic-load mechanism).  Use that path rather than the
+  generic suppress outcome; it produces the same directive with the required
+  load-mechanism justification.
 
 The justification must describe *why* the deviation is acceptable here, not
 merely that the rule is being suppressed.  Route every suppression to residue

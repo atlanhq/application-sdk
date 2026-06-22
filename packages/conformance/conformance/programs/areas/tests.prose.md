@@ -29,10 +29,13 @@ fingerprint-set across loop iterations is the oscillation signal.
 
 Postcondition (deterministic validator — never render-attested):
 
-> `atlan-application-sdk-conformance detect --repo . --series T` exits 0
-> (zero unsuppressed FAILING results).  In strict mode, additionally: the
-> `atlan/summary.warning` count for T-series in the SARIF output is 0 (every
-> T-series WARNING was cleared by a real fix or a justified suppression).
+**Default mode**: this facet is typically empty — all T-series rules are
+WARN-tier and do not contribute to the FAILING count.  The gate exits 0
+vacuously; no remediation runs.
+
+**Strict mode**: `atlan-application-sdk-conformance detect --repo . --series T`
+additionally reports `atlan/summary.warning` count 0 for T-series — every
+T-series WARNING was cleared by a real fix or a justified suppression.
 
 ### Requires
 
