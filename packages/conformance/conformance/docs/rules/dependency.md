@@ -5,7 +5,7 @@
 
 # Dependency Rules (D-series)
 
-**3 rules** · Checker: `suite.checks.dependency_conformance` (TOML-based, static)
+**8 rules** · Checker: `suite.checks.dependency_conformance` (TOML-based, static)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -18,6 +18,11 @@ Suppress a finding on the violating line or the line directly above it:
 | [D001](#d001) | `UnpinnedSdkDependency` | `block` | `app` | `dependency-pinning` | yes | 0.4.0 |
 | [D002](#d002) | `RedeclaredSdkManagedDependency` | `warn` | `app` | `dependency-pinning` | yes | 0.4.0 |
 | [D003](#d003) | `UnusedDependency` | `warn` | `both` | `dependency-hygiene` | — | 0.5.0 |
+| [D004](#d004) | `RedeclaredSdkManagedDependencyInGroups` | `warn` | `app` | `dependency-pinning` | yes | 0.5.0 |
+| [D005](#d005) | `UnknownSdkExtra` | `warn` | `app` | `dependency-pinning` | — | 0.5.0 |
+| [D006](#d006) | `IncompatibleRequiresPython` | `warn` | `app` | `python-version` | yes | 0.5.0 |
+| [D007](#d007) | `NonStandardBuildBackend` | `warn` | `app` | `build-system` | yes | 0.5.0 |
+| [D008](#d008) | `WeakenedTypeChecking` | `warn` | `app` | `tooling-baseline` | yes | 0.5.0 |
 
 ---
 
@@ -92,5 +97,102 @@ runner (e.g. `uvx atlan-application-sdk-conformance detect --series D`) no depen
 installed, so every one is skipped to stderr and the rule reports nothing; that is an
 unresolved environment, not a clean repo.  The conformance CI runs the D-series leg in a
 synced environment for this reason.  See BLDX-1462.
+
+---
+
+## D004 — `RedeclaredSdkManagedDependencyInGroups` {#d004}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `dependency-pinning` · **Autofixable:** yes · **Since:** 0.5.0
+
+> SDK-managed dependency redeclared in a [dependency-groups] table
+
+**Rationale:** D002 only covers [project.dependencies] and the optional-dependencies arrays; an
+SDK-managed package re-pinned in a PEP 735 [dependency-groups] table escapes it. A
+dev/test group that re-pins a package the SDK already manages drifts from the SDK's
+validated dev environment and must be touched on every SDK bump.
+
+Packages pinned by `atlan-application-sdk` must not be redeclared in the app's PEP 735
+`[dependency-groups.*]` tables (dev/test groups).  This is the coverage gap left by
+D002, which scans only `[project.dependencies]` and `[project.optional-dependencies.*]`.
+Pull SDK-managed dev/test tooling in via `atlan-application-sdk[tests]` rather than
+re-pinning it.  The managed set is read via
+`importlib.metadata.requires('atlan-application-sdk')`; if the SDK is not importable,
+this rule is skipped silently. Cite: BLDX-1410.
+
+---
+
+## D005 — `UnknownSdkExtra` {#d005}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `dependency-pinning` · **Autofixable:** — · **Since:** 0.5.0
+
+> Reference to an atlan-application-sdk extra the SDK does not publish
+
+**Rationale:** uv silently drops an unknown extra, so a typo like `atlan-application-sdk[dapr]` (no
+such extra) installs nothing for that extra and the missing dependencies surface only at
+runtime. Validating the reference against the SDK's published extras catches the
+silent-failure at build time.
+
+Every `atlan-application-sdk[extra]` reference must name an extra the SDK actually
+publishes (its `Provides-Extra` metadata).  An unknown extra is silently dropped by uv,
+so its dependencies are never installed and the failure appears only at runtime.  The
+published set is read from installed metadata; if the SDK is not importable, this rule
+is skipped silently.  The fix (map a typo to the intended extra) is judgment, so
+findings route to residue rather than auto-fix.  Cite: BLDX-1410.
+
+---
+
+## D006 — `IncompatibleRequiresPython` {#d006}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `python-version` · **Autofixable:** yes · **Since:** 0.5.0
+
+> App requires-python lower bound is below the SDK's minimum supported Python version
+
+**Rationale:** An app whose requires-python lower bound is below the SDK's claims to support an
+interpreter the SDK does not. Installs on that Python resolve a degraded or broken
+dependency set, and the mismatch surfaces only at runtime on the oldest supported
+environment — exactly where it is hardest to catch in review.
+
+The app's `[project].requires-python` lower bound must be at least the SDK's minimum
+supported Python (`>=3.11`). A lower floor lets the app be installed on a Python the SDK
+never validated against, where transitive resolution and runtime behaviour are
+unsupported. Apps that omit `requires-python` or set a bound at or above the SDK's floor
+are unaffected. The SDK's floor is a drift-guarded constant in the checker, not read
+from installed metadata, so this rule needs no resolved environment. Cite: BLDX-1410.
+
+---
+
+## D007 — `NonStandardBuildBackend` {#d007}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `build-system` · **Autofixable:** yes · **Since:** 0.5.0
+
+> Build backend is not Hatchling
+
+**Rationale:** Atlan apps standardise on Hatchling so build behaviour, wheel layout, and the managed CI
+build steps are uniform across the fleet. A setuptools/poetry-core backend diverges from
+that baseline and from the bootstrapped build-and-publish workflow, making fleet-wide
+build changes per-app instead of uniform.
+
+`[build-system].build-backend` must be `hatchling.build`.  Atlan's app fleet
+standardises on Hatchling so the managed build-and-publish workflow and wheel layout are
+uniform; a different backend diverges from that baseline.  A pyproject with no
+`build-backend` key is not flagged.  Cite: BLDX-1410.
+
+---
+
+## D008 — `WeakenedTypeChecking` {#d008}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `tooling-baseline` · **Autofixable:** yes · **Since:** 0.5.0
+
+> pyright typeCheckingMode is weaker than the SDK baseline 'standard'
+
+**Rationale:** The SDK's typed contracts only protect an app whose type checker actually runs at the
+SDK's level. A typeCheckingMode of 'off' or 'basic' lets type regressions against SDK
+APIs pass app CI unnoticed, defeating the point of the typed surface.
+
+`[tool.pyright].typeCheckingMode` must not be weaker than the SDK baseline `standard` —
+`off` and `basic` are flagged; `standard` and `strict` pass.  A weakened mode lets type
+regressions against the SDK's typed APIs slip through app CI.  A pyproject that does not
+set `typeCheckingMode` is not flagged; blanket `reportX = false` overrides are out of
+scope (they can be legitimate).  Cite: BLDX-1410.
 
 ---

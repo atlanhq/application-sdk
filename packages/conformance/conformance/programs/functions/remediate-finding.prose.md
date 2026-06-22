@@ -364,6 +364,92 @@ for human audit regardless.
 
 ---
 
+#### Area: dependency (D-series) — pyproject.toml contract
+
+Consult the finding's `hint` and `message`, then read the actual lines around
+`finding.line` in `finding.file` (always `pyproject.toml`) before proposing a
+fix.
+
+**Gate note (critical):** D edits change `pyproject.toml` text, not the
+installed environment — the loop does not re-sync between the edit and the
+gates.  The orthogonal test gate is therefore *non-protective* here (it runs
+against the unchanged env and passes vacuously); the authoritative gate is
+`recheck-narrowest` re-detection.  See `areas/dependency.prose.md`.
+
+**Mechanical rules** (`classification = "mechanical"`, `outcome = "fix"`):
+
+- **D001 UnpinnedSdkDependency** — the `atlan-application-sdk` entry in
+  `[project.dependencies]` has a lower bound but no upper bound (e.g.
+  `"atlan-application-sdk>=3.17"` or `"atlan-application-sdk[sql]>=2.3.1"`).
+  Add an upper bound at **(lower-bound major + 1).0.0** so the cap *includes*
+  the pinned version and stops the next major: read the major from the
+  existing lower bound (`>=3.x` → major 3 → `,<4.0.0`) and append it to the
+  specifier, preserving any `[extras]`.
+  `"atlan-application-sdk[sql]>=3.17"` → `"atlan-application-sdk[sql]>=3.17,<4.0.0"`.
+  **Exception — bare pin with no lower bound** (`"atlan-application-sdk"` or
+  `"atlan-application-sdk[workflows]"` with no version at all): there is no
+  major to infer, so the correct supported range is a human call →
+  `classification = "judgment"`, route to residue with a proposed
+  `">=<current>,<<next-major>.0.0"` for the maintainer to confirm.
+
+- **D002 RedeclaredSdkManagedDependency** — the named package is already
+  pinned by the SDK and redeclared in the app's `[project.dependencies]` or a
+  `[project.optional-dependencies.*]` array.  Delete the entire redeclaring
+  line (the SDK installs it transitively).  Remove only that one entry; leave
+  the rest of the array intact.  If the deletion empties the array, leave the
+  empty array rather than removing the table.
+
+- **D004 RedeclaredSdkManagedDependencyInGroups** — same as D002 but the
+  redeclaration is in a `[dependency-groups.*]` table.  Delete the entire
+  redeclaring line; if the SDK-managed package was dev/test tooling the app
+  genuinely needs, prefer pulling it in via `atlan-application-sdk[tests]`
+  instead (note that as a follow-up in the edit description).  Remove only that
+  one entry.
+
+- **D006 IncompatibleRequiresPython** — the app's `[project].requires-python`
+  lower bound is below the SDK's floor.  Replace only the lower-bound clause
+  with the SDK floor named in the finding message (`>=3.11`), preserving any
+  upper bound: `requires-python = ">=3.10,<4.0"` → `">=3.11,<4.0"`;
+  `requires-python = ">=3.10"` → `">=3.11"`.
+
+- **D007 NonStandardBuildBackend** — set `build-backend` to `"hatchling.build"`
+  in `[build-system]` and ensure `requires = ["hatchling"]`.  Build-affecting:
+  state in the edit description that the app must `uv lock` / rebuild and that a
+  human should confirm no backend-specific config (e.g. setuptools
+  `[tool.setuptools]` tables) is left orphaned.
+
+- **D008 WeakenedTypeChecking** — raise `[tool.pyright].typeCheckingMode` to
+  `"standard"` (leave `"strict"` untouched; only `"off"`/`"basic"` are flagged).
+  Replace only the mode value.
+
+**Judgment rules** (`autofixable = false`, `classification = "judgment"`; route
+to residue):
+
+- **D005 UnknownSdkExtra** — the `atlan-application-sdk[<extra>]` reference
+  names an extra the SDK does not publish.  Propose the closest published extra
+  if the name is an obvious typo or a renamed/removed extra (read the SDK's
+  `Provides-Extra` set from the finding context); otherwise propose removing the
+  bogus extra.  Mapping a dropped extra to its replacement requires judgement,
+  so always route to residue for human confirmation.
+
+**Suppress outcome (strict mode only, WARNING-tier findings)**:
+
+When `mode == "strict"` and `finding.disposition == "warning"` (D002 / D004 /
+D006 / D007 / D008), the model may propose an inline suppression instead of a
+fix if the deviation is a deliberate, justified exception for this app.  TOML
+uses `#` for comments, so the directive trails the entry or sits on the line
+above it:
+
+```
+"pyyaml>=6.0,<7",  # conformance: ignore[D002] <concise justification, 8–40 words>
+```
+
+The justification must describe *why* the deviation is acceptable here, not
+merely that the rule is being suppressed.  Route every suppression to residue
+for human audit.  D001 is BLOCK-tier and has no suppress path in default mode.
+
+---
+
 #### Area: dockerfile (I-series) — PHASE 1 (suggest-only)
 
 Proposes edits to the root `Dockerfile`.  Read the full Dockerfile context
@@ -421,3 +507,63 @@ before applying any edit; changes to one instruction may interact with others.
 
 No prescription authored for this phase.  Return `not_remediable = true`.
 Same residue note as logging.
+
+---
+
+#### Area: deprecation (B-series) — PHASE 1
+
+Consult the finding's `hint` and `message` — for the B-series the message
+carries the SDK's own migration guidance — then read the actual source lines
+around `finding.line` in `finding.file` before proposing anything.
+
+**Guided fixes** (`classification = "judgment"`; the loop applies and gates them
+with `recheck-narrowest` + the test orthogonal gate, then routes to residue for
+human audit):
+
+- **B001 DeprecatedSdkSymbolUsage** (app source) — the app imports, subclasses,
+  or calls a symbol the SDK has deprecated.  Apply the migration named in the
+  finding message — **never a blind name swap**: the replacement usually changes
+  the call shape (signature, return type, import path).  Examples:
+  - `upload_to_atlan(input)` → `App.upload(UploadInput(local_path=...,
+    tier=StorageTier.RETAINED))` — different argument and return types; read the
+    call site and adapt both.
+  - `from application_sdk.discovery import DiscoveryError` →
+    `from application_sdk.errors import InvalidInputError`, and update every
+    use of the old name in the file.
+  - `class X(BaseMetadataExtractor)` → migrate to `application_sdk.templates.SqlApp`
+    per the notice; this is a structural change — draft it and let the test gate
+    decide.
+  Because the migration is non-trivial, `classification` is always `"judgment"`.
+  The orthogonal test gate is what makes applying it safe: if the migration
+  breaks behaviour, the gate reverts and routes to residue.
+
+- **B002 MalformedDeprecationNotice** (SDK source) — the notice is missing a
+  migration target and/or a removal version.  Edit the notice string in place to
+  add what the finding says is missing:
+  - missing migration target → add `use <replacement>` naming the real successor
+    (read the surrounding code / docstring to find it);
+  - missing removal version → add `will be removed in v<N>`, choosing the next
+    major unless the surrounding context names a version, and **state that
+    assumption** in the edit.
+  `classification` is `"judgment"` (the wording and target need a human-level
+  call); the recheck gate confirms the notice now parses as well-formed.
+
+**Detect-only — route to residue** (`not_remediable = true`):
+
+- **B003 OverdueDeprecationRemoval** (SDK source) — the symbol was promised gone
+  by a version the SDK has already reached.  Resolving it means *removing a public
+  symbol* or *pushing out the removal version* — both are human decisions with
+  fleet-wide blast radius, so never auto-edit.  Record in residue with the
+  finding message (which names the overdue version and current version).
+
+- **B004 UnmarkedDeprecationClaim** (SDK source) — a docstring claims deprecation
+  with no marker.  Which marker to add (`@deprecated` decorator vs a
+  `DeprecationWarning` in `__init__`/`__init_subclass__`) is a small design
+  choice for the symbol's owner; record in residue with the suggestion the
+  finding message already carries.
+
+**Suppress outcome (strict mode only, WARNING-tier findings)**: as for the other
+areas, the model may propose an inline `# conformance: ignore[Bxxx] <8–40 word
+justification>` when the site is a legitimate exception (e.g. a B001 usage in a
+compatibility shim that intentionally bridges old and new APIs).  Route every
+suppression to residue for human audit.

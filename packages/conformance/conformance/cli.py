@@ -40,6 +40,16 @@ def _cmd_gen_rule_docs(argv: list[str]) -> int:
         return int(e.code) if e.code is not None else 0
 
 
+def _cmd_gen_deprecations(argv: list[str]) -> int:
+    from conformance.tools.generate_deprecations import main
+
+    try:
+        main(argv)
+        return 0
+    except SystemExit as e:
+        return int(e.code) if e.code is not None else 0
+
+
 def _cmd_remediate(argv: list[str]) -> int:
     """Print the resolved programs path + version, then exit.
 
@@ -214,6 +224,7 @@ _COMMANDS = {
     "detect": _cmd_detect,
     "programs-dir": _cmd_programs_dir,
     "gen-rule-docs": _cmd_gen_rule_docs,
+    "gen-deprecations": _cmd_gen_deprecations,
     "remediate": _cmd_remediate,
     "bootstrap": _cmd_bootstrap,
 }
@@ -225,6 +236,7 @@ commands:
   detect         Run the conformance suite and emit SARIF
   programs-dir   Print the absolute path to the bundled .prose.md programs
   gen-rule-docs  Regenerate rule docs from Python rule definitions
+  gen-deprecations  Regenerate the deprecated-symbol manifest from SDK source
   remediate      Print programs path + version banner (SKILL.md drives execution)
   bootstrap      Write .claude/skills/remediate/SKILL.md + all standard CI workflow
                  shims into .github/workflows/. The 14 managed shims always overwrite

@@ -4,10 +4,10 @@
     "extract": {
       "activity_name": "execute_workflow",
       "activity_display_name": "Extract Fan-in Example Metadata",
-      "app_name": "{app_name}",
+      "app_name": "fanin",
       "inputs": {
         "workflow_type": "fanin",
-        "app_name": "{app_name}",
+        "app_name": "fanin",
         "app_id": "",
         "argo_workflow_slug": "",
         "task_queue": "atlan-fanin-{deployment_name}",

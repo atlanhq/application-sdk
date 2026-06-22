@@ -4,10 +4,10 @@
     "extract": {
       "activity_name": "execute_workflow",
       "activity_display_name": "Extract Crawler Metadata",
-      "app_name": "{app_name}",
+      "app_name": "crawler",
       "inputs": {
         "workflow_type": "crawler",
-        "app_name": "{app_name}",
+        "app_name": "crawler",
         "app_id": "",
         "argo_workflow_slug": "",
         "task_queue": "atlan-crawler-{deployment_name}",
