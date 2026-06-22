@@ -114,10 +114,13 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     """
     rules = load_catalog()
     app_scoped = {r.id for r in rules if r.scope == RuleScope.APP}
-    # C002/D001/D002: publisher-side contract. P004/P005: apps must reach the
-    # orchestration layer through the SDK seam, not Temporal/SDK-internals (BLDX-1417).
-    # P008–P012: apps must use the SDK's storage seam, not hand-roll object stores
-    # or bare path fields (BLDX-1398).
+    # C002/D001/D002: publisher-side contract. D004/D005: the same
+    # redeclaration/extra contract on dependency-groups and SDK extras.
+    # D006/D007/D008: the app pyproject baseline (python floor, build backend,
+    # type-checking) the SDK publishes. P004/P005: apps must reach the
+    # orchestration layer through the SDK seam, not Temporal/SDK-internals
+    # (BLDX-1417). P008–P012: apps must use the SDK's storage seam, not
+    # hand-roll object stores or bare path fields (BLDX-1398).
     # I001–I005: Dockerfile conformance (SDK builds the base image, not consuming it).
     # B001: consuming a deprecated SDK symbol (BLDX-1418).
     assert app_scoped == {
@@ -125,6 +128,11 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "C002",
         "D001",
         "D002",
+        "D004",
+        "D005",
+        "D006",
+        "D007",
+        "D008",
         "P004",
         "P005",
         "P008",
@@ -231,7 +239,7 @@ def test_catalog_d_series_present() -> None:
     """The D-series dependency rules are all present."""
     rules = load_catalog()
     d_ids = {r.id for r in rules if r.id.startswith("D")}
-    expected = {"D001", "D002"}
+    expected = {"D001", "D002", "D003", "D004", "D005", "D006", "D007", "D008"}
     missing = expected - d_ids
     assert not missing, f"Missing D-series rules: {missing}"
 
