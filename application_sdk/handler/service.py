@@ -47,8 +47,9 @@ from uuid import uuid4
 
 import orjson
 import temporalio.service
-from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException
 from fastapi import Path as PathParam
+from fastapi import Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
@@ -68,7 +69,6 @@ from application_sdk.handler.contracts import (
     MetadataInput,
     PreflightInput,
     PreflightOutput,
-    PreflightStatus,
     SubscriptionConfig,
 )
 from application_sdk.handler.manifest import AppManifest
@@ -238,13 +238,6 @@ def _preflight_runtime_summary(result: PreflightOutput) -> dict[str, Any]:
             check.model_dump(mode="json", exclude_none=True) for check in result.checks
         ],
     }
-
-
-def _preflight_envelope_success(result: PreflightOutput) -> bool:
-    """Whether the legacy SageV2 envelope should be treated as successful."""
-    if result.status == PreflightStatus.SKIPPED:
-        return True
-    return len(result.checks) > 0
 
 
 if TYPE_CHECKING:
@@ -2338,15 +2331,13 @@ def create_app_handler_service(
                 # behaviour) made every PARTIAL/NOT_READY response surface
                 # as "Check failed" with a blank "Hide details" panel
                 # (DBBI-665). Tying envelope success to "any check ran"
-                # keeps it false when a real handler produced no checks (a
-                # preflight-system failure) and lets the widget render
-                # per-check rows otherwise. Canonical SKIPPED is the explicit
-                # no-op/default-handler path, so keep that benign for SageV2
-                # while exposing the skipped status under ``preflight``.
+                # keeps it false when a handler produced no checks and lets
+                # the widget render per-check rows otherwise. The canonical
+                # status is exposed separately under ``preflight``.
                 response = _wrap_response(
                     v2_data,
                     message=result.message or f"Preflight check {result.status.value}",
-                    success=_preflight_envelope_success(result),
+                    success=len(result.checks) > 0,
                 )
                 response["preflight"] = _preflight_runtime_summary(result)
                 return JSONResponse(content=response)

@@ -262,10 +262,15 @@ class AuthOutput(BaseModel):
 class PreflightStatus(SerializableEnum):
     """Overall result of a preflight check.
 
-    ``READY`` / ``NOT_READY`` / ``PARTIAL`` are the legacy Sage/SageV2 statuses.
-    ``SUCCESS`` / ``FAILED`` / ``SKIPPED`` / ``ERROR`` are canonical runtime
-    statuses for Automation Engine preflight. Legacy failure-like statuses remain
-    non-blocking unless an orchestrator explicitly opts an app into hard mapping.
+    ``SUCCESS`` / ``FAILED`` are the canonical statuses an app handler returns:
+    ``SUCCESS`` lets the run proceed (all checks green, or partially green but
+    still safe to extract — the handler's call), ``FAILED`` blocks the run
+    (an explicit hard config failure the app owner does not want to start).
+
+    ``READY`` / ``NOT_READY`` / ``PARTIAL`` are the legacy Sage/SageV2 statuses,
+    retained so existing handlers keep working. They are non-blocking: every one
+    folds to ``SUCCESS`` via :meth:`canonical`. An app opts into blocking only by
+    returning ``FAILED``.
     """
 
     READY = "ready"
@@ -273,8 +278,6 @@ class PreflightStatus(SerializableEnum):
     PARTIAL = "partial"
     SUCCESS = "success"
     FAILED = "failed"
-    SKIPPED = "skipped"
-    ERROR = "error"
 
     def canonical(self) -> PreflightStatus:
         """Normalize legacy statuses to their runtime aggregate equivalent."""
@@ -304,27 +307,6 @@ class PreflightCheck(BaseModel):
 
     duration_ms: float = 0.0
     """How long the check took in milliseconds."""
-
-
-class PreflightRuntimeContext(BaseModel):
-    """Runtime context supplied by orchestrators for server-side preflight."""
-
-    model_config = ConfigDict(extra="allow", populate_by_name=True)
-
-    source: str = ""
-    """Caller surface, for example ``automation_engine_preflight``."""
-
-    workflow_slug: str = ""
-    """Workflow slug for the current run."""
-
-    workflow_run_guid: str = ""
-    """WorkflowRun GUID for the current run."""
-
-    triggered_by: str = ""
-    """Trigger source such as manual, schedule, or event_watchdog."""
-
-    entrypoint: str = ""
-    """App entrypoint being checked, when known."""
 
 
 class PreflightInput(BaseModel):
@@ -380,8 +362,17 @@ class PreflightInput(BaseModel):
     timeout_seconds: int = 60
     """Maximum seconds to wait for all checks."""
 
-    runtime: PreflightRuntimeContext | None = None
-    """Optional runtime invocation context supplied by AE/Heracles."""
+    source: str = ""
+    """Caller surface, e.g. ``automation_engine_preflight``. Empty for UI checks."""
+
+    workflow_slug: str = ""
+    """Workflow slug for the current run (runtime preflight only)."""
+
+    workflow_run_guid: str = ""
+    """WorkflowRun GUID for the current run (runtime preflight only)."""
+
+    triggered_by: str = ""
+    """Trigger source such as manual, schedule, or event_watchdog."""
 
 
 class PreflightOutput(BaseModel):
@@ -428,36 +419,6 @@ class PreflightOutput(BaseModel):
     ) -> PreflightOutput:
         return cls(
             status=PreflightStatus.FAILED,
-            message=message,
-            checks=checks or [],
-            total_duration_ms=total_duration_ms,
-        )
-
-    @classmethod
-    def skipped(
-        cls,
-        *,
-        message: str = "",
-        checks: list[PreflightCheck] | None = None,
-        total_duration_ms: float = 0.0,
-    ) -> PreflightOutput:
-        return cls(
-            status=PreflightStatus.SKIPPED,
-            message=message,
-            checks=checks or [],
-            total_duration_ms=total_duration_ms,
-        )
-
-    @classmethod
-    def error(
-        cls,
-        *,
-        message: str = "",
-        checks: list[PreflightCheck] | None = None,
-        total_duration_ms: float = 0.0,
-    ) -> PreflightOutput:
-        return cls(
-            status=PreflightStatus.ERROR,
             message=message,
             checks=checks or [],
             total_duration_ms=total_duration_ms,
