@@ -149,6 +149,13 @@ on:
         required: false
         default: ""
         type: string
+      exclude-paths-b:
+        description: >
+          Comma-separated repo-root-relative path prefixes to exclude from B-series
+          (deprecation) checks only, e.g. 'tools/,contract-toolkit/'.  Default: nothing excluded.
+        required: false
+        default: ""
+        type: string
       force-all:
         description: >
           Run every rule series regardless of which paths changed.  Same effect
@@ -236,6 +243,15 @@ jobs:
             slug: container-image
             paths: "Dockerfile"
             exclude_paths: ${{ inputs.exclude-paths-i }}
+          # B-series is mixed-scope: B001 (app) flags consumption of deprecated
+          # SDK symbols, B002/B003/B004 (sdk) check the SDK's own deprecation
+          # authoring.  Scope is auto-detected per caller, so on a consumer app
+          # only B001 runs and on the SDK only B002–B004 run — no per-app config.
+          - series: B
+            name: "Deprecation"
+            slug: deprecation
+            paths: "**/*.py"
+            exclude_paths: ${{ inputs.exclude-paths-b }}
     steps:
       - name: "Checkout caller repo"
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

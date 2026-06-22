@@ -11,7 +11,7 @@ description: >
 
 The current remediation state of the working tree across all enabled
 conformance rule areas (error-handling, logging, CI, prescriptions,
-optimizations, dependency).
+optimizations, dependency, deprecation).
 
 #### violations-summary
 
@@ -29,7 +29,7 @@ An aggregate of violation counts across all enabled areas:
 Postcondition (deterministic validator — never render-attested):
 
 **Default mode:** `atlan-application-sdk-conformance detect --repo . --series
-E,L,C,P,O,D` exits 0 — zero unsuppressed FAILING results across all enabled areas.
+E,L,C,P,O,D,B` exits 0 — zero unsuppressed FAILING results across all enabled areas.
 
 **Strict mode** (`--strict`): additionally, the `atlan/summary.warning` count
 in the SARIF output is 0 — zero unsuppressed WARNING results.  Every WARNING
@@ -59,6 +59,7 @@ the reason each was routed here:
 - `violations-prescriptions` from `prescriptions-area`
 - `violations-optimizations` from `optimizations-area`
 - `violations-dependency` from `dependency-area`
+- `violations-deprecation` from `deprecation-area`
 
 Forme auto-wires these subscriptions from the matching `#### facet` names in
 the area responsibilities.  This node is clean only when every subscribed
@@ -90,6 +91,9 @@ parallel:
     scope: scope
     mode: mode
   call dependency-area
+    scope: scope
+    mode: mode
+  call deprecation-area
     scope: scope
     mode: mode
 

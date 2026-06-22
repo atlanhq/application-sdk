@@ -87,12 +87,13 @@ def test_scope_is_required_field() -> None:
 
 
 def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
-    """The publisher-side rules are app-scoped; everything else is 'both'.
+    """The one-sided rules declare app/sdk scope; everything else is 'both'.
 
     APP-scoped rules (dependency pinning, managed-workflow drift, Dockerfile
-    conformance, orchestration-seam P004/P005) must never fire on the SDK
-    itself, which publishes the contract.  Pin the exact set so a new rule
-    has to make a deliberate scope decision rather than silently inheriting.
+    conformance, orchestration-seam P004/P005, deprecated-symbol usage B001)
+    must never fire on the SDK itself, which publishes the contract.  Pin the
+    exact set so a new rule has to make a deliberate scope decision rather than
+    silently inheriting.
 
     Note C003 (.gitignore entries) is *both*, not app: the SDK has its own
     .gitignore sharing the standard baseline, so the rule is useful there too —
@@ -105,6 +106,11 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     P004–P005 (orchestration-seam) are app-scoped: apps must reach Temporal
     through the SDK seam (BLDX-1417).  P006–P007 are SDK-only: the SDK must
     keep Temporal contained behind its seam.
+
+    B001 (deprecated-symbol usage) is app-scoped: the SDK deliberately retains
+    and internally uses its own deprecated shims.  B002–B004 (deprecation
+    authoring hygiene) are SDK-only — they grade how the SDK *declares* its
+    deprecations, which is only meaningful on the publisher.
     """
     rules = load_catalog()
     app_scoped = {r.id for r in rules if r.scope == RuleScope.APP}
@@ -116,7 +122,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # (BLDX-1417). P008–P012: apps must use the SDK's storage seam, not
     # hand-roll object stores or bare path fields (BLDX-1398).
     # I001–I005: Dockerfile conformance (SDK builds the base image, not consuming it).
+    # B001: consuming a deprecated SDK symbol (BLDX-1418).
     assert app_scoped == {
+        "B001",
         "C002",
         "D001",
         "D002",
@@ -138,9 +146,10 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "I004",
         "I005",
     }, app_scoped
-    # SDK-only rules: the SDK must keep Temporal contained behind its seam (BLDX-1417).
+    # SDK-only rules: the SDK must keep Temporal contained behind its seam
+    # (P006/P007, BLDX-1417) and declare its deprecations correctly (B002–B004).
     sdk_scoped = {r.id for r in rules if r.scope == RuleScope.SDK}
-    assert sdk_scoped == {"P006", "P007"}, sdk_scoped
+    assert sdk_scoped == {"B002", "B003", "B004", "P006", "P007"}, sdk_scoped
     both = {r.id for r in rules if r.scope == RuleScope.BOTH}
     assert both == {r.id for r in rules} - app_scoped - sdk_scoped
 
@@ -281,6 +290,17 @@ def test_catalog_t_series_present() -> None:
     expected = {"T001"}
     missing = expected - t_ids
     assert not missing, f"Missing T-series rules: {missing}"
+
+
+def test_catalog_b_series_present() -> None:
+    """The B-series backwards-compatibility / deprecation rules are all present."""
+    rules = load_catalog()
+    b_ids = {r.id for r in rules if r.id.startswith("B")}
+    expected = {"B001", "B002", "B003", "B004"}
+    missing = expected - b_ids
+    assert not missing, f"Missing B-series rules: {missing}"
+    extra = b_ids - expected
+    assert not extra, f"Unexpected B-series rules: {extra}"
 
 
 def test_catalog_is_mapping_keyed_by_id() -> None:
