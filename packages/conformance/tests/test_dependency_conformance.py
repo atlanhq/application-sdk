@@ -1,4 +1,4 @@
-"""Tests for the D-series (D001/D002/D004/D005/D006/D007/D008) dependency_conformance check."""
+"""Tests for the D-series (D001/D002/D003/D004/D005/D006/D007/D008) dependency_conformance check."""
 
 from __future__ import annotations
 
