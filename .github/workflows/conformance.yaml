@@ -24,4 +24,7 @@ jobs:
       # O-series (orjson) excludes the conformance package itself: the suite
       # legitimately uses stdlib json for SARIF string output (orjson returns bytes).
       exclude-paths-o: "tools/,contract-toolkit/,packages/conformance/"
+      # B-series (sdk scope) grades only application_sdk/ deprecation authoring;
+      # exclude the conformance package (its tests embed deprecation-notice strings).
+      exclude-paths-b: "tools/,contract-toolkit/,packages/conformance/"
       event_name: ${{ github.event_name }}
