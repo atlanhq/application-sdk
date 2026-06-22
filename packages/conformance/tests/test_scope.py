@@ -135,8 +135,9 @@ def test_rule_in_scope_predicate() -> None:
 
 
 def test_series_in_scope_predicate() -> None:
-    # D-series is all-APP: out of scope on the SDK, in scope on an app.
-    assert not _series_in_scope("D", RuleScope.SDK)
+    # D-series is mixed (D001/D002 app, D003 both) -> active on both surfaces;
+    # the SDK runs only its in-scope D003 (D001/D002 are post-filtered out).
+    assert _series_in_scope("D", RuleScope.SDK)
     assert _series_in_scope("D", RuleScope.APP)
     # C-series is mixed (C001/C003 both, C002 app) -> stays active on the SDK.
     assert _series_in_scope("C", RuleScope.SDK)
@@ -180,8 +181,24 @@ def test_runner_app_scope_surfaces_d001(tmp_path: Path) -> None:
     assert exit_code == 1  # D001 is block-tier
 
 
-def test_runner_sdk_scope_skips_d_series(tmp_path: Path) -> None:
-    _make_app_repo(tmp_path)  # same repo, but force SDK scope
+def _make_sdk_repo_with_unused_dep(root: Path) -> None:
+    """An SDK-named repo declaring an installed-but-unimported dependency.
+
+    ``pydantic`` is a direct conformance dependency, so it is always importable
+    in the test environment; with no source files importing it, D003 fires
+    deterministically.
+    """
+    (root / "pyproject.toml").write_text(
+        '[project]\nname = "atlan-application-sdk"\nversion = "0.1.0"\n'
+        'dependencies = ["pydantic>=2,<3"]\n',
+        encoding="utf-8",
+    )
+
+
+def test_runner_sdk_scope_runs_d003_filters_app_rules(tmp_path: Path) -> None:
+    """Under SDK scope the D-series runs (D003 is scope=both) but D001/D002,
+    which are app-only, are filtered out."""
+    _make_sdk_repo_with_unused_dep(tmp_path)
     out = tmp_path / "report.sarif"
     exit_code = main(
         [
@@ -195,8 +212,9 @@ def test_runner_sdk_scope_skips_d_series(tmp_path: Path) -> None:
             str(out),
         ]
     )
-    assert _rule_ids(out) == set()
-    assert exit_code == 0
+    ids = _rule_ids(out)
+    assert ids == {"D003"}  # D003 runs on the SDK; D001/D002 are app-only, filtered
+    assert exit_code == 0  # D003 is warn-tier
 
 
 def test_runner_autodetects_app_scope(tmp_path: Path) -> None:
@@ -207,14 +225,13 @@ def test_runner_autodetects_app_scope(tmp_path: Path) -> None:
     assert "D001" in _rule_ids(out)
 
 
-def test_runner_autodetects_sdk_scope_skips_d(tmp_path: Path) -> None:
-    """An SDK-named repo auto-detects to sdk, so the app-scoped D-series is skipped."""
-    (tmp_path / "pyproject.toml").write_text(
-        '[project]\nname = "atlan-application-sdk"\nversion = "0.1.0"\n'
-        'dependencies = ["requests>=2,<3"]\n',
-        encoding="utf-8",
-    )
+def test_runner_autodetects_sdk_scope_runs_d003(tmp_path: Path) -> None:
+    """An SDK-named repo auto-detects to sdk: the app-scoped D001/D002 are
+    filtered, but the both-scoped D003 still runs."""
+    _make_sdk_repo_with_unused_dep(tmp_path)
     out = tmp_path / "report.sarif"
     exit_code = main(["--repo", str(tmp_path), "--series", "D", "--output", str(out)])
-    assert _rule_ids(out) == set()
-    assert exit_code == 0
+    ids = _rule_ids(out)
+    assert ids == {"D003"}
+    assert "D001" not in ids and "D002" not in ids
+    assert exit_code == 0  # D003 is warn-tier

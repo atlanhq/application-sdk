@@ -30,28 +30,29 @@ are *publishers* of the contract, not apps subject to it).
 
 from __future__ import annotations
 
+import ast
 import re
 import sys
 import tomllib
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any
 
+from conformance.suite.checks._ast_common import discover as _discover_sources
 from conformance.suite.checks._ast_common import is_sdk_package_name, make_cli_main
 from conformance.suite.schema.findings import Finding
 
 SERIES = "D"
 RULE_D001 = "D001"
 RULE_D002 = "D002"
+RULE_D003 = "D003"
 RULE_D004 = "D004"
 RULE_D005 = "D005"
 RULE_D006 = "D006"
 RULE_D007 = "D007"
 RULE_D008 = "D008"
-# D003 is reserved (UnusedDependency, BLDX-1462 / PR #2253) and intentionally
-# absent here — rule IDs never reuse.
 
 SDK_PACKAGE = "atlan-application-sdk"
 
@@ -215,7 +216,22 @@ def _is_bounded_specifier(spec: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _iter_dep_entries(text: str) -> Iterator[_DepEntry]:
+def _safe_load(text: str) -> dict[str, Any] | None:
+    """Parse *text* as TOML once; return the dict or ``None`` if unparseable.
+
+    Helpers accept the result via their ``data`` keyword so a single
+    ``scan_text`` parse is reused instead of re-parsing per helper.
+    """
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _iter_dep_entries(
+    text: str, *, data: Mapping[str, Any] | None = None
+) -> Iterator[_DepEntry]:
     """Yield every dep entry from ``[project.dependencies]`` and
     ``[project.optional-dependencies.*]`` arrays, preserving source lines.
 
@@ -223,17 +239,17 @@ def _iter_dep_entries(text: str) -> Iterator[_DepEntry]:
     line-by-line using a small state machine that tracks the current array
     context. This is sufficient for the well-formed TOML produced by ``uv``
     and ``hatch`` and is robust against most hand-written variants.
+
+    ``data`` lets the caller pass the already-parsed document so the
+    parseability check below does not re-parse.
     """
     array_path: str | None = None
     in_array = False
     extras_table: str | None = None  # current [project.optional-dependencies] subtable
 
-    # Pre-scan tomllib for the structure (so we know the dotted key for an
-    # ``[<table>] dependencies = [`` form).  But for *line numbers* we still
-    # walk the raw text: tomllib loses them.
-    try:
-        tomllib.loads(text)
-    except tomllib.TOMLDecodeError:
+    # Validate parseability once (line numbers still come from the raw-text walk
+    # below — tomllib loses them).
+    if data is None and _safe_load(text) is None:
         return  # unparseable input — emit no findings (caller decides)
 
     table_re = re.compile(r"^\s*\[([^\[\]]+)\]\s*(?:#.*)?$")
@@ -361,7 +377,9 @@ def _iter_dep_entries(text: str) -> Iterator[_DepEntry]:
         )
 
 
-def _iter_dependency_group_entries(text: str) -> Iterator[_DepEntry]:
+def _iter_dependency_group_entries(
+    text: str, *, data: Mapping[str, Any] | None = None
+) -> Iterator[_DepEntry]:
     """Yield string entries from PEP 735 ``[dependency-groups]`` arrays,
     preserving source lines.
 
@@ -370,13 +388,12 @@ def _iter_dependency_group_entries(text: str) -> Iterator[_DepEntry]:
     arrays), so D002's scope is unchanged.  ``{include-group = "..."}`` table
     entries are not requirement strings and are skipped naturally — only quoted
     string entries match ``entry_re``.  ``array_path`` is
-    ``"dependency-groups.<group>"``.
+    ``"dependency-groups.<group>"``.  ``data`` lets the caller pass the
+    already-parsed document.
     """
-    try:
-        data: Any = tomllib.loads(text)
-    except tomllib.TOMLDecodeError:
-        return
-    if not isinstance(data, dict) or "dependency-groups" not in data:
+    if data is None:
+        data = _safe_load(text)
+    if data is None or "dependency-groups" not in data:
         return
 
     table_re = re.compile(r"^\s*\[([^\[\]]+)\]\s*(?:#.*)?$")
@@ -455,9 +472,10 @@ def _parse_suppressions(text: str) -> dict[int, tuple[frozenset[str] | None, str
     ``# conformance: ignore[...]`` directive in *text*.
 
     ``rule_ids_or_None`` is ``None`` for a rule-id-less directive (matches any
-    rule on that line). The directive applies to its own line *and* the line
-    immediately below it (matches the E-series convention so users only have
-    to learn one form).
+    rule on that line). Framed from the violation's side to match
+    ``_is_suppressed``: a directive at line N suppresses findings on lines N and
+    N+1 (its own line and the one immediately below — the E-series convention,
+    so users only have to learn one form).
     """
     out: dict[int, tuple[frozenset[str] | None, str]] = {}
     for lineno, raw in enumerate(text.splitlines(), start=1):
@@ -557,13 +575,13 @@ def _sdk_published_extras() -> set[str] | None:
 # ---------------------------------------------------------------------------
 
 
-def _project_name(text: str) -> str | None:
+def _project_name(text: str, *, data: Mapping[str, Any] | None = None) -> str | None:
     """Return ``[project].name`` if parseable, else ``None``."""
-    try:
-        data: Any = tomllib.loads(text)
-    except tomllib.TOMLDecodeError:
+    if data is None:
+        data = _safe_load(text)
+    if data is None:
         return None
-    project = data.get("project") if isinstance(data, dict) else None
+    project = data.get("project")
     if not isinstance(project, dict):
         return None
     name = project.get("name")
@@ -579,7 +597,7 @@ _PY_LOWER_RE = re.compile(r"(>=|>)\s*(\d+)(?:\.(\d+))?")
 
 
 def _requires_python_lower_bound(
-    text: str,
+    text: str, *, data: Mapping[str, Any] | None = None
 ) -> tuple[tuple[int, int], str, int] | None:
     """Return ``((major, minor), operator, lineno)`` for the app's
     ``requires-python`` lower bound, or ``None`` when it is absent or has no
@@ -589,11 +607,11 @@ def _requires_python_lower_bound(
     still admits ``X.Y.z`` patch releases, which are below the next minor, so
     comparing the declared ``X.Y`` against the SDK floor is the right test.
     """
-    try:
-        data: Any = tomllib.loads(text)
-    except tomllib.TOMLDecodeError:
+    if data is None:
+        data = _safe_load(text)
+    if data is None:
         return None
-    project = data.get("project") if isinstance(data, dict) else None
+    project = data.get("project")
     if not isinstance(project, dict):
         return None
     spec = project.get("requires-python")
@@ -634,14 +652,16 @@ def _line_of(text: str, key: str, *, section: str | None = None) -> int:
     return 1
 
 
-def _build_backend(text: str) -> tuple[str, int] | None:
+def _build_backend(
+    text: str, *, data: Mapping[str, Any] | None = None
+) -> tuple[str, int] | None:
     """Return ``(build-backend, lineno)`` from ``[build-system]``, or ``None``
     when the key is absent (a missing build backend is not D007's concern)."""
-    try:
-        data: Any = tomllib.loads(text)
-    except tomllib.TOMLDecodeError:
+    if data is None:
+        data = _safe_load(text)
+    if data is None:
         return None
-    build_system = data.get("build-system") if isinstance(data, dict) else None
+    build_system = data.get("build-system")
     if not isinstance(build_system, dict):
         return None
     backend = build_system.get("build-backend")
@@ -650,14 +670,16 @@ def _build_backend(text: str) -> tuple[str, int] | None:
     return backend, _line_of(text, "build-backend", section="build-system")
 
 
-def _pyright_mode(text: str) -> tuple[str, int] | None:
+def _pyright_mode(
+    text: str, *, data: Mapping[str, Any] | None = None
+) -> tuple[str, int] | None:
     """Return ``(typeCheckingMode, lineno)`` from ``[tool.pyright]``, or
     ``None`` when the key is absent (D008 only flags an explicit weak mode)."""
-    try:
-        data: Any = tomllib.loads(text)
-    except tomllib.TOMLDecodeError:
+    if data is None:
+        data = _safe_load(text)
+    if data is None:
         return None
-    tool = data.get("tool") if isinstance(data, dict) else None
+    tool = data.get("tool")
     pyright = tool.get("pyright") if isinstance(tool, dict) else None
     if not isinstance(pyright, dict):
         return None
@@ -701,19 +723,18 @@ def scan_text(
         ``None``, looked up via ``importlib.metadata`` ``Provides-Extra``; when
         the SDK is not importable, D005 is skipped silently.
     """
-    try:
-        tomllib.loads(text)
-    except tomllib.TOMLDecodeError:
+    data = _safe_load(text)
+    if data is None:
         return []
 
-    name = _project_name(text)
+    name = _project_name(text, data=data)
     if _is_self_check(name):
         return []
 
     findings: list[Finding] = []
     suppressions = _parse_suppressions(text)
 
-    entries = list(_iter_dep_entries(text))
+    entries = list(_iter_dep_entries(text, data=data))
 
     # ── D001 ──────────────────────────────────────────────────────────────
     sdk_norm = _normalise_name(SDK_PACKAGE)
@@ -769,7 +790,7 @@ def scan_text(
     # ── D006 ──────────────────────────────────────────────────────────────
     # Pure-text: runs regardless of whether the SDK metadata is importable, so
     # it must precede the D002 early-return below.
-    py_bound = _requires_python_lower_bound(text)
+    py_bound = _requires_python_lower_bound(text, data=data)
     if py_bound is not None:
         (app_major, app_minor), app_op, py_line = py_bound
         if (app_major, app_minor) < SDK_PYTHON_FLOOR:
@@ -792,7 +813,7 @@ def scan_text(
             )
 
     # ── D007 (pure-text) ────────────────────────────────────────────────────
-    backend = _build_backend(text)
+    backend = _build_backend(text, data=data)
     if backend is not None and backend[0] != HATCHLING_BACKEND:
         findings.append(
             _make_finding(
@@ -811,7 +832,7 @@ def scan_text(
         )
 
     # ── D008 (pure-text) ────────────────────────────────────────────────────
-    pyright = _pyright_mode(text)
+    pyright = _pyright_mode(text, data=data)
     if pyright is not None and pyright[0].strip().lower() in PYRIGHT_WEAK_MODES:
         findings.append(
             _make_finding(
@@ -834,7 +855,7 @@ def scan_text(
     else:
         managed = {_normalise_name(p) for p in sdk_managed_packages}
 
-    group_entries = list(_iter_dependency_group_entries(text))
+    group_entries = list(_iter_dependency_group_entries(text, data=data))
 
     if managed is not None:
         # D002 — [project.dependencies] + [project.optional-dependencies.*]
@@ -958,10 +979,234 @@ def scan_path(
     )
 
 
+# ---------------------------------------------------------------------------
+# D003 — unused dependency (cross-file: pyproject deps vs. source imports)
+# ---------------------------------------------------------------------------
+
+
+def _collect_top_level_imports(py_files: Iterable[Path]) -> set[str]:
+    """Return the set of top-level module names imported across *py_files*.
+
+    Only the first dotted component of each import target is kept (``import
+    a.b.c`` and ``from a.b import x`` both contribute ``a``).  Relative imports
+    (``from . import x``) are skipped — they target the app's own package, never
+    a declared third-party distribution.
+    """
+    modules: set[str] = set()
+    for path in py_files:
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            continue
+        try:
+            # Parse from bytes so ``ast`` honours a PEP 263 coding cookie; a
+            # legacy non-UTF-8 source (e.g. ``# -*- coding: latin-1 -*-``) is
+            # decoded correctly instead of crashing on a UTF-8 decode.
+            tree = ast.parse(raw)
+        except (SyntaxError, ValueError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    modules.add(alias.name.split(".", 1)[0])
+            elif isinstance(node, ast.ImportFrom):
+                if node.level == 0 and node.module:
+                    modules.add(node.module.split(".", 1)[0])
+    return modules
+
+
+def _dist_import_names(dist_name: str) -> set[str] | None:
+    """Return the top-level import names a distribution provides, or ``None``.
+
+    Resolved from installed package metadata: ``top_level.txt`` when present,
+    plus top-level entries derived from the distribution's file list (RECORD).
+    Returns ``None`` when the distribution is not importable in the current
+    environment — the caller then *skips* the dependency (never flags it) and
+    reports it as unanalysed, so a missing env can never produce a false
+    "unused" finding.
+    """
+    try:
+        dist = importlib_metadata.distribution(dist_name)
+    except importlib_metadata.PackageNotFoundError:
+        return None
+
+    names: set[str] = set()
+    top_level = dist.read_text("top_level.txt")
+    if top_level:
+        names.update(line.strip() for line in top_level.splitlines() if line.strip())
+
+    # Derive top-levels from the installed file list as a fallback / supplement
+    # (namespace packages and wheels without top_level.txt rely on this).  Each
+    # candidate is gated on ``isidentifier`` so non-module RECORD entries — data
+    # files (``share/…``), scripts installed via ``..`` / ``bin``, ``LICENSE`` —
+    # never leak into the provided-names set.
+    for file in dist.files or ():
+        parts = file.parts
+        if not parts:
+            continue
+        head = parts[0]
+        if head.endswith((".dist-info", ".data", ".egg-info")):
+            continue
+        if len(parts) == 1:
+            # A single top-level module file: ``foo.py`` -> ``foo``.
+            if head.endswith(".py"):
+                stem = head[:-3]
+                if stem.isidentifier():
+                    names.add(stem)
+        elif head.isidentifier():
+            # A package directory: ``foo/__init__.py`` -> ``foo``.
+            names.add(head)
+
+    return names
+
+
+def _scan_unused_dependencies(
+    dep_entries: list[_DepEntry],
+    imported_modules: set[str],
+    suppressions: dict[int, tuple[frozenset[str] | None, str]],
+    file: str,
+    *,
+    dist_import_map: Mapping[str, set[str] | None],
+) -> tuple[list[Finding], list[str]]:
+    """Return (D003 findings, names of dependencies skipped as unresolvable).
+
+    A dependency is flagged when the import names it provides are all absent
+    from *imported_modules*.  A dependency whose ``dist_import_map`` value is
+    ``None`` (not importable in this environment) is skipped and returned in the
+    second list so the caller can surface it — never silently dropped.
+    """
+    findings: list[Finding] = []
+    unresolved: list[str] = []
+
+    # The caller filters out the SDK self-dependency when building dep_entries,
+    # so every entry here is a third-party package eligible for the unused check.
+    for entry in dep_entries:
+        provided = dist_import_map.get(entry.name)
+        if not provided:
+            # None (not installed) or empty (no resolvable import names) -> we
+            # cannot prove it is unused, so skip and report rather than flag.
+            unresolved.append(entry.name)
+            continue
+        if provided & imported_modules:
+            continue  # at least one provided module is imported -> used
+        provided_list = ", ".join(sorted(provided))
+        findings.append(
+            _make_finding(
+                rule_id=RULE_D003,
+                file=file,
+                line=entry.line,
+                column=entry.column,
+                message=(
+                    f"'{entry.name}' is declared in [project.dependencies] but none "
+                    f"of the modules it provides ({provided_list}) are imported "
+                    f"anywhere in source. If it is unused, remove it. Otherwise it may "
+                    f"be loaded dynamically (importlib), pulled in via an entry "
+                    f"point/plugin, or required by a framework/server it is not "
+                    f"directly imported by — verify before removing, or annotate the "
+                    f"line with '# conformance: ignore[D003] <reason>'."
+                ),
+                suppressions=suppressions,
+            )
+        )
+
+    return findings, unresolved
+
+
+def scan_all(
+    paths: list[Path],
+    root: Path,
+    *,
+    dist_import_map: Mapping[str, set[str] | None] | None = None,
+    imported_modules: set[str] | None = None,
+) -> list[Finding]:
+    """Run the full D-series over *paths*: per-file D001/D002 + cross-file D003.
+
+    ``paths`` is the post-exclusion discovery list (the root ``pyproject.toml``
+    plus the repo's Python sources — see :func:`discover`).
+
+    D001/D002 run per ``pyproject.toml`` via :func:`scan_path` (the SDK and its
+    sibling packages remain self-exempt).  D003 is computed here *outside* that
+    self-check guard — it is ``scope=both`` and so applies to the SDK itself —
+    by mapping each core dependency to the import names it provides and flagging
+    any whose modules never appear in the collected source imports.
+
+    Test seams: ``dist_import_map`` injects the dependency -> import-name map
+    (default: resolved from installed metadata) and ``imported_modules`` injects
+    the set of imported top-levels (default: parsed from the discovered sources).
+    """
+    pyprojects = [p for p in paths if p.name == "pyproject.toml"]
+    py_files = [p for p in paths if p.suffix == ".py"]
+
+    findings: list[Finding] = []
+    for pyproject in pyprojects:
+        findings.extend(scan_path(pyproject, root))
+
+    # ── D003 ────────────────────────────────────────────────────────────────
+    root_pyproject = root / "pyproject.toml"
+    if not root_pyproject.is_file():
+        return findings
+    text = root_pyproject.read_text(encoding="utf-8")
+    try:
+        tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return findings
+
+    dep_entries = [
+        e
+        for e in _iter_dep_entries(text)
+        if e.array_path == "project.dependencies"
+        and e.name != _normalise_name(SDK_PACKAGE)
+    ]
+    if not dep_entries:
+        return findings
+
+    if imported_modules is None:
+        imported_modules = _collect_top_level_imports(py_files)
+    if dist_import_map is None:
+        dist_import_map = {e.name: _dist_import_names(e.name) for e in dep_entries}
+
+    try:
+        rel = root_pyproject.relative_to(root)
+    except ValueError:
+        rel = root_pyproject
+
+    d003_findings, unresolved = _scan_unused_dependencies(
+        dep_entries,
+        imported_modules,
+        _parse_suppressions(text),
+        str(rel),
+        dist_import_map=dist_import_map,
+    )
+    findings.extend(d003_findings)
+
+    if unresolved:
+        # No silent caps: a dependency we cannot resolve in this environment is
+        # not analysed; surface it (to stderr, so SARIF on stdout stays clean)
+        # rather than letting "0 D003 findings" imply full coverage.
+        noun = "dependency" if len(unresolved) == 1 else "dependencies"
+        print(
+            f"conformance (D003): skipped {len(unresolved)} {noun} not importable "
+            f"in this environment (unused status undetermined): "
+            f"{', '.join(sorted(unresolved))}",
+            file=sys.stderr,
+        )
+
+    return findings
+
+
 def discover(root: Path) -> list[Path]:
-    """Return ``[root/pyproject.toml]`` if it exists, else ``[]``."""
+    """Return the root ``pyproject.toml`` (if any) plus the repo's Python sources.
+
+    D001/D002 need the ``pyproject.toml``; D003 additionally needs every source
+    file's imports.  Source discovery reuses the shared AST walk, which already
+    excludes tests, build dirs, virtualenvs, and dot-directories.
+    """
+    paths: list[Path] = []
     candidate = root / "pyproject.toml"
-    return [candidate] if candidate.is_file() else []
+    if candidate.is_file():
+        paths.append(candidate)
+    paths.extend(_discover_sources(root))
+    return paths
 
 
 # ---------------------------------------------------------------------------
@@ -969,10 +1214,10 @@ def discover(root: Path) -> list[Path]:
 # ---------------------------------------------------------------------------
 
 main = make_cli_main(
-    scan_text,
-    description="D-series: scan pyproject.toml against the application-sdk contract.",
+    scan_all=scan_all,
+    description="D-series: scan a repo against the application-sdk dependency contract.",
     discover=discover,
-    default_scan_paths=("pyproject.toml",),
+    default_scan_paths=(".",),
 )
 """CLI entry point for the D-series check."""
 

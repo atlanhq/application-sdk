@@ -33,10 +33,12 @@ description: >
 
 ### Write-scope constraint
 
-This function may **only** propose edits to Python source files under the
-repository root — never to `tests/`, `.github/`, `conformance/`, or any CI /
-gate configuration.  This is the §6.1 "no self-judging changes" discipline:
-the remediator may not touch the gate it is judged against.
+This function may **only** propose edits to Python source files and the root
+`Dockerfile` — never to `tests/`, `.github/`, `conformance/`, or any CI / gate
+configuration.  This is the §6.1 "no self-judging changes" discipline: the
+remediator may not touch the gate it is judged against.  The `Dockerfile`
+exception is limited to I-series findings; no other area may propose Dockerfile
+edits.
 
 ### Dispatch by area
 
@@ -189,6 +191,57 @@ propose-don't-apply: this function only *drafts* the change; a human is the gate
 This area graduates to the full `detect-fix-recheck` (apply-and-keep) loop only
 once a gate exists that validates the bound (a runtime-enforced `MaxItems`, or
 a payload-size behavioural check).
+
+---
+
+**Orchestration-seam rules (P004–P007, BLDX-1417).** These are also prescriptions
+(area `prescriptions`) and stay suggest-only: the P004/P005 violations are usually
+under `tests/` where this function may not write, the app-side rewrites carry
+judgment, and P006/P007 are refactors. `classification` is always `"judgment"`.
+
+- **P004 DirectTemporalImport** (app) — the app imports `temporalio` directly.
+  Draft a rewrite to the SDK seam by mapping the imported symbol:
+  - workflow primitives `now`/`sleep`/`uuid4`/`wait_condition` and the
+    interaction decorators `signal`/`query`/`update` (and `task` in place of
+    `activity`) → `from application_sdk.app import …`;
+  - `temporalio.client.Client` / `Client.connect(...)` →
+    `from application_sdk.execution import create_temporal_client`
+    (`client = await create_temporal_client(host=...)`);
+  - `temporalio.worker.Worker` →
+    `from application_sdk.execution import AppWorker, create_worker`;
+  - `temporalio.converter` data-converter use →
+    `from application_sdk.execution import create_data_converter`.
+
+  **Annotation hole — route to residue, do not fabricate a fix:** if the only
+  use of a `temporalio` symbol is to *annotate* a value the public seam returns
+  (e.g. `Client` for the result of `create_temporal_client`), there is no public
+  opaque type to swap to yet — this is the P007 leak the SDK must close first.
+  Note the P007 dependency in residue rather than inventing an import.
+
+- **P005 PrivateOrchestrationInternalImport** (app) — the app reaches into an
+  SDK-private module. Draft a rewrite to the public re-export when one exists:
+  - `application_sdk.execution._temporal.worker.{create_worker,AppWorker}` →
+    `application_sdk.execution.{create_worker,AppWorker}`;
+  - `application_sdk.execution._temporal.backend.create_temporal_client` →
+    `application_sdk.execution.create_temporal_client`;
+  - `application_sdk.execution._temporal.converter.create_data_converter` →
+    `application_sdk.execution.create_data_converter`.
+
+  **No public twin — route to residue:** some internals have no public
+  equivalent today (e.g. `create_data_converter_for_app`,
+  `TemporalExecutorBackend`). Do **not** invent a public import; note that the
+  SDK must expose a public equivalent (or the app must drop the dependency).
+
+- **P006 TemporalImportOutsideAdapter** (sdk) — `temporalio` is imported outside
+  the `execution/_temporal/` adapter. The fix is a structural relocation of the
+  Temporal usage behind the adapter, which no import rewrite can perform. Route
+  to residue with a note that an SDK refactor is required. Do not attempt a
+  mechanical edit.
+
+- **P007 RawTemporalInPublicSurface** (sdk) — a public API re-exports or exposes
+  a raw `temporalio` type. The fix is to wrap the value in an opaque SDK type (or
+  stop re-exporting it) — a public-contract refactor. Route to residue with that
+  guidance. Do not attempt a mechanical edit.
 
 ---
 
@@ -394,6 +447,59 @@ above it:
 The justification must describe *why* the deviation is acceptable here, not
 merely that the rule is being suppressed.  Route every suppression to residue
 for human audit.  D001 is BLOCK-tier and has no suppress path in default mode.
+
+---
+
+#### Area: dockerfile (I-series) — PHASE 1 (suggest-only)
+
+Proposes edits to the root `Dockerfile`.  Read the full Dockerfile context
+before applying any edit; changes to one instruction may interact with others.
+
+**Mechanical rules** (`autofixable = true`, `classification = "mechanical"`):
+
+- **I001 DockerfileWrongBaseImage** — replace the final `FROM` line with the
+  exact approved image:
+
+  ```
+  FROM registry.atlan.com/public/app-runtime-base:3
+  ```
+
+  Preserve any `AS <alias>` suffix if present (uncommon in single-stage
+  Dockerfiles; drop it otherwise).  This is a single-line substitution with a
+  known constant — no judgment needed.
+
+- **I002 DockerfileEntrypointOverride** — delete the `CMD` or `ENTRYPOINT`
+  line.  The base image's entrypoint script handles launch and graceful drain;
+  the line serves no purpose once the app is wired via `ATLAN_APP_MODULE`.  If
+  the removed instruction was the app's only start command, note in residue
+  that `ENV ATLAN_APP_MODULE` must also be present (I003 will flag it
+  independently if not).
+
+- **I004 DockerfileAppModeHardcoded** — delete the `ENV ATLAN_APP_MODE=…`
+  line.  No replacement is needed; the variable is supplied at deploy time by
+  the deployment manifest.
+
+- **I005 DockerfileRootUser** — delete the `USER root` or `USER 0` line.  The
+  base image already runs as `appuser`; the line is always wrong in the final
+  stage.  If a `RUN` step immediately follows that depends on root access
+  (e.g. `apt-get install`), note in residue that the install must move to an
+  earlier build stage — do **not** add a compensating `USER appuser` to hide
+  the `USER root`.
+
+**Judgment rules** (`autofixable = false`, `classification = "judgment"`):
+
+- **I003 DockerfileAppModuleMissing** — no `ENV ATLAN_APP_MODULE=…` is set.
+  Draft an addition after the `FROM` line (or after the last `ENV` block):
+
+  ```
+  ENV ATLAN_APP_MODULE=<module>:<AppClass>
+  ```
+
+  Do **not** invent a module path; leave `<module>:<AppClass>` as a literal
+  placeholder and instruct the developer to substitute the real value.  Only
+  the developer knows the correct path — this cannot be inferred statically.
+
+**Suppress outcome** is not available for I-series (all rules are BLOCK-tier).
 
 ---
 
