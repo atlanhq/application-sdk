@@ -398,6 +398,7 @@ jobs:
           # (e.g. a repo scoped to sdk-only) doesn't fail the whole step.
           for slug in ci error-handling prescriptions optimizations dependency logging tests; do
             gh run download "$RUN_ID" \
+              --repo "${{ github.repository }}" \
               --name "conformance-${slug}-sarif" \
               --dir /tmp/sarif 2>/dev/null \
               && found=$((found + 1)) || true
