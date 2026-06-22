@@ -8,13 +8,30 @@
 # Mirrors the conformance dashboard job in update-dashboard.yaml for the S3
 # deployment pattern, and reusable-renovate-dispatch.yaml for fleet discovery.
 #
-# Runs every 6 hours on a schedule, or on demand via workflow_dispatch.
+# Two modes:
+#   Full-fleet (schedule / workflow_dispatch without repo input):
+#     Discovers all consumer repos via gh search code and scans the whole fleet.
+#     Updates per-repo data, fleet.json aggregate, repos.json manifest, and all
+#     history JSONL files.
+#   Single-repo (workflow_dispatch with repo=<owner/name>):
+#     Scans only the specified repo. Skips fleet.json and fleet history so a
+#     partial scan never overwrites the full-fleet aggregate. Used by the
+#     renovate-auto-approve-reusable workflow for push-based, near-real-time
+#     updates immediately after a PR gate evaluation.
 name: Update Renovate Dashboard
 
 on:
   schedule:
     - cron: "0 */6 * * *" # every 6 hours
   workflow_dispatch:
+    inputs:
+      repo:
+        description: >
+          Single consumer repo to scan (e.g. atlanhq/my-app).
+          Leave empty to scan the full fleet.
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -29,22 +46,30 @@ jobs:
         id: discover
         env:
           GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          SINGLE_REPO: ${{ inputs.repo }}
         run: |
           set -euo pipefail
-          # Search for repos in the atlanhq org that list atlan-application-sdk
-          # as a dependency. gh search code returns up to 100 results per query;
-          # for a fleet > 100 repos, page through with --limit / --page.
-          repos=$(gh search code \
-            --owner atlanhq \
-            "atlan-application-sdk filename:pyproject.toml" \
-            --json repository \
-            --jq '[.[].repository.nameWithOwner] | unique' \
-            --limit 100 2>/dev/null || echo "[]")
 
-          if [ "$repos" = "[]" ] || [ -z "$repos" ]; then
-            echo "::warning::No consumer repos discovered. Check ORG_PAT_GITHUB permissions."
+          if [ -n "${SINGLE_REPO:-}" ]; then
+            # Push-based single-repo mode: skip fleet discovery entirely.
+            repos=$(printf '["%s"]' "$SINGLE_REPO")
+            echo "Single-repo scan: $SINGLE_REPO"
           else
-            echo "Discovered $(echo "$repos" | jq '. | length') consumer repos"
+            # Full-fleet mode: discover every consumer via code search.
+            # gh search code returns up to 100 results per query; for a fleet
+            # > 100 repos, page through with --limit / --page.
+            repos=$(gh search code \
+              --owner atlanhq \
+              "atlan-application-sdk filename:pyproject.toml" \
+              --json repository \
+              --jq '[.[].repository.nameWithOwner] | unique' \
+              --limit 100 2>/dev/null || echo "[]")
+
+            if [ "$repos" = "[]" ] || [ -z "$repos" ]; then
+              echo "::warning::No consumer repos discovered. Check ORG_PAT_GITHUB permissions."
+            else
+              echo "Discovered $(echo "$repos" | jq '. | length') consumer repos"
+            fi
           fi
           echo "repos=${repos}" >> "$GITHUB_OUTPUT"
 
@@ -100,6 +125,8 @@ jobs:
           role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess
 
       - name: Deploy to Kryptonite (renovate)
+        env:
+          SINGLE_REPO: ${{ inputs.repo }}
         run: |
           set -euo pipefail
           PREFIX="renovate-dashboard"
@@ -109,10 +136,6 @@ jobs:
             [ -e "$f" ] || continue
             aws s3 cp "$f" "s3://kryptonite-store/${PREFIX}/repos/$(basename "$f")"
           done
-
-          # Fleet-wide aggregate.
-          aws s3 cp /tmp/renovate-output/fleet.json \
-            "s3://kryptonite-store/${PREFIX}/fleet.json"
 
           # Regenerate manifest of all repo files present in S3.
           aws s3 ls "s3://kryptonite-store/${PREFIX}/repos/" \
@@ -129,7 +152,7 @@ jobs:
             base=$(basename "$f")          # history_<slug>.jsonl
             slug=${base#history_}
             slug=${slug%.jsonl}
-            # The fleet-wide history is merged separately below.
+            # Fleet-wide history is only written on full-fleet runs (see below).
             [ "$slug" = "fleet" ] && continue
             HISTORY_FILE="history/${slug}.jsonl"
             aws s3 cp \
@@ -142,17 +165,24 @@ jobs:
               "s3://kryptonite-store/${PREFIX}/${HISTORY_FILE}"
           done
 
-          # Append fleet-wide history.
-          if [ -e /tmp/renovate-output/history_fleet.jsonl ]; then
-            aws s3 cp \
-              "s3://kryptonite-store/${PREFIX}/history/fleet.jsonl" \
-              /tmp/existing_fleet_history.jsonl 2>/dev/null || true
-            cat /tmp/existing_fleet_history.jsonl \
-              /tmp/renovate-output/history_fleet.jsonl 2>/dev/null \
-              | sort -u \
-              > /tmp/merged_fleet_history.jsonl
-            aws s3 cp /tmp/merged_fleet_history.jsonl \
-              "s3://kryptonite-store/${PREFIX}/history/fleet.jsonl"
+          # Fleet-wide aggregate and history — only meaningful for full-fleet runs.
+          # In single-repo mode the scanner only has data for one repo, so writing
+          # fleet.json would overwrite the real fleet aggregate with a partial view.
+          if [ -z "${SINGLE_REPO:-}" ]; then
+            aws s3 cp /tmp/renovate-output/fleet.json \
+              "s3://kryptonite-store/${PREFIX}/fleet.json"
+
+            if [ -e /tmp/renovate-output/history_fleet.jsonl ]; then
+              aws s3 cp \
+                "s3://kryptonite-store/${PREFIX}/history/fleet.jsonl" \
+                /tmp/existing_fleet_history.jsonl 2>/dev/null || true
+              cat /tmp/existing_fleet_history.jsonl \
+                /tmp/renovate-output/history_fleet.jsonl 2>/dev/null \
+                | sort -u \
+                > /tmp/merged_fleet_history.jsonl
+              aws s3 cp /tmp/merged_fleet_history.jsonl \
+                "s3://kryptonite-store/${PREFIX}/history/fleet.jsonl"
+            fi
           fi
 
           echo "Renovate dashboard updated: https://k.atlan.dev/${PREFIX}/"

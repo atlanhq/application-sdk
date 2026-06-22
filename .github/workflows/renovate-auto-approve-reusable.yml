@@ -39,6 +39,13 @@
 #
 # Trigger rationale lives in the caller — each consumer lists the workflow names
 # that produce its required status checks, which differ per repo.
+#
+# Push-based dashboard update:
+#   After every gate evaluation (approved or not), this workflow dispatches
+#   atlanhq/application-sdk/renovate-dashboard.yaml with the calling repo as
+#   input. This keeps the dashboard current within seconds of a PR state change
+#   rather than waiting up to 6h for the next cron. Non-critical — the cron
+#   provides fleet-wide coverage as a fallback if the dispatch fails.
 
 name: "Renovate auto-approve (reusable)"
 
@@ -206,3 +213,18 @@ jobs:
             gh pr review "${PR_NUM}" --repo "${REPO}" --approve --body "$APPROVE_BODY"
             echo "✅ Approved PR #${PR_NUM} as atlan-ci (Renovate auto-approval)."
           done
+
+      - name: Trigger Renovate dashboard update
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.org_pat }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Push a fresh snapshot of this repo's Renovate PR state to the dashboard.
+          # Runs after every gate evaluation so the dashboard reflects current state
+          # within seconds — approved, blocked, or skipped. Non-critical: falls back
+          # to cron coverage if the dispatch fails (e.g. token lacks actions:write).
+          gh workflow run renovate-dashboard.yaml \
+            --repo atlanhq/application-sdk \
+            --field repo="${REPO}" \
+          || echo "::warning::Could not trigger renovate-dashboard.yaml in atlanhq/application-sdk — dashboard will sync on next scheduled run."
