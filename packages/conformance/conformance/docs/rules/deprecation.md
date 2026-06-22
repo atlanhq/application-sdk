@@ -13,13 +13,13 @@ Suppress a finding on the violating line or the line directly above it:
 # conformance: ignore[B001] intentional: migration deferred to next sprint
 ```
 
-**Rule-id stability (non-migration policy):** P-ids and O-ids are a permanent public
-contract — each is exposed in the SARIF `help_uri` and referenced by inline `#
-conformance: ignore[...]` suppressions across the fleet.  An id therefore **never
-migrates and never changes**, even if a future domain series (S/B/T/A/…) later subsumes
-the same topic.  When a domain series takes over an area, the rule is retired in place
-(kept documented, no longer firing) and the new rule gets a fresh id — the original id
-is never reused or reassigned.
+**Rule-id stability (non-migration policy):** rule ids are a permanent public contract —
+each is exposed in the SARIF `help_uri` and referenced by inline `# conformance:
+ignore[...]` suppressions across the fleet.  An id therefore **never migrates and never
+changes**, even if a future domain series (S/B/T/A/…) later subsumes the same topic.
+When a domain series takes over an area, the rule is retired in place (kept documented,
+no longer firing) and the new rule gets a fresh id — the original id is never reused or
+reassigned.
 
 | ID | Name | Tier | Scope | Category | Autofixable | Since |
 |---|---|---|---|---|---|---|

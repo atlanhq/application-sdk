@@ -2,7 +2,7 @@
 #
 # Reusable workflow: full conformance suite gate.
 #
-# Runs each rule series (C, E, P, O, D, L, T) as a separate leg of one matrix job so
+# Runs each rule series (C, E, P, O, D, L, T, I) as a separate leg of one matrix job so
 # each appears as its own status check:
 #   Conformance / suite / CI
 #   Conformance / suite / Error-handling
@@ -11,6 +11,7 @@
 #   Conformance / suite / Dependency
 #   Conformance / suite / Logging
 #   Conformance / suite / Tests
+#   Conformance / suite / Container image
 #   Conformance / suite / Conformance Gate  (required gate)
 #
 # The series share an identical job body (checkout → changed-files filter → uv →
@@ -19,13 +20,15 @@
 # values are the matrix entries (series letter, display name, sarif slug,
 # changed-files path glob, and the caller's exclude-paths input).  Note C-series
 # watches `.github/**`, D-series watches `**/pyproject.toml`, T-series watches
-# `tests/integration/**`, and the AST series (E/P/O/L) watch `**/*.py`; that
-# asymmetry is just a matrix field, not a separate job.
+# `tests/integration/**`, I-series watches `Dockerfile`, and the AST series
+# (E/P/O/L) watch `**/*.py`; that asymmetry is just a matrix field, not a
+# separate job.
 #
 # Scope: the runner auto-detects whether the caller repo is the SDK or a consumer
-# app (from its `[project].name`) and runs only the rules in scope.  D-series and
-# the bootstrap-workflow-drift rule (C002) are app-scoped, so they no-op on the
-# SDK itself with no per-caller configuration.
+# app (from its `[project].name`) and runs only the rules in scope.  The
+# app-scoped rules (D001/D002 and the bootstrap-workflow-drift rule C002) no-op on
+# the SDK itself with no per-caller configuration; the both-scoped rules — which
+# include D003 (UnusedDependency) — run on the SDK as well.
 #
 # The matrix job is intentionally inline (not delegating to sub-workflows) so
 # GitHub reports the legs at the correct depth — one level of workflow_call from
@@ -52,7 +55,7 @@
 #     annotations.  Use this for production code in the SDK/app that has a
 #     legitimate, site-specific carve-out.
 #
-#   exclude-paths-c / exclude-paths-e / exclude-paths-p / exclude-paths-o
+#   exclude-paths-c / exclude-paths-e / exclude-paths-p / exclude-paths-o / exclude-paths-i
 #     A path prefix removed from scanning entirely.  Nothing from that path
 #     appears in the SARIF report.  Use this only for code that is categorically
 #     outside the SDK/app surface — tooling, migration scripts, generated files,
@@ -139,6 +142,13 @@ on:
         required: false
         default: ""
         type: string
+      exclude-paths-i:
+        description: >
+          Comma-separated repo-root-relative path prefixes to exclude from I-series
+          (container image) checks only.  Default: nothing excluded.
+        required: false
+        default: ""
+        type: string
       exclude-paths-b:
         description: >
           Comma-separated repo-root-relative path prefixes to exclude from B-series
@@ -193,11 +203,22 @@ jobs:
             slug: optimizations
             paths: "**/*.py"
             exclude_paths: ${{ inputs.exclude-paths-o }}
+          # D003 (UnusedDependency) reads source imports too, but the changed-files
+          # filter watches only `**/pyproject.toml` to keep this (env-syncing,
+          # heavier) leg off every `*.py` PR.  A PR that removes the last import of
+          # a still-declared dependency therefore won't re-run this leg — that
+          # staleness is caught on push to main, where every leg runs
+          # unconditionally.  Acceptable at WARN tier (mirrors the T-series above).
           - series: D
             name: "Dependency"
             slug: dependency
             paths: "**/pyproject.toml"
             exclude_paths: ${{ inputs.exclude-paths-d }}
+            # D001/D002/D003 all map declared dependencies to import name(s) via
+            # installed package metadata, so the leg must run in an environment
+            # where the caller's dependencies are installed — not the isolated
+            # `uvx` env used by the other series.
+            needs_env: "true"
           - series: L
             name: "Logging"
             slug: logging
@@ -214,6 +235,14 @@ jobs:
             slug: tests
             paths: "tests/integration/**"
             exclude_paths: ${{ inputs.exclude-paths-t }}
+          # I-series (container image) is APP-scoped and no-ops on the SDK itself
+          # since the SDK Dockerfile builds the base image, not a consumer app.
+          # Watches only the root Dockerfile so Python-only PRs don't trigger it.
+          - series: I
+            name: "Container image"
+            slug: container-image
+            paths: "Dockerfile"
+            exclude_paths: ${{ inputs.exclude-paths-i }}
           # B-series is mixed-scope: B001 (app) flags consumption of deprecated
           # SDK symbols, B002/B003/B004 (sdk) check the SDK's own deprecation
           # authoring.  Scope is auto-detected per caller, so on a consumer app
@@ -246,8 +275,11 @@ jobs:
         if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
 
+      # ── Isolated env (uvx) — every series except those needing the caller's
+      #    installed dependencies. The tool runs in an ephemeral env; the
+      #    caller's deps are not installed (and not needed for AST/text checks).
       - name: "Run ${{ matrix.series }}-series checks (published package)"
-        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && inputs.conformance-ref == ''
+        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && inputs.conformance-ref == '' && matrix.needs_env != 'true'
         env:
           EXCLUDE_PATHS: ${{ matrix.exclude_paths }}
         run: |
@@ -258,7 +290,7 @@ jobs:
           uvx atlan-application-sdk-conformance detect "${args[@]}"
 
       - name: "Run ${{ matrix.series }}-series checks (from git ref)"
-        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && inputs.conformance-ref != ''
+        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && inputs.conformance-ref != '' && matrix.needs_env != 'true'
         env:
           EXCLUDE_PATHS: ${{ matrix.exclude_paths }}
         run: |
@@ -266,6 +298,45 @@ jobs:
           if [[ -n "$EXCLUDE_PATHS" ]]; then
             args+=(--exclude "$EXCLUDE_PATHS")
           fi
+          uv run \
+            --with "atlan-application-sdk-conformance @ git+https://github.com/atlanhq/application-sdk@${{ inputs.conformance-ref }}#subdirectory=packages/conformance" \
+            -- atlan-application-sdk-conformance detect "${args[@]}"
+
+      # ── Resolved env — series whose checks inspect installed package metadata
+      #    (D003 UnusedDependency). Sync the caller repo so its dependencies are
+      #    importable, then overlay the conformance tool with `uv run --with`.
+      #    A dependency that still cannot be resolved is reported and skipped by
+      #    the check itself (never flagged), so a partial sync degrades safely.
+      - name: "Run ${{ matrix.series }}-series checks (resolved env, published package)"
+        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && inputs.conformance-ref == '' && matrix.needs_env == 'true'
+        env:
+          EXCLUDE_PATHS: ${{ matrix.exclude_paths }}
+        run: |
+          args=(--repo . --series ${{ matrix.series }} --output "${{ matrix.slug }}.sarif")
+          if [[ -n "$EXCLUDE_PATHS" ]]; then
+            args+=(--exclude "$EXCLUDE_PATHS")
+          fi
+          # D003 only needs the core [project.dependencies] importable, which a
+          # plain sync installs; avoid --all-extras/--all-groups so the leg does
+          # not pull heavier or private-index dev/optional deps it never inspects.
+          uv sync
+          uv run \
+            --with "atlan-application-sdk-conformance" \
+            -- atlan-application-sdk-conformance detect "${args[@]}"
+
+      - name: "Run ${{ matrix.series }}-series checks (resolved env, from git ref)"
+        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && inputs.conformance-ref != '' && matrix.needs_env == 'true'
+        env:
+          EXCLUDE_PATHS: ${{ matrix.exclude_paths }}
+        run: |
+          args=(--repo . --series ${{ matrix.series }} --output "${{ matrix.slug }}.sarif")
+          if [[ -n "$EXCLUDE_PATHS" ]]; then
+            args+=(--exclude "$EXCLUDE_PATHS")
+          fi
+          # D003 only needs the core [project.dependencies] importable, which a
+          # plain sync installs; avoid --all-extras/--all-groups so the leg does
+          # not pull heavier or private-index dev/optional deps it never inspects.
+          uv sync
           uv run \
             --with "atlan-application-sdk-conformance @ git+https://github.com/atlanhq/application-sdk@${{ inputs.conformance-ref }}#subdirectory=packages/conformance" \
             -- atlan-application-sdk-conformance detect "${args[@]}"

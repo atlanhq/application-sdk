@@ -28,10 +28,12 @@ from conformance.suite.checks import (
     bootstrap_drift,
     dependency_conformance,
     deprecation,
+    dockerfile_conformance,
     error_handling,
     gitignore_entries,
     integration_marking,
     optimizations,
+    orchestration,
     prescriptions,
 )
 from conformance.suite.checks._ast_common import TOOL_VERSION, detect_scope
@@ -77,6 +79,7 @@ _CHECKS: list[CheckRegistration] = [
         series=dependency_conformance.SERIES,
         discover=dependency_conformance.discover,
         scan_path=dependency_conformance.scan_path,
+        scan_all=dependency_conformance.scan_all,
     ),
     CheckRegistration(
         series=optimizations.SERIES,
@@ -95,6 +98,12 @@ _CHECKS: list[CheckRegistration] = [
         scan_path=gitignore_entries.scan_path,
     ),
     CheckRegistration(
+        series=orchestration.SERIES,
+        discover=orchestration.discover,
+        scan_path=orchestration.scan_path,
+        scan_all=orchestration.scan_all,
+    ),
+    CheckRegistration(
         series=logging_checks.SERIES,
         discover=logging_checks.discover,
         scan_path=logging_checks.scan_path,
@@ -104,6 +113,11 @@ _CHECKS: list[CheckRegistration] = [
         series=integration_marking.SERIES,
         discover=integration_marking.discover,
         scan_path=integration_marking.scan_path,
+    ),
+    CheckRegistration(
+        series=dockerfile_conformance.SERIES,
+        discover=dockerfile_conformance.discover,
+        scan_path=dockerfile_conformance.scan_path,
     ),
     CheckRegistration(
         series=deprecation.SERIES,
