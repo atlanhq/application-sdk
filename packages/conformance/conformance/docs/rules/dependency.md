@@ -5,7 +5,7 @@
 
 # Dependency Rules (D-series)
 
-**2 rules** · Checker: `suite.checks.dependency_conformance` (TOML-based, static)
+**3 rules** · Checker: `suite.checks.dependency_conformance` (TOML-based, static)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -17,6 +17,7 @@ Suppress a finding on the violating line or the line directly above it:
 |---|---|---|---|---|---|---|
 | [D001](#d001) | `UnpinnedSdkDependency` | `block` | `app` | `dependency-pinning` | yes | 0.4.0 |
 | [D002](#d002) | `RedeclaredSdkManagedDependency` | `warn` | `app` | `dependency-pinning` | yes | 0.4.0 |
+| [D003](#d003) | `UnusedDependency` | `warn` | `both` | `dependency-hygiene` | — | 0.5.0 |
 
 ---
 
@@ -57,5 +58,39 @@ silently override the SDK's contract, causing resolver conflicts and drift acros
 fleet during automated SDK upgrades.  The SDK's managed set is read at check time via
 `importlib.metadata.requires('atlan-application-sdk')`; if the SDK is not importable in
 the runtime environment, this rule is skipped silently.
+
+---
+
+## D003 — `UnusedDependency` {#d003}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `dependency-hygiene` · **Autofixable:** — · **Since:** 0.5.0
+
+> A package declared in [project.dependencies] is never imported in source
+
+**Rationale:** A package declared in core dependencies but never imported is either dead weight that
+slows resolution and widens the supply-chain/CVE surface, or it was meant to live
+elsewhere (a test/dev group). Surfacing it turns the recurring manual question during a
+version bump — 'is this even used?' — into a deterministic, reviewable signal. It stays
+advisory (WARN, no autofix) because a dependency can be loaded dynamically, via an entry
+point/plugin, or run as a server (e.g. uvicorn) without an explicit import.
+
+Every package in the repo's core `[project.dependencies]` should be imported somewhere
+in the shipped source.  This rule maps each declared distribution to the import name(s)
+it provides and flags any whose modules never appear in an `import`/`from` statement
+across the repo's Python sources (tests, build, and dot-directories are excluded — a
+runtime dependency used *only* under `tests/` is itself a finding, because it belongs in
+a test group, not core dependencies).  The finding is advisory: before removing, confirm
+the dependency is not imported dynamically (via `importlib`), pulled in by an entry
+point or plugin, or required by a framework/server it is never directly imported by.
+Only core `[project.dependencies]` is analysed — optional-dependency extras and
+dependency groups routinely carry tools and plugins that are legitimately never
+imported.  A dependency that cannot be resolved in the analysis environment is skipped
+(and reported), never flagged.  **Operating note:** resolution maps a distribution to
+its import name(s) via installed package metadata, so the analysed repo's dependencies
+must be importable in the running interpreter — run `uv sync` first.  In an isolated
+runner (e.g. `uvx atlan-application-sdk-conformance detect --series D`) no dependency is
+installed, so every one is skipped to stderr and the rule reports nothing; that is an
+unresolved environment, not a clean repo.  The conformance CI runs the D-series leg in a
+synced environment for this reason.  See BLDX-1462.
 
 ---

@@ -41,6 +41,16 @@ When a gate that validates the bound exists (a runtime-enforced `MaxItems`, or
 a payload-size behavioural check), this area can graduate to the full
 `detect-fix-recheck` loop.
 
+The orchestration-seam rules (P004–P007, BLDX-1417) are also P-series and also
+suggest-only here, for their own reasons: the app-side import rewrites (P004/P005)
+land mostly under `tests/` (an integration harness) where `remediate-finding` may
+not write, and they carry judgment (whether a public twin exists, and the
+`Client`-annotation hole that depends on P007 being closed first); the SDK-side
+rules (P006/P007) describe refactors (relocate Temporal behind the adapter; wrap a
+raw type in an opaque SDK type) that no import edit can perform.  All four draft a
+proposal for human review and never auto-apply.  (These rules are backed by a
+separate, test-scanning `suite.checks.orchestration` check — see its module docs.)
+
 ### Requires
 
 - `scope` — repository root path.
