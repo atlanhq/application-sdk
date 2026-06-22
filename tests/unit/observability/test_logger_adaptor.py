@@ -2280,12 +2280,16 @@ class TestReplayLogSuppression:
         AtlanLoggerAdapter._reset_for_testing()
         from loguru import logger as loguru_logger
 
+        # ENABLE_WORKFLOW_REPLAY_LOGS is read once at import and frozen as a
+        # module-level constant, so patching os.environ after import is a
+        # no-op. Patch the constant in the adapter module directly when a test
+        # needs to control it; here we only need the default (False) so no
+        # patch is required.
         with mock.patch.dict(
             "os.environ",
             {
                 "LOG_LEVEL": "DEBUG",
                 "ENABLE_OTLP_LOGS": "false",
-                "ENABLE_WORKFLOW_REPLAY_LOGS": "false",
                 "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317",
             },
         ):
