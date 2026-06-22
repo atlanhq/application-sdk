@@ -37,19 +37,51 @@ _AUTO_APPROVE_SIGNATURE = "**Renovate auto-approval:**"
 _WINDOW_DAYS = 30
 
 
+_CHECKS_FAILING: frozenset[str] = frozenset(
+    {"FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED"}
+)
+_CHECKS_PENDING: frozenset[str] = frozenset(
+    {"PENDING", "IN_PROGRESS", "QUEUED", "WAITING", "REQUESTED"}
+)
+
+
 def _parse_checks_state(rollup: list[dict]) -> ChecksState:
-    """Reduce statusCheckRollup to ChecksState."""
+    """Reduce statusCheckRollup to ChecksState.
+
+    gh pr list --json statusCheckRollup returns a mix of two item shapes:
+    - StatusContext (commit status): non-null ``state`` field
+      (SUCCESS | FAILURE | PENDING | ERROR | EXPECTED).
+    - CheckRun (Actions workflow step): ``state`` is null; use ``conclusion``
+      when the run is completed (success | failure | timed_out | cancelled |
+      action_required | neutral | skipped), or ``status`` while it is still
+      running (queued | in_progress | waiting | requested).
+
+    Empirically the vast majority of items on a Renovate PR are CheckRun with
+    state=null, so reading only ``state`` misclassifies failing/pending checks
+    as GREEN.
+    """
     if not rollup:
         return ChecksState.UNKNOWN
-    states = {c.get("state", "").upper() for c in rollup}
-    if "FAILURE" in states or "ERROR" in states:
+
+    states: set[str] = set()
+    for c in rollup:
+        raw_state = c.get("state")
+        if raw_state:
+            # StatusContext item.
+            states.add(raw_state.upper())
+        else:
+            # CheckRun item: conclusion is set when completed, status otherwise.
+            conclusion = c.get("conclusion") or ""
+            status = c.get("status") or ""
+            states.add((conclusion or status).upper())
+
+    states.discard("")
+
+    if not states:
+        return ChecksState.UNKNOWN
+    if states & _CHECKS_FAILING:
         return ChecksState.FAILING
-    if (
-        "PENDING" in states
-        or "IN_PROGRESS" in states
-        or "QUEUED" in states
-        or "WAITING" in states
-    ):
+    if states & _CHECKS_PENDING:
         return ChecksState.PENDING
     return ChecksState.GREEN
 

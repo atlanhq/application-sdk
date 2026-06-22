@@ -217,6 +217,9 @@ jobs:
       - name: Trigger Renovate dashboard update
         if: always()
         env:
+          # secrets.org_pat is this reusable's declared alias for ORG_PAT_GITHUB
+          # (passed by every caller as `secrets: { org_pat: ${{ secrets.ORG_PAT_GITHUB }} }`).
+          # It is the same credential used in renovate-dashboard.yaml as secrets.ORG_PAT_GITHUB.
           GH_TOKEN: ${{ secrets.org_pat }}
           REPO: ${{ github.repository }}
         run: |

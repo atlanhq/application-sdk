@@ -35,6 +35,8 @@ on:
 
 permissions:
   contents: read
+  id-token: write  # required for OIDC auth in aws-actions/configure-aws-credentials
+  actions: read    # required to download workflow artifacts (parity with update-dashboard.yaml)
 
 jobs:
   renovate-dashboard:
@@ -42,6 +44,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - name: Checkout application-sdk
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
       - name: Discover atlan-application-sdk consumers
         id: discover
         env:
@@ -56,14 +61,18 @@ jobs:
             echo "Single-repo scan: $SINGLE_REPO"
           else
             # Full-fleet mode: discover every consumer via code search.
-            # gh search code returns up to 100 results per query; for a fleet
-            # > 100 repos, page through with --limit / --page.
+            # --paginate fetches all pages so the fleet is never silently
+            # truncated. The jq emits one name per line; sort -u deduplicates
+            # across pages; jq -R/-s rebuilds the JSON array.
             repos=$(gh search code \
               --owner atlanhq \
               "atlan-application-sdk filename:pyproject.toml" \
               --json repository \
-              --jq '[.[].repository.nameWithOwner] | unique' \
-              --limit 100 2>/dev/null || echo "[]")
+              --jq '.[].repository.nameWithOwner' \
+              --paginate 2>/dev/null \
+              | sort -u \
+              | jq -R . | jq -s . \
+              || echo "[]")
 
             if [ "$repos" = "[]" ] || [ -z "$repos" ]; then
               echo "::warning::No consumer repos discovered. Check ORG_PAT_GITHUB permissions."
@@ -113,7 +122,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p /tmp/renovate-output
-          uvx --from atlan-application-sdk-conformance atlan-application-sdk-conformance renovate-scan \
+          # Run from the checked-out source so renovate-scan is always current
+          # with main, regardless of the latest PyPI release version.
+          uv run --directory packages/conformance \
+            atlan-application-sdk-conformance renovate-scan \
             --input /tmp/renovate-input/open \
             --merged /tmp/renovate-input/merged \
             --out /tmp/renovate-output

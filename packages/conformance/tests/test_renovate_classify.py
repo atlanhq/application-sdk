@@ -12,6 +12,7 @@ from conformance.renovate.models import (
     RenovatePR,
     UpdateType,
 )
+from conformance.renovate.scan import _parse_checks_state
 
 # Anchor "now" once so age computations are deterministic within a run. _OLD is
 # clamped to day-of-month >= 1 so the 3-day-old PR stays in the same month.
@@ -233,3 +234,60 @@ def test_non_dep_file_triggers_block() -> None:
 def test_age_days_computed() -> None:
     pr = classify(make_pr(created_at=_OLD, updated_at=_NOW))
     assert pr.age_days >= 3
+
+
+# ── _parse_checks_state ───────────────────────────────────────────────────────
+
+
+def test_parse_checks_state_status_context_success() -> None:
+    # StatusContext item: non-null state field
+    assert _parse_checks_state([{"state": "SUCCESS"}]) is ChecksState.GREEN
+
+
+def test_parse_checks_state_status_context_failure() -> None:
+    # StatusContext item: non-null state field, failing
+    assert _parse_checks_state([{"state": "FAILURE"}]) is ChecksState.FAILING
+
+
+def test_parse_checks_state_checkrun_conclusion_failure() -> None:
+    # CheckRun item: state=null, conclusion=failure — the core bug this fixes
+    assert (
+        _parse_checks_state(
+            [{"state": None, "conclusion": "failure", "status": "completed"}]
+        )
+        is ChecksState.FAILING
+    )
+
+
+def test_parse_checks_state_checkrun_in_progress() -> None:
+    # CheckRun item: state=null, no conclusion yet, status=in_progress
+    assert (
+        _parse_checks_state(
+            [{"state": None, "conclusion": None, "status": "in_progress"}]
+        )
+        is ChecksState.PENDING
+    )
+
+
+def test_parse_checks_state_mixed_all_green() -> None:
+    # Real-world mix: StatusContext success + CheckRun success + CheckRun skipped
+    rollup = [
+        {"state": "SUCCESS"},
+        {"state": None, "conclusion": "success", "status": "completed"},
+        {"state": None, "conclusion": "skipped", "status": "completed"},
+    ]
+    assert _parse_checks_state(rollup) is ChecksState.GREEN
+
+
+def test_parse_checks_state_failing_checkrun_not_classified_green() -> None:
+    # The pre-fix bug: CheckRun with state=null and conclusion=failure was
+    # previously misclassified as GREEN because only `state` was read.
+    rollup = [
+        {"state": None, "conclusion": "failure", "status": "completed"},
+        {"state": None, "conclusion": "success", "status": "completed"},
+    ]
+    assert _parse_checks_state(rollup) is ChecksState.FAILING
+
+
+def test_parse_checks_state_empty_rollup() -> None:
+    assert _parse_checks_state([]) is ChecksState.UNKNOWN
