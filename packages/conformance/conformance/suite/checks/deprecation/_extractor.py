@@ -23,6 +23,13 @@ Everything else (a bare ``warnings.warn(DeprecationWarning)`` in some other
 method, deprecated *parameters*, deprecated *modes*) is an intentional,
 documented coverage limit: a warn call-site is not itself a symbol, and scraping
 it would mis-attribute the deprecation to ``__init__`` / a parameter name.
+
+Symbol extraction (``extract_sites`` — the manifest and B004) walks only the
+module top level and one class level deep, so a ``@deprecated`` symbol *guarded*
+by ``if sys.version_info >= …:`` / ``try/except ImportError:`` is invisible to it.
+Notice extraction (``extract_notices`` — B002/B003) uses a full ``ast.walk`` and
+so still sees guarded notices; only the importable-symbol surface has this limit.
+This is acceptable: the SDK does not guard deprecated public symbols today.
 """
 
 from __future__ import annotations
@@ -49,11 +56,13 @@ _REMOVAL_RE = re.compile(
     re.IGNORECASE,
 )
 
-# A docstring claims deprecation when it opens with "Deprecated" or carries the
-# Sphinx ``.. deprecated::`` directive.  Anchored to the docstring *start* (or a
-# directive line) so a passing mention of the word elsewhere is not a claim.
+# A docstring claims deprecation when a line opens with "Deprecated:" (the SDK's
+# convention) or carries the Sphinx ``.. deprecated::`` directive.  Requiring the
+# colon (rather than a bare "Deprecated" word boundary) keeps free-form prose like
+# "Deprecated APIs are filtered out here" from reading as a claim, while still
+# matching every real notice ("Deprecated: use X — removed in v4.0").
 _DOCSTRING_CLAIM_RE = re.compile(
-    r"^\s*deprecated\b|^\s*\.\.\s*deprecated::",
+    r"^\s*deprecated\s*:|^\s*\.\.\s*deprecated::",
     re.IGNORECASE,
 )
 
@@ -148,9 +157,15 @@ def has_migration_target(message: str) -> bool:
 
 
 def removal_version(message: str) -> str | None:
-    """Return the ``removed in vX`` version string in *message*, else ``None``."""
-    match = _REMOVAL_RE.search(message)
-    return match.group(1) if match else None
+    """Return the ``removed in vX`` version string in *message*, else ``None``.
+
+    Takes the *last* ``removed in vX`` match rather than the first, so a notice
+    that mentions an earlier version before the operative one (e.g. "was removed
+    in v2 internals, will be removed in v4 for callers") resolves to the version
+    callers actually care about.
+    """
+    matches = _REMOVAL_RE.findall(message)
+    return matches[-1] if matches else None
 
 
 # ---------------------------------------------------------------------------
@@ -162,8 +177,9 @@ def _deprecated_decorator_message(node: ast.AST) -> str | None:
     """If *node* (a def/class) carries ``@deprecated(...)``, return its message.
 
     Returns the (possibly empty) message string when the decorator is present,
-    ``None`` when it is absent.  Handles stacked decorators and both the bare
-    ``@deprecated`` and called ``@deprecated("…")`` forms.
+    ``None`` when it is absent.  Handles stacked decorators, both the bare
+    ``@deprecated`` and called ``@deprecated("…")`` forms, and both the plain
+    (``@deprecated``) and qualified (``@typing_extensions.deprecated``) names.
     """
     decorators = getattr(node, "decorator_list", [])
     for dec in decorators:
@@ -173,7 +189,12 @@ def _deprecated_decorator_message(node: ast.AST) -> str | None:
         else:
             target = dec
             args = []
-        name = target.id if isinstance(target, ast.Name) else None
+        if isinstance(target, ast.Name):
+            name = target.id
+        elif isinstance(target, ast.Attribute):
+            name = target.attr  # qualified: te.deprecated / warnings.deprecated
+        else:
+            name = None
         if name in _DEPRECATED_DECORATORS:
             return _static_str(args[0]) if args else ""
     return None

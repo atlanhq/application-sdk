@@ -19,6 +19,7 @@ from __future__ import annotations
 import ast
 import importlib.resources as _ir
 import json
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -26,19 +27,24 @@ from conformance.suite.checks._ast_common import discover
 
 from ._extractor import extract_sites
 
+_MANIFEST_RELPATH = ("data", "deprecated_symbols.json")
+
 
 def _manifest_path() -> Path:
-    """Resolve the committed manifest as package data.
+    """Resolve the committed manifest as a filesystem path for writing.
 
     Uses ``importlib.resources`` (like ``cli._cmd_programs_dir``) rather than a
     ``__file__``-relative path, so it resolves correctly across editable installs
     and built wheels alike — the manifest ships inside the ``conformance`` package
-    (verified: it appears in the wheel under ``conformance/data/``).
+    (verified: it appears in the wheel under ``conformance/data/``).  Reading goes
+    through :func:`load_manifest`, which uses the resource Traversable directly so
+    it stays correct even for zip-imported / namespace-packaged layouts.
     """
-    return Path(str(_ir.files("conformance"))) / "data" / "deprecated_symbols.json"
+    return Path(str(_ir.files("conformance"))).joinpath(*_MANIFEST_RELPATH)
 
 
-# Committed manifest location (package data).
+# Committed manifest location (package data) — for the generator's write target
+# and the drift test; reads use the resource Traversable (see load_manifest).
 MANIFEST_PATH = _manifest_path()
 
 # The SDK import root whose deprecations we track.
@@ -153,10 +159,41 @@ def _parse(payload: dict) -> Manifest:
     return Manifest(symbols=symbols)
 
 
-def load_manifest(path: Path = MANIFEST_PATH) -> Manifest:
-    """Load the committed manifest.  Returns an empty manifest if absent."""
+def load_manifest(path: Path | None = None) -> Manifest:
+    """Load the committed manifest.
+
+    With *path* ``None`` (the normal B001 path) the manifest is read from the
+    ``conformance`` package resource — robust across editable, wheel, and
+    zip-imported layouts.  A *path* override is used by tests.
+
+    A genuinely **absent** manifest yields an empty result silently (graceful
+    degradation: an older wheel without the file simply produces no B001
+    findings).  A **malformed** manifest is different — that is a packaging bug
+    that would otherwise make B001 silently blind fleet-wide — so it is reported
+    to stderr before degrading to empty, making the failure observable.
+    """
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        if path is None:
+            text = (
+                _ir.files("conformance")
+                .joinpath(*_MANIFEST_RELPATH)
+                .read_text(encoding="utf-8")
+            )
+        else:
+            text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return Manifest(symbols=())
+    except OSError as exc:  # pragma: no cover - unusual IO failure
+        print(f"warning: could not read deprecation manifest: {exc}", file=sys.stderr)
+        return Manifest(symbols=())
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        print(
+            f"warning: deprecation manifest is malformed JSON ({exc}); "
+            "B001 deprecated-symbol detection is disabled until it is regenerated "
+            "(`atlan-application-sdk-conformance gen-deprecations`).",
+            file=sys.stderr,
+        )
         return Manifest(symbols=())
     return _parse(payload)

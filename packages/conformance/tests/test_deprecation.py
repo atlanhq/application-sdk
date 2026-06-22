@@ -335,6 +335,19 @@ def test_b004_silent_without_docstring_claim() -> None:
     assert _authoring_ids(src) == []
 
 
+def test_b004_silent_on_prose_starting_with_deprecated_word() -> None:
+    # Free-form prose whose line merely starts with "Deprecated" (no colon) is
+    # not a claim — the regex requires the SDK's "Deprecated:" convention.
+    src = (
+        "class Registry:\n"
+        '    """Filters APIs by status.\n\n'
+        "    Deprecated APIs are filtered out of the public listing here.\n"
+        '    """\n'
+        "    pass\n"
+    )
+    assert _authoring_ids(src) == []
+
+
 def test_b004_silent_on_field_named_deprecated() -> None:
     # The `deprecated: bool` field trap must not be read as a claim.
     src = (
@@ -377,6 +390,26 @@ def test_extractor_finds_decorated_method() -> None:
     assert method.marker_via == "decorator"
 
 
+def test_extractor_finds_qualified_decorator() -> None:
+    # Qualified form (@te.deprecated / @warnings.deprecated) must be recognised,
+    # not just the bare-name @deprecated.
+    src = (
+        "import typing_extensions as te\n\n"
+        "@te.deprecated('gone soon — removed in v9.0')\n"
+        "def old():\n"
+        "    pass\n"
+    )
+    sites = extract_sites(ast.parse(src))
+    assert any(s.symbol == "old" and s.marker_via == "decorator" for s in sites)
+
+
+def test_removal_version_takes_last_match() -> None:
+    from conformance.suite.checks.deprecation._extractor import removal_version
+
+    msg = "removed in v2.0 from internals; will be removed in v4.0 for callers"
+    assert removal_version(msg) == "4.0"
+
+
 def test_extractor_attributes_init_subclass_warn_to_class() -> None:
     src = (
         "import warnings\n"
@@ -398,6 +431,23 @@ def test_extract_notices_walks_method_bodies() -> None:
     )
     notices = extract_notices(ast.parse(src))
     assert len(notices) == 1
+
+
+def test_load_manifest_warns_on_malformed_json(tmp_path, capsys) -> None:
+    # A corrupted committed manifest must degrade to empty *and* surface a
+    # stderr warning, so a packaging bug isn't silently invisible fleet-wide.
+    bad = tmp_path / "deprecated_symbols.json"
+    bad.write_text("{ this is not json", encoding="utf-8")
+    manifest = load_manifest(bad)
+    assert manifest.symbols == ()
+    assert "malformed" in capsys.readouterr().err.lower()
+
+
+def test_load_manifest_silent_when_absent(tmp_path, capsys) -> None:
+    # An absent manifest is graceful (older wheel) — empty, no warning noise.
+    manifest = load_manifest(tmp_path / "nope.json")
+    assert manifest.symbols == ()
+    assert capsys.readouterr().err == ""
 
 
 def test_parse_version_and_reached() -> None:
