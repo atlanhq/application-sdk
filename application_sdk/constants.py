@@ -416,6 +416,13 @@ OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
 )
 #: Whether to enable OpenTelemetry log export
 ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true"
+#: Whether to emit SDK logger output during Temporal workflow replay.
+#: Default is False, matching Temporal's native ``workflow.logger`` behaviour.
+#: Set to True to re-enable replay logs for debugging (e.g. when using the
+#: ``temporalio.worker.Replayer`` to inspect history locally).
+ENABLE_WORKFLOW_REPLAY_LOGS: bool = (
+    os.getenv("ENABLE_WORKFLOW_REPLAY_LOGS", "false").lower() == "true"
+)
 #: Whether to enable a secondary OpenTelemetry log exporter for workflow-log
 #: archival (e.g. S3 sink). When true, logs are emitted to both the primary
 #: OTEL_EXPORTER_OTLP_ENDPOINT and OTEL_WORKFLOW_LOGS_ENDPOINT.

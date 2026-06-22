@@ -2244,3 +2244,180 @@ class TestCloudflareTimeoutFilter:
             f.filter(_make_temporalio_record())
             second_msg = mock_adapter.info.call_args_list[1][0][0]
             assert "2" in second_msg
+
+
+# ---------------------------------------------------------------------------
+# TestReplayLogSuppression
+# ---------------------------------------------------------------------------
+
+
+class TestReplayLogSuppression:
+    """Tests for replay-aware log suppression in AtlanLoggerAdapter.
+
+    The adapter must drop workflow-body logs during Temporal replay
+    (matching ``workflow.logger``'s default ``log_during_replay=False``).
+    All checks are done by injecting a replay predicate via ContextVar —
+    no temporalio mocking required.
+    """
+
+    @pytest.fixture(autouse=True)
+    def reset_replay_predicate(self):
+        """Clear the replay predicate before and after each test."""
+        from application_sdk.observability.context import set_replay_predicate
+
+        set_replay_predicate(None)
+        yield
+        set_replay_predicate(None)
+
+    def _make_adapter_with_sink(self) -> tuple[AtlanLoggerAdapter, list[str]]:
+        """Return an adapter and a list that collects emitted log messages.
+
+        The capture sink is added AFTER adapter construction because
+        ``AtlanLoggerAdapter.__init__`` calls ``logger.remove()`` to clear
+        all existing sinks before registering its own — adding the sink first
+        would have it removed immediately.
+        """
+        AtlanLoggerAdapter._reset_for_testing()
+        from loguru import logger as loguru_logger
+
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "LOG_LEVEL": "DEBUG",
+                "ENABLE_OTLP_LOGS": "false",
+                "ENABLE_WORKFLOW_REPLAY_LOGS": "false",
+                "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317",
+            },
+        ):
+            adapter = AtlanLoggerAdapter("test_replay")
+
+        # Add capture sink after __init__ so it isn't removed by logger.remove()
+        emitted: list[str] = []
+
+        def _capture_sink(msg: object) -> None:
+            emitted.append(str(msg))
+
+        loguru_logger.add(_capture_sink, format="{message}", level="DEBUG")
+        return adapter, emitted
+
+    def test_suppresses_all_methods_when_replaying(self):
+        """All log methods must be silent during replay (predicate=True)."""
+        from application_sdk.observability.context import set_replay_predicate
+
+        adapter, emitted = self._make_adapter_with_sink()
+        set_replay_predicate(lambda: True)
+
+        adapter.debug("should-suppress-debug")
+        adapter.info("should-suppress-info")
+        adapter.warning("should-suppress-warning")
+        adapter.error("should-suppress-error")
+        adapter.critical("should-suppress-critical")
+        adapter.activity("should-suppress-activity")
+        adapter.metric("should-suppress-metric")
+        adapter.tracing("should-suppress-tracing")
+
+        assert not any(
+            "should-suppress" in m for m in emitted
+        ), f"Expected no emission during replay, got: {emitted}"
+
+    def test_emits_when_not_replaying(self):
+        """Log methods must emit normally when predicate returns False."""
+        from application_sdk.observability.context import set_replay_predicate
+
+        adapter, emitted = self._make_adapter_with_sink()
+        set_replay_predicate(lambda: False)
+
+        adapter.info("live-log")
+
+        assert any(
+            "live-log" in m for m in emitted
+        ), f"Expected 'live-log' in emissions, got: {emitted}"
+
+    def test_emits_when_predicate_is_none(self):
+        """No predicate set (default outside Temporal) → normal emission."""
+        adapter, emitted = self._make_adapter_with_sink()
+        # predicate is None by default (reset_replay_predicate fixture)
+
+        adapter.info("outside-temporal-log")
+
+        assert any(
+            "outside-temporal-log" in m for m in emitted
+        ), f"Expected 'outside-temporal-log' in emissions, got: {emitted}"
+
+    def test_log_during_replay_true_overrides_suppression(self):
+        """When log_during_replay=True the guard is bypassed even during replay."""
+        from application_sdk.observability.context import set_replay_predicate
+
+        adapter, emitted = self._make_adapter_with_sink()
+        adapter.log_during_replay = True
+        set_replay_predicate(lambda: True)
+
+        adapter.info("replay-with-opt-in")
+
+        assert any(
+            "replay-with-opt-in" in m for m in emitted
+        ), f"Expected emission with log_during_replay=True, got: {emitted}"
+
+    def test_suppression_is_per_emission_not_one_shot(self):
+        """Guard evaluates live per call: suppressed on replay, emitted on live."""
+        from application_sdk.observability.context import set_replay_predicate
+
+        adapter, emitted = self._make_adapter_with_sink()
+
+        replaying = True
+
+        def _live_predicate() -> bool:
+            return replaying
+
+        set_replay_predicate(_live_predicate)
+
+        adapter.info("during-replay")  # suppressed
+
+        replaying = False  # simulate replay → live transition
+
+        adapter.info("after-replay")  # should emit
+
+        assert not any(
+            "during-replay" in m for m in emitted
+        ), f"Expected 'during-replay' suppressed, got: {emitted}"
+        assert any(
+            "after-replay" in m for m in emitted
+        ), f"Expected 'after-replay' emitted, got: {emitted}"
+
+    def test_intercept_handler_suppressed_during_replay(self):
+        """The stdlib bridge (InterceptHandler) also drops records during replay."""
+        from application_sdk.observability.context import set_replay_predicate
+        from application_sdk.observability.logger_adaptor import InterceptHandler
+
+        AtlanLoggerAdapter._reset_for_testing()
+        set_replay_predicate(lambda: True)
+
+        handler = InterceptHandler()
+        emitted: list[str] = []
+
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor.logger"
+        ) as mock_loguru:
+            mock_loguru.opt.return_value.bind.return_value.log = mock.MagicMock(
+                side_effect=lambda *a, **kw: emitted.append(a[1] if len(a) > 1 else "")
+            )
+            record = logging.LogRecord(
+                name="test",
+                level=logging.INFO,
+                pathname="",
+                lineno=0,
+                msg="stdlib-during-replay",
+                args=(),
+                exc_info=None,
+            )
+            handler.emit(record)
+
+        assert (
+            not emitted
+        ), f"Expected InterceptHandler to suppress during replay, got: {emitted}"
+        mock_loguru.opt.assert_not_called()
+
+    def test_default_log_during_replay_is_false(self):
+        """log_during_replay defaults to False (env flag default=false)."""
+        adapter, _ = self._make_adapter_with_sink()
+        assert adapter.log_during_replay is False
