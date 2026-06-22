@@ -45,3 +45,15 @@ let violations = call detect-violations
 for each finding in violations:
   add finding to residue with note "C-series remediation deferred; add prescription to ci.prose.md"
 ```
+
+### Fix Prescription
+
+_Read by `remediate-finding` when `finding.area == "ci"`._
+
+No prescription authored for this phase.  Return `not_remediable = true` for
+every C-series finding.  The finding is added to residue with the note
+"C-series remediation deferred" and requires manual triage.
+
+To implement: author the per-rule guidance in this section and update the
+`Dispatch by area` table in `functions/remediate-finding.prose.md` to remove
+the `not_remediable` note for `ci`.
