@@ -293,14 +293,19 @@ async def get_dapr_component_types() -> dict[str, str]:
     is malformed. Never raises — callers treat a missing entry as unknown.
     """
     try:
-        async with AsyncDaprClient() as client:
+        # Tight bound: this runs inline at worker startup and is pure
+        # observability — never let a slow/flaky sidecar gate the worker.
+        # Degrade to {} rather than stall on the default 30s x retries.
+        async with AsyncDaprClient(timeout=2.0, retries=0) as client:
             meta = await client.get_metadata()
     except Exception:
         logger.debug("Could not read Dapr component metadata", exc_info=True)
         return {}
 
     types: dict[str, str] = {}
-    for component in meta.get("components") or []:
+    # Dapr versions differ on the key: newer sidecars return "components",
+    # older ones "registeredComponents" (mirrors is_dapr_component_registered).
+    for component in meta.get("components") or meta.get("registeredComponents") or []:
         name = component.get("name")
         if name:
             types[name] = component.get("type", "")
