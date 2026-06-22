@@ -89,19 +89,47 @@ def test_scope_is_required_field() -> None:
 def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     """The publisher-side rules are app-scoped; everything else is 'both'.
 
-    APP-scoped rules (dependency pinning, managed-workflow drift) must never fire
-    on the SDK itself, which publishes the contract.  Pin the exact set so a new
-    rule has to make a deliberate scope decision rather than silently inheriting.
+    APP-scoped rules (dependency pinning, managed-workflow drift, Dockerfile
+    conformance, orchestration-seam P004/P005) must never fire on the SDK
+    itself, which publishes the contract.  Pin the exact set so a new rule
+    has to make a deliberate scope decision rather than silently inheriting.
 
     Note C003 (.gitignore entries) is *both*, not app: the SDK has its own
     .gitignore sharing the standard baseline, so the rule is useful there too —
     only C002 (bootstrap workflow drift) is genuinely 0%-applicable to the SDK.
+
+    I001–I005 (Dockerfile conformance) are app-scoped because the SDK Dockerfile
+    *builds* the base image that these rules enforce, so the rules are meaningless
+    and noisy when applied to the SDK itself.
+
+    P004–P005 (orchestration-seam) are app-scoped: apps must reach Temporal
+    through the SDK seam (BLDX-1417).  P006–P007 are SDK-only: the SDK must
+    keep Temporal contained behind its seam.
     """
     rules = load_catalog()
     app_scoped = {r.id for r in rules if r.scope == RuleScope.APP}
     # C002/D001/D002: publisher-side contract. P004/P005: apps must reach the
     # orchestration layer through the SDK seam, not Temporal/SDK-internals (BLDX-1417).
-    assert app_scoped == {"C002", "D001", "D002", "P004", "P005"}, app_scoped
+    # P008–P012: apps must use the SDK's storage seam, not hand-roll object stores
+    # or bare path fields (BLDX-1398).
+    # I001–I005: Dockerfile conformance (SDK builds the base image, not consuming it).
+    assert app_scoped == {
+        "C002",
+        "D001",
+        "D002",
+        "P004",
+        "P005",
+        "P008",
+        "P009",
+        "P010",
+        "P011",
+        "P012",
+        "I001",
+        "I002",
+        "I003",
+        "I004",
+        "I005",
+    }, app_scoped
     # SDK-only rules: the SDK must keep Temporal contained behind its seam (BLDX-1417).
     sdk_scoped = {r.id for r in rules if r.scope == RuleScope.SDK}
     assert sdk_scoped == {"P006", "P007"}, sdk_scoped
@@ -200,15 +228,29 @@ def test_catalog_d_series_present() -> None:
 
 
 def test_catalog_p_series_present() -> None:
-    """The P-series prescription rules are exactly P001–P007.
+    """The P-series prescription rules are exactly P001–P012.
 
     Strict equality (not just not-missing): P004–P007 are the orchestration-seam
-    rules (BLDX-1417); a stray or renumbered P-id would slip past a subset check
-    while breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
+    rules (BLDX-1417); P008–P012 are the storage-seam rules (BLDX-1398).  A
+    stray or renumbered P-id would slip past a subset check while breaking
+    fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
     rules = load_catalog()
     p_ids = {r.id for r in rules if r.id.startswith("P")}
-    expected = {"P001", "P002", "P003", "P004", "P005", "P006", "P007"}
+    expected = {
+        "P001",
+        "P002",
+        "P003",
+        "P004",
+        "P005",
+        "P006",
+        "P007",
+        "P008",
+        "P009",
+        "P010",
+        "P011",
+        "P012",
+    }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
     extra = p_ids - expected
