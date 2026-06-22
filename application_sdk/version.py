@@ -26,4 +26,4 @@ Bump deliberately — older Dapr releases drop off the CDN.
 """
 
 __version__ = "3.18.0"
-__dapr_version: str = "1.18.0"
+__dapr_version: str = "1.18.1"
