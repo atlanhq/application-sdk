@@ -1124,11 +1124,45 @@ class UIRule {
 
 | Class | Widget | Python Type | Notes |
 |---|---|---|---|
-| `TextInput` | `input` | `str` | `placeholderText`, `defaultValue`, `validationRules` |
-| `TextBoxInput` | `TextInput` | `str` | Multi-line |
+| `TextInput` | `input` | `str` | `placeholderText`, `defaultValue`, `validationRules`, `validation` |
+| `TextBoxInput` | `TextInput` | `str` | Multi-line. `validation` |
 | `PasswordInput` | `password` | `str` | Masked input |
 | `NumericInput` | `inputNumber` | `int` | `default`, `placeholderValue` |
 | `InputRepeater` | `inputRepeater` | `list[str]` | Repeatable text inputs. `placeholderText`, `validationRules` |
+
+##### `validation` (WidgetValidation)
+
+`TextInput` and `TextBoxInput` accept an optional `validation` block for opt-in
+JSON or regex validation. It renders into the widget's `ui.validation` object,
+which the frontend reads directly to build an Ant Design validation rule.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `type` | `"json"` \| `"regex"` | (required) | `"json"` rejects values that do not parse as JSON; `"regex"` rejects values that do not match `pattern`. |
+| `pattern` | `String?` | null | Required when `type = "regex"`; unused for `"json"`. |
+| `message` | `String?` | null | Custom error message. When unset the frontend shows a generic message. |
+| `formatOnBlur` | `Boolean?` | null | Only meaningful for `"json"`. Frontend defaults to pretty-printing on blur; set `false` to disable while keeping validation. |
+
+```pkl
+["custom_attributes"] = new TextBoxInput {
+  title = "Custom attributes"
+  validation = new { type = "json"; formatOnBlur = true }
+}
+["table_prefix"] = new TextInput {
+  title = "Table prefix"
+  validation = new {
+    type = "regex"
+    pattern = "^[a-z0-9_]+$"
+    message = "Only lowercase alphanumeric and underscores allowed."
+  }
+}
+```
+
+This is separate from `validationRules` / `rules` (the Ant Design `RuleObject`
+array) — both can be set independently. `validation` is UI-only: it does not
+change the field's value type, the generated manifest arg, or the `_input.py`
+field. When unset, no `validation` key is emitted and output is unchanged. See
+the [`full`](../examples/full/) example.
 
 #### Selection
 

@@ -37,6 +37,7 @@ import "Widgets.pkl"
 
 typealias InfoBannerType = Widgets.InfoBannerType
 typealias WidgetLink = Widgets.WidgetLink
+typealias WidgetValidation = Widgets.WidgetValidation
 typealias UIConfig = Widgets.UIConfig
 typealias UIStep = Widgets.UIStep
 typealias UIRule = Widgets.UIRule

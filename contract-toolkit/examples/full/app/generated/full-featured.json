@@ -140,6 +140,39 @@
         },
         "default": 3
       },
+      "table_prefix": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "input",
+          "label": "Table prefix",
+          "hidden": false,
+          "help": "Only extract tables whose name starts with this prefix.",
+          "placeholder": "",
+          "grid": 4,
+          "validation": {
+            "type": "regex",
+            "pattern": "^[a-z0-9_]+$",
+            "message": "Only lowercase alphanumeric and underscores allowed."
+          }
+        }
+      },
+      "custom_attributes": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "TextInput",
+          "label": "Custom attributes",
+          "hidden": false,
+          "help": "Extra attributes to attach to every asset, as a JSON object.",
+          "placeholder": "",
+          "grid": 8,
+          "validation": {
+            "type": "json",
+            "formatOnBlur": true
+          }
+        }
+      },
       "schemas": {
         "type": "object",
         "required": false,
@@ -203,7 +236,9 @@
           "enable_lineage",
           "load-to-atlan",
           "log_level",
-          "lineage_depth"
+          "lineage_depth",
+          "table_prefix",
+          "custom_attributes"
         ]
       },
       {

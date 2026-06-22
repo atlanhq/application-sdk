@@ -1,0 +1,117 @@
+// Tests for the opt-in `validation` property on TextInput / TextBoxInput
+// (WidgetValidation), emitted as the widget's `ui.validation` object.
+//
+// Background: HYP-1788 added opt-in JSON/regex validation to workflows-v2 filter
+// inputs. The frontend reads `ui.validation` directly (NOT `ui.rules`) and builds
+// an Ant Design rule from it: `type = "json"` validates JSON-parse and pretty-
+// prints on blur (unless `formatOnBlur = false`); `type = "regex"` validates the
+// value against `pattern`. The toolkit owns the emitted shape; this is fully
+// separate from the existing ValidationRule / `rules` pipeline. When `validation`
+// is unset, no `validation` key is emitted and widget output is unchanged.
+
+amends "pkl:test"
+
+import "pkl:json"
+import "../examples/full/app.pkl" as fullApp
+import "../src/App.pkl" as App
+
+// The full example wires a regex-validated TextInput (table_prefix) and a
+// json-validated TextBoxInput (custom_attributes) into its Configuration step.
+local fullConfig = new json.Parser { useMapping = true }.parse(
+  fullApp.output.files["app/generated/full-featured.json"].text
+)["config"]["properties"]
+
+local regexUi = fullConfig["table_prefix"]["ui"]
+local jsonUi = fullConfig["custom_attributes"]["ui"]
+local plainUi = fullConfig["include_filter"]["ui"]
+
+facts {
+  // -----------------------------------------------------------------------
+  // End-to-end: validation renders into the generated configmap `ui` block.
+  // -----------------------------------------------------------------------
+
+  ["TextInput regex validation renders the full ui.validation shape"] {
+    regexUi["widget"] == "input"
+    regexUi["validation"]["type"] == "regex"
+    regexUi["validation"]["pattern"] == "^[a-z0-9_]+$"
+    regexUi["validation"]["message"] == "Only lowercase alphanumeric and underscores allowed."
+  }
+
+  ["TextBoxInput json validation renders type and formatOnBlur"] {
+    jsonUi["widget"] == "TextInput"
+    jsonUi["validation"]["type"] == "json"
+    jsonUi["validation"]["formatOnBlur"] == true
+  }
+
+  // Opt-in: unset validation must not change existing output.
+  ["TextInput without validation omits the ui.validation key"] {
+    !plainUi.containsKey("validation")
+  }
+
+  // -----------------------------------------------------------------------
+  // Class-level shape: only set fields are emitted; nulls are stripped.
+  // -----------------------------------------------------------------------
+
+  ["json validation emits only the set fields"] {
+    local w = new App.TextInput {
+      title = "x"
+      validation = new { type = "json"; formatOnBlur = true }
+    }
+    local v = w.ui.validation
+    v.type == "json"
+    v.formatOnBlur == true
+    v.pattern == null
+    v.message == null
+  }
+
+  ["regex validation carries pattern and message"] {
+    local w = new App.TextInput {
+      title = "x"
+      validation = new { type = "regex"; pattern = "^[a-z]+$"; message = "lowercase only" }
+    }
+    w.ui.validation.type == "regex"
+    w.ui.validation.pattern == "^[a-z]+$"
+    w.ui.validation.message == "lowercase only"
+  }
+
+  ["TextBoxInput exposes the same validation property"] {
+    local w = new App.TextBoxInput {
+      title = "x"
+      validation = new { type = "json" }
+    }
+    w.ui.validation.type == "json"
+    w.ui.validation.formatOnBlur == null
+  }
+
+  // Default behavior unchanged: no validation set means ui.validation is null
+  // (and therefore stripped from JSON output).
+  ["TextInput defaults validation to null"] {
+    new App.TextInput { title = "x" }.ui.validation == null
+  }
+
+  ["TextBoxInput defaults validation to null"] {
+    new App.TextBoxInput { title = "x" }.ui.validation == null
+  }
+
+  // formatOnBlur = false is preserved (lets authors keep JSON validation while
+  // disabling auto-format).
+  ["json validation can disable formatOnBlur"] {
+    new App.WidgetValidation { type = "json"; formatOnBlur = false }.formatOnBlur == false
+  }
+
+  // -----------------------------------------------------------------------
+  // Constraint: regex validation requires a pattern; json does not.
+  // -----------------------------------------------------------------------
+
+  ["regex validation without a pattern is rejected"] {
+    module.catchOrNull(() -> new App.WidgetValidation { type = "regex" }.pattern) != null
+  }
+
+  ["regex validation with a pattern is accepted"] {
+    new App.WidgetValidation { type = "regex"; pattern = "^[a-z]+$" }.pattern == "^[a-z]+$"
+  }
+
+  ["json validation does not require a pattern"] {
+    new App.WidgetValidation { type = "json" }.pattern == null
+  }
+}
