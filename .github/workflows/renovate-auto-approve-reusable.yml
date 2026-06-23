@@ -34,7 +34,8 @@
 #   2. PR is open and not a draft
 #   3. Current HEAD SHA matches the evaluated SHA (race guard)
 #   4. Every changed file is under .github/, uv.lock, requirements.txt,
-#      pyproject.toml, or contract/PklProject(.deps.json) (the Pkl toolkit pin + lock)
+#      pyproject.toml, the Pkl toolkit pin + lock (contract/PklProject[.deps.json]),
+#      or the regenerated contract artifacts (app/generated/**, atlan.yaml, app.yaml)
 #   5. All ruleset-required checks are green (gh pr checks --required exits 0)
 #   6. atlan-ci has not already posted an APPROVED review with this signature
 #
@@ -153,12 +154,15 @@ jobs:
             # d. All changed files must be dependency-related.
             #    Allowed: anything under .github/, or lock/manifest files at
             #    any depth: uv.lock, package-lock.json, requirements.txt,
-            #    pyproject.toml — plus the Pkl contract-toolkit pin and lock,
-            #    contract/PklProject and contract/PklProject.deps.json, which
-            #    are what a Renovate app-contract-toolkit bump touches (the
-            #    version bump + the renovate-pkl-sync re-resolve).  The (.*/)?
-            #    prefix in each pattern makes -x (full-line) matching work for
-            #    both root-level and workspace-relative paths (e.g.
+            #    pyproject.toml — plus everything a Renovate app-contract-toolkit
+            #    bump touches: the Pkl pin + lock (contract/PklProject,
+            #    contract/PklProject.deps.json) and the artifacts that
+            #    renovate-pkl-sync regenerates from them (app/generated/**,
+            #    atlan.yaml, app.yaml). The generated artifacts are a
+            #    deterministic function of the contract and the (already
+            #    auto-merged) toolkit version, so they ride the same gate.
+            #    The (.*/)? prefix in each pattern makes -x (full-line) matching
+            #    work for both root-level and workspace-relative paths (e.g.
             #    packages/conformance/uv.lock).
             FILENAMES=$(gh api "repos/${REPO}/pulls/${PR_NUM}/files" \
               --paginate --jq '.[].filename')
@@ -169,7 +173,7 @@ jobs:
 
             NON_DEP_FILES=$(echo "$FILENAMES" \
               | grep -v '^\.github/' \
-              | grep -vxE '(.*/)?uv\.lock|(.*/)?package-lock\.json|(.*/)?requirements\.txt|(.*/)?pyproject\.toml|(.*/)?contract/PklProject|(.*/)?contract/PklProject\.deps\.json' \
+              | grep -vxE '(.*/)?uv\.lock|(.*/)?package-lock\.json|(.*/)?requirements\.txt|(.*/)?pyproject\.toml|(.*/)?contract/PklProject|(.*/)?contract/PklProject\.deps\.json|(.*/)?app/generated/.*|(.*/)?atlan\.yaml|(.*/)?app\.yaml' \
               || true)
             if [ -n "$NON_DEP_FILES" ]; then
               echo "PR #${PR_NUM}: contains non-dependency files:"

@@ -1,9 +1,25 @@
-name: Sync PklProject.deps.json for Renovate (Reusable)
+name: Sync Pkl contract artifacts for Renovate (Reusable)
 
-# Reusable merge gate for Renovate (and Dependabot) upgrade PRs.
-# When Renovate bumps the @<version> URI in contract/PklProject, the committed
-# PklProject.deps.json lock file is stale. This workflow re-resolves it so the
-# PR is self-contained and CI passes without a manual `pkl project resolve` step.
+# Reusable merge gate for Renovate (and Dependabot) app-contract-toolkit PRs.
+#
+# When Renovate bumps the @<version> URI in contract/PklProject, two committed
+# artifacts go stale and must be regenerated so the PR is self-contained and CI
+# passes without a manual step:
+#
+#   1. contract/PklProject.deps.json — the Pkl lock (URI + checksum).
+#      Refreshed with `pkl project resolve contract/`.
+#   2. app/generated/** (+ atlan.yaml / app.yaml) — the generated contract
+#      artifacts. A toolkit bump can change generated output (e.g. a manifest
+#      field), so we re-run `pkl eval -m . contract/app.pkl` — the same
+#      canonical command used to author these files — and commit the result.
+#      Without this the lock advances but the generated artifacts keep the old
+#      output, defeating the point of the bump.
+#
+# Scope: this assumes the standard repo-root layout (contract/PklProject,
+# contract/app.pkl, generated output at the repo root). Apps with a
+# non-standard layout (e.g. app/contract/, or a monorepo apps/*/contract/) are
+# out of scope — the regeneration step self-skips when contract/app.pkl is
+# absent, so the workflow degrades to a pure re-resolve and never errors.
 #
 # Consumer repos call this from their own .github/workflows/renovate-pkl-sync.yaml:
 #
@@ -42,13 +58,16 @@ permissions:
 
 jobs:
   sync-pkl-deps:
-    name: Re-resolve PklProject.deps.json
+    name: Re-resolve and regenerate Pkl contract artifacts
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           token: ${{ secrets.push_token || secrets.GITHUB_TOKEN }}
           ref: ${{ github.ref }}
+
+      # uv provides `uvx ruff`, used to format the generated Python below.
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
 
       - name: Install pkl
         run: |
@@ -61,12 +80,55 @@ jobs:
       - name: Re-resolve PklProject.deps.json
         run: pkl project resolve contract/
 
+      - name: Regenerate contract artifacts
+        run: |
+          set -euo pipefail
+
+          if [ ! -f contract/app.pkl ]; then
+            echo "::notice::No contract/app.pkl at repo root — skipping artifact regeneration (re-resolve only)."
+            exit 0
+          fi
+
+          # rm before eval so a removed/renamed output (e.g. a dropped bundle)
+          # doesn't linger as an orphan — mirrors contract-toolkit/scripts/regenerate-all.sh.
+          rm -rf app/generated
+
+          # --project-dir contract: the contract is a Pkl project that declares
+          # app-contract-toolkit as a *remote package* dependency, so eval must
+          # load that project to resolve the `@app-contract-toolkit` import (the
+          # bare `pkl eval contract/app.pkl` from the repo root finds no project
+          # and fails). -m . writes every output key at its natural path
+          # relative to the repo root.
+          pkl eval --project-dir contract -m . contract/app.pkl
+
+          # The generated Python model (_input.py) is emitted unformatted; this
+          # commit bypasses pre-commit, so format it here exactly as
+          # regenerate-all.sh does or the app's ruff pre-commit CI will go red.
+          PY_FILES=$(find app/generated -name '_input.py' 2>/dev/null || true)
+          if [ -n "$PY_FILES" ]; then
+            echo "$PY_FILES" | xargs uvx ruff check --fix --select F401 --quiet
+            echo "$PY_FILES" | xargs uvx ruff format
+          fi
+
       - name: Commit and push if changed
         run: |
+          set -euo pipefail
+
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          if ! git diff --quiet contract/PklProject.deps.json; then
-            git add contract/PklProject.deps.json
-            git commit -m "chore: sync PklProject.deps.json with updated app-contract-toolkit"
+
+          # Stage only the known re-resolve / generation outputs (-A also stages
+          # deletions of orphaned generated files). Avoids picking up incidental
+          # working-tree noise such as ruff caches.
+          for p in contract/PklProject.deps.json app/generated atlan.yaml app.yaml; do
+            if [ -e "$p" ]; then
+              git add -A -- "$p"
+            fi
+          done
+
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: sync Pkl deps and regenerate contract artifacts for app-contract-toolkit"
             git push
+          else
+            echo "No contract artifact changes to commit."
           fi
