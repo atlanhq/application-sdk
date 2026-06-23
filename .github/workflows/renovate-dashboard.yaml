@@ -60,16 +60,15 @@ jobs:
             repos=$(printf '["%s"]' "$SINGLE_REPO")
             echo "Single-repo scan: $SINGLE_REPO"
           else
-            # Full-fleet mode: discover every consumer via code search.
-            # --limit 1000 is the GitHub API cap for code search results.
-            # gh search code does not support --paginate (that flag is only
-            # valid for gh api); using it caused the command to fail silently
-            # (error swallowed by 2>/dev/null) and return 0 repos.
-            # jq -cs produces compact single-line output so the value can be
-            # written to GITHUB_OUTPUT safely with echo.
+            # Full-fleet mode: discover repos that have Renovate configured
+            # with the application-sdk preset. Searching for the preset
+            # reference in renovate.json (rather than all pyproject.toml
+            # consumers) excludes repos that don't have Renovate set up —
+            # those always show 0 open PRs which would falsely read as
+            # "up to date" rather than "Renovate not configured".
             repos=$(gh search code \
               --owner atlanhq \
-              "atlan-application-sdk filename:pyproject.toml" \
+              "application-sdk//renovate-config/default.json filename:renovate.json" \
               --json repository \
               --jq '.[].repository.nameWithOwner' \
               --limit 1000 \
