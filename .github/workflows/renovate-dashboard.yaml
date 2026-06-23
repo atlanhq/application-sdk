@@ -121,6 +121,9 @@ jobs:
           echo "Open PR files:   $(ls /tmp/renovate-input/open   | wc -l)"
           echo "Merged PR files: $(ls /tmp/renovate-input/merged | wc -l)"
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
       - name: Run Renovate scanner
         run: |
           set -euo pipefail
