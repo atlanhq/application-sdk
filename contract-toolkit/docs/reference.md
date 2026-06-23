@@ -111,13 +111,23 @@ The single entry point for all new native app contracts. Supersedes `NativeApp.p
 
 ### E2E Test Harness
 
-These three fields are emitted into `app/generated/_e2e_base.py` and are required by `BaseE2ETest` / `SQLAppE2ETest`. The defaults are derived from `name`; 95% of connectors never need to override them.
+These fields are emitted into `app/generated/_e2e_base.py` and are required by `BaseE2ETest` / `SQLAppE2ETest`. The defaults are derived from `name`; 95% of connectors never need to override them.
 
 | Property | Type | Default | Description |
 |---|---|---|---|
 | `argoPackageName` | String | `"@atlan/{name}"` | Argo WorkflowTemplate package name. Override when the app uses a scoped or non-standard Argo package. |
 | `argoTemplateName` | String | `"atlan-{name}"` | Argo WorkflowTemplate resource name as deployed in-cluster. Matches `taskQueuePrefix` by default. |
 | `appServiceUrl` | String | `"http://{name}.{name}-app.svc.cluster.local"` | In-cluster Dapr service URL forwarded to by the e2e harness. Override when the app's Kubernetes service name deviates from the standard `{name}-app` pattern. |
+| `e2eCredentialMode` | `"direct" \| "agent"` | `"direct"` | Shape of the body emitted into `app/generated/_e2e_credential.py`. See below. |
+
+#### `e2eCredentialMode` — direct vs. agent credential body
+
+Controls only the credential body in `app/generated/_e2e_credential.py`; the credential configmap (`atlan-connectors-{name}.json`) and the workflow config are unaffected.
+
+- **`"direct"`** (default): the full body the AE submit needs to *create* a credential — `name`, `auth_type`, and every typed field derived from `credentialCommonFields` / `credentialUrlGroup` / `credentialAuthOptions` (host, port, username, password, …) plus any nested `extra` model. Use for connectors whose e2e tests connect directly from the Atlan tenant.
+- **`"agent"`**: the lightweight body used by self-deployed-runtime (SDR / agent) e2e flows — `name`, `auth_type`, `connector_config_name`, and an open `extra` dict, with **no** inline credential fields. In agent mode the real host/username/password live in the agent's secret store and are resolved at runtime via agent-json ref keys. The e2e harness serialises the body with a plain `model_dump(by_alias=True)` (no `exclude_unset`), so any inline credential field declared here would be sent on the wire and make the orchestrator treat the submit as a *direct* credential — skipping credential creation and leaving `{{credentialGuid}}` unsubstituted. Set this to `"agent"` for connectors whose e2e runs through the agent path (these contracts also carry an `AgentSelector` widget and an `extraction-method` override exposing the `"agent"` option). See [`examples/agent-e2e/`](../examples/agent-e2e/).
+
+> **ConditionalInput value space:** when an `extraction-method` (or any radio `ConditionalInput`) exposes extra options via a condition's `overrideEnum`, the generated `_e2e_substitutions.py` types that field as the **union** of `baseEnum` and every `overrideEnum` (e.g. `Literal["direct", "agent"]`), so agent-mode e2e runs can submit `"agent"`.
 
 ### Pipeline Block
 

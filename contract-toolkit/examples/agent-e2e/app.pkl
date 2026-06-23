@@ -1,0 +1,106 @@
+/// Agent (SDR) e2e example — demonstrates `e2eCredentialMode = "agent"` together
+/// with an `extraction-method` ConditionalInput whose `overrideEnum` exposes the
+/// "agent" option behind a lab flag.
+///
+/// Two generated artifacts change vs. a direct-mode app:
+///   * `app/generated/_e2e_credential.py` emits the lightweight agent body —
+///     `name`, `auth_type`, `connector_config_name`, `extra` — with NO inline
+///     host/username/password. In agent mode those live in the agent's secret
+///     store and are resolved at runtime via agent-json ref keys; the e2e
+///     harness dumps the body with a plain `model_dump(by_alias=True)`, so any
+///     inline credential field declared here would be sent on the wire and make
+///     the orchestrator treat the submit as a direct credential.
+///   * `app/generated/_e2e_substitutions.py` types `extraction_method` as
+///     `Literal["direct", "agent"]` — the union of `baseEnum` and the
+///     condition's `overrideEnum` — so AGENT-mode e2e runs can submit `"agent"`.
+amends "../../src/App.pkl"
+
+import "../../src/Connectors.pkl"
+
+name = "agent-e2e"
+displayName = "Agent E2E Example"
+icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
+connector = Connectors.API
+credentialConnectorType = "rest"
+
+// Emit the SDR-friendly lightweight credential body instead of the default
+// direct-mode body. See the `e2eCredentialMode` doc comment in src/App.pkl.
+e2eCredentialMode = "agent"
+
+credentialCommonFields {
+  new FieldSpec {
+    name = "host"
+    displayName = "Host"
+    placeholder = "https://my-instance.example.com"
+  }
+}
+
+credentialAuthOptions {
+  ["basic"] = new AuthOption {
+    label = "Basic"
+    fields {
+      new FieldSpec { name = "username"; displayName = "Username" }
+      new FieldSpec { name = "password"; displayName = "Password"; sensitive = true }
+    }
+  }
+}
+
+pipeline {
+  publish = null
+}
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Credential"] {
+      description = "Credential Details"
+      inputs {
+        // Radio that exposes "agent" only when the SECURE_AGENT_EXTRACTION lab
+        // flag is on. The generated substitutions Literal must admit both values.
+        ["extraction-method"] = new ConditionalInput {
+          title = "Extraction method"
+          helpText = "How metadata is extracted: directly from Atlan, or via a self-deployed agent."
+          baseWidgetType = "radio"
+          baseEnum { "direct" }
+          baseEnumNames { "Direct" }
+          default = "direct"
+          required = true
+          conditions {
+            new Condition {
+              property = "labFlag"
+              value = "SECURE_AGENT_EXTRACTION"
+              overrideEnum { "direct"; "agent" }
+              overrideEnumNames { "Direct"; "Self-Deployed Runtime" }
+            }
+          }
+        }
+        ["credential-guid"] = new CredentialInput {
+          title = ""
+          credType = "atlan-connectors-agent-e2e"
+        }
+        ["agent-json"] = new AgentSelector {
+          title = ""
+          placeholderText = "Agent JSON"
+        }
+      }
+    }
+    ["Connection"] {
+      description = "Connection Details"
+      inputs {
+        ["connection"] = new ConnectionCreator {
+          title = ""
+        }
+      }
+    }
+  }
+  // Direct mode needs the credential-guid; agent mode needs the AgentSelector payload.
+  rules {
+    new UIRule {
+      whenInputs { ["extraction-method"] = "direct" }
+      required { "credential-guid" }
+    }
+    new UIRule {
+      whenInputs { ["extraction-method"] = "agent" }
+      required { "agent-json" }
+    }
+  }
+}

@@ -260,6 +260,66 @@ local extraFieldsApp = (App) {
   uiConfig = minimalUiConfig
 }
 
+// Agent (SDR) credential mode: lightweight body, no inline credential fields.
+local agentCredApp = (App) {
+  name = "agent-cred"
+  displayName = "Agent Cred"
+  icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
+  connector = Connectors.API
+  hasCredentialConfig = true
+  credentialConnectorType = "rest"
+  e2eCredentialMode = "agent"
+  credentialCommonFields {
+    new App.FieldSpec { name = "host"; displayName = "Host" }
+  }
+  credentialAuthOptions {
+    ["basic"] = new App.AuthOption {
+      label = "Basic"
+      fields {
+        new App.FieldSpec { name = "username"; displayName = "Username" }
+        new App.FieldSpec { name = "password"; sensitive = true; displayName = "Password" }
+      }
+    }
+  }
+  pipeline { publish = null }
+  uiConfig = minimalUiConfig
+}
+
+// Non-SQL app whose extraction-method ConditionalInput exposes "agent" only via
+// a condition's overrideEnum — the substitutions Literal must admit both values.
+local conditionalEnumApp = (App) {
+  name = "cond-enum"
+  displayName = "Cond Enum"
+  icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
+  connector = Connectors.API
+  hasCredentialConfig = false
+  pipeline { publish = null }
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Configuration"] {
+        inputs {
+          ["extraction-method"] = new App.ConditionalInput {
+            title = "Extraction method"
+            baseWidgetType = "radio"
+            baseEnum { "direct" }
+            baseEnumNames { "Direct" }
+            default = "direct"
+            conditions {
+              new App.Condition {
+                property = "labFlag"
+                value = "SECURE_AGENT_EXTRACTION"
+                overrideEnum { "direct"; "agent" }
+                overrideEnumNames { "Direct"; "Self-Deployed Runtime" }
+              }
+            }
+          }
+          ["connection"] = new App.ConnectionCreator { placeholderText = "Conn" }
+        }
+      }
+    }
+  }
+}
+
 
 // ── Capture output text ────────────────────────────────────────────────────────
 
@@ -275,6 +335,8 @@ local authDefaultCred: String = authDefaultApp.output.files["app/generated/_e2e_
 local fullCredPy: String = fullExampleApp.output.files["app/generated/_e2e_credential.py"].text
 local fullSubsPy: String = fullExampleApp.output.files["app/generated/_e2e_substitutions.py"].text
 local extraFieldsCred: String = extraFieldsApp.output.files["app/generated/_e2e_credential.py"].text
+local agentCred: String = agentCredApp.output.files["app/generated/_e2e_credential.py"].text
+local condEnumSubs: String = conditionalEnumApp.output.files["app/generated/_e2e_substitutions.py"].text
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
@@ -567,6 +629,46 @@ facts {
   ["Short field stays single-line (≤88 chars)"] {
     // max_results: int = Field(default=500, alias="{{max_results}}") fits in 88 chars
     fullSubsPy.contains("max_results: int = Field(default=500, alias=\"{{max_results}}\")")
+  }
+
+  // ── _e2e_credential.py: agent (SDR) credential mode ──────────────────────────
+
+  ["Agent mode emits lightweight body with connector_config_name"] {
+    agentCred.contains("class AgentCredCredentialBody(CredentialBody):")
+    agentCred.contains("name: str = Field(alias=\"name\")")
+    agentCred.contains("auth_type: str = Field(default=\"basic\", alias=\"authType\")")
+    agentCred.contains("connector_config_name: str = Field(\n        default=\"atlan-connectors-agent-cred\", alias=\"connectorConfigName\"\n    )")
+    agentCred.contains("extra: dict = Field(default_factory=dict, alias=\"extra\")")
+  }
+
+  ["Agent mode omits all inline credential fields"] {
+    // host/port/username/password live in the agent secret store, never on the wire
+    !agentCred.contains("host:")
+    !agentCred.contains("username:")
+    !agentCred.contains("password:")
+  }
+
+  ["Agent mode body needs no __future__ import (no Optional fields)"] {
+    !agentCred.contains("from __future__ import annotations")
+  }
+
+  ["Direct mode (default) still emits the full inline credential body"] {
+    // singleAuthApp keeps the default e2eCredentialMode="direct"
+    singleAuthCred.contains("host: str = Field(alias=\"host\")")
+    singleAuthCred.contains("username: str = Field(default=\"\", alias=\"username\")")
+    !singleAuthCred.contains("connector_config_name:")
+  }
+
+  // ── _e2e_substitutions.py: ConditionalInput overrideEnum widens Literal ───────
+
+  ["ConditionalInput Literal unions baseEnum with conditions[].overrideEnum"] {
+    // baseEnum=["direct"] + overrideEnum=["direct","agent"] → deduped union
+    condEnumSubs.contains("Literal[\"direct\", \"agent\"]")
+    condEnumSubs.contains("alias=\"{{extraction-method}}\"")
+  }
+
+  ["ConditionalInput Literal default falls back to first base value"] {
+    condEnumSubs.contains("default=\"direct\"")
   }
 
 }
