@@ -128,8 +128,8 @@ inputs:
       git+ssh / git+https dependencies on other private atlanhq repos
       (e.g. `query-redaction` from `atlan-query-intelligence-app`) need
       this so `uv sync` inside the Docker build can authenticate the
-      clone. Pass `${{ secrets.ORG_PAT_GITHUB }}` (an org PAT with
-      cross-repo read) from the caller workflow.
+      clone. The caller workflow passes the org-scoped PAT from its own
+      secrets context (typically `secrets.ORG_PAT_GITHUB`).
 
       When empty (the default), no `--secret` flag is appended to the
       docker buildx invocation — connectors with PyPI-only dependencies
