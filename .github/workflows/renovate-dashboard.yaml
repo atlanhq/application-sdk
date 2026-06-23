@@ -61,17 +61,20 @@ jobs:
             echo "Single-repo scan: $SINGLE_REPO"
           else
             # Full-fleet mode: discover every consumer via code search.
-            # --paginate fetches all pages so the fleet is never silently
-            # truncated. The jq emits one name per line; sort -u deduplicates
-            # across pages; jq -R/-s rebuilds the JSON array.
+            # --limit 1000 is the GitHub API cap for code search results.
+            # gh search code does not support --paginate (that flag is only
+            # valid for gh api); using it caused the command to fail silently
+            # (error swallowed by 2>/dev/null) and return 0 repos.
+            # jq -cs produces compact single-line output so the value can be
+            # written to GITHUB_OUTPUT safely with echo.
             repos=$(gh search code \
               --owner atlanhq \
               "atlan-application-sdk filename:pyproject.toml" \
               --json repository \
               --jq '.[].repository.nameWithOwner' \
-              --paginate 2>/dev/null \
+              --limit 1000 \
               | sort -u \
-              | jq -R . | jq -s . \
+              | jq -R . | jq -cs '.' \
               || echo "[]")
 
             if [ "$repos" = "[]" ] || [ -z "$repos" ]; then
