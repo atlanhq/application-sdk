@@ -33,7 +33,8 @@
 #   1. PR author is renovate[bot]
 #   2. PR is open and not a draft
 #   3. Current HEAD SHA matches the evaluated SHA (race guard)
-#   4. Every changed file is under .github/, uv.lock, requirements.txt, or pyproject.toml
+#   4. Every changed file is under .github/, uv.lock, requirements.txt,
+#      pyproject.toml, or contract/PklProject(.deps.json) (the Pkl toolkit pin + lock)
 #   5. All ruleset-required checks are green (gh pr checks --required exits 0)
 #   6. atlan-ci has not already posted an APPROVED review with this signature
 #
@@ -152,9 +153,13 @@ jobs:
             # d. All changed files must be dependency-related.
             #    Allowed: anything under .github/, or lock/manifest files at
             #    any depth: uv.lock, package-lock.json, requirements.txt,
-            #    pyproject.toml.  The (.*/)?  prefix in each pattern makes
-            #    -x (full-line) matching work for both root-level and
-            #    workspace-relative paths (e.g. packages/conformance/uv.lock).
+            #    pyproject.toml — plus the Pkl contract-toolkit pin and lock,
+            #    contract/PklProject and contract/PklProject.deps.json, which
+            #    are what a Renovate app-contract-toolkit bump touches (the
+            #    version bump + the renovate-pkl-sync re-resolve).  The (.*/)?
+            #    prefix in each pattern makes -x (full-line) matching work for
+            #    both root-level and workspace-relative paths (e.g.
+            #    packages/conformance/uv.lock).
             FILENAMES=$(gh api "repos/${REPO}/pulls/${PR_NUM}/files" \
               --paginate --jq '.[].filename')
             if [ -z "$FILENAMES" ]; then
@@ -164,7 +169,7 @@ jobs:
 
             NON_DEP_FILES=$(echo "$FILENAMES" \
               | grep -v '^\.github/' \
-              | grep -vxE '(.*/)?uv\.lock|(.*/)?package-lock\.json|(.*/)?requirements\.txt|(.*/)?pyproject\.toml' \
+              | grep -vxE '(.*/)?uv\.lock|(.*/)?package-lock\.json|(.*/)?requirements\.txt|(.*/)?pyproject\.toml|(.*/)?contract/PklProject|(.*/)?contract/PklProject\.deps\.json' \
               || true)
             if [ -n "$NON_DEP_FILES" ]; then
               echo "PR #${PR_NUM}: contains non-dependency files:"
