@@ -18,7 +18,11 @@ from application_sdk.execution._temporal.interceptors.log import (
     _LogWorkflowInboundInterceptor,
     _LogWorkflowOutboundInterceptor,
 )
-from application_sdk.observability.context import ExecutionContext, _execution_ctx
+from application_sdk.observability.context import (
+    ExecutionContext,
+    _execution_ctx,
+    _replay_predicate,
+)
 from application_sdk.observability.correlation import (
     CorrelationContext,
     _correlation_ctx,
@@ -81,9 +85,11 @@ class MockExecuteActivityInput:
 def reset_context():
     _correlation_ctx.set(None)
     _execution_ctx.set(ExecutionContext())
+    _replay_predicate.set(None)
     yield
     _correlation_ctx.set(None)
     _execution_ctx.set(ExecutionContext())
+    _replay_predicate.set(None)
 
 
 # ---------------------------------------------------------------------------
@@ -1028,3 +1034,113 @@ class TestActivityInboundReadsParentHeaders:
         ctx = _execution_ctx.get()
         assert ctx.parent_workflow_id == "A"
         assert ctx.parent_run_id == "A_run"
+
+
+# ---------------------------------------------------------------------------
+# TestReplayPredicateInjection
+# ---------------------------------------------------------------------------
+
+
+class TestReplayPredicateInjection:
+    """The workflow log interceptor must inject the replay predicate into the
+    replay_predicate ContextVar so the SDK logger can suppress workflow-body
+    logs during replay without importing temporalio."""
+
+    @pytest.fixture(autouse=True)
+    def reset_replay_predicate(self):
+        _replay_predicate.set(None)
+        yield
+        _replay_predicate.set(None)
+
+    @pytest.fixture
+    def mock_next(self):
+        n = AsyncMock()
+        n.execute_workflow = AsyncMock(return_value="wf-result")
+        return n
+
+    @pytest.fixture
+    def interceptor(self, mock_next):
+        return _LogWorkflowInboundInterceptor(mock_next)
+
+    async def test_injects_predicate_on_live_execution(self, interceptor, mock_next):
+        """On a live (non-replay) execution the predicate must be set to the
+        ``workflow.unsafe.is_replaying_history_events`` callable."""
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = False
+            mock_wf.unsafe.is_replaying_history_events = lambda: False
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {}
+            await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+        pred = _replay_predicate.get()
+        assert pred is not None, "Replay predicate must be set after execute_workflow"
+        assert callable(pred)
+
+    async def test_injects_predicate_on_replay(self, interceptor, mock_next):
+        """On replay the predicate must also be set (before the is_replaying()
+        early-return gate) so the logger can check live state for workflow-tail
+        log calls once replay finishes."""
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = True
+            mock_wf.unsafe.is_replaying_history_events = lambda: True
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {}
+            await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+        pred = _replay_predicate.get()
+        assert pred is not None, (
+            "Replay predicate must be set even during replay so logger can "
+            "check live state once the replay tail completes"
+        )
+        assert callable(pred)
+
+    async def test_predicate_is_injected_before_replay_gate(
+        self, interceptor, mock_next
+    ):
+        """set_replay_predicate must be called before is_replaying() is checked
+        so the predicate is always present when user workflow code runs.
+
+        Patches the module-level ``set_replay_predicate`` name in the
+        interceptor module (not the ContextVar.set method, which is read-only)
+        to track call order vs the ``is_replaying()`` gate.
+        """
+        injection_order: list[str] = []
+
+        from application_sdk.observability.context import (
+            set_replay_predicate as _orig_srp,
+        )
+
+        def _tracking_srp(pred: object) -> None:
+            injection_order.append("predicate_set")
+            _orig_srp(pred)  # type: ignore[arg-type]
+
+        with (
+            patch(
+                "application_sdk.execution._temporal.interceptors.log.workflow"
+            ) as mock_wf,
+            patch(
+                "application_sdk.execution._temporal.interceptors.log.set_replay_predicate",
+                side_effect=_tracking_srp,
+            ),
+        ):
+            mock_wf.unsafe.is_replaying.side_effect = lambda: (
+                injection_order.append("is_replaying_checked") or True
+            )
+            mock_wf.unsafe.is_replaying_history_events = lambda: True
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {}
+            await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+        assert (
+            "predicate_set" in injection_order
+        ), "set_replay_predicate was never called"
+        pred_idx = injection_order.index("predicate_set")
+        gate_idx = injection_order.index("is_replaying_checked")
+        assert pred_idx < gate_idx, (
+            f"Predicate must be injected before is_replaying() gate; "
+            f"got order {injection_order}"
+        )

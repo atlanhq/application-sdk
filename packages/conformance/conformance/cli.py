@@ -220,6 +220,12 @@ def _cmd_bootstrap(argv: list[str]) -> int:
     return 0
 
 
+def _cmd_renovate_scan(argv: list[str]) -> int:
+    from conformance.renovate.scan import main
+
+    return main(argv)
+
+
 _COMMANDS = {
     "detect": _cmd_detect,
     "programs-dir": _cmd_programs_dir,
@@ -227,6 +233,7 @@ _COMMANDS = {
     "gen-deprecations": _cmd_gen_deprecations,
     "remediate": _cmd_remediate,
     "bootstrap": _cmd_bootstrap,
+    "renovate-scan": _cmd_renovate_scan,
 }
 
 _USAGE = """\
@@ -248,6 +255,7 @@ commands:
                    --app-image-name NAME       GHCR image name for tests.yaml (default: atlan-<app-name>-app)
                    --enable-e2e true|false     enable e2e in tests.yaml (default: true, line omitted)
                    --services-script PATH      services setup script (default: auto-detected from .github/test/setup-services.sh)
+  renovate-scan  Build Renovate fleet dashboard JSON from gh pr list output files
 """
 
 

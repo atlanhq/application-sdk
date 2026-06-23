@@ -16,6 +16,7 @@ from application_sdk.infrastructure._dapr.http import (
     STATE_PATH,
     AsyncDaprClient,
     BindingResult,
+    get_dapr_component_types,
     wait_for_dapr_sidecar,
 )
 
@@ -440,3 +441,62 @@ class TestWaitForDaprSidecar:
             )
             mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
             await wait_for_dapr_sidecar(timeout=0.05, interval=0.01)
+
+
+class TestGetDaprComponentTypes:
+    """Tests for get_dapr_component_types() — the worker_start binding-type reader."""
+
+    @staticmethod
+    def _patch_metadata(meta):
+        """Patch AsyncDaprClient so `async with` yields a client returning `meta`."""
+        fake = AsyncMock()
+        fake.get_metadata = AsyncMock(return_value=meta)
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=fake)
+        cm.__aexit__ = AsyncMock(return_value=None)
+        return patch(
+            "application_sdk.infrastructure._dapr.http.AsyncDaprClient",
+            return_value=cm,
+        )
+
+    async def test_projects_components_to_types(self):
+        meta = {
+            "components": [
+                {"name": "objectstore", "type": "bindings.aws.s3"},
+                {"name": "secretstore", "type": "secretstores.kubernetes"},
+            ]
+        }
+        with self._patch_metadata(meta):
+            result = await get_dapr_component_types()
+        assert result == {
+            "objectstore": "bindings.aws.s3",
+            "secretstore": "secretstores.kubernetes",
+        }
+
+    async def test_reads_registered_components_key(self):
+        # Older Dapr sidecars emit "registeredComponents" rather than "components".
+        meta = {
+            "registeredComponents": [
+                {"name": "objectstore", "type": "bindings.localstorage"},
+            ]
+        }
+        with self._patch_metadata(meta):
+            result = await get_dapr_component_types()
+        assert result == {"objectstore": "bindings.localstorage"}
+
+    async def test_skips_unnamed_components(self):
+        meta = {"components": [{"type": "bindings.aws.s3"}]}
+        with self._patch_metadata(meta):
+            result = await get_dapr_component_types()
+        assert result == {}
+
+    async def test_returns_empty_on_sidecar_error(self):
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(side_effect=RuntimeError("sidecar unreachable"))
+        cm.__aexit__ = AsyncMock(return_value=None)
+        with patch(
+            "application_sdk.infrastructure._dapr.http.AsyncDaprClient",
+            return_value=cm,
+        ):
+            result = await get_dapr_component_types()
+        assert result == {}

@@ -200,6 +200,15 @@ class MyConnector(App):
 
 Use **%-style** message bodies (`"fetching page=%d", page_num`) rather than keyword arguments. See [Logging Standards](../standards/logging.md) and [ADR-0011](../adr/0011-logging-level-guidelines.md).
 
+### Replay suppression
+
+`self.logger` suppresses log output during Temporal workflow replay by default, matching the behaviour of Temporal's native `workflow.logger`. This prevents duplicate bare lines (missing `workflow_id`/`run_id`) that would otherwise appear in Grafana when a worker replays history after a sticky-cache eviction.
+
+If you need replay logs — for example when using `temporalio.worker.Replayer` locally to inspect workflow history — re-enable them in two ways:
+
+- **Per-instance** (in-code): `self.logger.log_during_replay = True`
+- **Globally** (env flag): `ENABLE_WORKFLOW_REPLAY_LOGS=true`
+
 ---
 
 ## Correlation IDs

@@ -199,9 +199,12 @@ async def _emit_worker_start_event(
         APP_SDK_VERSION,
         APP_TYPE,
         APPLICATION_VERSION,
+        DEPLOYMENT_OBJECT_STORE_NAME,
         PUBLISHED_AT,
         RELEASE_CHANNEL,
         RELEASE_ID,
+        SECRET_STORE_NAME,
+        UPSTREAM_OBJECT_STORE_NAME,
     )
     from application_sdk.contracts.events import (  # noqa: PLC0415 — circular: contracts.events imports execution.errors
         ApplicationEventNames,
@@ -212,12 +215,19 @@ async def _emit_worker_start_event(
     from application_sdk.execution._temporal.interceptors.events import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
         _publish_event_via_binding,
     )
+    from application_sdk.infrastructure._dapr.http import (  # noqa: PLC0415 — circular: infrastructure imports execution transitively
+        get_dapr_component_types,
+    )
     from application_sdk.infrastructure.bindings import (  # noqa: PLC0415 — circular: infrastructure imports execution transitively
         BindingError,
     )
 
     deployment_name = os.environ.get("ATLAN_DEPLOYMENT_NAME", app_name)
     host_part, _, port_part = host.partition(":")
+
+    # Discover which Dapr binding types back the object/secret stores. Best-effort
+    # and deploy-path-agnostic: read from the live sidecar rather than env.
+    component_types = await get_dapr_component_types()
 
     event_data = WorkerStartEventData(
         application_name=app_name,
@@ -239,6 +249,11 @@ async def _emit_worker_start_event(
         sdk_version=APP_SDK_VERSION,
         app_type=APP_TYPE,
         published_at=PUBLISHED_AT,
+        objectstore_binding_type=component_types.get(DEPLOYMENT_OBJECT_STORE_NAME, ""),
+        upstream_objectstore_binding_type=component_types.get(
+            UPSTREAM_OBJECT_STORE_NAME, ""
+        ),
+        secretstore_binding_type=component_types.get(SECRET_STORE_NAME, ""),
     )
     event = Event(
         event_type=EventTypes.APPLICATION_EVENT.value,
