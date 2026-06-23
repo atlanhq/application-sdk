@@ -260,7 +260,8 @@ local extraFieldsApp = (App) {
   uiConfig = minimalUiConfig
 }
 
-// Agent (SDR) credential mode: lightweight body, no inline credential fields.
+// Credential app — _e2e_credential.py must emit BOTH the direct body and the
+// lightweight agent body (no contract flag; the test picks per RunMode).
 local agentCredApp = (App) {
   name = "agent-cred"
   displayName = "Agent Cred"
@@ -268,7 +269,6 @@ local agentCredApp = (App) {
   connector = Connectors.API
   hasCredentialConfig = true
   credentialConnectorType = "rest"
-  e2eCredentialMode = "agent"
   credentialCommonFields {
     new App.FieldSpec { name = "host"; displayName = "Host" }
   }
@@ -631,32 +631,33 @@ facts {
     fullSubsPy.contains("max_results: int = Field(default=500, alias=\"{{max_results}}\")")
   }
 
-  // ── _e2e_credential.py: agent (SDR) credential mode ──────────────────────────
+  // ── _e2e_credential.py: emits BOTH direct + agent bodies ─────────────────────
 
-  ["Agent mode emits lightweight body with connector_config_name"] {
+  ["Credential file emits the direct body with full inline fields"] {
     agentCred.contains("class AgentCredCredentialBody(CredentialBody):")
-    agentCred.contains("name: str = Field(alias=\"name\")")
-    agentCred.contains("auth_type: str = Field(default=\"basic\", alias=\"authType\")")
-    agentCred.contains("connector_config_name: str = Field(\n        default=\"atlan-connectors-agent-cred\", alias=\"connectorConfigName\"\n    )")
-    agentCred.contains("extra: dict = Field(default_factory=dict, alias=\"extra\")")
+    agentCred.contains("host: str = Field(alias=\"host\")")
+    agentCred.contains("username: str = Field(default=\"\", alias=\"username\")")
+    agentCred.contains("password: str = Field(default=\"\", alias=\"password\")")
   }
 
-  ["Agent mode omits all inline credential fields"] {
-    // host/port/username/password live in the agent secret store, never on the wire
-    !agentCred.contains("host:")
-    !agentCred.contains("username:")
-    !agentCred.contains("password:")
+  ["Credential file also emits the lightweight agent body (exact shape)"] {
+    // The agent class carries ONLY name/auth_type/connector_config_name/extra —
+    // matching the whole block proves no inline credential field leaks in.
+    agentCred.contains(
+      "class AgentCredAgentCredentialBody(CredentialBody):\n"
+      + "    name: str = Field(alias=\"name\")\n"
+      + "    auth_type: str = Field(default=\"basic\", alias=\"authType\")\n"
+      + "    connector_config_name: str = Field(\n"
+      + "        default=\"atlan-connectors-agent-cred\", alias=\"connectorConfigName\"\n"
+      + "    )\n"
+      + "    extra: dict = Field(default_factory=dict, alias=\"extra\")\n"
+    )
   }
 
-  ["Agent mode body needs no __future__ import (no Optional fields)"] {
-    !agentCred.contains("from __future__ import annotations")
-  }
-
-  ["Direct mode (default) still emits the full inline credential body"] {
-    // singleAuthApp keeps the default e2eCredentialMode="direct"
-    singleAuthCred.contains("host: str = Field(alias=\"host\")")
-    singleAuthCred.contains("username: str = Field(default=\"\", alias=\"username\")")
-    !singleAuthCred.contains("connector_config_name:")
+  ["Both bodies are emitted for every credential app — no contract flag"] {
+    // singleAuthApp sets nothing special — still gets both classes.
+    singleAuthCred.contains("class SingleAuthCredentialBody(CredentialBody):")
+    singleAuthCred.contains("class SingleAuthAgentCredentialBody(CredentialBody):")
   }
 
   // ── _e2e_substitutions.py: ConditionalInput overrideEnum widens Literal ───────

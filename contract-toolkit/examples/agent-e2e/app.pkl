@@ -1,18 +1,20 @@
-/// Agent (SDR) e2e example — demonstrates `e2eCredentialMode = "agent"` together
-/// with an `extraction-method` ConditionalInput whose `overrideEnum` exposes the
-/// "agent" option behind a lab flag.
+/// Agent (SDR) e2e example — demonstrates the agent-mode e2e codegen surface.
 ///
-/// Two generated artifacts change vs. a direct-mode app:
-///   * `app/generated/_e2e_credential.py` emits the lightweight agent body —
-///     `name`, `auth_type`, `connector_config_name`, `extra` — with NO inline
-///     host/username/password. In agent mode those live in the agent's secret
-///     store and are resolved at runtime via agent-json ref keys; the e2e
-///     harness dumps the body with a plain `model_dump(by_alias=True)`, so any
-///     inline credential field declared here would be sent on the wire and make
-///     the orchestrator treat the submit as a direct credential.
-///   * `app/generated/_e2e_substitutions.py` types `extraction_method` as
-///     `Literal["direct", "agent"]` — the union of `baseEnum` and the
-///     condition's `overrideEnum` — so AGENT-mode e2e runs can submit `"agent"`.
+/// Every credential-config app's `app/generated/_e2e_credential.py` emits BOTH
+/// bodies (no contract flag needed — the e2e test picks the shape per RunMode):
+///   * `<Name>CredentialBody` — the direct body (full inline host/username/
+///     password from the contract), and
+///   * `<Name>AgentCredentialBody` — the lightweight SDR body (`name`,
+///     `auth_type`, `connector_config_name`, `extra`; no inline credential
+///     fields, since the harness dumps the body with a plain
+///     `model_dump(by_alias=True)` and the agent resolves real creds from its
+///     secret store at runtime).
+///
+/// This example also shows an `extraction-method` ConditionalInput whose
+/// `overrideEnum` exposes "agent" behind a lab flag, so
+/// `app/generated/_e2e_substitutions.py` types `extraction_method` as
+/// `Literal["direct", "agent"]` (the union of `baseEnum` + the condition's
+/// `overrideEnum`) and AGENT-mode e2e runs can submit `"agent"`.
 amends "../../src/App.pkl"
 
 import "../../src/Connectors.pkl"
@@ -22,10 +24,6 @@ displayName = "Agent E2E Example"
 icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
 connector = Connectors.API
 credentialConnectorType = "rest"
-
-// Emit the SDR-friendly lightweight credential body instead of the default
-// direct-mode body. See the `e2eCredentialMode` doc comment in src/App.pkl.
-e2eCredentialMode = "agent"
 
 credentialCommonFields {
   new FieldSpec {

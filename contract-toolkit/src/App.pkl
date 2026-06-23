@@ -215,31 +215,6 @@ argoTemplateName: String = "atlan-\(name)"
 /// Default: `"http://<name>.<name>-app.svc.cluster.local"`.
 appServiceUrl: String = "http://\(name).\(name)-app.svc.cluster.local"
 
-/// Shape of the credential body emitted into `app/generated/_e2e_credential.py`.
-///
-/// - `"direct"` (default): the full credential body the AE submit needs to
-///   create a credential — `name`, `auth_type`, and every typed field derived
-///   from `credentialCommonFields` / `credentialUrlGroup` / `credentialAuthOptions`
-///   (host, port, username, password, …) plus any nested `extra` model. Use for
-///   connectors whose e2e tests connect directly from the Atlan tenant.
-///
-/// - `"agent"`: the lightweight body used by self-deployed-runtime (SDR / agent)
-///   e2e flows — `name`, `auth_type`, `connector_config_name`, and an open
-///   `extra` dict, with NO inline credential fields. In agent mode the real
-///   host/username/password live in the agent's secret store and are resolved at
-///   runtime via agent-json ref keys; the e2e harness serialises the body with a
-///   plain `model_dump(by_alias=True)` (no `exclude_unset`), so any inline
-///   credential field declared here would be sent on the wire and make the
-///   orchestrator treat the submit as a direct credential — skipping credential
-///   creation and leaving `{{credentialGuid}}` unsubstituted. Set this to
-///   `"agent"` for connectors whose e2e runs through the agent path (these
-///   contracts also carry an `AgentSelector` widget + an `extraction-method`
-///   override exposing the `"agent"` option).
-///
-/// Only the body in `_e2e_credential.py` changes; the credential configmap
-/// (`atlan-connectors-<name>.json`) and the workflow config are unaffected.
-e2eCredentialMode: "direct" | "agent" = "direct"
-
 // ── CREDENTIAL CONFIG ─────────────────────────────────────────────────────────
 
 /// Whether this app has a credential config.
@@ -2869,33 +2844,28 @@ local function credFieldLine(f: FieldSpec, authSpecific: Boolean): String =
   else
     "    \(pyName): \(pyType) = Field(default=\(defExpr), alias=\"\(f.name)\")"
 
-// Agent (SDR) credential body: lightweight — no inline credential fields.
-// `name`/`auth_type`/`connector_config_name`/`extra` only. See the
-// `e2eCredentialMode` doc comment for why inline fields must be omitted here.
-local function generateE2EAgentCredentialPy(): FileOutput = new FileOutput {
-  local cname = pascalCase(name)
-  local firstAuthKey: String =
-    credentialAuthDefault ??
-    (new Listing { for (k, v in credentialAuthOptions!!) { k } }).toList().first
-  text =
-    "# Generated from contract/app.pkl via contract-toolkit. DO NOT EDIT.\n" +
-    "# Regenerate with: pkl eval -m . contract/app.pkl\n" +
-    "from pydantic import Field\n\n" +
-    "from application_sdk.testing.e2e.credential import CredentialBody\n\n\n" +
-    "class \(cname)CredentialBody(CredentialBody):\n" +
-    "    name: str = Field(alias=\"name\")\n" +
-    "    auth_type: str = Field(default=\"\(firstAuthKey)\", alias=\"authType\")\n" +
-    "    connector_config_name: str = Field(\n" +
-    "        default=\"\(connectorConfigName)\", alias=\"connectorConfigName\"\n" +
-    "    )\n" +
-    "    extra: dict = Field(default_factory=dict, alias=\"extra\")\n"
-}
+// Lightweight agent (SDR) credential body, appended after the direct body so a
+// single `_e2e_credential.py` carries BOTH `<Cname>CredentialBody` (direct) and
+// `<Cname>AgentCredentialBody` (agent). The e2e test picks the shape per RunMode;
+// the credential mode is a per-run concern, not a contract property. Agent mode
+// omits all inline credential fields: the harness serialises the body with a
+// plain `model_dump(by_alias=True)` (no `exclude_unset`), so an inline
+// host/username/password would be sent on the wire and make the orchestrator
+// treat the submit as a direct credential — skipping credential creation and
+// leaving `{{credentialGuid}}` unsubstituted. Real creds live in the agent's
+// secret store, resolved at runtime via agent-json ref keys.
+local function agentCredentialClass(cname: String, firstAuthKey: String): String =
+  "\n\nclass \(cname)AgentCredentialBody(CredentialBody):\n" +
+  "    name: str = Field(alias=\"name\")\n" +
+  "    auth_type: str = Field(default=\"\(firstAuthKey)\", alias=\"authType\")\n" +
+  "    connector_config_name: str = Field(\n" +
+  "        default=\"\(connectorConfigName)\", alias=\"connectorConfigName\"\n" +
+  "    )\n" +
+  "    extra: dict = Field(default_factory=dict, alias=\"extra\")\n"
 
 local function generateE2ECredentialPy(): FileOutput? =
   if (!(hasCredentialConfig && credentialAuthOptions != null && !credentialAuthOptions!!.isEmpty))
     null
-  else if (e2eCredentialMode == "agent")
-    generateE2EAgentCredentialPy()
   else new FileOutput {
     local cname = pascalCase(name)
 
@@ -3044,7 +3014,8 @@ local function generateE2ECredentialPy(): FileOutput? =
       "from application_sdk.testing.e2e.credential import CredentialBody\n" +
       extraModelBlock +
       "\n\nclass \(cname)CredentialBody(CredentialBody):\n" +
-      mainClassBody
+      mainClassBody +
+      agentCredentialClass(cname, firstAuthKey)
   }
 
 // ── atlan.yaml generation ─────────────────────────────────────────────────────

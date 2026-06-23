@@ -8,6 +8,14 @@ from application_sdk.testing.e2e.credential import CredentialBody
 class AgentE2eCredentialBody(CredentialBody):
     name: str = Field(alias="name")
     auth_type: str = Field(default="basic", alias="authType")
+    host: str = Field(alias="host")
+    username: str = Field(default="", alias="username")
+    password: str = Field(default="", alias="password")
+
+
+class AgentE2eAgentCredentialBody(CredentialBody):
+    name: str = Field(alias="name")
+    auth_type: str = Field(default="basic", alias="authType")
     connector_config_name: str = Field(
         default="atlan-connectors-agent-e2e", alias="connectorConfigName"
     )
