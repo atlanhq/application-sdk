@@ -5,10 +5,50 @@ from __future__ import annotations
 from typing import Any, Dict
 from unittest.mock import MagicMock, patch
 
+import orjson
 import pytest
 
 from application_sdk.testing.integration import Scenario
 from application_sdk.testing.sdr import BaseSDRIntegrationTest
+
+
+def _write_manifest(tmp_path, extract_args: Dict[str, Any]) -> str:
+    """Write a minimal AE manifest.json whose extract node carries ``extract_args``."""
+    manifest = {
+        "execution_mode": "automation-engine",
+        "dag": {
+            "extract": {
+                "inputs": {
+                    "workflow_type": "MSSQLMetadataExtractionWorkflow",
+                    "args": extract_args,
+                }
+            }
+        },
+    }
+    path = tmp_path / "manifest.json"
+    path.write_bytes(orjson.dumps(manifest))
+    return str(path)
+
+
+# Extract args shaped like a real manifest, WITH the agent_json slot (post-#177).
+_ARGS_WITH_AGENT_JSON: Dict[str, Any] = {
+    "connection": "{{connection}}",
+    "credential_guid": "{{credential-guid}}",
+    "extraction_method": "{{extraction-method}}",
+    "agent_json": "{{agent-json}}",
+    "include_filter": "{{include-filter}}",
+    "exclude_filter": "{{exclude-filter}}",
+    "preflight_check": "{{preflight-check}}",
+}
+
+# Same, but MISSING the agent_json slot — the atlan-mssql-app#177 bug.
+_ARGS_MISSING_AGENT_JSON: Dict[str, Any] = {
+    "connection": "{{connection}}",
+    "credential_guid": "{{credential-guid}}",
+    "extraction_method": "{{extraction-method}}",
+    "include_filter": "{{include-filter}}",
+    "exclude_filter": "{{exclude-filter}}",
+}
 
 
 @pytest.fixture
@@ -72,6 +112,67 @@ def test_empty_agent_spec_disables_routing(workflow_scenario: Scenario) -> None:
     suite = _NoAgentSuite()
     args = suite._build_scenario_args(workflow_scenario)
     assert "extraction_method" not in args
+
+
+def test_manifest_driven_args_built_from_extract_node(
+    tmp_path, workflow_scenario: Scenario
+) -> None:
+    """With manifest_path set, workflow input is derived from the manifest's
+    extract args (substituted), not hand-written."""
+
+    class _ManifestSuite(BaseSDRIntegrationTest):
+        manifest_path = _write_manifest(tmp_path, dict(_ARGS_WITH_AGENT_JSON))
+        agent_spec_template = {
+            "agent-name": "mssql-ci-agent",
+            "secret-path": "mssql-credentials",
+            "auth-type": "basic",
+        }
+        default_connection = {
+            "typeName": "Connection",
+            "attributes": {"qualifiedName": "default/mssql/1700000000"},
+        }
+        include_filter = '{"include":"db"}'
+        scenarios = []
+
+    args = _ManifestSuite()._build_scenario_args(workflow_scenario)
+    # Manifest declared the slot → agent_json is substituted in.
+    assert args["agent_json"] == _ManifestSuite.agent_spec_template
+    assert args["extraction_method"] == "agent"
+    assert args["connection"] == _ManifestSuite.default_connection
+    assert args["include_filter"] == '{"include":"db"}'
+    assert args["preflight_check"] is True
+    # workflow_type comes from the manifest's extract inputs when unset on the class.
+    assert args["workflow_type"] == "MSSQLMetadataExtractionWorkflow"
+
+
+def test_manifest_missing_agent_json_slot_is_not_injected(
+    tmp_path, workflow_scenario: Scenario
+) -> None:
+    """The whole point (atlan-mssql-app#177): a manifest with no agent_json slot
+    must produce a workflow input WITHOUT agent_json — so the agent run fails and
+    the e2e surfaces the gap — unlike the legacy path that injected it regardless."""
+
+    class _BadManifestSuite(BaseSDRIntegrationTest):
+        manifest_path = _write_manifest(tmp_path, dict(_ARGS_MISSING_AGENT_JSON))
+        agent_spec_template = {"agent-name": "a", "secret-path": "p"}
+        scenarios = []
+
+    args = _BadManifestSuite()._build_scenario_args(workflow_scenario)
+    assert "agent_json" not in args, (
+        "manifest had no agent_json slot — the derived input must not contain it"
+    )
+    # Slots the manifest DID declare are still substituted.
+    assert args["extraction_method"] == "agent"
+
+
+def test_manifest_missing_file_raises(workflow_scenario: Scenario) -> None:
+    class _MissingManifestSuite(BaseSDRIntegrationTest):
+        manifest_path = "/nonexistent/manifest.json"
+        agent_spec_template = {"agent-name": "a"}
+        scenarios = []
+
+    with pytest.raises(FileNotFoundError, match="SDR manifest not found"):
+        _MissingManifestSuite()._build_scenario_args(workflow_scenario)
 
 
 def test_execute_scenario_polls_workflow_completion(
