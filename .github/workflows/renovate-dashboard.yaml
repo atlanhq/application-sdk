@@ -176,6 +176,7 @@ jobs:
             aws s3 cp \
               "s3://kryptonite-store/${PREFIX}/${HISTORY_FILE}" \
               /tmp/existing_renovate_history.jsonl 2>/dev/null || true
+            touch /tmp/existing_renovate_history.jsonl
             cat /tmp/existing_renovate_history.jsonl "$f" 2>/dev/null \
               | sort -u \
               > /tmp/merged_renovate_history.jsonl
@@ -194,6 +195,7 @@ jobs:
               aws s3 cp \
                 "s3://kryptonite-store/${PREFIX}/history/fleet.jsonl" \
                 /tmp/existing_fleet_history.jsonl 2>/dev/null || true
+              touch /tmp/existing_fleet_history.jsonl
               cat /tmp/existing_fleet_history.jsonl \
                 /tmp/renovate-output/history_fleet.jsonl 2>/dev/null \
                 | sort -u \
