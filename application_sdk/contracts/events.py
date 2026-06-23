@@ -182,6 +182,16 @@ class WorkerStartEventData(BaseModel):
         sdk_version: SDK version used to build the app image (ATLAN_SDK_VERSION).
         app_type: App type from Global Marketplace (ATLAN_APP_TYPE).
         published_at: Release publication timestamp (ATLAN_PUBLISHED_AT).
+        objectstore_binding_type: Dapr component type of the deployment object
+            store (e.g. "bindings.aws.s3", "bindings.localstorage"), discovered
+            at runtime from the Dapr sidecar metadata. Empty if undiscoverable.
+        upstream_objectstore_binding_type: Dapr component type of the upstream
+            (Atlan) object store the app uploads artifacts to, discovered the
+            same way. Reported alongside the deployment store so a mis-wired
+            upstream binding is visible. Empty if undiscoverable.
+        secretstore_binding_type: Dapr component type of the secret store (e.g.
+            "secretstores.hashicorp.vault", "secretstores.kubernetes"),
+            discovered at runtime from the Dapr sidecar metadata.
     """
 
     version: str = WORKER_START_EVENT_VERSION
@@ -204,6 +214,9 @@ class WorkerStartEventData(BaseModel):
     sdk_version: str = ""
     app_type: str = ""
     published_at: str = ""
+    objectstore_binding_type: str = ""
+    upstream_objectstore_binding_type: str = ""
+    secretstore_binding_type: str = ""
 
 
 class WorkerTokenRefreshEventData(BaseModel):

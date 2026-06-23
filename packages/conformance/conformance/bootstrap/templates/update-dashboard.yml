@@ -2,7 +2,11 @@ name: Update Security Dashboard
 
 on:
   workflow_run:
-    workflows: ["Vulnerability Scan", "Build & Publish"]
+    # "Conformance" is included so the conformance dashboard (a separate job in
+    # the reusable) updates on every push to main rather than only when the
+    # daily vulnerability scan runs. The security dashboard job in the reusable
+    # skips automatically when triggered by Conformance (no Trivy artifacts).
+    workflows: ["Vulnerability Scan", "Build & Publish", "Conformance"]
     types: [completed]
   workflow_dispatch:
 

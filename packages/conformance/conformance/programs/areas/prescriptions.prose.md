@@ -41,6 +41,12 @@ When a gate that validates the bound exists (a runtime-enforced `MaxItems`, or
 a payload-size behavioural check), this area can graduate to the full
 `detect-fix-recheck` loop.
 
+P002/P003 are BLOCK-tier and their fixes *are* validated by the orthogonal test
+gate (`orthogonal_gate = "tests"`), unlike P001.  They are suggest-only here for
+architectural consistency with the rest of this area, but they are strong
+candidates to graduate to the `detect-fix-recheck` loop once the area
+differentiates sub-groups by gate status.
+
 The orchestration-seam rules (P004–P007, BLDX-1417) are also P-series and also
 suggest-only here, for their own reasons: the app-side import rewrites (P004/P005)
 land mostly under `tests/` (an integration harness) where `remediate-finding` may
@@ -50,6 +56,13 @@ rules (P006/P007) describe refactors (relocate Temporal behind the adapter; wrap
 raw type in an opaque SDK type) that no import edit can perform.  All four draft a
 proposal for human review and never auto-apply.  (These rules are backed by a
 separate, test-scanning `suite.checks.orchestration` check — see its module docs.)
+
+The storage-seam rules (P008–P012) are also P-series and suggest-only: they
+describe structural workflow refactors (data-flow topology, store-routing
+contracts, durability-field ownership) that no local import rewrite can perform,
+and the orthogonal gate is non-protective for structural regressions not yet
+covered by tests.  All five draft a proposal for human review.  (These rules are
+backed by `suite.checks.prescriptions` alongside P001–P003.)
 
 ### Requires
 
@@ -81,3 +94,176 @@ for each finding in violations:
   # "judgment" for P-series, so it lands in the human-review residue.
   add { finding, proposal } to residue with note "P-series suggest-only: proposed fix drafted for human review; NOT applied (no orthogonal gate validates a MaxItems bound or suppression)"
 ```
+
+### Fix Prescription
+
+_Read by `remediate-finding` when `finding.area == "prescriptions"`._
+
+Drafts a **proposed** fix for human review.  This area is suggest-only: the
+proposal is recorded in residue and **never applied** — see **Why suggest-only**
+above.  `classification` is always `"judgment"` for all P-series rules.
+
+- **P001 UnboundedContractFields** — the contract opts out of payload safety
+  via the `allow_unbounded_fields=True` class keyword.  Read the contract's
+  fields around `finding.line`, then draft, in order of preference:
+
+  1. **The real fix (preferred)** — remove `allow_unbounded_fields=True` and
+     bound each field the payload-safety validator would reject: wrap an
+     unbounded `list[T]` as `Annotated[list[T], MaxItems(N)]` and an unbounded
+     `dict[K, V]` as `Annotated[dict[K, V], MaxItems(N)]`, choosing `N` from
+     the field's realistic cardinality and **stating that assumption** in the
+     proposal (e.g. ~10000 ≈ ~1MB JSON, well under Temporal's 2MB limit).  A
+     scalar-only contract needs only the opt-out removed.  Add
+     `from typing import Annotated` and
+     `from application_sdk.contracts.types import MaxItems` if missing.
+     Return `outcome = "fix"`.
+
+  2. **Fallback** — if a field is genuinely unbounded with no sensible cap,
+     draft an inline `# conformance: ignore[P001] <concise justification>` on
+     the declaration line, where the justification explains *why* unbounded
+     fields are unavoidable here (not merely that the rule is suppressed).
+     Return `outcome = "suppress"`.
+
+- **P002 CategoryFieldOverride** — a non-canonical subclass of `AppError` (or
+  any of its 14 categorical leaves) redeclares the `category` ClassVar in its
+  own body.  Read the class definition around `finding.line`, then:
+
+  1. Verify that the class inherits from a canonical leaf and that the parent's
+     `category` value is semantically correct for this class's failure mode.
+     (It almost always is — the redeclaration is typically a copy-paste artifact.)
+  2. Delete the redeclaring `category` assignment from the class body.  The
+     class will then inherit `category` from its canonical-leaf ancestor.
+
+  If the redeclaring class appears to need a category that genuinely differs
+  from its parent (i.e. it belongs under a different leaf), do **not** rename
+  the field value — instead, note in residue that the class hierarchy may be
+  wrong and name the leaf that better fits the semantic.
+
+  The orthogonal test gate (`orthogonal_gate = "tests"`) validates the fix.
+
+- **P003 ErrorCodePrefixMismatch** — a (transitive) subclass of an
+  `application_sdk.errors` leaf either omits its own `code: ClassVar[str]`
+  declaration or declares one that does not start with the leaf's category
+  prefix.  The finding message names the leaf and the required prefix (e.g.
+  `AuthError` → `AUTH_`).  Two cases:
+
+  - **No `code` declaration** — add `code: ClassVar[str] = "<PREFIX>_<SUFFIX>"`
+    to the class body (just below any docstring, or at the top of the body).
+    Choose `<SUFFIX>` from the class name or its semantic intent: a class named
+    `CredentialExpiredError` under `AuthError` becomes `AUTH_CREDENTIAL_EXPIRED`.
+    Add `from typing import ClassVar` if not already imported.
+
+  - **Code declared but wrong prefix** — if the value is otherwise sensible
+    (e.g. `EXPIRED` instead of `AUTH_EXPIRED`), prepend the prefix.  If the
+    value clashes with a different leaf's prefix (e.g. `INTERNAL_TIMEOUT` on an
+    `AuthError` subclass), note in residue that the class may belong under the
+    wrong leaf hierarchy.
+
+  The orthogonal test gate (`orthogonal_gate = "tests"`) validates the fix.
+
+**Orchestration-seam rules (P004–P007)** — also suggest-only; `classification`
+is always `"judgment"`:
+
+- **P004 DirectTemporalImport** (app) — the app imports `temporalio` directly.
+  Draft a rewrite to the SDK seam by mapping the imported symbol:
+  - workflow primitives `now`/`sleep`/`uuid4`/`wait_condition` and the
+    interaction decorators `signal`/`query`/`update` (and `task` in place of
+    `activity`) → `from application_sdk.app import …`;
+  - `temporalio.client.Client` / `Client.connect(...)` →
+    `from application_sdk.execution import create_temporal_client`
+    (`client = await create_temporal_client(host=...)`);
+  - `temporalio.worker.Worker` →
+    `from application_sdk.execution import AppWorker, create_worker`;
+  - `temporalio.converter` data-converter use →
+    `from application_sdk.execution import create_data_converter`.
+
+  **Annotation hole — route to residue, do not fabricate a fix:** if the only
+  use of a `temporalio` symbol is to *annotate* a value the public seam returns
+  (e.g. `Client` for the result of `create_temporal_client`), there is no public
+  opaque type to swap to yet — this is the P007 leak the SDK must close first.
+  Note the P007 dependency in residue rather than inventing an import.
+
+- **P005 PrivateOrchestrationInternalImport** (app) — the app reaches into an
+  SDK-private module. Draft a rewrite to the public re-export when one exists:
+  - `application_sdk.execution._temporal.worker.{create_worker,AppWorker}` →
+    `application_sdk.execution.{create_worker,AppWorker}`;
+  - `application_sdk.execution._temporal.backend.create_temporal_client` →
+    `application_sdk.execution.create_temporal_client`;
+  - `application_sdk.execution._temporal.converter.create_data_converter` →
+    `application_sdk.execution.create_data_converter`.
+
+  **No public twin — route to residue:** some internals have no public
+  equivalent today (e.g. `create_data_converter_for_app`,
+  `TemporalExecutorBackend`). Do **not** invent a public import; note that the
+  SDK must expose a public equivalent (or the app must drop the dependency).
+
+- **P006 TemporalImportOutsideAdapter** (sdk) — `temporalio` is imported outside
+  the `execution/_temporal/` adapter. The fix is a structural relocation of the
+  Temporal usage behind the adapter, which no import rewrite can perform. Route
+  to residue with a note that an SDK refactor is required. Do not attempt a
+  mechanical edit.
+
+- **P007 RawTemporalInPublicSurface** (sdk) — a public API re-exports or exposes
+  a raw `temporalio` type. The fix is to wrap the value in an opaque SDK type (or
+  stop re-exporting it) — a public-contract refactor. Route to residue with that
+  guidance. Do not attempt a mechanical edit.
+
+**Storage-seam rules (P008–P012)** — all suggest-only, scope=app, WARN-tier;
+`classification` is always `"judgment"`.  Read the full function/class context
+around `finding.line` before drafting any proposal.
+
+- **P008 FrameworkTransferInsideTask** — `self.upload(...)` or
+  `self.download(...)` is called inside a `@task`-decorated method.
+  `App.upload`/`download` are themselves framework tasks; nesting them violates
+  Temporal's activity-within-activity constraint.  Draft a workflow restructure:
+  - **Producing side**: remove the nested `self.upload()` call from the `@task`
+    method; return the data (or a local file path) to the workflow layer instead.
+    The workflow layer calls `App.upload()` as a separate task and passes the
+    resulting `FileReference` onward.
+  - **Consuming side**: accept a `FileReference` input field rather than calling
+    `self.download()` inside the task body; the workflow layer calls
+    `App.download()` before scheduling the task.
+  Do not attempt a mechanical rewrite — the topology change requires
+  understanding the full workflow.  Draft the refactored shape and route to
+  residue.
+
+- **P009 ManualObjectStoreConstruction** — app code constructs a cloud client or
+  object store directly: `boto3.client(...)`, `S3Store(...)`, `GCSStore(...)`,
+  `AzureStore(...)`, or any `create_store_from_binding*(...)` call.  The SDK
+  provides a correctly routed store (including SDR mode) via
+  `get_infrastructure().storage` (import from `application_sdk.framework`).
+  Draft a replacement that obtains the store through the SDK seam.  If the
+  original construction passes configuration parameters (region, endpoint,
+  credentials) that may not be available through the SDK, note those in residue
+  as a follow-up for the SDK team — do not silently drop them.
+
+- **P010 ManualFileReferenceConstruction** — a `FileReference(...)` constructor
+  call sets SDK-owned durability fields: `storage_path`, `is_durable`, or
+  `file_count`.  These are populated by the activity interceptor at persist time;
+  setting them manually bypasses the persist/materialize contract.  Draft a fix
+  that removes the SDK-managed fields from the constructor, leaving only
+  caller-owned fields (e.g. `name`, `file_type`, metadata).  If the intent is to
+  produce a pre-materialized `FileReference` from a known cloud URI, note in
+  residue that the SDK may need a factory (`FileReference.from_uri(...)` or
+  similar) — do not silently omit the URI.
+
+- **P011 RawBytesInContract** — a `bytes`, `bytearray`, or `memoryview` field
+  on an `Input`/`Output` contract embeds raw binary data across the Temporal
+  payload boundary and risks hitting the 2 MB limit.  Draft a `FileReference`
+  replacement:
+  - **Producing side**: write the bytes to a local temp file, call `App.upload()`
+    to transfer it, put the resulting `FileReference` in the contract field.
+  - **Consuming side**: receive the `FileReference`, call `App.download()` to
+    materialize the file, then read the local bytes.
+  If the data is demonstrably ≤ 1 KB and truly inline (not file-like), propose
+  a `str` field (base64-encoded bytes) with a `# conformance: ignore[P011]`
+  suppression and state the size justification explicitly.
+
+- **P012 FilePathStringInContract** — a `str` field whose name or docstring
+  signals a filesystem path (`input_path`, `output_dir`, `file`, `directory`,
+  etc.) carries a worker-local reference that is invalid on a different worker.
+  Draft a `FileReference` replacement using the same producing/consuming pattern
+  as P011.  If the path is always an object-store URI (not a worker-local path),
+  propose renaming the field to clarify the semantics (e.g. `storage_uri`) and
+  suppressing P012 with justification; state why the value is stable across
+  workers.
