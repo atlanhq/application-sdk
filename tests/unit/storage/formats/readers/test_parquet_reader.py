@@ -598,6 +598,122 @@ class TestBuildUnifiedParquetSchema:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Multi-row-group parquet tests
+#
+# The parquet reader uses pq.ParquetFile.iter_batches(), which streams one
+# row group at a time without merging across groups. These tests verify:
+#   1. Data fidelity — all rows recovered, no gaps, no duplication
+#   2. Bounded batches — each yielded batch never exceeds chunk_size rows
+#   3. Streaming — row groups are NOT merged into one large batch
+#
+# The motivation: the daft.read_parquet() path retained arena memory for the
+# entire file; iter_batches() releases each row group after processing.
+# ---------------------------------------------------------------------------
+
+
+def _make_multi_row_group_parquet(
+    tmp_path: Path, name: str, rows_per_group: int, num_groups: int
+) -> str:
+    """Write a parquet file with a controlled number of row groups."""
+    total_rows = rows_per_group * num_groups
+    schema = pa.schema([("id", pa.int64()), ("value", pa.string())])
+    table = pa.Table.from_pydict(
+        {
+            "id": list(range(total_rows)),
+            "value": [f"v{i}" for i in range(total_rows)],
+        },
+        schema=schema,
+    )
+    path = tmp_path / name
+    pq.write_table(table, path, row_group_size=rows_per_group)
+    assert pq.ParquetFile(path).metadata.num_row_groups == num_groups
+    return str(path)
+
+
+@pytest.mark.asyncio
+async def test_read_batches_multi_row_group_data_fidelity(tmp_path: Path) -> None:
+    """All rows are recovered from a file with multiple row groups — no gaps, no duplication."""
+    # 3 row groups × 4 rows = 12 rows
+    parquet_file = _make_multi_row_group_parquet(
+        tmp_path, "multi_rg.parquet", rows_per_group=4, num_groups=3
+    )
+
+    async def dummy_download(path, file_extension, file_names=None):
+        return [parquet_file]
+
+    with patch(
+        "application_sdk.storage.formats.parquet._download_files",
+        side_effect=dummy_download,
+    ):
+        reader = ParquetFileReader(
+            path=str(tmp_path), chunk_size=4, dataframe_type=DataframeType.pandas
+        )
+        chunks = [chunk async for chunk in reader.read_batches()]
+
+    total_rows = sum(len(c) for c in chunks)
+    assert total_rows == 12
+
+    all_ids = sorted(id_ for chunk in chunks for id_ in chunk["id"].tolist())
+    assert all_ids == list(range(12)), "rows missing or duplicated across row groups"
+
+    all_values = sorted(v for chunk in chunks for v in chunk["value"].tolist())
+    assert all_values == sorted(f"v{i}" for i in range(12))
+
+
+@pytest.mark.asyncio
+async def test_read_batches_bounded_by_chunk_size(tmp_path: Path) -> None:
+    """Each yielded batch contains at most chunk_size rows (bounded memory per batch)."""
+    # 4 row groups × 100 rows = 400 rows; chunk_size=50 forces splits within each group
+    parquet_file = _make_multi_row_group_parquet(
+        tmp_path, "large_rg.parquet", rows_per_group=100, num_groups=4
+    )
+
+    async def dummy_download(path, file_extension, file_names=None):
+        return [parquet_file]
+
+    with patch(
+        "application_sdk.storage.formats.parquet._download_files",
+        side_effect=dummy_download,
+    ):
+        reader = ParquetFileReader(
+            path=str(tmp_path), chunk_size=50, dataframe_type=DataframeType.pandas
+        )
+        chunks = [chunk async for chunk in reader.read_batches()]
+
+    assert all(len(c) <= 50 for c in chunks), "a batch exceeded chunk_size"
+    assert sum(len(c) for c in chunks) == 400
+
+
+@pytest.mark.asyncio
+async def test_read_batches_streams_in_multiple_batches(tmp_path: Path) -> None:
+    """When chunk_size < total rows, multiple batches are yielded — not one large load.
+
+    pyarrow iter_batches(batch_size=N) merges across row groups up to N rows per batch.
+    With chunk_size smaller than the total file, the file is processed in pieces.
+    """
+    # 4 row groups × 100 rows = 400 rows; chunk_size=100 → at least 4 batches
+    parquet_file = _make_multi_row_group_parquet(
+        tmp_path, "stream.parquet", rows_per_group=100, num_groups=4
+    )
+
+    async def dummy_download(path, file_extension, file_names=None):
+        return [parquet_file]
+
+    with patch(
+        "application_sdk.storage.formats.parquet._download_files",
+        side_effect=dummy_download,
+    ):
+        reader = ParquetFileReader(
+            path=str(tmp_path), chunk_size=100, dataframe_type=DataframeType.pandas
+        )
+        chunks = [chunk async for chunk in reader.read_batches()]
+
+    assert len(chunks) > 1, "chunk_size < total rows must yield multiple batches"
+    assert all(len(c) <= 100 for c in chunks), "a batch exceeded chunk_size"
+    assert sum(len(c) for c in chunks) == 400
+
+
 class TestReadNonBatchedSchemaUnification:
     """Integration tests: mixed-schema parquet reads must not drop rows."""
 
