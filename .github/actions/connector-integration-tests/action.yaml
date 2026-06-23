@@ -23,8 +23,8 @@ description: |
   - Uploads junit XML + raw test output as artifacts.
   - Cleans up app server + Dapr/Temporal.
 
-  pytest-xdist is installed transiently via `uv run --with pytest-xdist` so the
-  caller does not need to declare it as a dependency.
+  pytest-xdist and pytest-rerunfailures are installed transiently via `uv run --with`
+  so the caller does not need to declare them as dependencies.
 
   ## Connectors with native dependencies
 
@@ -89,9 +89,10 @@ inputs:
     required: false
     description: |
       Extra arguments passed to pytest after the integration-tests path.
-      Default parallelises tests across xdist workers; override to dial worker
-      count or change distribution strategy.
-    default: "-n auto --dist=load --tb=short"
+      Default parallelises tests across xdist workers and retries transient
+      failures; override to dial worker count, change distribution strategy,
+      or adjust retry count.
+    default: "-n auto --dist=load --tb=short --reruns 2 --reruns-delay 5"
   app-port:
     required: false
     description: HTTP port the connector app server listens on.
@@ -204,16 +205,16 @@ runs:
       run: |
         DAPR_CLI_VERSION="${{ inputs.dapr-cli-version }}"
         DAPR_RUNTIME_VERSION="${{ inputs.dapr-version }}"
-        wget -q "https://github.com/dapr/cli/releases/download/v${DAPR_CLI_VERSION}/dapr_linux_amd64.tar.gz" -O /tmp/dapr.tar.gz
+        "${GITHUB_WORKSPACE}/.github/scripts/with-retry.sh" wget -q "https://github.com/dapr/cli/releases/download/v${DAPR_CLI_VERSION}/dapr_linux_amd64.tar.gz" -O /tmp/dapr.tar.gz
         tar -xzf /tmp/dapr.tar.gz -C /tmp
         sudo mv /tmp/dapr /usr/local/bin/
         chmod +x /usr/local/bin/dapr
-        dapr init --runtime-version "${DAPR_RUNTIME_VERSION}" --slim
+        "${GITHUB_WORKSPACE}/.github/scripts/with-retry.sh" dapr init --runtime-version "${DAPR_RUNTIME_VERSION}" --slim
 
     - name: Install Temporal CLI
       if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
       shell: bash
-      run: curl -sSf https://temporal.download/cli.sh | sh
+      run: "${GITHUB_WORKSPACE}/.github/scripts/with-retry.sh" bash -c "curl -sSf https://temporal.download/cli.sh | sh"
 
     - name: Add Dapr and Temporal to PATH
       if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
@@ -225,7 +226,7 @@ runs:
     - name: Download Dapr components
       if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
       shell: bash
-      run: uv run poe download-components
+      run: "${GITHUB_WORKSPACE}/.github/scripts/with-retry.sh" uv run poe download-components
 
     - name: Start Dapr + Temporal
       if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
@@ -272,10 +273,9 @@ runs:
       run: |
         mkdir -p results
         set +e
-        # pytest-cov added transiently so callers can opt in to coverage
-        # via pytest-args (e.g., `--cov=app --cov-report=xml ...`). No
-        # effect when coverage flags aren't passed.
-        uv run --with pytest-xdist --with pytest-cov pytest ${{ inputs.test-paths }} -v \
+        # pytest-xdist, pytest-cov, and pytest-rerunfailures are installed
+        # transiently — callers do not need to declare them as dependencies.
+        uv run --with pytest-xdist --with pytest-cov --with pytest-rerunfailures pytest ${{ inputs.test-paths }} -v \
           ${{ inputs.pytest-args }} \
           --junit-xml=results/test-results.xml \
           2>&1 | tee results/test-output.txt

@@ -50,7 +50,7 @@ runs:
           # pyatlan pydantic-v1 compat (upstream fix: atlan-python PR #893)
           PYTEST_IGNORE="--ignore=tests/unit/tools --ignore=tests/unit/clients/test_atlan_client.py --ignore=tests/unit/credentials/test_atlan_client.py"
         fi
-        $UV_RUN coverage run -m pytest --import-mode=importlib --capture=no --log-cli-level=INFO tests/ $PYTEST_IGNORE -v --full-trace --hypothesis-show-statistics
+        $UV_RUN coverage run -m pytest --import-mode=importlib --capture=no --log-cli-level=INFO tests/ $PYTEST_IGNORE -v --full-trace --hypothesis-show-statistics --disable-socket --allow-unix-socket
         $UV_RUN coverage xml
         $UV_RUN coverage html
         $UV_RUN coverage report --fail-under=${{ inputs.fail-under }}
