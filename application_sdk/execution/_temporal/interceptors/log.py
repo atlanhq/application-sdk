@@ -44,6 +44,7 @@ from application_sdk.errors.wire import FailureDetails
 from application_sdk.observability.context import (
     ExecutionContext,
     set_execution_context,
+    set_replay_predicate,
 )
 from application_sdk.observability.correlation import (
     CorrelationContext,
@@ -331,6 +332,14 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         correlation_id = self._resolve_correlation_id(input)
         self._correlation_id = correlation_id
         set_correlation_context(CorrelationContext(correlation_id=correlation_id))
+
+        # Inject the live replay predicate so the SDK logger can suppress
+        # workflow-body log emissions during replay without importing temporalio.
+        # Uses ``is_replaying_history_events`` (not plain ``is_replaying``) to
+        # match Temporal's own LoggerAdapter: it returns False during
+        # read-only operations (queries, update validators) where
+        # ``is_replaying`` may still be True, preventing over-suppression.
+        set_replay_predicate(workflow.unsafe.is_replaying_history_events)
 
         if workflow.unsafe.is_replaying():
             return await self.next.execute_workflow(input)

@@ -6,6 +6,12 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.14.2] - 2026-06-22
+
+### Bug fixes
+
+- bake manifest app_name from contract name; drop runtime placeholder (#2271) ([b78ce51](https://github.com/atlanhq/application-sdk/commit/b78ce51))
+
 ## [0.14.1] - 2026-06-18
 
 ### Bug fixes
