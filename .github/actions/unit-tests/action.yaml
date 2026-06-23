@@ -50,7 +50,16 @@ runs:
           # pyatlan pydantic-v1 compat (upstream fix: atlan-python PR #893)
           PYTEST_IGNORE="--ignore=tests/unit/tools --ignore=tests/unit/clients/test_atlan_client.py --ignore=tests/unit/credentials/test_atlan_client.py"
         fi
-        $UV_RUN coverage run -m pytest --import-mode=importlib --capture=no --log-cli-level=INFO tests/ $PYTEST_IGNORE -v --full-trace --hypothesis-show-statistics --disable-socket --allow-unix-socket
+        # pytest-socket: on Linux/macOS the event loop uses os.pipe()/AF_UNIX for its
+        # self-pipe, so --allow-unix-socket is sufficient. On Windows, ProactorEventLoop
+        # uses AF_INET socket pairs internally; --disable-socket would break asyncio
+        # entirely there, so we skip the guard on Windows. Linux CI still enforces it.
+        if [ "${RUNNER_OS}" != "Windows" ]; then
+          SOCKET_FLAGS="--disable-socket --allow-unix-socket"
+        else
+          SOCKET_FLAGS=""
+        fi
+        $UV_RUN coverage run -m pytest --import-mode=importlib --capture=no --log-cli-level=INFO tests/ $PYTEST_IGNORE -v --full-trace --hypothesis-show-statistics ${SOCKET_FLAGS}
         $UV_RUN coverage xml
         $UV_RUN coverage html
         $UV_RUN coverage report --fail-under=${{ inputs.fail-under }}

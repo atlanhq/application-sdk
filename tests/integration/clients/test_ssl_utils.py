@@ -18,6 +18,19 @@ from aiohttp import web
 from application_sdk.clients.ssl_utils import get_ssl_context
 
 
+@pytest.fixture(autouse=True)
+def clear_ssl_context_cache():  # type: ignore[no-untyped-def]
+    """Clear the get_ssl_context lru_cache before and after each test.
+
+    Each test uses a different trustme CA + tmpdir; without this the first
+    call caches an SSL context keyed to the first tmpdir, and subsequent
+    tests get that stale context (wrong CA), causing cert verification errors.
+    """
+    get_ssl_context.cache_clear()
+    yield
+    get_ssl_context.cache_clear()
+
+
 @pytest.fixture
 def trustme_ca():  # type: ignore[no-untyped-def]
     """Create a trustme CA for testing."""
