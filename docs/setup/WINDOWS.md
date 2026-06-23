@@ -26,51 +26,19 @@ uv venv --python 3.11.10
 uv run python --version # Should show Python 3.11.10
 ```
 
-### 2. Install Temporal CLI
+### 2. That's it — Dapr and Temporal are auto-managed
 
-Download and install Temporal:
+You do **not** need to install the Dapr or Temporal CLIs. When you run an app
+locally via `run_dev_combined()` (see the [Getting Started Guide](../guides/getting-started.md)),
+the SDK auto-downloads and manages both the Dapr runtime (`daprd`) and an
+in-process Temporal server for you — nothing is required on your machine beyond
+Python and uv.
 
-```powershell
-# Create a directory for Temporal CLI
-New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.temporalio\bin"
-
-# Download Temporal CLI
-Invoke-WebRequest -Uri "https://temporal.download/cli/archive/latest?platform=windows&arch=amd64" -OutFile "$env:USERPROFILE\.temporalio\temporal.zip"
-
-# if you face issues with architecture, check: https://temporal.io/setup/install-temporal-cli
-
-# Extract and install
-Expand-Archive -Path "$env:USERPROFILE\.temporalio\temporal.zip" -DestinationPath "$env:USERPROFILE\.temporalio\bin" -Force
-
-# Add to PATH
-$env:Path += ";$env:USERPROFILE\.temporalio\bin"
-[Environment]::SetEnvironmentVariable("Path", $env:Path, [System.EnvironmentVariableTarget]::User)
-
-# Verify installation
-temporal --version
-```
-
-### 3. Install DAPR CLI
-
-Install DAPR using PowerShell:
-
-```powershell
-# Set required execution policy
-Set-ExecutionPolicy RemoteSigned -scope CurrentUser
-
-# Install DAPR CLI
-$script=iwr -useb https://raw.githubusercontent.com/dapr/cli/master/install/install.ps1; $block=[ScriptBlock]::Create($script); invoke-command -ScriptBlock $block -ArgumentList 1.18.0, "$env:USERPROFILE\.dapr\bin\"
-
-# Add to PATH
-$env:Path += ";$env:USERPROFILE\.dapr\bin\"
-[Environment]::SetEnvironmentVariable("Path", $env:Path, [System.EnvironmentVariableTarget]::User)
-
-# Initialize DAPR (slim mode)
-dapr init --runtime-version 1.18.0 --slim
-
-# Verify installation
-dapr --version
-```
+> [!NOTE]
+> Prefer to run against an external Dapr sidecar and Temporal server to mirror
+> production? Install the [Dapr CLI](https://docs.dapr.io/getting-started/install-dapr-cli/)
+> and [Temporal CLI](https://docs.temporal.io/cli#install), then follow the
+> optional external-infrastructure section of the Getting Started guide.
 
 > [!NOTE]
 > Your development environment is now ready! Head over to our [Getting Started Guide](../guides/getting-started.md) to learn how to:

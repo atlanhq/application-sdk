@@ -19,12 +19,17 @@ Holds two kinds of versions:
   Don't expect editing this value to move the container — it only steers the
   local-dev / CI download so it matches what the container already runs.
 
-CI workflows that need the daprd pin (`.github/workflows/push.yaml`,
-`.github/workflows/pull_request.yaml`, `.github/workflows/scale-tests.yaml`)
-avoid hard-coding the runtime version by reading it from this file via a
-small shell step::
+Everything that needs the daprd pin derives it from this one line — nothing
+re-hardcodes the version:
 
-    ver=$(grep '^__dapr_version' application_sdk/version.py | cut -d'"' -f2)
+* ``application_sdk.dev._dapr`` imports ``__dapr_version`` directly for the
+  embedded local-dev daprd download.
+* The external-Dapr CI paths read it without importing, by grepping this file::
+
+      ver=$(grep '^__dapr_version' application_sdk/version.py | cut -d'"' -f2)
+
+  — namely ``.github/actions/ae-stack-up/ae-stack-up.sh`` and
+  ``.github/actions/connector-integration-tests/action.yaml``.
 
 This constant is normally updated by the sync workflow above; bump it by hand
 only to reconcile ahead of a release — and deliberately, since older Dapr

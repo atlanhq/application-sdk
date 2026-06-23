@@ -342,9 +342,9 @@ Prerequisites:
         E2E_{APP_NAME}_PORT=...
         E2E_{APP_NAME}_DATABASE=...
 
-    2. Start services:
-        uv run poe start-deps  # Dapr + Temporal
-        uv run python main.py  # App server
+    2. Start the app server (boots an embedded Dapr runtime + in-process
+       Temporal itself on SDK 3.13+ — no Dapr/Temporal CLI, no `poe start-deps`):
+        uv run python main.py
 
     3. Run tests:
         uv run pytest tests/integration/ -v
@@ -387,10 +387,9 @@ If `tests/integration/__init__.py` doesn't exist, create it as an empty file.
 After generating, remind the user:
 
 ```bash
-# Start dependencies (separate terminal)
-uv run poe start-deps
-
-# Start app server (separate terminal)
+# Start the app server (separate terminal). On SDK 3.13+ `python main.py`
+# boots an embedded Dapr runtime + in-process Temporal itself — no Dapr/Temporal
+# CLI install and no `poe start-deps` required.
 uv run python main.py
 
 # Run all integration tests
@@ -411,6 +410,11 @@ uv run pytest tests/integration/ -v -s
 ## CI/CD Deployment — Ready-to-Use Workflow Templates
 
 After the tests pass locally, deploy them to CI. Below are complete, copy-paste workflow templates.
+
+> **No Dapr/Temporal CLI downloads.** These templates rely on the embedded dev
+> runtime: on SDK 3.13+ `python main.py` boots its own Dapr runtime + in-process
+> Temporal, so CI needs only `setup-deps` (Python + uv) and the app server —
+> there is no `dapr init`, no Temporal CLI install, and no version to pin.
 
 ### Template 1: Standard Connector (Public Source — Postgres, Redshift, Snowflake)
 
@@ -442,34 +446,14 @@ jobs:
       - name: Checkout PR branch
         uses: actions/checkout@v4.0.0
 
-      - name: Install Dapr CLI
-        run: |
-          DAPR_VERSION="1.18.0"
-          wget -q https://github.com/dapr/cli/releases/download/v${DAPR_VERSION}/dapr_linux_amd64.tar.gz -O /tmp/dapr.tar.gz
-          tar -xzf /tmp/dapr.tar.gz -C /tmp
-          sudo mv /tmp/dapr /usr/local/bin/
-          chmod +x /usr/local/bin/dapr
-          dapr init --runtime-version ${DAPR_VERSION} --slim
-
-      - name: Install Temporal CLI
-        run: curl -sSf https://temporal.download/cli.sh | sh
-
-      - name: Add Dapr and Temporal to PATH
-        run: |
-          echo "$HOME/.dapr/bin" >> $GITHUB_PATH
-          echo "$HOME/.temporalio/bin" >> $GITHUB_PATH
-
       - name: Setup Python, uv, and dependencies
         uses: atlanhq/application-sdk/.github/actions/setup-deps@main
 
-      - name: Download Dapr components
-        run: uv run poe download-components
-
-      - name: Start Dapr + Temporal
-        run: |
-          uv run poe start-deps
-          sleep 5
-
+      # No external Dapr/Temporal CLI install needed: on SDK 3.13+ `python
+      # main.py` boots an embedded daprd + Temporal itself (application_sdk.dev),
+      # so the "Start app server" step below brings up the full runtime. The
+      # daprd it downloads is the SDK's pinned `__dapr_version` — nothing to pin
+      # in this workflow.
       - name: Start app server
         env:
           ATLAN_LOCAL_DEVELOPMENT: "true"
@@ -554,13 +538,14 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
+          # Killing the app server (port 8000) also tears down the embedded
+          # daprd + Temporal it spawned — no separate stop-deps needed.
           kill $(lsof -t -i :8000) 2>/dev/null || true
-          uv run poe stop-deps || true
 ```
 
 ### Template 2: VPN-Protected Source (ClickHouse, Oracle, on-prem)
 
-Add these two steps **before** "Start Dapr + Temporal":
+Add these two steps **before** "Start app server":
 
 ```yaml
       # Requires: GLOBALPROTECT_USERNAME, GLOBALPROTECT_PASSWORD (secrets)
