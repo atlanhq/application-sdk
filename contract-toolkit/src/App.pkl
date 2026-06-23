@@ -197,6 +197,15 @@ emitGeneratedArtifacts: Boolean = true
 /// which pass through the conversion unchanged.
 workflowType: String = name
 
+/// Explicit workflow type emitted verbatim, bypassing the PascalCase→kebab
+/// conversion applied to `workflowType`. When set (non-empty), it wins over
+/// `workflowType`. Use only when the manifest must carry a non-kebab
+/// `workflow_type` — e.g. a PascalCase identifier the runtime keys on, where
+/// kebab-casing would change the value (`NetSuiteMetadataExtractionWorkflow` →
+/// `net-suite-…`). Leave unset for the default kebab behavior. Affects only the
+/// extract node's `workflow_type` in the generated manifest; nothing else.
+workflowTypeOverride: String?
+
 /// Task queue prefix for the extract node in the AE manifest.
 taskQueuePrefix: String = "atlan-\(name)"
 
@@ -205,6 +214,13 @@ taskQueuePrefix: String = "atlan-\(name)"
 /// Argo WorkflowTemplate package name used by the e2e test harness.
 /// Default: `"@atlan/<name>"`. Override for apps with scoped or non-standard package names.
 argoPackageName: String = "@atlan/\(name)"
+
+/// Argo WorkflowTemplate package names rendered into `atlan.yaml` as
+/// `argo_package_names`. The marketplace tile is derived from this list, so
+/// multi-package apps must populate it. Emitted only when non-empty; leave
+/// empty for single-package apps. Distinct from `argoPackageName`, which feeds
+/// only the e2e test harness and is never written to `atlan.yaml`.
+argoPackageNames: Listing<String> = new Listing {}
 
 /// Argo WorkflowTemplate resource name as deployed in the cluster.
 /// Default: `"atlan-<name>"` — same pattern as `taskQueuePrefix`.
@@ -2349,6 +2365,15 @@ local function renderNodeArgs(node: DAGNode): Mapping<String, Any> =
     }
   else node.args
 
+/// Workflow type for the extract node: verbatim `workflowTypeOverride` when set,
+/// otherwise `workflowType` PascalCase→kebab-cased.
+local workflowTypeResolved: String =
+  if (workflowTypeOverride != null && workflowTypeOverride!! != "") workflowTypeOverride!!
+  else workflowType
+    .replaceAll(Regex("([A-Z]+)([A-Z][a-z])"), "$1-$2")
+    .replaceAll(Regex("([a-z0-9])([A-Z])"), "$1-$2")
+    .toLowerCase()
+
 local function generateExtractNode(): Mapping<String, Any> =
   let (step = pipeline.extract!!)
   let (_extractEhCheck = validateWorkflowNodeErrorHandling(step.errorHandling, "pipeline.extract.errorHandling"))
@@ -2362,10 +2387,7 @@ local function generateExtractNode(): Mapping<String, Any> =
     // the runtime app class name) or failure logs won't surface (HYP-1678).
     ["app_name"] = name
     ["inputs"] = new Mapping {
-      ["workflow_type"] = workflowType
-          .replaceAll(Regex("([A-Z]+)([A-Z][a-z])"), "$1-$2")
-          .replaceAll(Regex("([a-z0-9])([A-Z])"), "$1-$2")
-          .toLowerCase()
+      ["workflow_type"] = workflowTypeResolved
       ["app_name"] = name
       ["app_id"] = ""
       ["argo_workflow_slug"] = ""
@@ -3090,6 +3112,7 @@ local generatedAtlanYamlData: Mapping<String, Any> = new Mapping {
   ["execution_mode"] = deploy.executionMode
   when (iconUrl != null) { ["icon_url"] = iconUrl }
   ["visibility"] = visibility
+  when (!argoPackageNames.isEmpty) { ["argo_package_names"] = argoPackageNames }
   ["build_tag"] = buildTag
   ["self_deployed_runtime"] = selfDeployedRuntime
   when (tags.toList().length > 0) { ["tags"] = tags }

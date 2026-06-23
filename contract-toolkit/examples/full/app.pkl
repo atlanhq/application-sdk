@@ -19,6 +19,7 @@ name = "full-featured"
 displayName = "Full-Featured Example"
 connector = Connectors.POSTGRES
 workflowType = "FullFeaturedExampleWorkflow"
+workflowTypeOverride = "FullFeaturedExampleWorkflow"
 icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
 docsUrl = "https://docs.example.com/apps/full-featured"
 shortDescription = "Reference contract that exercises every App.pkl property."
@@ -163,6 +164,7 @@ uiConfig = new UIConfig {
       inputs {
         ["credential-guid"] = new CredentialInput {
           credType = "atlan-connectors-full-featured"
+          placeholderText = "Credential GUID"
         }
       }
     }

@@ -6,6 +6,9 @@ type: connector
 execution_mode: native
 icon_url: https://assets.atlan.com/assets/snowflake.svg
 visibility: public
+argo_package_names:
+- '@atlan/crawler'
+- '@atlan/miner'
 build_tag: v1
 self_deployed_runtime: true
 entrypoints:

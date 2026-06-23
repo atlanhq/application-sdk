@@ -95,6 +95,7 @@ The single entry point for all new native app contracts. Supersedes `NativeApp.p
 | `helpdeskLink` | String | `""` | Helpdesk link for credential form. |
 | `type` | String | `"connector"` | Marketplace type. |
 | `visibility` | String | `"public"` | Marketplace visibility. |
+| `argoPackageNames` | Listing\<String\> | `[]` | Argo WorkflowTemplate package names. Emitted into `atlan.yaml` as `argo_package_names` (between `visibility` and `build_tag`) when non-empty; drives the marketplace tile for multi-package apps. Distinct from the singular `argoPackageName`, which feeds only the e2e harness. |
 | `buildTag` | String | `"v1"` | Emitted as `build_tag`. |
 | `selfDeployedRuntime` | Boolean | `true` | Emitted as `self_deployed_runtime`. |
 | `shortDescription` | String | `""` | One-line marketplace card description. Emitted as top-level `short_description` (omitted when empty). |
@@ -105,8 +106,8 @@ The single entry point for all new native app contracts. Supersedes `NativeApp.p
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `workflowType` | String | `""` | Python App class name in PascalCase. Auto-converted to kebab-case. Either this or `workflowTypeOverride` must be set. |
-| `workflowTypeOverride` | String? | null | Explicit workflow type (used as-is, overrides `workflowType`). |
+| `workflowType` | String | `name` | Workflow type for the extract node. Accepts PascalCase or kebab-case; auto-converted to kebab-case at output. Defaults to `name`. |
+| `workflowTypeOverride` | String? | null | Verbatim workflow type emitted as-is, bypassing the PascalCase→kebab conversion; wins over `workflowType` when set. Use only when the manifest must carry a non-kebab `workflow_type` (e.g. a PascalCase identifier the runtime keys on). |
 | `taskQueuePrefix` | String | `"atlan-{name}"` | Task queue prefix. Override for multi-entrypoint apps sharing a deployment. |
 
 ### E2E Test Harness
@@ -1146,7 +1147,7 @@ class UIRule {
 | `ConnectionCreator` | `connection` | `Connection \| None` | `placeholderText` |
 | `ConnectionSelector` | `connectionSelector` | `str` | `multiSelect`, `connectorFilter` (single), `connectorFilters` (multi — emits `connectorName` as list), `connectionCategories`, `selectedConnectorName`, `selectedCredentialGuid`, `emitMode`, `emitStart` |
 | `ConnectionRefInput` | `connectionSelector` | `ConnectionRef \| None` or `list[ConnectionRef]` | Emits `ui.shouldIncludeConnectionInfo = true`. Use when the workflow needs both `attributes.qualifiedName` and `attributes.defaultCredentialGuid` from the selected connection. Supports `multiSelect`, `connectorFilter`, `connectorFilters`, `connectionCategories`, `selectedConnectorName`, `selectedCredentialGuid`, `displayOnlyMultiConnections`, `emitMode`, `emitStart` |
-| `CredentialInput` | `credential` | `str` | `credType` (required), `authTypeVsLabel`, `hiddenFields`, `additionalDisplayFields` — triggers credential form fetch |
+| `CredentialInput` | `credential` | `str` | `credType` (required), `placeholderText`, `authTypeVsLabel`, `hiddenFields`, `additionalDisplayFields` — triggers credential form fetch |
 | `APITokenSelector` | `apiTokenSelect` | `str` | Select existing API token |
 
 `ConnectionRefInput` uses the same frontend widget as `ConnectionSelector`, but

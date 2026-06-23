@@ -1,0 +1,158 @@
+/// Unit tests for the HYP-1848 App.pkl parity gaps:
+///   Gap 1 — Widgets.CredentialInput renders `placeholderText` as `ui.placeholder`.
+///   Gap 2 — `argoPackageNames` renders to atlan.yaml as `argo_package_names`,
+///           in canonical position between `visibility` and `build_tag`.
+///   Gap 3 — `workflowTypeOverride` emits a verbatim `workflow_type`, bypassing
+///           the PascalCase→kebab conversion applied to `workflowType`.
+amends "pkl:test"
+
+import "pkl:json"
+import "../src/App.pkl" as App
+import "../src/Connectors.pkl"
+
+// ── Gap 1: credential placeholder ───────────────────────────────────────────
+local appCredWithPlaceholder = (App) {
+  name = "cred-placeholder-test"
+  displayName = "Cred Placeholder Test"
+  connector = Connectors.TRINO
+  icon = "https://example.com/icon.svg"
+  credentialAuthOptions {
+    ["basic"] = new App.AuthOption {
+      label = "Basic"
+      fields {
+        new App.FieldSpec { name = "username"; displayName = "Username" }
+        new App.FieldSpec { name = "password"; sensitive = true; displayName = "Password" }
+      }
+    }
+  }
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Credential"] {
+        inputs {
+          ["credential-guid"] = new App.CredentialInput {
+            credType = "atlan-connectors-cred-placeholder-test"
+            placeholderText = "Credential GUID"
+          }
+        }
+      }
+    }
+  }
+}
+
+local appCredNoPlaceholder = (App) {
+  name = "cred-no-placeholder-test"
+  displayName = "Cred No Placeholder Test"
+  connector = Connectors.TRINO
+  icon = "https://example.com/icon.svg"
+  credentialAuthOptions {
+    ["basic"] = new App.AuthOption {
+      label = "Basic"
+      fields {
+        new App.FieldSpec { name = "username"; displayName = "Username" }
+        new App.FieldSpec { name = "password"; sensitive = true; displayName = "Password" }
+      }
+    }
+  }
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Credential"] {
+        inputs {
+          ["credential-guid"] = new App.CredentialInput {
+            credType = "atlan-connectors-cred-no-placeholder-test"
+          }
+        }
+      }
+    }
+  }
+}
+
+local credWithJson = new json.Parser { useMapping = true }.parse(appCredWithPlaceholder.output.files["app/generated/cred-placeholder-test.json"].text)
+local credNoJson = new json.Parser { useMapping = true }.parse(appCredNoPlaceholder.output.files["app/generated/cred-no-placeholder-test.json"].text)
+local credWithUi = credWithJson["config"]["properties"]["credential-guid"]["ui"]
+local credNoUi = credNoJson["config"]["properties"]["credential-guid"]["ui"]
+
+// ── Gap 2: argoPackageNames → atlan.yaml ────────────────────────────────────
+local appArgoPkgs = (App) {
+  name = "argo-pkgs-test"
+  displayName = "Argo Pkgs Test"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  pipeline { publish = null }
+  argoPackageNames { "@atlan/a"; "@atlan/b" }
+}
+
+local appNoArgoPkgs = (App) {
+  name = "no-argo-pkgs-test"
+  displayName = "No Argo Pkgs Test"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  pipeline { publish = null }
+}
+
+local argoYaml = appArgoPkgs.output.files["atlan.yaml"].text
+local noArgoYaml = appNoArgoPkgs.output.files["atlan.yaml"].text
+
+// ── Gap 3: workflowTypeOverride verbatim vs kebab ───────────────────────────
+local workflowUiConfig = new App.UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["target"] = new App.TextInput { title = "Target"; helpText = "What to process." }
+      }
+    }
+  }
+}
+
+local appWorkflowOverride = (App) {
+  name = "wf-override-test"
+  displayName = "WF Override Test"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  pipeline { publish = null }
+  workflowType = "WfKebabTest"
+  workflowTypeOverride = "WfOverrideTest"
+  uiConfig = workflowUiConfig
+}
+
+local appWorkflowKebab = (App) {
+  name = "wf-kebab-test"
+  displayName = "WF Kebab Test"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  pipeline { publish = null }
+  workflowType = "WfKebabTest"
+  uiConfig = workflowUiConfig
+}
+
+local overrideManifest = new json.Parser { useMapping = true }.parse(appWorkflowOverride.output.files["app/generated/manifest.json"].text)
+local kebabManifest = new json.Parser { useMapping = true }.parse(appWorkflowKebab.output.files["app/generated/manifest.json"].text)
+local overrideWorkflowType = overrideManifest["dag"]["extract"]["inputs"]["workflow_type"]
+local kebabWorkflowType = kebabManifest["dag"]["extract"]["inputs"]["workflow_type"]
+
+facts {
+  ["Gap 1: CredentialInput renders placeholderText as ui.placeholder"] {
+    credWithUi["placeholder"] == "Credential GUID"
+  }
+
+  ["Gap 1: CredentialInput omits ui.placeholder when placeholderText is unset"] {
+    !credNoUi.containsKey("placeholder")
+  }
+
+  ["Gap 2: argoPackageNames renders argo_package_names between visibility and build_tag"] {
+    argoYaml.contains("argo_package_names:")
+    argoYaml.indexOf("visibility:") < argoYaml.indexOf("argo_package_names:")
+    argoYaml.indexOf("argo_package_names:") < argoYaml.indexOf("build_tag:")
+  }
+
+  ["Gap 2: argo_package_names omitted from atlan.yaml when list is empty"] {
+    !noArgoYaml.contains("argo_package_names")
+  }
+
+  ["Gap 3: workflowTypeOverride emits a verbatim workflow_type, winning over workflowType"] {
+    overrideWorkflowType == "WfOverrideTest"
+  }
+
+  ["Gap 3: workflowType is PascalCase→kebab-cased when no override is set"] {
+    kebabWorkflowType == "wf-kebab-test"
+  }
+}

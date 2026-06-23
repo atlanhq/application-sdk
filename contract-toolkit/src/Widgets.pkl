@@ -841,6 +841,9 @@ class CredentialInput extends UIElement {
 
   hidden allowTestAuthentication: Boolean = true
 
+  /// (Optional) Placeholder text rendered as `ui.placeholder`.
+  hidden placeholderText: String?
+
   hidden authTypeVsLabel: Mapping<String, String>?
 
   hidden hiddenFields: Listing<String>?
@@ -851,6 +854,7 @@ class CredentialInput extends UIElement {
     widget = "credential"
     credentialType = credType
     isTestAuthenticationDisabled = !allowTestAuthentication
+    placeholder = placeholderText
     authTypeVsLabel = outer.authTypeVsLabel
     hiddenFields = outer.hiddenFields
     additionalDisplayFields = outer.additionalDisplayFields

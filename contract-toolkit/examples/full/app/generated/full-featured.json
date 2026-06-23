@@ -12,6 +12,7 @@
           "label": "",
           "hidden": false,
           "help": "",
+          "placeholder": "Credential GUID",
           "grid": 8,
           "credentialType": "atlan-connectors-full-featured",
           "isTestAuthenticationDisabled": false
