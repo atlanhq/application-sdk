@@ -3,9 +3,9 @@
 Targets uncovered branches:
 - Reader.close() idempotency and ``_cleanup_downloaded_files`` exception swallow
   (and the inline ``import shutil``).
-- Writer._convert_to_dataframe pandas / dict / list / daft / unsupported branches,
-  including the daft ImportError fallbacks.
-- Writer.write closed / unsupported ``dataframe_type`` errors.
+- Writer._convert_to_dataframe pandas / dict / list / unsupported branches.
+- Writer.write closed / unsupported ``dataframe_type`` errors, plus the
+  DataframeType.daft deprecation shim routing to the pandas path.
 - Writer._write_batched_dataframe raises FormatWriteError on exception.
 - Writer._upload_file delegation and ``retain_local_copy`` propagation.
 - Writer._flush_buffer failure path (records error metric, re-raises).
@@ -70,9 +70,6 @@ class _StubWriter(Writer):
         self.chunk_start = None
         self.typename = None
         self.metrics = MagicMock()
-
-    async def _write_daft_dataframe(self, dataframe: Any, **kwargs: Any) -> None:
-        return None
 
     async def _write_chunk(self, chunk: Any, output_file_name: str) -> None:
         return None
@@ -164,8 +161,8 @@ class TestReaderClose:
 
 
 # ---------------------------------------------------------------------------
-# Writer._convert_to_dataframe — exercises inline ``import pandas`` and
-# ``import daft`` plus the daft ImportError fallbacks.
+# Writer._convert_to_dataframe — exercises inline ``import pandas`` plus the
+# pandas / dict / list / unsupported conversion branches.
 # ---------------------------------------------------------------------------
 
 
@@ -202,48 +199,6 @@ class TestConvertToDataframe:
         with pytest.raises(UnsupportedDataTypeError) as exc_info:
             writer._convert_to_dataframe(42)
         assert exc_info.value.code == "INVALID_INPUT_FORMAT_DATA_TYPE"
-
-    def test_pandas_input_with_daft_type_without_daft_raises(self) -> None:
-        """Exercises inline ``import daft`` ImportError fallback."""
-        import builtins
-
-        import pandas as pd
-
-        from application_sdk.storage.formats.format_errors import DaftNotInstalledError
-
-        writer = _StubWriter(dataframe_type=DataframeType.daft)
-        df = pd.DataFrame({"a": [1]})
-
-        original_import = builtins.__import__
-
-        def _raise_for_daft(name: str, *args: Any, **kwargs: Any) -> Any:
-            if name == "daft":
-                raise ImportError("daft missing")
-            return original_import(name, *args, **kwargs)
-
-        with patch.object(builtins, "__import__", side_effect=_raise_for_daft):
-            with pytest.raises(DaftNotInstalledError) as exc_info:
-                writer._convert_to_dataframe(df)
-        assert exc_info.value.code == "DEPENDENCY_UNAVAILABLE_DAFT"
-
-    def test_dict_input_with_daft_type_without_daft_raises(self) -> None:
-        """Inline ``import daft`` ImportError on dict→daft conversion path."""
-        import builtins
-
-        from application_sdk.storage.formats.format_errors import DaftNotInstalledError
-
-        writer = _StubWriter(dataframe_type=DataframeType.daft)
-        original_import = builtins.__import__
-
-        def _raise_for_daft(name: str, *args: Any, **kwargs: Any) -> Any:
-            if name == "daft":
-                raise ImportError("daft missing")
-            return original_import(name, *args, **kwargs)
-
-        with patch.object(builtins, "__import__", side_effect=_raise_for_daft):
-            with pytest.raises(DaftNotInstalledError) as exc_info:
-                writer._convert_to_dataframe({"a": 1})
-        assert exc_info.value.code == "DEPENDENCY_UNAVAILABLE_DAFT"
 
 
 # ---------------------------------------------------------------------------
@@ -285,19 +240,27 @@ class TestWriterWrite:
         mock_write.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_write_daft_calls_internal_method(self) -> None:
-        # Force pandas conversion (via dict input) but dispatch to daft branch.
-        # Skip if daft not present — simpler: stub _convert_to_dataframe out.
+    async def test_write_daft_type_routes_to_pandas_with_deprecation_warning(
+        self,
+    ) -> None:
+        """DataframeType.daft emits DeprecationWarning and routes to pandas path."""
+        import warnings as _warnings
+
         writer = _StubWriter(dataframe_type=DataframeType.daft)
-        sentinel = MagicMock(name="daft_df")
         with (
-            patch.object(writer, "_convert_to_dataframe", return_value=sentinel),
             patch.object(
-                writer, "_write_daft_dataframe", new_callable=AsyncMock
-            ) as mock_daft_write,
+                writer, "_write_dataframe", new_callable=AsyncMock
+            ) as mock_pandas,
+            _warnings.catch_warnings(record=True) as captured,
         ):
+            _warnings.simplefilter("always")
             await writer.write({"a": 1})
-        mock_daft_write.assert_awaited_once()
+
+        mock_pandas.assert_awaited_once()
+        assert any(
+            issubclass(w.category, DeprecationWarning) and "v4.0" in str(w.message)
+            for w in captured
+        )
 
 
 # ---------------------------------------------------------------------------

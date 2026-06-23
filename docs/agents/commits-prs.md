@@ -27,4 +27,4 @@ Use Conventional Commits format:
 - `refactor: description` - Code refactoring
 - `test: description` - Test additions/changes
 
-Example: `fix(io): align daft writer behavior with pandas to prevent data loss`
+Example: `fix(io): align parquet writer row-group size with reader batch size`

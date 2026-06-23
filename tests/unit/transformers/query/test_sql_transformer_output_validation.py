@@ -3,18 +3,8 @@ import json
 import os
 from typing import Any
 
+import pyarrow as pa
 import pytest
-
-try:
-    import daft
-except BaseException as _daft_err:
-    # daft's Rust extension panics when certain OTel env vars (e.g.
-    # OTEL_EXPORTER_OTLP_PROTOCOL=http/json) conflict with its internal OTel
-    # initialisation. Skip the whole module rather than failing to collect.
-    pytest.skip(
-        f"daft unavailable in this environment: {_daft_err}",
-        allow_module_level=True,
-    )
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.transformers.query import QueryBasedTransformer
@@ -54,7 +44,7 @@ def remove_run_time_sensitive_fields(row: dict[str, Any]):
 def test_transform_metadata_output_validation(sql_transformer):
     """
     Test the complete transformation flow for all JSON files in resources:
-    1. Read raw JSON from resources using daft.read_json
+    1. Read raw JSON from resources
     2. Transform using SQL transformer
     3. Validate output
     """
@@ -66,8 +56,10 @@ def test_transform_metadata_output_validation(sql_transformer):
         file_name = os.path.basename(json_file).removesuffix(".json").upper()
         logger.info("Testing for Asset: %s", file_name)
 
-        # Read the json file into a Daft DataFrame
-        input_df = daft.read_json(json_file)
+        # Read the json file into a pyarrow Table
+        with open(json_file, "r") as f:
+            records = [json.loads(line) for line in f if line.strip()]
+        input_df = pa.Table.from_pylist(records)
 
         # Transform using SQL transformer
         result = sql_transformer.transform_metadata(
@@ -81,10 +73,10 @@ def test_transform_metadata_output_validation(sql_transformer):
 
         # Assert that the result is not None and has rows
         assert result is not None
-        assert result.count_rows() > 0
+        assert len(result) > 0
 
-        # convert the transformed Daft DataFrame to a list of records
-        transformed_result_ouput = result.to_pylist()
+        # result is already a list of dicts
+        transformed_result_ouput = result
 
         # read the expected transformed json file
         expected_transformed_output: list[dict[str, Any]] = []

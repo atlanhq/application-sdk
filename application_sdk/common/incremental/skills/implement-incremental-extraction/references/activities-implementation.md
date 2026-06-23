@@ -200,7 +200,7 @@ The following methods are **concrete in the SDK** and should NOT be overridden:
 | `update_incremental_marker()` | Generic marker S3 persistence |
 | `read_current_state()` | Generic current-state S3 download |
 | `write_current_state()` | Generic ancestral merge + S3 upload |
-| `prepare_column_extraction_queries()` | Generic Daft analysis + batching |
+| `prepare_column_extraction_queries()` | Generic DuckDB analysis + batching |
 | `execute_single_column_batch()` | Generic batch download + delegation |
 
 ## ClickHouse-Specific: Filter Transformation

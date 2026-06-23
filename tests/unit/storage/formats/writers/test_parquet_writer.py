@@ -11,7 +11,6 @@ import pyarrow.parquet as pq
 import pytest
 
 from application_sdk import constants
-from application_sdk.common.types import DataframeType
 from application_sdk.infrastructure.context import (
     InfrastructureContext,
     clear_infrastructure,
@@ -535,262 +534,6 @@ class TestParquetFileWriterCloseContract:
         parquet_upload.assert_not_called()
         delete_prefix.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_consolidation_end_to_end_persist(self, tmp_path: Path):
-        """`use_consolidation=True` + `defer_uploads=True` reach the store via close().
-
-        Exercises the full chain: many small DataFrames → daft consolidation
-        → close() → persist → store has the consolidated keys.
-        """
-        pytest.importorskip("daft")
-
-        writer = ParquetFileWriter(
-            path=str(tmp_path / "out"),
-            typename="orders",
-            chunk_size=200,
-            buffer_size=50,
-            use_consolidation=True,
-            defer_uploads=True,
-        )
-
-        async def _batches():
-            # 3 DataFrames of 100 records each = 300 total.
-            # consolidation_threshold=200 → one consolidation at ~200,
-            # final consolidation at the end with the remaining 100.
-            for i in range(3):
-                yield pd.DataFrame(
-                    {
-                        "id": list(range(i * 100, (i + 1) * 100)),
-                        "batch": [i] * 100,
-                    }
-                )
-
-        await writer.write_batches(_batches())
-        result = await writer.close()
-
-        assert result.total_record_count == 300
-        # Local consolidated files must exist on disk before persist.
-        local_parquet = list(Path(writer.path).rglob("*.parquet"))
-        assert local_parquet, "Consolidation produced no local parquet files"
-
-        store = create_memory_store()
-        durable = await persist_file_reference(store, result.files)
-        assert durable.is_durable is True
-
-        # Every consolidated file lands in the store under the persisted prefix.
-        store_keys = await list_keys(durable.storage_path, store, suffix=".parquet")
-        assert len(store_keys) == len(local_parquet), (
-            f"Store key count {len(store_keys)} != local file count "
-            f"{len(local_parquet)} — consolidation upload boundary broken"
-        )
-
-
-class TestParquetFileWriterWriteDaftDataframe:
-    """Test ParquetFileWriter daft DataFrame writing via _write_daft_dataframe.
-
-    Note: These tests call _write_daft_dataframe directly to test the daft-specific
-    implementation without going through the type-checking in write().
-    """
-
-    @pytest.mark.asyncio
-    async def test_write_empty(self, base_output_path: str):
-        """Test writing an empty daft DataFrame."""
-        mock_df = MagicMock()
-        mock_df.count_rows.return_value = 0
-
-        parquet_output = ParquetFileWriter(
-            path=base_output_path,
-            dataframe_type=DataframeType.daft,
-        )
-
-        await parquet_output._write_daft_dataframe(mock_df)
-
-        assert parquet_output.chunk_count == 0
-        assert parquet_output.total_record_count == 0
-
-    @pytest.mark.asyncio
-    async def test_write_success(self, base_output_path: str):
-        """Test successful daft DataFrame writing — no inline uploads."""
-        with patch("daft.execution_config_ctx") as mock_ctx:
-            mock_ctx.return_value.__enter__ = MagicMock()
-            mock_ctx.return_value.__exit__ = MagicMock()
-
-            # Mock daft DataFrame
-            mock_df = MagicMock()
-            mock_df.count_rows.return_value = 1000
-            mock_result = MagicMock()
-            mock_result.to_pydict.return_value = {"path": ["test.parquet"]}
-            mock_df.write_parquet.return_value = mock_result
-
-            parquet_output = ParquetFileWriter(
-                path=base_output_path,
-                dataframe_type=DataframeType.daft,
-                defer_uploads=True,
-            )
-
-            await parquet_output._write_daft_dataframe(mock_df)
-
-            assert parquet_output.chunk_count == 1
-            assert parquet_output.total_record_count == 1000
-
-            # Check that daft write_parquet was called with correct parameters
-            mock_df.write_parquet.assert_called_once_with(
-                root_dir=parquet_output.path,
-                write_mode="append",  # Uses method default value "append"
-                partition_cols=None,
-            )
-
-    @pytest.mark.asyncio
-    async def test_write_with_parameter_overrides(self, base_output_path: str):
-        """Test daft DataFrame writing with parameter overrides."""
-        with patch("daft.execution_config_ctx") as mock_ctx:
-            mock_ctx.return_value.__enter__ = MagicMock()
-            mock_ctx.return_value.__exit__ = MagicMock()
-
-            # Mock daft DataFrame
-            mock_df = MagicMock()
-            mock_df.count_rows.return_value = 500
-            mock_result = MagicMock()
-            mock_result.to_pydict.return_value = {"path": ["test.parquet"]}
-            mock_df.write_parquet.return_value = mock_result
-
-            parquet_output = ParquetFileWriter(
-                path=base_output_path,
-                dataframe_type=DataframeType.daft,
-                defer_uploads=True,
-            )
-
-            # Override parameters in method call
-            await parquet_output._write_daft_dataframe(
-                mock_df, partition_cols=["department", "year"], write_mode="overwrite"
-            )
-
-            # Check that overridden parameters were used
-            mock_df.write_parquet.assert_called_once_with(
-                root_dir=parquet_output.path,
-                write_mode="overwrite",  # Overridden
-                partition_cols=["department", "year"],  # Overridden
-            )
-
-    @pytest.mark.asyncio
-    async def test_write_with_default_parameters(self, base_output_path: str):
-        """Test daft DataFrame writing with default parameters (uses method default write_mode='append')."""
-        with patch("daft.execution_config_ctx") as mock_ctx:
-            mock_ctx.return_value.__enter__ = MagicMock()
-            mock_ctx.return_value.__exit__ = MagicMock()
-
-            # Mock daft DataFrame
-            mock_df = MagicMock()
-            mock_df.count_rows.return_value = 500
-            mock_result = MagicMock()
-            mock_result.to_pydict.return_value = {"path": ["test.parquet"]}
-            mock_df.write_parquet.return_value = mock_result
-
-            parquet_output = ParquetFileWriter(
-                path=base_output_path,
-                dataframe_type=DataframeType.daft,
-                defer_uploads=True,
-            )
-
-            # Use default parameters
-            await parquet_output._write_daft_dataframe(mock_df)
-
-            # Check that default method parameters were used
-            mock_df.write_parquet.assert_called_once_with(
-                root_dir=parquet_output.path,
-                write_mode="append",  # Uses method default value "append"
-                partition_cols=None,
-            )
-
-    @pytest.mark.asyncio
-    async def test_write_with_execution_configuration(self, base_output_path: str):
-        """Test that DAPR limit is properly configured."""
-        with patch("daft.execution_config_ctx") as mock_ctx:
-            mock_ctx.return_value.__enter__ = MagicMock()
-            mock_ctx.return_value.__exit__ = MagicMock()
-
-            # Mock daft DataFrame
-            mock_df = MagicMock()
-            mock_df.count_rows.return_value = 1000
-            mock_result = MagicMock()
-            mock_result.to_pydict.return_value = {"path": ["test.parquet"]}
-            mock_df.write_parquet.return_value = mock_result
-
-            parquet_output = ParquetFileWriter(
-                path=base_output_path,
-                dataframe_type=DataframeType.daft,
-                defer_uploads=True,
-            )
-
-            await parquet_output._write_daft_dataframe(mock_df)
-
-            # Check that execution context was called (don't check exact value since DAPR_MAX_GRPC_MESSAGE_LENGTH is imported)
-            mock_ctx.assert_called_once()
-            # Verify the call was made with parquet_target_filesize parameter
-            call_args = mock_ctx.call_args
-            assert "parquet_target_filesize" in call_args.kwargs
-            assert "default_morsel_size" in call_args.kwargs
-            assert call_args.kwargs["parquet_target_filesize"] > 0
-            assert call_args.kwargs["default_morsel_size"] > 0
-
-    @pytest.mark.asyncio
-    async def test_write_error_handling(self, base_output_path: str):
-        """Test error handling during daft DataFrame writing."""
-        # Test that count_rows error is properly handled
-        mock_df = MagicMock()
-        mock_df.count_rows.side_effect = Exception("Count rows error")
-
-        parquet_output = ParquetFileWriter(
-            path=base_output_path,
-            dataframe_type=DataframeType.daft,
-        )
-
-        with pytest.raises(Exception, match="Count rows error"):
-            await parquet_output._write_daft_dataframe(mock_df)
-
-    @pytest.mark.asyncio
-    async def test_write_empty_micropartition_swallowed(
-        self, base_output_path: str
-    ) -> None:
-        """count_rows() raising DaftCoreException with "MicroPartition" in the
-        message must be treated as an empty DataFrame — early return, no write."""
-        from daft.exceptions import DaftCoreException
-
-        mock_df = MagicMock()
-        mock_df.count_rows.side_effect = DaftCoreException(
-            "DaftError::ValueError Need at least 1 MicroPartition to perform concat"
-        )
-
-        parquet_output = ParquetFileWriter(
-            path=base_output_path,
-            dataframe_type=DataframeType.daft,
-        )
-
-        await parquet_output._write_daft_dataframe(mock_df)
-
-        mock_df.write_parquet.assert_not_called()
-        assert parquet_output.chunk_count == 0
-        assert parquet_output.total_record_count == 0
-
-    @pytest.mark.asyncio
-    async def test_write_non_micropartition_daft_exception_propagates(
-        self, base_output_path: str
-    ) -> None:
-        """A DaftCoreException whose message does NOT contain "MicroPartition"
-        must propagate — the writer only swallows the empty-concat variant."""
-        from daft.exceptions import DaftCoreException
-
-        mock_df = MagicMock()
-        mock_df.count_rows.side_effect = DaftCoreException("some other daft failure")
-
-        parquet_output = ParquetFileWriter(
-            path=base_output_path,
-            dataframe_type=DataframeType.daft,
-        )
-
-        with pytest.raises(DaftCoreException, match="some other daft failure"):
-            await parquet_output._write_daft_dataframe(mock_df)
-
 
 class TestParquetFileWriterMetrics:
     """Test ParquetFileWriter metrics recording."""
@@ -818,48 +561,6 @@ class TestParquetFileWriterMetrics:
             await parquet_output.write(sample_dataframe)
 
             assert mock_metrics.record_metric.call_count >= 2
-
-    @pytest.mark.asyncio
-    async def test_daft_write_metrics(self, base_output_path: str):
-        """Test that metrics are recorded for daft DataFrame writes."""
-        with (
-            patch("daft.execution_config_ctx") as mock_ctx,
-            patch(
-                "application_sdk.storage.formats.parquet.get_metrics"
-            ) as mock_get_metrics,
-        ):
-            mock_ctx.return_value.__enter__ = MagicMock()
-            mock_ctx.return_value.__exit__ = MagicMock()
-            mock_metrics = MagicMock()
-            mock_get_metrics.return_value = mock_metrics
-
-            # Mock daft DataFrame
-            mock_df = MagicMock()
-            mock_df.count_rows.return_value = 1000
-            mock_result = MagicMock()
-            mock_result.to_pydict.return_value = {"path": ["test.parquet"]}
-            mock_df.write_parquet.return_value = mock_result
-
-            parquet_output = ParquetFileWriter(
-                path=base_output_path,
-                dataframe_type=DataframeType.daft,
-                defer_uploads=True,
-            )
-
-            # Call _write_daft_dataframe directly to test daft-specific metrics
-            await parquet_output._write_daft_dataframe(mock_df)
-
-            # Check that record metrics were called with correct labels
-            assert (
-                mock_metrics.record_metric.call_count >= 2
-            )  # At least records and operations metrics
-
-            # Verify that metrics include the correct write_mode
-            calls = mock_metrics.record_metric.call_args_list
-            for call in calls:
-                labels = call[1]["labels"]
-                assert labels["mode"] == "append"  # Uses method default "append"
-                assert labels["type"] == "daft"
 
 
 class TestParquetFileWriterConsolidation:
@@ -995,53 +696,6 @@ class TestParquetFileWriterConsolidation:
         assert exc_info.value.code == "INTERNAL_FORMAT_TEMP_FOLDER_PATH_MISSING"
 
     @pytest.mark.asyncio
-    async def test_consolidate_current_folder(
-        self, base_output_path: str, mock_consolidation_files
-    ):
-        """Test consolidating current temp folder using Daft."""
-        with (
-            patch("daft.read_parquet") as mock_read,
-            patch("daft.execution_config_ctx") as mock_ctx,
-        ):
-            # Setup mocks
-            mock_ctx.return_value.__enter__ = MagicMock()
-            mock_ctx.return_value.__exit__ = MagicMock()
-
-            # Mock daft DataFrame
-            mock_df = MagicMock()
-            mock_read.return_value = mock_df
-
-            parquet_output = ParquetFileWriter(path=base_output_path)
-            parquet_output._start_new_temp_folder()
-            parquet_output.current_folder_records = 500  # Simulate some records
-
-            # Create a dummy file to simulate temp folder content
-            assert parquet_output.current_temp_folder_path is not None
-            temp_file = os.path.join(
-                parquet_output.current_temp_folder_path, "chunk-0.parquet"
-            )
-            with open(temp_file, "w") as f:
-                f.write("dummy")
-
-            # Use the reusable fixture for mock file creation
-            with mock_consolidation_files(
-                base_output_path, ["test_generated_file.parquet"]
-            ) as (file_paths, create_mock_result):
-                mock_df.write_parquet.return_value = create_mock_result(file_paths)
-
-                await parquet_output._consolidate_current_folder()
-
-                # Check that Daft was called correctly
-                mock_read.assert_called_once()
-                mock_df.write_parquet.assert_called_once()
-
-                # Check statistics were updated
-                assert parquet_output.chunk_count == 1
-                assert parquet_output.total_record_count == 500
-                # Partitions track partition count
-                assert parquet_output.partitions == [1]  # 1 partition from mock result
-
-    @pytest.mark.asyncio
     async def test_consolidate_empty_folder(self, base_output_path: str):
         """Test consolidating when folder is empty."""
         parquet_output = ParquetFileWriter(path=base_output_path)
@@ -1083,61 +737,6 @@ class TestParquetFileWriterConsolidation:
         assert parquet_output.current_temp_folder_path is None
         assert parquet_output.temp_folder_index == 0
         assert parquet_output.current_folder_records == 0
-
-    @pytest.mark.asyncio
-    async def test_write_batches_with_consolidation(
-        self, base_output_path: str, mock_consolidation_files
-    ):
-        """Test write_batches with consolidation enabled."""
-        with (
-            patch("daft.read_parquet") as mock_read,
-            patch("daft.execution_config_ctx") as mock_ctx,
-        ):
-            mock_ctx.return_value.__enter__ = MagicMock()
-            mock_ctx.return_value.__exit__ = MagicMock()
-
-            # Mock daft DataFrame
-            mock_df = MagicMock()
-            mock_read.return_value = mock_df
-            mock_result = MagicMock()
-            mock_result.to_pydict.return_value = {"path": ["test_file.parquet"]}
-            mock_df.write_parquet.return_value = mock_result
-
-            parquet_output = ParquetFileWriter(
-                path=base_output_path,
-                chunk_size=500,  # Small threshold for testing
-                buffer_size=100,  # Small buffer for testing
-                defer_uploads=True,  # skip inline upload (no store in unit test)
-            )
-
-            # Create test data generator
-            def create_test_dataframes():
-                for i in range(3):  # 3 DataFrames of 200 records each = 600 total
-                    df = pd.DataFrame(
-                        {
-                            "id": range(i * 200, (i + 1) * 200),
-                            "value": [f"value_{j}" for j in range(200)],
-                            "batch": [i] * 200,
-                        }
-                    )
-                    yield df
-
-            # Use the reusable fixture for mock file creation
-            with mock_consolidation_files(base_output_path, ["test_file.parquet"]) as (
-                file_paths,
-                create_mock_result,
-            ):
-                mock_df.write_parquet.return_value = create_mock_result(file_paths)
-
-                await parquet_output.write_batches(create_test_dataframes())
-
-                # Should have triggered consolidation (600 records > 500 threshold)
-                assert parquet_output.total_record_count == 600
-                assert parquet_output.chunk_count >= 1
-
-                # Temp folders should be cleaned up
-                temp_base = os.path.join(parquet_output.path, "temp_accumulation")
-                assert not os.path.exists(temp_base) or len(os.listdir(temp_base)) == 0
 
     @pytest.mark.asyncio
     async def test_write_batches_without_consolidation(self, base_output_path: str):
@@ -1253,197 +852,30 @@ class TestParquetFileWriterConsolidation:
             mock_cleanup.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_multiple_write_batched_calls_with_consolidation(
-        self, base_output_path: str
+    async def test_consolidate_current_folder_pyarrow(
+        self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
-        """Test multiple calls to write_batches with consolidation enabled.
+        """Consolidation writes combined DataFrame chunks to final location."""
+        parquet_output = ParquetFileWriter(path=base_output_path, buffer_size=3)
+        parquet_output._start_new_temp_folder()
+        parquet_output.current_folder_records = len(sample_dataframe)
 
-        This test verifies that:
-        1. Multiple calls to write_batches work correctly
-        2. Each call generates separate consolidated files
-        3. Chunk counts accumulate across calls
-        4. Low thresholds trigger multiple consolidations within a single call
-        """
-        with (
-            patch("daft.read_parquet") as mock_read,
-            patch("daft.execution_config_ctx") as mock_ctx,
+        # Write sample data to the temp folder
+        assert parquet_output.current_temp_folder_path is not None
+        temp_file = os.path.join(
+            parquet_output.current_temp_folder_path, "chunk-0.parquet"
+        )
+        sample_dataframe.to_parquet(temp_file, index=False)
+
+        with patch(
+            "application_sdk.storage.formats.parquet._upload_file",
+            new_callable=AsyncMock,
         ):
-            mock_ctx.return_value.__enter__ = MagicMock()
-            mock_ctx.return_value.__exit__ = MagicMock()
+            await parquet_output._consolidate_current_folder()
 
-            # Mock daft DataFrame with different file names for each consolidation
-            mock_df = MagicMock()
-            mock_read.return_value = mock_df
-
-            # Use the reusable fixture for mock file creation
-            consolidation_counter = [0]  # Use list to modify from inner function
-
-            def mock_write_parquet(*args, **kwargs):
-                consolidation_counter[0] += 1
-                # Create files using the fixture pattern
-                temp_dir = os.path.join(
-                    base_output_path, f"temp_consolidated_{consolidation_counter[0]}"
-                )
-                os.makedirs(temp_dir, exist_ok=True)
-                file_path = os.path.join(
-                    temp_dir, f"consolidated_{consolidation_counter[0]}.parquet"
-                )
-                with open(file_path, "w") as f:
-                    f.write("dummy")
-                result = MagicMock()
-                result.to_pydict.return_value = {"path": [file_path]}
-                return result
-
-            mock_df.write_parquet.side_effect = mock_write_parquet
-
-            # Create ParquetFileWriter with very low thresholds to trigger multiple consolidations
-            parquet_output = ParquetFileWriter(
-                path=base_output_path,
-                chunk_size=100,  # Very small consolidation threshold
-                buffer_size=50,  # Very small buffer size
-                use_consolidation=True,
-            )
-
-            # First call: 3 DataFrames of 80 records each = 240 total
-            # Should trigger 2 consolidations (160 records, then remaining 80)
-            def create_first_batch():
-                for i in range(3):
-                    df = pd.DataFrame(
-                        {
-                            "id": range(i * 80, (i + 1) * 80),
-                            "value": [f"batch1_value_{j}" for j in range(80)],
-                            "call": [1] * 80,
-                        }
-                    )
-                    yield df
-
-            # Files are now created by the mock_write_parquet function
-
-            try:
-                # First call to write_batches
-                await parquet_output.write_batches(create_first_batch())
-
-                # Verify first call results
-                first_call_total = parquet_output.total_record_count
-                first_call_chunks = parquet_output.chunk_count
-                assert first_call_total == 240
-                assert (
-                    first_call_chunks >= 1
-                )  # Should have at least 1 consolidated chunk
-
-                # Second call: 2 DataFrames of 120 records each = 240 total
-                # Should trigger 2 more consolidations
-                def create_second_batch():
-                    for i in range(2):
-                        df = pd.DataFrame(
-                            {
-                                "id": range(
-                                    i * 120 + 1000, (i + 1) * 120 + 1000
-                                ),  # Different IDs
-                                "value": [f"batch2_value_{j}" for j in range(120)],
-                                "call": [2] * 120,
-                            }
-                        )
-                        yield df
-
-                # Second call to write_batches on the same instance
-                await parquet_output.write_batches(create_second_batch())
-
-                # Verify accumulated results across both calls
-                total_records = parquet_output.total_record_count
-                total_chunks = parquet_output.chunk_count
-
-                assert total_records == 480  # 240 + 240
-                assert total_chunks > first_call_chunks  # Should have more chunks now
-
-                # Verify that consolidation was called multiple times
-                # With chunk_size=100, we should get multiple consolidations:
-                # Call 1: 240 records -> at least 2 consolidations (100+100+remaining)
-                # Call 2: 240 records -> at least 2 more consolidations
-                assert mock_df.write_parquet.call_count >= 4
-
-                # Verify partitions tracking (should track each consolidated file)
-                assert len(parquet_output.partitions) >= 4
-
-                # Verify cleanup happened (temp folders should be clean)
-                temp_base = os.path.join(parquet_output.path, "temp_accumulation")
-                assert not os.path.exists(temp_base) or len(os.listdir(temp_base)) == 0
-
-            finally:
-                # Cleanup all temp directories
-                import shutil
-
-                for i in range(1, consolidation_counter[0] + 1):
-                    temp_dir = os.path.join(base_output_path, f"temp_consolidated_{i}")
-                    if os.path.exists(temp_dir):
-                        shutil.rmtree(temp_dir, ignore_errors=True)
-
-    @pytest.mark.asyncio
-    async def test_consolidation_with_very_small_buffer_multiple_chunks(
-        self, base_output_path: str, mock_consolidation_files
-    ):
-        """Test consolidation behavior with very small buffer size generating multiple chunk files.
-
-        This test specifically targets the scenario where buffer_size is much smaller than
-        consolidation_threshold, leading to multiple small files being consolidated.
-        """
-        with (
-            patch("daft.read_parquet") as mock_read,
-            patch("daft.execution_config_ctx") as mock_ctx,
-        ):
-            mock_ctx.return_value.__enter__ = MagicMock()
-            mock_ctx.return_value.__exit__ = MagicMock()
-
-            mock_df = MagicMock()
-            mock_read.return_value = mock_df
-            # Use the reusable fixture for mock file creation
-            with mock_consolidation_files(
-                base_output_path, ["multi_chunk_test.parquet"]
-            ) as (file_paths, create_mock_result):
-                mock_df.write_parquet.return_value = create_mock_result(file_paths)
-
-                # Extreme settings: buffer_size=10, consolidation_threshold=200
-                # This should create many small chunk files before consolidation
-                parquet_output = ParquetFileWriter(
-                    path=base_output_path,
-                    chunk_size=200,  # consolidation_threshold
-                    buffer_size=10,  # Very small buffer - each dataframe chunk becomes a file
-                    use_consolidation=True,
-                )
-
-                # Create a large dataframe that will be split into many buffer_size chunks
-                def create_large_batch():
-                    # Single large DataFrame with 250 records
-                    # With buffer_size=10, this creates 25 small chunk files
-                    # With consolidation_threshold=200, first 20 files (200 records) get consolidated
-                    # Then remaining 5 files (50 records) get consolidated at the end
-                    df = pd.DataFrame(
-                        {
-                            "id": range(250),
-                            "value": [f"large_value_{i}" for i in range(250)],
-                            "chunk_test": ["multi"] * 250,
-                        }
-                    )
-                    yield df
-
-                # Files are created by the fixture automatically
-                await parquet_output.write_batches(create_large_batch())
-
-                # Verify results
-                assert parquet_output.total_record_count == 250
-
-                # Should have triggered consolidation at least once
-                # (when current_folder_records + chunk_size > consolidation_threshold)
-                mock_df.write_parquet.assert_called()
-
-                # With 250 records, buffer_size=10, consolidation_threshold=200:
-                # - First 200 records (20 chunks) -> 1 consolidation
-                # - Remaining 50 records (5 chunks) -> 1 final consolidation
-                # So we expect 2 consolidations total
-                assert mock_df.write_parquet.call_count == 2
-
-                # Verify partitions tracking
-                assert len(parquet_output.partitions) == 2
+        assert parquet_output.chunk_count == 1
+        assert parquet_output.total_record_count == len(sample_dataframe)
+        assert len(parquet_output.partitions) == 1
 
 
 class TestWriteChunkNullColumns:

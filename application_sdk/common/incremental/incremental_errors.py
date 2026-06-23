@@ -51,12 +51,16 @@ class JsonScanError(InternalError):
 
 
 @dataclass(kw_only=True)
-class DaftAnalysisError(InternalError):
-    """Daft table analysis failed during incremental column extraction."""
+class ColumnExtractionAnalysisError(InternalError):
+    """Table analysis failed during incremental column extraction."""
 
     code: ClassVar[str] = "INTERNAL_INCREMENTAL_DAFT_ANALYSIS"
-    message: str = "Daft table analysis failed"
+    message: str = "Table analysis failed"
     component: str | None = "column_extraction"
+
+
+# Backward-compat alias — do not use in new code
+DaftAnalysisError = ColumnExtractionAnalysisError
 
 
 @dataclass(kw_only=True)

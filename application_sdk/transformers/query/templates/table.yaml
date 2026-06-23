@@ -31,10 +31,10 @@ columns:
           WHEN remarks IS NOT NULL THEN REGEXP_REPLACE(
             REGEXP_REPLACE(
               REGEXP_REPLACE(
-                REGEXP_REPLACE(SUBSTRING(COALESCE(remarks, ''), 1, 100000), '<[^>]+>', ''),
-              '\s+', ' '),
-            '^ ', ''),
-            ' $', '')
+                REGEXP_REPLACE(SUBSTRING(COALESCE(remarks, ''), 1, 100000), '<[^>]+>', '', 'g'),
+              '\s+', ' ', 'g'),
+            '^ ', '', 'g'),
+            ' $', '', 'g')
           ELSE NULL
         END
       source_columns: [remarks]
@@ -169,11 +169,7 @@ columns:
         END
       source_columns: [number_columns_in_part_key]
     columns_participating_in_part_key:
-      source_query: |
-        CASE
-          WHEN columns_participating_in_part_key IS NOT NULL THEN CAST(COALESCE(columns_participating_in_part_key, 0) AS FLOAT)
-          ELSE NULL
-        END
+      source_query: TRY_CAST(columns_participating_in_part_key AS FLOAT)
       source_columns: [columns_participating_in_part_key]
     is_typed:
       source_query: is_typed
