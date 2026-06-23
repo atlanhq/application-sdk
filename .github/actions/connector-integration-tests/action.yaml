@@ -102,12 +102,13 @@ inputs:
     default: "60"
   dapr-version:
     required: false
-    description: Dapr runtime version to install.
-    default: "1.18.0"
-  dapr-cli-version:
-    required: false
-    description: Dapr CLI version to download (may differ from the runtime version).
-    default: "1.18.0"
+    description: |
+      Dapr version used for BOTH the CLI download and the daprd runtime.
+      Leave empty (the default) to read the SDK's pinned ``__dapr_version``
+      from ``application_sdk/version.py`` — the single source of truth, bumped
+      by ``.github/workflows/check-dapr-version.yaml``. Set this only to force a
+      specific version (e.g. to reproduce an issue on an older daprd).
+    default: ""
   force-external-runtime:
     required: false
     description: >
@@ -201,14 +202,27 @@ runs:
     - name: Install Dapr CLI
       if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
       shell: bash
+      env:
+        DAPR_VERSION_INPUT: ${{ inputs.dapr-version }}
       run: |
-        DAPR_CLI_VERSION="${{ inputs.dapr-cli-version }}"
-        DAPR_RUNTIME_VERSION="${{ inputs.dapr-version }}"
-        wget -q "https://github.com/dapr/cli/releases/download/v${DAPR_CLI_VERSION}/dapr_linux_amd64.tar.gz" -O /tmp/dapr.tar.gz
+        # Default to the SDK's pinned __dapr_version (single source of truth).
+        # This action ships inside application-sdk, so version.py sits three
+        # dirs up from the action dir. An explicit dapr-version input overrides.
+        # The CLI download and the daprd runtime share the one version.
+        DAPR_VERSION="${DAPR_VERSION_INPUT}"
+        if [ -z "$DAPR_VERSION" ]; then
+          DAPR_VERSION="$(grep '^__dapr_version' "${{ github.action_path }}/../../../application_sdk/version.py" | cut -d'"' -f2)"
+        fi
+        if [ -z "$DAPR_VERSION" ]; then
+          echo "::error::Could not resolve Dapr version (input empty and __dapr_version unreadable)"
+          exit 1
+        fi
+        echo "Using Dapr version: $DAPR_VERSION"
+        wget -q "https://github.com/dapr/cli/releases/download/v${DAPR_VERSION}/dapr_linux_amd64.tar.gz" -O /tmp/dapr.tar.gz
         tar -xzf /tmp/dapr.tar.gz -C /tmp
         sudo mv /tmp/dapr /usr/local/bin/
         chmod +x /usr/local/bin/dapr
-        dapr init --runtime-version "${DAPR_RUNTIME_VERSION}" --slim
+        dapr init --runtime-version "${DAPR_VERSION}" --slim
 
     - name: Install Temporal CLI
       if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'

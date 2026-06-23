@@ -444,7 +444,7 @@ jobs:
 
       - name: Install Dapr CLI
         run: |
-          DAPR_VERSION="1.16.2"
+          DAPR_VERSION="1.18.0"
           wget -q https://github.com/dapr/cli/releases/download/v${DAPR_VERSION}/dapr_linux_amd64.tar.gz -O /tmp/dapr.tar.gz
           tar -xzf /tmp/dapr.tar.gz -C /tmp
           sudo mv /tmp/dapr /usr/local/bin/
