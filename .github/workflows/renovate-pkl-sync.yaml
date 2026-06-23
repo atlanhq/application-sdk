@@ -81,34 +81,57 @@ jobs:
         run: pkl project resolve contract/
 
       - name: Regenerate contract artifacts
+        # Best-effort by design: this step must NEVER fail the job. The
+        # re-resolve above has already produced the lock; if regeneration hits
+        # any snag (eval error, transient package fetch, ruff hiccup) we fall
+        # back to committing just the lock — i.e. exactly what this workflow did
+        # before regeneration existed — rather than blocking the PR. Note the
+        # absence of `set -e`: failures are handled explicitly, not fatally.
         run: |
-          set -euo pipefail
+          set -uo pipefail
 
           if [ ! -f contract/app.pkl ]; then
             echo "::notice::No contract/app.pkl at repo root — skipping artifact regeneration (re-resolve only)."
             exit 0
           fi
 
-          # rm before eval so a removed/renamed output (e.g. a dropped bundle)
-          # doesn't linger as an orphan — mirrors contract-toolkit/scripts/regenerate-all.sh.
-          rm -rf app/generated
+          # Generate into a throwaway dir first and only swap the result into the
+          # working tree on full success. This keeps the step atomic: a failed
+          # eval leaves the committed app/generated untouched, so the commit step
+          # never publishes a half-deleted / half-regenerated state.
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
 
           # --project-dir contract: the contract is a Pkl project that declares
           # app-contract-toolkit as a *remote package* dependency, so eval must
           # load that project to resolve the `@app-contract-toolkit` import (the
           # bare `pkl eval contract/app.pkl` from the repo root finds no project
-          # and fails). -m . writes every output key at its natural path
-          # relative to the repo root.
-          pkl eval --project-dir contract -m . contract/app.pkl
+          # and fails). -m writes every output key at its natural path relative
+          # to the output base.
+          if ! pkl eval --project-dir contract -m "$tmp" contract/app.pkl; then
+            echo "::warning::pkl eval failed — falling back to lock-only sync (generated artifacts left unchanged)."
+            exit 0
+          fi
 
           # The generated Python model (_input.py) is emitted unformatted; this
           # commit bypasses pre-commit, so format it here exactly as
-          # regenerate-all.sh does or the app's ruff pre-commit CI will go red.
-          PY_FILES=$(find app/generated -name '_input.py' 2>/dev/null || true)
+          # regenerate-all.sh does (best-effort) for apps that lint app/generated.
+          PY_FILES="$(find "$tmp/app/generated" -name '_input.py' 2>/dev/null || true)"
           if [ -n "$PY_FILES" ]; then
-            echo "$PY_FILES" | xargs uvx ruff check --fix --select F401 --quiet
-            echo "$PY_FILES" | xargs uvx ruff format
+            echo "$PY_FILES" | xargs uvx ruff check --fix --select F401 --quiet || true
+            echo "$PY_FILES" | xargs uvx ruff format || true
           fi
+
+          # Swap freshly generated outputs into the tree. Replacing app/generated
+          # wholesale clears any orphaned files from a removed/renamed bundle.
+          if [ -d "$tmp/app/generated" ]; then
+            rm -rf app/generated
+            mkdir -p app
+            cp -R "$tmp/app/generated" app/generated
+          fi
+          [ -f "$tmp/atlan.yaml" ] && cp "$tmp/atlan.yaml" atlan.yaml
+          [ -f "$tmp/app.yaml" ]   && cp "$tmp/app.yaml"   app.yaml
+          echo "Regenerated contract artifacts."
 
       - name: Commit and push if changed
         run: |
