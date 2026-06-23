@@ -216,10 +216,10 @@ taskQueuePrefix: String = "atlan-\(name)"
 argoPackageName: String = "@atlan/\(name)"
 
 /// Argo WorkflowTemplate package names rendered into `atlan.yaml` as
-/// `argo_package_names`. The marketplace tile is derived from this list, so
-/// multi-package apps must populate it. Emitted only when non-empty; leave
-/// empty for single-package apps. Distinct from `argoPackageName`, which feeds
-/// only the e2e test harness and is never written to `atlan.yaml`.
+/// `argo_package_names`, consumed by the marketplace for multi-package apps.
+/// Emitted only when non-empty; leave empty for single-package apps. Distinct
+/// from `argoPackageName`, which feeds only the e2e test harness and is never
+/// written to `atlan.yaml`.
 argoPackageNames: Listing<String> = new Listing {}
 
 /// Argo WorkflowTemplate resource name as deployed in the cluster.

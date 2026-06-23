@@ -19,6 +19,8 @@ name = "full-featured"
 displayName = "Full-Featured Example"
 connector = Connectors.POSTGRES
 workflowType = "FullFeaturedExampleWorkflow"
+// Demonstrates workflowTypeOverride: emits workflow_type verbatim, skipping the
+// PascalCase→kebab conversion. Most apps omit this and let workflowType kebab-case.
 workflowTypeOverride = "FullFeaturedExampleWorkflow"
 icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
 docsUrl = "https://docs.example.com/apps/full-featured"

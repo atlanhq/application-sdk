@@ -95,7 +95,7 @@ The single entry point for all new native app contracts. Supersedes `NativeApp.p
 | `helpdeskLink` | String | `""` | Helpdesk link for credential form. |
 | `type` | String | `"connector"` | Marketplace type. |
 | `visibility` | String | `"public"` | Marketplace visibility. |
-| `argoPackageNames` | Listing\<String\> | `[]` | Argo WorkflowTemplate package names. Emitted into `atlan.yaml` as `argo_package_names` (between `visibility` and `build_tag`) when non-empty; drives the marketplace tile for multi-package apps. Distinct from the singular `argoPackageName`, which feeds only the e2e harness. |
+| `argoPackageNames` | Listing\<String\> | `[]` | Argo WorkflowTemplate package names. Emitted into `atlan.yaml` as `argo_package_names` (between `visibility` and `build_tag`) when non-empty; consumed by the marketplace for multi-package apps. Distinct from the singular `argoPackageName`, which feeds only the e2e harness. |
 | `buildTag` | String | `"v1"` | Emitted as `build_tag`. |
 | `selfDeployedRuntime` | Boolean | `true` | Emitted as `self_deployed_runtime`. |
 | `shortDescription` | String | `""` | One-line marketplace card description. Emitted as top-level `short_description` (omitted when empty). |
