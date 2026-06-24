@@ -5,7 +5,7 @@ This test suite verifies that writers maintain data integrity when multiple
 write() calls are made and when DataFrames exceed buffer_size.
 
 Guards against two classes of bugs:
-1. JSON/daft writer: file name collisions across write() calls (fixed earlier)
+1. JSON writer (incl. legacy daft shim): file name collisions across write() calls (fixed earlier)
 2. Parquet writer: pq.write_table() overwrites within a single write() call
    when DataFrame exceeds buffer_size, since parquet cannot append (HYP-773)
 
@@ -122,7 +122,7 @@ class TestWriterDataIntegrity:
                 new_callable=AsyncMock,
                 side_effect=mock_upload,
             ),
-            pytest.warns(DeprecationWarning),
+            pytest.warns(DeprecationWarning, match="DataframeType.daft is deprecated"),
         ):
             writer = JsonFileWriter(
                 path=temp_dir,
@@ -169,31 +169,32 @@ class TestWriterDataIntegrity:
             if os.path.exists(source) and not retain_local_copy:
                 os.remove(source)
 
-        with (
-            patch(
-                "application_sdk.storage.formats._upload_file",
-                new_callable=AsyncMock,
-                side_effect=mock_upload,
-            ),
-            pytest.warns(DeprecationWarning),
+        with patch(
+            "application_sdk.storage.formats._upload_file",
+            new_callable=AsyncMock,
+            side_effect=mock_upload,
         ):
-            pandas_writer = JsonFileWriter(
-                path=os.path.join(temp_dir, "pandas"),
-                typename="test",
-                buffer_size=50,
-                chunk_size=100,
-                retain_local_copy=False,
-                dataframe_type=DataframeType.pandas,
-            )
+            with pytest.warns(DeprecationWarning, match="JsonFileWriter is deprecated"):
+                pandas_writer = JsonFileWriter(
+                    path=os.path.join(temp_dir, "pandas"),
+                    typename="test",
+                    buffer_size=50,
+                    chunk_size=100,
+                    retain_local_copy=False,
+                    dataframe_type=DataframeType.pandas,
+                )
 
-            daft_shim_writer = JsonFileWriter(
-                path=os.path.join(temp_dir, "daft_shim"),
-                typename="test",
-                buffer_size=50,
-                chunk_size=100,
-                retain_local_copy=False,
-                dataframe_type=DataframeType.daft,
-            )
+            with pytest.warns(
+                DeprecationWarning, match="DataframeType.daft is deprecated"
+            ):
+                daft_shim_writer = JsonFileWriter(
+                    path=os.path.join(temp_dir, "daft_shim"),
+                    typename="test",
+                    buffer_size=50,
+                    chunk_size=100,
+                    retain_local_copy=False,
+                    dataframe_type=DataframeType.daft,
+                )
 
             for batch in range(3):
                 data = {"id": list(range(batch * 50, (batch + 1) * 50))}
@@ -238,7 +239,7 @@ class TestWriterDataIntegrity:
                 new_callable=AsyncMock,
                 side_effect=mock_upload,
             ),
-            pytest.warns(DeprecationWarning),
+            pytest.warns(DeprecationWarning, match="DataframeType.daft is deprecated"),
         ):
             writer = JsonFileWriter(
                 path=temp_dir,
