@@ -16,12 +16,16 @@ description: |
 
   Steps:
   - Sets up Python + uv via `setup-deps` (which also checks out the caller repo).
-  - Installs Dapr CLI + Temporal CLI.
-  - Starts Dapr + Temporal (`poe start-deps`).
-  - Starts the connector app server (`python main.py`) and waits for health.
+  - Starts the connector app server (`python main.py`) and waits for health. On
+    SDK >= 3.13 this boots an embedded daprd + in-process Temporal itself
+    (`application_sdk.dev`), so no external runtime install is needed — that is
+    the default.
+  - Only on SDK < 3.13 (or when `force-external-runtime: true`): installs the
+    Dapr CLI + Temporal CLI and starts them via `poe start-deps` before the app
+    server. The daprd version then follows the SDK's pinned `__dapr_version`.
   - Runs `pytest tests/integration/` with pytest-xdist for in-process parallelism.
   - Uploads junit XML + raw test output as artifacts.
-  - Cleans up app server + Dapr/Temporal.
+  - Cleans up the app server (and the external Dapr/Temporal when they were started).
 
   pytest-xdist is installed transiently via `uv run --with pytest-xdist` so the
   caller does not need to declare it as a dependency.
