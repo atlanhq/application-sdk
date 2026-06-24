@@ -144,8 +144,24 @@ for i in $(seq 1 30); do
   sleep 1
 done
 
+# Best-effort readiness gate for a freshly-launched daprd: poll its HTTP API
+# until it answers, then let the app start. We poll /v1.0/metadata (HTTP server
+# up) rather than /v1.0/healthz — daprd 1.14+ holds healthz until ALL components
+# finish initializing, which can outlast this bound and would needlessly serialize
+# startup. Bounded + non-fatal: the SDK's Dapr client retries connect anyway, so
+# if daprd is a touch slow we proceed and let the existing wait_ready loops absorb
+# the slack (no worse than `dapr run`, which was also async).
+wait_daprd() { # $1 dapr-http-port  $2 timeout(s, default 15)
+  local port="$1" to="${2:-15}"
+  for _ in $(seq 1 "$to"); do
+    curl -sf "http://localhost:${port}/v1.0/metadata" >/dev/null 2>&1 && return 0
+    sleep 1
+  done
+  return 0
+}
+
 # ── 4. Generic worker launcher ───────────────────────────────────────────────
-# Every app starts the same way: uv sync, dapr-run its main.py with a unique
+# Every app starts the same way: uv sync, start daprd + its main.py with a unique
 # port block + its task queue. Ports are derived from a per-app index so they
 # never collide.
 PORT_IDX=0
@@ -177,6 +193,7 @@ start_worker() {
       --scheduler-host-address '' --placement-host-address '' \
       --max-body-size 100Mi --resources-path components --log-level warn \
       > "$LOG_DIR/${appid}-daprd.log" 2>&1 &
+    wait_daprd "$dhttp"
     env \
       ATLAN_APPLICATION_NAME="$appname" \
       ATLAN_DEPLOYMENT_NAME="$DEPLOYMENT" \
@@ -214,6 +231,7 @@ log "starting automation-engine on :8000"
     --metrics-port 3100 --scheduler-host-address '' --placement-host-address '' \
     --resources-path components --log-level warn \
     > "$LOG_DIR/automation-engine-daprd.log" 2>&1 &
+  wait_daprd 3500
   env \
     ATLAN_APPLICATION_NAME=automation-engine ATLAN_DEPLOYMENT_NAME="$DEPLOYMENT" \
     ATLAN_REGISTRY_TYPE=sql ATLAN_WORKFLOW_HOST=localhost ATLAN_WORKFLOW_PORT=7233 \

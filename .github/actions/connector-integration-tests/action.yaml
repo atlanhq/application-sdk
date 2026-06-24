@@ -268,14 +268,18 @@ runs:
     - name: Start daprd + Temporal
       if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
       shell: bash
+      env:
+        APP_PORT: ${{ inputs.app-port }}
       run: |
         # Start daprd directly (no `dapr run` wrapper). App-less sidecar on the
         # default ports; the app server (next step) connects to it. We do NOT
         # delegate to the caller's `poe start-deps` because that task lives in
         # the *connector's* pyproject and runs `dapr run`, which needs the CLI.
+        # Record PIDs so cleanup kills exactly these processes (not every daprd
+        # on the box — matters on self-hosted runners).
         daprd \
           --app-id app \
-          --app-port "${{ inputs.app-port }}" \
+          --app-port "$APP_PORT" \
           --dapr-http-port 3500 \
           --dapr-grpc-port 50001 \
           --resources-path components \
@@ -284,12 +288,20 @@ runs:
           --scheduler-host-address '' \
           --max-body-size 1024Mi \
           > daprd.log 2>&1 &
+        echo $! > daprd.pid
         temporal server start-dev --db-filename /tmp/temporal.db > temporal.log 2>&1 &
+        echo $! > temporal.pid
         # Export the sidecar ports so the (separate) app-server step runs in
         # Dapr-backed mode — the SDK keys off DAPR_HTTP_PORT being set.
         echo "DAPR_HTTP_PORT=3500" >> "$GITHUB_ENV"
         echo "DAPR_GRPC_PORT=50001" >> "$GITHUB_ENV"
-        sleep 5
+        # Wait for daprd's HTTP API to answer (bounded, non-fatal). Poll
+        # /v1.0/metadata, not /v1.0/healthz — daprd holds healthz until all
+        # components init, which can outlast this bound.
+        for _ in $(seq 1 15); do
+          curl -sf http://localhost:3500/v1.0/metadata >/dev/null 2>&1 && break
+          sleep 1
+        done
 
     - name: Start runtime services (services-script hook)
       if: inputs.services-script != ''
@@ -357,7 +369,9 @@ runs:
       shell: bash
       run: |
         kill $(lsof -t -i :${{ inputs.app-port }}) 2>/dev/null || true
-        # Kill the daprd + Temporal we started directly (no `poe stop-deps`,
-        # which is a connector-side task and was tied to the old CLI flow).
-        pkill -f daprd 2>/dev/null || true
-        pkill -f "temporal server" 2>/dev/null || true
+        # Kill exactly the daprd + Temporal we started (by recorded PID, not a
+        # broad pkill -f — avoids killing other jobs' processes on self-hosted
+        # runners). No `poe stop-deps`: that is a connector-side, CLI-era task.
+        for p in daprd.pid temporal.pid; do
+          [ -f "$p" ] && kill "$(cat "$p")" 2>/dev/null || true
+        done
