@@ -86,9 +86,16 @@ path.write_text(replaced)
 print(f"Re-pinned app-contract-toolkit to {version}")
 PYEOF
 
-# Re-resolve the lock for the new version, then regenerate app/generated/.
-# These are the same commands the make-contract skill documents and that
-# renovate-pkl-sync.yaml runs for the resolve half.
+# Re-resolve the lock for the new version, then regenerate the generated
+# artifacts. The eval MUST run from the app root with `--project-dir contract/`
+# and `-m .` (NOT `-m app/generated`): the toolkit's modules already encode
+# their own output paths (`app/generated/manifest.json`, root `atlan.yaml`,
+# root `app.yaml`), so `-m .` lands them correctly. Verified to reproduce a
+# connector's committed app/generated/manifest.json byte-identically; the
+# `-m app/generated` form double-nests to app/generated/app/generated/.
+# (Canonical path is `atlan app contract generate`, but the atlan CLI is not
+# installed in this runner — this is the pkl fallback the make-contract skill
+# documents.)
 pkl project resolve contract/
-pkl eval -m app/generated contract/app.pkl
-echo "Regenerated app/generated/ from contract/app.pkl with toolkit ${TOOLKIT_VERSION}"
+pkl eval --project-dir contract/ -m . contract/app.pkl
+echo "Regenerated contract artifacts from contract/app.pkl with toolkit ${TOOLKIT_VERSION}"
