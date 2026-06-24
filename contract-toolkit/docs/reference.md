@@ -95,7 +95,7 @@ The single entry point for all new native app contracts. Supersedes `NativeApp.p
 | `helpdeskLink` | String | `""` | Helpdesk link for credential form. |
 | `type` | String | `"connector"` | Marketplace type. |
 | `visibility` | String | `"public"` | Marketplace visibility. |
-| `argoPackageNames` | Listing\<String\> | `[]` | Argo WorkflowTemplate package names. Emitted into `atlan.yaml` as `argo_package_names` (between `visibility` and `build_tag`) when non-empty; consumed by the marketplace for multi-package apps. Distinct from the singular `argoPackageName`, which feeds only the e2e harness. |
+| `argoPackageNames` | Listing\<String\> | `[]` | Argo WorkflowTemplate package names — the single knob for Argo package naming. Rendered into `atlan.yaml` as `argo_package_names` (between `visibility` and `build_tag`) when non-empty, consumed by the marketplace; the e2e harness's `argo_package_name` is taken from the first entry (falls back to `@atlan/{name}` when empty). |
 | `buildTag` | String | `"v1"` | Emitted as `build_tag`. |
 | `selfDeployedRuntime` | Boolean | `true` | Emitted as `self_deployed_runtime`. |
 | `shortDescription` | String | `""` | One-line marketplace card description. Emitted as top-level `short_description` (omitted when empty). |
@@ -116,7 +116,6 @@ These fields are emitted into `app/generated/_e2e_base.py` and are required by `
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `argoPackageName` | String | `"@atlan/{name}"` | Argo WorkflowTemplate package name. Override when the app uses a scoped or non-standard Argo package. |
 | `argoTemplateName` | String | `"atlan-{name}"` | Argo WorkflowTemplate resource name as deployed in-cluster. Matches `taskQueuePrefix` by default. |
 | `appServiceUrl` | String | `"http://{name}.{name}-app.svc.cluster.local"` | In-cluster Dapr service URL forwarded to by the e2e harness. Override when the app's Kubernetes service name deviates from the standard `{name}-app` pattern. |
 

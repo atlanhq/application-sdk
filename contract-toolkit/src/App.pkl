@@ -212,16 +212,21 @@ taskQueuePrefix: String = "atlan-\(name)"
 
 // ── E2E TEST HARNESS ──────────────────────────────────────────────────────────
 
-/// Argo WorkflowTemplate package name used by the e2e test harness.
-/// Default: `"@atlan/<name>"`. Override for apps with scoped or non-standard package names.
-argoPackageName: String = "@atlan/\(name)"
-
-/// Argo WorkflowTemplate package names rendered into `atlan.yaml` as
-/// `argo_package_names`, consumed by the marketplace for multi-package apps.
-/// Emitted only when non-empty; leave empty for single-package apps. Distinct
-/// from `argoPackageName`, which feeds only the e2e test harness and is never
-/// written to `atlan.yaml`.
+/// Argo WorkflowTemplate package names. The single knob for Argo package
+/// naming — drives two outputs:
+///   - rendered into `atlan.yaml` as `argo_package_names` (between `visibility`
+///     and `build_tag`), consumed by the marketplace; emitted only when non-empty.
+///   - the e2e test harness's single `argo_package_name`, taken as the first
+///     entry.
+/// Single-package apps can leave this empty: the harness falls back to
+/// `"@atlan/<name>"` and `atlan.yaml` omits the key. Set one entry for a scoped
+/// or non-standard package, or several for a multi-package app.
 argoPackageNames: Listing<String> = new Listing {}
+
+/// (Derived) Single Argo package name for the e2e harness: the first entry of
+/// `argoPackageNames`, or `"@atlan/<name>"` when the list is empty.
+local resolvedArgoPackageName: String =
+  if (!argoPackageNames.isEmpty) argoPackageNames.first else "@atlan/\(name)"
 
 /// Argo WorkflowTemplate resource name as deployed in the cluster.
 /// Default: `"atlan-<name>"` — same pattern as `taskQueuePrefix`.
@@ -2807,7 +2812,7 @@ local function generateE2EBasePy(): FileOutput = new FileOutput {
     "from application_sdk.testing.e2e import \(baseClass)\n\n\n" +
     "class \(cname)GeneratedE2EBase(\(baseClass)):\n" +
     "    connector_short_name = \"\(escapePyStr(name))\"\n" +
-    "    argo_package_name = \"\(escapePyStr(argoPackageName))\"\n" +
+    "    argo_package_name = \"\(escapePyStr(resolvedArgoPackageName))\"\n" +
     "    argo_template_name = \"\(escapePyStr(argoTemplateName))\"\n" +
     "    app_service_url = \"\(escapePyStr(appServiceUrl))\"\n" +
     (if (emitConnType) "    connection_type = \"\(escapePyStr(connector!!.value))\"\n" else "") +

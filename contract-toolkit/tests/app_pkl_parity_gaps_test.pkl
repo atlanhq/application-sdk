@@ -91,6 +91,8 @@ local appNoArgoPkgs = (App) {
 
 local argoYaml = appArgoPkgs.output.files["atlan.yaml"].text
 local noArgoYaml = appNoArgoPkgs.output.files["atlan.yaml"].text
+local argoE2eBase = appArgoPkgs.output.files["app/generated/_e2e_base.py"].text
+local noArgoE2eBase = appNoArgoPkgs.output.files["app/generated/_e2e_base.py"].text
 
 // ── Gap 3: workflowTypeOverride verbatim vs kebab ───────────────────────────
 local workflowUiConfig = new App.UIConfig {
@@ -159,6 +161,14 @@ facts {
 
   ["Gap 2: argo_package_names omitted from atlan.yaml when list is empty"] {
     !noArgoYaml.contains("argo_package_names")
+  }
+
+  ["Gap 2: e2e argo_package_name takes the first argoPackageNames entry"] {
+    argoE2eBase.contains("argo_package_name = \"@atlan/a\"")
+  }
+
+  ["Gap 2: e2e argo_package_name falls back to @atlan/{name} when list is empty"] {
+    noArgoE2eBase.contains("argo_package_name = \"@atlan/no-argo-pkgs-test\"")
   }
 
   ["Gap 3: workflowTypeOverride emits a verbatim workflow_type, winning over workflowType"] {

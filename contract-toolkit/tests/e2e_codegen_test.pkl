@@ -67,7 +67,7 @@ local overrideApp = (App) {
   displayName = "My Connector"
   icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
   hasCredentialConfig = false
-  argoPackageName = "@custom/scope"
+  argoPackageNames { "@custom/scope" }
   argoTemplateName = "custom-template"
   appServiceUrl = "http://custom.svc.local"
   pipeline { publish = null }
