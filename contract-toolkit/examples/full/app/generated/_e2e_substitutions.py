@@ -22,4 +22,6 @@ class FullFeaturedMustacheSubstitutions(SQLMustacheSubstitutions):
         alias="{{log_level}}",
     )
     lineage_depth: int = Field(default=3, alias="{{lineage_depth}}")
+    table_prefix: str = Field(default="", alias="{{table_prefix}}")
+    custom_attributes: str = Field(default="", alias="{{custom_attributes}}")
     schemas: dict[str, Any] | None = Field(default=None, alias="{{schemas}}")
