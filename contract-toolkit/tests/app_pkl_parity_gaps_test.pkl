@@ -124,10 +124,23 @@ local appWorkflowKebab = (App) {
   uiConfig = workflowUiConfig
 }
 
+local appWorkflowEmptyOverride = (App) {
+  name = "wf-empty-override-test"
+  displayName = "WF Empty Override Test"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  pipeline { publish = null }
+  workflowType = "WfKebabTest"
+  workflowTypeOverride = ""
+  uiConfig = workflowUiConfig
+}
+
 local overrideManifest = new json.Parser { useMapping = true }.parse(appWorkflowOverride.output.files["app/generated/manifest.json"].text)
 local kebabManifest = new json.Parser { useMapping = true }.parse(appWorkflowKebab.output.files["app/generated/manifest.json"].text)
+local emptyOverrideManifest = new json.Parser { useMapping = true }.parse(appWorkflowEmptyOverride.output.files["app/generated/manifest.json"].text)
 local overrideWorkflowType = overrideManifest["dag"]["extract"]["inputs"]["workflow_type"]
 local kebabWorkflowType = kebabManifest["dag"]["extract"]["inputs"]["workflow_type"]
+local emptyOverrideWorkflowType = emptyOverrideManifest["dag"]["extract"]["inputs"]["workflow_type"]
 
 facts {
   ["Gap 1: CredentialInput renders placeholderText as ui.placeholder"] {
@@ -150,6 +163,10 @@ facts {
 
   ["Gap 3: workflowTypeOverride emits a verbatim workflow_type, winning over workflowType"] {
     overrideWorkflowType == "WfOverrideTest"
+  }
+
+  ["Gap 3: empty-string workflowTypeOverride is treated as unset and falls back to kebab"] {
+    emptyOverrideWorkflowType == "wf-kebab-test"
   }
 
   ["Gap 3: workflowType is PascalCase→kebab-cased when no override is set"] {

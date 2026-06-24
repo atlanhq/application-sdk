@@ -107,7 +107,7 @@ The single entry point for all new native app contracts. Supersedes `NativeApp.p
 | Property | Type | Default | Description |
 |---|---|---|---|
 | `workflowType` | String | `name` | Workflow type for the extract node. Accepts PascalCase or kebab-case; auto-converted to kebab-case at output. Defaults to `name`. |
-| `workflowTypeOverride` | String? | null | Verbatim workflow type emitted as-is, bypassing the PascalCase→kebab conversion; wins over `workflowType` when set. Use only when the manifest must carry a non-kebab `workflow_type` (e.g. a PascalCase identifier the runtime keys on). |
+| `workflowTypeOverride` | String? | null | Verbatim workflow type emitted as-is, bypassing the PascalCase→kebab conversion; wins over `workflowType` when set. An empty string is treated as unset (falls back to the kebab-cased `workflowType`). Use only when the manifest must carry a non-kebab `workflow_type` (e.g. a PascalCase identifier the runtime keys on). |
 | `taskQueuePrefix` | String | `"atlan-{name}"` | Task queue prefix. Override for multi-entrypoint apps sharing a deployment. |
 
 ### E2E Test Harness
