@@ -1759,6 +1759,29 @@ class TestConfigMapEndpoints:
             assert data["metadata"]["name"] == "my-config"
             parsed_config = json.loads(data["data"]["config"])
             assert parsed_config == {"key": "value"}
+            # Absent from the file -> absent from the response.
+            assert "defaultConnectorType" not in data["data"]
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_configmap_includes_default_connector_type_when_present(
+        self, tmp_path: Path
+    ) -> None:
+        from application_sdk.handler import service as svc_module
+
+        raw = {"defaultConnectorType": "jdbc", "config": {"key": "value"}}
+        (tmp_path / "my-config.json").write_text(json.dumps(raw))
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/configmap/my-config")
+            assert response.status_code == 200
+            data = response.json()["data"]
+            assert data["data"]["defaultConnectorType"] == "jdbc"
+            parsed_config = json.loads(data["data"]["config"])
+            assert parsed_config == {"key": "value"}
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
