@@ -99,6 +99,25 @@ inputs:
       FROM untouched — the merge-queue / non-e2e path is unchanged.
     required: false
     default: ""
+  contract-toolkit-version:
+    description: |
+      Optional PUBLISHED app-contract-toolkit version (e.g. "0.15.0").
+      When supplied, the action re-pins app-contract-toolkit in the
+      caller's contract/PklProject, re-resolves the lock, and regenerates
+      app/generated/ (manifest.json, atlan.yaml, input types) BEFORE the
+      Docker image build — so the worker container bakes and serves the
+      new manifest — and AGAIN after setup-deps re-checks-out the
+      workspace, so the host pytest harness seeds the AE workflow version
+      from the same regenerated manifest. Set by cross-repo dispatch from
+      a contract-toolkit release so toolkit changes are exercised
+      end-to-end (worker manifest endpoint + AE version create + run).
+
+      Unlike application-sdk-ref (a git rev), the toolkit is a pkl package
+      resolved from the published package index, so this must be an
+      already-published version. Empty (the default) leaves the committed
+      contract/PklProject pin untouched — today's behavior.
+    required: false
+    default: ""
   components-dir:
     description: |
       App-level directory holding additional Dapr component YAMLs to
@@ -191,6 +210,7 @@ runs:
         rm -rf /tmp/sdr-e2e
         cp -R "${{ github.action_path }}" /tmp/sdr-e2e
         chmod +x /tmp/sdr-e2e/repin-application-sdk.sh || true
+        chmod +x /tmp/sdr-e2e/bump-contract-toolkit.sh || true
 
     - name: Pin application-sdk to dispatched ref (pre-build)
       if: inputs.application-sdk-ref != ''
@@ -206,6 +226,21 @@ runs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
         fi
         uv lock
+
+    # Cross-repo dispatch from a contract-toolkit release hands us a
+    # published toolkit version. Re-pin contract/PklProject + regenerate
+    # app/generated/ here, while the workspace is still pristine, so the
+    # image build's `COPY app/ app/` bakes the NEW manifest into the
+    # worker (it serves /workflows/v1/manifest from the baked-in copy).
+    # Repeated again after setup-deps re-checks-out the workspace so the
+    # host pytest harness seeds the AE version from the same manifest.
+    - name: Regenerate contracts for dispatched toolkit (pre-build)
+      if: inputs.contract-toolkit-version != ''
+      shell: bash
+      env:
+        TOOLKIT_VERSION: ${{ inputs.contract-toolkit-version }}
+      run: |
+        ${{ github.action_path }}/bump-contract-toolkit.sh
 
     # Buildx is required for the GHA cache backend below. Set up once
     # per run, before the image build that uses `cache-from/cache-to`.
@@ -313,6 +348,21 @@ runs:
         "$SDR_E2E_ROOT/repin-application-sdk.sh"
         uv lock
         uv sync --all-extras --all-groups
+
+    # setup-deps' actions/checkout wiped the pre-build regeneration. Redo
+    # it from the /tmp stash so the host pytest harness reads the SAME
+    # app/generated/manifest.json the worker image was built from — the
+    # full-DAG harness seeds the AE workflow version off this file
+    # (full_dag/base.py manifest_path). Without this the worker would
+    # serve the new manifest while AE seeds the old, masking real drift.
+    - name: Regenerate contracts for dispatched toolkit (post-setup)
+      if: inputs.contract-toolkit-version != ''
+      shell: bash
+      env:
+        TOOLKIT_VERSION: ${{ inputs.contract-toolkit-version }}
+        SDR_E2E_ROOT: ${{ steps.action_root.outputs.path }}
+      run: |
+        "$SDR_E2E_ROOT/bump-contract-toolkit.sh"
 
     - name: Download atlan-configurator
       shell: bash

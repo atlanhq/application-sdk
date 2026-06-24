@@ -103,6 +103,11 @@ on:
         type: string
         default: ""
         description: Runtime base image override for the connector Docker build.
+      contract-toolkit-version:
+        required: false
+        type: string
+        default: ""
+        description: Published app-contract-toolkit version to re-pin + regenerate app/generated/ against in the e2e job. Empty = committed contract/PklProject pin.
       agent-name-override:
         required: false
         type: string
@@ -176,6 +181,7 @@ jobs:
       agent-name-override: ${{ inputs.agent-name-override }}
       application-sdk-ref: ${{ inputs.application-sdk-ref }}
       base-image-ref: ${{ inputs.base-image-ref }}
+      contract-toolkit-version: ${{ inputs.contract-toolkit-version }}
       distinct-id: ${{ inputs.distinct-id }}
     secrets: inherit
 

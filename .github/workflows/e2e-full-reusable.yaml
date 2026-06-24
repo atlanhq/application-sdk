@@ -118,6 +118,17 @@ on:
         required: false
         type: string
         default: ""
+      contract-toolkit-version:
+        description: |
+          Optional published app-contract-toolkit version. When set, the
+          SDR composite re-pins contract/PklProject + regenerates
+          app/generated/ before the image build and after setup-deps, so
+          the full-DAG e2e exercises the new toolkit's manifest end-to-end
+          (worker manifest endpoint + AE version create). Set by cross-repo
+          dispatch from a contract-toolkit release. Empty = committed pin.
+        required: false
+        type: string
+        default: ""
       distinct-id:
         description: |
           Identifier passed through from the caller's
@@ -206,3 +217,4 @@ jobs:
           pytest-extra-args: "-s"
           application-sdk-ref: ${{ inputs.application-sdk-ref }}
           base-image-ref: ${{ inputs.base-image-ref }}
+          contract-toolkit-version: ${{ inputs.contract-toolkit-version }}
