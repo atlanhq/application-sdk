@@ -24,7 +24,8 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass
 
-_SDK_MODULE_PREFIX = "application_sdk"
+from ._constants import _SDK_MODULE_PREFIX
+
 _SDK_CONTRACT_MODULE_PREFIXES: tuple[str, ...] = (
     "application_sdk.contracts",
     "application_sdk.handler.contracts",
@@ -44,6 +45,19 @@ class ImportProvenance:
     non_sdk_module_names: frozenset[str]
     """Local names of imported non-SDK top-level modules (``import celery`` → ``"celery"``)."""
 
+    sdk_task_names: frozenset[str]
+    """Local names bound to ``task`` from an SDK import (including aliases).
+
+    Tracks ``from application_sdk.app import task as sdk_task`` → ``{"sdk_task"}``.
+    Used by :func:`is_task_decorator` to recognise aliased SDK decorators.
+    """
+
+    sdk_ep_names: frozenset[str]
+    """Local names bound to ``entrypoint`` from an SDK import (including aliases).
+
+    Tracks ``from application_sdk.app import entrypoint as ep`` → ``{"ep"}``.
+    """
+
     sdk_contract_names: frozenset[str]
     """Local names imported from ``application_sdk.contracts.*`` — valid by provenance."""
 
@@ -56,6 +70,8 @@ def collect_import_provenance(tree: ast.AST) -> ImportProvenance:
     non_sdk_task: set[str] = set()
     non_sdk_ep: set[str] = set()
     non_sdk_mods: set[str] = set()
+    sdk_task: set[str] = set()
+    sdk_ep: set[str] = set()
     sdk_contracts: set[str] = set()
     sdk_contract_mod_aliases: set[str] = set()
 
@@ -65,7 +81,14 @@ def collect_import_provenance(tree: ast.AST) -> ImportProvenance:
             is_sdk = module == _SDK_MODULE_PREFIX or module.startswith(
                 _SDK_MODULE_PREFIX + "."
             )
-            if not is_sdk:
+            if is_sdk:
+                for alias in node.names:
+                    local = alias.asname or alias.name
+                    if alias.name == "task":
+                        sdk_task.add(local)
+                    if alias.name == "entrypoint":
+                        sdk_ep.add(local)
+            else:
                 for alias in node.names:
                     if alias.name == "task":
                         non_sdk_task.add(alias.asname or alias.name)
@@ -98,16 +121,26 @@ def collect_import_provenance(tree: ast.AST) -> ImportProvenance:
         non_sdk_task_names=frozenset(non_sdk_task),
         non_sdk_ep_names=frozenset(non_sdk_ep),
         non_sdk_module_names=frozenset(non_sdk_mods),
+        sdk_task_names=frozenset(sdk_task),
+        sdk_ep_names=frozenset(sdk_ep),
         sdk_contract_names=frozenset(sdk_contracts),
         sdk_contract_module_aliases=frozenset(sdk_contract_mod_aliases),
     )
 
 
 def is_task_decorator(dec: ast.expr, prov: ImportProvenance) -> bool:
-    """True if *dec* is the SDK ``@task`` decorator (not a third-party one)."""
+    """True if *dec* is the SDK ``@task`` decorator (not a third-party one).
+
+    Recognises both the canonical ``@task`` name and SDK aliases such as
+    ``from application_sdk.app import task as sdk_task`` → ``@sdk_task``.
+    """
     if isinstance(dec, ast.Call):
         dec = dec.func
     if isinstance(dec, ast.Name):
+        # Positively confirmed SDK alias (from application_sdk.app import task as X)
+        if dec.id in prov.sdk_task_names:
+            return True
+        # Bare 'task' name — assume SDK unless shadowed by a non-SDK import
         return dec.id == "task" and dec.id not in prov.non_sdk_task_names
     if isinstance(dec, ast.Attribute):
         return dec.attr == "task" and (
@@ -118,10 +151,18 @@ def is_task_decorator(dec: ast.expr, prov: ImportProvenance) -> bool:
 
 
 def is_entrypoint_decorator(dec: ast.expr, prov: ImportProvenance) -> bool:
-    """True if *dec* is the SDK ``@entrypoint`` decorator (not a third-party one)."""
+    """True if *dec* is the SDK ``@entrypoint`` decorator (not a third-party one).
+
+    Recognises both the canonical ``@entrypoint`` name and SDK aliases such as
+    ``from application_sdk.app import entrypoint as ep`` → ``@ep``.
+    """
     if isinstance(dec, ast.Call):
         dec = dec.func
     if isinstance(dec, ast.Name):
+        # Positively confirmed SDK alias
+        if dec.id in prov.sdk_ep_names:
+            return True
+        # Bare 'entrypoint' name — assume SDK unless shadowed by a non-SDK import
         return dec.id == "entrypoint" and dec.id not in prov.non_sdk_ep_names
     if isinstance(dec, ast.Attribute):
         return dec.attr == "entrypoint" and (

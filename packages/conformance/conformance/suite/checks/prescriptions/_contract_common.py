@@ -21,8 +21,9 @@ from __future__ import annotations
 import ast
 from typing import Iterator
 
+from ._constants import _SDK_MODULE_PREFIX
+
 _CONTRACT_BASE_NAMES: frozenset[str] = frozenset({"Input", "Output"})
-_SDK_MODULE_PREFIX = "application_sdk"
 
 # Builtin bytes-like types that carry the same Temporal payload-size risk.
 _BYTES_LIKE_NAMES: frozenset[str] = frozenset({"bytes", "bytearray", "memoryview"})

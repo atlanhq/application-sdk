@@ -1921,3 +1921,151 @@ def test_p015_result_is_warning_disposition(tmp_path: Path) -> None:
     p015_results = [r for r in report.runs[0].results if r.rule_id == "P015"]
     assert len(p015_results) >= 1
     assert all(derive_disposition(r) == Disposition.WARNING for r in p015_results)
+
+
+# ── P013/P014 fixed-point unwrap regressions ──────────────────────────────────
+
+
+def test_p013_fires_on_optional_annotated_dict_input(tmp_path: Path) -> None:
+    """Optional[Annotated[dict[str,str], M]] input → fixed-point loop unwraps both layers → P013."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": (
+            _APP_IMPORTS + "from typing import Annotated, Optional\n"
+            "from contracts import FetchOutput\n"
+            "class MyApp(App):\n"
+            "    @entrypoint\n"
+            "    async def run_it(\n"
+            "        self, input: Optional[Annotated[dict[str, str], object()]]\n"
+            "    ) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    p013 = [f for f in findings if f.rule_id == "P013"]
+    assert len(p013) == 1
+    assert "input" in p013[0].message
+
+
+def test_p014_fires_on_optional_annotated_dict_input(tmp_path: Path) -> None:
+    """Optional[Annotated[dict[str,str], M]] input on @task → P014."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": (
+            _APP_IMPORTS + "from typing import Annotated, Optional\n"
+            "from contracts import FetchOutput\n"
+            "class MyApp(App):\n"
+            "    @task\n"
+            "    async def fetch(\n"
+            "        self, input: Optional[Annotated[dict[str, str], object()]]\n"
+            "    ) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    p014 = [f for f in findings if f.rule_id == "P014"]
+    assert len(p014) == 1
+    assert "input" in p014[0].message
+
+
+def test_p013_fires_on_annotated_optional_dict_input(tmp_path: Path) -> None:
+    """Annotated[Optional[dict], M] input → outer Annotated then Optional unwrapped → P013."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": (
+            _APP_IMPORTS + "from typing import Annotated, Optional\n"
+            "from contracts import FetchOutput\n"
+            "class MyApp(App):\n"
+            "    @entrypoint\n"
+            "    async def run_it(\n"
+            "        self, input: Annotated[Optional[dict], object()]\n"
+            "    ) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    p013 = [f for f in findings if f.rule_id == "P013"]
+    assert len(p013) == 1
+    assert "input" in p013[0].message
+
+
+# ── P013/P014 aliased SDK decorator regressions ───────────────────────────────
+
+
+def test_p013_fires_on_aliased_sdk_entrypoint_decorator(tmp_path: Path) -> None:
+    """from application_sdk.app import entrypoint as ep; @ep with dict input → P013."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": (
+            "from application_sdk.app import App\n"
+            "from application_sdk.app import entrypoint as ep\n"
+            "from contracts import FetchOutput\n"
+            "class MyApp(App):\n"
+            "    @ep\n"
+            "    async def run_it(self, input: dict) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    p013 = [f for f in findings if f.rule_id == "P013"]
+    assert len(p013) == 1
+    assert "input" in p013[0].message
+
+
+def test_p014_fires_on_aliased_sdk_task_decorator(tmp_path: Path) -> None:
+    """from application_sdk.app import task as sdk_task; @sdk_task with dict input → P014."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": (
+            "from application_sdk.app import App\n"
+            "from application_sdk.app import task as sdk_task\n"
+            "from contracts import FetchOutput\n"
+            "class MyApp(App):\n"
+            "    @sdk_task\n"
+            "    async def fetch(self, input: dict) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    p014 = [f for f in findings if f.rule_id == "P014"]
+    assert len(p014) == 1
+    assert "input" in p014[0].message
+
+
+# ── P013/P014 keyword-only parameter regressions ──────────────────────────────
+
+
+def test_p014_fires_on_kwonly_input(tmp_path: Path) -> None:
+    """def fetch(self, *, input: dict) — keyword-only param caught by _get_non_self_params → P014."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": (
+            _APP_IMPORTS + "from contracts import FetchOutput\n"
+            "class MyApp(App):\n"
+            "    @task\n"
+            "    async def fetch(self, *, input: dict) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    p014 = [f for f in findings if f.rule_id == "P014"]
+    assert len(p014) == 1
+    assert "input" in p014[0].message
+
+
+def test_p013_fires_on_kwonly_input(tmp_path: Path) -> None:
+    """def run_it(self, *, input: dict) — keyword-only input on @entrypoint → P013."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": (
+            _APP_IMPORTS + "from contracts import FetchOutput\n"
+            "class MyApp(App):\n"
+            "    @entrypoint\n"
+            "    async def run_it(self, *, input: dict) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    p013 = [f for f in findings if f.rule_id == "P013"]
+    assert len(p013) == 1
+    assert "input" in p013[0].message

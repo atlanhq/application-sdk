@@ -56,7 +56,7 @@ from typing import Iterator
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.schema.findings import Finding
 
-from ._contract_common import _terminal_name, _unwrap_optional_node
+from ._contract_common import _terminal_name, _unwrap_annotated, _unwrap_optional_node
 from ._decorator_provenance import (
     ImportProvenance,
     collect_import_provenance,
@@ -117,16 +117,27 @@ _CLEARLY_UNTYPED: frozenset[str] = frozenset(
 
 
 def _annotation_terminal_name(node: ast.expr | None) -> str | None:
-    """Return the terminal class name of an annotation, unwrapping Optional/union.
+    """Return the terminal class name of an annotation, unwrapping all wrappers.
 
-    ``FetchInput`` → ``"FetchInput"``; ``FetchInput | None`` → ``"FetchInput"``;
-    ``Optional[FetchInput]`` → ``"FetchInput"``; ``dict[str, str]`` → ``"dict"``;
+    Unwraps ``Optional[X]`` / ``X | None`` and ``Annotated[X, ...]`` in a
+    fixed-point loop so nested forms like ``Optional[Annotated[dict, M]]`` and
+    ``Annotated[Optional[dict]]`` are fully reduced before the terminal name is
+    read.
+
+    ``FetchInput`` → ``"FetchInput"``; ``Optional[FetchInput]`` → ``"FetchInput"``;
+    ``Optional[Annotated[dict[str,str], M]]`` → ``"dict"``;
     ``None`` literal (``-> None``) → ``"None"``.
     """
     if node is None:
         return None
-    # Peer through Optional[X] and X | None.
-    inner = _unwrap_optional_node(node)
+    # Peer through Optional[X] / X | None and Annotated[X, ...] to a fixed point.
+    inner = node
+    while True:
+        unwrapped = _unwrap_optional_node(inner)
+        unwrapped = _unwrap_annotated(unwrapped)
+        if unwrapped is inner:
+            break
+        inner = unwrapped
     return _terminal_name(inner)
 
 
@@ -158,11 +169,18 @@ def _iter_class_body_methods(
 def _get_non_self_params(
     func: ast.FunctionDef | ast.AsyncFunctionDef,
 ) -> list[ast.arg]:
-    """Return the non-``self``/non-``cls`` parameters of a method."""
-    args = func.args.args
-    if args and args[0].arg in ("self", "cls"):
-        return args[1:]
-    return list(args)
+    """Return the non-``self``/non-``cls`` parameters of a method.
+
+    Combines positional-only (``/``), regular, and keyword-only (``*``)
+    parameters so that ``def f(self, *, input: dict)`` and
+    ``def f(self, input: dict, /)`` are both handled correctly.
+    """
+    all_params = (
+        list(func.args.posonlyargs) + list(func.args.args) + list(func.args.kwonlyargs)
+    )
+    if all_params and all_params[0].arg in ("self", "cls"):
+        return all_params[1:]
+    return all_params
 
 
 # ── Finding helpers ───────────────────────────────────────────────────────────
@@ -195,7 +213,9 @@ def _make_boundary_finding(
     message = (
         f"Method '{func.name}' {direction} annotation '{ann_name}' {reason}. "
         f"Boundary types must subclass the SDK's {target_base} "
-        f"(application_sdk.contracts). {guidance}"
+        f"(application_sdk.contracts). {guidance} "
+        f"Suppress with '# conformance: ignore[{rule_id}] <reason>' on the "
+        "def line (the violation node is the annotation, not the call-site)."
     )
     node: ast.AST = ann_node if ann_node is not None else fallback_node
     return make_finding(
@@ -233,7 +253,9 @@ def _check_one_annotation(
             f"Boundary types must subclass the SDK's {target_base_name} "
             "(application_sdk.contracts). "
             f"Define a class inheriting from {target_base_name} and annotate "
-            "the parameter/return accordingly."
+            "the parameter/return accordingly. "
+            f"Suppress with '# conformance: ignore[{rule_id}] <reason>' on the "
+            "def line (the violation node is the annotation, not the call-site)."
         )
         return make_finding(
             filename=filename,
@@ -357,7 +379,10 @@ def check_p013_p014(
                     rule_id = "P014"
 
                 elif func.name == "run" and isinstance(func, ast.AsyncFunctionDef):
-                    # Implicit entrypoint: run() on an App subclass.
+                    # Implicit entrypoint: async run() on an App subclass.
+                    # Only async — App.run() is defined as async-only; a sync
+                    # def run() would be rejected by the runtime before P013
+                    # has any value, so we intentionally skip it here.
                     for base in class_node.bases:
                         base_name: str | None = None
                         if isinstance(base, ast.Name):
