@@ -586,3 +586,22 @@ async def test_downloaded_files_tracked_on_read(tmp_path: Path) -> None:
 
         # Files should now be tracked
         assert reader._downloaded_files == downloaded_files
+
+
+@pytest.mark.asyncio
+async def test_read_no_files(tmp_path: Path) -> None:
+    """read() with no files available returns an empty pandas DataFrame."""
+    import pandas as pd
+
+    async def dummy_download(path, file_extension, file_names=None):
+        return []
+
+    with patch(
+        "application_sdk.storage.formats.json._download_files",
+        side_effect=dummy_download,
+    ):
+        reader = JsonFileReader(path=str(tmp_path), dataframe_type=DataframeType.pandas)
+        result = await reader.read()
+
+    assert isinstance(result, pd.DataFrame)
+    assert len(result) == 0

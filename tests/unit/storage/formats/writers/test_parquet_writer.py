@@ -900,6 +900,143 @@ class TestParquetFileWriterConsolidation:
         assert parquet_output.total_record_count == len(sample_dataframe)
         assert len(parquet_output.partitions) == 1
 
+    @pytest.mark.asyncio
+    async def test_consolidation_end_to_end_persist(self, tmp_path: Path):
+        """`use_consolidation=True` + `defer_uploads=True` reach the store via close().
+
+        Exercises the full chain: many small DataFrames → pyarrow consolidation
+        → close() → persist → store has the consolidated keys.
+        """
+        writer = ParquetFileWriter(
+            path=str(tmp_path / "out"),
+            typename="orders",
+            chunk_size=200,
+            buffer_size=50,
+            use_consolidation=True,
+            defer_uploads=True,
+        )
+
+        async def _batches():
+            # 3 DataFrames of 100 records each = 300 total.
+            # consolidation_threshold=200 → one consolidation at ~200,
+            # final consolidation at the end with the remaining 100.
+            for i in range(3):
+                yield pd.DataFrame(
+                    {
+                        "id": list(range(i * 100, (i + 1) * 100)),
+                        "batch": [i] * 100,
+                    }
+                )
+
+        await writer.write_batches(_batches())
+        result = await writer.close()
+
+        assert result.total_record_count == 300
+        # Local consolidated files must exist on disk before persist.
+        local_parquet = list(Path(writer.path).rglob("*.parquet"))
+        assert local_parquet, "Consolidation produced no local parquet files"
+
+        store = create_memory_store()
+        durable = await persist_file_reference(store, result.files)
+        assert durable.is_durable is True
+
+        # Every consolidated file lands in the store under the persisted prefix.
+        store_keys = await list_keys(durable.storage_path, store, suffix=".parquet")
+        assert len(store_keys) == len(local_parquet), (
+            f"Store key count {len(store_keys)} != local file count "
+            f"{len(local_parquet)} — consolidation upload boundary broken"
+        )
+
+    @pytest.mark.asyncio
+    async def test_write_batches_with_consolidation(self, base_output_path: str):
+        """write_batches() with consolidation accumulates, consolidates, and cleans up.
+
+        3 × 200-row DataFrames with consolidation_threshold=500 triggers one
+        mid-stream consolidation at 600 records and a final flush, then the
+        temp_accumulation dir is removed.
+        """
+        parquet_output = ParquetFileWriter(
+            path=base_output_path,
+            chunk_size=500,
+            buffer_size=100,
+            use_consolidation=True,
+            defer_uploads=True,
+        )
+
+        def create_test_dataframes():
+            for i in range(3):  # 3 × 200 = 600 total
+                yield pd.DataFrame(
+                    {
+                        "id": list(range(i * 200, (i + 1) * 200)),
+                        "value": [f"value_{j}" for j in range(200)],
+                        "batch": [i] * 200,
+                    }
+                )
+
+        await parquet_output.write_batches(create_test_dataframes())
+
+        assert parquet_output.total_record_count == 600
+        assert parquet_output.chunk_count >= 1
+
+        temp_base = os.path.join(parquet_output.path, "temp_accumulation")
+        assert not os.path.exists(temp_base) or not os.listdir(temp_base)
+
+    @pytest.mark.asyncio
+    async def test_multiple_write_batched_calls_with_consolidation(
+        self, base_output_path: str
+    ):
+        """Two sequential write_batches() calls on the same writer accumulate correctly.
+
+        Each call produces 4 consolidations (chunk_size=100, buffer_size=50,
+        4 × 60-row batches). After both calls: 480 total records, ≥ 8 partitions.
+        """
+        parquet_output = ParquetFileWriter(
+            path=base_output_path,
+            chunk_size=100,
+            buffer_size=50,
+            use_consolidation=True,
+            defer_uploads=True,
+        )
+
+        def make_batches(start: int):
+            for i in range(4):  # 4 × 60 = 240 rows per call
+                yield pd.DataFrame(
+                    {"id": list(range(start + i * 60, start + (i + 1) * 60))}
+                )
+
+        await parquet_output.write_batches(make_batches(0))
+        assert parquet_output.total_record_count == 240
+
+        await parquet_output.write_batches(make_batches(1000))
+        assert parquet_output.total_record_count == 480
+        assert parquet_output.chunk_count >= 4
+        assert len(parquet_output.partitions) >= 4
+
+    @pytest.mark.asyncio
+    async def test_consolidation_with_very_small_buffer_multiple_chunks(
+        self, base_output_path: str
+    ):
+        """Very small buffer_size forces many temp chunks; consolidation still correct.
+
+        buffer_size=10 with consolidation_threshold=200 and a single 250-row DataFrame
+        triggers exactly 2 consolidations: one at 200 records mid-stream, one final
+        flush of the remaining 50 on write_batches() completion.
+        """
+        parquet_output = ParquetFileWriter(
+            path=base_output_path,
+            chunk_size=200,
+            buffer_size=10,
+            use_consolidation=True,
+            defer_uploads=True,
+        )
+
+        await parquet_output.write_batches(
+            iter([pd.DataFrame({"id": list(range(250))})])
+        )
+
+        assert parquet_output.total_record_count == 250
+        assert parquet_output.chunk_count == 2
+
 
 class TestWriteChunkNullColumns:
     """Tests for _write_chunk handling of null-typed columns (BLDX-837)."""

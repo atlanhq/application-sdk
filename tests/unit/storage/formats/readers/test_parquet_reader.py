@@ -706,3 +706,71 @@ class TestReadNonBatchedSchemaUnification:
         assert len(df) == 4
         assert set(df["id"].tolist()) == {1, 2, 3, 4}
         assert set(df["tag"].tolist()) == {None, "a", "b"}
+
+
+@pytest.mark.asyncio
+async def test_read_with_file_names(tmp_path: Path) -> None:
+    """read() returns combined data from all explicitly named files.
+
+    Passes file_names= to the reader; _download_files honours the list and
+    the reader assembles the results from both files.
+    """
+    import pandas as pd
+
+    f1 = _make_parquet_file(tmp_path, "file1.parquet", rows=3)
+    f2 = _make_parquet_file(tmp_path, "file2.parquet", rows=4)
+
+    async def dummy_download(path, file_extension, file_names=None):
+        # Return only the explicitly named files (mirrors production behaviour).
+        if file_names:
+            return [str(tmp_path / fn) for fn in file_names]
+        return [f1, f2]
+
+    with patch(
+        "application_sdk.storage.formats.parquet._download_files",
+        side_effect=dummy_download,
+    ):
+        reader = ParquetFileReader(
+            path=str(tmp_path),
+            file_names=["file1.parquet", "file2.parquet"],
+            dataframe_type=DataframeType.pandas,
+        )
+        df = await reader.read()
+
+    assert isinstance(df, pd.DataFrame)
+    assert len(df) == 7  # 3 + 4
+    # Both files share the same schema; all IDs from both files are present.
+    assert set(df["id"].tolist()) == set(range(3)) | set(range(4))
+
+
+@pytest.mark.asyncio
+async def test_read_batches_with_file_names(tmp_path: Path) -> None:
+    """read_batches() yields all rows from explicitly named files.
+
+    Mirrors test_read_with_file_names but exercises the streaming path.
+    """
+    import pandas as pd
+
+    f1 = _make_parquet_file(tmp_path, "a.parquet", rows=5)
+    f2 = _make_parquet_file(tmp_path, "b.parquet", rows=6)
+
+    async def dummy_download(path, file_extension, file_names=None):
+        if file_names:
+            return [str(tmp_path / fn) for fn in file_names]
+        return [f1, f2]
+
+    with patch(
+        "application_sdk.storage.formats.parquet._download_files",
+        side_effect=dummy_download,
+    ):
+        reader = ParquetFileReader(
+            path=str(tmp_path),
+            file_names=["a.parquet", "b.parquet"],
+            chunk_size=4,
+            dataframe_type=DataframeType.pandas,
+        )
+        chunks = [chunk async for chunk in reader.read_batches()]
+
+    assert all(isinstance(c, pd.DataFrame) for c in chunks)
+    total = sum(len(c) for c in chunks)
+    assert total == 11  # 5 + 6
