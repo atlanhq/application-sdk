@@ -102,6 +102,169 @@ class TestWriterDataIntegrity:
             ), f"PANDAS data loss: missing IDs {sorted(missing_ids)[:20]}"
             assert len(ids_in_store) == total_records
 
+    @pytest.mark.asyncio
+    async def test_daft_shim_writer_no_data_loss(self, temp_dir: str):
+        """Verify DataframeType.daft shim preserves all records across multiple write() calls.
+
+        DataframeType.daft is deprecated and routes to the pandas/orjson path.
+        The shim must not drop data — same assertion as test_pandas_writer_no_data_loss.
+        """
+        object_store: dict[str, list[str]] = {}
+
+        async def mock_upload(key, local_path, **kwargs):
+            if os.path.exists(local_path):
+                with open(local_path, "r") as f:
+                    object_store[key] = f.readlines()
+
+        with (
+            patch(
+                "application_sdk.storage.formats._upload_file",
+                new_callable=AsyncMock,
+                side_effect=mock_upload,
+            ),
+            pytest.warns(DeprecationWarning),
+        ):
+            writer = JsonFileWriter(
+                path=temp_dir,
+                typename="daft_shim_test",
+                buffer_size=50,
+                chunk_size=100,
+                retain_local_copy=False,
+                dataframe_type=DataframeType.daft,
+            )
+
+            total_records = 0
+            for batch in range(3):
+                df = pd.DataFrame(
+                    {
+                        "id": list(range(batch * 120, (batch + 1) * 120)),
+                        "batch": [f"batch_{batch}"] * 120,
+                    }
+                )
+                await writer.write(df)
+                total_records += 120
+
+            await writer.close()
+
+            ids_in_store = self.extract_ids_from_store(object_store)
+            expected_ids = set(range(total_records))
+            missing_ids = expected_ids - ids_in_store
+
+            assert (
+                not missing_ids
+            ), f"DAFT shim data loss: missing IDs {sorted(missing_ids)[:20]}"
+            assert len(ids_in_store) == total_records
+
+    @pytest.mark.asyncio
+    async def test_pandas_daft_shim_chunk_count_consistency(self, temp_dir: str):
+        """Verify pandas and DataframeType.daft-shim writers have identical chunk_count.
+
+        Since DataframeType.daft routes to the pandas path, the buffering and
+        chunking behaviour must be byte-for-byte identical.
+        """
+
+        async def mock_upload(
+            source, destination=None, retain_local_copy=False, **kwargs
+        ):
+            if os.path.exists(source) and not retain_local_copy:
+                os.remove(source)
+
+        with (
+            patch(
+                "application_sdk.storage.formats._upload_file",
+                new_callable=AsyncMock,
+                side_effect=mock_upload,
+            ),
+            pytest.warns(DeprecationWarning),
+        ):
+            pandas_writer = JsonFileWriter(
+                path=os.path.join(temp_dir, "pandas"),
+                typename="test",
+                buffer_size=50,
+                chunk_size=100,
+                retain_local_copy=False,
+                dataframe_type=DataframeType.pandas,
+            )
+
+            daft_shim_writer = JsonFileWriter(
+                path=os.path.join(temp_dir, "daft_shim"),
+                typename="test",
+                buffer_size=50,
+                chunk_size=100,
+                retain_local_copy=False,
+                dataframe_type=DataframeType.daft,
+            )
+
+            for batch in range(3):
+                data = {"id": list(range(batch * 50, (batch + 1) * 50))}
+                await pandas_writer.write(pd.DataFrame(data))
+                await daft_shim_writer.write(pd.DataFrame(data))
+
+                assert pandas_writer.chunk_count == daft_shim_writer.chunk_count, (
+                    f"chunk_count diverged after write {batch + 1}: "
+                    f"pandas={pandas_writer.chunk_count}, "
+                    f"daft_shim={daft_shim_writer.chunk_count}"
+                )
+
+            await pandas_writer.close()
+            await daft_shim_writer.close()
+
+            assert pandas_writer.chunk_count == daft_shim_writer.chunk_count
+            assert len(pandas_writer.partitions) == len(daft_shim_writer.partitions)
+
+    @pytest.mark.asyncio
+    async def test_no_duplicate_file_uploads(self, temp_dir: str):
+        """Verify no duplicate file names are uploaded (original file-name-collision bug).
+
+        Originally caught against the DataframeType.daft path; re-expressed using
+        the deprecated daft shim (which routes to pandas) so the assertion stands
+        without requiring daft installed.
+        """
+        from collections import Counter
+
+        uploaded_files: list[str] = []
+
+        async def mock_upload(
+            source, destination=None, retain_local_copy=False, **kwargs
+        ):
+            filename = os.path.basename(source)
+            uploaded_files.append(filename)
+            if os.path.exists(source) and not retain_local_copy:
+                os.remove(source)
+
+        with (
+            patch(
+                "application_sdk.storage.formats._upload_file",
+                new_callable=AsyncMock,
+                side_effect=mock_upload,
+            ),
+            pytest.warns(DeprecationWarning),
+        ):
+            writer = JsonFileWriter(
+                path=temp_dir,
+                typename="test",
+                buffer_size=50,
+                chunk_size=80,
+                retain_local_copy=False,
+                dataframe_type=DataframeType.daft,
+            )
+
+            for batch in range(3):
+                df = pd.DataFrame({"id": list(range(batch * 100, (batch + 1) * 100))})
+                await writer.write(df)
+
+            await writer.close()
+
+            json_uploads = [
+                f
+                for f in uploaded_files
+                if f.endswith(".json") and "statistics" not in f
+            ]
+            counts = Counter(json_uploads)
+            duplicates = {f: c for f, c in counts.items() if c > 1}
+
+            assert not duplicates, f"Duplicate file uploads detected: {duplicates}"
+
 
 class TestParquetWriterDataIntegrity:
     """Verify ParquetFileWriter preserves all data both on disk AND through
