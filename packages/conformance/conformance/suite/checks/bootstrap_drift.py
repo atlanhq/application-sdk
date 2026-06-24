@@ -20,6 +20,12 @@ package_name, etc.) are not flagged as drift — only structural changes are cau
    Remediation: *delete tests.yaml* then re-run bootstrap to regenerate from
    canonical.
 
+**Sanctioned per-repo overrides:** a few managed shims accept a documented
+override that is normalised out of the on-disk file before comparison, so the
+choice is not flagged as drift (any *other* change still is).  Currently:
+``renovate-pkl-sync.yaml`` tolerates a ``with: regenerate-contract: <bool>``
+opt-out on its reusable-workflow caller.
+
 Remediation: run ``atlan-application-sdk-conformance bootstrap`` to re-sync.
 """
 
@@ -39,6 +45,24 @@ _CLI_CMD = "atlan-application-sdk-conformance bootstrap"
 # Write-if-absent scaffolds tracked alongside managed shims (WARN-only drift).
 _TESTS_WORKFLOW = "tests.yaml"
 _RENOVATE_JSON = "renovate.json"
+
+# Managed shim (in MANAGED_WORKFLOWS) that tolerates a sanctioned per-repo override.
+_RENOVATE_PKL_SYNC = "renovate-pkl-sync.yaml"
+
+# The renovate-pkl-sync caller regenerates contract artifacts by default
+# (the reusable's regenerate-contract input defaults to true). An app may opt
+# out by adding a `with: regenerate-contract: false` override to the caller.
+# That override is a sanctioned per-repo choice, so strip it before the drift
+# comparison — only other structural changes should flag C002. Matches the
+# block whether the value is true or false and regardless of indentation.
+_REGEN_OVERRIDE_RE = re.compile(
+    r"\n[ ]*with:\n[ ]*regenerate-contract:[ ]*(?:true|false)[ ]*"
+)
+
+
+def _strip_regen_override(text: str) -> str:
+    return _REGEN_OVERRIDE_RE.sub("", text)
+
 
 # ---------------------------------------------------------------------------
 # Managed-shim param extractors
@@ -145,6 +169,11 @@ def _scan_managed_shim(path: Path, root: Path) -> list[Finding]:
         ]
 
     on_disk = path.read_text(encoding="utf-8")
+
+    # Sanctioned per-repo override: opting out of contract regeneration is not
+    # drift. Strip it before comparing to the (plain) canonical caller.
+    if name == _RENOVATE_PKL_SYNC:
+        on_disk = _strip_regen_override(on_disk)
 
     # For parameterised templates, extract the on-disk value so structural
     # drift is caught while per-repo value choices are preserved.

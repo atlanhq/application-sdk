@@ -30,8 +30,8 @@ description: |
   - Uploads junit XML + raw test output as artifacts.
   - Cleans up the app server (and the external Dapr/Temporal when they were started).
 
-  pytest-xdist is installed transiently via `uv run --with pytest-xdist` so the
-  caller does not need to declare it as a dependency.
+  pytest-xdist and pytest-rerunfailures are installed transiently via `uv run --with`
+  so the caller does not need to declare them as dependencies.
 
   ## Connectors with native dependencies
 
@@ -96,9 +96,10 @@ inputs:
     required: false
     description: |
       Extra arguments passed to pytest after the integration-tests path.
-      Default parallelises tests across xdist workers; override to dial worker
-      count or change distribution strategy.
-    default: "-n auto --dist=load --tb=short"
+      Default parallelises tests across xdist workers and retries only
+      transient network/socket failures; override to dial worker count,
+      change distribution strategy, or adjust retry count/pattern.
+    default: "-n auto --dist=load --tb=short --reruns 2 --reruns-delay 5 --only-rerun \"ConnectError|ConnectionError|ClientConnectorError|TimeoutError|ReadTimeout\""
   app-port:
     required: false
     description: HTTP port the connector app server listens on.
@@ -248,7 +249,7 @@ runs:
           exit 1
         fi
         echo "Installing daprd runtime v$DAPR_VERSION (no Dapr CLI)"
-        wget -q "https://github.com/dapr/dapr/releases/download/v${DAPR_VERSION}/daprd_linux_amd64.tar.gz" -O /tmp/daprd.tar.gz
+        "${{ github.action_path }}/../../scripts/with-retry.sh" wget -q "https://github.com/dapr/dapr/releases/download/v${DAPR_VERSION}/daprd_linux_amd64.tar.gz" -O /tmp/daprd.tar.gz
         tar -xzf /tmp/daprd.tar.gz -C /tmp
         sudo mv /tmp/daprd /usr/local/bin/
         sudo chmod +x /usr/local/bin/daprd
@@ -257,7 +258,11 @@ runs:
     - name: Install Temporal CLI
       if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
       shell: bash
-      run: curl -sSf https://temporal.download/cli.sh | sh
+      # Block scalar: a `run:` value that *starts* with a quote is parsed by YAML
+      # as a single quoted string, leaving the trailing args as an unexpected
+      # token (this exact line took the connector fleet down — invalid manifest).
+      run: |
+        "${{ github.action_path }}/../../scripts/with-retry.sh" bash -c "curl -sSf https://temporal.download/cli.sh | sh"
 
     - name: Add Temporal to PATH
       if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
@@ -341,10 +346,9 @@ runs:
       run: |
         mkdir -p results
         set +e
-        # pytest-cov added transiently so callers can opt in to coverage
-        # via pytest-args (e.g., `--cov=app --cov-report=xml ...`). No
-        # effect when coverage flags aren't passed.
-        uv run --with pytest-xdist --with pytest-cov pytest ${{ inputs.test-paths }} -v \
+        # pytest-xdist, pytest-cov, and pytest-rerunfailures are installed
+        # transiently — callers do not need to declare them as dependencies.
+        uv run --with pytest-xdist --with pytest-cov --with pytest-rerunfailures pytest ${{ inputs.test-paths }} -v \
           ${{ inputs.pytest-args }} \
           --junit-xml=results/test-results.xml \
           2>&1 | tee results/test-output.txt
