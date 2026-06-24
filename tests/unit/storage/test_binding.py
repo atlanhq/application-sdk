@@ -293,12 +293,12 @@ class TestS3StaticCredentials:
         mock_logger.warning.assert_called_once()
 
     @patch("obstore.store.S3Store")
-    def test_session_token_without_key_pair_is_ignored(
+    def test_session_token_without_key_pair_warns_and_is_ignored(
         self, mock_s3_cls: MagicMock, tmp_path: Path
     ) -> None:
-        # A session token with no static key pair is meaningless — obstore
-        # would mix it with ambient env credentials.  It should be silently
-        # ignored so the ambient chain activates cleanly.
+        # STS session tokens require base credentials by definition; a bare
+        # sessionToken is a misconfiguration that should warn rather than
+        # silently fall back (symmetric with the half-pair warning above).
         components_dir = _write_component(
             tmp_path,
             "objectstore",
@@ -306,12 +306,19 @@ class TestS3StaticCredentials:
             {"bucket": "b", "region": "us-east-1", "sessionToken": "TOKEN"},
         )
         mock_s3_cls.return_value = MagicMock()
-        create_store_from_binding("objectstore", components_dir=components_dir)
+        with patch("application_sdk.storage.binding._get_logger") as mock_logger_fn:
+            mock_logger = MagicMock()
+            mock_logger_fn.return_value = mock_logger
+            create_store_from_binding("objectstore", components_dir=components_dir)
 
         config = mock_s3_cls.call_args.kwargs["config"] or {}
         assert "aws_session_token" not in config
         assert "aws_access_key_id" not in config
         assert "aws_secret_access_key" not in config
+        mock_logger.warning.assert_called_once()
+        assert (
+            "sessionToken requires accessKey" in mock_logger.warning.call_args.args[0]
+        )
 
 
 class TestS3EmptyConfigHardening:

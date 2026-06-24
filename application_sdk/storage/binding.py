@@ -357,6 +357,12 @@ def _build_s3_config(
                 "back to the ambient credential chain",
                 name,
             )
+        elif _nonempty(meta, "sessionToken"):
+            _get_logger().warning(
+                "S3 binding '%s': sessionToken requires accessKey + secretKey; "
+                "ignoring sessionToken and falling back to the ambient credential chain",
+                name,
+            )
 
     # --- Storage class (obstore ≥ 0.10.0 put attribute) -------------------
     storage_class = _nonempty(meta, "storageClass")
