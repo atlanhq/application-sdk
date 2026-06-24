@@ -1,4 +1,4 @@
-"""Meta-tests for the P-series prescription checks (P001, P002, P003).
+"""Meta-tests for the P-series prescription checks (P001–P015).
 
 These checks are shipped in the conformance package and fanned out across the
 fleet — a buggy check false-positives across hundreds of apps and triggers
@@ -945,3 +945,674 @@ def test_p002_sarif_output_validates(tmp_path: Path) -> None:
     )
     report = SarifReport.model_validate(json.loads(sarif_file.read_text()))
     validate_sarif(report)
+
+
+# ── P013 UntypedEntrypointBoundary ────────────────────────────────────────────
+
+# Shared contract fixtures for P013/P014 tests
+_TYPED_CONTRACTS = (
+    "from application_sdk.contracts import Input, Output\n"
+    "\n"
+    "class FetchInput(Input):\n"
+    "    connection_id: str = ''\n"
+    "\n"
+    "class FetchOutput(Output):\n"
+    "    rows: int = 0\n"
+)
+
+_APP_IMPORTS = "from application_sdk.app import App, entrypoint, task, signal, query\n"
+
+
+def test_p013_fires_on_untyped_dict_input(tmp_path: Path) -> None:
+    """@entrypoint with dict input → P013."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": (
+            _APP_IMPORTS + "from contracts import FetchOutput\n"
+            "class MyApp(App):\n"
+            "    @entrypoint\n"
+            "    async def run_it(self, input: dict) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    p013 = [f for f in findings if f.rule_id == "P013"]
+    assert len(p013) == 1
+    assert "input" in p013[0].message
+
+
+def test_p013_fires_on_subscripted_dict_input(tmp_path: Path) -> None:
+    """@entrypoint with dict[str,str] input — 'even if bounded' → P013."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": (
+            _APP_IMPORTS + "from contracts import FetchOutput\n"
+            "class MyApp(App):\n"
+            "    @entrypoint\n"
+            "    async def run_it(self, input: dict[str, str]) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    p013 = [f for f in findings if f.rule_id == "P013"]
+    assert len(p013) == 1
+
+
+def test_p013_fires_on_any_input(tmp_path: Path) -> None:
+    """@entrypoint with Any input → P013."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": (
+            _APP_IMPORTS + "from typing import Any\n"
+            "from contracts import FetchOutput\n"
+            "class MyApp(App):\n"
+            "    @entrypoint\n"
+            "    async def run_it(self, input: Any) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    p013 = [f for f in findings if f.rule_id == "P013"]
+    assert len(p013) == 1
+
+
+def test_p013_fires_on_missing_input_annotation(tmp_path: Path) -> None:
+    """@entrypoint with unannotated input param → P013."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": (
+            _APP_IMPORTS + "from contracts import FetchOutput\n"
+            "class MyApp(App):\n"
+            "    @entrypoint\n"
+            "    async def run_it(self, input) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    p013 = [f for f in findings if f.rule_id == "P013"]
+    assert len(p013) == 1
+    assert "missing" in p013[0].message.lower()
+
+
+def test_p013_fires_on_untyped_return(tmp_path: Path) -> None:
+    """@entrypoint with dict return type → P013."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": (
+            _APP_IMPORTS + "from contracts import FetchInput\n"
+            "class MyApp(App):\n"
+            "    @entrypoint\n"
+            "    async def run_it(self, input: FetchInput) -> dict:\n"
+            "        return {}\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    p013 = [f for f in findings if f.rule_id == "P013"]
+    assert len(p013) == 1
+    assert "output" in p013[0].message
+
+
+def test_p013_fires_on_missing_return_annotation(tmp_path: Path) -> None:
+    """@entrypoint with no return annotation → P013."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": (
+            _APP_IMPORTS + "from contracts import FetchInput\n"
+            "class MyApp(App):\n"
+            "    @entrypoint\n"
+            "    async def run_it(self, input: FetchInput):\n"
+            "        pass\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    p013 = [f for f in findings if f.rule_id == "P013"]
+    assert len(p013) == 1
+    assert "missing" in p013[0].message.lower()
+
+
+def test_p013_fires_on_plain_base_model_boundary(tmp_path: Path) -> None:
+    """@entrypoint whose input is a plain BaseModel (not Input subclass) → P013."""
+    files = {
+        "contracts.py": (
+            "from pydantic import BaseModel\n"
+            "\n"
+            "class FetchInput(BaseModel):\n"
+            "    connection_id: str = ''\n"
+        ),
+        "out.py": (
+            "from application_sdk.contracts import Output\n"
+            "class FetchOutput(Output):\n"
+            "    rows: int = 0\n"
+        ),
+        "connector.py": (
+            _APP_IMPORTS + "from contracts import FetchInput\n"
+            "from out import FetchOutput\n"
+            "class MyApp(App):\n"
+            "    @entrypoint\n"
+            "    async def run_it(self, input: FetchInput) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    p013 = [f for f in findings if f.rule_id == "P013"]
+    assert len(p013) == 1
+    assert "FetchInput" in p013[0].message
+
+
+def test_p013_silent_on_correctly_typed_entrypoint(tmp_path: Path) -> None:
+    """@entrypoint with proper Input/Output subclasses → no P013."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": (
+            _APP_IMPORTS + "from contracts import FetchInput, FetchOutput\n"
+            "class MyApp(App):\n"
+            "    @entrypoint\n"
+            "    async def run_it(self, input: FetchInput) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    p013 = [f for f in findings if f.rule_id == "P013"]
+    assert p013 == []
+
+
+def test_p013_silent_on_contracts_in_same_file(tmp_path: Path) -> None:
+    """Contracts defined in the same file as the App → resolved correctly."""
+    src = (
+        "from application_sdk.contracts import Input, Output\n"
+        "from application_sdk.app import App, entrypoint\n"
+        "\n"
+        "class FetchInput(Input):\n"
+        "    x: str = ''\n"
+        "\n"
+        "class FetchOutput(Output):\n"
+        "    y: int = 0\n"
+        "\n"
+        "class MyApp(App):\n"
+        "    @entrypoint\n"
+        "    async def run_it(self, input: FetchInput) -> FetchOutput:\n"
+        "        return FetchOutput()\n"
+    )
+    findings = _scan_one(tmp_path, src)
+    p013 = [f for f in findings if f.rule_id == "P013"]
+    assert p013 == []
+
+
+def test_p013_silent_on_third_party_unresolvable_annotation(tmp_path: Path) -> None:
+    """A boundary type imported from a third-party lib (not in scanned tree) is
+    assumed OK — no false-positive."""
+    files = {
+        "connector.py": (
+            _APP_IMPORTS + "from some_third_party import SomeInput, SomeOutput\n"
+            "class MyApp(App):\n"
+            "    @entrypoint\n"
+            "    async def run_it(self, input: SomeInput) -> SomeOutput:\n"
+            "        return SomeOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    p013 = [f for f in findings if f.rule_id == "P013"]
+    assert p013 == []
+
+
+def test_p013_silent_on_signal_and_query_methods(tmp_path: Path) -> None:
+    """@signal and @query are runtime interactions, not task boundaries → not P013."""
+    src = (
+        "from application_sdk.app import App, signal, query\n"
+        "\n"
+        "class MyApp(App):\n"
+        "    @signal\n"
+        "    async def pause(self, flag: bool) -> None:\n"
+        "        pass\n"
+        "\n"
+        "    @query\n"
+        "    def status(self) -> str:\n"
+        "        return 'ok'\n"
+    )
+    findings = _scan_one(tmp_path, src)
+    p013 = [f for f in findings if f.rule_id == "P013"]
+    assert p013 == []
+
+
+def test_p013_silent_on_non_sdk_entrypoint_decorator(tmp_path: Path) -> None:
+    """@flask.entrypoint or other non-SDK decorator → not P013 (provenance excluded)."""
+    src = (
+        "from flask import entrypoint\n"
+        "\n"
+        "class MyThing:\n"
+        "    @entrypoint\n"
+        "    async def run_it(self, input: dict) -> dict:\n"
+        "        return {}\n"
+    )
+    findings = _scan_one(tmp_path, src)
+    p013 = [f for f in findings if f.rule_id == "P013"]
+    assert p013 == []
+
+
+def test_p013_implicit_run_fires_on_app_subclass(tmp_path: Path) -> None:
+    """Implicit run() override on an App subclass with untyped input → P013."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": (
+            "from application_sdk.app import App\n"
+            "from contracts import FetchOutput\n"
+            "\n"
+            "class MyConnector(App):\n"
+            "    async def run(self, input: dict) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    p013 = [f for f in findings if f.rule_id == "P013"]
+    assert len(p013) == 1
+    assert "input" in p013[0].message
+
+
+def test_p013_implicit_run_silent_on_non_app_class(tmp_path: Path) -> None:
+    """run() on a class that does not subclass App → not P013."""
+    src = (
+        "class SomeHelper:\n"
+        "    async def run(self, input: dict) -> dict:\n"
+        "        return {}\n"
+    )
+    findings = _scan_one(tmp_path, src)
+    p013 = [f for f in findings if f.rule_id == "P013"]
+    assert p013 == []
+
+
+def test_p013_suppression_directive_clears_gate(tmp_path: Path) -> None:
+    """A justified inline suppression on a P013 violation keeps gate green.
+
+    The suppression comment must be on the same line as the finding (the ``def``
+    line where the annotation lives).  An inline ``# conformance: ignore[P013]``
+    on that line always suppresses regardless of ``comment_only`` status.
+    """
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": (
+            _APP_IMPORTS + "from contracts import FetchOutput\n"
+            "class MyApp(App):\n"
+            "    @entrypoint\n"
+            "    async def run_it(self, input: dict) -> FetchOutput:  # conformance: ignore[P013] legacy shim pending contract migration\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    paths = []
+    for name, src in files.items():
+        p = tmp_path / name
+        p.write_text(src)
+        paths.append(p)
+    findings = [f for f in scan_all(paths, tmp_path) if f.rule_id == "P013"]
+    assert len(findings) == 1
+    assert findings[0].suppressed is True
+
+
+def test_p013_is_block_tier() -> None:
+    assert get_rule("P013").tier is EnforcementTier.BLOCK
+
+
+def test_p013_block_violation_fails_gate(tmp_path: Path) -> None:
+    (tmp_path / "m.py").write_text(
+        "from application_sdk.app import App, entrypoint\n"
+        "class MyApp(App):\n"
+        "    @entrypoint\n"
+        "    async def run_it(self, input: dict) -> dict:\n"
+        "        return {}\n"
+    )
+    code = main(["--root", str(tmp_path), str(tmp_path / "m.py")])
+    assert code == 1
+
+
+def test_p013_result_is_failing_disposition(tmp_path: Path) -> None:
+    (tmp_path / "m.py").write_text(
+        "from application_sdk.app import App, entrypoint\n"
+        "class MyApp(App):\n"
+        "    @entrypoint\n"
+        "    async def run_it(self, input: dict) -> dict:\n"
+        "        return {}\n"
+    )
+    sarif_file = tmp_path / "out.sarif"
+    main(
+        [
+            "--root",
+            str(tmp_path),
+            str(tmp_path / "m.py"),
+            "--sarif-output",
+            str(sarif_file),
+        ]
+    )
+    report = SarifReport.model_validate(json.loads(sarif_file.read_text()))
+    p013_results = [r for r in report.runs[0].results if r.rule_id == "P013"]
+    assert len(p013_results) >= 1
+    assert all(derive_disposition(r) == Disposition.FAILING for r in p013_results)
+
+
+# ── P014 UntypedTaskBoundary ──────────────────────────────────────────────────
+
+
+def test_p014_fires_on_untyped_dict_input(tmp_path: Path) -> None:
+    """@task with dict input → P014."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": (
+            _APP_IMPORTS + "from contracts import FetchOutput\n"
+            "class MyApp(App):\n"
+            "    @task\n"
+            "    async def fetch(self, input: dict) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    p014 = [f for f in findings if f.rule_id == "P014"]
+    assert len(p014) == 1
+    assert "input" in p014[0].message
+
+
+def test_p014_fires_on_untyped_return(tmp_path: Path) -> None:
+    """@task with dict return → P014."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": (
+            _APP_IMPORTS + "from contracts import FetchInput\n"
+            "class MyApp(App):\n"
+            "    @task\n"
+            "    async def fetch(self, input: FetchInput) -> dict:\n"
+            "        return {}\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    p014 = [f for f in findings if f.rule_id == "P014"]
+    assert len(p014) == 1
+    assert "output" in p014[0].message
+
+
+def test_p014_fires_on_subscripted_dict_input(tmp_path: Path) -> None:
+    """@task with dict[str,str] input → P014 (bounded containers still untyped)."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": (
+            _APP_IMPORTS + "from contracts import FetchOutput\n"
+            "class MyApp(App):\n"
+            "    @task\n"
+            "    async def fetch(self, input: dict[str, str]) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    p014 = [f for f in findings if f.rule_id == "P014"]
+    assert len(p014) == 1
+
+
+def test_p014_fires_on_plain_base_model_boundary(tmp_path: Path) -> None:
+    """@task whose input is a plain BaseModel (in scanned tree, not Input subclass) → P014."""
+    files = {
+        "contracts.py": (
+            "from pydantic import BaseModel\n"
+            "\n"
+            "class FetchInput(BaseModel):\n"
+            "    connection_id: str = ''\n"
+        ),
+        "out.py": (
+            "from application_sdk.contracts import Output\n"
+            "class FetchOutput(Output):\n"
+            "    rows: int = 0\n"
+        ),
+        "connector.py": (
+            _APP_IMPORTS + "from contracts import FetchInput\n"
+            "from out import FetchOutput\n"
+            "class MyApp(App):\n"
+            "    @task\n"
+            "    async def fetch(self, input: FetchInput) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    p014 = [f for f in findings if f.rule_id == "P014"]
+    assert len(p014) == 1
+    assert "FetchInput" in p014[0].message
+
+
+def test_p014_silent_on_correctly_typed_task(tmp_path: Path) -> None:
+    """@task with proper Input/Output subclasses → no P014."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": (
+            _APP_IMPORTS + "from contracts import FetchInput, FetchOutput\n"
+            "class MyApp(App):\n"
+            "    @task\n"
+            "    async def fetch(self, input: FetchInput) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    p014 = [f for f in findings if f.rule_id == "P014"]
+    assert p014 == []
+
+
+def test_p014_silent_on_non_sdk_task_decorator(tmp_path: Path) -> None:
+    """@celery.task with untyped args → not P014 (provenance-excluded)."""
+    src = (
+        "import celery\n"
+        "\n"
+        "class Worker:\n"
+        "    @celery.task\n"
+        "    async def fetch(self, input: dict) -> dict:\n"
+        "        return {}\n"
+    )
+    findings = _scan_one(tmp_path, src)
+    p014 = [f for f in findings if f.rule_id == "P014"]
+    assert p014 == []
+
+
+def test_p014_silent_on_from_celery_import_task(tmp_path: Path) -> None:
+    """``from celery import task`` → not P014."""
+    src = (
+        "from celery import task\n"
+        "\n"
+        "class Worker:\n"
+        "    @task\n"
+        "    async def fetch(self, input: dict) -> dict:\n"
+        "        return {}\n"
+    )
+    findings = _scan_one(tmp_path, src)
+    p014 = [f for f in findings if f.rule_id == "P014"]
+    assert p014 == []
+
+
+def test_p014_silent_on_third_party_unresolvable_annotation(tmp_path: Path) -> None:
+    """Boundary type from a third-party lib (not in tree) is assumed OK."""
+    files = {
+        "connector.py": (
+            _APP_IMPORTS + "from some_lib import SomeInput, SomeOutput\n"
+            "class MyApp(App):\n"
+            "    @task\n"
+            "    async def fetch(self, input: SomeInput) -> SomeOutput:\n"
+            "        return SomeOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    p014 = [f for f in findings if f.rule_id == "P014"]
+    assert p014 == []
+
+
+def test_p014_is_block_tier() -> None:
+    assert get_rule("P014").tier is EnforcementTier.BLOCK
+
+
+def test_p014_block_violation_fails_gate(tmp_path: Path) -> None:
+    (tmp_path / "m.py").write_text(
+        "from application_sdk.app import App, task\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def fetch(self, input: dict) -> dict:\n"
+        "        return {}\n"
+    )
+    code = main(["--root", str(tmp_path), str(tmp_path / "m.py")])
+    assert code == 1
+
+
+def test_p014_result_is_failing_disposition(tmp_path: Path) -> None:
+    (tmp_path / "m.py").write_text(
+        "from application_sdk.app import App, task\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def fetch(self, input: dict) -> dict:\n"
+        "        return {}\n"
+    )
+    sarif_file = tmp_path / "out.sarif"
+    main(
+        [
+            "--root",
+            str(tmp_path),
+            str(tmp_path / "m.py"),
+            "--sarif-output",
+            str(sarif_file),
+        ]
+    )
+    report = SarifReport.model_validate(json.loads(sarif_file.read_text()))
+    p014_results = [r for r in report.runs[0].results if r.rule_id == "P014"]
+    assert len(p014_results) >= 1
+    assert all(derive_disposition(r) == Disposition.FAILING for r in p014_results)
+
+
+# ── P015 UnmodeledBoundedContractField ────────────────────────────────────────
+
+
+def _p015_ids(src: str) -> list[str]:
+    return [f.rule_id for f in scan_text(src, "x.py") if f.rule_id == "P015"]
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        "dict",
+        "dict[str, str]",
+        "Dict[str, Any]",
+        "list[str]",
+        "List[int]",
+        "set[str]",
+        "Set[str]",
+        "Mapping[str, str]",
+        "Sequence[str]",
+    ],
+)
+def test_p015_fires_on_unmodeled_container(annotation: str) -> None:
+    """Container of primitives/Any on a contract field → P015."""
+    src = f"class MyInput(Input):\n    data: {annotation}\n"
+    assert _p015_ids(src) == ["P015"], f"Expected P015 for annotation '{annotation}'"
+
+
+def test_p015_fires_on_bounded_annotated_dict(tmp_path: Path) -> None:
+    """Annotated[dict[str, str], MaxItems(50)] — bounded but unmodeled → P015."""
+    src = (
+        "from typing import Annotated\n"
+        "class MyInput(Input):\n"
+        "    data: Annotated[dict[str, str], object()]\n"
+    )
+    assert _p015_ids(src) == ["P015"]
+
+
+def test_p015_fires_on_optional_dict(tmp_path: Path) -> None:
+    """dict[str, str] | None → P015 (optional wrapper doesn't exempt the container)."""
+    src = "class MyInput(Input):\n    data: dict[str, str] | None\n"
+    assert _p015_ids(src) == ["P015"]
+
+
+def test_p015_fires_on_bare_dict_output_field(tmp_path: Path) -> None:
+    """Bare dict on an Output contract → P015."""
+    src = "class MyOutput(Output):\n    result: dict\n"
+    assert _p015_ids(src) == ["P015"]
+
+
+def test_p015_silent_on_list_of_model(tmp_path: Path) -> None:
+    """list[FooModel] — container of a typed class → exempt, no P015."""
+    src = (
+        "class FooModel:\n"
+        "    x: str = ''\n"
+        "\n"
+        "class MyInput(Input):\n"
+        "    items: list[FooModel]\n"
+    )
+    assert _p015_ids(src) == []
+
+
+def test_p015_silent_on_dict_str_model(tmp_path: Path) -> None:
+    """dict[str, FooModel] — dict of model values → exempt, no P015."""
+    src = (
+        "class FooModel:\n"
+        "    x: str = ''\n"
+        "\n"
+        "class MyInput(Input):\n"
+        "    lookup: dict[str, FooModel]\n"
+    )
+    assert _p015_ids(src) == []
+
+
+def test_p015_silent_on_scalar_field(tmp_path: Path) -> None:
+    """Non-container scalar field on a contract → no P015."""
+    src = (
+        "class MyInput(Input):\n"
+        "    connection_id: str\n"
+        "    limit: int\n"
+        "    enabled: bool\n"
+    )
+    assert _p015_ids(src) == []
+
+
+def test_p015_silent_on_non_contract_class(tmp_path: Path) -> None:
+    """dict[str, str] field on a non-contract class → no P015."""
+    src = "class SomeConfig:\n    settings: dict[str, str]\n"
+    assert _p015_ids(src) == []
+
+
+def test_p015_silent_on_foreign_output(tmp_path: Path) -> None:
+    """A class extending Output imported from a non-SDK module is excluded."""
+    src = (
+        "from pydantic_ai import Output\n"
+        "\n"
+        "class MyResult(Output):\n"
+        "    data: dict[str, str]\n"
+    )
+    assert _p015_ids(src) == []
+
+
+def test_p015_suppression_directive(tmp_path: Path) -> None:
+    """# conformance: ignore[P015] suppresses the finding."""
+    src = (
+        "class MyInput(Input):\n"
+        "    # conformance: ignore[P015] schema varies per connector version\n"
+        "    data: dict[str, str]\n"
+    )
+    findings = [f for f in scan_text(src, "x.py") if f.rule_id == "P015"]
+    assert len(findings) == 1
+    assert findings[0].suppressed is True
+
+
+def test_p015_is_warn_tier() -> None:
+    """P015 is WARN, not BLOCK — a modeling nudge, not a gate failure."""
+    assert get_rule("P015").tier is EnforcementTier.WARN
+
+
+def test_p015_warn_violation_passes_gate(tmp_path: Path) -> None:
+    """An unsuppressed P015 (WARN) does not fail the gate (exit 0)."""
+    (tmp_path / "m.py").write_text("class MyInput(Input):\n    data: dict[str, str]\n")
+    code = main(["--root", str(tmp_path), str(tmp_path / "m.py")])
+    assert code == 0
+
+
+def test_p015_result_is_warning_disposition(tmp_path: Path) -> None:
+    (tmp_path / "m.py").write_text("class MyInput(Input):\n    data: dict[str, str]\n")
+    sarif_file = tmp_path / "out.sarif"
+    main(
+        [
+            "--root",
+            str(tmp_path),
+            str(tmp_path / "m.py"),
+            "--sarif-output",
+            str(sarif_file),
+        ]
+    )
+    report = SarifReport.model_validate(json.loads(sarif_file.read_text()))
+    p015_results = [r for r in report.runs[0].results if r.rule_id == "P015"]
+    assert len(p015_results) >= 1
+    assert all(derive_disposition(r) == Disposition.WARNING for r in p015_results)
