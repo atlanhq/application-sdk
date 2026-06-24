@@ -129,10 +129,19 @@ inputs:
   force-external-runtime:
     required: false
     description: >
-      Force the external Dapr CLI + Temporal CLI install steps to run even when the
-      installed SDK reports embedded runtime support (SDK >= 3.13). Use when the
-      connector's main.py has NOT been migrated to the embedded runtime path yet
-      and still expects external daprd at localhost:3500 + temporal at localhost:7233.
+      Force the external daprd + Temporal CLI install/start steps to run even when
+      the installed SDK reports embedded runtime support (SDK >= 3.13). Set this
+      only when the connector's main.py has NOT been migrated to the embedded
+      runtime path yet and still expects external daprd at localhost:3500 +
+      temporal at localhost:7233.
+
+      PREFER THE EMBEDDED RUNTIME (leave this unset / "false"). On SDK >= 3.13 the
+      app boots daprd + an in-process Temporal itself from `python main.py`, so CI
+      needs no external runtime at all — this is what the v3 reference connectors
+      (atlan-metabase-app, atlan-openapi-app, atlan-mysql-app) do. Migrating your
+      main.py to the embedded runtime and dropping this flag is the recommended
+      end state; see docs/guides/integration-testing.md. (Even when set, this no
+      longer uses the Dapr CLI — daprd is downloaded and run directly.)
     default: "false"
   application-sdk-ref:
     required: false
