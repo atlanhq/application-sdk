@@ -277,7 +277,7 @@ class TransformInput(Input):
     data: FileReference                              # auto-materialised
 
 async def transform_users(self, inp: TransformInput) -> TransformOutput:
-    df = pd.read_parquet(inp.data.local_path)        # or daft.read_parquet
+    df = pd.read_parquet(inp.data.local_path)
     ...
 ```
 

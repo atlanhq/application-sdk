@@ -15,7 +15,7 @@ columns:
       source_query: |
         CASE
           WHEN remarks IS NOT NULL THEN
-            REGEXP_REPLACE(REGEXP_REPLACE(SUBSTRING(COALESCE(remarks, ''), 1, 100000), '<[^>]+>', ''), '\s+', ' ')
+            REGEXP_REPLACE(REGEXP_REPLACE(SUBSTRING(COALESCE(remarks, ''), 1, 100000), '<[^>]+>', '', 'g'), '\s+', ' ', 'g')
           ELSE
             NULL
         END

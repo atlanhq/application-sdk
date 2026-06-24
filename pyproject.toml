@@ -67,10 +67,9 @@ sql = [
     "duckdb>=1.1.3,<1.6.0",
     "duckdb-engine>=0.17.0,<0.18.0",
 ]
-# Daft transformer engine
-daft = [
-    "daft==0.7.15",
-]
+# Daft transformer engine — deprecated no-op alias; will be removed next major.
+# Install [sql] or [incremental] instead; daft is no longer used.
+daft = []
 # Disk-backed RocksDB storage utilities (SpillableDict, rocksdb_utils).
 # Standalone extra — non-incremental connectors that want disk-backed
 # scratch state pull this in directly without needing the full
@@ -78,7 +77,7 @@ daft = [
 storage = [
     "rocksdict>=0.3.0",
 ]
-# Incremental extraction: sql + daft + RocksDB state store.
+# Incremental extraction: sql + RocksDB state store.
 # Includes ``storage`` because the incremental TableScope pattern uses
 # RocksDB for state — keep one source of truth for the rocksdict pin.
 incremental = [
@@ -88,7 +87,6 @@ incremental = [
     "sqlalchemy[asyncio]>=2.0.36,<3.0.0",
     "duckdb>=1.1.3,<1.6.0",
     "duckdb-engine>=0.17.0,<0.18.0",
-    "daft==0.7.15",
 ]
 # Backwards-compatibility shim — boto3 promoted to core in v3.14; keeping this
 # extra means existing connector pyproject.toml files that specify [iam_auth]

@@ -5,7 +5,7 @@ This test suite verifies that writers maintain data integrity when multiple
 write() calls are made and when DataFrames exceed buffer_size.
 
 Guards against two classes of bugs:
-1. JSON/daft writer: file name collisions across write() calls (fixed earlier)
+1. JSON writer (incl. legacy daft shim): file name collisions across write() calls (fixed earlier)
 2. Parquet writer: pq.write_table() overwrites within a single write() call
    when DataFrame exceeds buffer_size, since parquet cannot append (HYP-773)
 
@@ -34,7 +34,7 @@ from application_sdk.storage.reference import persist_file_reference
 
 
 class TestWriterDataIntegrity:
-    """Verify pandas and daft writers preserve all data across multiple write() calls."""
+    """Verify the pandas writer preserves all data across multiple write() calls."""
 
     @pytest.fixture
     def temp_dir(self):
@@ -103,16 +103,12 @@ class TestWriterDataIntegrity:
             assert len(ids_in_store) == total_records
 
     @pytest.mark.asyncio
-    async def test_daft_writer_no_data_loss(self, temp_dir: str):
-        """Verify daft writer preserves all records across multiple write() calls."""
-        pytest.importorskip("daft")
-        from unittest.mock import AsyncMock, patch
+    async def test_daft_shim_writer_no_data_loss(self, temp_dir: str):
+        """Verify DataframeType.daft shim preserves all records across multiple write() calls.
 
-        import daft
-
-        from application_sdk.common.types import DataframeType
-        from application_sdk.storage.formats.json import JsonFileWriter
-
+        DataframeType.daft is deprecated and routes to the pandas/orjson path.
+        The shim must not drop data — same assertion as test_pandas_writer_no_data_loss.
+        """
         object_store: dict[str, list[str]] = {}
 
         async def mock_upload(key, local_path, **kwargs):
@@ -120,14 +116,17 @@ class TestWriterDataIntegrity:
                 with open(local_path, "r") as f:
                     object_store[key] = f.readlines()
 
-        with patch(
-            "application_sdk.storage.formats._upload_file",
-            new_callable=AsyncMock,
-            side_effect=mock_upload,
+        with (
+            patch(
+                "application_sdk.storage.formats._upload_file",
+                new_callable=AsyncMock,
+                side_effect=mock_upload,
+            ),
+            pytest.warns(DeprecationWarning, match="DataframeType.daft is deprecated"),
         ):
             writer = JsonFileWriter(
                 path=temp_dir,
-                typename="daft_test",
+                typename="daft_shim_test",
                 buffer_size=50,
                 chunk_size=100,
                 retain_local_copy=False,
@@ -136,7 +135,7 @@ class TestWriterDataIntegrity:
 
             total_records = 0
             for batch in range(3):
-                df = daft.from_pydict(
+                df = pd.DataFrame(
                     {
                         "id": list(range(batch * 120, (batch + 1) * 120)),
                         "batch": [f"batch_{batch}"] * 120,
@@ -153,19 +152,16 @@ class TestWriterDataIntegrity:
 
             assert (
                 not missing_ids
-            ), f"DAFT data loss: missing IDs {sorted(missing_ids)[:20]}"
+            ), f"DAFT shim data loss: missing IDs {sorted(missing_ids)[:20]}"
             assert len(ids_in_store) == total_records
 
     @pytest.mark.asyncio
-    async def test_pandas_daft_chunk_count_consistency(self, temp_dir: str):
-        """Verify pandas and daft writers have identical chunk_count after writes."""
-        pytest.importorskip("daft")
-        from unittest.mock import AsyncMock, patch
+    async def test_pandas_daft_shim_chunk_count_consistency(self, temp_dir: str):
+        """Verify pandas and DataframeType.daft-shim writers have identical chunk_count.
 
-        import daft
-
-        from application_sdk.common.types import DataframeType
-        from application_sdk.storage.formats.json import JsonFileWriter
+        Since DataframeType.daft routes to the pandas path, the buffering and
+        chunking behaviour must be byte-for-byte identical.
+        """
 
         async def mock_upload(
             source, destination=None, retain_local_copy=False, **kwargs
@@ -178,55 +174,54 @@ class TestWriterDataIntegrity:
             new_callable=AsyncMock,
             side_effect=mock_upload,
         ):
-            pandas_writer = JsonFileWriter(
-                path=os.path.join(temp_dir, "pandas"),
-                typename="test",
-                buffer_size=50,
-                chunk_size=100,
-                retain_local_copy=False,
-                dataframe_type=DataframeType.pandas,
-            )
-
-            daft_writer = JsonFileWriter(
-                path=os.path.join(temp_dir, "daft"),
-                typename="test",
-                buffer_size=50,
-                chunk_size=100,
-                retain_local_copy=False,
-                dataframe_type=DataframeType.daft,
-            )
-
-            for batch in range(3):
-                pdf = pd.DataFrame({"id": list(range(batch * 50, (batch + 1) * 50))})
-                ddf = daft.from_pydict(
-                    {"id": list(range(batch * 50, (batch + 1) * 50))}
+            with pytest.warns(DeprecationWarning, match="JsonFileWriter is deprecated"):
+                pandas_writer = JsonFileWriter(
+                    path=os.path.join(temp_dir, "pandas"),
+                    typename="test",
+                    buffer_size=50,
+                    chunk_size=100,
+                    retain_local_copy=False,
+                    dataframe_type=DataframeType.pandas,
                 )
 
-                await pandas_writer.write(pdf)
-                await daft_writer.write(ddf)
+            with pytest.warns(
+                DeprecationWarning, match="DataframeType.daft is deprecated"
+            ):
+                daft_shim_writer = JsonFileWriter(
+                    path=os.path.join(temp_dir, "daft_shim"),
+                    typename="test",
+                    buffer_size=50,
+                    chunk_size=100,
+                    retain_local_copy=False,
+                    dataframe_type=DataframeType.daft,
+                )
 
-                assert pandas_writer.chunk_count == daft_writer.chunk_count, (
+            for batch in range(3):
+                data = {"id": list(range(batch * 50, (batch + 1) * 50))}
+                await pandas_writer.write(pd.DataFrame(data))
+                await daft_shim_writer.write(pd.DataFrame(data))
+
+                assert pandas_writer.chunk_count == daft_shim_writer.chunk_count, (
                     f"chunk_count diverged after write {batch + 1}: "
-                    f"pandas={pandas_writer.chunk_count}, daft={daft_writer.chunk_count}"
+                    f"pandas={pandas_writer.chunk_count}, "
+                    f"daft_shim={daft_shim_writer.chunk_count}"
                 )
 
             await pandas_writer.close()
-            await daft_writer.close()
+            await daft_shim_writer.close()
 
-            assert pandas_writer.chunk_count == daft_writer.chunk_count
-            assert len(pandas_writer.partitions) == len(daft_writer.partitions)
+            assert pandas_writer.chunk_count == daft_shim_writer.chunk_count
+            assert len(pandas_writer.partitions) == len(daft_shim_writer.partitions)
 
     @pytest.mark.asyncio
     async def test_no_duplicate_file_uploads(self, temp_dir: str):
-        """Verify no duplicate file names are uploaded (original bug symptom)."""
-        pytest.importorskip("daft")
+        """Verify no duplicate file names are uploaded (original file-name-collision bug).
+
+        Originally caught against the DataframeType.daft path; re-expressed using
+        the deprecated daft shim (which routes to pandas) so the assertion stands
+        without requiring daft installed.
+        """
         from collections import Counter
-        from unittest.mock import AsyncMock, patch
-
-        import daft
-
-        from application_sdk.common.types import DataframeType
-        from application_sdk.storage.formats.json import JsonFileWriter
 
         uploaded_files: list[str] = []
 
@@ -238,10 +233,13 @@ class TestWriterDataIntegrity:
             if os.path.exists(source) and not retain_local_copy:
                 os.remove(source)
 
-        with patch(
-            "application_sdk.storage.formats._upload_file",
-            new_callable=AsyncMock,
-            side_effect=mock_upload,
+        with (
+            patch(
+                "application_sdk.storage.formats._upload_file",
+                new_callable=AsyncMock,
+                side_effect=mock_upload,
+            ),
+            pytest.warns(DeprecationWarning, match="DataframeType.daft is deprecated"),
         ):
             writer = JsonFileWriter(
                 path=temp_dir,
@@ -253,9 +251,7 @@ class TestWriterDataIntegrity:
             )
 
             for batch in range(3):
-                df = daft.from_pydict(
-                    {"id": list(range(batch * 100, (batch + 1) * 100))}
-                )
+                df = pd.DataFrame({"id": list(range(batch * 100, (batch + 1) * 100))})
                 await writer.write(df)
 
             await writer.close()

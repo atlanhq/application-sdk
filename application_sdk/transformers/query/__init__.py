@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import textwrap
+import warnings
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -8,7 +9,7 @@ import yaml
 from pyatlan.model.enums import AtlanConnectorType
 
 if TYPE_CHECKING:
-    import daft
+    import pyarrow as pa
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.transformers import TransformerInterface
@@ -26,14 +27,22 @@ from application_sdk.transformers.query.errors import (
     SqlTransformNotRegisteredError as SqlTransformNotRegisteredError,
 )
 
+warnings.warn(
+    "application_sdk.transformers.query is deprecated and will be removed in the next major version. "
+    "Use the connector-side typed-record → mapper-function pattern instead. "
+    "See docs/upgrade-guide-v3.md.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 logger = get_logger(__name__)
 
 
 class QueryBasedTransformer(TransformerInterface):
-    """Query based transformer that uses YAML files for SQL queries and daft engine for execution.
+    """Query based transformer that uses YAML files for SQL queries and DuckDB for execution.
 
     Uses a YAML file to define SQL queries for each asset type and executes them on raw dataframes
-    using the daft engine to get transformed data.
+    using DuckDB to get transformed data.
 
     The execution flow is:
         1. Initialize transformer with connector name and tenant ID
@@ -43,9 +52,9 @@ class QueryBasedTransformer(TransformerInterface):
            - Loading YAML template for the typename
            - Preparing default attributes and SQL template
            - Generating SQL query from template
-           - Executing query on raw daft dataframe
-           - Converting flat dataframe with dot notation to nested structure
-           - Returning transformed dataframe
+           - Executing query on raw pyarrow Table via DuckDB
+           - Converting flat table with dot notation to nested structure
+           - Returning transformed list of dicts
 
     Args:
         connector_name: Name of the connector
@@ -101,14 +110,14 @@ class QueryBasedTransformer(TransformerInterface):
     def get_sql_column_expressions(
         self,
         sql_template: dict[str, Any],
-        dataframe: daft.DataFrame,
+        dataframe: pa.Table,
         default_attributes: dict[str, Any],
     ) -> tuple[list[str], list[dict[str, str]] | None]:
         """Get the columns and literal columns for the SQL query.
 
         Args:
             sql_template (Dict[str, Any]): The SQL template
-            dataframe (daft.DataFrame): The DataFrame to get columns from
+            dataframe (pa.Table): The Table to get columns from
             default_attributes (Dict[str, Any]): The default attributes to add to the SQL query
 
         Returns:
@@ -116,17 +125,9 @@ class QueryBasedTransformer(TransformerInterface):
         """
         columns: list[str] = []
         literal_columns: list[dict[str, str]] = []
-        column_names = dataframe.column_names + list(default_attributes.keys())
+        column_names = list(dataframe.schema.names) + list(default_attributes.keys())
 
-        # Add the columns from the SQL template to the columns list only if they are present in the dataframe
-        # Otherwise the dataframe will throw an error
         for column in sql_template["columns"]:
-            # If the column has a source_columns attribute and all of the source_columns are present in the dataframe,
-            # then add the column to the columns list
-            # E.g
-            # - name: attributes.qualifiedName
-            #   source_query: concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name)
-            #   source_columns: [connection_qualified_name, table_catalog, table_schema, table_name]
             if (
                 column.get("source_columns")
                 and (all(col in column_names for col in column["source_columns"]))
@@ -134,14 +135,6 @@ class QueryBasedTransformer(TransformerInterface):
             ):
                 columns.append(self.convert_to_sql_expression(column))
 
-            # Else if the column has a string literal, then add the column to the literal_columns list
-            # E.g 1. String Literal
-            # - name: attributes.typeName
-            #   source_query: "'Table'"
-
-            # E.g 2. Boolean Literal
-            # - name: attributes.isPartition
-            #   source_query: True
             elif (
                 isinstance(column["source_query"], float)
                 or isinstance(column["source_query"], int)
@@ -161,7 +154,7 @@ class QueryBasedTransformer(TransformerInterface):
     def generate_sql_query(
         self,
         yaml_path: str,
-        dataframe: daft.DataFrame,
+        dataframe: pa.Table,
         default_attributes: dict[str, Any],
     ) -> tuple[str, list[dict[str, str]] | None]:
         """
@@ -169,26 +162,21 @@ class QueryBasedTransformer(TransformerInterface):
 
         Args:
             yaml_path (str): The path to the YAML template
-            dataframe (daft.DataFrame): The DataFrame to reference for column names
+            dataframe (pa.Table): The Table to reference for column names
             default_attributes (Dict[str, Any]): The default attributes to add to the SQL query
 
         Returns:
             str: The generated SQL query
         """
-        # Load the YAML template from the path
         with open(yaml_path, "r") as f:
             sql_template = yaml.safe_load(f)
 
-        # Flatten the columns dictionary
         sql_template["columns"] = flatten_yaml_columns(sql_template["columns"])
 
-        # Get the SQL columns expressions for the SQL query
         columns, literal_columns = self.get_sql_column_expressions(
             sql_template, dataframe, default_attributes
         )
 
-        # Join all the SQL column expressions to create the full SELECT statement for the SQL query
-        # This will be used for transforming the dataframe
         sql_query = textwrap.dedent(f"""
         SELECT
             {",".join(columns)}
@@ -196,230 +184,105 @@ class QueryBasedTransformer(TransformerInterface):
         """)
         return sql_query, literal_columns or None
 
-    def _build_struct(self, level: dict, prefix: str = "") -> daft.Expression | None:
-        """
-        Recursively build nested struct expressions.
+    def _build_struct(self, level: dict, prefix: str = "") -> None:  # type: ignore[return]
+        """Deprecated: struct building is now handled by get_grouped_dataframe_by_prefix.
+
+        Kept as a no-op so callers that were patching this in tests do not blow up.
 
         Args:
             level (dict): The current level of the struct hierarchy
             prefix (str): The prefix for the current struct level
-
-        Returns:
-            Optional[daft.Expression]: The constructed struct expression or None if all fields are null
         """
-
-        # Check if level is None
         if level is None:
             raise BuildStructLevelRequiredError()
-
-        # Check if prefix is None
         if prefix is None:
             raise BuildStructPrefixRequiredError()
 
-        import daft  # noqa: PLC0415 — optional dep: daft
-        from daft.functions import to_struct, when  # noqa: PLC0415 — optional dep: daft
+    def get_grouped_dataframe_by_prefix(self, table: pa.Table) -> list[dict[str, Any]]:
+        """Convert flat dot-notation columns to nested dicts.
 
-        struct_fields = []
-        non_null_fields = []
-
-        # Handle columns at this level
-        if "columns" in level:
-            logger.debug("Processing columns at level: %s", level["columns"])
-            for full_col, suffix in level["columns"]:
-                logger.debug(
-                    "Processing column: full_col=%s suffix=%s", full_col, suffix
-                )
-                field = daft.col(full_col).alias(suffix)
-                struct_fields.append(field)
-                # Add to non_null check by negating is_null()
-                non_null_fields.append(~daft.col(full_col).is_null())
-
-        # Handle nested levels
-        for component, sub_level in level.items():
-            if component != "columns":  # Skip the columns key
-                logger.debug("Processing nested component: %s", component)
-                nested_struct = self._build_struct(sub_level, component)
-                if nested_struct is not None:
-                    struct_fields.append(nested_struct)
-                    # Add nested struct's non-null check
-                    non_null_fields.append(~nested_struct.is_null())
-
-        # Only create a struct if we have fields
-        if struct_fields:
-            logger.debug("Creating struct with %d fields", len(struct_fields))
-            # Create the struct first
-            struct = to_struct(*struct_fields)
-
-            # If we have non-null checks, apply them
-            if non_null_fields:
-                # Combine all non-null checks with OR to check if any field is non-null
-                any_non_null = non_null_fields[0]
-                for check in non_null_fields[1:]:
-                    any_non_null = any_non_null | check
-
-                # Use when().otherwise() for conditional expression (replaces if_else in daft 0.7+)
-                return when(any_non_null, struct).otherwise(None).alias(prefix)
-
-            return struct.alias(prefix)
-
-        logger.warning("No fields found for level: %s", level)
-        return None
-
-    def get_grouped_dataframe_by_prefix(
-        self, dataframe: daft.DataFrame
-    ) -> daft.DataFrame:
-        """Group columns with the same prefix into structs, supporting any level of nesting.
-
-        We have a flat structured dataframe with columns that have dot notation in the yaml template.
-        For example:
-
-        .. code-block:: yaml
-
-            - name: attributes.name
-              source_query: table_name
-            - name: attributes.qualifiedName
-              source_query: concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name)
-              source_columns: [connection_qualified_name, table_catalog, table_schema, table_name]
-            - name: attributes.connectionQualifiedName
-              source_query: connection_qualified_name
-
-        This method will group the columns with the same prefix into structs.
-        For example:
-
-        .. code-block:: python
-
-            struct(
-                name=table_name,
-                qualifiedName=concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name),
-                connectionQualifiedName=connection_qualified_name
-            ).alias("attributes")
+        We have a flat structured table with columns that have dot notation.
+        For example columns like ``attributes.name``, ``attributes.qualifiedName``
+        are converted into nested dicts:
+        ``{"attributes": {"name": ..., "qualifiedName": ...}}``.
 
         Args:
-            dataframe (daft.DataFrame): DataFrame to restructure
+            table (pa.Table): Table with flat dot-notation column names
 
         Returns:
-            daft.DataFrame: DataFrame with columns grouped into structs
+            list[dict[str, Any]]: List of nested dicts
         """
-        import daft  # noqa: PLC0415 — optional dep: daft
 
-        # Get all column names
-        columns = dataframe.column_names
-        logger.debug("=== DEBUG: get_grouped_dataframe_by_prefix ===")
-        logger.debug("Input DataFrame columns: %s", columns)
+        def collapse_all_none(value: Any) -> Any:
+            """Collapse a dict where every (recursive) leaf is None into None itself."""
+            if not isinstance(value, dict):
+                return value
+            collapsed = {k: collapse_all_none(v) for k, v in value.items()}
+            return None if all(v is None for v in collapsed.values()) else collapsed
 
-        # Group columns by their path components
-        path_groups = {}
-        standalone_columns = []
-
-        for col in columns:
-            if col is None:
-                logger.error("Found None column in DataFrame columns: %s", columns)
-                continue
-
-            if "." in col:
-                # Split the full path into components
-                path_components = col.split(".")
-                current_level = path_groups
-
-                # Traverse the path, creating nested dictionaries as needed
-                for component in path_components[:-1]:
-                    if component not in current_level:
-                        current_level[component] = {}
-                    current_level = current_level[component]
-
-                # Store the column name and its final component at the leaf level
-                if "columns" not in current_level:
-                    current_level["columns"] = []
-                current_level["columns"].append((col, path_components[-1]))
-            else:
-                standalone_columns.append(col)
-
-        # Create new DataFrame with restructured columns
-        new_columns = []
-
-        # Add standalone columns as is
-        for col in standalone_columns:
-            new_columns.append(daft.col(col))
-
-        logger.debug("path_groups: %s", path_groups)
-        logger.debug("standalone_columns: %s", standalone_columns)
-
-        # Build nested structs starting from the root level
-        for prefix, level in path_groups.items():
-            logger.debug("Building struct for prefix=%s level=%s", prefix, level)
-            struct_expr = self._build_struct(level, prefix)
-            new_columns.append(struct_expr)
-
-        return dataframe.select(*new_columns)
+        result = []
+        for row_dict in table.to_pylist():
+            nested: dict[str, Any] = {}
+            for key, value in row_dict.items():
+                parts = key.split(".")
+                current = nested
+                for part in parts[:-1]:
+                    child = current.get(part)
+                    if not isinstance(child, dict):
+                        child = {}
+                        current[part] = child
+                    current = child
+                final_key = parts[-1]
+                if not isinstance(current.get(final_key), dict):
+                    current[final_key] = value
+            result.append({k: collapse_all_none(v) for k, v in nested.items()})
+        return result
 
     def prepare_template_and_attributes(
         self,
-        dataframe: daft.DataFrame,
+        dataframe: pa.Table,
         workflow_id: str,
         workflow_run_id: str,
         connection_qualified_name: str | None = None,
         connection_name: str | None = None,
         entity_sql_template_path: str | None = None,
-    ) -> tuple[daft.DataFrame, str]:
+    ) -> tuple[pa.Table, str]:
         """
-        Prepare the entity SQL template and the default attributes for the DataFrame.
+        Prepare the entity SQL template and the default attributes for the Table.
 
         Args:
-            dataframe (daft.DataFrame): Input DataFrame
+            dataframe (pa.Table): Input Table
             workflow_id (str): ID of the workflow
             workflow_run_id (str): ID of the workflow run
             connection_qualified_name (str): Qualified name of the connection
             connection_name (str): Name of the connection
+            entity_sql_template_path (str): Path to the SQL template
 
         Returns:
-            Tuple[daft.DataFrame, str]: DataFrame with default attributes added and the entity SQL template
+            Tuple[pa.Table, str]: Table with default attributes added and the entity SQL template
         """
-        import daft  # noqa: PLC0415 — optional dep: daft
+        import pyarrow as pa  # noqa: PLC0415 — optional dep: pyarrow
 
-        # Promote any Null-typed input columns to Utf8. Daft resolves expression
-        # types at logical-plan creation, so SQL templates that apply utf8
-        # functions (SUBSTRING, REGEXP_REPLACE) or `CASE WHEN col IS NOT NULL`
-        # guards against an all-NULL parquet column fail with
-        # `DaftError::TypeError Expected input to be utf8 but received Null` —
-        # COALESCE rescues some forms but not all, so we cast at the source.
-        null_cols = [
-            field.name
-            for field in dataframe.schema()
-            if field.dtype == daft.DataType.null()
-        ]
-        if null_cols:
-            dataframe = dataframe.with_columns(
-                {
-                    name: daft.col(name).cast(daft.DataType.string())
-                    for name in null_cols
-                }
-            )
-
-        # prepare default attributes
-        default_attributes = {
-            "connection_qualified_name": daft.lit(connection_qualified_name),
-            "connection_name": daft.lit(connection_name),
-            "tenant_id": daft.lit(self.tenant_id),
-            "last_sync_workflow_name": daft.lit(workflow_id),
-            "last_sync_run": daft.lit(workflow_run_id),
-            "last_sync_run_at": daft.lit(int(datetime.now(UTC).timestamp() * 1000)),
-            "connector_name": daft.lit(
-                AtlanConnectorType.get_connector_name(connection_qualified_name)
+        # prepare default attributes as scalar values
+        default_attributes: dict[str, Any] = {
+            "connection_qualified_name": connection_qualified_name,
+            "connection_name": connection_name,
+            "tenant_id": self.tenant_id,
+            "last_sync_workflow_name": workflow_id,
+            "last_sync_run": workflow_run_id,
+            "last_sync_run_at": int(datetime.now(UTC).timestamp() * 1000),
+            "connector_name": AtlanConnectorType.get_connector_name(
+                connection_qualified_name
             ),
         }
         entity_sql_template, literal_columns = self.generate_sql_query(
             entity_sql_template_path, dataframe, default_attributes=default_attributes
         )
 
-        # We have to prepare the literal attributes in the raw dataframe because
-        # we get an error which is due to the mismatch in lengths between the
-        # literal values and the columns in the DataFrame.
-        # The daft.lit function creates a literal value that is not automatically broadcasted
-        # to match the length of the DataFrame columns.
-        # This results in a length mismatch when constructing the struct.
+        # Add literal columns to default_attributes
         default_attributes.update(
             {
-                column["name"].strip('"').strip("'"): daft.lit(
+                column["name"].strip('"').strip("'"): (
                     column["source_query"].strip("'")
                     if isinstance(column["source_query"], str)
                     else column["source_query"]
@@ -428,19 +291,29 @@ class QueryBasedTransformer(TransformerInterface):
             }
         )
 
-        return dataframe.with_columns(default_attributes), entity_sql_template
+        # Append default attribute columns as constant arrays to the table
+        n = len(dataframe)
+        for col_name, value in default_attributes.items():
+            if col_name not in dataframe.schema.names:
+                dataframe = dataframe.append_column(col_name, pa.array([value] * n))
+
+        return dataframe, entity_sql_template
 
     def transform_metadata(  # type: ignore
         self,
         typename: str,
-        dataframe: daft.DataFrame,
+        dataframe: pa.Table | list[dict[str, Any]],
         workflow_id: str,
         workflow_run_id: str,
         entity_class_definitions: dict[str, type[Any]] | None = None,
         **kwargs: Any,
-    ) -> daft.DataFrame | None:
-        """Transform records using SQL executed through Daft"""
-        if dataframe.count_rows() == 0:
+    ) -> list[dict[str, Any]] | None:
+        """Transform records using SQL executed through DuckDB"""
+        import pyarrow as pa  # noqa: PLC0415 — optional dep: pyarrow
+
+        if isinstance(dataframe, list):
+            dataframe = pa.Table.from_pylist(dataframe) if dataframe else None
+        if dataframe is None or len(dataframe) == 0:
             return None
 
         # Load the YAML template for the given typename
@@ -464,16 +337,19 @@ class QueryBasedTransformer(TransformerInterface):
             entity_sql_template_path=entity_sql_template_path,
         )
 
-        # run the SQL on the dataframe
-        import daft  # noqa: PLC0415 — optional dep: daft
+        # run the SQL on the table via DuckDB
+        from application_sdk.common.incremental.storage.duckdb_utils import (  # noqa: PLC0415
+            DuckDBConnectionManager,
+        )
 
         logger.debug(
             "Running transformer for asset typename=%s sql=%s",
             typename,
             entity_sql_template,
         )
-        transformed_df = daft.sql(entity_sql_template)
+        with DuckDBConnectionManager() as db:
+            db.connection.register("dataframe", dataframe)
+            result_table = db.connection.execute(entity_sql_template).to_arrow_table()
 
-        # We have a flat structured dataframe with columns that have dot notation
-        # for their path. We want to group the columns with the same prefix into structs.
-        return self.get_grouped_dataframe_by_prefix(transformed_df)
+        # Convert flat dot-notation columns into nested dicts
+        return self.get_grouped_dataframe_by_prefix(result_table)
