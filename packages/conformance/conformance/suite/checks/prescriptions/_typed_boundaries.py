@@ -9,8 +9,8 @@ Violations caught:
 
 1. **Missing annotation** — the non-``self`` param or return has no type annotation.
 2. **Clearly untyped** — the annotation is a builtin/typing primitive or container
-   (``dict``, ``list``, ``Any``, ``str``, etc.), including subscripted/bounded forms
-   (``dict[str, str]``) — these never subclass ``Input``/``Output``.
+   (``dict``, ``list``, ``Any``, ``str``, ``None``, etc.), including subscripted/bounded
+   forms (``dict[str, str]``) — these never subclass ``Input``/``Output``.
 3. **Resolvable but wrong base** — the annotation class IS in the scanned source
    tree (or importable from within the app) but does **not** transitively subclass
    ``Input``/``Output`` (e.g. a plain ``pydantic.BaseModel`` subclass, a dataclass,
@@ -26,16 +26,25 @@ implicit entrypoint and checked under P013.
 
 Decorator provenance
 --------------------
-Mirrors ``_framework_transfer.py``: a decorator is only treated as the SDK
-``task`` / ``entrypoint`` when the name is *not* explicitly imported from a
-non-SDK module.  ``@celery.task``, ``@invoke.task``, and similar third-party
-task decorators are excluded.
+Provenance gating is shared with P008 via ``_decorator_provenance``: a decorator
+is only treated as the SDK ``task`` / ``entrypoint`` when the name is *not*
+explicitly imported from a non-SDK module.  ``@celery.task``, ``@flask.entrypoint``,
+and similar third-party decorators are excluded.
 
 Cross-file resolution
 ---------------------
 Mirrors the P003 multi-pass pattern: ``check_p013_p014`` operates on the
 pre-built ``by_name`` registry assembled by ``scan_all`` and resolves base
-chains transitively and cycle-safely.  Results are memoised per-call.
+chains transitively and cycle-safely using ``resolve_ancestor`` from
+``_error_code_prefix``.  Results are memoised per-call.
+
+Alias resolution
+----------------
+``collect_import_aliases`` de-aliases annotation class names before resolution
+so that ``from .contracts import FetchInput as MyAlias`` is resolved correctly.
+Module-level ``import application_sdk.contracts as c`` is handled by the
+``sdk_contract_module_aliases`` provenance set: a ``c.FetchInput`` annotation is
+fast-pathed as valid without needing to be in the scanned tree.
 """
 
 from __future__ import annotations
@@ -48,7 +57,13 @@ from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.schema.findings import Finding
 
 from ._contract_common import _terminal_name, _unwrap_optional_node
-from ._error_code_prefix import ClassRecord
+from ._decorator_provenance import (
+    ImportProvenance,
+    collect_import_provenance,
+    is_entrypoint_decorator,
+    is_task_decorator,
+)
+from ._error_code_prefix import ClassRecord, collect_import_aliases, resolve_ancestor
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -98,116 +113,6 @@ _CLEARLY_UNTYPED: frozenset[str] = frozenset(
     }
 )
 
-_SDK_MODULE_PREFIX = "application_sdk"
-
-# Imports from these module prefixes are valid contracts by provenance —
-# skip cross-file resolution and treat them as correctly typed.
-_SDK_CONTRACT_MODULE_PREFIXES: tuple[str, ...] = (
-    "application_sdk.contracts",
-    "application_sdk.handler.contracts",
-)
-
-# ── Provenance helpers ─────────────────────────────────────────────────────────
-
-
-def _collect_ep_task_provenance(
-    tree: ast.AST,
-) -> tuple[frozenset[str], frozenset[str], frozenset[str], frozenset[str]]:
-    """Collect import-provenance sets needed for decorator and annotation gating.
-
-    Returns
-    -------
-    non_sdk_task_names :
-        Local names bound to ``task`` from a non-SDK ``from … import task``.
-    non_sdk_ep_names :
-        Local names bound to ``entrypoint`` from a non-SDK import.
-    non_sdk_module_names :
-        Local names of imported non-SDK top-level modules (``import celery``).
-    sdk_contract_imports :
-        Local names imported from ``application_sdk.contracts.*`` or
-        ``application_sdk.handler.contracts.*`` — valid by provenance.
-    """
-    non_sdk_task: set[str] = set()
-    non_sdk_ep: set[str] = set()
-    non_sdk_mods: set[str] = set()
-    sdk_contracts: set[str] = set()
-
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
-            module = node.module or ""
-            is_sdk = module == _SDK_MODULE_PREFIX or module.startswith(
-                _SDK_MODULE_PREFIX + "."
-            )
-            if not is_sdk:
-                for alias in node.names:
-                    if alias.name == "task":
-                        non_sdk_task.add(alias.asname or alias.name)
-                    if alias.name == "entrypoint":
-                        non_sdk_ep.add(alias.asname or alias.name)
-            # SDK contract provenance: any import from application_sdk.contracts.*
-            # or application_sdk.handler.contracts.* is treated as a valid contract.
-            if is_sdk and any(
-                module == prefix or module.startswith(prefix + ".")
-                for prefix in _SDK_CONTRACT_MODULE_PREFIXES
-            ):
-                for alias in node.names:
-                    sdk_contracts.add(alias.asname or alias.name)
-        elif isinstance(node, ast.Import):
-            for alias in node.names:
-                name = alias.name
-                is_sdk = name == _SDK_MODULE_PREFIX or name.startswith(
-                    _SDK_MODULE_PREFIX + "."
-                )
-                if not is_sdk:
-                    non_sdk_mods.add(alias.asname or name.split(".")[0])
-
-    return (
-        frozenset(non_sdk_task),
-        frozenset(non_sdk_ep),
-        frozenset(non_sdk_mods),
-        frozenset(sdk_contracts),
-    )
-
-
-# ── Decorator helpers ─────────────────────────────────────────────────────────
-
-
-def _is_task_decorator(
-    dec: ast.expr,
-    non_sdk_task_names: frozenset[str],
-    non_sdk_module_names: frozenset[str],
-) -> bool:
-    """True if *dec* is the SDK ``@task`` decorator (not a third-party one)."""
-    if isinstance(dec, ast.Call):
-        dec = dec.func
-    if isinstance(dec, ast.Name):
-        return dec.id == "task" and dec.id not in non_sdk_task_names
-    if isinstance(dec, ast.Attribute):
-        return dec.attr == "task" and (
-            not isinstance(dec.value, ast.Name)
-            or dec.value.id not in non_sdk_module_names
-        )
-    return False
-
-
-def _is_entrypoint_decorator(
-    dec: ast.expr,
-    non_sdk_ep_names: frozenset[str],
-    non_sdk_module_names: frozenset[str],
-) -> bool:
-    """True if *dec* is the SDK ``@entrypoint`` decorator (not a third-party one)."""
-    if isinstance(dec, ast.Call):
-        dec = dec.func
-    if isinstance(dec, ast.Name):
-        return dec.id == "entrypoint" and dec.id not in non_sdk_ep_names
-    if isinstance(dec, ast.Attribute):
-        return dec.attr == "entrypoint" and (
-            not isinstance(dec.value, ast.Name)
-            or dec.value.id not in non_sdk_module_names
-        )
-    return False
-
-
 # ── Annotation analysis ───────────────────────────────────────────────────────
 
 
@@ -216,7 +121,7 @@ def _annotation_terminal_name(node: ast.expr | None) -> str | None:
 
     ``FetchInput`` → ``"FetchInput"``; ``FetchInput | None`` → ``"FetchInput"``;
     ``Optional[FetchInput]`` → ``"FetchInput"``; ``dict[str, str]`` → ``"dict"``;
-    ``None`` (missing annotation) → ``None``.
+    ``None`` literal (``-> None``) → ``"None"``.
     """
     if node is None:
         return None
@@ -236,64 +141,6 @@ def _is_clearly_untyped_annotation(node: ast.expr | None) -> bool:
         return False  # caller handles missing annotation separately
     name = _annotation_terminal_name(node)
     return name is not None and name in _CLEARLY_UNTYPED
-
-
-# ── Cross-file resolution ─────────────────────────────────────────────────────
-
-
-def _resolve_to_base(
-    name: str,
-    target: str,
-    by_name: dict[str, ClassRecord],
-    cache: dict[str, bool | None],
-    visiting: set[str],
-) -> bool | None:
-    """Transitively resolve *name*'s inheritance chain looking for *target*.
-
-    Returns
-    -------
-    ``True``
-        *name* or one of its ancestors IS *target* (valid boundary type).
-    ``False``
-        *name* is in the scanned universe but does *not* reach *target*
-        (violation — the class is a concrete wrong-base type).  This is
-        definitive even when some ancestor bases are external/unknown: an
-        external base that is not in *by_name* simply does not contribute
-        a confirmed path to *target*, so it is treated as non-reaching.
-    ``None``
-        *name* itself is not in the scanned universe (unknown / third-party
-        / generated — assumed OK to avoid false positives).
-    """
-    if name == target:
-        return True
-    if name in cache:
-        return cache[name]
-    if name in visiting:
-        # Cycle detected — treat as unknown to avoid false positives.
-        return None
-    rec = by_name.get(name)
-    if rec is None:
-        # Not in the scanned source tree → cannot determine → assume OK.
-        cache[name] = None
-        return None
-    visiting.add(name)
-    # Class IS in the scanned universe → result is definitive (True or False).
-    # We only return None when the class itself is absent from by_name (line above).
-    # An external/unknown *base* (sub is None) does not make the class's status
-    # unknown — it simply means that base doesn't confirm the target, so we
-    # continue looking at other bases, and if none resolve to True, the class
-    # does NOT reach the target (result stays False → violation).
-    result: bool = False
-    for base in rec.bases:
-        sub = _resolve_to_base(base, target, by_name, cache, visiting)
-        if sub is True:
-            result = True
-            break
-        # sub is None (external base) or False (doesn't reach target) — either
-        # way this base doesn't establish the target; try the next one.
-    visiting.discard(name)
-    cache[name] = result
-    return result
 
 
 # ── Method iteration ──────────────────────────────────────────────────────────
@@ -372,6 +219,8 @@ def _check_one_annotation(
     directives: dict[int, _IgnoreDirective],
     by_name: dict[str, ClassRecord],
     sdk_contract_imports: frozenset[str],
+    sdk_contract_module_aliases: frozenset[str],
+    aliases: dict[str, str],
     cache: dict[str, bool | None],
 ) -> Finding | None:
     """Return a finding for *annotation* when it is not a valid contract, else ``None``."""
@@ -409,18 +258,31 @@ def _check_one_annotation(
             directives=directives,
         )
 
+    # ── Case 3a: module-level SDK contract alias (import ... as c; c.FetchInput) ─
+    # Unwrap Optional so that Optional[c.FetchInput] is also handled.
+    inner_ann = _unwrap_optional_node(annotation)
+    if (
+        isinstance(inner_ann, ast.Attribute)
+        and isinstance(inner_ann.value, ast.Name)
+        and inner_ann.value.id in sdk_contract_module_aliases
+    ):
+        return None  # valid by provenance
+
     # ── Resolve annotation class name ─────────────────────────────────────────
     ann_name = _annotation_terminal_name(annotation)
     if ann_name is None:
         # Unrecognisable annotation form (e.g. complex subscript) → skip.
         return None
 
-    # ── Case 3a: SDK contract import by provenance → valid ───────────────────
+    # De-alias so that `from .contracts import FetchInput as MyAlias` resolves.
+    ann_name = aliases.get(ann_name, ann_name)
+
+    # ── Case 3b: SDK contract import by provenance (from ... import X) → valid ─
     if ann_name in sdk_contract_imports:
         return None
 
-    # ── Case 3b: cross-file resolution ───────────────────────────────────────
-    result = _resolve_to_base(ann_name, target_base, by_name, cache, set())
+    # ── Case 3c: cross-file resolution ───────────────────────────────────────
+    result = resolve_ancestor(ann_name, target_base, by_name, cache, set())
     if result is False:
         # Found in scanned universe but does not reach Input/Output.
         return _make_boundary_finding(
@@ -473,9 +335,10 @@ def check_p013_p014(
             rel = path
         filename = str(rel)
 
-        non_sdk_task, non_sdk_ep, non_sdk_mods, sdk_contracts = (
-            _collect_ep_task_provenance(tree)
-        )
+        prov: ImportProvenance = collect_import_provenance(tree)
+        # Per-file import aliases for de-aliasing annotation class names
+        # (e.g. `from .contracts import FetchInput as MyAlias`).
+        aliases = collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
 
         for class_node in ast.walk(tree):
             if not isinstance(class_node, ast.ClassDef):
@@ -486,15 +349,11 @@ def check_p013_p014(
                 rule_id: str | None = None
 
                 if any(
-                    _is_entrypoint_decorator(dec, non_sdk_ep, non_sdk_mods)
-                    for dec in func.decorator_list
+                    is_entrypoint_decorator(dec, prov) for dec in func.decorator_list
                 ):
                     rule_id = "P013"
 
-                elif any(
-                    _is_task_decorator(dec, non_sdk_task, non_sdk_mods)
-                    for dec in func.decorator_list
-                ):
+                elif any(is_task_decorator(dec, prov) for dec in func.decorator_list):
                     rule_id = "P014"
 
                 elif func.name == "run" and isinstance(func, ast.AsyncFunctionDef):
@@ -507,9 +366,11 @@ def check_p013_p014(
                             base_name = base.attr
                         if base_name is None:
                             continue
+                        # De-alias before comparing: handles `App as BaseApp`.
+                        base_name = aliases.get(base_name, base_name)
                         if (
                             base_name == "App"
-                            or _resolve_to_base(
+                            or resolve_ancestor(
                                 base_name, "App", by_name, app_cache, set()
                             )
                             is True
@@ -538,7 +399,9 @@ def check_p013_p014(
                     filename=filename,
                     directives=directives,
                     by_name=by_name,
-                    sdk_contract_imports=sdk_contracts,
+                    sdk_contract_imports=prov.sdk_contract_names,
+                    sdk_contract_module_aliases=prov.sdk_contract_module_aliases,
+                    aliases=aliases,
                     cache=input_cache,
                 )
                 if finding is not None:
@@ -555,7 +418,9 @@ def check_p013_p014(
                     filename=filename,
                     directives=directives,
                     by_name=by_name,
-                    sdk_contract_imports=sdk_contracts,
+                    sdk_contract_imports=prov.sdk_contract_names,
+                    sdk_contract_module_aliases=prov.sdk_contract_module_aliases,
+                    aliases=aliases,
                     cache=output_cache,
                 )
                 if finding is not None:

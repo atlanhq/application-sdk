@@ -1475,6 +1475,298 @@ def test_p014_result_is_failing_disposition(tmp_path: Path) -> None:
     assert all(derive_disposition(r) == Disposition.FAILING for r in p014_results)
 
 
+# ── P013/P014 additional coverage ─────────────────────────────────────────────
+
+# TEST 8 — multi-hop transitive resolution
+
+
+def test_p013_silent_on_multi_hop_valid_base(tmp_path: Path) -> None:
+    """FetchInput(MyBaseInput) where MyBaseInput(Input) across files → no P013."""
+    files = {
+        "base.py": (
+            "from application_sdk.contracts import Input\n"
+            "class MyBaseInput(Input):\n"
+            "    x: str = ''\n"
+        ),
+        "contracts.py": (
+            "from base import MyBaseInput\n"
+            "class FetchInput(MyBaseInput):\n"
+            "    y: int = 0\n"
+        ),
+        "out.py": (
+            "from application_sdk.contracts import Output\n"
+            "class FetchOutput(Output):\n"
+            "    rows: int = 0\n"
+        ),
+        "connector.py": (
+            _APP_IMPORTS + "from contracts import FetchInput\n"
+            "from out import FetchOutput\n"
+            "class MyApp(App):\n"
+            "    @entrypoint\n"
+            "    async def run_it(self, input: FetchInput) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f for f in findings if f.rule_id == "P013"] == []
+
+
+def test_p013_fires_on_multi_hop_invalid_base(tmp_path: Path) -> None:
+    """FetchInput(MyBaseInput) where MyBaseInput(BaseModel) across files → P013."""
+    files = {
+        "base.py": (
+            "from pydantic import BaseModel\n"
+            "class MyBaseInput(BaseModel):\n"
+            "    x: str = ''\n"
+        ),
+        "contracts.py": (
+            "from base import MyBaseInput\n"
+            "class FetchInput(MyBaseInput):\n"
+            "    y: int = 0\n"
+        ),
+        "out.py": (
+            "from application_sdk.contracts import Output\n"
+            "class FetchOutput(Output):\n"
+            "    rows: int = 0\n"
+        ),
+        "connector.py": (
+            _APP_IMPORTS + "from contracts import FetchInput\n"
+            "from out import FetchOutput\n"
+            "class MyApp(App):\n"
+            "    @entrypoint\n"
+            "    async def run_it(self, input: FetchInput) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    p013 = [f for f in findings if f.rule_id == "P013"]
+    assert len(p013) == 1
+    assert "FetchInput" in p013[0].message
+
+
+# TEST 9 — attribute-form non-SDK entrypoint decorator
+
+
+def test_p013_silent_on_flask_entrypoint_attribute_form(tmp_path: Path) -> None:
+    """import flask; @flask.entrypoint → not P013 (provenance-excluded)."""
+    src = (
+        "import flask\n"
+        "\n"
+        "class Foo:\n"
+        "    @flask.entrypoint\n"
+        "    async def run_it(self, input: dict) -> dict:\n"
+        "        return {}\n"
+    )
+    findings = _scan_one(tmp_path, src)
+    assert [f for f in findings if f.rule_id == "P013"] == []
+
+
+# TEST 10 — cycle guard (no RecursionError)
+
+
+def test_p013_p014_cycle_in_class_hierarchy_no_error(tmp_path: Path) -> None:
+    """A cycle A(B)/B(A) in the scanned tree must not cause RecursionError.
+
+    A and B are in the scanned universe but don't reach Input/Output, so
+    findings ARE emitted — this test guards against crashes, not false positives.
+    """
+    src = (
+        "from application_sdk.app import App, entrypoint, task\n"
+        "\n"
+        "class A(B):\n"
+        "    pass\n"
+        "\n"
+        "class B(A):\n"
+        "    pass\n"
+        "\n"
+        "class MyApp(App):\n"
+        "    @entrypoint\n"
+        "    async def run_it(self, input: A) -> B:\n"
+        "        pass\n"
+        "\n"
+        "    @task\n"
+        "    async def fetch(self, input: B) -> A:\n"
+        "        pass\n"
+    )
+    # Must not raise RecursionError or any exception.
+    findings = _scan_one(tmp_path, src)
+    # A and B are in tree but don't reach Input/Output → findings emitted.
+    assert any(f.rule_id in ("P013", "P014") for f in findings)
+
+
+# TEST 11 — SDK-contract-import provenance fast-path
+
+
+def test_p013_silent_when_contracts_imported_directly_from_sdk(
+    tmp_path: Path,
+) -> None:
+    """from application_sdk.contracts import Input, Output → direct SDK import fast-path."""
+    src = (
+        "from application_sdk.contracts import Input, Output\n"
+        "from application_sdk.app import App, entrypoint\n"
+        "\n"
+        "class MyApp(App):\n"
+        "    @entrypoint\n"
+        "    async def run_it(self, input: Input) -> Output:\n"
+        "        pass\n"
+    )
+    findings = _scan_one(tmp_path, src)
+    assert [f for f in findings if f.rule_id == "P013"] == []
+
+
+# TEST 12 — arity-0 entrypoint silently skipped
+
+
+def test_p013_silent_on_arity_zero_entrypoint(tmp_path: Path) -> None:
+    """@entrypoint async def run_it(self) → arity-0, skipped (runtime rejects it)."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": (
+            _APP_IMPORTS + "from contracts import FetchOutput\n"
+            "class MyApp(App):\n"
+            "    @entrypoint\n"
+            "    async def run_it(self) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f for f in findings if f.rule_id == "P013"] == []
+
+
+# TEST 13 — Optional[...] / X | None unwrap for P013
+
+
+def test_p013_silent_on_optional_valid_input(tmp_path: Path) -> None:
+    """Optional[FetchInput] input annotation → valid after unwrap, no P013."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": (
+            _APP_IMPORTS + "from typing import Optional\n"
+            "from contracts import FetchInput, FetchOutput\n"
+            "class MyApp(App):\n"
+            "    @entrypoint\n"
+            "    async def run_it(self, input: Optional[FetchInput]) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f for f in findings if f.rule_id == "P013"] == []
+
+
+def test_p013_fires_on_optional_dict_input(tmp_path: Path) -> None:
+    """Optional[dict] input annotation → unwraps to dict, still untyped, P013 fires."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": (
+            _APP_IMPORTS + "from typing import Optional\n"
+            "from contracts import FetchOutput\n"
+            "class MyApp(App):\n"
+            "    @entrypoint\n"
+            "    async def run_it(self, input: Optional[dict]) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    p013 = [f for f in findings if f.rule_id == "P013"]
+    assert len(p013) == 1
+    assert "input" in p013[0].message
+
+
+# TEST 13 continued — Optional for P014
+
+
+def test_p014_silent_on_optional_valid_input(tmp_path: Path) -> None:
+    """Optional[FetchInput] input on @task → valid after unwrap, no P014."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": (
+            _APP_IMPORTS + "from typing import Optional\n"
+            "from contracts import FetchInput, FetchOutput\n"
+            "class MyApp(App):\n"
+            "    @task\n"
+            "    async def fetch(self, input: Optional[FetchInput]) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f for f in findings if f.rule_id == "P014"] == []
+
+
+def test_p014_fires_on_optional_dict_input(tmp_path: Path) -> None:
+    """Optional[dict] input on @task → unwraps to dict, still untyped, P014 fires."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": (
+            _APP_IMPORTS + "from typing import Optional\n"
+            "from contracts import FetchOutput\n"
+            "class MyApp(App):\n"
+            "    @task\n"
+            "    async def fetch(self, input: Optional[dict]) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    p014 = [f for f in findings if f.rule_id == "P014"]
+    assert len(p014) == 1
+    assert "input" in p014[0].message
+
+
+# BUG 1 regression — -> None return annotation fires
+
+
+def test_p013_fires_on_none_return_annotation(tmp_path: Path) -> None:
+    """@entrypoint with ``-> None`` return → treated as clearly untyped, P013 fires."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": (
+            _APP_IMPORTS + "from contracts import FetchInput\n"
+            "class MyApp(App):\n"
+            "    @entrypoint\n"
+            "    async def run_it(self, input: FetchInput) -> None:\n"
+            "        pass\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    p013 = [f for f in findings if f.rule_id == "P013"]
+    assert len(p013) == 1
+    assert "output" in p013[0].message
+
+
+def test_p014_fires_on_none_return_annotation(tmp_path: Path) -> None:
+    """@task with ``-> None`` return → treated as clearly untyped, P014 fires."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": (
+            _APP_IMPORTS + "from contracts import FetchInput\n"
+            "class MyApp(App):\n"
+            "    @task\n"
+            "    async def fetch(self, input: FetchInput) -> None:\n"
+            "        pass\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    p014 = [f for f in findings if f.rule_id == "P014"]
+    assert len(p014) == 1
+    assert "output" in p014[0].message
+
+
+# BUG 3 regression — App aliased as BaseApp still fires for implicit run()
+
+
+def test_p013_fires_on_implicit_run_with_aliased_app_base(tmp_path: Path) -> None:
+    """from application_sdk.app import App as BaseApp; class MyApp(BaseApp) — implicit run() fires."""
+    src = (
+        "from application_sdk.app import App as BaseApp\n"
+        "\n"
+        "class MyApp(BaseApp):\n"
+        "    async def run(self, input: dict) -> dict:\n"
+        "        return {}\n"
+    )
+    findings = _scan_one(tmp_path, src)
+    p013 = [f for f in findings if f.rule_id == "P013"]
+    assert len(p013) >= 1
+
+
 # ── P015 UnmodeledBoundedContractField ────────────────────────────────────────
 
 
@@ -1563,6 +1855,19 @@ def test_p015_silent_on_non_contract_class(tmp_path: Path) -> None:
     """dict[str, str] field on a non-contract class → no P015."""
     src = "class SomeConfig:\n    settings: dict[str, str]\n"
     assert _p015_ids(src) == []
+
+
+def test_p015_fires_on_optional_annotated_dict(tmp_path: Path) -> None:
+    """Optional[Annotated[dict[str, str], MaxItems(50)]] → BUG 2 regression.
+
+    The unwrap loop must handle both Annotated-outer and Optional-outer orderings.
+    """
+    src = (
+        "from typing import Annotated, Optional\n"
+        "class FetchInput(Input):\n"
+        "    metadata: Optional[Annotated[dict[str, str], 'MaxItems(50)']]\n"
+    )
+    assert _p015_ids(src) == ["P015"]
 
 
 def test_p015_silent_on_foreign_output(tmp_path: Path) -> None:

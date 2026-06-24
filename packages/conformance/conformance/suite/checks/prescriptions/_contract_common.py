@@ -202,7 +202,8 @@ def _terminal_name(node: ast.expr) -> str | None:
     """Return the terminal (rightmost) name of a (possibly subscripted) annotation.
 
     ``dict[str, str]`` → ``"dict"``;  ``List[Any]`` → ``"List"``;
-    ``mod.Output`` → ``"Output"``.  Returns ``None`` for unrecognised forms.
+    ``mod.Output`` → ``"Output"``;  ``None`` literal → ``"None"``.
+    Returns ``None`` for unrecognised forms.
     """
     if isinstance(node, ast.Name):
         return node.id
@@ -210,6 +211,9 @@ def _terminal_name(node: ast.expr) -> str | None:
         return _terminal_name(node.value)
     if isinstance(node, ast.Attribute):
         return node.attr
+    # ``-> None`` parses as ast.Constant(value=None) on Python 3.8+.
+    if isinstance(node, ast.Constant) and node.value is None:
+        return "None"
     return None
 
 
@@ -294,9 +298,15 @@ def unmodeled_container_name(node: ast.expr) -> str | None:
     Returns the container name (e.g. ``"dict"``, ``"list"``) for the finding
     message, or ``None`` when the annotation is not an unmodeled container.
     """
-    # Peer through Annotated[X, ...] and Optional[X] / X | None.
-    inner = _unwrap_annotated(node)
-    inner = _unwrap_optional_node(inner)
+    # Peer through Annotated[X, ...] and Optional[X] / X | None to a fixed point.
+    # A single pass misses Optional[Annotated[...]] when Annotated is the outer wrapper.
+    inner = node
+    while True:
+        unwrapped = _unwrap_annotated(inner)
+        unwrapped = _unwrap_optional_node(unwrapped)
+        if unwrapped is inner:
+            break
+        inner = unwrapped
 
     # Bare container name: dict, list, set, … — always unmodeled.
     if isinstance(inner, ast.Name) and inner.id in _CONTAINER_NAMES:
