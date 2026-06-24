@@ -248,8 +248,10 @@ def _write_json_file(tmp_path: Path, name: str, records: list[dict]) -> str:
 
 
 @pytest.mark.asyncio
-async def test_read_batches_yields_list_of_dicts(tmp_path: Path) -> None:
-    """_get_batched_dataframe yields list[dict] batches via orjson line reading."""
+async def test_read_batches_yields_dataframes(tmp_path: Path) -> None:
+    """_get_batched_dataframe yields pd.DataFrame batches via orjson line reading."""
+    import pandas as pd
+
     records = [{"id": i, "name": f"item-{i}"} for i in range(5)]
     json_file = _write_json_file(tmp_path, "data.json", records)
 
@@ -267,7 +269,9 @@ async def test_read_batches_yields_list_of_dicts(tmp_path: Path) -> None:
         chunks = [chunk async for chunk in batches]
 
     assert len(chunks) == 1
-    assert chunks[0] == records
+    assert isinstance(chunks[0], pd.DataFrame)
+    assert list(chunks[0]["id"]) == [r["id"] for r in records]
+    assert list(chunks[0]["name"]) == [r["name"] for r in records]
 
 
 @pytest.mark.asyncio

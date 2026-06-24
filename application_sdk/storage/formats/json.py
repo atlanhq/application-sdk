@@ -30,9 +30,9 @@ class JsonFileReader(Reader):
     Supports reading both single files and directories containing multiple JSON files.
     Follows Python's file I/O pattern with read/close semantics and supports context managers.
 
-    Note: ``read_batches()`` yields ``list[dict]`` (one batch per ``chunk_size``
-    records), not ``pd.DataFrame``. ``read()`` returns a ``pd.DataFrame`` built
-    from all records in memory.
+    Both ``read()`` and ``read_batches()`` return ``pd.DataFrame`` — ``read()``
+    materialises all records at once; ``read_batches()`` yields one
+    ``pd.DataFrame`` per ``chunk_size`` records, streaming the file line-by-line.
 
     Attributes:
         path (str): Path to JSON file or directory containing JSON files.
@@ -87,8 +87,6 @@ class JsonFileReader(Reader):
         """
         warnings.warn(
             "JsonFileReader is deprecated and will be removed in v4.0. "
-            "Note: read_batches() now yields list[dict] (not pd.DataFrame) — "
-            "calling DataFrame methods on batches raises AttributeError. "
             "Migrate now: declare the upstream artifact as a FileReference "
             "field on your task's typed Input — the SDK's activity "
             "interceptor auto-materialises it to a local path before the "
@@ -156,16 +154,15 @@ class JsonFileReader(Reader):
 
     def read_batches(
         self,
-    ) -> AsyncIterator[list[dict]]:
-        """Read the data from the JSON files as batches of plain dicts.
+    ) -> AsyncIterator["pd.DataFrame"]:
+        """Read the data from the JSON files as batched pandas DataFrames.
 
-        Each yielded batch is a ``list[dict]`` of up to ``chunk_size`` records
-        parsed by orjson. Unlike ``read()``, which returns a ``pd.DataFrame``,
-        this path never constructs a DataFrame — callers that previously called
-        DataFrame methods on batches must switch to plain dict access.
+        Files are read line-by-line via orjson; each yielded batch is a
+        ``pd.DataFrame`` of up to ``chunk_size`` rows. Peak memory is bounded
+        to one batch at a time — the file never fully materialises.
 
         Returns:
-            AsyncIterator[list[dict]]: Async iterator of record batches.
+            AsyncIterator[pd.DataFrame]: Async iterator of pandas DataFrames.
 
         Raises:
             ValueError: If the reader has been closed or dataframe_type is unsupported.
@@ -188,9 +185,11 @@ class JsonFileReader(Reader):
 
     async def _get_batched_dataframe(
         self,
-    ) -> AsyncIterator[list[dict]]:
-        """Read data from JSON files line-by-line using orjson, yielding list[dict] batches."""
+    ) -> AsyncIterator["pd.DataFrame"]:
+        """Read data from JSON files line-by-line via orjson, yielding pd.DataFrame batches."""
         try:
+            import pandas as pd  # noqa: PLC0415 — optional dep: pandas
+
             # Ensure files are available (local or downloaded)
             json_files = await _download_files(
                 self.path, self.extension, self.file_names
@@ -211,10 +210,10 @@ class JsonFileReader(Reader):
                             continue
                         batch.append(orjson.loads(line))
                         if len(batch) >= chunk_size:
-                            yield batch
+                            yield pd.DataFrame(batch)
                             batch = []
             if batch:
-                yield batch
+                yield pd.DataFrame(batch)
         # conformance: ignore[E004] pure re-raise into typed FormatReadError; exception is not swallowed
         except Exception as e:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415

@@ -162,10 +162,8 @@ class ParquetFileReader(Reader):
         streamed one pyarrow row-group at a time via
         ``pyarrow.parquet.ParquetFile.iter_batches()``.
 
-        Note: unlike ``JsonFileReader.read_batches()`` (which yields
-        ``list[dict]``), this method yields ``pd.DataFrame`` objects. Polymorphic
-        consumers that switch between the two readers must branch on the batch
-        type at runtime.
+        Note: ``JsonFileReader.read_batches()`` also yields ``pd.DataFrame``
+        objects, so polymorphic consumers can treat both readers uniformly.
 
         Returns:
             AsyncIterator[pd.DataFrame]: Async iterator of pandas DataFrames.
