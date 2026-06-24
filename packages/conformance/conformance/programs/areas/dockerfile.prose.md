@@ -75,16 +75,30 @@ instruction may interact with others.
 
 **Mechanical rules** (`autofixable = true`, `classification = "mechanical"`):
 
-- **I001 DockerfileWrongBaseImage** — replace the final `FROM` line with the
-  exact approved image:
+- **I001 DockerfileWrongBaseImage** — depends on the shape of the `FROM` line:
 
-  ```
-  FROM registry.atlan.com/public/app-runtime-base:3
-  ```
+  - **Literal base** (`FROM <wrong-image>`) — replace the final `FROM` line
+    with the exact approved image:
 
-  Preserve any `AS <alias>` suffix if present (uncommon in single-stage
-  Dockerfiles; drop it otherwise).  This is a single-line substitution with a
-  known constant — no judgment needed.
+    ```
+    FROM registry.atlan.com/public/app-runtime-base:3
+    ```
+
+    Preserve any `AS <alias>` suffix if present (uncommon in single-stage
+    Dockerfiles; drop it otherwise).  This is a single-line substitution with a
+    known constant — no judgment needed.
+
+  - **Build-arg base** (`FROM ${BASE_IMAGE}` / `$BASE_IMAGE`) — do **not**
+    replace the `FROM` line with a literal; that would destroy the deliberate
+    override mechanism (CI rebuilds on a PR-scoped base via `--build-arg`).
+    Instead fix the `ARG` default so it pins the approved image:
+
+    ```
+    ARG BASE_IMAGE=registry.atlan.com/public/app-runtime-base:3
+    ```
+
+    If no `ARG` for the referenced variable exists, add one with that default
+    before the `FROM` line.  Leave the `FROM ${BASE_IMAGE}` line unchanged.
 
 - **I002 DockerfileEntrypointOverride** — delete the `CMD` or `ENTRYPOINT`
   line.  The base image's entrypoint script handles launch and graceful drain;
