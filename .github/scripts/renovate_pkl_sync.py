@@ -29,9 +29,12 @@ re-resolve:
     a layout this can't drive). Apps with no sync caller at all are unaffected.
   * Non-fatal: a failed ``pkl eval`` logs a warning and degrades to a lock-only
     sync rather than failing the job.
-  * Atomic: eval writes into a temp dir and is swapped into the working tree
-    only on full success, so a failure leaves the committed ``app/generated``
-    untouched (no half-regenerated state).
+  * Commit-gated: eval writes into a temp dir and is swapped into the working
+    tree only after eval (and formatting) succeed; the commit only happens
+    after the swap returns. So a failed/killed run commits nothing and never
+    publishes a half-regenerated tree. The swap itself (rmtree + copytree) is
+    best-effort, not crash-safe — a SIGKILL mid-swap could leave the *local*
+    tree half-populated, but that run commits nothing, so the branch is safe.
 
 Scope: assumes the standard repo-root layout (``contract/PklProject``,
 ``contract/app.pkl``, output at the repo root). Non-standard layouts
@@ -77,7 +80,12 @@ def resolve(contract_dir: str) -> None:
 
 
 def regenerate(contract_dir: str) -> bool:
-    """Regenerate contract artifacts atomically.
+    """Regenerate contract artifacts; swap gated on eval+format success.
+
+    Eval runs into a temp dir; the working tree is only touched once eval (and
+    formatting) succeed. The swap itself is best-effort (rmtree + copytree), not
+    crash-safe — but the caller commits only after this returns, so a failed or
+    killed run commits nothing and never publishes a half-regenerated tree.
 
     Returns True only when the working tree was actually updated with fresh
     artifacts. Returns False (degrading to a lock-only sync) when there is no
@@ -133,7 +141,13 @@ def _format_generated(out_dir: Path) -> None:
 def _swap_outputs(out_dir: Path) -> None:
     """Replace the working tree's generated artifacts with the freshly
     generated ones. Replacing app/generated wholesale clears orphans left by a
-    removed/renamed bundle."""
+    removed/renamed bundle.
+
+    If eval emitted no app/generated at all (a degenerate/partial output a real
+    contract never produces), the existing committed dir is left untouched
+    rather than deleted — we never destroy generated output just because one
+    eval didn't reproduce it. Only the artifacts eval actually emitted are
+    swapped in; stage_and_commit then commits whatever changed."""
     generated = out_dir / "app" / "generated"
     if generated.is_dir():
         shutil.rmtree("app/generated", ignore_errors=True)
@@ -178,12 +192,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--regenerate",
+        choices=["true", "false"],
         default="true",
         help="'true' (default) to also regenerate app/generated/** via pkl "
         "eval; 'false' to re-resolve the lock only.",
     )
     args = parser.parse_args(argv)
-    regenerate_enabled = str(args.regenerate).strip().lower() == "true"
+    regenerate_enabled = args.regenerate == "true"
 
     resolve(args.contract_dir)
     regenerated = regenerate(args.contract_dir) if regenerate_enabled else False

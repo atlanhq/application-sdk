@@ -75,9 +75,13 @@ def _make_fake_run(
     *,
     eval_rc: int = 0,
     resolve_changes_lock: bool = True,
+    emit_generated: bool = True,
 ):
     """Build a `run` replacement: simulate pkl/uvx, pass git through to real
-    subprocess so commit/staging decisions are genuinely exercised."""
+    subprocess so commit/staging decisions are genuinely exercised.
+
+    emit_generated=False simulates a partial eval (rc=0) that writes only
+    atlan.yaml and no app/generated/ dir."""
     real_run = subprocess.run
 
     def fake_run(cmd, *, check=False):
@@ -91,10 +95,11 @@ def _make_fake_run(
         if prog == "pkl" and cmd[1] == "eval":
             if eval_rc == 0:
                 out_dir = Path(cmd[cmd.index("-m") + 1])
-                gen = out_dir / "app" / "generated"
-                gen.mkdir(parents=True, exist_ok=True)
-                (gen / "manifest.json").write_text(FRESH_MANIFEST)
-                (gen / "_input.py").write_text("import os\n")
+                if emit_generated:
+                    gen = out_dir / "app" / "generated"
+                    gen.mkdir(parents=True, exist_ok=True)
+                    (gen / "manifest.json").write_text(FRESH_MANIFEST)
+                    (gen / "_input.py").write_text("import os\n")
                 (out_dir / "atlan.yaml").write_text("deploy: true\n")
             return types.SimpleNamespace(returncode=eval_rc)
         if prog == "uvx":  # ruff — no-op in tests
@@ -180,6 +185,33 @@ def test_regenerate_eval_failure_falls_back_to_lock_only(repo, monkeypatch):
     assert _commit_count(repo) == before + 1
     assert (
         mod.COMMIT_MESSAGE_LOCK_ONLY
+        in subprocess.run(
+            ["git", "log", "-1", "--pretty=%s"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+        ).stdout
+    )
+
+
+def test_regenerate_eval_emits_no_generated_dir(repo, monkeypatch):
+    """Partial eval (rc=0, only atlan.yaml, no app/generated/): the existing
+    committed app/generated is left untouched (not deleted), the emitted
+    atlan.yaml is swapped in, and the commit uses the regen message."""
+    monkeypatch.setattr(
+        mod, "run", _make_fake_run(repo, eval_rc=0, emit_generated=False)
+    )
+    before = _commit_count(repo)
+
+    assert mod.main(["--regenerate", "true"]) == 0
+
+    # Existing generated preserved (not destroyed because eval emitted none).
+    assert (repo / "app" / "generated" / "manifest.json").read_text() == STALE_MANIFEST
+    # The artifact eval did emit is swapped in and committed.
+    assert (repo / "atlan.yaml").read_text() == "deploy: true\n"
+    assert _commit_count(repo) == before + 1
+    assert (
+        mod.COMMIT_MESSAGE_REGEN
         in subprocess.run(
             ["git", "log", "-1", "--pretty=%s"],
             cwd=repo,
