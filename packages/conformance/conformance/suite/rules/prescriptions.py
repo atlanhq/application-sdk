@@ -138,4 +138,144 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p003",
     ),
+    RuleDefinition(
+        id="P013",
+        scope=RuleScope.APP,
+        name="UntypedEntrypointBoundary",
+        tier=EnforcementTier.BLOCK,
+        mechanism=RuleMechanism.STATIC,
+        category="typed-contract-boundary",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.6.0",
+        rationale=(
+            "Every @entrypoint method (and the implicit run() override) is the "
+            "public API boundary of the app — the payload that crosses it must be "
+            "validated, versioned, and evolvable.  Using a primitive, a container, "
+            "or a class that does not subclass Input/Output bypasses the SDK's "
+            "payload-safety validation, config-hash computation, and backwards-"
+            "compatibility tracking.  The runtime @entrypoint decorator already "
+            "rejects these at import time, so no conforming running app is untyped "
+            "today — this rule surfaces the violation earlier (PR/CI) and covers "
+            "pre-decorator code paths."
+        ),
+        short_description=(
+            "@entrypoint (or implicit run()) input/output is not an SDK Input/Output subclass"
+        ),
+        full_description=(
+            "A method decorated with ``@entrypoint`` (or a concrete ``run()`` "
+            "override on an ``App`` subclass, which is the implicit single-"
+            "entrypoint form) must declare:\n"
+            "\n"
+            "* its non-``self`` parameter as a subclass of ``Input``\n"
+            "  (``application_sdk.contracts``);\n"
+            "* its return type as a subclass of ``Output``\n"
+            "  (``application_sdk.contracts``).\n"
+            "\n"
+            "Violations include: missing annotation, a primitive / container type\n"
+            "(``dict``, ``list``, ``str``, ``Any``, etc. — even subscripted/bounded\n"
+            "forms like ``dict[str, str]``), or a class that exists in the scanned\n"
+            "source tree but does not transitively subclass ``Input``/``Output``\n"
+            "(e.g. a plain ``pydantic.BaseModel`` subclass or a dataclass).\n"
+            "\n"
+            "Suppressed declarations are still emitted to the SARIF report.\n"
+            "This rule is ``BLOCK`` (suppress-only): an unsuppressed violation\n"
+            "fails the conformance gate — suppress with\n"
+            "``# conformance: ignore[P013] <reason>`` at the method definition.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p013",
+    ),
+    RuleDefinition(
+        id="P014",
+        scope=RuleScope.APP,
+        name="UntypedTaskBoundary",
+        tier=EnforcementTier.BLOCK,
+        mechanism=RuleMechanism.STATIC,
+        category="typed-contract-boundary",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.6.0",
+        rationale=(
+            "Every @task method is an internal activity boundary — the payload must "
+            "be typed and bounded so the SDK can validate it at the activity layer "
+            "and detect drift across deployments.  Using an untyped structure "
+            "bypasses the SDK's payload-safety enforcement and makes the task's "
+            "I/O invisible to dashboards, schema tooling, and the contract registry.  "
+            "The runtime @task decorator already rejects these at import time, so "
+            "no conforming running app is untyped today — this rule surfaces the "
+            "violation earlier (PR/CI)."
+        ),
+        short_description="@task input/output is not an SDK Input/Output subclass",
+        full_description=(
+            "A method decorated with ``@task`` must declare:\n"
+            "\n"
+            "* its non-``self`` parameter as a subclass of ``Input``\n"
+            "  (``application_sdk.contracts``);\n"
+            "* its return type as a subclass of ``Output``\n"
+            "  (``application_sdk.contracts``).\n"
+            "\n"
+            "Violations include: missing annotation, a primitive / container type\n"
+            "(``dict``, ``list``, ``str``, ``Any``, etc. — even subscripted/bounded\n"
+            "forms like ``dict[str, str]``), or a class that exists in the scanned\n"
+            "source tree but does not transitively subclass ``Input``/``Output``\n"
+            "(e.g. a plain ``pydantic.BaseModel`` subclass or a dataclass).\n"
+            "\n"
+            "Suppressed declarations are still emitted to the SARIF report.\n"
+            "This rule is ``BLOCK`` (suppress-only): an unsuppressed violation\n"
+            "fails the conformance gate — suppress with\n"
+            "``# conformance: ignore[P014] <reason>`` at the method definition.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p014",
+    ),
+    RuleDefinition(
+        id="P015",
+        scope=RuleScope.APP,
+        name="UnmodeledBoundedContractField",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="contract-modeling",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.6.0",
+        rationale=(
+            "Bounded containers (Annotated[dict[str, str], MaxItems(50)]) pass "
+            "payload-safety validation (P001) but are still stringly-typed: "
+            "keys and values carry no schema, typos surface only at runtime, and "
+            "the field is invisible to contract diffing and schema tooling.  "
+            "The SDK's make-contract guidance explicitly prefers typed properties "
+            "over arbitrary string keys ('avoid stringly-typed contracts where the "
+            "user can typo a key and only discover it at runtime').  WARN (not "
+            "BLOCK) because the bounded form is technically sanctioned; this is a "
+            "modeling nudge toward a typed nested model."
+        ),
+        short_description=(
+            "Input/Output contract field uses a container of primitives/Any — "
+            "replace with a typed nested model"
+        ),
+        full_description=(
+            "A field on an ``Input``/``Output`` contract whose annotation is a "
+            "container of primitives or ``Any`` — ``dict[str, str]``,\n"
+            "``list[str]``, ``set[int]``, or the bounded equivalents\n"
+            "``Annotated[dict[str, str], MaxItems(N)]`` — is considered an\n"
+            "unmodeled boundary.  Even though the bounded form satisfies the\n"
+            "payload-safety gate (P001), the container has no schema: keys and\n"
+            "values are opaque strings, typos are runtime-only failures, and the\n"
+            "field is invisible to contract diffing and the SDK's\n"
+            "``is_backwards_compatible`` checker.\n"
+            "\n"
+            "The SDK contract guidance (``make-contract`` skill, §6) prefers\n"
+            "typed properties / a nested ``pydantic.BaseModel`` subclass over\n"
+            "arbitrary string keys.\n"
+            "\n"
+            "**Exempt:** ``list[FooModel]``, ``dict[str, FooModel]`` — containers\n"
+            "of a typed class are the canonical bounded pattern and are fine.\n"
+            "\n"
+            "This rule lands as ``WARN`` (not ``BLOCK``) because the bounded form\n"
+            "is technically sanctioned — this is a modeling nudge, not a gate\n"
+            "failure.  Suppress with\n"
+            "``# conformance: ignore[P015] <reason>`` when a typed replacement\n"
+            "is not feasible.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p015",
+    ),
 )

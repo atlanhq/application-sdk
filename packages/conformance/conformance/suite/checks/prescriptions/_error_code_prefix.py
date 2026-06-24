@@ -172,6 +172,54 @@ def resolve_leaf_prefix(
     return result
 
 
+def resolve_ancestor(
+    name: str,
+    target: str,
+    by_name: dict[str, ClassRecord],
+    cache: dict[str, bool | None],
+    visiting: set[str],
+) -> bool | None:
+    """Transitively resolve *name*'s base chain looking for *target*.
+
+    Generic counterpart to :func:`resolve_leaf_prefix` with ``bool | None``
+    semantics for use by P013/P014 boundary resolution.
+
+    Returns
+    -------
+    ``True``
+        *name* IS *target*, or one of its ancestors is.
+    ``False``
+        *name* is in the scanned universe but none of its ancestors reach
+        *target*.  Definitive even when some bases are external/unknown — an
+        external base simply fails to confirm the target.
+    ``None``
+        *name* is not in the scanned universe (unknown / third-party /
+        generated — assumed OK to avoid false positives).
+    """
+    if name == target:
+        return True
+    if name in cache:
+        return cache[name]
+    if name in visiting:
+        # Cycle — treat as unknown to avoid false positives.
+        return None
+    rec = by_name.get(name)
+    if rec is None:
+        cache[name] = None
+        return None
+    visiting.add(name)
+    result: bool = False
+    for base in rec.bases:
+        sub = resolve_ancestor(base, target, by_name, cache, visiting)
+        if sub is True:
+            result = True
+            break
+        # sub is None (external base) or False — keep looking.
+    visiting.discard(name)
+    cache[name] = result
+    return result
+
+
 def emit_p003(
     rec: ClassRecord,
     leaf_prefix: str,

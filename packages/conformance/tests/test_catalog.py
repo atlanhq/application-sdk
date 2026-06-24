@@ -121,6 +121,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # orchestration layer through the SDK seam, not Temporal/SDK-internals
     # (BLDX-1417). P008–P012: apps must use the SDK's storage seam, not
     # hand-roll object stores or bare path fields (BLDX-1398).
+    # P013/P014: apps must declare typed Input/Output contracts on all
+    # entrypoints and tasks (BLDX-1413). P015: contract fields should use
+    # typed models, not containers of primitives (BLDX-1413).
     # I001–I005: Dockerfile conformance (SDK builds the base image, not consuming it).
     # B001: consuming a deprecated SDK symbol (BLDX-1418).
     assert app_scoped == {
@@ -140,6 +143,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P010",
         "P011",
         "P012",
+        "P013",
+        "P014",
+        "P015",
         "I001",
         "I002",
         "I003",
@@ -245,12 +251,13 @@ def test_catalog_d_series_present() -> None:
 
 
 def test_catalog_p_series_present() -> None:
-    """The P-series prescription rules are exactly P001–P012.
+    """The P-series prescription rules are exactly P001–P015.
 
     Strict equality (not just not-missing): P004–P007 are the orchestration-seam
-    rules (BLDX-1417); P008–P012 are the storage-seam rules (BLDX-1398).  A
-    stray or renumbered P-id would slip past a subset check while breaking
-    fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
+    rules (BLDX-1417); P008–P012 are the storage-seam rules (BLDX-1398);
+    P013–P015 are the typed-contract-boundary rules (BLDX-1413).  A stray or
+    renumbered P-id would slip past a subset check while breaking fleet-wide
+    ``# conformance: ignore[Pxxx]`` suppressions.
     """
     rules = load_catalog()
     p_ids = {r.id for r in rules if r.id.startswith("P")}
@@ -267,6 +274,9 @@ def test_catalog_p_series_present() -> None:
         "P010",
         "P011",
         "P012",
+        "P013",
+        "P014",
+        "P015",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
