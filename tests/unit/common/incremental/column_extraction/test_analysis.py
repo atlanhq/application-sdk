@@ -92,16 +92,18 @@ class TestGetTablesNeedingColumnExtraction:
         _duckdb_or_skip()
         # transformed/ but no transformed/table/ subdir
         (tmp_path / "transformed").mkdir()
-        with pytest.raises(
-            Exception
-        ):  # ColumnExtractionAnalysisError wraps FileNotFoundError
+        with pytest.raises(ColumnExtractionAnalysisError) as exc_info:
             get_tables_needing_column_extraction(tmp_path / "transformed")
+        assert exc_info.value.code == "INTERNAL_INCREMENTAL_COLUMN_EXTRACTION_ANALYSIS"
+        assert isinstance(exc_info.value.cause, FileNotFoundError)
 
     def test_empty_table_subdir_raises(self, tmp_path: Path) -> None:
         _duckdb_or_skip()
         (tmp_path / "transformed" / "table").mkdir(parents=True)
-        with pytest.raises(Exception):
+        with pytest.raises(ColumnExtractionAnalysisError) as exc_info:
             get_tables_needing_column_extraction(tmp_path / "transformed")
+        assert exc_info.value.code == "INTERNAL_INCREMENTAL_COLUMN_EXTRACTION_ANALYSIS"
+        assert isinstance(exc_info.value.cause, FileNotFoundError)
 
     def test_changed_tables_only(self, tmp_path: Path) -> None:
         """One CREATED, one UPDATED, one NO CHANGE → 2 changed, 1 unchanged."""
@@ -207,3 +209,11 @@ class TestGetTablesNeedingColumnExtraction:
 def test_daft_analysis_error_is_column_extraction_analysis_error() -> None:
     """DaftAnalysisError must remain a back-compat alias for ColumnExtractionAnalysisError."""
     assert DaftAnalysisError is ColumnExtractionAnalysisError
+
+
+def test_column_extraction_analysis_error_code() -> None:
+    """Pin the error code string — downstream classifiers match on it."""
+    assert (
+        ColumnExtractionAnalysisError().code
+        == "INTERNAL_INCREMENTAL_COLUMN_EXTRACTION_ANALYSIS"
+    )

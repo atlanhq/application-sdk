@@ -657,9 +657,10 @@ async def test_read_batches_malformed_jsonl_raises_format_read_error(
         side_effect=dummy_download,
     ):
         reader = JsonFileReader(path=str(tmp_path), dataframe_type=DataframeType.pandas)
-        with pytest.raises(FormatReadError):
+        with pytest.raises(FormatReadError) as exc_info:
             async for _ in reader.read_batches():
                 pass
+        assert isinstance(exc_info.value.cause, orjson.JSONDecodeError)
 
 
 @pytest.mark.asyncio

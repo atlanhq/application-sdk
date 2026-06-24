@@ -828,6 +828,7 @@ async def test_read_batches_corrupt_file_raises_format_read_error(
         reader = ParquetFileReader(
             path=str(tmp_path), dataframe_type=DataframeType.pandas
         )
-        with pytest.raises(FormatReadError):
+        with pytest.raises(FormatReadError) as exc_info:
             async for _ in reader.read_batches():
                 pass
+        assert isinstance(exc_info.value.cause, pa.lib.ArrowInvalid)
