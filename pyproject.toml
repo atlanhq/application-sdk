@@ -165,11 +165,15 @@ docs = [
 
 [tool.poe.tasks]
 download-components.shell = "ls -l components/*.yaml"
-# Dapr and Temporal service tasks
-start-dapr = "dapr run --enable-api-logging --log-level debug --app-id app --app-port 8000 --dapr-http-port 3500 --dapr-grpc-port 50001 --scheduler-host-address '' --placement-host-address '' --max-body-size 1024Mi --config components/configuration.yaml --resources-path components"
+# Dapr and Temporal service tasks.
+# No Dapr CLI: resolve the daprd binary via the SDK's own downloader
+# (application_sdk.dev._dapr — the same binary the embedded local-dev runtime
+# uses, pinned to __dapr_version) and invoke daprd directly, exactly like the
+# SDK container entrypoint. First run downloads daprd into ~/.cache/atlan-sdk.
+start-dapr.shell = "DAPRD=$(uv run python -c 'from application_sdk.dev._dapr import _ensure_daprd_binary; print(_ensure_daprd_binary())') && \"$DAPRD\" --enable-api-logging --log-level debug --app-id app --app-port 8000 --dapr-http-port 3500 --dapr-grpc-port 50001 --scheduler-host-address '' --placement-host-address '' --max-body-size 1024Mi --config components/configuration.yaml --resources-path components"
 
 # if you need to test dapr with environment values for an app
-#start-dapr.shell = "set -a && source .env && set +a && dapr run --enable-api-logging --log-level debug --app-id app --app-port 8000 --dapr-http-port 3500 --dapr-grpc-port 50001 --scheduler-host-address '' --placement-host-address '' --max-body-size 1024Mi --config components/configuration.yaml --resources-path components"
+#start-dapr.shell = "set -a && source .env && set +a && DAPRD=$(uv run python -c 'from application_sdk.dev._dapr import _ensure_daprd_binary; print(_ensure_daprd_binary())') && \"$DAPRD\" --enable-api-logging --log-level debug --app-id app --app-port 8000 --dapr-http-port 3500 --dapr-grpc-port 50001 --scheduler-host-address '' --placement-host-address '' --max-body-size 1024Mi --config components/configuration.yaml --resources-path components"
 
 start-temporal = "temporal server start-dev --db-filename ./temporal.db"
 # Export Dapr ports before backgrounding so `uv run main.py` (run separately)
