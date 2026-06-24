@@ -31,7 +31,10 @@
     ],
     "automerge": true,
     "automergeType": "pr",
-    "platformAutomerge": true
+    "platformAutomerge": true,
+    "addLabels": [
+      "update:lock-maintenance"
+    ]
   },
   "packageRules": [
     {
@@ -85,7 +88,10 @@
       "groupName": "github-actions",
       "automerge": true,
       "automergeType": "pr",
-      "platformAutomerge": true
+      "platformAutomerge": true,
+      "addLabels": [
+        "update:github-actions"
+      ]
     },
     {
       "description": "Trivy CLI version (version: in with: blocks): disable auto-updates. The scanner version is pinned deliberately \u2014 scan results drift when Trivy's vuln DB schema or detection logic changes, so bumps must be a conscious decision.",
@@ -96,6 +102,19 @@
         "github-actions"
       ],
       "enabled": false
+    },
+    {
+      "description": "Fleet-wide update-type labels — applied to every PR so the Renovate dashboard scanner can classify without title-parsing. Renovate auto-creates these labels per repo; no per-repo manual setup needed.",
+      "matchUpdateTypes": [
+        "major",
+        "minor",
+        "patch",
+        "digest",
+        "pin"
+      ],
+      "addLabels": [
+        "update:{{{updateType}}}"
+      ]
     }
   ],
   "customManagers": [
