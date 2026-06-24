@@ -605,3 +605,93 @@ async def test_read_no_files(tmp_path: Path) -> None:
 
     assert isinstance(result, pd.DataFrame)
     assert len(result) == 0
+
+
+@pytest.mark.asyncio
+async def test_read_batches_empty_json_file(tmp_path: Path) -> None:
+    """read_batches() on a file with zero records yields no batches.
+
+    Distinct from test_read_batches_empty_file_list: the file exists but
+    contains no records — the batch accumulator never fills, so nothing is yielded.
+    """
+    json_file = _write_json_file(tmp_path, "empty.json", [])
+
+    async def dummy_download(path, file_extension, file_names=None):
+        return [json_file]
+
+    with patch(
+        "application_sdk.storage.formats.json._download_files",
+        side_effect=dummy_download,
+    ):
+        reader = JsonFileReader(
+            path=str(tmp_path), chunk_size=100, dataframe_type=DataframeType.pandas
+        )
+        chunks = [chunk async for chunk in reader.read_batches()]
+
+    assert chunks == [], "file with zero records must yield no batches"
+
+
+@pytest.mark.asyncio
+async def test_read_batches_malformed_jsonl_raises_format_read_error(
+    tmp_path: Path,
+) -> None:
+    """read_batches() wraps orjson.JSONDecodeError in FormatReadError.
+
+    The orjson contract requires JSONL (one JSON object per line). A malformed
+    line raises orjson.JSONDecodeError, which the reader must surface as
+    FormatReadError (not the raw orjson exception).
+    """
+    from application_sdk.storage.formats.format_errors import FormatReadError
+
+    bad_file = tmp_path / "bad.json"
+    with open(bad_file, "wb") as f:
+        f.write(b'{"id": 1}\n')
+        f.write(b"not valid json\n")
+        f.write(b'{"id": 3}\n')
+
+    async def dummy_download(path, file_extension, file_names=None):
+        return [str(bad_file)]
+
+    with patch(
+        "application_sdk.storage.formats.json._download_files",
+        side_effect=dummy_download,
+    ):
+        reader = JsonFileReader(path=str(tmp_path), dataframe_type=DataframeType.pandas)
+        with pytest.raises(FormatReadError):
+            async for _ in reader.read_batches():
+                pass
+
+
+@pytest.mark.asyncio
+async def test_read_batches_skips_blank_lines(tmp_path: Path) -> None:
+    """read_batches() silently skips blank and whitespace-only lines.
+
+    The `if not line: continue` guard (after strip) handles trailing
+    newlines and blank separators written by some JSON producers.
+    All real records must still appear in the output.
+    """
+    import pandas as pd
+
+    json_file = tmp_path / "with_blanks.json"
+    with open(json_file, "wb") as f:
+        f.write(b'{"id": 1}\n')
+        f.write(b"\n")
+        f.write(b'{"id": 2}\n')
+        f.write(b"   \n")
+        f.write(b'{"id": 3}\n')
+
+    async def dummy_download(path, file_extension, file_names=None):
+        return [str(json_file)]
+
+    with patch(
+        "application_sdk.storage.formats.json._download_files",
+        side_effect=dummy_download,
+    ):
+        reader = JsonFileReader(
+            path=str(tmp_path), chunk_size=100000, dataframe_type=DataframeType.pandas
+        )
+        chunks = [chunk async for chunk in reader.read_batches()]
+
+    assert len(chunks) == 1
+    assert isinstance(chunks[0], pd.DataFrame)
+    assert list(chunks[0]["id"]) == [1, 2, 3]

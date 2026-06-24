@@ -774,3 +774,60 @@ async def test_read_batches_with_file_names(tmp_path: Path) -> None:
     assert all(isinstance(c, pd.DataFrame) for c in chunks)
     total = sum(len(c) for c in chunks)
     assert total == 11  # 5 + 6
+
+
+@pytest.mark.asyncio
+async def test_read_batches_empty_parquet_file(tmp_path: Path) -> None:
+    """read_batches() on a 0-row parquet file yields no rows.
+
+    pyarrow ParquetFile.iter_batches() on an empty table produces zero
+    record batches — no empty DataFrame should reach the caller.
+    Analogous to the deleted daft test_read_batches_empty_micropartition_yields_no_batches.
+    """
+    empty_file = _make_parquet_file(tmp_path, "empty.parquet", rows=0)
+
+    async def dummy_download(path, file_extension, file_names=None):
+        return [empty_file]
+
+    with patch(
+        "application_sdk.storage.formats.parquet._download_files",
+        side_effect=dummy_download,
+    ):
+        reader = ParquetFileReader(
+            path=str(tmp_path), chunk_size=100, dataframe_type=DataframeType.pandas
+        )
+        chunks = [chunk async for chunk in reader.read_batches()]
+
+    total_rows = sum(len(c) for c in chunks)
+    assert total_rows == 0, "empty parquet file must yield no rows"
+
+
+@pytest.mark.asyncio
+async def test_read_batches_corrupt_file_raises_format_read_error(
+    tmp_path: Path,
+) -> None:
+    """read_batches() wraps pyarrow parse errors in FormatReadError.
+
+    pyarrow raises ArrowInvalid when the magic bytes are wrong; the reader
+    must surface this as FormatReadError (not the raw pyarrow exception).
+    Analogous to the deleted daft test_read_batches_non_micropartition_daft_exception_propagates.
+    """
+    from application_sdk.storage.formats.format_errors import FormatReadError
+
+    corrupt_file = str(tmp_path / "corrupt.parquet")
+    with open(corrupt_file, "wb") as f:
+        f.write(b"this is not valid parquet data at all")
+
+    async def dummy_download(path, file_extension, file_names=None):
+        return [corrupt_file]
+
+    with patch(
+        "application_sdk.storage.formats.parquet._download_files",
+        side_effect=dummy_download,
+    ):
+        reader = ParquetFileReader(
+            path=str(tmp_path), dataframe_type=DataframeType.pandas
+        )
+        with pytest.raises(FormatReadError):
+            async for _ in reader.read_batches():
+                pass
