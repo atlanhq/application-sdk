@@ -192,7 +192,16 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
    NEEDS_REBASE -->`); the GHA layer applies the `sdk-review-needs-rebase`
    label from there. EXIT.
 
-9. **Pre-commit cleanup** (eliminate style noise before review):
+9. **Pre-commit cleanup — Mode C (auto-fix) ONLY.**
+   In standard review modes (A/B/D/E/F) do NOT run pre-commit and do NOT
+   mutate the branch. Pre-commit already runs as a **blocking CI gate**,
+   and pure style/format findings are on the CI-enforced do-not-flag list
+   in `references/retro-log.md` — so there is no formatting noise for the
+   review to strip. Skipping this removes a `uv run pre-commit` pass from
+   every standard review and stops the reviewer from pushing `style:`
+   commits onto the author's branch.
+
+   **Only when `mode == C`** (the review is going to iterate fixes anyway):
    ```bash
    CHANGED=$(git diff --name-only "origin/$BASE_REF"...HEAD -- '*.py')
    if [ -n "$CHANGED" ]; then
@@ -206,15 +215,24 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
      fi
    fi
    ```
-   This ensures the review finds REAL issues, not formatting noise.
 
-10. **CI pre-check** (don't waste review time if CI is broken):
+10. **CI status read** (feeds the verdict — does NOT fix anything):
     ```bash
     FAILING=$(gh pr checks "$PR_NUMBER" --repo "$REPO" \
       --json name,conclusion --jq '.[] | select(.conclusion=="failure") | .name' 2>/dev/null)
     ```
 
-    If CI is failing:
+    Record `FAILING` for the verdict (G7) and the `**CI:**` summary line.
+    In **standard** modes the reviewer does NOT read CI logs and does NOT
+    fix CI: CI reports its own failures, and
+    `sdk-review-downgrade-on-ci-failure.yml` already strips the approval
+    if a non-review check fails. Just note the failing checks in the
+    review and proceed (a CI failure on its own → verdict NEEDS_FIXES per
+    §2g). This keeps standard reviews read-only and off the author's
+    branch.
+
+    **Only when `mode == C`** (auto-fix) may the reviewer read failure
+    logs and dispatch the CI-fix sub-agent:
     - Read failure logs: `gh run view <run_id> --log-failed 2>/dev/null | head -100`
     - If failure is in PR code (lint, type error, missing import, test failure):
       → Dispatch Sonnet CI fix sub-agent (see below)
@@ -894,9 +912,18 @@ in sync with the human-readable `### Verdict:` line below. The token
 after `VERDICT:` MUST be one of: `READY_TO_MERGE`, `NEEDS_FIXES`,
 `BLOCKED`, `NEEDS_HUMAN`, `NEEDS_REBASE`.
 
+The third marker `<!-- SDK_REVIEW_HEAD: <sha> -->` records the exact
+`HEAD_SHA` this review describes. The GHA workflow uses it as a
+**same-HEAD debounce**: a fresh `@sdk-review` with empty intent on a
+commit that already carries a `SDK_REVIEW_HEAD` marker for that SHA is
+skipped before the sandbox is even dispatched (a new commit changes the
+SHA → re-runs; any non-empty intent → always re-runs). Substitute the
+literal `HEAD_SHA` value from the prompt header — never a placeholder.
+
 ```
 <!-- SDK_REVIEW -->
 <!-- VERDICT: READY_TO_MERGE | NEEDS_FIXES | BLOCKED | NEEDS_HUMAN | NEEDS_REBASE -->
+<!-- SDK_REVIEW_HEAD: <HEAD_SHA> -->
 ## SDK <Review | Re-review> (mothership): PR #<number> — <title>
 <!-- For review_scope=contract-toolkit, write this heading as:
      "Contract Toolkit <Review | Re-review> (mothership)".
@@ -1039,9 +1066,18 @@ Retry once on 5xx from the GitHub API. On 422 (malformed inline
 comment because the line is not in the diff), drop that one finding
 and continue with the rest.
 
-### 3g. CI Check — Fix Failures Before Final Verdict
+### 3g. CI Check — note failures (fixing is Mode C only)
 
-After posting the review, re-check CI via `gh pr checks "$PR_NUMBER" --repo "$REPO"`. If failures:
+After posting the review, re-check CI via `gh pr checks "$PR_NUMBER" --repo "$REPO"`.
+
+**Standard modes (A/B/D/E/F):** do NOT fix CI and do NOT push. Just
+reflect the failing checks in the `**CI:**` summary line and the verdict
+(a real CI failure → NEEDS_FIXES per §2g). The
+`sdk-review-downgrade-on-ci-failure.yml` workflow independently strips
+any approval if a non-review check fails, so the gate is covered without
+the reviewer mutating the branch.
+
+**Mode C (auto-fix) only** — if failures remain:
 
 1. Read the failing check logs (if accessible via gh CLI in sandbox)
 2. If the failure is in code the PR touched AND the fix is obvious (lint, type error, import):

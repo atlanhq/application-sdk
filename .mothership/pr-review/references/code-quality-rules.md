@@ -311,10 +311,18 @@ When raising a new exception from inside an `except` block, the
 in `__cause__`. Dropping `from exc` produces a `During handling of
 the above exception, another exception occurred` traceback that
 hides the original cause and breaks our error-classification
-pipeline (the wire-format `cause` field is empty). Pre-commit
-doesn't reliably catch this — the reviewer must.
+pipeline (the wire-format `cause` field is empty).
 
-**Flag any new code that:**
+**Already enforced deterministically by the conformance gate**
+(series E `MissingExceptionChaining`), which blocks the PR
+regardless of this review. Do NOT raise a finding for the bare
+missing-`from exc` case — it is redundant with CI and is covered by
+the CI-enforced exclusion list in `retro-log.md`. The reviewer's
+residual value here is the *judgment* call only: e.g. a
+`from None` suppression that looks unintentional, or a wrapped
+re-raise where the right `__cause__` is ambiguous.
+
+**Flag (judgment only) any new code that:**
 - Has a `raise X(...)` inside an `except Y as exc:` block without
   `from exc` (or `from None` if intentionally suppressing).
 - Re-raises after wrapping: `raise NewError("...")` where the
