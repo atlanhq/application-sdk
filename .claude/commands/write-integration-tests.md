@@ -538,9 +538,14 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
-          # Killing the app server (port 8000) also tears down the embedded
-          # daprd + Temporal it spawned — no separate stop-deps needed.
+          # Kill the app server (port 8000). It normally tears down the embedded
+          # daprd + Temporal it spawned via signal forwarding — but that only
+          # holds if those children share its process group, so sweep them
+          # defensively too. Harmless on the ephemeral CI runner; also keeps this
+          # safe if copied into a long-lived/shared environment.
           kill $(lsof -t -i :8000) 2>/dev/null || true
+          pkill -f daprd 2>/dev/null || true
+          pkill -f 'temporal server' 2>/dev/null || true
 ```
 
 ### Template 2: VPN-Protected Source (ClickHouse, Oracle, on-prem)

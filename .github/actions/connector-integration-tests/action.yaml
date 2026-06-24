@@ -100,6 +100,10 @@ inputs:
     required: false
     description: How long to wait for the app server to become healthy.
     default: "60"
+  # MIGRATION: the separate ``dapr-cli-version`` input was removed — the CLI now
+  # always tracks the runtime version (one ``dapr-version`` drives both). GitHub
+  # Actions silently ignores unknown ``with:`` keys, so a caller still passing
+  # ``dapr-cli-version:`` won't error — that override is simply no longer honoured.
   dapr-version:
     required: false
     description: |
@@ -108,6 +112,8 @@ inputs:
       from ``application_sdk/version.py`` — the single source of truth, bumped
       by ``.github/workflows/check-dapr-version.yaml``. Set this only to force a
       specific version (e.g. to reproduce an issue on an older daprd).
+
+      (Replaces the removed ``dapr-cli-version`` input — see note above.)
     default: ""
   force-external-runtime:
     required: false

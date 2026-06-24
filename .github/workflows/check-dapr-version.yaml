@@ -159,8 +159,10 @@ jobs:
           if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
             git fetch origin "$branch"
             git checkout "$branch"
-            # Re-apply the bump on top of the existing branch (the checkout above
-            # replaced the working-tree edit from the Bump step).
+            # Defensive re-apply: normally a no-op (the existing branch tip already
+            # has __dapr_version = ${baked}). Only does anything in the rare case
+            # where that branch's version.py drifted from ${baked} — e.g. a manual
+            # edit on the branch.
             sed -i "s/^__dapr_version: str = \"${pinned}\"$/__dapr_version: str = \"${baked}\"/" \
               application_sdk/version.py
           else
@@ -170,6 +172,17 @@ jobs:
           git add application_sdk/version.py
           if git diff --cached --quiet; then
             echo "::notice::No actual change to commit; PR may already be up to date."
+            # Nothing new to push, but still ensure auto-merge is enabled on any
+            # open PR for this branch — one opened by an earlier run (before
+            # auto-merge was wired up, or with it since cleared) would otherwise
+            # never get it, because the commit + create paths below are skipped.
+            existing=$(gh pr list \
+              --head "$branch" --base "$base" --state open \
+              --json number --jq '.[0].number')
+            if [[ -n "$existing" ]]; then
+              gh pr merge "$existing" --repo "${{ github.repository }}" --auto --squash || \
+                echo "::warning::Could not enable auto-merge on PR #${existing}; merge it manually."
+            fi
             exit 0
           fi
 
