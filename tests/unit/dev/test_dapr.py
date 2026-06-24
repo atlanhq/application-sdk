@@ -17,7 +17,6 @@ import pytest
 from application_sdk.dev._dapr import (
     _COMPONENTS_YAML,
     EmbeddedDapr,
-    _pick_free_port,
     _platform_tuple,
     _write_components,
     embedded_dapr,
@@ -164,14 +163,6 @@ class TestWriteComponents:
         assert eventstore_root.is_dir()
 
 
-class TestPickFreePort:
-    def test_returns_int_in_valid_range(self) -> None:
-        port = _pick_free_port()
-        assert isinstance(port, int)
-        # Ephemeral port range — varies by OS, but always > 1023.
-        assert 1024 <= port <= 65535
-
-
 class TestEmbeddedDaprLifecycle:
     """``embedded_dapr`` must save/restore env vars and clean up its temp dir."""
 
@@ -179,8 +170,8 @@ class TestEmbeddedDaprLifecycle:
     def _stub_subprocess_and_binary(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        """Replace binary download, subprocess spawn, and readiness poll
-        with no-ops so the context manager runs end-to-end without
+        """Replace binary download, subprocess spawn, readiness poll, and port
+        allocation with no-ops so the context manager runs end-to-end without
         touching the network or spawning a real daprd."""
         fake_binary = tmp_path / "daprd-stub"
         fake_binary.write_text("#!/bin/sh\n")
@@ -189,6 +180,13 @@ class TestEmbeddedDaprLifecycle:
         monkeypatch.setattr(
             "application_sdk.dev._dapr._ensure_daprd_binary",
             lambda: fake_binary,
+        )
+
+        # Stub port allocation — avoids opening a real socket in the unit suite.
+        _ports = iter([13500, 15001])
+        monkeypatch.setattr(
+            "application_sdk.dev._dapr._pick_free_port",
+            lambda: next(_ports),
         )
 
         fake_proc = MagicMock()
