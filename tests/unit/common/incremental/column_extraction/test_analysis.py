@@ -14,6 +14,10 @@ from application_sdk.common.incremental.column_extraction.analysis import (
     get_tables_needing_column_extraction,
     get_transformed_dir,
 )
+from application_sdk.common.incremental.incremental_errors import (
+    ColumnExtractionAnalysisError,
+    DaftAnalysisError,
+)
 
 
 def _duckdb_or_skip():
@@ -193,3 +197,13 @@ class TestGetTablesNeedingColumnExtraction:
         assert set(rows[0].keys()) == {"table_id", "is_changed", "is_backfill"}
         assert isinstance(rows[0]["is_changed"], bool)
         assert isinstance(rows[0]["is_backfill"], bool)
+
+
+# ---------------------------------------------------------------------------
+# Backward-compat alias
+# ---------------------------------------------------------------------------
+
+
+def test_daft_analysis_error_is_column_extraction_analysis_error() -> None:
+    """DaftAnalysisError must remain a back-compat alias for ColumnExtractionAnalysisError."""
+    assert DaftAnalysisError is ColumnExtractionAnalysisError

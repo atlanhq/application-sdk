@@ -25,37 +25,6 @@ logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     import pandas as pd
-    import pyarrow as pa
-
-
-def _build_unified_parquet_schema(
-    parquet_files: list[str],
-) -> "pa.Schema | None":
-    """Build a unified pyarrow schema from a set of parquet files.
-
-    Reads each file's pyarrow schema (metadata-only, cheap), unifies them
-    permissively, and promotes any null-typed column to ``pa.large_string()``.
-    Returns ``None`` on failure so the caller can fall back to default inference.
-    """
-    import pyarrow as pa  # noqa: PLC0415 — optional dep: pyarrow
-    import pyarrow.parquet as pq_meta  # noqa: PLC0415 — optional dep: pyarrow.parquet
-
-    try:
-        pa_schemas = [pq_meta.read_schema(f) for f in parquet_files]
-        unified = pa.unify_schemas(pa_schemas, promote_options="permissive")
-        # Promote null-typed columns to large_string to avoid downstream type errors
-        fields = [
-            pa.field(f.name, pa.large_string()) if pa.types.is_null(f.type) else f
-            for f in unified
-        ]
-        return pa.schema(fields)
-    except (pa.ArrowException, OSError):
-        logger.warning(
-            "Parquet schema unification failed; falling back to default "
-            "inference. Mixed-schema multi-file reads may have issues.",
-            exc_info=True,
-        )
-        return None
 
 
 class ParquetFileReader(Reader):
@@ -326,8 +295,11 @@ class ParquetFileReader(Reader):
 
             for parquet_file in parquet_files:
                 pf = pq.ParquetFile(parquet_file)
-                for batch in pf.iter_batches(batch_size=chunk_size):
-                    yield batch.to_pandas()
+                try:
+                    for batch in pf.iter_batches(batch_size=chunk_size):
+                        yield batch.to_pandas()
+                finally:
+                    pf.close()
         # conformance: ignore[E004] exception is re-raised as FormatReadError; traceback preserved in cause chain
         except Exception as e:
             from application_sdk.storage.formats.format_errors import (  # noqa: PLC0415

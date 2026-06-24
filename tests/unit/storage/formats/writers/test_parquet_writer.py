@@ -223,6 +223,29 @@ class TestParquetFileWriterInit:
         ), f"Expected DeprecationWarning mentioning v4.0; got: {messages}"
         assert any("ParquetFileWriter is deprecated" in m for m in messages)
 
+    def test_init_daft_dataframe_type_emits_deprecation_and_routes_to_pandas(
+        self, base_output_path: str
+    ):
+        """DataframeType.daft must emit DeprecationWarning and route to pandas."""
+        import warnings as _warnings
+
+        from application_sdk.common.types import DataframeType
+
+        with _warnings.catch_warnings(record=True) as captured:
+            _warnings.simplefilter("always")
+            writer = ParquetFileWriter(
+                path=base_output_path,
+                typename="t",
+                dataframe_type=DataframeType.daft,
+            )
+
+        assert writer.dataframe_type == DataframeType.pandas
+        assert any(
+            issubclass(w.category, DeprecationWarning)
+            and "DataframeType.daft is deprecated" in str(w.message)
+            for w in captured
+        )
+
 
 class TestParquetFileWriterPathGen:
     """Test ParquetFileWriter path generation."""

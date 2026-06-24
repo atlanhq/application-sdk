@@ -321,6 +321,35 @@ class TestWriteBatches:
                 await writer.write_batches(_gen())
         assert excinfo.value.code == "INTERNAL_FORMAT_WRITE"
 
+    @pytest.mark.asyncio
+    async def test_write_batches_daft_type_routes_to_pandas_with_deprecation_warning(
+        self,
+    ) -> None:
+        """DataframeType.daft in write_batches emits DeprecationWarning and routes to pandas path."""
+        import warnings as _warnings
+
+        writer = _StubWriter(dataframe_type=DataframeType.daft)
+        with (
+            patch.object(
+                writer, "_write_batched_dataframe", new_callable=AsyncMock
+            ) as mock_batched,
+            _warnings.catch_warnings(record=True) as captured,
+        ):
+            _warnings.simplefilter("always")
+
+            async def _gen() -> AsyncGenerator[Any, None]:
+                import pandas as pd
+
+                yield pd.DataFrame({"a": [1]})
+
+            await writer.write_batches(_gen())
+
+        mock_batched.assert_awaited_once()
+        assert any(
+            issubclass(w.category, DeprecationWarning) and "v4.0" in str(w.message)
+            for w in captured
+        )
+
 
 # ---------------------------------------------------------------------------
 # Writer._upload_file — delegates to _upload_file in ops

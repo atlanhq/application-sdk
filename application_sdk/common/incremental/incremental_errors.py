@@ -54,7 +54,7 @@ class JsonScanError(InternalError):
 class ColumnExtractionAnalysisError(InternalError):
     """Table analysis failed during incremental column extraction."""
 
-    code: ClassVar[str] = "INTERNAL_INCREMENTAL_DAFT_ANALYSIS"
+    code: ClassVar[str] = "INTERNAL_INCREMENTAL_COLUMN_EXTRACTION_ANALYSIS"
     message: str = "Table analysis failed"
     component: str | None = "column_extraction"
 

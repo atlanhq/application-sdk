@@ -8,10 +8,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 
 from application_sdk.common.types import DataframeType
-from application_sdk.storage.formats.parquet import (
-    ParquetFileReader,
-    _build_unified_parquet_schema,
-)
+from application_sdk.storage.formats.parquet import ParquetFileReader
 from application_sdk.storage.formats.utils import _download_files
 from application_sdk.testing.hypothesis.strategies.inputs.parquet_input import (
     parquet_input_config_strategy,
@@ -548,53 +545,14 @@ def _write_parquet(path: Path, schema: pa.Schema, rows: dict) -> str:
     return str(path)
 
 
-class TestBuildUnifiedParquetSchema:
-    """Unit tests for the _build_unified_parquet_schema helper."""
-
-    def test_promotes_null_field_to_large_string(self, tmp_path) -> None:
-        f = _write_parquet(
-            tmp_path / "nulls.parquet",
-            pa.schema([("id", pa.int64()), ("remarks", pa.null())]),
-            {"id": [1, 2], "remarks": [None, None]},
-        )
-
-        schema = _build_unified_parquet_schema([f])
-
-        assert schema is not None
-        assert schema.field("remarks").type == pa.large_string()
-        assert schema.field("id").type == pa.int64()
-
-    def test_unifies_mixed_null_and_string_across_files(self, tmp_path) -> None:
-        f1 = _write_parquet(
-            tmp_path / "f1.parquet",
-            pa.schema([("id", pa.int64()), ("extra", pa.null())]),
-            {"id": [1, 2], "extra": [None, None]},
-        )
-        f2 = _write_parquet(
-            tmp_path / "f2.parquet",
-            pa.schema([("id", pa.int64()), ("extra", pa.string())]),
-            {"id": [3, 4], "extra": ["foo", "bar"]},
-        )
-
-        schema = _build_unified_parquet_schema([f1, f2])
-
-        assert schema is not None
-        # After unification, extra should be large_string (promoted from null)
-        assert schema.field("extra").type in (pa.string(), pa.large_string())
-
-    def test_returns_none_on_invalid_input(self, tmp_path) -> None:
-        """Bad inputs fall back to None."""
-        bogus = str(tmp_path / "does-not-exist.parquet")
-        assert _build_unified_parquet_schema([bogus]) is None
-
-        assert _build_unified_parquet_schema([]) is None
-
-
 # ---------------------------------------------------------------------------
 # Schema-unification integration: mixed-schema multi-file reads (BLDX-837)
 #
-# Tests that a pyarrow-backed read preserves rows from files where one file
-# has a null-typed column and another has a string-typed column.
+# _build_unified_parquet_schema was removed: pa.concat_tables with
+# promote_options="permissive" already handles the null/string promotion
+# correctly, so the separate schema-build step was dead code.
+#
+# These tests verify the read path itself preserves rows across schemas.
 # ---------------------------------------------------------------------------
 
 
@@ -715,10 +673,15 @@ async def test_read_batches_streams_in_multiple_batches(tmp_path: Path) -> None:
 
 
 class TestReadNonBatchedSchemaUnification:
-    """Integration tests: mixed-schema parquet reads must not drop rows."""
+    """Integration tests: mixed-schema parquet reads must not drop rows.
 
-    def test_read_preserves_rows_mixed_null_and_string(self, tmp_path) -> None:
-        """Null column in file1 + string column in file2 must not lose rows."""
+    These test ParquetFileReader.read() end-to-end to protect the BLDX-837
+    fix (null-typed column in one file + string-typed in another).
+    """
+
+    @pytest.mark.asyncio
+    async def test_read_preserves_rows_mixed_null_and_string(self, tmp_path) -> None:
+        """ParquetFileReader.read() must preserve all rows from files with mixed schemas."""
         f1 = _write_parquet(
             tmp_path / "f1.parquet",
             pa.schema([("id", pa.int64()), ("tag", pa.null())]),
@@ -730,9 +693,16 @@ class TestReadNonBatchedSchemaUnification:
             {"id": [3, 4], "tag": ["a", "b"]},
         )
 
-        tables = [pq.read_table(f) for f in [f1, f2]]
-        combined = pa.concat_tables(tables, promote_options="permissive")
-        df = combined.to_pandas()
+        async def _download(_path, _ext, _names=None):
+            return [f1, f2]
+
+        with patch(
+            "application_sdk.storage.formats.parquet._download_files",
+            side_effect=_download,
+        ):
+            reader = ParquetFileReader(path=str(tmp_path))
+            df = await reader.read()
 
         assert len(df) == 4
         assert set(df["id"].tolist()) == {1, 2, 3, 4}
+        assert set(df["tag"].tolist()) == {None, "a", "b"}

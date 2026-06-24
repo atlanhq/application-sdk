@@ -190,6 +190,8 @@ class JsonFileReader(Reader):
 
             chunk_size = self.chunk_size or 100000
             batch: list[dict] = []
+            # Files must be JSONL (one JSON object per line). Multi-line JSON
+            # arrays are not supported and will raise orjson.JSONDecodeError.
             for json_file in json_files:
                 with open(json_file, "rb") as f:
                     for line in f:
@@ -223,6 +225,9 @@ class JsonFileReader(Reader):
             self._downloaded_files.extend(json_files)
             logger.info("Reading %d JSON files as pandas dataframe", len(json_files))
 
+            # All records are accumulated in memory before building the
+            # DataFrame. Suitable only for small datasets (≲ a few hundred MB).
+            # For large inputs, use read_batches() to stay bounded.
             all_records: list[dict] = []
             for json_file in json_files:
                 with open(json_file, "rb") as f:
@@ -367,10 +372,22 @@ class JsonFileWriter(Writer):
 
     async def _write_chunk(self, chunk: "pd.DataFrame", file_name: str):
         """Write a chunk to a JSON file using orjson."""
+
+        def _default_serializer(obj: object) -> str:
+            # pandas.Timestamp and similar datetime-like objects are not
+            # natively handled by orjson when they appear as dict values.
+            return str(obj)
+
         mode = "ab+" if SafeFileOps.exists(file_name) else "wb"
         with SafeFileOps.open(file_name, mode=mode) as f:
             for record in chunk.to_dict(orient="records"):
-                f.write(orjson.dumps(record, option=orjson.OPT_APPEND_NEWLINE))
+                f.write(
+                    orjson.dumps(
+                        record,
+                        default=_default_serializer,
+                        option=orjson.OPT_APPEND_NEWLINE,
+                    )
+                )
 
     async def _finalize(self) -> None:
         """Finalize the JSON writer before closing.

@@ -338,19 +338,18 @@ class QueryBasedTransformer(TransformerInterface):
         )
 
         # run the SQL on the table via DuckDB
-        import duckdb  # noqa: PLC0415 — optional dep: duckdb (sql extra)
+        from application_sdk.common.incremental.storage.duckdb_utils import (  # noqa: PLC0415
+            DuckDBConnectionManager,
+        )
 
         logger.debug(
             "Running transformer for asset typename=%s sql=%s",
             typename,
             entity_sql_template,
         )
-        conn = duckdb.connect(":memory:")
-        try:
-            conn.register("dataframe", dataframe)
-            result_table = conn.execute(entity_sql_template).to_arrow_table()
-        finally:
-            conn.close()
+        with DuckDBConnectionManager() as db:
+            db.connection.register("dataframe", dataframe)
+            result_table = db.connection.execute(entity_sql_template).to_arrow_table()
 
         # Convert flat dot-notation columns into nested dicts
         return self.get_grouped_dataframe_by_prefix(result_table)

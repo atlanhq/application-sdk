@@ -162,11 +162,7 @@ columns:
     is_insertable_into:
       source_query: is_insertable_into
     number_columns_in_part_key:
-      source_query: |
-        CASE
-          WHEN number_columns_in_part_key IS NOT NULL THEN CAST(COALESCE(number_columns_in_part_key, 0) AS FLOAT)
-          ELSE NULL
-        END
+      source_query: TRY_CAST(number_columns_in_part_key AS FLOAT)
       source_columns: [number_columns_in_part_key]
     columns_participating_in_part_key:
       source_query: TRY_CAST(columns_participating_in_part_key AS FLOAT)
