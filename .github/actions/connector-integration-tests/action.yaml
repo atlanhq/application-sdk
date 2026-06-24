@@ -258,7 +258,11 @@ runs:
     - name: Install Temporal CLI
       if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
       shell: bash
-      run: "${{ github.action_path }}/../../scripts/with-retry.sh" bash -c "curl -sSf https://temporal.download/cli.sh | sh"
+      # Block scalar: a `run:` value that *starts* with a quote is parsed by YAML
+      # as a single quoted string, leaving the trailing args as an unexpected
+      # token (this exact line took the connector fleet down — invalid manifest).
+      run: |
+        "${{ github.action_path }}/../../scripts/with-retry.sh" bash -c "curl -sSf https://temporal.download/cli.sh | sh"
 
     - name: Add Temporal to PATH
       if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
