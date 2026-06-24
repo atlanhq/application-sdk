@@ -261,7 +261,8 @@ class JsonFileWriter(Writer):
 
     This class provides functionality for writing data to JSON files with support
     for chunking large datasets, buffering, and automatic file path generation.
-    It can handle both pandas and daft DataFrames as input.
+    It accepts pandas DataFrames; DataframeType.daft is a deprecated no-op alias
+    that routes to the pandas path.
 
     The output can be written to local files and optionally uploaded to an object
     store. Files are named using a configurable path generation scheme that
@@ -405,8 +406,8 @@ class JsonFileWriter(Writer):
 
         Uploads any remaining buffered data to the object store.
         Only updates chunk_count/partitions when it performs the upload, to
-        avoid double-counting with _write_dataframe/_write_daft_dataframe which
-        already update statistics after their own upload.
+        avoid double-counting with _write_chunk which already updates statistics
+        after its own upload.
         """
         if self.current_buffer_size_bytes > 0:
             output_file_name = f"{self.path}/{path_gen(self.chunk_count, self.chunk_part, self.start_marker, self.end_marker, extension=self.extension)}"
