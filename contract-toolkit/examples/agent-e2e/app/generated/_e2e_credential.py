@@ -5,19 +5,18 @@ from pydantic import Field
 from application_sdk.testing.e2e.credential import CredentialBody
 
 
-class PublishControlsCredentialBody(CredentialBody):
+class AgentE2eCredentialBody(CredentialBody):
     name: str = Field(alias="name")
     auth_type: str = Field(default="basic", alias="authType")
     host: str = Field(alias="host")
-    enable_ssl: str = Field(default="true", alias="enable_ssl")
     username: str = Field(default="", alias="username")
     password: str = Field(default="", alias="password")
 
 
-class PublishControlsAgentCredentialBody(CredentialBody):
+class AgentE2eAgentCredentialBody(CredentialBody):
     name: str = Field(alias="name")
     auth_type: str = Field(default="basic", alias="authType")
     connector_config_name: str = Field(
-        default="atlan-connectors-publish-controls", alias="connectorConfigName"
+        default="atlan-connectors-agent-e2e", alias="connectorConfigName"
     )
     extra: dict = Field(default_factory=dict, alias="extra")

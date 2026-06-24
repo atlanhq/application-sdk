@@ -1,0 +1,119 @@
+{
+  "id": "agent-e2e",
+  "name": "Agent E2E Example",
+  "logo": "https://assets.atlan.com/assets/fullscreen-exit.svg",
+  "config": {
+    "properties": {
+      "extraction-method": {
+        "type": "conditional",
+        "required": true,
+        "ui": {
+          "widget": "radio",
+          "label": "Extraction method",
+          "hidden": false,
+          "help": "How metadata is extracted: directly from Atlan, or via a self-deployed agent.",
+          "grid": 8
+        },
+        "default": "direct",
+        "conditions": [
+          {
+            "property": "labFlag",
+            "value": "SECURE_AGENT_EXTRACTION",
+            "enum": [
+              "direct",
+              "agent"
+            ],
+            "enumNames": [
+              "Direct",
+              "Self-Deployed Runtime"
+            ]
+          }
+        ],
+        "enum": [
+          "direct"
+        ],
+        "enumNames": [
+          "Direct"
+        ]
+      },
+      "credential-guid": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "credential",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "grid": 8,
+          "credentialType": "atlan-connectors-agent-e2e",
+          "isTestAuthenticationDisabled": false
+        }
+      },
+      "agent-json": {
+        "type": "object",
+        "required": false,
+        "ui": {
+          "widget": "agent",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "placeholder": "Agent JSON",
+          "grid": 8
+        }
+      },
+      "connection": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "connection",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "grid": 8
+        }
+      }
+    },
+    "anyOf": [
+      {
+        "properties": {
+          "extraction-method": {
+            "const": "direct"
+          }
+        },
+        "required": [
+          "credential-guid"
+        ]
+      },
+      {
+        "properties": {
+          "extraction-method": {
+            "const": "agent"
+          }
+        },
+        "required": [
+          "agent-json"
+        ]
+      }
+    ],
+    "steps": [
+      {
+        "title": "Credential",
+        "description": "Credential Details",
+        "id": "credential",
+        "properties": [
+          "extraction-method",
+          "credential-guid",
+          "agent-json"
+        ]
+      },
+      {
+        "title": "Connection",
+        "description": "Connection Details",
+        "id": "connection",
+        "properties": [
+          "connection"
+        ]
+      }
+    ]
+  }
+}
