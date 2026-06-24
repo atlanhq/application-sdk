@@ -251,12 +251,12 @@ class TestBindingPlumbsClientOptions:
         kwargs = mock_s3.call_args.kwargs
         client_opts = kwargs.get("client_options") or {}
         retry_cfg = kwargs.get("retry_config") or {}
-        assert client_opts.get("timeout") == "42m", (
-            f"timeout not plumbed into S3Store(client_options=...): {client_opts}"
-        )
-        assert retry_cfg.get("max_retries") == 7, (
-            f"retry max_retries not plumbed into S3Store(retry_config=...): {retry_cfg}"
-        )
+        assert (
+            client_opts.get("timeout") == "42m"
+        ), f"timeout not plumbed into S3Store(client_options=...): {client_opts}"
+        assert (
+            retry_cfg.get("max_retries") == 7
+        ), f"retry max_retries not plumbed into S3Store(retry_config=...): {retry_cfg}"
 
 
 class TestCloudPlumbsClientOptions:
@@ -398,3 +398,134 @@ class TestAzureAmbientEnvIsolation:
     )
     def test_explicit_credential_gate(self, config, expected):
         assert _azure_config_has_explicit_credential(config) is expected
+
+    def test_credential_provider_strips_ambient_env(self, monkeypatch):
+        # cert-auth and other credential_provider paths leave config without any
+        # of the four guarded keys, so the original gate (_azure_config_has_explicit_credential)
+        # returned False and ambient AZURE_* env was NOT stripped — the same host-identity
+        # outranking bug as the account-key case.  The gate must also fire when
+        # credential_provider is not None.
+        monkeypatch.setenv("AZURE_STORAGE_ACCESS_KEY", "host-key")
+        monkeypatch.setenv("AZURE_FEDERATED_TOKEN_FILE", "/var/run/token")
+        monkeypatch.setenv("AZURE_CLIENT_ID", "host-client")
+
+        captured: dict = {}
+
+        def fake_azure_store(**kw):
+            captured["azure_env"] = {
+                k: v for k, v in os.environ.items() if k.startswith("AZURE_")
+            }
+            captured["kw"] = kw
+            return MagicMock(name="AzureStore")
+
+        fake_provider = MagicMock(name="cert-credential-provider")
+        with patch("obstore.store.AzureStore", new=fake_azure_store):
+            make_azure_store(
+                "container",
+                {"azure_storage_account_name": "acct"},
+                credential_provider=fake_provider,
+            )
+
+        assert (
+            captured["azure_env"] == {}
+        ), "ambient AZURE_* env must be stripped when credential_provider is supplied"
+        assert captured["kw"]["credential_provider"] is fake_provider
+        # env restored after construction
+        assert os.environ["AZURE_STORAGE_ACCESS_KEY"] == "host-key"
+        assert os.environ["AZURE_FEDERATED_TOKEN_FILE"] == "/var/run/token"
+        assert os.environ["AZURE_CLIENT_ID"] == "host-client"
+
+
+# ---------------------------------------------------------------------------
+# Credential precedence — empirically verified against obstore-rs 0.10.x
+#
+# These tests document behaviour confirmed by live requests (see PR audit).
+# The pattern: mock the store constructor and assert on the config dict it
+# receives — we can't easily intercept the Rust-layer credential resolution
+# at the unit level, but we CAN verify that the right keys reach the
+# constructor (which is the invariant the fix is about).
+# ---------------------------------------------------------------------------
+
+
+class TestS3CredentialPrecedence:
+    """S3: explicit config credentials must reach S3Store unchanged.
+
+    obstore-rs uses the AWS credential chain where explicit static credentials
+    in config beat env vars.  Verified empirically: a store constructed with
+    both aws_access_key_id + aws_secret_access_key in config sends requests
+    signed with the config key, not the ambient AWS_ACCESS_KEY_ID env var.
+    """
+
+    def test_full_explicit_credentials_reach_s3_store(self, monkeypatch) -> None:
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "ENV-ACCESS-KEY")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "ENV-SECRET-KEY")
+
+        with patch("obstore.store.S3Store") as mock_s3:
+            mock_s3.return_value = MagicMock()
+            from application_sdk.storage._obstore_config import make_s3_store
+
+            make_s3_store(
+                "test-bucket",
+                {
+                    "aws_access_key_id": "CONFIG-ACCESS-KEY",
+                    "aws_secret_access_key": "CONFIG-SECRET-KEY",
+                    "aws_region": "us-east-1",
+                },
+            )
+
+        config = mock_s3.call_args.kwargs["config"]
+        assert config["aws_access_key_id"] == "CONFIG-ACCESS-KEY"
+        assert config["aws_secret_access_key"] == "CONFIG-SECRET-KEY"
+
+    def test_no_credentials_in_config_passes_none(self, monkeypatch) -> None:
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "ENV-ACCESS-KEY")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "ENV-SECRET-KEY")
+
+        with patch("obstore.store.S3Store") as mock_s3:
+            mock_s3.return_value = MagicMock()
+            from application_sdk.storage._obstore_config import make_s3_store
+
+            make_s3_store("test-bucket", None)
+
+        assert mock_s3.call_args.kwargs["config"] is None
+
+
+class TestGCSCredentialPrecedence:
+    """GCS: explicit SA key in config bypasses GOOGLE_APPLICATION_CREDENTIALS.
+
+    Verified empirically: GCSStore constructed with google_service_account_key
+    does NOT read GOOGLE_APPLICATION_CREDENTIALS from the environment; the ADC
+    path is only taken when no explicit credential is passed (config=None).
+    """
+
+    def test_explicit_sa_key_reaches_gcs_store(self, monkeypatch) -> None:
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/nonexistent/adc.json")
+
+        with patch("obstore.store.GCSStore") as mock_gcs:
+            mock_gcs.return_value = MagicMock()
+            from application_sdk.storage._obstore_config import make_gcs_store
+
+            make_gcs_store(
+                "test-bucket",
+                {"google_service_account_key": '{"type":"service_account"}'},
+            )
+
+        config = mock_gcs.call_args.kwargs["config"]
+        assert config is not None
+        assert "google_service_account_key" in config
+
+    def test_no_sa_key_passes_none_config_for_adc(self, monkeypatch) -> None:
+        # No SA key → config=None → obstore uses ADC / Workload Identity.
+        # Verified empirically: GCSStore(bucket=...) with no config and
+        # GOOGLE_APPLICATION_CREDENTIALS pointing to a nonexistent path fails
+        # at construction with "No such file or directory" — proving ADC is only
+        # consulted when the config SA key is absent.
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/nonexistent/adc.json")
+
+        with patch("obstore.store.GCSStore") as mock_gcs:
+            mock_gcs.return_value = MagicMock()
+            from application_sdk.storage._obstore_config import make_gcs_store
+
+            make_gcs_store("test-bucket", None)
+
+        assert mock_gcs.call_args.kwargs["config"] is None

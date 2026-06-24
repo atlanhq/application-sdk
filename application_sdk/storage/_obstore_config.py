@@ -198,6 +198,11 @@ def make_s3_store(
 # store with all ``AZURE_*`` stripped from the environment, leaving obstore to resolve
 # from our ``config`` alone. Callers that pass no credential (managed / workload
 # identity) are left untouched so the ambient identity still applies.
+#
+# TODO: retire this env-mutation workaround once obstore-rs honours explicit ``config``
+# credentials with higher precedence than ambient ``AZURE_*`` env vars.  Track at
+# https://github.com/developmentseed/obstore/issues — file or link an upstream issue
+# before removing this block.
 _AZURE_CREDENTIAL_CONFIG_KEYS = (
     "azure_storage_account_key",
     "azure_storage_client_secret",
@@ -205,9 +210,11 @@ _AZURE_CREDENTIAL_CONFIG_KEYS = (
     "azure_storage_token",
 )
 
-# os.environ is process-global, so serialize every AzureStore construction: an isolated
-# build (env temporarily stripped) must never overlap a concurrent build that relies on
-# the ambient AZURE_* env.
+# os.environ is process-global, so serialize make_azure_store callers: an isolated build
+# (env temporarily stripped) must never overlap a concurrent build that relies on the
+# ambient AZURE_* env.  Note: this lock only protects callers of make_azure_store — other
+# in-process readers (azure-identity, OpenTelemetry exporters, subprocesses spawned during
+# the window, sidecar SDKs) can still observe the stripped env during the brief window.
 _azure_store_build_lock = threading.Lock()
 
 
@@ -250,8 +257,11 @@ def make_azure_store(
     """Create an AzureStore with SDK-default client/retry config.
 
     See :func:`make_s3_store` for rationale. When *config* carries an explicit
-    credential, the ambient ``AZURE_*`` environment is suppressed for the construction
-    so the host's own identity can't override it (see ``_suppress_ambient_azure_env``).
+    credential *or* a ``credential_provider`` is supplied, the ambient ``AZURE_*``
+    environment is suppressed for the construction so the host's own identity can't
+    override it (see ``_suppress_ambient_azure_env``).  The cert-auth path in
+    ``binding.py`` uses ``credential_provider`` instead of placing a key in ``config``,
+    so both cases must activate env stripping.
     """
     from obstore.store import AzureStore  # noqa: PLC0415
 
@@ -263,7 +273,10 @@ def make_azure_store(
     )
     if credential_provider is not None:
         kw["credential_provider"] = credential_provider
-    with _suppress_ambient_azure_env(_azure_config_has_explicit_credential(config)):
+    isolate = (
+        _azure_config_has_explicit_credential(config) or credential_provider is not None
+    )
+    with _suppress_ambient_azure_env(isolate):
         return AzureStore(**kw)  # type: ignore[arg-type]
 
 
