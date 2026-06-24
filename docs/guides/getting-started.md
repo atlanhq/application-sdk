@@ -112,7 +112,7 @@ curl -s -X POST http://localhost:8000/workflows/v1/start \
 
 ## Optional: run against external Dapr + Temporal
 
-The embedded runtime above is the recommended local-dev path. If you want to mirror production more closely — where the app runs against a Dapr **sidecar** and a standalone **Temporal cluster** — install the [Dapr CLI](https://docs.dapr.io/getting-started/install-dapr-cli/) and [Temporal CLI](https://docs.temporal.io/cli#install), then:
+The embedded runtime above is the recommended local-dev path. If you want to mirror production more closely — where the app runs against a Dapr **sidecar** and a standalone **Temporal cluster** — you only need the [Temporal CLI](https://docs.temporal.io/cli#install). You do **not** need the Dapr CLI: production runs the `daprd` runtime directly (see the SDK container entrypoint), and the SDK can fetch the same pinned `daprd` binary for you. Then:
 
 **1. Add the SDK's Dapr component definitions to your project:**
 
@@ -128,7 +128,11 @@ temporal server start-dev --db-filename temporal.db
 ```
 
 ```bash
-dapr run \
+# Resolve the pinned daprd binary via the SDK (downloads it on first use;
+# no Dapr CLI / `dapr init` required), then run daprd directly:
+DAPRD=$(uv run python -c "from application_sdk.dev._dapr import _ensure_daprd_binary; print(_ensure_daprd_binary())")
+
+"$DAPRD" \
   --app-id app \
   --app-port 8000 \
   --dapr-http-port 3500 \

@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
+from temporalio.client import Client as _TemporalClientImpl
 from temporalio.converter import DataConverter
 
 from application_sdk.contracts.base import Input, Output
-from application_sdk.execution._temporal.converter import (
-    create_data_converter,
-    create_data_converter_for_app,
-)
+from application_sdk.execution import TemporalClient, create_data_converter_for_app
+from application_sdk.execution._temporal.converter import create_data_converter
 
 
 class _ConverterInput(Input):
@@ -19,6 +18,20 @@ class _ConverterInput(Input):
 class _ConverterOutput(Output):
     result: str = ""
     success: bool = True
+
+
+class TestPublicSurface:
+    """Smoke tests for the application_sdk.execution public surface."""
+
+    def test_temporal_client_is_exported(self) -> None:
+        assert TemporalClient is _TemporalClientImpl
+
+    def test_create_data_converter_for_app_is_exported(self) -> None:
+        from application_sdk.execution._temporal.converter import (
+            create_data_converter_for_app as _internal,
+        )
+
+        assert create_data_converter_for_app is _internal
 
 
 class TestCreateDataConverter:
