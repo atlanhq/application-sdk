@@ -280,7 +280,11 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
    - If `SOURCE_FILES == 0 && DOC_FILES > 0 && TEST_FILES == 0` → `review_scope=docs-only`
      (Skip Phase 2 — submit APPROVE with "Docs-only PR, no code review needed")
    - If `SOURCE_FILES == 0 && CONFIG_FILES > 0` → `review_scope=config-only`
-     (CORRECTNESS agent only — dependency/security/CI permission check)
+     (`ci-config.md` agent only — the CI/workflow/deps/infra specialist, NOT
+     the SDK CORRECTNESS agent. CORRECTNESS is tuned for Temporal/Dapr/contract
+     code and is the wrong lens for `.github/**` YAML, shell, dependency bumps,
+     or `helm/**`. `ci-config.md` reviews GHA injection/permissions/pinning,
+     shell robustness, dependency/supply-chain, and infra config.)
    - If `SOURCE_FILES <= 2 && TEST_FILES >= SOURCE_FILES * 3` → `review_scope=tests-focused`
      (QUALITY agent + lightweight CORRECTNESS — mostly tests with a few source changes)
    - Otherwise → `review_scope=full` (all 3 agents)
@@ -639,8 +643,17 @@ Based on `review_scope`, dispatch agents via the Agent tool:
 | `mixed-sdk-toolkit` | correctness.md + quality.md + structure.md + toolkit-review.md |
 | `tests-only` | quality.md only |
 | `tests-focused` | quality.md + correctness.md (lightweight) |
-| `config-only` | correctness.md only |
+| `config-only` | ci-config.md only (CI/workflow/deps/infra specialist) |
 | `docs-only` | SKIP Phase 2 entirely |
+
+**Mixed source + config:** when a `full` or `tests-focused` PR ALSO changes
+config files (`CONFIG_FILES > 0` — i.e. `.github/**`, `pyproject.toml`,
+`uv.lock`, `.pre-commit*`, `helm/**`), additionally dispatch `ci-config.md`
+scoped to **only** the config partition. The SDK domain agents
+(correctness/quality/structure) review `application_sdk/**` + tests and must
+NOT be handed `.github/**`/`helm/**` for Temporal/Dapr review — that is
+`ci-config.md`'s job. Skip the extra dispatch if the only config file is an
+incidental `uv.lock` churn with no `.github/`/`helm/`/`pyproject` change.
 
 Each agent receives: PR diff (or partition), full file contents,
 holistic annotations, their reference rules, reachability output.
