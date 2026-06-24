@@ -121,6 +121,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # orchestration layer through the SDK seam, not Temporal/SDK-internals
     # (BLDX-1417). P008–P012: apps must use the SDK's storage seam, not
     # hand-roll object stores or bare path fields (BLDX-1398).
+    # P016: entry-point contract/code alignment — only apps have a Pkl contract
+    # and app/generated/ dirs; the SDK itself has no @entrypoint-decorated App
+    # methods and no contract to drift from (BLDX-1425).
     # I001–I005: Dockerfile conformance (SDK builds the base image, not consuming it).
     # B001: consuming a deprecated SDK symbol (BLDX-1418).
     assert app_scoped == {
@@ -140,6 +143,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P010",
         "P011",
         "P012",
+        "P016",
         "I001",
         "I002",
         "I003",
@@ -245,12 +249,13 @@ def test_catalog_d_series_present() -> None:
 
 
 def test_catalog_p_series_present() -> None:
-    """The P-series prescription rules are exactly P001–P012.
+    """The P-series prescription rules are exactly P001–P012 plus P016.
 
     Strict equality (not just not-missing): P004–P007 are the orchestration-seam
-    rules (BLDX-1417); P008–P012 are the storage-seam rules (BLDX-1398).  A
-    stray or renumbered P-id would slip past a subset check while breaking
-    fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
+    rules (BLDX-1417); P008–P012 are the storage-seam rules (BLDX-1398);
+    P016 is the entry-point contract/code alignment rule (BLDX-1425).  A stray
+    or renumbered P-id would slip past a subset check while breaking fleet-wide
+    ``# conformance: ignore[Pxxx]`` suppressions.
     """
     rules = load_catalog()
     p_ids = {r.id for r in rules if r.id.startswith("P")}
@@ -267,6 +272,7 @@ def test_catalog_p_series_present() -> None:
         "P010",
         "P011",
         "P012",
+        "P016",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
