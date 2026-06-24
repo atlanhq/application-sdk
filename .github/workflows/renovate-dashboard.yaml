@@ -1,0 +1,207 @@
+# Update Renovate Dashboard — standalone scheduled workflow.
+#
+# Discovers every atlan-application-sdk consumer repo, gathers each repo's open
+# and recently-merged Renovate PRs via `gh pr list`, classifies them with the
+# conformance `renovate-scan` CLI, and deploys per-repo + fleet dashboard data
+# to Kryptonite (k.atlan.dev/renovate-dashboard/).
+#
+# Mirrors the conformance dashboard job in update-dashboard.yaml for the S3
+# deployment pattern, and reusable-renovate-dispatch.yaml for fleet discovery.
+#
+# Two modes:
+#   Full-fleet (schedule / workflow_dispatch without repo input):
+#     Discovers all consumer repos via gh search code and scans the whole fleet.
+#     Updates per-repo data, fleet.json aggregate, repos.json manifest, and all
+#     history JSONL files.
+#   Single-repo (workflow_dispatch with repo=<owner/name>):
+#     Scans only the specified repo. Skips fleet.json and fleet history so a
+#     partial scan never overwrites the full-fleet aggregate. Used by the
+#     renovate-auto-approve-reusable workflow for push-based, near-real-time
+#     updates immediately after a PR gate evaluation.
+name: Update Renovate Dashboard
+
+on:
+  schedule:
+    - cron: "0 */6 * * *" # every 6 hours
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: >
+          Single consumer repo to scan (e.g. atlanhq/my-app).
+          Leave empty to scan the full fleet.
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+  id-token: write  # required for OIDC auth in aws-actions/configure-aws-credentials
+  actions: read    # required to download workflow artifacts (parity with update-dashboard.yaml)
+
+jobs:
+  renovate-dashboard:
+    name: Update Renovate Dashboard
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout application-sdk
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Discover atlan-application-sdk consumers
+        id: discover
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          SINGLE_REPO: ${{ inputs.repo }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "${SINGLE_REPO:-}" ]; then
+            # Push-based single-repo mode: skip fleet discovery entirely.
+            repos=$(printf '["%s"]' "$SINGLE_REPO")
+            echo "Single-repo scan: $SINGLE_REPO"
+          else
+            # Full-fleet mode: discover repos that have Renovate configured
+            # with the application-sdk preset. Searching for the preset
+            # reference in renovate.json (rather than all pyproject.toml
+            # consumers) excludes repos that don't have Renovate set up —
+            # those always show 0 open PRs which would falsely read as
+            # "up to date" rather than "Renovate not configured".
+            repos=$(gh search code \
+              --owner atlanhq \
+              "application-sdk//renovate-config/default.json filename:renovate.json" \
+              --json repository \
+              --jq '.[].repository.nameWithOwner' \
+              --limit 1000 \
+              | sort -u \
+              | jq -R . | jq -cs '.' \
+              || echo "[]")
+
+            if [ "$repos" = "[]" ] || [ -z "$repos" ]; then
+              echo "::warning::No consumer repos discovered. Check ORG_PAT_GITHUB permissions."
+            else
+              echo "Discovered $(echo "$repos" | jq '. | length') consumer repos"
+            fi
+          fi
+          echo "repos=${repos}" >> "$GITHUB_OUTPUT"
+
+      - name: Gather Renovate PR data
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          REPOS: ${{ steps.discover.outputs.repos }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/renovate-input/open /tmp/renovate-input/merged
+
+          # 30-day merged window — GNU date on the runner, BSD date as fallback.
+          SINCE=$(date -d '30 days ago' +%Y-%m-%d 2>/dev/null || date -v-30d +%Y-%m-%d)
+
+          # Iterate the discovered fleet. gh calls are fast, so a serial loop is
+          # simpler than a matrix and keeps all data in one workspace for the scan.
+          echo "$REPOS" | jq -r '.[]' | while read -r repo; do
+            [ -z "$repo" ] && continue
+            slug=$(echo "$repo" | tr '/' '_')
+            echo "Gathering Renovate PRs for $repo"
+
+            # Open PRs. gh returns [] for repos with no matching PRs — scan.py
+            # handles empty arrays, so a repo with no Renovate PRs is fine.
+            gh pr list --repo "$repo" --author 'app/renovate' --state open --limit 100 \
+              --json number,title,headRefName,labels,mergeable,reviewDecision,statusCheckRollup,files,createdAt,updatedAt,url,isDraft,body \
+              > "/tmp/renovate-input/open/${slug}.json" 2>/dev/null \
+              || echo "[]" > "/tmp/renovate-input/open/${slug}.json"
+
+            # Merged PRs over the trailing 30-day window.
+            gh pr list --repo "$repo" --author 'app/renovate' --state merged --limit 100 \
+              --search "merged:>=${SINCE}" \
+              --json number,title,headRefName,labels,createdAt,mergedAt,url,reviews \
+              > "/tmp/renovate-input/merged/${slug}.json" 2>/dev/null \
+              || echo "[]" > "/tmp/renovate-input/merged/${slug}.json"
+          done
+
+          echo "Open PR files:   $(ls /tmp/renovate-input/open   | wc -l)"
+          echo "Merged PR files: $(ls /tmp/renovate-input/merged | wc -l)"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+      - name: Run Renovate scanner
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/renovate-output
+          # Run from the checked-out source so renovate-scan is always current
+          # with main, regardless of the latest PyPI release version.
+          uv run --directory packages/conformance \
+            atlan-application-sdk-conformance renovate-scan \
+            --input /tmp/renovate-input/open \
+            --merged /tmp/renovate-input/merged \
+            --out /tmp/renovate-output
+
+      - name: Setup AWS Credentials
+        uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6
+        with:
+          aws-region: ap-south-1
+          role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess
+
+      - name: Deploy to Kryptonite (renovate)
+        env:
+          SINGLE_REPO: ${{ inputs.repo }}
+        run: |
+          set -euo pipefail
+          PREFIX="renovate-dashboard"
+
+          # Per-repo summaries — upload every file the scanner emitted.
+          for f in /tmp/renovate-output/repos/*.json; do
+            [ -e "$f" ] || continue
+            aws s3 cp "$f" "s3://kryptonite-store/${PREFIX}/repos/$(basename "$f")"
+          done
+
+          # Regenerate manifest of all repo files present in S3.
+          aws s3 ls "s3://kryptonite-store/${PREFIX}/repos/" \
+            | grep '\.json$' | awk '{print $4}' \
+            | python3 -c "import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))" \
+            > /tmp/renovate-output/repos.json
+          aws s3 cp /tmp/renovate-output/repos.json \
+            "s3://kryptonite-store/${PREFIX}/repos.json"
+
+          # Append per-repo history (download existing → merge → re-upload;
+          # sort -u deduplicates same-day reruns).
+          for f in /tmp/renovate-output/history_*.jsonl; do
+            [ -e "$f" ] || continue
+            base=$(basename "$f")          # history_<slug>.jsonl
+            slug=${base#history_}
+            slug=${slug%.jsonl}
+            # Fleet-wide history is only written on full-fleet runs (see below).
+            [ "$slug" = "fleet" ] && continue
+            HISTORY_FILE="history/${slug}.jsonl"
+            aws s3 cp \
+              "s3://kryptonite-store/${PREFIX}/${HISTORY_FILE}" \
+              /tmp/existing_renovate_history.jsonl 2>/dev/null || true
+            touch /tmp/existing_renovate_history.jsonl
+            cat /tmp/existing_renovate_history.jsonl "$f" 2>/dev/null \
+              | sort -u \
+              > /tmp/merged_renovate_history.jsonl
+            aws s3 cp /tmp/merged_renovate_history.jsonl \
+              "s3://kryptonite-store/${PREFIX}/${HISTORY_FILE}"
+          done
+
+          # Fleet-wide aggregate and history — only meaningful for full-fleet runs.
+          # In single-repo mode the scanner only has data for one repo, so writing
+          # fleet.json would overwrite the real fleet aggregate with a partial view.
+          if [ -z "${SINGLE_REPO:-}" ]; then
+            aws s3 cp /tmp/renovate-output/fleet.json \
+              "s3://kryptonite-store/${PREFIX}/fleet.json"
+
+            if [ -e /tmp/renovate-output/history_fleet.jsonl ]; then
+              aws s3 cp \
+                "s3://kryptonite-store/${PREFIX}/history/fleet.jsonl" \
+                /tmp/existing_fleet_history.jsonl 2>/dev/null || true
+              touch /tmp/existing_fleet_history.jsonl
+              cat /tmp/existing_fleet_history.jsonl \
+                /tmp/renovate-output/history_fleet.jsonl 2>/dev/null \
+                | sort -u \
+                > /tmp/merged_fleet_history.jsonl
+              aws s3 cp /tmp/merged_fleet_history.jsonl \
+                "s3://kryptonite-store/${PREFIX}/history/fleet.jsonl"
+            fi
+          fi
+
+          echo "Renovate dashboard updated: https://k.atlan.dev/${PREFIX}/"

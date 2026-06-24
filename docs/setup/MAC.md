@@ -39,22 +39,19 @@ source .venv/bin/activate
 python --version # Should show Python 3.11.10
 ```
 
-### 3. Install Temporal CLI
+### 3. That's it — Dapr and Temporal are auto-managed
 
-Temporal is the workflow orchestration platform:
+You do **not** need to install the Dapr or Temporal CLIs. When you run an app
+locally via `run_dev_combined()` (see the [Getting Started Guide](../guides/getting-started.md)),
+the SDK auto-downloads and manages both the Dapr runtime (`daprd`) and an
+in-process Temporal server for you — nothing is required on your machine beyond
+Python and uv.
 
-```bash
-brew install temporal
-```
-
-### 4. Install DAPR CLI
-
-DAPR (Distributed Application Runtime) simplifies microservice development:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/dapr/cli/master/install/install.sh | /bin/bash -s 1.18.0
-dapr init --runtime-version 1.18.0 --slim
-```
+> [!NOTE]
+> Prefer to run against an external Dapr sidecar and Temporal server to mirror
+> production? Install the [Dapr CLI](https://docs.dapr.io/getting-started/install-dapr-cli/)
+> and [Temporal CLI](https://docs.temporal.io/cli#install), then follow the
+> optional external-infrastructure section of the Getting Started guide.
 
 > [!NOTE]
 > Your development environment is now ready! Head over to our [Getting Started Guide](../guides/getting-started.md) to learn how to:

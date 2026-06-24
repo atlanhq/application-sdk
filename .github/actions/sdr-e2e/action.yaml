@@ -121,6 +121,26 @@ inputs:
       agent-name so the worker registers on its own Temporal queue).
     required: false
     default: ""
+  git-token:
+    description: |
+      Optional GitHub token forwarded to the docker buildx build as the
+      `git_token` build secret. Connectors whose pyproject.toml declares
+      git+ssh / git+https dependencies on other private atlanhq repos
+      (e.g. `query-redaction` from `atlan-query-intelligence-app`) need
+      this so `uv sync` inside the Docker build can authenticate the
+      clone. The caller workflow passes the org-scoped PAT from its own
+      secrets context (typically `secrets.ORG_PAT_GITHUB`).
+
+      When empty (the default), no `--secret` flag is appended to the
+      docker buildx invocation — connectors with PyPI-only dependencies
+      stay unaffected.
+
+      Consumed by the Dockerfile as:
+          RUN --mount=type=secret,id=git_token,uid=1000 \
+              git config --global url."https://x-access-token:$(cat /run/secrets/git_token)@github.com/".insteadOf "ssh://git@github.com/" \
+              && uv sync --locked --no-install-project
+    required: false
+    default: ""
 outputs:
   test-outcome:
     description: pytest exit outcome (success/failure)
@@ -208,6 +228,11 @@ runs:
       shell: bash
       env:
         BASE_IMAGE_REF: ${{ inputs.base-image-ref }}
+        # Read by --secret id=git_token,env=GIT_TOKEN below. The env-var
+        # form (vs --secret-file) keeps the token out of the buildx
+        # command line and out of any tmpfile on the runner — buildx
+        # streams it directly into the build context.
+        GIT_TOKEN: ${{ inputs.git-token }}
       run: |
         SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-8)
         IMAGE="ghcr.io/atlanhq/${{ inputs.app-image-name }}:sdr-test-${SHORT_SHA}"
@@ -220,6 +245,15 @@ runs:
         if [ -n "${BASE_IMAGE_REF}" ]; then
           echo "Building connector on dispatched base image: ${BASE_IMAGE_REF}"
           BUILD_ARGS+=(--build-arg "BASE_IMAGE=${BASE_IMAGE_REF}")
+        fi
+        # When the caller supplies git-token, forward it as the
+        # `git_token` build secret so Dockerfiles that clone private
+        # atlanhq repos during `uv sync` can authenticate. Connectors
+        # with PyPI-only deps don't need this — leaving the input empty
+        # skips the flag entirely so their builds stay unchanged.
+        if [ -n "${GIT_TOKEN}" ]; then
+          echo "Forwarding git-token to docker build as 'git_token' secret"
+          BUILD_ARGS+=(--secret "id=git_token,env=GIT_TOKEN")
         fi
         # --push pushes to GHCR; compose pulls from there at run-time
         # (atlan-configurator wires app_image into the generated
