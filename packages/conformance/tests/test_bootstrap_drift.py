@@ -215,6 +215,26 @@ def test_renovate_pkl_sync_other_drift_still_flagged(tmp_path: pathlib.Path) -> 
     assert findings[0].rule_id == "C002"
 
 
+def test_renovate_pkl_sync_extra_with_key_still_flagged(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The strip is targeted: only `regenerate-contract` is sanctioned. A second
+    key under `with:` is unsanctioned drift and must still flag."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "renovate-pkl-sync.yaml"
+    canonical = render("renovate-pkl-sync.yaml")
+    drifted = canonical.replace(
+        "    secrets:",
+        "    with:\n      regenerate-contract: false\n      some-other-key: true\n    secrets:",
+        1,
+    )
+    wf.write_text(drifted)
+    findings = scan_path(wf, tmp_path)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "C002"
+
+
 # ---------------------------------------------------------------------------
 # Parameterised files: structural drift beyond the value → finding
 # ---------------------------------------------------------------------------

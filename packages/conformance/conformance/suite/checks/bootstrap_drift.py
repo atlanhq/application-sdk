@@ -20,6 +20,12 @@ package_name, etc.) are not flagged as drift — only structural changes are cau
    Remediation: *delete tests.yaml* then re-run bootstrap to regenerate from
    canonical.
 
+**Sanctioned per-repo overrides:** a few managed shims accept a documented
+override that is normalised out of the on-disk file before comparison, so the
+choice is not flagged as drift (any *other* change still is).  Currently:
+``renovate-pkl-sync.yaml`` tolerates a ``with: regenerate-contract: <bool>``
+opt-out on its reusable-workflow caller.
+
 Remediation: run ``atlan-application-sdk-conformance bootstrap`` to re-sync.
 """
 
@@ -39,6 +45,8 @@ _CLI_CMD = "atlan-application-sdk-conformance bootstrap"
 # Write-if-absent scaffolds tracked alongside managed shims (WARN-only drift).
 _TESTS_WORKFLOW = "tests.yaml"
 _RENOVATE_JSON = "renovate.json"
+
+# Managed shim (in MANAGED_WORKFLOWS) that tolerates a sanctioned per-repo override.
 _RENOVATE_PKL_SYNC = "renovate-pkl-sync.yaml"
 
 # The renovate-pkl-sync caller regenerates contract artifacts by default
