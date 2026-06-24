@@ -231,9 +231,11 @@ def test_catalog_c_series_present() -> None:
     """The C-series CI/workflow supply-chain rules are all present."""
     rules = load_catalog()
     c_ids = {r.id for r in rules if r.id.startswith("C")}
-    expected = {"C001", "C002"}
+    expected = {"C001", "C002", "C003", "C004"}
     missing = expected - c_ids
     assert not missing, f"Missing C-series rules: {missing}"
+    extra = c_ids - expected
+    assert not extra, f"Unexpected C-series rules: {extra}"
 
 
 def test_catalog_d_series_present() -> None:
