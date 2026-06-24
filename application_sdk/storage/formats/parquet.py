@@ -156,10 +156,19 @@ class ParquetFileReader(Reader):
     def read_batches(
         self,
     ) -> AsyncIterator["pd.DataFrame"]:
-        """Read the data from the parquet files and return as batched DataFrames.
+        """Read the data from the parquet files as batches of pandas DataFrames.
+
+        Each yielded batch is a ``pd.DataFrame`` of up to ``chunk_size`` rows,
+        streamed one pyarrow row-group at a time via
+        ``pyarrow.parquet.ParquetFile.iter_batches()``.
+
+        Note: unlike ``JsonFileReader.read_batches()`` (which yields
+        ``list[dict]``), this method yields ``pd.DataFrame`` objects. Polymorphic
+        consumers that switch between the two readers must branch on the batch
+        type at runtime.
 
         Returns:
-            AsyncIterator[pd.DataFrame]: Async iterator of DataFrames.
+            AsyncIterator[pd.DataFrame]: Async iterator of pandas DataFrames.
 
         Raises:
             ValueError: If the reader has been closed or dataframe_type is unsupported.

@@ -25,16 +25,21 @@ logger = get_logger(__name__)
 
 
 class JsonFileReader(Reader):
-    """JSON File Reader class to read data from JSON files using daft and pandas.
+    """JSON File Reader class to read data from JSON files using orjson.
 
     Supports reading both single files and directories containing multiple JSON files.
     Follows Python's file I/O pattern with read/close semantics and supports context managers.
+
+    Note: ``read_batches()`` yields ``list[dict]`` (one batch per ``chunk_size``
+    records), not ``pd.DataFrame``. ``read()`` returns a ``pd.DataFrame`` built
+    from all records in memory.
 
     Attributes:
         path (str): Path to JSON file or directory containing JSON files.
         chunk_size (int): Number of rows per batch.
         file_names (Optional[List[str]]): List of specific file names to read.
-        dataframe_type (DataframeType): Type of dataframe to return (pandas or daft).
+        dataframe_type (DataframeType): Type of dataframe to return (pandas only;
+            daft is a deprecated no-op alias that routes to the pandas path).
         cleanup_on_close (bool): Whether to clean up downloaded temp files on close.
 
     Example:
@@ -82,6 +87,8 @@ class JsonFileReader(Reader):
         """
         warnings.warn(
             "JsonFileReader is deprecated and will be removed in v4.0. "
+            "Note: read_batches() now yields list[dict] (not pd.DataFrame) — "
+            "calling DataFrame methods on batches raises AttributeError. "
             "Migrate now: declare the upstream artifact as a FileReference "
             "field on your task's typed Input — the SDK's activity "
             "interceptor auto-materialises it to a local path before the "
@@ -149,12 +156,16 @@ class JsonFileReader(Reader):
 
     def read_batches(
         self,
-    ) -> AsyncIterator["pd.DataFrame"] | AsyncIterator[list[dict]]:
-        """Read the data from the JSON files and return as batched DataFrames.
+    ) -> AsyncIterator[list[dict]]:
+        """Read the data from the JSON files as batches of plain dicts.
+
+        Each yielded batch is a ``list[dict]`` of up to ``chunk_size`` records
+        parsed by orjson. Unlike ``read()``, which returns a ``pd.DataFrame``,
+        this path never constructs a DataFrame — callers that previously called
+        DataFrame methods on batches must switch to plain dict access.
 
         Returns:
-            AsyncIterator[pd.DataFrame] | AsyncIterator[list[dict]]:
-                Async iterator of batches.
+            AsyncIterator[list[dict]]: Async iterator of record batches.
 
         Raises:
             ValueError: If the reader has been closed or dataframe_type is unsupported.

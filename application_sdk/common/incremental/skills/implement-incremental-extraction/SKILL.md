@@ -130,7 +130,7 @@ See the reference files for detailed implementation of each step:
 2. **`references/sql-templates.md`** - SQL template patterns for incremental queries
 3. **`references/workflow-implementation.md`** - Workflow class setup
 4. **`references/testing-patterns.md`** - Unit test patterns
-5. **`references/daft-duckdb-patterns.md`** - DuckDB and RocksDB usage patterns
+5. **`references/duckdb-patterns.md`** - DuckDB usage patterns
 
 ## Quick Start: Minimal Implementation
 

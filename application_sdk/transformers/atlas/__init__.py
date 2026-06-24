@@ -27,7 +27,7 @@ from application_sdk.transformers.common.last_sync import (
 from application_sdk.transformers.common.utils import process_text
 
 warnings.warn(
-    "application_sdk.transformers is deprecated and will be removed in the next major version. "
+    "application_sdk.transformers.atlas is deprecated and will be removed in the next major version. "
     "Use the connector-side typed-record → mapper-function pattern instead. "
     "See docs/upgrade-guide-v3.md.",
     DeprecationWarning,
