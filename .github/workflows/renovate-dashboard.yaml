@@ -42,7 +42,7 @@ jobs:
   renovate-dashboard:
     name: Update Renovate Dashboard
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     steps:
       - name: Checkout application-sdk
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -60,18 +60,20 @@ jobs:
             repos=$(printf '["%s"]' "$SINGLE_REPO")
             echo "Single-repo scan: $SINGLE_REPO"
           else
-            # Full-fleet mode: discover every consumer via code search.
-            # --paginate fetches all pages so the fleet is never silently
-            # truncated. The jq emits one name per line; sort -u deduplicates
-            # across pages; jq -R/-s rebuilds the JSON array.
+            # Full-fleet mode: discover repos that have Renovate configured
+            # with the application-sdk preset. Searching for the preset
+            # reference in renovate.json (rather than all pyproject.toml
+            # consumers) excludes repos that don't have Renovate set up —
+            # those always show 0 open PRs which would falsely read as
+            # "up to date" rather than "Renovate not configured".
             repos=$(gh search code \
               --owner atlanhq \
-              "atlan-application-sdk filename:pyproject.toml" \
+              "application-sdk//renovate-config/default.json filename:renovate.json" \
               --json repository \
               --jq '.[].repository.nameWithOwner' \
-              --paginate 2>/dev/null \
+              --limit 1000 \
               | sort -u \
-              | jq -R . | jq -s . \
+              | jq -R . | jq -cs '.' \
               || echo "[]")
 
             if [ "$repos" = "[]" ] || [ -z "$repos" ]; then
@@ -117,6 +119,9 @@ jobs:
 
           echo "Open PR files:   $(ls /tmp/renovate-input/open   | wc -l)"
           echo "Merged PR files: $(ls /tmp/renovate-input/merged | wc -l)"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
 
       - name: Run Renovate scanner
         run: |
@@ -170,6 +175,7 @@ jobs:
             aws s3 cp \
               "s3://kryptonite-store/${PREFIX}/${HISTORY_FILE}" \
               /tmp/existing_renovate_history.jsonl 2>/dev/null || true
+            touch /tmp/existing_renovate_history.jsonl
             cat /tmp/existing_renovate_history.jsonl "$f" 2>/dev/null \
               | sort -u \
               > /tmp/merged_renovate_history.jsonl
@@ -188,6 +194,7 @@ jobs:
               aws s3 cp \
                 "s3://kryptonite-store/${PREFIX}/history/fleet.jsonl" \
                 /tmp/existing_fleet_history.jsonl 2>/dev/null || true
+              touch /tmp/existing_fleet_history.jsonl
               cat /tmp/existing_fleet_history.jsonl \
                 /tmp/renovate-output/history_fleet.jsonl 2>/dev/null \
                 | sort -u \
