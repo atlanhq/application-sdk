@@ -111,13 +111,24 @@ The single entry point for all new native app contracts. Supersedes `NativeApp.p
 
 ### E2E Test Harness
 
-These three fields are emitted into `app/generated/_e2e_base.py` and are required by `BaseE2ETest` / `SQLAppE2ETest`. The defaults are derived from `name`; 95% of connectors never need to override them.
+These fields are emitted into `app/generated/_e2e_base.py` and are required by `BaseE2ETest` / `SQLAppE2ETest`. The defaults are derived from `name`; 95% of connectors never need to override them.
 
 | Property | Type | Default | Description |
 |---|---|---|---|
 | `argoPackageName` | String | `"@atlan/{name}"` | Argo WorkflowTemplate package name. Override when the app uses a scoped or non-standard Argo package. |
 | `argoTemplateName` | String | `"atlan-{name}"` | Argo WorkflowTemplate resource name as deployed in-cluster. Matches `taskQueuePrefix` by default. |
 | `appServiceUrl` | String | `"http://{name}.{name}-app.svc.cluster.local"` | In-cluster Dapr service URL forwarded to by the e2e harness. Override when the app's Kubernetes service name deviates from the standard `{name}-app` pattern. |
+
+#### Credential bodies in `_e2e_credential.py` — direct + agent (both always emitted)
+
+Every credential-config app (`hasCredentialConfig` + non-empty `credentialAuthOptions`) gets **two** classes in `app/generated/_e2e_credential.py`. There is **no contract flag** — the credential mode is a per-test-run concern, so the e2e test imports whichever shape a given run needs (an app can be tested in both modes):
+
+- **`<Name>CredentialBody`** — the **direct** body: `name`, `auth_type`, and every typed field derived from `credentialCommonFields` / `credentialUrlGroup` / `credentialAuthOptions` (host, port, username, password, …) plus any nested `extra` model. This is the full body the AE submit needs to *create* a credential when the e2e connects directly from the Atlan tenant.
+- **`<Name>AgentCredentialBody`** — the **agent / self-deployed-runtime (SDR)** body: `name`, `auth_type`, `connector_config_name`, and an open `extra` dict, with **no** inline credential fields. In agent mode the real host/username/password live in the agent's secret store and are resolved at runtime via agent-json ref keys. The harness serialises the body with a plain `model_dump(by_alias=True)` (no `exclude_unset`), so an inline credential field would be sent on the wire and make the orchestrator treat the submit as a *direct* credential — skipping credential creation and leaving `{{credentialGuid}}` unsubstituted. That's why the agent body must omit them.
+
+Only `_e2e_credential.py` carries both classes; the credential configmap (`atlan-connectors-{name}.json`) and the workflow config are unaffected. See [`examples/agent-e2e/`](../examples/agent-e2e/).
+
+> **ConditionalInput value space:** when an `extraction-method` (or any radio `ConditionalInput`) exposes extra options via a condition's `overrideEnum`, the generated `_e2e_substitutions.py` types that field as the **union** of `baseEnum` and every `overrideEnum` (e.g. `Literal["direct", "agent"]`), so an agent-mode e2e run can submit `"agent"`.
 
 ### Pipeline Block
 
@@ -1124,11 +1135,45 @@ class UIRule {
 
 | Class | Widget | Python Type | Notes |
 |---|---|---|---|
-| `TextInput` | `input` | `str` | `placeholderText`, `defaultValue`, `validationRules` |
-| `TextBoxInput` | `TextInput` | `str` | Multi-line |
+| `TextInput` | `input` | `str` | `placeholderText`, `defaultValue`, `validationRules`, `validation` |
+| `TextBoxInput` | `TextInput` | `str` | Multi-line. `validation` |
 | `PasswordInput` | `password` | `str` | Masked input |
 | `NumericInput` | `inputNumber` | `int` | `default`, `placeholderValue` |
 | `InputRepeater` | `inputRepeater` | `list[str]` | Repeatable text inputs. `placeholderText`, `validationRules` |
+
+##### `validation` (WidgetValidation)
+
+`TextInput` and `TextBoxInput` accept an optional `validation` block for opt-in
+JSON or regex validation. It renders into the widget's `ui.validation` object,
+which the frontend reads directly to build an Ant Design validation rule.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `type` | `"json"` \| `"regex"` | (required) | `"json"` rejects values that do not parse as JSON; `"regex"` rejects values that do not match `pattern`. |
+| `pattern` | `String?` | null | Required when `type = "regex"`; must be null for `"json"` (rejected otherwise). |
+| `message` | `String?` | null | Custom error message. When unset the frontend shows a generic message. |
+| `formatOnBlur` | `Boolean?` | null | Only meaningful for `"json"`. Frontend defaults to pretty-printing on blur; set `false` to disable while keeping validation. |
+
+```pkl
+["custom_attributes"] = new TextBoxInput {
+  title = "Custom attributes"
+  validation = new { type = "json"; formatOnBlur = true }
+}
+["table_prefix"] = new TextInput {
+  title = "Table prefix"
+  validation = new {
+    type = "regex"
+    pattern = "^[a-z0-9_]+$"
+    message = "Only lowercase alphanumeric and underscores allowed."
+  }
+}
+```
+
+This is separate from `validationRules` / `rules` (the Ant Design `RuleObject`
+array) — both can be set independently. `validation` is UI-only: it does not
+change the field's value type, the generated manifest arg, or the `_input.py`
+field. When unset, no `validation` key is emitted and output is unchanged. See
+the [`full`](../examples/full/) example.
 
 #### Selection
 

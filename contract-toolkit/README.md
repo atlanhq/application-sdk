@@ -101,6 +101,7 @@ The `examples/` directory contains executable contracts that teach stable toolki
 - [`examples/connection-ref/`](examples/connection-ref/) — `ConnectionRefInput` widget, `pipeline.publish = null`.
 - [`examples/publish-controls/`](examples/publish-controls/) — publish toggles, `includeInputFields`, `errorHandling`.
 - [`examples/fanin/`](examples/fanin/) — multi-parent fan-in via `dependsOn`, explicit `DependencyCondition`.
+- [`examples/agent-e2e/`](examples/agent-e2e/) — agent/SDR e2e codegen: `_e2e_credential.py` emits both `<Name>CredentialBody` (direct) and `<Name>AgentCredentialBody` (lightweight), plus an `extraction-method` ConditionalInput whose `overrideEnum` widens the substitutions `Literal` to `["direct", "agent"]`.
 
 ## What Gets Generated
 
@@ -394,6 +395,12 @@ Used inside `uiConfig.tasks` — reference them as `Widgets.*`:
 | `Widgets.PasswordInput` | `password` | `str` |
 | `Widgets.NumericInput` | `inputNumber` | `int` |
 | `Widgets.InputRepeater` | `inputRepeater` | `list[str]` |
+
+`TextInput` and `TextBoxInput` support an optional `validation` block for opt-in
+JSON or regex validation (`new { type = "json"; formatOnBlur = true }` or
+`new { type = "regex"; pattern = "^[a-z0-9_]+$" }`). It renders into `ui.validation`
+and is UI-only — separate from `validationRules`. See `docs/reference.md` and the
+[`full`](examples/full/) example.
 
 ### Selection
 

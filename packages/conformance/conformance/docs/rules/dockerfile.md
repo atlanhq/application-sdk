@@ -41,8 +41,12 @@ The final-stage `FROM` instruction must be exactly
 form: `*-latest`, dev-branch tags (e.g. `:main`), pinned patch versions (e.g. `:3.2.1`),
 raw upstream Python images, and any other registry or image name are rejected.
 Intermediate builder-stage FROMs in multi-stage builds are not checked — only the last
-`FROM` in the file determines the runtime base.  Inline suppression: `# conformance:
-ignore[I001] <reason>` on the line before the FROM instruction.
+`FROM` in the file determines the runtime base.  A build-arg base (`ARG
+BASE_IMAGE=<approved>` + `FROM ${BASE_IMAGE}`) is accepted when the ARG default resolves
+to the approved image — this lets CI rebuild on a PR-scoped base via `--build-arg` while
+keeping the committed default approved; a build-arg with no default, or a non-approved
+default, is rejected.  Inline suppression: `# conformance: ignore[I001] <reason>` on the
+line before the FROM instruction.
 
 ---
 

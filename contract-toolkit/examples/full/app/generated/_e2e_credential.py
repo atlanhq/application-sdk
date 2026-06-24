@@ -19,3 +19,12 @@ class FullFeaturedCredentialBody(CredentialBody):
     token: str = Field(default="", alias="token")
     ca_cert_file: str = Field(default="", alias="ca_cert-file")
     keytab_file: str = Field(default="", alias="keytab-file")
+
+
+class FullFeaturedAgentCredentialBody(CredentialBody):
+    name: str = Field(alias="name")
+    auth_type: str = Field(default="basic", alias="authType")
+    connector_config_name: str = Field(
+        default="atlan-connectors-full-featured", alias="connectorConfigName"
+    )
+    extra: dict = Field(default_factory=dict, alias="extra")
