@@ -200,9 +200,11 @@ def make_s3_store(
 # identity) are left untouched so the ambient identity still applies.
 #
 # TODO: retire this env-mutation workaround once obstore-rs honours explicit ``config``
-# credentials with higher precedence than ambient ``AZURE_*`` env vars.  Track at
-# https://github.com/developmentseed/obstore/issues — file or link an upstream issue
-# before removing this block.
+# credentials with higher precedence than ambient ``AZURE_*`` env vars.  File an issue
+# at https://github.com/developmentseed/obstore/issues and replace the placeholder
+# below with the specific issue URL — the workaround must not be deleted until that
+# gate is closed.
+# Upstream issue: <not yet filed>
 _AZURE_CREDENTIAL_CONFIG_KEYS = (
     "azure_storage_account_key",
     "azure_storage_client_secret",
@@ -240,6 +242,10 @@ def _suppress_ambient_azure_env(active: bool):
         saved = {
             k: os.environ.pop(k) for k in list(os.environ) if k.startswith("AZURE_")
         }
+        if saved:
+            logger.debug(
+                "make_azure_store: suppressed %d ambient AZURE_* env var(s)", len(saved)
+            )
         try:
             yield
         finally:

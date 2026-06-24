@@ -437,23 +437,23 @@ class TestAzureAmbientEnvIsolation:
 
 
 # ---------------------------------------------------------------------------
-# Credential precedence — empirically verified against obstore-rs 0.10.x
+# Config passthrough — regression guard for binding.py / cloud.py
 #
-# These tests document behaviour confirmed by live requests (see PR audit).
-# The pattern: mock the store constructor and assert on the config dict it
-# receives — we can't easily intercept the Rust-layer credential resolution
-# at the unit level, but we CAN verify that the right keys reach the
-# constructor (which is the invariant the fix is about).
+# These tests verify that make_s3_store / make_gcs_store forward the caller's
+# config dict to the obstore constructor without dropping or mutating keys.
+# The Rust-layer credential precedence (explicit config vs. ambient env vars)
+# was confirmed by live requests during the PR audit but cannot be exercised
+# at the unit level — integration tests cover that invariant.
 # ---------------------------------------------------------------------------
 
 
-class TestS3CredentialPrecedence:
-    """S3: explicit config credentials must reach S3Store unchanged.
+class TestS3ConfigPassthrough:
+    """Regression guard: the config dict reaches S3Store unchanged.
 
-    obstore-rs uses the AWS credential chain where explicit static credentials
-    in config beat env vars.  Verified empirically: a store constructed with
-    both aws_access_key_id + aws_secret_access_key in config sends requests
-    signed with the config key, not the ambient AWS_ACCESS_KEY_ID env var.
+    These tests assert that make_s3_store passes the caller's config dict to the
+    S3Store constructor without dropping or mutating keys.  They do NOT verify the
+    Rust-layer credential precedence (explicit config vs. ambient env vars) — that
+    behaviour is tested by integration tests against a real or mocked S3 endpoint.
     """
 
     def test_full_explicit_credentials_reach_s3_store(self, monkeypatch) -> None:
@@ -490,12 +490,13 @@ class TestS3CredentialPrecedence:
         assert mock_s3.call_args.kwargs["config"] is None
 
 
-class TestGCSCredentialPrecedence:
-    """GCS: explicit SA key in config bypasses GOOGLE_APPLICATION_CREDENTIALS.
+class TestGCSConfigPassthrough:
+    """Regression guard: the config dict reaches GCSStore unchanged.
 
-    Verified empirically: GCSStore constructed with google_service_account_key
-    does NOT read GOOGLE_APPLICATION_CREDENTIALS from the environment; the ADC
-    path is only taken when no explicit credential is passed (config=None).
+    These tests assert that make_gcs_store passes the caller's config dict to the
+    GCSStore constructor without dropping or mutating keys.  They do NOT verify the
+    Rust-layer credential precedence (SA key in config vs. ADC / Workload Identity) —
+    that behaviour is tested by integration tests against a real or mocked GCS endpoint.
     """
 
     def test_explicit_sa_key_reaches_gcs_store(self, monkeypatch) -> None:
