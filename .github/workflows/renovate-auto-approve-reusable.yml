@@ -161,9 +161,13 @@ jobs:
             #    atlan.yaml, app.yaml). The generated artifacts are a
             #    deterministic function of the contract and the (already
             #    auto-merged) toolkit version, so they ride the same gate.
-            #    The (.*/)? prefix in each pattern makes -x (full-line) matching
-            #    work for both root-level and workspace-relative paths (e.g.
-            #    packages/conformance/uv.lock).
+            #    The (.*/)? prefix lets the lock/manifest and contract/PklProject
+            #    patterns match workspace-relative paths too (e.g.
+            #    packages/conformance/uv.lock, a monorepo apps/*/contract/...).
+            #    The generated artifacts are matched root-only (no prefix):
+            #    renovate-pkl-sync only ever writes them at the repo root, so an
+            #    unrelated app.yaml/atlan.yaml elsewhere in a consumer tree must
+            #    NOT ride this gate.
             FILENAMES=$(gh api "repos/${REPO}/pulls/${PR_NUM}/files" \
               --paginate --jq '.[].filename')
             if [ -z "$FILENAMES" ]; then
@@ -173,7 +177,7 @@ jobs:
 
             NON_DEP_FILES=$(echo "$FILENAMES" \
               | grep -v '^\.github/' \
-              | grep -vxE '(.*/)?uv\.lock|(.*/)?package-lock\.json|(.*/)?requirements\.txt|(.*/)?pyproject\.toml|(.*/)?contract/PklProject|(.*/)?contract/PklProject\.deps\.json|(.*/)?app/generated/.*|(.*/)?atlan\.yaml|(.*/)?app\.yaml' \
+              | grep -vxE '(.*/)?uv\.lock|(.*/)?package-lock\.json|(.*/)?requirements\.txt|(.*/)?pyproject\.toml|(.*/)?contract/PklProject|(.*/)?contract/PklProject\.deps\.json|app/generated/.*|atlan\.yaml|app\.yaml' \
               || true)
             if [ -n "$NON_DEP_FILES" ]; then
               echo "PR #${PR_NUM}: contains non-dependency files:"
