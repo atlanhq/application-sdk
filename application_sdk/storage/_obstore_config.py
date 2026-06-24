@@ -42,7 +42,9 @@ without changing the outcome (see BLDX-1155 review thread).
 
 from __future__ import annotations
 
+import contextlib
 import os
+import threading
 import urllib.request
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit, urlunsplit
@@ -185,6 +187,58 @@ def make_s3_store(
     return S3Store(**kw)  # type: ignore[arg-type]
 
 
+# obstore-rs reads ``AZURE_*`` from the environment at AzureStore construction
+# *unconditionally*, and its credential precedence (account key > SAS > client secret >
+# workload identity) lets a value injected into the host environment outrank the
+# credential the caller passed in ``config``. On an Azure-hosted node the pod carries
+# its own identity in ``AZURE_STORAGE_ACCESS_KEY`` and in ``AZURE_FEDERATED_TOKEN_FILE``
+# + ``AZURE_CLIENT_ID``; either silently overrides an explicit caller credential and
+# signs requests as the wrong principal (403 AuthenticationFailed / 401 AADSTS70025).
+# So when the caller supplies a standalone credential in ``config`` we construct the
+# store with all ``AZURE_*`` stripped from the environment, leaving obstore to resolve
+# from our ``config`` alone. Callers that pass no credential (managed / workload
+# identity) are left untouched so the ambient identity still applies.
+_AZURE_CREDENTIAL_CONFIG_KEYS = (
+    "azure_storage_account_key",
+    "azure_storage_client_secret",
+    "azure_storage_sas_key",
+    "azure_storage_token",
+)
+
+# os.environ is process-global, so serialize every AzureStore construction: an isolated
+# build (env temporarily stripped) must never overlap a concurrent build that relies on
+# the ambient AZURE_* env.
+_azure_store_build_lock = threading.Lock()
+
+
+def _azure_config_has_explicit_credential(config: dict[str, str] | None) -> bool:
+    """True if *config* carries a standalone Azure credential (account key / client
+    secret / SAS / bearer token) — i.e. the caller wants that credential used, not the
+    host's ambient identity."""
+    return bool(config) and any(config.get(k) for k in _AZURE_CREDENTIAL_CONFIG_KEYS)
+
+
+@contextlib.contextmanager
+def _suppress_ambient_azure_env(active: bool):
+    """Temporarily drop all ambient ``AZURE_*`` env vars when *active*.
+
+    Scoped to the synchronous AzureStore constructor (where obstore reads the
+    environment). Serialized by ``_azure_store_build_lock`` so an isolated build can't
+    strip the environment out from under a concurrent non-isolated build.
+    """
+    with _azure_store_build_lock:
+        if not active:
+            yield
+            return
+        saved = {
+            k: os.environ.pop(k) for k in list(os.environ) if k.startswith("AZURE_")
+        }
+        try:
+            yield
+        finally:
+            os.environ.update(saved)
+
+
 def make_azure_store(
     container: str,
     config: dict[str, str] | None = None,
@@ -195,7 +249,9 @@ def make_azure_store(
 ) -> ObjectStore:
     """Create an AzureStore with SDK-default client/retry config.
 
-    See :func:`make_s3_store` for rationale.
+    See :func:`make_s3_store` for rationale. When *config* carries an explicit
+    credential, the ambient ``AZURE_*`` environment is suppressed for the construction
+    so the host's own identity can't override it (see ``_suppress_ambient_azure_env``).
     """
     from obstore.store import AzureStore  # noqa: PLC0415
 
@@ -207,7 +263,8 @@ def make_azure_store(
     )
     if credential_provider is not None:
         kw["credential_provider"] = credential_provider
-    return AzureStore(**kw)  # type: ignore[arg-type]
+    with _suppress_ambient_azure_env(_azure_config_has_explicit_credential(config)):
+        return AzureStore(**kw)  # type: ignore[arg-type]
 
 
 def make_gcs_store(

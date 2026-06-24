@@ -9,11 +9,16 @@ timeout.
 
 from __future__ import annotations
 
+import os
 from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from application_sdk.storage._obstore_config import (
+    _azure_config_has_explicit_credential,
     log_obstore_config,
+    make_azure_store,
     obstore_client_options,
     obstore_retry_config,
 )
@@ -246,12 +251,12 @@ class TestBindingPlumbsClientOptions:
         kwargs = mock_s3.call_args.kwargs
         client_opts = kwargs.get("client_options") or {}
         retry_cfg = kwargs.get("retry_config") or {}
-        assert (
-            client_opts.get("timeout") == "42m"
-        ), f"timeout not plumbed into S3Store(client_options=...): {client_opts}"
-        assert (
-            retry_cfg.get("max_retries") == 7
-        ), f"retry max_retries not plumbed into S3Store(retry_config=...): {retry_cfg}"
+        assert client_opts.get("timeout") == "42m", (
+            f"timeout not plumbed into S3Store(client_options=...): {client_opts}"
+        )
+        assert retry_cfg.get("max_retries") == 7, (
+            f"retry max_retries not plumbed into S3Store(retry_config=...): {retry_cfg}"
+        )
 
 
 class TestCloudPlumbsClientOptions:
@@ -285,3 +290,111 @@ class TestCloudPlumbsClientOptions:
         retry_cfg = kwargs.get("retry_config") or {}
         assert client_opts.get("timeout") == "42m"
         assert retry_cfg.get("max_retries") == 7
+
+
+# ---------------------------------------------------------------------------
+# make_azure_store — ambient AZURE_* env isolation
+# ---------------------------------------------------------------------------
+
+
+class TestAzureAmbientEnvIsolation:
+    """obstore reads ``AZURE_*`` from the environment at construction and lets a
+    host-injected value outrank the caller's explicit credential. ``make_azure_store``
+    must strip the ambient env while building from an explicit credential, and leave it
+    in place for the managed/workload-identity case.
+    """
+
+    def _build_and_capture(self, config: dict | None) -> dict:
+        """Build via make_azure_store with ``obstore.store.AzureStore`` stubbed; return
+        the AZURE_* env visible *during* construction plus the kwargs passed to obstore."""
+        captured: dict = {}
+
+        def fake_azure_store(**kw):
+            captured["azure_env"] = {
+                k: v for k, v in os.environ.items() if k.startswith("AZURE_")
+            }
+            captured["kw"] = kw
+            return MagicMock(name="AzureStore")
+
+        with patch("obstore.store.AzureStore", new=fake_azure_store):
+            make_azure_store("container", config)
+        return captured
+
+    def test_explicit_account_key_strips_ambient_env_during_build(self, monkeypatch):
+        monkeypatch.setenv("AZURE_STORAGE_ACCESS_KEY", "host-key")
+        monkeypatch.setenv("AZURE_FEDERATED_TOKEN_FILE", "/var/run/token")
+        monkeypatch.setenv("AZURE_CLIENT_ID", "host-client")
+        cap = self._build_and_capture(
+            {
+                "azure_storage_account_name": "acct",
+                "azure_storage_account_key": "cust-key",
+            }
+        )
+        # no ambient identity leaks into the construction — only our config is used
+        assert cap["azure_env"] == {}
+        assert cap["kw"]["config"]["azure_storage_account_key"] == "cust-key"
+        # ambient env restored afterwards
+        assert os.environ["AZURE_STORAGE_ACCESS_KEY"] == "host-key"
+        assert os.environ["AZURE_FEDERATED_TOKEN_FILE"] == "/var/run/token"
+        assert os.environ["AZURE_CLIENT_ID"] == "host-client"
+
+    def test_explicit_client_secret_strips_ambient_env(self, monkeypatch):
+        monkeypatch.setenv("AZURE_STORAGE_ACCESS_KEY", "host-key")
+        monkeypatch.setenv("AZURE_FEDERATED_TOKEN_FILE", "/var/run/token")
+        cap = self._build_and_capture(
+            {
+                "azure_storage_account_name": "acct",
+                "azure_storage_client_id": "c",
+                "azure_storage_tenant_id": "t",
+                "azure_storage_client_secret": "s",
+            }
+        )
+        assert cap["azure_env"] == {}
+        assert os.environ["AZURE_STORAGE_ACCESS_KEY"] == "host-key"
+
+    def test_no_credential_preserves_ambient_env(self, monkeypatch):
+        # Managed / workload identity: the caller passed no standalone credential, so
+        # the host's ambient identity must stay visible to obstore.
+        monkeypatch.setenv("AZURE_STORAGE_ACCESS_KEY", "host-key")
+        monkeypatch.setenv("AZURE_FEDERATED_TOKEN_FILE", "/var/run/token")
+        cap = self._build_and_capture({"azure_storage_account_name": "acct"})
+        assert cap["azure_env"]["AZURE_STORAGE_ACCESS_KEY"] == "host-key"
+        assert cap["azure_env"]["AZURE_FEDERATED_TOKEN_FILE"] == "/var/run/token"
+
+    def test_ambient_env_restored_even_on_construction_error(self, monkeypatch):
+        monkeypatch.setenv("AZURE_STORAGE_ACCESS_KEY", "host-key")
+
+        def boom(**kw):
+            raise RuntimeError("construction failed")
+
+        with patch("obstore.store.AzureStore", new=boom):
+            with pytest.raises(RuntimeError, match="construction failed"):
+                make_azure_store(
+                    "container",
+                    {
+                        "azure_storage_account_name": "a",
+                        "azure_storage_account_key": "k",
+                    },
+                )
+        assert os.environ["AZURE_STORAGE_ACCESS_KEY"] == "host-key"
+
+    @pytest.mark.parametrize(
+        "config, expected",
+        [
+            ({"azure_storage_account_key": "k"}, True),
+            ({"azure_storage_client_secret": "s"}, True),
+            ({"azure_storage_sas_key": "sas"}, True),
+            ({"azure_storage_token": "tok"}, True),
+            ({"azure_storage_account_name": "a"}, False),  # managed identity
+            # SP without a secret → relies on workload identity, keep ambient env
+            ({"azure_storage_client_id": "c", "azure_storage_tenant_id": "t"}, False),
+            (
+                {"azure_storage_account_key": ""},
+                False,
+            ),  # empty value is not a credential
+            ({}, False),
+            (None, False),
+        ],
+    )
+    def test_explicit_credential_gate(self, config, expected):
+        assert _azure_config_has_explicit_credential(config) is expected
