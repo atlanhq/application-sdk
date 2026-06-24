@@ -36,9 +36,10 @@ Python and uv.
 
 > [!NOTE]
 > Prefer to run against an external Dapr sidecar and Temporal server to mirror
-> production? Install the [Dapr CLI](https://docs.dapr.io/getting-started/install-dapr-cli/)
-> and [Temporal CLI](https://docs.temporal.io/cli#install), then follow the
-> optional external-infrastructure section of the Getting Started guide.
+> production? You only need the [Temporal CLI](https://docs.temporal.io/cli#install) —
+> not the Dapr CLI; the SDK fetches the pinned `daprd` runtime for you and you run
+> it directly. Then follow the optional external-infrastructure section of the
+> Getting Started guide.
 
 > [!NOTE]
 > Your development environment is now ready! Head over to our [Getting Started Guide](../guides/getting-started.md) to learn how to:
