@@ -30,6 +30,13 @@ name: Build & Publish Atlan App
 
 on:
   workflow_call:
+    outputs:
+      ghcr_image:
+        description: "Immutable GHCR image ref that was built+pushed (e.g. ghcr.io/atlanhq/atlan-foo-app:branch-sha7). Lets callers consume the exact tag instead of recomputing it."
+        value: ${{ jobs.prepare.outputs.ghcr_image }}
+      dockerhub_image:
+        description: "Docker Hub image ref (set when published)."
+        value: ${{ jobs.prepare.outputs.dockerhub_image }}
     inputs:
       ref:
         description: "Branch or SHA to checkout and build (default: caller's ref)"
