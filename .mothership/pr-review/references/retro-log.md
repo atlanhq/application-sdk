@@ -75,31 +75,33 @@
   added: 2026-06-24
   source: ci-redundancy-audit
   reason: |
-    ruff (PLC0415, F401/F403, S110/S112, isort) and conformance E-series
-    (BareExceptPass / TypedExceptPass / MissingExceptionChaining) block
-    these mechanically.
+    ruff (PLC0415, F401/F403, S110/S112, isort) and the BLOCK-tier
+    conformance E-series rules (BareExceptPass / TypedExceptPass) block
+    these mechanically. NOTE: MissingExceptionChaining (missing `from
+    exc`) is WARN-tier — conformance surfaces it but does NOT block, so
+    it stays the reviewer's job (see the WARN-tier note below), not a
+    do-not-flag.
   applies_to:
     - "import not at top of module (PLC0415) — unless a justified lazy import"
     - "unused / star imports, import ordering (F401/F403/isort)"
     - "bare or typed except-pass / silent swallow (S110/S112)"
-    - "missing `from exc` exception chaining (E MissingExceptionChaining)"
   detection_to_skip:
     - "inline import / except-pass / from-exc presence checks"
 
-- pattern: "single-source conformance + Trivy rules"
+- pattern: "single-source BLOCK-tier conformance + Trivy rules"
   do_not_flag: true
   added: 2026-06-24
   source: ci-redundancy-audit
   reason: |
-    Each is blocked by exactly one deterministic gate already. Flag only
-    the scoping/judgment residue, never the mechanical match.
+    Each is blocked by exactly one deterministic gate already — a
+    BLOCK-tier conformance rule or the Trivy gate. Flag only the
+    scoping/judgment residue, never the mechanical match. WARN-tier
+    conformance rules are deliberately NOT listed here (CI surfaces but
+    does not block them) — see the WARN-tier note below; the reviewer
+    still owns those.
   applies_to:
-    - "stdlib json over orjson (conformance O OrjsonOverStdlibJson)"
     - "unpinned (non-SHA) GitHub Action ref (conformance C UnpinnedActionReference)"
-    - "missing integration-test marker (conformance T)"
-    - "direct temporalio/dapr import outside the adapter seam (conformance orchestration series)"
-    - "logger.critical() usage (conformance L LoggerCriticalUsage)"
-    - "error-code prefix / category-override mechanics (conformance E/P)"
+    - "error-code prefix / category-override mechanics (conformance E/P: ErrorCodePrefixMismatch, CategoryFieldOverride)"
     - "hardcoded secret detectable by Trivy secret scan; dependency CVE-with-fix (Trivy vuln gate)"
   detection_to_skip:
     - "patterns owned by a single blocking conformance/Trivy rule"
@@ -119,8 +121,19 @@
 
 > **Not on this list (still the reviewer's job — no deterministic gate):**
 > G3 determinism in `run()`/`@entrypoint`, G2 contract evolution
-> (field remove/rename/retype), performance rules other than orjson,
-> SQL/command-injection gating (CodeQL is detect-only / non-blocking),
-> `dict[str, Any]`/`Any` on general public signatures (pyright reporters
-> are warnings, not errors), and all structural / DX / test-design
-> judgment. Keep reviewing those.
+> (field remove/rename/retype), performance rules, SQL/command-injection
+> gating (CodeQL is detect-only / non-blocking), `dict[str, Any]`/`Any`
+> on general public signatures (pyright reporters are warnings, not
+> errors), and all structural / DX / test-design judgment. Keep
+> reviewing those.
+>
+> **WARN-tier conformance rules — conformance surfaces these but does NOT
+> block the PR, so the reviewer is the only enforcement. Flag them; do
+> NOT treat them as CI-covered:** missing `from exc` chaining
+> (`MissingExceptionChaining`), stdlib `json` over `orjson`
+> (`OrjsonOverStdlibJson`), missing integration-test marker
+> (`UnmarkedIntegrationTest`), direct `temporalio`/`dapr` import outside
+> the adapter seam (`DirectTemporalImport`,
+> `PrivateOrchestrationInternalImport`, `TemporalImportOutsideAdapter`,
+> `RawTemporalInPublicSurface`), and `logger.critical()` usage
+> (`LoggerCriticalUsage`).

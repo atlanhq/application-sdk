@@ -313,13 +313,14 @@ the above exception, another exception occurred` traceback that
 hides the original cause and breaks our error-classification
 pipeline (the wire-format `cause` field is empty).
 
-**Already enforced deterministically by the conformance gate**
-(series E `MissingExceptionChaining`), which blocks the PR
-regardless of this review. Do NOT raise a finding for the bare
-missing-`from exc` case — it is redundant with CI and is covered by
-the CI-enforced exclusion list in `retro-log.md`. The reviewer's
-residual value here is the *judgment* call only: e.g. a
-`from None` suppression that looks unintentional, or a wrapped
+The conformance gate surfaces this as series E
+`MissingExceptionChaining`, but that rule is **WARN-tier — it does NOT
+block the PR**. CI will not catch a missing `from exc`, so the reviewer
+is the only enforcement: **DO flag it.** (Contrast the BLOCK-tier
+`BareExceptPass` / `TypedExceptPass`, which CI *does* block and which
+`retro-log.md` correctly de-dupes — do not flag those.) Flag the bare
+missing-`from exc` case, and apply extra judgment to the harder calls:
+a `from None` suppression that looks unintentional, or a wrapped
 re-raise where the right `__cause__` is ambiguous.
 
 **Flag (judgment only) any new code that:**
