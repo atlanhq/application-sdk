@@ -38,8 +38,10 @@ Check that each tool is installed:
 python --version          # must be 3.11+
 uv --version
 temporal --version        # temporal CLI
-dapr --version
 ```
+
+> No Dapr CLI is required. The `daprd` runtime is fetched and pinned by the SDK
+> (`application_sdk.dev._dapr`) and invoked directly — see step 5.
 
 If any are missing, point the user to the platform setup guide:
 - [macOS](../../docs/setup/MAC.md)
@@ -102,7 +104,9 @@ else
     exit 1
   fi
 
-  dapr run \
+  # Resolve the pinned daprd binary via the SDK (no Dapr CLI), then run it directly.
+  DAPRD=$(uv run python -c "from application_sdk.dev._dapr import _ensure_daprd_binary; print(_ensure_daprd_binary())")
+  "$DAPRD" \
     --app-id app \
     --app-port 8000 \
     --dapr-http-port 3500 \
@@ -195,8 +199,8 @@ To stop all local processes cleanly:
 
 ```bash
 # Stop the app (Ctrl-C in the terminal running run_dev.py)
-# Stop Dapr
-dapr stop --app-id app
+# Stop Dapr (daprd was launched directly, so stop it directly)
+pkill -f "daprd --app-id app"
 # Stop Temporal (if started by this skill)
 pkill -f "temporal server"   # temporal has no "server stop" subcommand; use pkill or Ctrl-C
 ```
