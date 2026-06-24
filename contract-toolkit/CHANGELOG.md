@@ -6,6 +6,12 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.15.0] - 2026-06-24
+
+### Features
+
+- add e2eCredentialMode + widen ConditionalInput Literal for agent e2e (#2299) ([51995b2](https://github.com/atlanhq/application-sdk/commit/51995b2))
+
 ## [0.14.2] - 2026-06-22
 
 ### Bug fixes
