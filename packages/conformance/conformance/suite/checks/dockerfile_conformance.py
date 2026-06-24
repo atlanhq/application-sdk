@@ -1,10 +1,14 @@
 """I-series container image conformance checks.
 
 I001 — DockerfileWrongBaseImage
-    The final-stage FROM must be exactly
+    The final-stage FROM must resolve to exactly
     ``registry.atlan.com/public/app-runtime-base:3``.  Any other base image —
     wrong registry, wrong tag (including ``:latest``), or raw upstream Python —
-    is flagged.
+    is flagged.  A build-arg base (``ARG BASE_IMAGE=<approved>`` +
+    ``FROM ${BASE_IMAGE}``) is accepted when the ARG's default is the approved
+    image; this lets CI rebuild on a PR-scoped base via ``--build-arg`` while
+    keeping the committed default approved.  A build-arg with no default (or a
+    non-approved default) is flagged.
 
 I002 — DockerfileEntrypointOverride
     CMD and ENTRYPOINT must not appear in the Dockerfile.  The base image
@@ -275,6 +279,39 @@ def _final_stage_start_idx(instructions: list[_Instruction]) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Build-arg resolution (for FROM ${BASE_IMAGE} base images)
+# ---------------------------------------------------------------------------
+
+# A FROM image that is a single build-arg reference: ``${NAME}`` or ``$NAME``.
+# Docker supports only these two substitution forms in FROM — there is no
+# shell-style ``${NAME:-default}`` — so we deliberately do not parse one.
+_ARG_REF_RE = re.compile(
+    r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$|^\$([A-Za-z_][A-Za-z0-9_]*)$"
+)
+
+
+def _arg_defaults(instructions: list[_Instruction]) -> dict[str, str]:
+    """Map ``{ARG_NAME: default}`` from ``ARG NAME=default`` instructions.
+
+    Only the ``ARG NAME=value`` form sets a default.  A bare ``ARG NAME`` (no
+    ``=``) is the multi-stage re-import of a global ARG into a later stage's
+    scope and carries no value of its own — it must NOT clear an existing
+    default, so it is skipped rather than overwriting the map.
+    """
+    defaults: dict[str, str] = {}
+    for instr in instructions:
+        if instr.keyword != "ARG":
+            continue
+        for token in instr.args.split():
+            if "=" in token:
+                name, _, value = token.partition("=")
+                name = name.strip()
+                if name:
+                    defaults[name] = value
+    return defaults
+
+
+# ---------------------------------------------------------------------------
 # Per-rule checks
 # ---------------------------------------------------------------------------
 
@@ -297,6 +334,28 @@ def _check_i001(
         r"--platform(?:=\S+|\s+\S+)\s*", "", final_from.args, flags=re.IGNORECASE
     ).strip()
     image = args_clean.split()[0] if args_clean.split() else ""
+
+    # Resolve a build-arg base image (``FROM ${BASE_IMAGE}`` / ``$BASE_IMAGE``).
+    # Apps may parameterise the base via an ARG whose default pins the approved
+    # image, so CI can rebuild on a PR-scoped base with ``--build-arg`` (the
+    # SDK e2e flow does this).  The committed default must still be the approved
+    # image, so resolve the ARG default and validate *that*.  An unresolved
+    # reference — ARG missing entirely, or declared without a default — cannot
+    # be proven to build the approved base and is rejected with its own message.
+    arg_match = _ARG_REF_RE.match(image)
+    if arg_match is not None:
+        arg_name = arg_match.group(1) or arg_match.group(2)
+        default = _arg_defaults(instructions).get(arg_name, "").strip()
+        if default:
+            image = default
+        else:
+            msg = (
+                f"FROM uses build-arg '{image}' but no resolvable default is "
+                f"declared. Add 'ARG {arg_name}={_REQUIRED_BASE}' before the "
+                "FROM so the image builds the approved base by default; the "
+                "build-arg may still be overridden at build time."
+            )
+            return [_make_finding(RULE_I001, file, final_from.line, msg, directives)]
 
     # Accept the canonical base image with or without a digest pin.
     # Digest pinning is strictly stronger than the v3 major tag alone —
