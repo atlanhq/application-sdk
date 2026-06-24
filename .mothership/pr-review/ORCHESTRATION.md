@@ -912,18 +912,9 @@ in sync with the human-readable `### Verdict:` line below. The token
 after `VERDICT:` MUST be one of: `READY_TO_MERGE`, `NEEDS_FIXES`,
 `BLOCKED`, `NEEDS_HUMAN`, `NEEDS_REBASE`.
 
-The third marker `<!-- SDK_REVIEW_HEAD: <sha> -->` records the exact
-`HEAD_SHA` this review describes. The GHA workflow uses it as a
-**same-HEAD debounce**: a fresh `@sdk-review` with empty intent on a
-commit that already carries a `SDK_REVIEW_HEAD` marker for that SHA is
-skipped before the sandbox is even dispatched (a new commit changes the
-SHA → re-runs; any non-empty intent → always re-runs). Substitute the
-literal `HEAD_SHA` value from the prompt header — never a placeholder.
-
 ```
 <!-- SDK_REVIEW -->
 <!-- VERDICT: READY_TO_MERGE | NEEDS_FIXES | BLOCKED | NEEDS_HUMAN | NEEDS_REBASE -->
-<!-- SDK_REVIEW_HEAD: <HEAD_SHA> -->
 ## SDK <Review | Re-review> (mothership): PR #<number> — <title>
 <!-- For review_scope=contract-toolkit, write this heading as:
      "Contract Toolkit <Review | Re-review> (mothership)".

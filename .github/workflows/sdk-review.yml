@@ -76,23 +76,7 @@ permissions:
   checks: write
 
 jobs:
-  # Same-HEAD debounce. A real review is expensive (VPN + sandbox dispatch
-  # + up to a 2h SSE block) and the mothership SSE stream can drop mid-run,
-  # so the cheapest win is to NOT dispatch at all when this exact commit was
-  # already reviewed. This job runs BEFORE the dispatch job (which owns VPN
-  # + the sandbox) so a skip costs only a couple of `gh` API calls — it never
-  # enters the window where the stream can die.
-  #
-  # Skip ONLY when: the trigger is an issue_comment with EMPTY intent (just
-  # `@sdk-review`, no trailing text) AND a prior review summary carries the
-  # `<!-- SDK_REVIEW_HEAD: <head_sha> -->` marker for the current HEAD.
-  #   - A new commit changes head_sha → no marker match → re-runs.
-  #   - Any free-form intent text → always re-runs (challenge / focus / fix).
-  #   - workflow_dispatch (manual test path) → never debounced.
-  #   - A failed prior run left no SDK_REVIEW_HEAD marker → re-runs.
-  # This kills empty-intent re-trigger churn (repeated `@sdk-review` on an
-  # unchanged, already-approved HEAD) without blocking legitimate re-reviews.
-  debounce:
+  sdk-review-dispatch:
     if: >-
       github.event_name == 'workflow_dispatch'
       || (
@@ -104,77 +88,6 @@ jobs:
           || github.event.comment.author_association == 'COLLABORATOR'
         )
       )
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      skip: ${{ steps.check.outputs.skip }}
-    steps:
-      - name: Decide whether this HEAD was already reviewed
-        id: check
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        with:
-          script: |
-            // Manual dispatch is a test path — always run a real review.
-            if (context.eventName === 'workflow_dispatch') {
-              core.setOutput('skip', 'false');
-              return;
-            }
-
-            // Empty intent = bare "@sdk-review" with no trailing text.
-            const raw = context.payload.comment.body || '';
-            const intent = raw.replace(/@sdk-review/gi, '').replace(/^\s+|\s+$/g, '');
-            if (intent !== '') {
-              console.log('Non-empty intent — always run a fresh review.');
-              core.setOutput('skip', 'false');
-              return;
-            }
-
-            const prNumber = context.payload.issue.number;
-            const { data: pr } = await github.rest.pulls.get({
-              owner: context.repo.owner, repo: context.repo.repo, pull_number: prNumber,
-            });
-            const headSha = pr.head.sha;
-
-            const comments = await github.paginate(github.rest.issues.listComments, {
-              owner: context.repo.owner, repo: context.repo.repo,
-              issue_number: prNumber, per_page: 100,
-            });
-
-            // Did a prior SDK review describe THIS exact HEAD?
-            const headMarker = `<!-- SDK_REVIEW_HEAD: ${headSha} -->`;
-            const prior = [...comments].reverse().find(c => (c.body || '').includes(headMarker));
-            if (!prior) {
-              console.log(`No prior review for HEAD ${headSha} — running a fresh review.`);
-              core.setOutput('skip', 'false');
-              return;
-            }
-
-            const vm = (prior.body || '').match(/<!--\s*VERDICT:\s*([A-Z_]+)\s*-->/);
-            const verdict = vm ? vm[1] : 'previously reviewed';
-
-            // Avoid debounce-notice spam: only post one skip note per HEAD.
-            const debounceMarker = `<!-- SDK_REVIEW_DEBOUNCE: ${headSha} -->`;
-            const alreadyNoted = comments.some(c => (c.body || '').includes(debounceMarker));
-            if (!alreadyNoted) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner, repo: context.repo.repo, issue_number: prNumber,
-                body: [
-                  debounceMarker,
-                  `🔁 **SDK Review skipped** — commit \`${headSha.slice(0, 8)}\` was already reviewed (verdict: \`${verdict}\`). No new sandbox was dispatched.`,
-                  ``,
-                  `Push a new commit, or re-comment \`@sdk-review <what to focus on>\` **with text** to force a fresh review.`,
-                ].join('\n'),
-              });
-            }
-            console.log(`Debounced: prior review found for HEAD ${headSha}, verdict=${verdict}`);
-            core.setOutput('skip', 'true');
-
-  sdk-review-dispatch:
-    needs: debounce
-    # Run only when the debounce job actually ran (trigger gate passed) and
-    # did NOT decide to skip. If `debounce` is skipped (non-trigger), its
-    # result is not 'success' and this job is skipped too.
-    if: needs.debounce.result == 'success' && needs.debounce.outputs.skip != 'true'
     runs-on: ubuntu-latest
     # Total budget: 5 min for orient + retries + dispatch.
     # The sandbox itself runs for up to 2h (max_timeout_seconds: 7200),
