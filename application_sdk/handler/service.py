@@ -1716,11 +1716,17 @@ def _register_workflow_routes(
         if target is not None:
             with open(target) as f:
                 raw = json.load(f)
+            data: dict[str, Any] = {"config": json.dumps(raw.get("config", raw))}
+            # Some configmaps (e.g. connector apps) carry a top-level
+            # `defaultConnectorType`; surface it alongside `config` when present.
+            default_connector_type = raw.get("defaultConnectorType")
+            if default_connector_type is not None:
+                data["defaultConnectorType"] = default_connector_type
             configmap = {
                 "kind": "ConfigMap",
                 "apiVersion": "v1",
                 "metadata": {"name": config_map_id},
-                "data": {"config": json.dumps(raw.get("config", raw))},
+                "data": data,
             }
             return JSONResponse(
                 content=_wrap_response(
