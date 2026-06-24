@@ -82,9 +82,9 @@ def test_workflow_scenario_gets_agent_routing_args(workflow_scenario: Scenario) 
     args = suite._build_scenario_args(workflow_scenario)
     assert args["extraction_method"] == "agent"
     assert args["agent_json"] == _Suite.agent_spec_template
-    assert (
-        "workflow_type" not in args
-    ), "workflow_type only injected when subclass sets it"
+    assert "workflow_type" not in args, (
+        "workflow_type only injected when subclass sets it"
+    )
 
 
 def test_workflow_scenario_with_workflow_type_set(workflow_scenario: Scenario) -> None:
