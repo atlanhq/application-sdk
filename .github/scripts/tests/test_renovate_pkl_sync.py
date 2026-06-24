@@ -146,6 +146,26 @@ def test_regenerate_true_success_regenerates_and_commits(repo, monkeypatch):
     )
 
 
+def test_default_regenerates(repo, monkeypatch):
+    # No --regenerate flag -> regeneration is the default (opt-out model).
+    monkeypatch.setattr(mod, "run", _make_fake_run(repo, eval_rc=0))
+    before = _commit_count(repo)
+
+    assert mod.main([]) == 0
+
+    assert (repo / "app" / "generated" / "manifest.json").read_text() == FRESH_MANIFEST
+    assert _commit_count(repo) == before + 1
+    assert (
+        mod.COMMIT_MESSAGE_REGEN
+        in subprocess.run(
+            ["git", "log", "-1", "--pretty=%s"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+        ).stdout
+    )
+
+
 def test_regenerate_eval_failure_falls_back_to_lock_only(repo, monkeypatch):
     monkeypatch.setattr(mod, "run", _make_fake_run(repo, eval_rc=1))
     before = _commit_count(repo)

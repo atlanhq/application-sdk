@@ -24,10 +24,9 @@ branching cannot be regression-tested.
 Safety contract — regeneration can never make a toolkit PR *worse* than a pure
 re-resolve:
 
-  * Opt-in: regeneration only runs when ``--regenerate true``. Off by default,
-    so an app is never auto-regenerated until its owner has confirmed the
-    contract regenerates to working output (and wired the input). Apps with no
-    sync caller at all are unaffected.
+  * Opt-out: regeneration runs by default (``--regenerate true``); an app opts
+    out with ``--regenerate false`` (e.g. hand-maintained generated config, or
+    a layout this can't drive). Apps with no sync caller at all are unaffected.
   * Non-fatal: a failed ``pkl eval`` logs a warning and degrades to a lock-only
     sync rather than failing the job.
   * Atomic: eval writes into a temp dir and is swapped into the working tree
@@ -179,9 +178,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--regenerate",
-        default="false",
-        help="'true' to also regenerate app/generated/** via pkl eval; "
-        "anything else re-resolves the lock only (default: false).",
+        default="true",
+        help="'true' (default) to also regenerate app/generated/** via pkl "
+        "eval; 'false' to re-resolve the lock only.",
     )
     args = parser.parse_args(argv)
     regenerate_enabled = str(args.regenerate).strip().lower() == "true"

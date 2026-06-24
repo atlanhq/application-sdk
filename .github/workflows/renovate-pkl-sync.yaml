@@ -10,10 +10,11 @@ name: Sync Pkl contract artifacts for Renovate (Reusable)
 #
 #   1. contract/PklProject.deps.json — the Pkl lock. Always re-resolved.
 #   2. app/generated/** (+ atlan.yaml / app.yaml) — the generated artifacts.
-#      Regenerated via `pkl eval` ONLY when regenerate-contract: true, since a
-#      toolkit bump can change generated output. Off by default: an app opts in
-#      after confirming its contract regenerates to working output. A failed
-#      eval degrades to a lock-only sync (never worse than re-resolve alone).
+#      Regenerated via `pkl eval` by default (regenerate-contract: true), since
+#      a toolkit bump can change generated output and a lock-only sync would
+#      leave it stale. An app opts OUT with regenerate-contract: false (e.g.
+#      hand-maintained generated config, or a layout this can't drive). A
+#      failed eval degrades to a lock-only sync (never worse than re-resolve).
 #
 # Scope: standard repo-root layout (contract/PklProject, contract/app.pkl,
 # output at the repo root). Non-standard layouts (app/contract/, monorepo
@@ -30,9 +31,9 @@ name: Sync Pkl contract artifacts for Renovate (Reusable)
 #   jobs:
 #     sync:
 #       uses: atlanhq/application-sdk/.github/workflows/renovate-pkl-sync.yaml@main
-#       # opt in to artifact regeneration once the contract is validated:
+#       # artifact regeneration is ON by default; opt OUT with:
 #       # with:
-#       #   regenerate-contract: true
+#       #   regenerate-contract: false
 #
 # The GITHUB_TOKEN in the called workflow inherits the caller's contents:write
 # permission, which is enough to commit and push to the renovate/** branch.
@@ -47,12 +48,12 @@ on:
         type: string
       regenerate-contract:
         description: >
-          When true, also regenerate app/generated/** (+ atlan.yaml/app.yaml)
-          via `pkl eval`, not just the lock. Default false — opt in per app
-          only after confirming the contract regenerates to working output, so
-          a bump can't silently overwrite hand-tuned generated config.
+          Regenerate app/generated/** (+ atlan.yaml/app.yaml) via `pkl eval`,
+          not just the lock. Default true — a toolkit bump otherwise leaves the
+          generated artifacts stale. Set false to opt out (e.g. an app with
+          hand-maintained generated config, or a layout this can't drive).
         required: false
-        default: false
+        default: true
         type: boolean
     secrets:
       push_token:
