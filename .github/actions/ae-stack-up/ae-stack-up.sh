@@ -66,12 +66,18 @@ PYEOF
 log "DAG needs sibling apps: $(echo "$NEEDS" | cut -d'|' -f1 | tr '\n' ' ' )"
 
 # ── 2. Toolchain: Dapr (slim) + Temporal CLI + uv ────────────────────────────
-DAPR_CLI_VERSION="1.18.0"
-DAPR_RUNTIME_VERSION="1.18.0"
+# Single source of truth for the daprd pin is __dapr_version in
+# application_sdk/version.py. This action ships inside the application-sdk repo,
+# so version.py sits three dirs up from the action dir; grep it (the same
+# one-liner check-dapr-version.yaml and the SDK docstring sanction) rather than
+# hard-coding. The CLI download and the daprd runtime share the one version.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DAPR_VERSION="$(grep '^__dapr_version' "$SCRIPT_DIR/../../../application_sdk/version.py" | cut -d'"' -f2)"
+[ -n "$DAPR_VERSION" ] || err "could not read __dapr_version from application_sdk/version.py"
 if ! command -v dapr >/dev/null 2>&1; then
-  wget -q "https://github.com/dapr/cli/releases/download/v${DAPR_CLI_VERSION}/dapr_linux_amd64.tar.gz" -O /tmp/dapr.tar.gz
+  wget -q "https://github.com/dapr/cli/releases/download/v${DAPR_VERSION}/dapr_linux_amd64.tar.gz" -O /tmp/dapr.tar.gz
   tar -xzf /tmp/dapr.tar.gz -C /tmp && sudo mv /tmp/dapr /usr/local/bin/
-  dapr init --runtime-version "${DAPR_RUNTIME_VERSION}" --slim
+  dapr init --runtime-version "${DAPR_VERSION}" --slim
 fi
 command -v temporal >/dev/null 2>&1 || curl -sSf https://temporal.download/cli.sh | sh
 export PATH="$HOME/.dapr/bin:$HOME/.temporalio/bin:$PATH"

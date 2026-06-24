@@ -2740,8 +2740,25 @@ local function getSubsFieldLine(k: String, u: Widgets.UIElement): String? =
     if (ci.outputValueType == "object")
       fmtSubsField(pyName, "dict[str, Any] | None", "default=None", k)
     else if (ci.baseWidgetType == "radio" && ci.baseEnum != null && !ci.baseEnum!!.isEmpty)
-      let (litStr = (new Listing { for (v in ci.baseEnum!!) { "\"\(v)\"" } }).toList().join(", "))
-      let (defVal = if (ci.default != null) ci.default!!.toString() else ci.baseEnum!!.toList().first)
+      // A ConditionalInput's value space is the union of `baseEnum` and every
+      // `conditions[].overrideEnum` (e.g. extraction-method exposes "agent" only
+      // when a lab flag is on). The Literal must admit all of them, or AGENT-mode
+      // e2e can't set extraction_method="agent". Base values first, then override
+      // values not already present, deduped while preserving order.
+      let (baseVals = ci.baseEnum!!.toList())
+      let (overrideVals = (new Listing {
+            when (ci.conditions != null) {
+              for (c in ci.conditions!!) {
+                when (c.overrideEnum != null) {
+                  for (v in c.overrideEnum!!) { v }
+                }
+              }
+            }
+          }).toList())
+      let (allVals = (baseVals + overrideVals)
+            .fold(List(), (acc: List<String>, v: String) -> if (acc.contains(v)) acc else acc.add(v)))
+      let (litStr = (new Listing { for (v in allVals) { "\"\(v)\"" } }).toList().join(", "))
+      let (defVal = if (ci.default != null) ci.default!!.toString() else baseVals.first)
       fmtSubsField(pyName, "Literal[\(litStr)]", "default=\"\(defVal)\"", k)
     else
       fmtSubsField(pyName, "str", "default=\"\(if (ci.default != null) ci.default!!.toString() else "")\"", k)
@@ -2826,6 +2843,25 @@ local function credFieldLine(f: FieldSpec, authSpecific: Boolean): String =
     "    \(pyName): \(pyType) = Field(alias=\"\(f.name)\")"
   else
     "    \(pyName): \(pyType) = Field(default=\(defExpr), alias=\"\(f.name)\")"
+
+// Lightweight agent (SDR) credential body, appended after the direct body so a
+// single `_e2e_credential.py` carries BOTH `<Cname>CredentialBody` (direct) and
+// `<Cname>AgentCredentialBody` (agent). The e2e test picks the shape per RunMode;
+// the credential mode is a per-run concern, not a contract property. Agent mode
+// omits all inline credential fields: the harness serialises the body with a
+// plain `model_dump(by_alias=True)` (no `exclude_unset`), so an inline
+// host/username/password would be sent on the wire and make the orchestrator
+// treat the submit as a direct credential — skipping credential creation and
+// leaving `{{credentialGuid}}` unsubstituted. Real creds live in the agent's
+// secret store, resolved at runtime via agent-json ref keys.
+local function agentCredentialClass(cname: String, firstAuthKey: String): String =
+  "\n\nclass \(cname)AgentCredentialBody(CredentialBody):\n" +
+  "    name: str = Field(alias=\"name\")\n" +
+  "    auth_type: str = Field(default=\"\(firstAuthKey)\", alias=\"authType\")\n" +
+  "    connector_config_name: str = Field(\n" +
+  "        default=\"\(connectorConfigName)\", alias=\"connectorConfigName\"\n" +
+  "    )\n" +
+  "    extra: dict = Field(default_factory=dict, alias=\"extra\")\n"
 
 local function generateE2ECredentialPy(): FileOutput? =
   if (!(hasCredentialConfig && credentialAuthOptions != null && !credentialAuthOptions!!.isEmpty))
@@ -2978,7 +3014,8 @@ local function generateE2ECredentialPy(): FileOutput? =
       "from application_sdk.testing.e2e.credential import CredentialBody\n" +
       extraModelBlock +
       "\n\nclass \(cname)CredentialBody(CredentialBody):\n" +
-      mainClassBody
+      mainClassBody +
+      agentCredentialClass(cname, firstAuthKey)
   }
 
 // ── atlan.yaml generation ─────────────────────────────────────────────────────

@@ -16,12 +16,16 @@ description: |
 
   Steps:
   - Sets up Python + uv via `setup-deps` (which also checks out the caller repo).
-  - Installs Dapr CLI + Temporal CLI.
-  - Starts Dapr + Temporal (`poe start-deps`).
-  - Starts the connector app server (`python main.py`) and waits for health.
+  - Starts the connector app server (`python main.py`) and waits for health. On
+    SDK >= 3.13 this boots an embedded daprd + in-process Temporal itself
+    (`application_sdk.dev`), so no external runtime install is needed — that is
+    the default.
+  - Only on SDK < 3.13 (or when `force-external-runtime: true`): installs the
+    Dapr CLI + Temporal CLI and starts them via `poe start-deps` before the app
+    server. The daprd version then follows the SDK's pinned `__dapr_version`.
   - Runs `pytest tests/integration/` with pytest-xdist for in-process parallelism.
   - Uploads junit XML + raw test output as artifacts.
-  - Cleans up app server + Dapr/Temporal.
+  - Cleans up the app server (and the external Dapr/Temporal when they were started).
 
   pytest-xdist is installed transiently via `uv run --with pytest-xdist` so the
   caller does not need to declare it as a dependency.
@@ -100,14 +104,21 @@ inputs:
     required: false
     description: How long to wait for the app server to become healthy.
     default: "60"
+  # MIGRATION: the separate ``dapr-cli-version`` input was removed — the CLI now
+  # always tracks the runtime version (one ``dapr-version`` drives both). GitHub
+  # Actions silently ignores unknown ``with:`` keys, so a caller still passing
+  # ``dapr-cli-version:`` won't error — that override is simply no longer honoured.
   dapr-version:
     required: false
-    description: Dapr runtime version to install.
-    default: "1.18.0"
-  dapr-cli-version:
-    required: false
-    description: Dapr CLI version to download (may differ from the runtime version).
-    default: "1.18.0"
+    description: |
+      Dapr version used for BOTH the CLI download and the daprd runtime.
+      Leave empty (the default) to read the SDK's pinned ``__dapr_version``
+      from ``application_sdk/version.py`` — the single source of truth, bumped
+      by ``.github/workflows/check-dapr-version.yaml``. Set this only to force a
+      specific version (e.g. to reproduce an issue on an older daprd).
+
+      (Replaces the removed ``dapr-cli-version`` input — see note above.)
+    default: ""
   force-external-runtime:
     required: false
     description: >
@@ -201,14 +212,27 @@ runs:
     - name: Install Dapr CLI
       if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
       shell: bash
+      env:
+        DAPR_VERSION_INPUT: ${{ inputs.dapr-version }}
       run: |
-        DAPR_CLI_VERSION="${{ inputs.dapr-cli-version }}"
-        DAPR_RUNTIME_VERSION="${{ inputs.dapr-version }}"
-        wget -q "https://github.com/dapr/cli/releases/download/v${DAPR_CLI_VERSION}/dapr_linux_amd64.tar.gz" -O /tmp/dapr.tar.gz
+        # Default to the SDK's pinned __dapr_version (single source of truth).
+        # This action ships inside application-sdk, so version.py sits three
+        # dirs up from the action dir. An explicit dapr-version input overrides.
+        # The CLI download and the daprd runtime share the one version.
+        DAPR_VERSION="${DAPR_VERSION_INPUT}"
+        if [ -z "$DAPR_VERSION" ]; then
+          DAPR_VERSION="$(grep '^__dapr_version' "${{ github.action_path }}/../../../application_sdk/version.py" | cut -d'"' -f2)"
+        fi
+        if [ -z "$DAPR_VERSION" ]; then
+          echo "::error::Could not resolve Dapr version (input empty and __dapr_version unreadable)"
+          exit 1
+        fi
+        echo "Using Dapr version: $DAPR_VERSION"
+        wget -q "https://github.com/dapr/cli/releases/download/v${DAPR_VERSION}/dapr_linux_amd64.tar.gz" -O /tmp/dapr.tar.gz
         tar -xzf /tmp/dapr.tar.gz -C /tmp
         sudo mv /tmp/dapr /usr/local/bin/
         chmod +x /usr/local/bin/dapr
-        dapr init --runtime-version "${DAPR_RUNTIME_VERSION}" --slim
+        dapr init --runtime-version "${DAPR_VERSION}" --slim
 
     - name: Install Temporal CLI
       if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
