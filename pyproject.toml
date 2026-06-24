@@ -183,7 +183,7 @@ stop-deps.shell = "lsof -ti:3000,3500,7233,8233,50001 | xargs kill -9 2>/dev/nul
 # `temporal server start-dev` or daprd needed. Set TEMPORAL_HOST to point at
 # an already-running server instead.
 test-integration = "pytest tests/integration/ -m integration -v --timeout=120"
-test-scripts = "bats .github/scripts/tests"
+test-scripts = "bats .github/scripts/tests"  # requires: bats-core (apt-get install -y bats)
 
 # API docs — must be before any sub-table header ([tool.poe.tasks.*])
 # or TOML nests it inside the sub-table rather than the parent tasks namespace
