@@ -121,6 +121,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # orchestration layer through the SDK seam, not Temporal/SDK-internals
     # (BLDX-1417). P008–P012: apps must use the SDK's storage seam, not
     # hand-roll object stores or bare path fields (BLDX-1398).
+    # P013/P014: apps must declare typed Input/Output contracts on all
+    # entrypoints and tasks (BLDX-1413). P015: contract fields should use
+    # typed models, not containers of primitives (BLDX-1413).
     # P016: entry-point contract/code alignment — only apps have a Pkl contract
     # and app/generated/ dirs; the SDK itself has no @entrypoint-decorated App
     # methods and no contract to drift from (BLDX-1425).
@@ -143,6 +146,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P010",
         "P011",
         "P012",
+        "P013",
+        "P014",
+        "P015",
         "P016",
         "I001",
         "I002",
@@ -249,10 +255,11 @@ def test_catalog_d_series_present() -> None:
 
 
 def test_catalog_p_series_present() -> None:
-    """The P-series prescription rules are exactly P001–P012 plus P016.
+    """The P-series prescription rules are exactly P001–P015 plus P016.
 
     Strict equality (not just not-missing): P004–P007 are the orchestration-seam
     rules (BLDX-1417); P008–P012 are the storage-seam rules (BLDX-1398);
+    P013–P015 are the typed-contract-boundary rules (BLDX-1413);
     P016 is the entry-point contract/code alignment rule (BLDX-1425).  A stray
     or renumbered P-id would slip past a subset check while breaking fleet-wide
     ``# conformance: ignore[Pxxx]`` suppressions.
@@ -272,6 +279,9 @@ def test_catalog_p_series_present() -> None:
         "P010",
         "P011",
         "P012",
+        "P013",
+        "P014",
+        "P015",
         "P016",
     }
     missing = expected - p_ids

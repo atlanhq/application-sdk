@@ -124,7 +124,7 @@ _SERIES_META: list[SeriesMeta] = [
         ),
         output_filename="prescriptions.md",
         checker=(
-            "`suite.checks.prescriptions` (P001–P003, P008–P012), "
+            "`suite.checks.prescriptions` (P001–P003, P008–P015), "
             "`suite.checks.orchestration` (P004–P007, scans test files too), "
             "`suite.checks.entrypoint_alignment` (P016) "
             "(all AST-based)"
