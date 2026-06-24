@@ -89,4 +89,42 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/ci.md#c003",
     ),
+    RuleDefinition(
+        id="C004",
+        scope=RuleScope.APP,
+        name="ForceExternalRuntimeDrift",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="ci-consistency",
+        autofixable=False,
+        since="0.6.0",
+        rationale=(
+            "The connector-integration-tests action's `force-external-runtime` "
+            "input is only needed on atlan-application-sdk < 3.13. On >= 3.13 the "
+            "standard `run_dev_combined()` entry boots an in-process (embedded) "
+            "daprd + Temporal itself, so forcing the external runtime stands up a "
+            "second runtime in CI — the embedded one roots its object store at "
+            "./local/objectstore, the external one at ./local/dapr/objectstore. "
+            "That is wasteful and a known source of 'component not found' / "
+            "wrong-objectstore-root flakiness. Leaving the flag set after an SDK "
+            "bump is silent drift from the embedded-runtime baseline."
+        ),
+        short_description=(
+            "Workflow forces the external Dapr/Temporal runtime (redundant on "
+            "SDK >= 3.13)"
+        ),
+        full_description=(
+            "Flags any `.github/workflows/*` line that sets "
+            "`force-external-runtime: true` for the connector-integration-tests "
+            "action. On atlan-application-sdk >= 3.13 `run_dev_combined()` already "
+            "boots an embedded daprd + Temporal, so the flag is redundant and "
+            "starts a duplicate runtime in CI. Once the app's integration suite "
+            "passes without it, remove the line so CI runs the embedded runtime — "
+            "the v3 reference connectors (atlan-metabase-app, atlan-openapi-app, "
+            "atlan-mysql-app) already do. WARN only (never blocks). A connector "
+            "genuinely still on SDK < 3.13 is the legitimate exception and can "
+            "acknowledge it with `# conformance: ignore[C004] <reason>`."
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/ci.md#c004",
+    ),
 )

@@ -126,6 +126,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     assert app_scoped == {
         "B001",
         "C002",
+        "C004",
         "D001",
         "D002",
         "D004",

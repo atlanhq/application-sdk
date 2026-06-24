@@ -5,7 +5,7 @@
 
 # CI/Workflow Supply-Chain Rules (C-series)
 
-**3 rules** · Checker: `suite.checks.actions_pinning` and related workflow checks (static)
+**4 rules** · Checker: `suite.checks.actions_pinning` and related workflow checks (static)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -18,6 +18,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [C001](#c001) | `UnpinnedActionReference` | `block` | `both` | `supply-chain` | yes | 0.2.0 |
 | [C002](#c002) | `BootstrapWorkflowDrift` | `warn` | `app` | `ci-consistency` | yes | 0.3.0 |
 | [C003](#c003) | `GitignoreMissingEntry` | `warn` | `both` | `ci-consistency` | — | 0.4.0 |
+| [C004](#c004) | `ForceExternalRuntimeDrift` | `warn` | `app` | `ci-consistency` | — | 0.6.0 |
 
 ---
 
@@ -74,5 +75,30 @@ from the file. One finding is emitted per missing entry so each can be triaged o
 suppressed independently. Equivalences are respected: `.venv` covers `.venv/`, and
 `**/node_modules/**` covers `node_modules/`. Both absent-file and missing-entry findings
 are WARN only — the file is app-editable and must never block CI.
+
+---
+
+## C004 — `ForceExternalRuntimeDrift` {#c004}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `ci-consistency` · **Autofixable:** — · **Since:** 0.6.0
+
+> Workflow forces the external Dapr/Temporal runtime (redundant on SDK >= 3.13)
+
+**Rationale:** The connector-integration-tests action's `force-external-runtime` input is only needed
+on atlan-application-sdk < 3.13. On >= 3.13 the standard `run_dev_combined()` entry
+boots an in-process (embedded) daprd + Temporal itself, so forcing the external runtime
+stands up a second runtime in CI — the embedded one roots its object store at
+./local/objectstore, the external one at ./local/dapr/objectstore. That is wasteful and
+a known source of 'component not found' / wrong-objectstore-root flakiness. Leaving the
+flag set after an SDK bump is silent drift from the embedded-runtime baseline.
+
+Flags any `.github/workflows/*` line that sets `force-external-runtime: true` for the
+connector-integration-tests action. On atlan-application-sdk >= 3.13
+`run_dev_combined()` already boots an embedded daprd + Temporal, so the flag is
+redundant and starts a duplicate runtime in CI. Once the app's integration suite passes
+without it, remove the line so CI runs the embedded runtime — the v3 reference
+connectors (atlan-metabase-app, atlan-openapi-app, atlan-mysql-app) already do. WARN
+only (never blocks). A connector genuinely still on SDK < 3.13 is the legitimate
+exception and can acknowledge it with `# conformance: ignore[C004] <reason>`.
 
 ---

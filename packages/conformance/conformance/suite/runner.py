@@ -30,6 +30,7 @@ from conformance.suite.checks import (
     deprecation,
     dockerfile_conformance,
     error_handling,
+    force_external_runtime_drift,
     gitignore_entries,
     integration_marking,
     optimizations,
@@ -64,6 +65,11 @@ _CHECKS: list[CheckRegistration] = [
         series=actions_pinning.SERIES,
         discover=actions_pinning.discover,
         scan_path=actions_pinning.scan_path,
+    ),
+    CheckRegistration(
+        series=force_external_runtime_drift.SERIES,
+        discover=force_external_runtime_drift.discover,
+        scan_path=force_external_runtime_drift.scan_path,
     ),
     CheckRegistration(
         series=bootstrap_drift.SERIES,
