@@ -132,13 +132,15 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
                 args["workflow_type"] = self.workflow_type
         return args
 
-    def _manifest_extract_inputs(self) -> tuple[dict[str, Any], str | None]:
-        """Load the connector's manifest and return its extract node's
-        ``(args, workflow_type)``.
+    def _manifest_extract_inputs(self) -> dict[str, Any]:
+        """Load the connector's manifest and return its extract node's ``args``.
 
         Raises if the manifest is missing or has no ``dag.extract.inputs.args``
         — a manifest-driven SDR test with no usable extract node is a config
         error, not something to silently fall back on.
+
+        Note: the sibling ``inputs.workflow_type`` (the AE workflow-type slug) is
+        deliberately NOT read — see :meth:`_workflow_args_from_manifest`.
         """
         path = Path(self.manifest_path)
         if not path.is_absolute():
@@ -155,41 +157,53 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
                 f"Manifest at {path} has no `dag.extract.inputs.args` object — "
                 "cannot derive the workflow input from it."
             )
-        return inputs["args"], inputs.get("workflow_type")
+        return inputs["args"]
 
     def _workflow_args_from_manifest(self, base_args: dict[str, Any]) -> dict[str, Any]:
         """Build workflow input from the manifest's extract args + substitutions.
 
-        The substitution keys/literals mirror
+        Only ``dag.extract.inputs.args`` is substituted — exactly like the e2e /
+        full_dag walker. The substitution keys are the manifest mustache
+        literals; the map is a *superset* of
         :class:`application_sdk.testing.e2e.substitutions.SQLMustacheSubstitutions`
-        (the e2e harness's canonical map); built directly here so the connection
-        dict and agent spec the SDR test already holds pass straight through.
+        (it also fills ``{{temp-table-regex}}``, and uses an empty
+        ``{{credential-guid}}`` rather than the AE-runtime ``"{{credentialGuid}}"``
+        default — agent mode resolves the credential via ``agent_json``, and an
+        empty guid is falsy / treated-as-absent by the extractor).
         """
-        extract_args, manifest_wf_type = self._manifest_extract_inputs()
+        extract_args = self._manifest_extract_inputs()
         method = "agent" if self.agent_spec_template else "direct"
+        # Per-scenario metadata filters win over the class-level defaults, so
+        # scenarios that differ only by filter still exercise distinct inputs.
+        metadata = base_args.get("metadata") or {}
         subs: dict[str, Any] = {
             "{{credential}}": None,
             "{{credential-guid}}": "",
             "{{connection}}": base_args.get("connection") or {},
             "{{extraction-method}}": method,
             "{{agent-json}}": self.agent_spec_template or None,
-            "{{include-filter}}": self.include_filter,
-            "{{exclude-filter}}": self.exclude_filter,
-            "{{exclude-table-regex}}": "",
-            "{{temp-table-regex}}": "",
+            "{{include-filter}}": metadata.get("include-filter", self.include_filter),
+            "{{exclude-filter}}": metadata.get("exclude-filter", self.exclude_filter),
+            "{{exclude-table-regex}}": metadata.get("exclude-table-regex", ""),
+            "{{temp-table-regex}}": metadata.get("temp-table-regex", ""),
             "{{preflight-check}}": True,
         }
         wf_args = _apply_mustache_subs(extract_args, subs)
-        # Carry credentials/metadata through for the start endpoint: agent mode
-        # resolves the DB credential via agent_json, but direct mode and the
-        # client's credential provisioning still rely on these.
+        # Carry credentials through for the start endpoint (agent mode resolves
+        # via agent_json; direct mode + the client's credential provisioning use
+        # these). The manifest-substituted args are authoritative for the run;
+        # metadata is forwarded only for backward-compat with the start handler.
         merged: dict[str, Any] = {
             k: base_args[k] for k in ("credentials", "metadata") if k in base_args
         }
         merged.update(wf_args)
-        wf_type = self.workflow_type or manifest_wf_type
-        if wf_type:
-            merged["workflow_type"] = wf_type
+        # Entrypoint stays class-controlled: self.workflow_type maps to an SDK
+        # entrypoint name (default None → the app's implicit "run"). The
+        # manifest's sibling inputs.workflow_type is the AE workflow-type slug —
+        # a DIFFERENT namespace — and must NOT be sent as the start-body
+        # workflow_type, or the SDK rejects it as an invalid entrypoint (400).
+        if self.workflow_type:
+            merged["workflow_type"] = self.workflow_type
         return merged
 
     def _execute_scenario(self, scenario: Scenario) -> ScenarioResult:
