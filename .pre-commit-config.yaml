@@ -11,6 +11,13 @@ repos:
       - id: debug-statements
       - id: fix-byte-order-marker
       - id: trailing-whitespace
+      # Guard the composite-action manifests: a malformed action.yaml fails to
+      # load for EVERY repo that `uses:` it via @main, taking the whole connector
+      # fleet down before any step runs. Parse them on every commit so an invalid
+      # manifest can never reach main again.
+      - id: check-yaml
+        name: check-yaml (GitHub composite-action manifests)
+        files: ^\.github/actions/.*/action\.ya?ml$
   - repo: https://github.com/pycqa/isort
     rev: 5.13.2
     hooks:

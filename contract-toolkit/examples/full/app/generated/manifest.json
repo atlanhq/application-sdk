@@ -22,6 +22,8 @@
           "load_to_atlan": "{{load-to-atlan}}",
           "log_level": "{{log_level}}",
           "lineage_depth": "{{lineage_depth}}",
+          "table_prefix": "{{table_prefix}}",
+          "custom_attributes": "{{custom_attributes}}",
           "schemas": "{{schemas}}"
         }
       },

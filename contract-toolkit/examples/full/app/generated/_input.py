@@ -32,6 +32,10 @@ class AppInputContract(ExtractionInput):
     """Verbosity for the extraction run."""
     lineage_depth: int = 3
     """How many hops of upstream lineage to resolve (required when lineage is on)."""
+    table_prefix: str = ""
+    """Only extract tables whose name starts with this prefix."""
+    custom_attributes: str = ""
+    """Extra attributes to attach to every asset, as a JSON object."""
     schemas: Annotated[dict[str, str], MaxItems(1000)] = Field(default_factory=dict)
 
     @field_validator("schemas", mode="before")

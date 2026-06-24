@@ -396,6 +396,12 @@ Used inside `uiConfig.tasks` — reference them as `Widgets.*`:
 | `Widgets.NumericInput` | `inputNumber` | `int` |
 | `Widgets.InputRepeater` | `inputRepeater` | `list[str]` |
 
+`TextInput` and `TextBoxInput` support an optional `validation` block for opt-in
+JSON or regex validation (`new { type = "json"; formatOnBlur = true }` or
+`new { type = "regex"; pattern = "^[a-z0-9_]+$" }`). It renders into `ui.validation`
+and is UI-only — separate from `validationRules`. See `docs/reference.md` and the
+[`full`](examples/full/) example.
+
 ### Selection
 
 | Class | Widget | Python Type |
