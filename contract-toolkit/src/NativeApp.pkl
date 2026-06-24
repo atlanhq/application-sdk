@@ -2627,8 +2627,11 @@ local function generateExtractNode(): Mapping<String, Any> =
         // that silently broke MSSQL's SDR rollout (atlan-mssql-app#177). Skipped
         // when the app DOES model `agent-json` (the loops below already emit it),
         // to avoid a duplicate key. Harmless for direct-only runs: AE leaves the
-        // unused slot empty.
-        when (!uiConfig.properties.containsKey("agent-json")) {
+        // unused slot empty. The guard mirrors the loops' emit condition exactly
+        // (`containsKey && includeInManifest`) — so an app that models `agent-json`
+        // but sets `includeInManifest = false` still gets the default rather than
+        // ending up with no slot at all.
+        when (!(uiConfig.properties.containsKey("agent-json") && uiConfig.properties["agent-json"].includeInManifest)) {
           ["agent_json"] = "{{agent-json}}"
         }
         for (argName, formField in manifestTopLevelArgs) {
