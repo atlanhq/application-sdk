@@ -233,6 +233,7 @@ packaging==26.2
     #   lazy-loader
     #   opentelemetry-instrumentation
     #   pytest
+    #   pytest-rerunfailures
 pastel==0.2.1
     # via poethepoet
 platformdirs==4.10.0
@@ -283,8 +284,12 @@ pyjwt==2.13.0
 pytest==9.1.1
     # via
     #   pytest-asyncio
+    #   pytest-rerunfailures
+    #   pytest-socket
     #   pytest-timeout
 pytest-asyncio==1.4.0
+pytest-rerunfailures==15.1
+pytest-socket==0.8.0
 pytest-timeout==2.4.0
 python-dateutil==2.9.0.post0
     # via
