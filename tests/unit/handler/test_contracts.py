@@ -134,6 +134,18 @@ class TestPreflightOutput:
         assert PreflightOutput.success().status == PreflightStatus.SUCCESS
         assert PreflightOutput.failed().status == PreflightStatus.FAILED
 
+    def test_helper_constructors_round_trip_all_kwargs(self):
+        checks = [PreflightCheck(name="auth", passed=False, message="bad creds")]
+        for factory, expected_status in (
+            (PreflightOutput.success, PreflightStatus.SUCCESS),
+            (PreflightOutput.failed, PreflightStatus.FAILED),
+        ):
+            out = factory(message="hello", checks=checks, total_duration_ms=12.5)
+            assert out.status == expected_status
+            assert out.message == "hello"
+            assert out.checks == checks
+            assert out.total_duration_ms == 12.5
+
 
 class TestMetadataOutput:
     """Tests for the MetadataOutput hierarchy."""

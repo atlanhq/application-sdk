@@ -228,7 +228,15 @@ def _normalize_preflight_request(body: dict[str, Any]) -> dict[str, Any]:
 
 
 def _preflight_runtime_summary(result: PreflightOutput) -> dict[str, Any]:
-    """Canonical runtime metadata kept outside the SageV2 ``data`` map."""
+    """Canonical runtime metadata kept outside the SageV2 ``data`` map.
+
+    ``status`` is the canonical gate signal (legacy folded → ``success``/``failed``).
+    ``app_status`` is the RAW handler status BEFORE canonicalization (e.g. a legacy
+    ``not_ready``) — downstream consumers (Heracles, the Automation Engine event,
+    the connector-pulse dashboard) read it to distinguish a legacy soft-failure
+    from a clean pass and to track contract adoption. Keep this key name in sync
+    with those consumers if ever renamed.
+    """
     return {
         "status": result.canonical_status().value,
         "app_status": result.status.value,

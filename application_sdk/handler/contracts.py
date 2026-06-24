@@ -280,7 +280,9 @@ class PreflightStatus(SerializableEnum):
     FAILED = "failed"
 
     def canonical(self) -> PreflightStatus:
-        """Normalize legacy statuses to their runtime aggregate equivalent."""
+        """Map legacy ``READY``/``NOT_READY``/``PARTIAL`` to canonical ``SUCCESS``;
+        only ``FAILED`` blocks a run. Folding ``NOT_READY`` → ``SUCCESS`` is a
+        deliberate opt-out of blocking (back-compat), not an aggregate equivalence."""
         if self in (
             PreflightStatus.READY,
             PreflightStatus.NOT_READY,
@@ -402,6 +404,9 @@ class PreflightOutput(BaseModel):
         checks: list[PreflightCheck] | None = None,
         total_duration_ms: float = 0.0,
     ) -> PreflightOutput:
+        """Build a non-blocking result (the run proceeds). Use for a clean pass
+        or a partial result the connector still considers safe to extract on;
+        per-check detail goes in ``checks``."""
         return cls(
             status=PreflightStatus.SUCCESS,
             message=message,
@@ -417,6 +422,9 @@ class PreflightOutput(BaseModel):
         checks: list[PreflightCheck] | None = None,
         total_duration_ms: float = 0.0,
     ) -> PreflightOutput:
+        """Build a blocking result — the ONLY status that stops a run. Returning
+        this is an explicit opt-in to block; every other status (incl. legacy
+        ``not_ready``) proceeds. Use only for failures that must not start a run."""
         return cls(
             status=PreflightStatus.FAILED,
             message=message,
