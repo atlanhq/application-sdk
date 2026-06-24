@@ -1,5 +1,6 @@
 """Execution layer for running Apps on Temporal."""
 
+# Re-export the temporalio Client as TemporalClient for app-side type annotations.
 from temporalio.client import Client as TemporalClient
 
 from application_sdk.execution._temporal.activity_utils import (
