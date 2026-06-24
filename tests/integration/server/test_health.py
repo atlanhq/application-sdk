@@ -123,14 +123,6 @@ class TestWorkerHealthServer:
             await server.stop()
 
     @pytest.mark.asyncio
-    async def test_record_activity_updates_last_activity(self):
-        port = _find_free_port()
-        server = WorkerHealthServer(host="127.0.0.1", port=port)
-        assert server._last_activity is None
-        server.record_activity()
-        assert server._last_activity is not None
-
-    @pytest.mark.asyncio
     async def test_request_count_increments(self):
         port = _find_free_port()
         async with WorkerHealthServer(host="127.0.0.1", port=port) as server:

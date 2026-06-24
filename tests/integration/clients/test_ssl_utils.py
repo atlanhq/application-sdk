@@ -1,8 +1,12 @@
-"""Integration tests for SSL utilities that require a real local HTTPS server.
+"""Integration tests for SSL utilities.
 
-These tests were moved from tests/unit/clients/test_ssl_utils.py when the unit
-suite was hardened with --disable-socket.  They spin up a local aiohttp TLS
-server via trustme and make real connections — no external network needed.
+TestSslContextWithPrivateServer: spins up a local aiohttp TLS server via trustme
+and makes real connections — no external network needed.
+
+TestSslContextPublicCertificates: verifies that the custom SSL context still
+reaches public HTTPS endpoints (requires outbound internet, available on CI
+runners). Moved from tests/unit when --disable-socket was added; the
+has_internet_connection() guard was dropped so the network call IS the assertion.
 """
 
 import ssl
@@ -190,3 +194,45 @@ class TestSslContextWithPrivateServer:
                         assert private_response.text == "Private server response"
             finally:
                 await runner.cleanup()
+
+
+@pytest.mark.integration
+class TestSslContextPublicCertificates:
+    """Verify the custom SSL context still reaches public HTTPS endpoints.
+
+    Requires outbound internet (available on CI runners). The network call IS
+    the assertion — no has_internet_connection() guard that silently skips.
+    """
+
+    @pytest.mark.asyncio
+    async def test_httpx_ssl_context_works_with_public_url(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
+                ssl_context = get_ssl_context()
+                assert isinstance(ssl_context, ssl.SSLContext)
+                async with httpx.AsyncClient(verify=ssl_context) as client:
+                    response = await client.get("https://www.google.com", timeout=10)
+                    assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_aiohttp_ssl_context_works_with_public_url(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
+                ssl_context = get_ssl_context()
+                assert isinstance(ssl_context, ssl.SSLContext)
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        "https://www.google.com",
+                        ssl=ssl_context,
+                        timeout=aiohttp.ClientTimeout(total=10),
+                    ) as response:
+                        assert response.status == 200
+
+    @pytest.mark.asyncio
+    async def test_default_ssl_works_with_public_url(self):
+        with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", ""):
+            ssl_context = get_ssl_context()
+            assert ssl_context is True
+            async with httpx.AsyncClient(verify=ssl_context) as client:
+                response = await client.get("https://www.google.com", timeout=10)
+                assert response.status_code == 200

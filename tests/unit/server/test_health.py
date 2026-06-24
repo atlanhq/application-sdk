@@ -1,12 +1,14 @@
 """Tests for application_sdk.server.health.
 
-Covers HealthStatus data class (hermetic, no network).
+Covers HealthStatus data class and pure state-mutation helpers (hermetic, no network).
 
 Tests that start a real local TCP server have been moved to
 tests/integration/server/test_health.py.
 """
 
-from application_sdk.server.health import HealthStatus
+import pytest
+
+from application_sdk.server.health import HealthStatus, WorkerHealthServer
 
 # ---------------------------------------------------------------------------
 # HealthStatus
@@ -30,3 +32,17 @@ class TestHealthStatus:
         status = HealthStatus(healthy=True, details={"key": "value"})
         d = status.to_dict()
         assert d["details"]["key"] == "value"
+
+
+# ---------------------------------------------------------------------------
+# WorkerHealthServer — pure state helpers (no server started)
+# ---------------------------------------------------------------------------
+
+
+class TestWorkerHealthServerState:
+    @pytest.mark.asyncio
+    async def test_record_activity_updates_last_activity(self):
+        server = WorkerHealthServer(host="127.0.0.1", port=0)
+        assert server._last_activity is None
+        server.record_activity()
+        assert server._last_activity is not None

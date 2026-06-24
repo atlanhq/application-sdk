@@ -58,7 +58,7 @@ runs:
         PYTHON_MINOR=$(echo "${{ inputs.python-version }}" | cut -d. -f2)
         if [ "${PYTHON_MINOR}" -ge 14 ] 2>/dev/null; then
           # Python 3.14+: skip dev group (libcst's pyo3 doesn't support 3.14 yet)
-          "${GITHUB_WORKSPACE}/.github/scripts/with-retry.sh" uv sync --all-extras --no-group dev
+          "${{ github.action_path }}/../../scripts/with-retry.sh" uv sync --all-extras --no-group dev
         else
-          "${GITHUB_WORKSPACE}/.github/scripts/with-retry.sh" uv sync --all-extras --all-groups
+          "${{ github.action_path }}/../../scripts/with-retry.sh" uv sync --all-extras --all-groups
         fi

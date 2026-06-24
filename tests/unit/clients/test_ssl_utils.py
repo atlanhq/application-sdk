@@ -1,12 +1,9 @@
 """Tests for SSL utilities."""
 
-import socket
 import ssl
 import tempfile
 from unittest.mock import patch
 
-import aiohttp
-import httpx
 import pytest
 import trustme
 
@@ -23,16 +20,6 @@ def clear_ssl_context_cache():
     get_ssl_context.cache_clear()
     yield
     get_ssl_context.cache_clear()
-
-
-def has_internet_connection() -> bool:
-    """Check if there is an active internet connection."""
-    try:
-        conn = socket.create_connection(("www.google.com", 443), timeout=3)
-        conn.close()
-        return True
-    except Exception:
-        return False
 
 
 class TestGetSslCertDir:
@@ -112,60 +99,6 @@ class TestGetSslContext:
             with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
                 result = get_ssl_context()
                 assert isinstance(result, ssl.SSLContext)
-
-
-@pytest.mark.integration
-class TestSslContextPublicCertificates:
-    """Test that SSL context works with public certificates (default CAs).
-
-    These tests verify that when custom certificates are added, the default
-    system certificates are still available, allowing connections to public
-    services like Google.
-    """
-
-    @pytest.mark.asyncio
-    async def test_httpx_ssl_context_works_with_public_url(self):
-        """Test that httpx with custom SSL context can connect to public HTTPS URLs."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
-                ssl_context = get_ssl_context()
-                assert isinstance(ssl_context, ssl.SSLContext)
-
-                if has_internet_connection():
-                    async with httpx.AsyncClient(verify=ssl_context) as client:
-                        response = await client.get(
-                            "https://www.google.com", timeout=10
-                        )
-                        assert response.status_code == 200
-
-    @pytest.mark.asyncio
-    async def test_aiohttp_ssl_context_works_with_public_url(self):
-        """Test that aiohttp with custom SSL context can connect to public HTTPS URLs."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
-                ssl_context = get_ssl_context()
-                assert isinstance(ssl_context, ssl.SSLContext)
-
-                if has_internet_connection():
-                    async with aiohttp.ClientSession() as session:
-                        async with session.get(
-                            "https://www.google.com",
-                            ssl=ssl_context,
-                            timeout=aiohttp.ClientTimeout(total=10),
-                        ) as response:
-                            assert response.status == 200
-
-    @pytest.mark.asyncio
-    async def test_default_ssl_works_with_public_url(self):
-        """Test that default SSL (no custom certs) works with public URLs."""
-        with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", ""):
-            ssl_context = get_ssl_context()
-            assert ssl_context is True
-
-            if has_internet_connection():
-                async with httpx.AsyncClient(verify=ssl_context) as client:
-                    response = await client.get("https://www.google.com", timeout=10)
-                    assert response.status_code == 200
 
 
 class TestSslContextPrivateCertificates:

@@ -229,16 +229,16 @@ runs:
           exit 1
         fi
         echo "Using Dapr version: $DAPR_VERSION"
-        "${GITHUB_WORKSPACE}/.github/scripts/with-retry.sh" wget -q "https://github.com/dapr/cli/releases/download/v${DAPR_VERSION}/dapr_linux_amd64.tar.gz" -O /tmp/dapr.tar.gz
+        "${{ github.action_path }}/../../scripts/with-retry.sh" wget -q "https://github.com/dapr/cli/releases/download/v${DAPR_VERSION}/dapr_linux_amd64.tar.gz" -O /tmp/dapr.tar.gz
         tar -xzf /tmp/dapr.tar.gz -C /tmp
         sudo mv /tmp/dapr /usr/local/bin/
         chmod +x /usr/local/bin/dapr
-        "${GITHUB_WORKSPACE}/.github/scripts/with-retry.sh" dapr init --runtime-version "${DAPR_VERSION}" --slim
+        "${{ github.action_path }}/../../scripts/with-retry.sh" dapr init --runtime-version "${DAPR_VERSION}" --slim
 
     - name: Install Temporal CLI
       if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
       shell: bash
-      run: "${GITHUB_WORKSPACE}/.github/scripts/with-retry.sh" bash -c "curl -sSf https://temporal.download/cli.sh | sh"
+      run: "${{ github.action_path }}/../../scripts/with-retry.sh" bash -c "curl -sSf https://temporal.download/cli.sh | sh"
 
     - name: Add Dapr and Temporal to PATH
       if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
@@ -250,7 +250,7 @@ runs:
     - name: Download Dapr components
       if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
       shell: bash
-      run: "${GITHUB_WORKSPACE}/.github/scripts/with-retry.sh" uv run poe download-components
+      run: "${{ github.action_path }}/../../scripts/with-retry.sh" uv run poe download-components
 
     - name: Start Dapr + Temporal
       if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
