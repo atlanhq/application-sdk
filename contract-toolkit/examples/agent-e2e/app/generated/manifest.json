@@ -1,0 +1,24 @@
+{
+  "execution_mode": "automation-engine",
+  "dag": {
+    "extract": {
+      "activity_name": "execute_workflow",
+      "activity_display_name": "Extract Agent E2E Example Metadata",
+      "app_name": "agent-e2e",
+      "inputs": {
+        "workflow_type": "agent-e2e",
+        "app_name": "agent-e2e",
+        "app_id": "",
+        "argo_workflow_slug": "",
+        "task_queue": "atlan-agent-e2e-{deployment_name}",
+        "args": {
+          "credential": "{{credential}}",
+          "credential_guid": "{{credential-guid}}",
+          "connection": "{{connection}}",
+          "extraction_method": "{{extraction-method}}",
+          "agent_json": "{{agent-json}}"
+        }
+      }
+    }
+  }
+}
