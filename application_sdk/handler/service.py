@@ -1717,7 +1717,7 @@ def _register_workflow_routes(
             with open(target) as f:
                 raw = json.load(f)
             data: dict[str, Any] = {"config": json.dumps(raw.get("config", raw))}
-            # Some configmaps (e.g. connector apps) carry a top-level
+            # Some configmaps (e.g., connector apps) carry a top-level
             # `defaultConnectorType`; surface it alongside `config` when present.
             default_connector_type = raw.get("defaultConnectorType")
             if default_connector_type is not None:
