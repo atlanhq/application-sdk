@@ -96,7 +96,7 @@ inputs:
       Default parallelises tests across xdist workers and retries only
       transient network/socket failures; override to dial worker count,
       change distribution strategy, or adjust retry count/pattern.
-    default: "-n auto --dist=load --tb=short --reruns 2 --reruns-delay 5 --only-rerun \"ConnectionError|TimeoutError|ReadTimeout\""
+    default: "-n auto --dist=load --tb=short --reruns 2 --reruns-delay 5 --only-rerun \"ConnectError|ConnectionError|ClientConnectorError|TimeoutError|ReadTimeout\""
   app-port:
     required: false
     description: HTTP port the connector app server listens on.

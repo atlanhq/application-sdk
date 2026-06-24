@@ -2,7 +2,7 @@
 # Tests for .github/scripts/with-retry.sh
 #
 # Run:  bats .github/scripts/tests/with-retry.bats
-# Req:  bats-core >= 1.9 (https://github.com/bats-core/bats-core)
+# Req:  bats-core >= 1.5 (https://github.com/bats-core/bats-core)
 
 SCRIPT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)/with-retry.sh"
 

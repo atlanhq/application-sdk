@@ -44,7 +44,7 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Install bats-core
-        run: sudo apt-get install -y bats
+        run: sudo apt-get update && sudo apt-get install -y bats
       - uses: "./.github/actions/setup-deps"
       - name: Run shell script tests
         run: uv run poe test-scripts
@@ -78,7 +78,7 @@ jobs:
             embedded-runtimes-${{ runner.os }}-
 
       - name: Run integration tests
-        run: uv run pytest tests/integration/ -m integration -v --timeout=120 --reruns 2 --reruns-delay 5 --only-rerun "ConnectionError|TimeoutError|ReadTimeout"
+        run: uv run pytest tests/integration/ -m integration -v --timeout=120 --reruns 2 --reruns-delay 5 --only-rerun "ConnectError|ConnectionError|ClientConnectorError|TimeoutError|ReadTimeout"
 
   storage-emulator:
     name: Storage Emulator Tests
@@ -138,7 +138,7 @@ jobs:
           AWS_ENDPOINT_URL: http://localhost:9000
           AZURE_STORAGE_ENDPOINT: http://localhost:10000
           GCS_EMULATOR_ENDPOINT: http://localhost:9095
-        run: uv run pytest tests/integration/storage -m storage_emulator -v --timeout=300 --reruns 2 --reruns-delay 5 --only-rerun "ConnectionError|TimeoutError|ReadTimeout"
+        run: uv run pytest tests/integration/storage -m storage_emulator -v --timeout=300 --reruns 2 --reruns-delay 5 --only-rerun "ConnectError|ConnectionError|ClientConnectorError|TimeoutError|ReadTimeout"
 
       - name: Teardown emulators
         if: always()
