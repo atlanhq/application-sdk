@@ -57,7 +57,7 @@ runs:
         if [ "${RUNNER_OS}" != "Windows" ]; then
           SOCKET_FLAGS="--disable-socket --allow-unix-socket"
         else
-          SOCKET_FLAGS=""
+          SOCKET_FLAGS=""  # intentionally empty — see comment above
         fi
         $UV_RUN coverage run -m pytest --import-mode=importlib --capture=no --log-cli-level=INFO tests/ $PYTEST_IGNORE -v --full-trace --hypothesis-show-statistics ${SOCKET_FLAGS}
         $UV_RUN coverage xml

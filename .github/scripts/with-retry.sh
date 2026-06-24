@@ -7,6 +7,7 @@
 #
 # Exit code: the exit code of the last (failing) attempt, or 0 on success.
 set -uo pipefail
+[ "$#" -ge 1 ] || { echo "with-retry: usage: with-retry.sh <command> [args...]" >&2; exit 1; }
 
 max="${RETRY_MAX_ATTEMPTS:-3}"
 base="${RETRY_BACKOFF_BASE_SECONDS:-5}"

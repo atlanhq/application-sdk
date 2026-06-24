@@ -34,6 +34,12 @@ teardown() {
 
 # ---------- tests -------------------------------------------------------------
 
+@test "no arguments — exits 1 with usage message" {
+    run bash "$SCRIPT"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"usage"* ]]
+}
+
 @test "succeeds on first try — command invoked exactly once" {
     export RETRY_MAX_ATTEMPTS=3
     run bash "$SCRIPT" true
