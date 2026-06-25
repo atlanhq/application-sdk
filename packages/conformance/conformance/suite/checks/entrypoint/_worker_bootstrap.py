@@ -33,7 +33,11 @@ import ast
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.schema.findings import Finding
 
-from ._bootstrap_common import collect_import_origins, is_app_receiver
+from ._bootstrap_common import (
+    collect_import_origins,
+    is_app_receiver,
+    qualify_chained_attr_call,
+)
 
 # ── Worker-construction symbols (from application_sdk.execution) ─────────────
 
@@ -166,51 +170,81 @@ def check_p017(
                         )
                     )
 
-            elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
-                module_origin = origins.get(func.value.id, "")
+            elif isinstance(func, ast.Attribute):
+                if isinstance(func.value, ast.Name):
+                    module_origin = origins.get(func.value.id, "")
 
-                # (b cont'd) module-attribute construction (e.g. ex.create_worker(...))
-                if f"{module_origin}.{func.attr}" in _WORKER_CONSTRUCTION_ORIGINS:
-                    findings.append(
-                        make_finding(
-                            filename=filename,
-                            rule_id="P017",
-                            node=node,
-                            message=(
-                                f"Calls '{func.value.id}.{func.attr}(...)' "
-                                "directly — worker and client construction is "
-                                "the SDK launcher's job, not the app's. Launch "
-                                "via 'application-sdk --mode worker|combined' "
-                                "(prod) or 'run_dev_combined(MyApp, ...)' "
-                                "(dev); workers are auto-discovered from "
-                                "'AppRegistry'/'TaskRegistry'. See BLDX-1411. "
-                                "Suppress with "
-                                "'# conformance: ignore[P017] <reason>'."
-                            ),
-                            directives=directives,
+                    # (b cont'd) module-attribute construction (e.g. ex.create_worker(...))
+                    if f"{module_origin}.{func.attr}" in _WORKER_CONSTRUCTION_ORIGINS:
+                        findings.append(
+                            make_finding(
+                                filename=filename,
+                                rule_id="P017",
+                                node=node,
+                                message=(
+                                    f"Calls '{func.value.id}.{func.attr}(...)' "
+                                    "directly — worker and client construction is "
+                                    "the SDK launcher's job, not the app's. Launch "
+                                    "via 'application-sdk --mode worker|combined' "
+                                    "(prod) or 'run_dev_combined(MyApp, ...)' "
+                                    "(dev); workers are auto-discovered from "
+                                    "'AppRegistry'/'TaskRegistry'. See BLDX-1411. "
+                                    "Suppress with "
+                                    "'# conformance: ignore[P017] <reason>'."
+                                ),
+                                directives=directives,
+                            )
                         )
-                    )
 
-                # (c) Lifecycle method calls on app-receiver only
-                elif func.attr in _WORKER_LIFECYCLE_METHODS and is_app_receiver(
-                    func.value.id, module_origin
-                ):
-                    findings.append(
-                        make_finding(
-                            filename=filename,
-                            rule_id="P017",
-                            node=node,
-                            message=(
-                                f"Calls '.{func.attr}(...)' — manual workflow "
-                                "lifecycle call that the SDK launcher manages. "
-                                "In v3 the SDK owns the full boot sequence; "
-                                "subclass 'App' and use "
-                                "'run_dev_combined'/'application-sdk'. See "
-                                "BLDX-1411. Suppress with "
-                                "'# conformance: ignore[P017] <reason>'."
-                            ),
-                            directives=directives,
+                    # (c) Lifecycle method calls on app-receiver only
+                    elif func.attr in _WORKER_LIFECYCLE_METHODS and is_app_receiver(
+                        func.value.id, module_origin
+                    ):
+                        findings.append(
+                            make_finding(
+                                filename=filename,
+                                rule_id="P017",
+                                node=node,
+                                message=(
+                                    f"Calls '.{func.attr}(...)' — manual workflow "
+                                    "lifecycle call that the SDK launcher manages. "
+                                    "In v3 the SDK owns the full boot sequence; "
+                                    "subclass 'App' and use "
+                                    "'run_dev_combined'/'application-sdk'. See "
+                                    "BLDX-1411. Suppress with "
+                                    "'# conformance: ignore[P017] <reason>'."
+                                ),
+                                directives=directives,
+                            )
                         )
-                    )
+
+                else:
+                    # (b cont'd) chained dotted construction:
+                    # `import application_sdk.execution` then
+                    # `application_sdk.execution.create_worker(...)`
+                    qualified = qualify_chained_attr_call(func, origins)
+                    if (
+                        qualified is not None
+                        and qualified in _WORKER_CONSTRUCTION_ORIGINS
+                    ):
+                        findings.append(
+                            make_finding(
+                                filename=filename,
+                                rule_id="P017",
+                                node=node,
+                                message=(
+                                    f"Calls '{qualified}(...)' directly — worker "
+                                    "and client construction is the SDK launcher's "
+                                    "job, not the app's. Launch via "
+                                    "'application-sdk --mode worker|combined' "
+                                    "(prod) or 'run_dev_combined(MyApp, ...)' "
+                                    "(dev); workers are auto-discovered from "
+                                    "'AppRegistry'/'TaskRegistry'. See BLDX-1411. "
+                                    "Suppress with "
+                                    "'# conformance: ignore[P017] <reason>'."
+                                ),
+                                directives=directives,
+                            )
+                        )
 
     return findings

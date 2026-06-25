@@ -40,6 +40,39 @@ def collect_import_origins(tree: ast.AST) -> dict[str, str]:
     return origins
 
 
+def qualify_chained_attr_call(
+    func: ast.Attribute, origins: dict[str, str]
+) -> str | None:
+    """Resolve a chained attribute call (X.Y.Z()) to its as-written dotted path.
+
+    Handles the case where ``func.value`` is itself an ``ast.Attribute`` — i.e.
+    bare dotted submodule calls like::
+
+        import application_sdk.execution
+        application_sdk.execution.create_worker(...)
+        # → "application_sdk.execution.create_worker"
+
+        import fastapi.applications
+        fastapi.applications.FastAPI()
+        # → "fastapi.applications.FastAPI"
+
+    The single-level case (``func.value: ast.Name``) is handled separately by
+    the callers using the origins dict directly.
+
+    Returns the full as-written dotted path if the root name was imported, else
+    ``None``.
+    """
+    attrs: list[str] = [func.attr]
+    node: ast.expr = func.value
+    while isinstance(node, ast.Attribute):
+        attrs.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name) or node.id not in origins:
+        return None
+    # attrs collected outermost-first; reverse to reconstruct left-to-right.
+    return node.id + "." + ".".join(reversed(attrs))
+
+
 def is_app_receiver(name: str, origin: str) -> bool:
     """True if the call receiver is plausibly an Atlan App or SDK object.
 

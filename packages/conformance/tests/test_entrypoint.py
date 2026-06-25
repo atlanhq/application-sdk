@@ -118,6 +118,19 @@ class TestP017WorkerConstructionCalls:
         )
         assert len(_rule(src, "P017")) == 1
 
+    def test_fires_on_bare_import_execution_create_worker(self) -> None:
+        """`import application_sdk.execution` then `application_sdk.execution.create_worker(...)`.
+
+        The chained ast.Attribute (Name→.execution→.create_worker) bypassed the
+        original `isinstance(func.value, ast.Name)` guard — this test keeps the
+        gap from reopening.
+        """
+        src = (
+            "import application_sdk.execution\n"
+            "worker = application_sdk.execution.create_worker(client=client, task_queue='q')\n"
+        )
+        assert len(_rule(src, "P017")) == 1
+
 
 class TestP017LegacyV2Imports:
     """Violation class (a): imports from removed v2 boot modules."""
@@ -274,6 +287,16 @@ class TestP018FastAPIConstruction:
     def test_fires_on_fastapi_applications_import(self) -> None:
         """FastAPI imported from fastapi.applications (the actual module)."""
         src = "from fastapi.applications import FastAPI\napp = FastAPI()\n"
+        assert len(_rule(src, "P018")) == 1
+
+    def test_fires_on_bare_import_fastapi_applications(self) -> None:
+        """`import fastapi.applications` then `fastapi.applications.FastAPI(...)`.
+
+        The chained ast.Attribute (Name→.applications→.FastAPI) bypassed the
+        original `isinstance(func.value, ast.Name)` guard — this test keeps the
+        gap from reopening.
+        """
+        src = "import fastapi.applications\napp = fastapi.applications.FastAPI()\n"
         assert len(_rule(src, "P018")) == 1
 
     def test_silent_on_fastapi_imported_elsewhere(self) -> None:
