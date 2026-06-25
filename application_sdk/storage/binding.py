@@ -545,6 +545,28 @@ def _build_gcs_config(
     return bucket, gcs_config, put_attributes
 
 
+def _adc_is_external_account() -> bool:
+    """True if ``GOOGLE_APPLICATION_CREDENTIALS`` points to a Workload Identity
+    Federation (``external_account``) credential file.
+
+    That is the one ADC subtype obstore's built-in GCS credential-file decoder
+    cannot parse; every other subtype (service-account key, authorized_user,
+    GKE metadata server) is left to obstore. Reads a local file only — never
+    networks — so it is safe on the hermetic unit/emulator-test paths (where
+    ``GOOGLE_APPLICATION_CREDENTIALS`` is unset and this returns ``False``).
+    """
+    path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
+    if not path:
+        return False
+    try:
+        import json  # noqa: PLC0415
+
+        with open(path) as fh:
+            return json.load(fh).get("type") == "external_account"
+    except (OSError, ValueError):
+        return False
+
+
 def create_store_from_binding_with_put_attrs(
     name: str,
     *,
@@ -684,12 +706,14 @@ def _create_store_core(
     if store_kind == "gcs":
         bucket, gcs_config, put_attrs = _build_gcs_config(meta)
         gcs_credential_provider = None
-        if not gcs_config:
-            # ADC / Workload-Identity path (no SA key in the binding): resolve
-            # credentials via google-auth rather than obstore's built-in GCS file
-            # decoder, which only understands service_account / authorized_user
-            # files — google-auth also handles Workload Identity Federation
-            # external_account files (GKE WI, GitHub OIDC → GCP).
+        # Only Workload Identity Federation (`external_account`) ADC needs the
+        # google-auth provider: obstore's built-in GCS credential-file decoder
+        # rejects `external_account` (GitHub OIDC → GCP) but handles every other
+        # ADC subtype (service-account key file, authorized_user, GKE metadata
+        # server) on its own via ``config=None``. Gating on this keeps the common
+        # ADC path zero-network (so hermetic unit/emulator tests don't resolve
+        # credentials), and only reaches for google-auth when obstore can't cope.
+        if not gcs_config and _adc_is_external_account():
             from application_sdk.storage._credential_providers import (  # noqa: PLC0415
                 make_gcs_adc_provider,
             )
