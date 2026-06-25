@@ -181,6 +181,30 @@
           }
         }
       },
+      "legacy_timeout": {
+        "type": "number",
+        "required": false,
+        "ui": {
+          "widget": "inputNumber",
+          "label": "Legacy timeout",
+          "hidden": false,
+          "help": "Deprecated: use the standard pipeline timeout instead.",
+          "grid": 4
+        },
+        "default": 60
+      },
+      "old_batch_mode": {
+        "type": "boolean",
+        "required": false,
+        "ui": {
+          "widget": "boolean",
+          "label": "Old batch mode",
+          "hidden": false,
+          "help": "Sunset: no longer consumed by the extractor.",
+          "grid": 8
+        },
+        "default": false
+      },
       "schemas": {
         "type": "object",
         "required": false,
@@ -246,7 +270,9 @@
           "log_level",
           "lineage_depth",
           "table_prefix",
-          "custom_attributes"
+          "custom_attributes",
+          "legacy_timeout",
+          "old_batch_mode"
         ]
       },
       {

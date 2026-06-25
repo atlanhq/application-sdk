@@ -24,4 +24,6 @@ class FullFeaturedMustacheSubstitutions(SQLMustacheSubstitutions):
     lineage_depth: int = Field(default=3, alias="{{lineage_depth}}")
     table_prefix: str = Field(default="", alias="{{table_prefix}}")
     custom_attributes: str = Field(default="", alias="{{custom_attributes}}")
+    legacy_timeout: int = Field(default=60, alias="{{legacy_timeout}}")
+    old_batch_mode: bool = Field(default=False, alias="{{old_batch_mode}}")
     schemas: dict[str, Any] | None = Field(default=None, alias="{{schemas}}")
