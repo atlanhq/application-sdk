@@ -63,5 +63,7 @@ def write_bulk(
 
     df = daft.read_parquet(source_prefix)
     result_df = df.write_iceberg(table, mode=mode)
+    # Daft's write_iceberg result has one row per written file with the row
+    # count in the "rows" column (alongside operation/file_size/file_name).
     rows = result_df.to_pylist()
-    return sum(int(row.get("num_rows", 0)) for row in rows)
+    return sum(int(row.get("rows", 0)) for row in rows)

@@ -20,11 +20,23 @@ _SCHEMA = Schema(
 
 def _stub_daft_with(num_rows_per_partition):
     """Build a fake daft module whose read_parquet → df.write_iceberg → result_df chain
-    yields ``num_rows_per_partition`` per partition. Returns ``(daft_module, df)``.
+    yields ``num_rows_per_partition`` per written file. Returns ``(daft_module, df)``.
+
+    The result rows mirror daft's real ``write_iceberg`` output schema
+    (``operation`` / ``rows`` / ``file_size`` / ``file_name``) — the row count
+    lives in ``rows``, NOT ``num_rows``.
     """
     df = MagicMock()
     result = MagicMock()
-    result.to_pylist.return_value = [{"num_rows": n} for n in num_rows_per_partition]
+    result.to_pylist.return_value = [
+        {
+            "operation": "ADD",
+            "rows": n,
+            "file_size": 1024,
+            "file_name": f"part-{i}.parquet",
+        }
+        for i, n in enumerate(num_rows_per_partition)
+    ]
     df.write_iceberg.return_value = result
 
     daft_mod = types.ModuleType("daft")
@@ -103,7 +115,7 @@ class TestWriteBulk(unittest.TestCase):
         with _DaftPatch(daft_mod), self.assertRaises(NoSuchTableError):
             daft_writer.write_bulk(catalog, "ns", "t", "prefix/", schema=None)
 
-    def test_sums_num_rows_across_result_partitions(self):
+    def test_sums_rows_across_result_partitions(self):
         catalog = MagicMock()
         catalog.load_table.return_value = MagicMock()
         daft_mod, _ = _stub_daft_with([10, 25, 7])
