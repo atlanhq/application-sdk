@@ -1,6 +1,6 @@
 """Unit tests for application_sdk.contracts.base."""
 
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any
 from unittest.mock import patch
 
 import pytest
@@ -157,7 +157,7 @@ class TestOutputStatus:
 
     def test_input_safe_file_reference(self) -> None:
         class SafeInput(Input):
-            file: Optional[FileReference] = None
+            file: FileReference | None = None
 
         ref = FileReference(local_path="/tmp/data.jsonl")
         obj = SafeInput(file=ref)
@@ -293,16 +293,15 @@ class TestIsBackwardsCompatible:
         assert ok is True
         assert issues == []
 
-    def test_new_field_without_default_is_incompatible(self) -> None:
+    def test_new_field_with_empty_string_default_is_compatible(self) -> None:
         class V1(Input):
             name: str
 
         class V2(Input):
             name: str
-            required_new: str = ""  # needs default to be backwards-compatible
+            required_new: str = ""  # empty string is a valid default
 
         ok, issues = is_backwards_compatible(V1, V2)
-        # required_new has a default so this IS compatible
         assert ok is True
 
     def test_added_required_field_is_incompatible(self) -> None:

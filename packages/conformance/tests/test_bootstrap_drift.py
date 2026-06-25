@@ -11,6 +11,7 @@ Covers:
 from __future__ import annotations
 
 import pathlib
+import re
 
 import pytest
 from conformance.bootstrap.render import MANAGED_WORKFLOWS, render
@@ -145,6 +146,46 @@ def test_drifted_workflow_finding_names_the_file(tmp_path: pathlib.Path) -> None
 
 
 # ---------------------------------------------------------------------------
+# Action pin bumps — ignored during drift comparison
+# ---------------------------------------------------------------------------
+
+_SHA_A = "a" * 40
+_SHA_B = "b" * 40
+
+
+def test_pin_only_change_not_flagged(tmp_path: pathlib.Path) -> None:
+    """Automations may bump SHA pins freely — a pin-only diff must not flag C002."""
+    _bootstrap(tmp_path)
+    wf = tmp_path / ".github" / "workflows" / "checks.yml"
+    bumped = re.sub(r"@[0-9a-f]{40}", f"@{_SHA_B}", wf.read_text())
+    wf.write_text(bumped)
+    assert scan_path(wf, tmp_path) == []
+
+
+def test_pin_and_comment_change_not_flagged(tmp_path: pathlib.Path) -> None:
+    """Renovate typically updates both the SHA and the adjacent version comment."""
+    _bootstrap(tmp_path)
+    wf = tmp_path / ".github" / "workflows" / "checks.yml"
+    bumped = re.sub(
+        r"@[0-9a-f]{40}(?:[ \t]+#[^\n]*)?", f"@{_SHA_B} # v99", wf.read_text()
+    )
+    wf.write_text(bumped)
+    assert scan_path(wf, tmp_path) == []
+
+
+def test_structural_change_alongside_pin_still_flagged(tmp_path: pathlib.Path) -> None:
+    """A structural edit is caught even when the SHA pin was also bumped."""
+    _bootstrap(tmp_path)
+    wf = tmp_path / ".github" / "workflows" / "checks.yml"
+    bumped = re.sub(r"@[0-9a-f]{40}", f"@{_SHA_B}", wf.read_text())
+    drifted = bumped + "\n# injected structural drift\n"
+    wf.write_text(drifted)
+    findings = scan_path(wf, tmp_path)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "C002"
+
+
+# ---------------------------------------------------------------------------
 # Parameterised files: custom value → no structural finding
 # ---------------------------------------------------------------------------
 
@@ -171,6 +212,68 @@ def test_build_and_publish_custom_unit_tests_workflow_not_flagged(
     wf.write_text(render("build-and-publish.yaml", unit_tests_workflow="ci.yaml"))
     findings = scan_path(wf, tmp_path)
     assert findings == []
+
+
+def _renovate_pkl_sync_with_regen(value: str) -> str:
+    """Canonical caller with a `with: regenerate-contract: <value>` override."""
+    canonical = render("renovate-pkl-sync.yaml")
+    return canonical.replace(
+        "    secrets:",
+        f"    with:\n      regenerate-contract: {value}\n    secrets:",
+        1,
+    )
+
+
+def test_renovate_pkl_sync_optout_not_flagged(tmp_path: pathlib.Path) -> None:
+    """Opting out of regeneration (regenerate-contract: false) is a sanctioned
+    per-repo choice, not drift."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "renovate-pkl-sync.yaml"
+    wf.write_text(_renovate_pkl_sync_with_regen("false"))
+    assert scan_path(wf, tmp_path) == []
+
+
+def test_renovate_pkl_sync_explicit_true_not_flagged(tmp_path: pathlib.Path) -> None:
+    """An explicit regenerate-contract: true (the default, stated redundantly)
+    is also fine."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "renovate-pkl-sync.yaml"
+    wf.write_text(_renovate_pkl_sync_with_regen("true"))
+    assert scan_path(wf, tmp_path) == []
+
+
+def test_renovate_pkl_sync_other_drift_still_flagged(tmp_path: pathlib.Path) -> None:
+    """Stripping the regenerate-contract override must not mask real drift."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "renovate-pkl-sync.yaml"
+    drifted = _renovate_pkl_sync_with_regen("false").replace("@main", "@v1")
+    wf.write_text(drifted)
+    findings = scan_path(wf, tmp_path)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "C002"
+
+
+def test_renovate_pkl_sync_extra_with_key_still_flagged(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The strip is targeted: only `regenerate-contract` is sanctioned. A second
+    key under `with:` is unsanctioned drift and must still flag."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "renovate-pkl-sync.yaml"
+    canonical = render("renovate-pkl-sync.yaml")
+    drifted = canonical.replace(
+        "    secrets:",
+        "    with:\n      regenerate-contract: false\n      some-other-key: true\n    secrets:",
+        1,
+    )
+    wf.write_text(drifted)
+    findings = scan_path(wf, tmp_path)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "C002"
 
 
 # ---------------------------------------------------------------------------

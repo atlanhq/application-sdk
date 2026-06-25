@@ -22,7 +22,7 @@ Run 2 (Incremental Extraction):
   5. fetch_columns: SKIPPED (handled by incremental pipeline)
   6. prepare_column_extraction_queries:
      - Downloads transformed table JSONs
-     - Daft analyzes incremental_state labels
+     - DuckDB analyzes incremental_state labels
      - DuckDB detects backfill tables
      - Batches table_ids into JSON files
   7. execute_single_column_batch (parallel):

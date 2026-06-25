@@ -37,6 +37,7 @@ import "Widgets.pkl"
 
 typealias InfoBannerType = Widgets.InfoBannerType
 typealias WidgetLink = Widgets.WidgetLink
+typealias WidgetValidation = Widgets.WidgetValidation
 typealias UIConfig = Widgets.UIConfig
 typealias UIStep = Widgets.UIStep
 typealias UIRule = Widgets.UIRule
@@ -190,21 +191,35 @@ emitGeneratedArtifacts: Boolean = true
 
 // ── WORKFLOW TYPE ────────────────────────────────────────────────────────────
 
-/// Temporal workflow type written to `manifest.json` as `workflow_type` (in kebab-case).
-/// Accepts PascalCase (e.g. `"SnowflakeApp"`) or kebab-case (e.g. `"snowflake-app"`)
-/// — the toolkit converts either form to kebab-case at output time.
-/// Defaults to `name`. Also accepts colon-format identifiers (e.g. `"dbt:extract-metadata"`),
-/// which pass through the conversion unchanged.
-workflowType: String = name
+/// Temporal workflow type written to `manifest.json` as `workflow_type`.
+/// When set, the value is emitted verbatim — no conversion is applied. Use this
+/// when the runtime keys on a specific string that must not be transformed
+/// (e.g. `"NetSuiteMetadataExtractionWorkflow"` or `"teradata-app:crawler"`).
+/// When unset (the default), the toolkit derives the value by kebab-casing `name`
+/// (e.g. `name = "snowflake-app"` → `workflow_type: "snowflake-app"`). Most apps
+/// can omit this property entirely.
+workflowType: String?
 
 /// Task queue prefix for the extract node in the AE manifest.
 taskQueuePrefix: String = "atlan-\(name)"
 
 // ── E2E TEST HARNESS ──────────────────────────────────────────────────────────
 
-/// Argo WorkflowTemplate package name used by the e2e test harness.
-/// Default: `"@atlan/<name>"`. Override for apps with scoped or non-standard package names.
-argoPackageName: String = "@atlan/\(name)"
+/// Argo WorkflowTemplate package names. The single knob for Argo package
+/// naming — drives two outputs:
+///   - rendered into `atlan.yaml` as `argo_package_names` (between `visibility`
+///     and `build_tag`), consumed by the marketplace; emitted only when non-empty.
+///   - the e2e test harness's single `argo_package_name`, taken as the first
+///     entry.
+/// Single-package apps can leave this empty: the harness falls back to
+/// `"@atlan/<name>"` and `atlan.yaml` omits the key. Set one entry for a scoped
+/// or non-standard package, or several for a multi-package app.
+argoPackageNames: Listing<String> = new Listing {}
+
+/// (Derived) Single Argo package name for the e2e harness: the first entry of
+/// `argoPackageNames`, or `"@atlan/<name>"` when the list is empty.
+local resolvedArgoPackageName: String =
+  if (!argoPackageNames.isEmpty) argoPackageNames.first else "@atlan/\(name)"
 
 /// Argo WorkflowTemplate resource name as deployed in the cluster.
 /// Default: `"atlan-<name>"` — same pattern as `taskQueuePrefix`.
@@ -2349,6 +2364,15 @@ local function renderNodeArgs(node: DAGNode): Mapping<String, Any> =
     }
   else node.args
 
+/// Workflow type for the extract node: verbatim `workflowType` when set,
+/// otherwise `name` kebab-cased.
+local workflowTypeResolved: String =
+  if (workflowType != null) workflowType!!
+  else name
+    .replaceAll(Regex("([A-Z]+)([A-Z][a-z])"), "$1-$2")
+    .replaceAll(Regex("([a-z0-9])([A-Z])"), "$1-$2")
+    .toLowerCase()
+
 local function generateExtractNode(): Mapping<String, Any> =
   let (step = pipeline.extract!!)
   let (_extractEhCheck = validateWorkflowNodeErrorHandling(step.errorHandling, "pipeline.extract.errorHandling"))
@@ -2362,10 +2386,7 @@ local function generateExtractNode(): Mapping<String, Any> =
     // the runtime app class name) or failure logs won't surface (HYP-1678).
     ["app_name"] = name
     ["inputs"] = new Mapping {
-      ["workflow_type"] = workflowType
-          .replaceAll(Regex("([A-Z]+)([A-Z][a-z])"), "$1-$2")
-          .replaceAll(Regex("([a-z0-9])([A-Z])"), "$1-$2")
-          .toLowerCase()
+      ["workflow_type"] = workflowTypeResolved
       ["app_name"] = name
       ["app_id"] = ""
       ["argo_workflow_slug"] = ""
@@ -2422,69 +2443,99 @@ local function getPyDefaultFactoryField(k: String, fieldType: String, factory: S
   else
     "\(k): \(fieldType) = Field(\n        default_factory=\(factory)\n    )"
 
+/// Wrap a generated field line with a Pydantic lifecycle marker when the field is
+/// deprecated or sunset.  The existing default value is preserved inside Field(...).
+///
+/// active  → pass through unchanged
+/// deprecated → `x: T = expr`          → `x: T = Field(default=expr, deprecated=True)`
+///              `x: T = Field(...)`     → `x: T = Field(..., deprecated=True)`
+/// sunset  → same as deprecated but also appends `json_schema_extra={"x-lifecycle": "sunset"}`
+local function applyLifecycle(fieldLine: String, u: Widgets.UIElement): String =
+  if (u.lifecycle == "active")
+    fieldLine
+  else
+    let (deprecatedKwarg =
+      if (u.lifecycleMessage != null)
+        "deprecated=\"\(u.lifecycleMessage!!)\""
+      else
+        "deprecated=True")
+    let (lifecycleKwargs =
+      if (u.lifecycle == "sunset")
+        ", \(deprecatedKwarg), json_schema_extra={\"x-lifecycle\": \"sunset\"}"
+      else
+        ", \(deprecatedKwarg)")
+    if (fieldLine.contains("= Field("))
+      // Already has a Field(...) call — append lifecycle kwargs before the final closing )
+      fieldLine.replaceFirst(Regex("\\)\\s*$"), "\(lifecycleKwargs))")
+    else
+      // Simple `name: Type = expr` form — rewrite as Field(default=expr, ...)
+      fieldLine.replaceFirst(Regex(" = (.+)$"), " = Field(default=$1\(lifecycleKwargs))")
+
 local function getInputPyField(k: String, u: Widgets.UIElement): String =
   let (k = toPyName(k))
-  if (u is Widgets.BooleanInput)
-    "\(k): bool = \(if ((u as Widgets.BooleanInput).default) "True" else "False")"
-  else if (u is Widgets.Switcher)
-    "\(k): bool = \(if ((u as Widgets.Switcher).default) "True" else "False")"
-  else if (u is Widgets.NumericInput)
-    "\(k): int = \(if ((u as Widgets.NumericInput).default != null) (u as Widgets.NumericInput).default!!.toInt() else 0)"
-  else if (u is Widgets.DateInput)
-    "\(k): int = 0"
-  else if (u is Widgets.FileUploader)
-    "\(k): FileReference | None = None"
-  else if (u is Widgets.ConnectionCreator)
-    "\(k): ConnectionRef | None = None"
-  else if (u is Widgets.ConnectionRefInput)
-    (if ((u as Widgets.ConnectionRefInput).multiSelect)
-      getPyDefaultFactoryField(k, "Annotated[list[ConnectionRef], MaxItems(1000)]", "list")
-    else
-      "\(k): ConnectionRef | None = None")
-  else if (u is Widgets.ConnectionSelector)
-    "\(k): str = \"\""
-  else if (u is Widgets.CredentialInput)
-    "\(k): str = \"\""
-  else if (u is Widgets.PasswordInput)
-    "\(k): str = \"\""
-  else if (u is Widgets.TagsInput)
-    getPyDefaultFactoryField(k, "Annotated[list[str], MaxItems(1000)]", "list")
-  else if (u is Widgets.InputRepeater)
-    getPyDefaultFactoryField(k, "Annotated[list[str], MaxItems(1000)]", "list")
-  else if (u is Widgets.DropDown)
-    (if ((u as Widgets.DropDown).multiSelect)
-      getPyDefaultFactoryField(k, "Annotated[list[str], MaxItems(1000)]", "list")
-    else
-      "\(k): str = \"\(if ((u as Widgets.DropDown).default != null) (u as Widgets.DropDown).default!! else "")\"")
-  else if (u is Widgets.Radio)
-    "\(k): str = \"\(if ((u as Widgets.Radio).default != null) (u as Widgets.Radio).default!! else "")\""
-  else if (u is Widgets.CloudProvider)
-    "\(k): str = \"\""
-  else if (u is Widgets.Sage || u is Widgets.SageV2)
-    "\(k): str = \"\""
-  else if (u is Widgets.InfoBanner || u is Widgets.GlossarySelector)
-    "\(k): str = \"\""
-  else if (u is Widgets.CustomWidget)
-    "\(k): str = \"\""
-  else if (u is Widgets.TextInput)
-    "\(k): str = \"\(if ((u as Widgets.TextInput).default != null) (u as Widgets.TextInput).default!! else "")\""
-  else if (u is Widgets.TextBoxInput)
-    "\(k): str = \"\""
-  else if (u is Widgets.ConditionalInput)
-    (let (ci = u as Widgets.ConditionalInput)
-      if (ci.outputValueType == "object")
-        getPyDefaultFactoryField(k, "Annotated[dict[str, Any], MaxItems(1000)]", "dict")
+  let (baseLine =
+    if (u is Widgets.BooleanInput)
+      "\(k): bool = \(if ((u as Widgets.BooleanInput).default) "True" else "False")"
+    else if (u is Widgets.Switcher)
+      "\(k): bool = \(if ((u as Widgets.Switcher).default) "True" else "False")"
+    else if (u is Widgets.NumericInput)
+      "\(k): int = \(if ((u as Widgets.NumericInput).default != null) (u as Widgets.NumericInput).default!!.toInt() else 0)"
+    else if (u is Widgets.DateInput)
+      "\(k): int = 0"
+    else if (u is Widgets.FileUploader)
+      "\(k): FileReference | None = None"
+    else if (u is Widgets.ConnectionCreator)
+      "\(k): ConnectionRef | None = None"
+    else if (u is Widgets.ConnectionRefInput)
+      (if ((u as Widgets.ConnectionRefInput).multiSelect)
+        getPyDefaultFactoryField(k, "Annotated[list[ConnectionRef], MaxItems(1000)]", "list")
       else
-        "\(k): str = \"\(if (ci.default != null) ci.default!!.toString() else "")\"")
-  else if (u is Widgets.SqlTree)
-    // Values are bounded strings (schema names / JSON-encoded selections); `str` avoids
-    // the SDK's AAF-CTR-002 rejection of `Any`.  Pydantic's lax mode coerces non-string
-    // leaf values (e.g. booleans) to str during model construction.
-    getPyDefaultFactoryField(k, "Annotated[dict[str, str], MaxItems(1000)]", "dict")
-  else if (u is Widgets.NestedInput || u is Widgets.APITree || u is Widgets.ApiTreeSelect || u is Widgets.DsnTreeMap || u is Widgets.AgentSelector)
-    getPyDefaultFactoryField(k, "Annotated[dict[str, Any], MaxItems(1000)]", "dict")
-  else
-    "\(k): str = \"\""
+        "\(k): ConnectionRef | None = None")
+    else if (u is Widgets.ConnectionSelector)
+      "\(k): str = \"\""
+    else if (u is Widgets.CredentialInput)
+      "\(k): str = \"\""
+    else if (u is Widgets.PasswordInput)
+      "\(k): str = \"\""
+    else if (u is Widgets.TagsInput)
+      getPyDefaultFactoryField(k, "Annotated[list[str], MaxItems(1000)]", "list")
+    else if (u is Widgets.InputRepeater)
+      getPyDefaultFactoryField(k, "Annotated[list[str], MaxItems(1000)]", "list")
+    else if (u is Widgets.DropDown)
+      (if ((u as Widgets.DropDown).multiSelect)
+        getPyDefaultFactoryField(k, "Annotated[list[str], MaxItems(1000)]", "list")
+      else
+        "\(k): str = \"\(if ((u as Widgets.DropDown).default != null) (u as Widgets.DropDown).default!! else "")\"")
+    else if (u is Widgets.Radio)
+      "\(k): str = \"\(if ((u as Widgets.Radio).default != null) (u as Widgets.Radio).default!! else "")\""
+    else if (u is Widgets.CloudProvider)
+      "\(k): str = \"\""
+    else if (u is Widgets.Sage || u is Widgets.SageV2)
+      "\(k): str = \"\""
+    else if (u is Widgets.InfoBanner || u is Widgets.GlossarySelector)
+      "\(k): str = \"\""
+    else if (u is Widgets.CustomWidget)
+      "\(k): str = \"\""
+    else if (u is Widgets.TextInput)
+      "\(k): str = \"\(if ((u as Widgets.TextInput).default != null) (u as Widgets.TextInput).default!! else "")\""
+    else if (u is Widgets.TextBoxInput)
+      "\(k): str = \"\""
+    else if (u is Widgets.ConditionalInput)
+      (let (ci = u as Widgets.ConditionalInput)
+        if (ci.outputValueType == "object")
+          getPyDefaultFactoryField(k, "Annotated[dict[str, Any], MaxItems(1000)]", "dict")
+        else
+          "\(k): str = \"\(if (ci.default != null) ci.default!!.toString() else "")\"")
+    else if (u is Widgets.SqlTree)
+      // Values are bounded strings (schema names / JSON-encoded selections); `str` avoids
+      // the SDK's AAF-CTR-002 rejection of `Any`.  Pydantic's lax mode coerces non-string
+      // leaf values (e.g. booleans) to str during model construction.
+      getPyDefaultFactoryField(k, "Annotated[dict[str, str], MaxItems(1000)]", "dict")
+    else if (u is Widgets.NestedInput || u is Widgets.APITree || u is Widgets.ApiTreeSelect || u is Widgets.DsnTreeMap || u is Widgets.AgentSelector)
+      getPyDefaultFactoryField(k, "Annotated[dict[str, Any], MaxItems(1000)]", "dict")
+    else
+      "\(k): str = \"\"")
+  applyLifecycle(baseLine, u)
 
 local function needsJsonObjectStringCoercion(u: Widgets.UIElement): Boolean =
   u is Widgets.NestedInput
@@ -2740,8 +2791,25 @@ local function getSubsFieldLine(k: String, u: Widgets.UIElement): String? =
     if (ci.outputValueType == "object")
       fmtSubsField(pyName, "dict[str, Any] | None", "default=None", k)
     else if (ci.baseWidgetType == "radio" && ci.baseEnum != null && !ci.baseEnum!!.isEmpty)
-      let (litStr = (new Listing { for (v in ci.baseEnum!!) { "\"\(v)\"" } }).toList().join(", "))
-      let (defVal = if (ci.default != null) ci.default!!.toString() else ci.baseEnum!!.toList().first)
+      // A ConditionalInput's value space is the union of `baseEnum` and every
+      // `conditions[].overrideEnum` (e.g. extraction-method exposes "agent" only
+      // when a lab flag is on). The Literal must admit all of them, or AGENT-mode
+      // e2e can't set extraction_method="agent". Base values first, then override
+      // values not already present, deduped while preserving order.
+      let (baseVals = ci.baseEnum!!.toList())
+      let (overrideVals = (new Listing {
+            when (ci.conditions != null) {
+              for (c in ci.conditions!!) {
+                when (c.overrideEnum != null) {
+                  for (v in c.overrideEnum!!) { v }
+                }
+              }
+            }
+          }).toList())
+      let (allVals = (baseVals + overrideVals)
+            .fold(List(), (acc: List<String>, v: String) -> if (acc.contains(v)) acc else acc.add(v)))
+      let (litStr = (new Listing { for (v in allVals) { "\"\(v)\"" } }).toList().join(", "))
+      let (defVal = if (ci.default != null) ci.default!!.toString() else baseVals.first)
       fmtSubsField(pyName, "Literal[\(litStr)]", "default=\"\(defVal)\"", k)
     else
       fmtSubsField(pyName, "str", "default=\"\(if (ci.default != null) ci.default!!.toString() else "")\"", k)
@@ -2767,7 +2835,7 @@ local function generateE2EBasePy(): FileOutput = new FileOutput {
     "from application_sdk.testing.e2e import \(baseClass)\n\n\n" +
     "class \(cname)GeneratedE2EBase(\(baseClass)):\n" +
     "    connector_short_name = \"\(escapePyStr(name))\"\n" +
-    "    argo_package_name = \"\(escapePyStr(argoPackageName))\"\n" +
+    "    argo_package_name = \"\(escapePyStr(resolvedArgoPackageName))\"\n" +
     "    argo_template_name = \"\(escapePyStr(argoTemplateName))\"\n" +
     "    app_service_url = \"\(escapePyStr(appServiceUrl))\"\n" +
     (if (emitConnType) "    connection_type = \"\(escapePyStr(connector!!.value))\"\n" else "") +
@@ -2826,6 +2894,25 @@ local function credFieldLine(f: FieldSpec, authSpecific: Boolean): String =
     "    \(pyName): \(pyType) = Field(alias=\"\(f.name)\")"
   else
     "    \(pyName): \(pyType) = Field(default=\(defExpr), alias=\"\(f.name)\")"
+
+// Lightweight agent (SDR) credential body, appended after the direct body so a
+// single `_e2e_credential.py` carries BOTH `<Cname>CredentialBody` (direct) and
+// `<Cname>AgentCredentialBody` (agent). The e2e test picks the shape per RunMode;
+// the credential mode is a per-run concern, not a contract property. Agent mode
+// omits all inline credential fields: the harness serialises the body with a
+// plain `model_dump(by_alias=True)` (no `exclude_unset`), so an inline
+// host/username/password would be sent on the wire and make the orchestrator
+// treat the submit as a direct credential — skipping credential creation and
+// leaving `{{credentialGuid}}` unsubstituted. Real creds live in the agent's
+// secret store, resolved at runtime via agent-json ref keys.
+local function agentCredentialClass(cname: String, firstAuthKey: String): String =
+  "\n\nclass \(cname)AgentCredentialBody(CredentialBody):\n" +
+  "    name: str = Field(alias=\"name\")\n" +
+  "    auth_type: str = Field(default=\"\(firstAuthKey)\", alias=\"authType\")\n" +
+  "    connector_config_name: str = Field(\n" +
+  "        default=\"\(connectorConfigName)\", alias=\"connectorConfigName\"\n" +
+  "    )\n" +
+  "    extra: dict = Field(default_factory=dict, alias=\"extra\")\n"
 
 local function generateE2ECredentialPy(): FileOutput? =
   if (!(hasCredentialConfig && credentialAuthOptions != null && !credentialAuthOptions!!.isEmpty))
@@ -2978,7 +3065,8 @@ local function generateE2ECredentialPy(): FileOutput? =
       "from application_sdk.testing.e2e.credential import CredentialBody\n" +
       extraModelBlock +
       "\n\nclass \(cname)CredentialBody(CredentialBody):\n" +
-      mainClassBody
+      mainClassBody +
+      agentCredentialClass(cname, firstAuthKey)
   }
 
 // ── atlan.yaml generation ─────────────────────────────────────────────────────
@@ -3090,6 +3178,7 @@ local generatedAtlanYamlData: Mapping<String, Any> = new Mapping {
   ["execution_mode"] = deploy.executionMode
   when (iconUrl != null) { ["icon_url"] = iconUrl }
   ["visibility"] = visibility
+  when (!argoPackageNames.isEmpty) { ["argo_package_names"] = argoPackageNames }
   ["build_tag"] = buildTag
   ["self_deployed_runtime"] = selfDeployedRuntime
   when (tags.toList().length > 0) { ["tags"] = tags }

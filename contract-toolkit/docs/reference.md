@@ -95,6 +95,7 @@ The single entry point for all new native app contracts. Supersedes `NativeApp.p
 | `helpdeskLink` | String | `""` | Helpdesk link for credential form. |
 | `type` | String | `"connector"` | Marketplace type. |
 | `visibility` | String | `"public"` | Marketplace visibility. |
+| `argoPackageNames` | Listing\<String\> | `[]` | Argo WorkflowTemplate package names — the single knob for Argo package naming. Rendered into `atlan.yaml` as `argo_package_names` (between `visibility` and `build_tag`) when non-empty, consumed by the marketplace; the e2e harness's `argo_package_name` is taken from the first entry (falls back to `@atlan/{name}` when empty). |
 | `buildTag` | String | `"v1"` | Emitted as `build_tag`. |
 | `selfDeployedRuntime` | Boolean | `true` | Emitted as `self_deployed_runtime`. |
 | `shortDescription` | String | `""` | One-line marketplace card description. Emitted as top-level `short_description` (omitted when empty). |
@@ -105,19 +106,28 @@ The single entry point for all new native app contracts. Supersedes `NativeApp.p
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `workflowType` | String | `""` | Python App class name in PascalCase. Auto-converted to kebab-case. Either this or `workflowTypeOverride` must be set. |
-| `workflowTypeOverride` | String? | null | Explicit workflow type (used as-is, overrides `workflowType`). |
+| `workflowType` | String? | null | Workflow type emitted verbatim into `manifest.json` as `workflow_type`. When unset (the default), the toolkit kebab-cases `name` to derive the value. Set explicitly only when the runtime keys on a string that must not be transformed (e.g. `"NetSuiteMetadataExtractionWorkflow"` or `"teradata-app:crawler"`). |
 | `taskQueuePrefix` | String | `"atlan-{name}"` | Task queue prefix. Override for multi-entrypoint apps sharing a deployment. |
 
 ### E2E Test Harness
 
-These three fields are emitted into `app/generated/_e2e_base.py` and are required by `BaseE2ETest` / `SQLAppE2ETest`. The defaults are derived from `name`; 95% of connectors never need to override them.
+These fields are emitted into `app/generated/_e2e_base.py` and are required by `BaseE2ETest` / `SQLAppE2ETest`. The defaults are derived from `name`; 95% of connectors never need to override them.
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `argoPackageName` | String | `"@atlan/{name}"` | Argo WorkflowTemplate package name. Override when the app uses a scoped or non-standard Argo package. |
 | `argoTemplateName` | String | `"atlan-{name}"` | Argo WorkflowTemplate resource name as deployed in-cluster. Matches `taskQueuePrefix` by default. |
 | `appServiceUrl` | String | `"http://{name}.{name}-app.svc.cluster.local"` | In-cluster Dapr service URL forwarded to by the e2e harness. Override when the app's Kubernetes service name deviates from the standard `{name}-app` pattern. |
+
+#### Credential bodies in `_e2e_credential.py` — direct + agent (both always emitted)
+
+Every credential-config app (`hasCredentialConfig` + non-empty `credentialAuthOptions`) gets **two** classes in `app/generated/_e2e_credential.py`. There is **no contract flag** — the credential mode is a per-test-run concern, so the e2e test imports whichever shape a given run needs (an app can be tested in both modes):
+
+- **`<Name>CredentialBody`** — the **direct** body: `name`, `auth_type`, and every typed field derived from `credentialCommonFields` / `credentialUrlGroup` / `credentialAuthOptions` (host, port, username, password, …) plus any nested `extra` model. This is the full body the AE submit needs to *create* a credential when the e2e connects directly from the Atlan tenant.
+- **`<Name>AgentCredentialBody`** — the **agent / self-deployed-runtime (SDR)** body: `name`, `auth_type`, `connector_config_name`, and an open `extra` dict, with **no** inline credential fields. In agent mode the real host/username/password live in the agent's secret store and are resolved at runtime via agent-json ref keys. The harness serialises the body with a plain `model_dump(by_alias=True)` (no `exclude_unset`), so an inline credential field would be sent on the wire and make the orchestrator treat the submit as a *direct* credential — skipping credential creation and leaving `{{credentialGuid}}` unsubstituted. That's why the agent body must omit them.
+
+Only `_e2e_credential.py` carries both classes; the credential configmap (`atlan-connectors-{name}.json`) and the workflow config are unaffected. See [`examples/agent-e2e/`](../examples/agent-e2e/).
+
+> **ConditionalInput value space:** when an `extraction-method` (or any radio `ConditionalInput`) exposes extra options via a condition's `overrideEnum`, the generated `_e2e_substitutions.py` types that field as the **union** of `baseEnum` and every `overrideEnum` (e.g. `Literal["direct", "agent"]`), so an agent-mode e2e run can submit `"agent"`.
 
 ### Pipeline Block
 
@@ -379,6 +389,20 @@ To enable, set `notifications = true`. To retarget the alert (different
 ## Legacy: NativeApp.pkl — Base Module (pre-v0.10.0)
 
 > **Deprecated.** New contracts should amend `App.pkl`. `NativeApp.pkl` remains resolvable for existing apps during the v0.10.x transition period; the hard cutover is planned for v1.0.
+
+### Migrating `workflowType` / `workflowTypeOverride` to App.pkl
+
+The biggest mechanical difference when switching the `amends` line is how the
+manifest `workflow_type` is derived. NativeApp auto-converts PascalCase to
+kebab-case; App.pkl does not — it emits the value verbatim.
+
+| NativeApp.pkl | Manifest value | App.pkl equivalent |
+|---|---|---|
+| `workflowType = "SodaApp"` | `"soda-app"` | `workflowType = "soda-app"` |
+| `workflowType = "SodaApp"` and `name = "soda-app"` | `"soda-app"` | *(omit — App.pkl defaults to kebab-casing `name`)* |
+| `workflowTypeOverride = "teradata-app:crawler"` | `"teradata-app:crawler"` | `workflowType = "teradata-app:crawler"` |
+
+Rule of thumb: take whatever string the old contract would have written into the manifest and set that as `workflowType` in App.pkl. If that string is identical to `name`, omit `workflowType` entirely.
 
 Developers amend this module. It defines the app's identity, credentials, workflow form, and manifest.
 
@@ -1109,6 +1133,50 @@ They default to the current generated shape and should only be changed when
 matching an existing hand-authored configmap or intentionally rendering static
 UI that should not become a runtime input.
 
+### Field Lifecycle — `lifecycle` and `lifecycleMessage`
+
+Every `UIElement` carries two lifecycle properties that control backwards-compatible
+field retirement:
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `lifecycle` | `"active"\|"deprecated"\|"sunset"` | `"active"` | Lifecycle state of this field (see below). |
+| `lifecycleMessage` | `String?` | null | Optional human-readable note shown alongside the deprecation warning. Ignored when `lifecycle = "active"`. |
+
+**Lifecycle states:**
+
+- **`active`** — field is in active use. Generated Python is unchanged.
+- **`deprecated`** — field is still accepted but consumers should migrate away.
+  Generated Python: `field: T = Field(default=..., deprecated=True)`. Pydantic v2 emits a
+  runtime `DeprecationWarning` when the field is set.
+- **`sunset`** — field is retained only for backwards-compatibility and is no longer consumed
+  by the app. A stronger form of deprecated.
+  Generated Python: `field: T = Field(default=..., deprecated=True, json_schema_extra={"x-lifecycle": "sunset"})`.
+
+**Invariants:**
+- A field's lifecycle may only *advance* (`active → deprecated → sunset`).
+- A field is **never removed** and its **type never changes** — these are breaking contract
+  changes caught by the `B005 NonAdditiveContractChange` conformance rule.
+- A "rename" is achieved by deprecating/sunsetting the old field and adding a new field
+  with the new name and a default value.
+
+```pkl
+// Deprecate an old field:
+["legacy_timeout"] = new NumericInput {
+  title = "Legacy timeout"
+  default = 60
+  lifecycle = "deprecated"
+  lifecycleMessage = "Use the standard pipeline timeout instead."
+}
+
+// Sunset an old field (no longer consumed):
+["old_batch_mode"] = new BooleanInput {
+  title = "Old batch mode"
+  default = false
+  lifecycle = "sunset"
+}
+```
+
 ### UIRule — Conditional Visibility
 
 ```pkl
@@ -1124,11 +1192,45 @@ class UIRule {
 
 | Class | Widget | Python Type | Notes |
 |---|---|---|---|
-| `TextInput` | `input` | `str` | `placeholderText`, `defaultValue`, `validationRules` |
-| `TextBoxInput` | `TextInput` | `str` | Multi-line |
+| `TextInput` | `input` | `str` | `placeholderText`, `defaultValue`, `validationRules`, `validation` |
+| `TextBoxInput` | `TextInput` | `str` | Multi-line. `validation` |
 | `PasswordInput` | `password` | `str` | Masked input |
 | `NumericInput` | `inputNumber` | `int` | `default`, `placeholderValue` |
 | `InputRepeater` | `inputRepeater` | `list[str]` | Repeatable text inputs. `placeholderText`, `validationRules` |
+
+##### `validation` (WidgetValidation)
+
+`TextInput` and `TextBoxInput` accept an optional `validation` block for opt-in
+JSON or regex validation. It renders into the widget's `ui.validation` object,
+which the frontend reads directly to build an Ant Design validation rule.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `type` | `"json"` \| `"regex"` | (required) | `"json"` rejects values that do not parse as JSON; `"regex"` rejects values that do not match `pattern`. |
+| `pattern` | `String?` | null | Required when `type = "regex"`; must be null for `"json"` (rejected otherwise). |
+| `message` | `String?` | null | Custom error message. When unset the frontend shows a generic message. |
+| `formatOnBlur` | `Boolean?` | null | Only meaningful for `"json"`. Frontend defaults to pretty-printing on blur; set `false` to disable while keeping validation. |
+
+```pkl
+["custom_attributes"] = new TextBoxInput {
+  title = "Custom attributes"
+  validation = new { type = "json"; formatOnBlur = true }
+}
+["table_prefix"] = new TextInput {
+  title = "Table prefix"
+  validation = new {
+    type = "regex"
+    pattern = "^[a-z0-9_]+$"
+    message = "Only lowercase alphanumeric and underscores allowed."
+  }
+}
+```
+
+This is separate from `validationRules` / `rules` (the Ant Design `RuleObject`
+array) — both can be set independently. `validation` is UI-only: it does not
+change the field's value type, the generated manifest arg, or the `_input.py`
+field. When unset, no `validation` key is emitted and output is unchanged. See
+the [`full`](../examples/full/) example.
 
 #### Selection
 
@@ -1146,7 +1248,7 @@ class UIRule {
 | `ConnectionCreator` | `connection` | `Connection \| None` | `placeholderText` |
 | `ConnectionSelector` | `connectionSelector` | `str` | `multiSelect`, `connectorFilter` (single), `connectorFilters` (multi — emits `connectorName` as list), `connectionCategories`, `selectedConnectorName`, `selectedCredentialGuid`, `emitMode`, `emitStart` |
 | `ConnectionRefInput` | `connectionSelector` | `ConnectionRef \| None` or `list[ConnectionRef]` | Emits `ui.shouldIncludeConnectionInfo = true`. Use when the workflow needs both `attributes.qualifiedName` and `attributes.defaultCredentialGuid` from the selected connection. Supports `multiSelect`, `connectorFilter`, `connectorFilters`, `connectionCategories`, `selectedConnectorName`, `selectedCredentialGuid`, `displayOnlyMultiConnections`, `emitMode`, `emitStart` |
-| `CredentialInput` | `credential` | `str` | `credType` (required), `authTypeVsLabel`, `hiddenFields`, `additionalDisplayFields` — triggers credential form fetch |
+| `CredentialInput` | `credential` | `str` | `credType` (required), `placeholderText`, `authTypeVsLabel`, `hiddenFields`, `additionalDisplayFields` — triggers credential form fetch |
 | `APITokenSelector` | `apiTokenSelect` | `str` | Select existing API token |
 
 `ConnectionRefInput` uses the same frontend widget as `ConnectionSelector`, but

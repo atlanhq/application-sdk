@@ -147,6 +147,41 @@ class ValidationRule {
   whitespace: Boolean?
 }
 
+/// Opt-in JSON or regex validation for input widgets, emitted as the widget's
+/// `ui.validation` object.
+///
+/// This is separate from [ValidationRule] / `rules`. The workflows-v2 frontend
+/// reads `ui.validation` directly and builds an Ant Design rule from it:
+///
+/// - `type = "json"` rejects values that do not parse as JSON and, unless
+///   [formatOnBlur] is `false`, pretty-prints the field on blur.
+/// - `type = "regex"` rejects values that do not match [pattern].
+///
+/// Default: unset. When unset, no `validation` key is emitted and the widget's
+/// output is unchanged. Use it for free-text fields that must hold JSON or
+/// match a strict format. It only adds frontend validation/formatting; it does
+/// not change the value type, the manifest arg, or the generated `_input.py`
+/// field. It does not interact with the existing `rules`/`validationRules`
+/// pipeline — both can be set independently.
+class WidgetValidation {
+  /// Validation strategy. `"json"` checks the value parses as JSON; `"regex"`
+  /// checks it matches [pattern].
+  type: "json"|"regex"
+
+  /// Regex the value must match. Required when [type] is `"regex"`; must be null
+  /// for `"json"` (a pattern has no meaning there).
+  pattern: String?(if (type == "regex") this != null else this == null)
+
+  /// Custom error message shown when validation fails. When unset the frontend
+  /// falls back to a generic message (`"Invalid JSON"` / `"Invalid value"`).
+  message: String?
+
+  /// Whether to pretty-print the value on blur. Only meaningful for
+  /// `type = "json"`. Leave null to inherit the frontend default (true for
+  /// JSON); set `false` to disable formatting while keeping validation.
+  formatOnBlur: Boolean?
+}
+
 /// Base class for all UI elements that can be used in the configuration of a package.
 abstract class UIElement {
   /// Type of the element.
@@ -193,6 +228,27 @@ abstract class UIElement {
 
   /// Default fallback value to use for the element if nothing is selected or entered in the UI.
   hidden fallback: Any? = null
+
+  /// Field lifecycle state.
+  ///
+  /// * `active` (default) — field is in active use.
+  /// * `deprecated` — still accepted but discouraged; consumers should migrate away.
+  ///   The generated Python field carries `Field(deprecated=True)`, which emits a
+  ///   runtime `DeprecationWarning` when the field is set.
+  /// * `sunset` — retained for backwards-compatibility but no longer consumed by
+  ///   the app; a stronger form of deprecated.  The generated Python field carries
+  ///   `Field(deprecated=True, json_schema_extra={"x-lifecycle": "sunset"})`.
+  ///
+  /// A field's lifecycle may only advance (active → deprecated → sunset).  The field
+  /// is NEVER removed and its type NEVER changes — removal or type change is a
+  /// breaking contract change caught by the B005 conformance rule.
+  hidden lifecycle: "active"|"deprecated"|"sunset" = "active"
+
+  /// Optional deprecation message passed to Pydantic's `Field(deprecated="<msg>")`.
+  /// When set, the generated field uses `Field(deprecated="<message>")` instead of
+  /// `Field(deprecated=True)`, providing a richer runtime warning.
+  /// Ignored when `lifecycle` is `"active"`.
+  hidden lifecycleMessage: String?
 
   /// (Generated) UI configuration for the element.
   fixed ui: Widget|Mapping<String, Any> = new Widget {
@@ -341,6 +397,9 @@ class Widget {
   /// Validation rules for the widget.
   rules: Listing<ValidationRule>?
 
+  /// Opt-in JSON/regex validation config read from `ui.validation` by the frontend.
+  validation: WidgetValidation?
+
   /// Agent configuration entries for agent widget.
   agentConfigs: Listing<Any>?
 
@@ -460,6 +519,10 @@ class TextInput extends UIElement {
 
   hidden validationRules: Listing<ValidationRule>?
 
+  /// Opt-in JSON/regex validation rendered into `ui.validation`. Independent of
+  /// `validationRules`; both can be set.
+  hidden validation: WidgetValidation?
+
   fixed ui {
     widget = "input"
     placeholder = placeholderText
@@ -470,6 +533,7 @@ class TextInput extends UIElement {
     message = validationMessage
     key = keyOverride
     rules = validationRules
+    validation = outer.validation
   }
 }
 
@@ -480,9 +544,13 @@ class TextBoxInput extends UIElement {
 
   hidden placeholderText: String = ""
 
+  /// Opt-in JSON/regex validation rendered into `ui.validation`.
+  hidden validation: WidgetValidation?
+
   fixed ui {
     widget = "TextInput"
     placeholder = placeholderText
+    validation = outer.validation
   }
 }
 
@@ -841,6 +909,9 @@ class CredentialInput extends UIElement {
 
   hidden allowTestAuthentication: Boolean = true
 
+  /// (Optional) Placeholder text rendered as `ui.placeholder`.
+  hidden placeholderText: String?
+
   hidden authTypeVsLabel: Mapping<String, String>?
 
   hidden hiddenFields: Listing<String>?
@@ -851,6 +922,7 @@ class CredentialInput extends UIElement {
     widget = "credential"
     credentialType = credType
     isTestAuthenticationDisabled = !allowTestAuthentication
+    placeholder = placeholderText
     authTypeVsLabel = outer.authTypeVsLabel
     hiddenFields = outer.hiddenFields
     additionalDisplayFields = outer.additionalDisplayFields

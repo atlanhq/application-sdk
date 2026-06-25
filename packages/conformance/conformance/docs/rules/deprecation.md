@@ -5,7 +5,7 @@
 
 # Backwards-Compatibility / Deprecation Rules (B-series)
 
-**4 rules** · Checker: `suite.checks.deprecation` (AST-based)
+**6 rules** · Checker: `suite.checks.deprecation` (AST-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -27,6 +27,8 @@ reassigned.
 | [B002](#b002) | `MalformedDeprecationNotice` | `warn` | `sdk` | `deprecation-hygiene` | — | 0.5.0 |
 | [B003](#b003) | `OverdueDeprecationRemoval` | `warn` | `sdk` | `deprecation-hygiene` | — | 0.5.0 |
 | [B004](#b004) | `UnmarkedDeprecationClaim` | `warn` | `sdk` | `deprecation-hygiene` | — | 0.5.0 |
+| [B005](#b005) | `NonAdditiveContractChange` | `block` | `both` | `contract-backwards-compatibility` | — | 0.7.0 |
+| [B006](#b006) | `StaleContractLedger` | `block` | `both` | `contract-backwards-compatibility` | — | 0.7.0 |
 
 ---
 
@@ -134,5 +136,74 @@ routes it to residue with a suggestion to add a marker.
 
 Scoped to real symbol docstrings (not, e.g., a field literally named `deprecated`),
 biased toward low false positives at WARN.
+
+---
+
+## B005 — `NonAdditiveContractChange` {#b005}
+
+**Tier:** `block` · **Scope:** `both` · **Category:** `contract-backwards-compatibility` · **Autofixable:** — · **Since:** 0.7.0
+
+> An entrypoint contract field was removed or had its type changed
+
+**Rationale:** Entrypoint contract fields are a serialization promise to every deployed consumer.
+Removing a field or changing its type silently corrupts payloads that already encode the
+old shape — the damage is invisible until runtime. The only valid operations on an
+existing entrypoint field are: mark it deprecated (keep it, discourage use), mark it
+sunset (keep it, stop consuming), or leave it unchanged. A rename must be expressed as
+deprecate/sunset the old field + add a new field. The committed
+contract_schema.lock.json ledger (append-only, regenerated in-PR) provides the baseline
+so the check is single-checkout and offline. BLOCK from day 0: backwards-compat is a
+property that must already hold; there is no warn-first window.
+
+Fires when a ledger entry for an entrypoint contract field is either:
+
+* **absent from the live contract** — the field was removed (a rename is   caught here:
+the old name is gone); or * **present with a different canonical type** — the field's
+annotation   changed (e.g. `str` → `int`, or `Optional[str]` → `str`).
+
+Type comparison uses canonical normalized strings: `Optional[X]` and `X | None` are
+equivalent, as are `List[X]` and `list[X]`, so purely syntactic rewrites do not trigger
+a false positive.
+
+Only entrypoint contracts are gated — Input/Output classes bound to an
+`@entrypoint`-decorated method or an `App.run()` method.  `@task` boundary contracts are
+explicitly excluded: tasks are internal and may evolve with breaking changes.
+
+The ledger is append-only and machine-generated, so regeneration can only *add* — it can
+never launder a removal.  To retire a field: mark it `deprecated` or `sunset` in the Pkl
+widget definition, regenerate the contract, run `gen-contract-ledger` to record the new
+status, and commit the updated ledger in the same PR.
+
+---
+
+## B006 — `StaleContractLedger` {#b006}
+
+**Tier:** `block` · **Scope:** `both` · **Category:** `contract-backwards-compatibility` · **Autofixable:** — · **Since:** 0.7.0
+
+> An entrypoint contract field is missing from contract_schema.lock.json
+
+**Rationale:** B005 can only guard removals and type changes against the committed ledger. If a new
+entrypoint field is not recorded in the ledger, B005 has a blind spot: the next PR that
+removes it will see no ledger entry and pass silently. B006 closes that gap — a live
+field not in the ledger means the ledger was not regenerated after the field was added.
+Because the generator is append-only (it can never delete entries or change a recorded
+type), regeneration is always safe: it can only add. BLOCK because a stale ledger
+defeats the backwards-compat guarantee.
+
+Fires when a live entrypoint contract field has no corresponding entry in
+`contract_schema.lock.json`.  This means the ledger was not regenerated after the field
+was introduced.
+
+Fix: run `uv run atlan-application-sdk-conformance gen-contract-ledger` and commit the
+updated ledger in the same PR as the contract change.
+
+The generator is append-only — it appends new live fields and refreshes `status` from
+source but never deletes an entry or rewrites a recorded `type`.  Regenerating after a
+removal will therefore *not* launder the removal: B005 will still fire against the
+persisted ledger entry.
+
+Suppression: `# conformance: ignore[B006] <reason>` on the field line. Only appropriate
+when the contract is pre-deployment (no consumers) and the ledger will be regenerated
+before the first deploy.
 
 ---

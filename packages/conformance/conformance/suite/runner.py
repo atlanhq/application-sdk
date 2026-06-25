@@ -22,6 +22,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+import conformance.suite.checks.entrypoint as entrypoint
 import conformance.suite.checks.logging as logging_checks
 from conformance.suite.checks import (
     actions_pinning,
@@ -29,6 +30,7 @@ from conformance.suite.checks import (
     dependency_conformance,
     deprecation,
     dockerfile_conformance,
+    entrypoint_alignment,
     error_handling,
     gitignore_entries,
     integration_marking,
@@ -104,6 +106,11 @@ _CHECKS: list[CheckRegistration] = [
         scan_all=orchestration.scan_all,
     ),
     CheckRegistration(
+        series=entrypoint.SERIES,
+        discover=entrypoint.discover,
+        scan_path=entrypoint.scan_path,
+    ),
+    CheckRegistration(
         series=logging_checks.SERIES,
         discover=logging_checks.discover,
         scan_path=logging_checks.scan_path,
@@ -124,6 +131,12 @@ _CHECKS: list[CheckRegistration] = [
         discover=deprecation.discover,
         scan_path=deprecation.scan_path,
         scan_all=deprecation.scan_all,
+    ),
+    CheckRegistration(
+        series=entrypoint_alignment.SERIES,
+        discover=entrypoint_alignment.discover,
+        scan_path=entrypoint_alignment.scan_path,
+        scan_all=entrypoint_alignment.scan_all,
     ),
 ]
 

@@ -343,12 +343,26 @@ def _build_s3_config(
             base_session_token=base_session_token,
         )
     else:
-        if _nonempty(meta, "accessKey"):
-            config["aws_access_key_id"] = meta["accessKey"]
-        if _nonempty(meta, "secretKey"):
-            config["aws_secret_access_key"] = meta["secretKey"]
-        if _nonempty(meta, "sessionToken"):
-            config["aws_session_token"] = meta["sessionToken"]
+        access_key = _nonempty(meta, "accessKey")
+        secret_key = _nonempty(meta, "secretKey")
+        if access_key and secret_key:
+            config["aws_access_key_id"] = access_key
+            config["aws_secret_access_key"] = secret_key
+            if _nonempty(meta, "sessionToken"):
+                config["aws_session_token"] = meta["sessionToken"]
+        elif access_key or secret_key:
+            _get_logger().warning(
+                "S3 binding '%s': both accessKey and secretKey are required for "
+                "static credentials; only one was set — ignoring both and falling "
+                "back to the ambient credential chain",
+                name,
+            )
+        elif _nonempty(meta, "sessionToken"):
+            _get_logger().warning(
+                "S3 binding '%s': sessionToken requires accessKey + secretKey; "
+                "ignoring sessionToken and falling back to the ambient credential chain",
+                name,
+            )
 
     # --- Storage class (obstore ≥ 0.10.0 put attribute) -------------------
     storage_class = _nonempty(meta, "storageClass")

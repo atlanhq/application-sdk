@@ -6,7 +6,7 @@
       "activity_display_name": "Discover",
       "app_name": "full-featured",
       "inputs": {
-        "workflow_type": "full-featured-example-workflow",
+        "workflow_type": "FullFeaturedExampleWorkflow",
         "app_name": "full-featured",
         "app_id": "",
         "argo_workflow_slug": "",
@@ -22,6 +22,10 @@
           "load_to_atlan": "{{load-to-atlan}}",
           "log_level": "{{log_level}}",
           "lineage_depth": "{{lineage_depth}}",
+          "table_prefix": "{{table_prefix}}",
+          "custom_attributes": "{{custom_attributes}}",
+          "legacy_timeout": "{{legacy_timeout}}",
+          "old_batch_mode": "{{old_batch_mode}}",
           "schemas": "{{schemas}}"
         }
       },

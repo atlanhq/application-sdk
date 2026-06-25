@@ -3,29 +3,48 @@
 Validate base-allowlist.json entries against the expiry policy.
 
 Rules enforced:
-  1. Every entry must have: package, severity, reason, expires, added_by
+  1. Every entry must have: package, severity, reason, expires, added_by,
+     case, ticket
   2. `expires` must be a valid YYYY-MM-DD date
   3. `expires` must not already be in the past
   4. `expires` must be within the max window for the entry's severity:
-       CRITICAL → _expiry_policy.CRITICAL days (default 15)
+       CRITICAL → _expiry_policy.CRITICAL days (default 7)
        HIGH     → _expiry_policy.HIGH days     (default 30)
+     Only CRITICAL and HIGH are allowlistable — MEDIUM/LOW are tracked on
+     Linear tickets only (their SLAs are not gated), so any other severity
+     is rejected here.
+  5. `case` must be one of 1|2|3|4 (the vuln-triage classification), `ticket`
+     the Linear identifier driving the entry, and `fix_pr` (optional) a URL.
 
-The expiry policy is read from the `_expiry_policy` metadata key in the
-allowlist itself so the security team can adjust limits without touching code:
+The expiry windows ARE the remediation SLA, measured from first detection:
+CRITICAL 7 days, HIGH 30 days. They are read from the `_expiry_policy`
+metadata key in the allowlist itself so the security team can adjust limits
+without touching code:
 
   {
-    "_expiry_policy": { "CRITICAL": 15, "HIGH": 30 },
-    "CVE-2026-12345": { ... }
+    "_expiry_policy": { "CRITICAL": 7, "HIGH": 30 },
+    "CVE-2026-12345": { "case": 1, "ticket": "BLDX-1234", ... }
   }
 """
 
 import json
 import sys
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 ALLOWLIST_PATH = ".security/base-allowlist.json"
-DEFAULT_POLICY = {"CRITICAL": 15, "HIGH": 30}
-REQUIRED_FIELDS = ["package", "severity", "reason", "expires", "added_by"]
+DEFAULT_POLICY = {"CRITICAL": 7, "HIGH": 30}
+REQUIRED_FIELDS = [
+    "package",
+    "severity",
+    "reason",
+    "expires",
+    "added_by",
+    "case",
+    "ticket",
+]
+
+# Valid vuln-triage classification cases (see .mothership/vuln-triage/ORCHESTRATION.md).
+VALID_CASES = {"1", "2", "3", "4"}
 
 # F-cross.2 compliance fields. Optional during the migration window; promoted
 # to required once all entries are filled in.
@@ -44,7 +63,7 @@ def main() -> int:
         return 1
 
     policy = {**DEFAULT_POLICY, **data.get("_expiry_policy", {})}
-    today = datetime.utcnow().date()
+    today = datetime.now(UTC).date()
     errors = []
 
     entries = {k: v for k, v in data.items() if not k.startswith("_")}
@@ -117,6 +136,20 @@ def main() -> int:
         if sup is not None and not isinstance(sup, bool):
             errors.append(
                 f"{cve_id}: suppressed must be a bool, got {type(sup).__name__}"
+            )
+
+        # 6. Triage metadata: case (1-4) and an optional fix PR URL.
+        case = entry.get("case")
+        if str(case) not in VALID_CASES:
+            errors.append(
+                f"{cve_id}: case '{case}' must be one of 1, 2, 3, 4 "
+                f"(vuln-triage classification)"
+            )
+
+        fix_pr = entry.get("fix_pr")
+        if fix_pr is not None and not str(fix_pr).startswith("https://"):
+            errors.append(
+                f"{cve_id}: fix_pr '{fix_pr}' must be an https URL to the fix PR"
             )
 
     if errors:

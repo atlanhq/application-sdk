@@ -30,6 +30,13 @@ name: Build & Publish Atlan App
 
 on:
   workflow_call:
+    outputs:
+      ghcr_image:
+        description: "Immutable GHCR image ref that was built+pushed (e.g. ghcr.io/atlanhq/atlan-foo-app:branch-sha7). Lets callers consume the exact tag instead of recomputing it."
+        value: ${{ jobs.prepare.outputs.ghcr_image }}
+      dockerhub_image:
+        description: "Docker Hub image ref (set when published)."
+        value: ${{ jobs.prepare.outputs.dockerhub_image }}
     inputs:
       ref:
         description: "Branch or SHA to checkout and build (default: caller's ref)"
@@ -404,7 +411,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
         with:
-          version: "0.11.23"
+          version: "0.11.24"
 
       # ── 1. v3 shape ─────────────────────────────────────────────────────────
       - name: Install SDK (migration tooling)

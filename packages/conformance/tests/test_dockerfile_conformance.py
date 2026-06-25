@@ -176,6 +176,73 @@ def test_i001_bare_suppress_without_reason_not_accepted() -> None:
     assert "I001" in _active(src)
 
 
+# ── I001 — build-arg base image (FROM ${BASE_IMAGE}) ─────────────────────────
+
+
+def test_i001_silent_on_arg_base_image_with_approved_default() -> None:
+    # The real metabase shape: ARG default pins the approved base, FROM uses it.
+    src = (
+        "ARG BASE_IMAGE=registry.atlan.com/public/app-runtime-base:3\n"
+        "FROM ${BASE_IMAGE}\n"
+        "ENV ATLAN_APP_MODULE=myapp:MyApp\n"
+    )
+    assert "I001" not in _ids(src)
+
+
+def test_i001_silent_on_braceless_arg_base_image_with_approved_default() -> None:
+    src = (
+        "ARG BASE_IMAGE=registry.atlan.com/public/app-runtime-base:3\n"
+        "FROM $BASE_IMAGE\n"
+        "ENV ATLAN_APP_MODULE=myapp:MyApp\n"
+    )
+    assert "I001" not in _ids(src)
+
+
+def test_i001_silent_on_arg_base_image_with_digest_pinned_default() -> None:
+    digest = "a" * 64
+    src = (
+        f"ARG BASE_IMAGE=registry.atlan.com/public/app-runtime-base:3@sha256:{digest}\n"
+        "FROM ${BASE_IMAGE}\n"
+        "ENV ATLAN_APP_MODULE=myapp:MyApp\n"
+    )
+    assert "I001" not in _ids(src)
+
+
+def test_i001_silent_on_arg_base_image_bare_redeclare_keeps_default() -> None:
+    # A bare `ARG BASE_IMAGE` (multi-stage re-import) must not clear the default.
+    src = (
+        "ARG BASE_IMAGE=registry.atlan.com/public/app-runtime-base:3\n"
+        "FROM ${BASE_IMAGE} AS builder\n"
+        "ARG BASE_IMAGE\n"
+        "FROM ${BASE_IMAGE}\n"
+        "ENV ATLAN_APP_MODULE=myapp:MyApp\n"
+    )
+    assert "I001" not in _ids(src)
+
+
+def test_i001_fires_on_arg_base_image_without_default() -> None:
+    src = "ARG BASE_IMAGE\n" "FROM ${BASE_IMAGE}\n" "ENV ATLAN_APP_MODULE=myapp:MyApp\n"
+    findings = [f for f in scan_text(src, _FILE) if f.rule_id == "I001"]
+    assert len(findings) == 1
+    assert "no resolvable default" in findings[0].message
+
+
+def test_i001_fires_on_arg_ref_with_no_arg_declared() -> None:
+    src = "FROM ${BASE_IMAGE}\nENV ATLAN_APP_MODULE=myapp:MyApp\n"
+    findings = [f for f in scan_text(src, _FILE) if f.rule_id == "I001"]
+    assert len(findings) == 1
+    assert "no resolvable default" in findings[0].message
+
+
+def test_i001_fires_on_arg_base_image_wrong_default() -> None:
+    src = (
+        "ARG BASE_IMAGE=python:3.11\n"
+        "FROM ${BASE_IMAGE}\n"
+        "ENV ATLAN_APP_MODULE=myapp:MyApp\n"
+    )
+    assert "I001" in _ids(src)
+
+
 # ── I002 — DockerfileEntrypointOverride ──────────────────────────────────────
 
 

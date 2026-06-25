@@ -5,14 +5,16 @@
 # Runs each rule series (C, E, P, O, D, L, T, I) as a separate leg of one matrix job so
 # each appears as its own status check:
 #   Conformance / suite / CI
-#   Conformance / suite / Error-handling
+#   Conformance / suite / Error handling
 #   Conformance / suite / Prescriptions
 #   Conformance / suite / Optimizations
-#   Conformance / suite / Dependency
+#   Conformance / suite / Dependencies
 #   Conformance / suite / Logging
 #   Conformance / suite / Tests
-#   Conformance / suite / Container image
-#   Conformance / suite / Conformance Gate  (required gate)
+#   Conformance / suite / Container images
+#   Conformance / suite / Deprecations
+#   Conformance / Contracts
+#   Conformance / Conformance Gate  (required gate)
 #
 # The series share an identical job body (checkout → changed-files filter → uv →
 # run → upload → Security-tab upload), so they are expressed as a single
@@ -156,6 +158,16 @@ on:
         required: false
         default: ""
         type: string
+      ledger-path:
+        description: >
+          Repo-relative path to the app's committed contract ledger
+          (contract_schema.lock.json).  The guard compares this file between
+          origin/main and HEAD and blocks any deletion or type change.
+          Default: contract_schema.lock.json (repo root — convention for app repos).
+          The SDK overrides this to packages/conformance/conformance/data/contract_schema.lock.json.
+        required: false
+        default: "contract_schema.lock.json"
+        type: string
       force-all:
         description: >
           Run every rule series regardless of which paths changed.  Same effect
@@ -189,14 +201,20 @@ jobs:
             paths: ".github/**"
             exclude_paths: ${{ inputs.exclude-paths-c }}
           - series: E
-            name: "Error-handling"
+            name: "Error handling"
             slug: error-handling
             paths: "**/*.py"
             exclude_paths: ${{ inputs.exclude-paths-e }}
           - series: P
             name: "Prescriptions"
             slug: prescriptions
-            paths: "**/*.py"
+            # P016 reads both Python sources (@entrypoint code) and the
+            # app/generated/ + contract/ trees (contract-side artifacts), so a
+            # PR that only re-runs pkl eval and commits regenerated app/generated/
+            # files — the canonical BLDX-1425 drift shape — must still trigger
+            # this leg.  Brace expansion (micromatch) covers all three sources
+            # with a single paths filter entry and no template change.
+            paths: "{**/*.py,app/generated/**,contract/**}"
             exclude_paths: ${{ inputs.exclude-paths-p }}
           - series: O
             name: "Optimizations"
@@ -210,7 +228,7 @@ jobs:
           # staleness is caught on push to main, where every leg runs
           # unconditionally.  Acceptable at WARN tier (mirrors the T-series above).
           - series: D
-            name: "Dependency"
+            name: "Dependencies"
             slug: dependency
             paths: "**/pyproject.toml"
             exclude_paths: ${{ inputs.exclude-paths-d }}
@@ -239,7 +257,7 @@ jobs:
           # since the SDK Dockerfile builds the base image, not a consumer app.
           # Watches only the root Dockerfile so Python-only PRs don't trigger it.
           - series: I
-            name: "Container image"
+            name: "Container images"
             slug: container-image
             paths: "Dockerfile"
             exclude_paths: ${{ inputs.exclude-paths-i }}
@@ -248,7 +266,7 @@ jobs:
           # authoring.  Scope is auto-detected per caller, so on a consumer app
           # only B001 runs and on the SDK only B002–B004 run — no per-app config.
           - series: B
-            name: "Deprecation"
+            name: "Deprecations"
             slug: deprecation
             paths: "**/*.py"
             exclude_paths: ${{ inputs.exclude-paths-b }}
@@ -347,6 +365,46 @@ jobs:
         with:
           name: conformance-${{ matrix.slug }}-sarif
           path: ${{ matrix.slug }}.sarif
+
+  # ── Contract ledger append-only guard ─────────────────────────────────────
+  # Verifies that no entry was deleted from the committed contract ledger and
+  # no recorded type was changed between origin/main and HEAD.  Adding entries
+  # and status changes (active→deprecated→sunset) are always allowed.
+  #
+  # Uses `uvx atlan-application-sdk-conformance ledger-guard` so the guard
+  # travels with the published package — no local script copy needed in app repos.
+  # The ledger-path input lets each caller point to its own ledger; the SDK
+  # overrides the default via conformance.yaml / sdk-gate.yaml.
+  #
+  # Requires fetch-depth: 0 so the full git history (and origin/main) is
+  # available to `git show`.  Skipped on push to main (no base-ref diff).
+  contract-ledger-guard:
+    name: "Contracts"
+    runs-on: ubuntu-latest
+    if: inputs.event_name != 'push'
+    steps:
+      - name: "Checkout (full history)"
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: "Set up uv"
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+      - name: "Guard contract_schema.lock.json (published package)"
+        if: inputs.conformance-ref == ''
+        env:
+          LEDGER_PATH: ${{ inputs.ledger-path }}
+        run: uvx atlan-application-sdk-conformance ledger-guard --base-ref origin/main --ledger-path "$LEDGER_PATH"
+
+      - name: "Guard contract_schema.lock.json (in-flight conformance-ref)"
+        if: inputs.conformance-ref != ''
+        env:
+          LEDGER_PATH: ${{ inputs.ledger-path }}
+        run: >-
+          uvx
+          --from "atlan-application-sdk-conformance @ git+https://github.com/atlanhq/application-sdk@${{ inputs.conformance-ref }}#subdirectory=packages/conformance"
+          atlan-application-sdk-conformance ledger-guard --base-ref origin/main --ledger-path "$LEDGER_PATH"
 
   # ── Required gate ─────────────────────────────────────────────────────────
   # Always runs so it can be marked a required check without ever becoming

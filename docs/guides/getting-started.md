@@ -6,16 +6,16 @@ This guide walks you through building and running your first application on the 
 
 ## Prerequisites
 
-You need the following tools installed:
+You need just two tools installed:
 
 | Tool | Minimum version | Install |
 |------|----------------|---------|
 | Python | 3.11 | [python.org](https://www.python.org/downloads/) |
 | uv | latest | [docs.astral.sh/uv](https://docs.astral.sh/uv/getting-started/installation/) |
-| Temporal CLI | latest | [docs.temporal.io/cli](https://docs.temporal.io/cli#install) |
-| Dapr CLI | 1.14+ | [docs.dapr.io/getting-started/install-dapr-cli/](https://docs.dapr.io/getting-started/install-dapr-cli/) |
 
-For platform-specific setup instructions see the [macOS](../setup/MAC.md), [Linux](../setup/LINUX.md), or [Windows](../setup/WINDOWS.md) setup guides.
+The SDK auto-downloads and manages everything else — the Dapr runtime (`daprd`) and an in-process Temporal server — the first time you run an app locally. You do **not** need to install the Dapr or Temporal CLIs.
+
+For platform-specific setup see the [macOS](../setup/MAC.md), [Linux](../setup/LINUX.md), or [Windows](../setup/WINDOWS.md) setup guides.
 
 ---
 
@@ -59,90 +59,9 @@ class HelloApp(App):
 
 ---
 
-## Step 3: Add Dapr components
+## Step 3: Run your app
 
-The SDK uses Dapr for state, secrets, and pub/sub. Copy the ready-made component definitions into your project:
-
-```bash
-# If you have the SDK repo cloned locally:
-cp -r /path/to/application-sdk/components ./components
-
-# Otherwise, download them directly:
-curl -sL https://github.com/atlanhq/application-sdk/archive/refs/heads/main.tar.gz \
-  | tar -xz --strip-components=2 application-sdk-main/components
-```
-
-Your project should now look like:
-
-```
-my-app/
-├── app.py
-├── components/       # Dapr component YAMLs
-├── pyproject.toml
-└── .python-version
-```
-
----
-
-## Step 4: Start local infrastructure
-
-Open two terminal tabs.
-
-**Tab 1 — Temporal:**
-```bash
-temporal server start-dev --db-filename temporal.db
-```
-
-**Tab 2 — Dapr sidecar:**
-```bash
-dapr run \
-  --app-id app \
-  --app-port 8000 \
-  --dapr-http-port 3500 \
-  --dapr-grpc-port 50001 \
-  --scheduler-host-address '' \
-  --placement-host-address '' \
-  --max-body-size 1024Mi \
-  --config components/configuration.yaml \
-  --resources-path components
-```
-
----
-
-## Step 5: Run your app
-
-Back in your project directory, run the combined handler + worker:
-
-```bash
-DAPR_HTTP_PORT=3500 DAPR_GRPC_PORT=50001 \
-  uv run application-sdk --mode combined --app app:HelloApp
-```
-
-The SDK starts:
-- A **handler** (FastAPI) on `http://localhost:8000`
-- A **worker** connected to Temporal on `localhost:7233`
-
----
-
-## Step 6: Trigger a workflow
-
-In a new terminal, send a workflow start request:
-
-```bash
-curl -s -X POST http://localhost:8000/workflows/v1/start \
-  -H "Content-Type: application/json" \
-  -d '{"name": "Atlan"}'
-```
-
-Then open [http://localhost:8233](http://localhost:8233) in your browser to see the completed workflow in the Temporal UI.
-
-> **Multi-entrypoint apps:** if your `App` has multiple `@entrypoint` methods, append `?entrypoint=<name>` to select one — e.g. `POST /workflows/v1/start?entrypoint=extract-metadata`. Apps with more than one entry point return HTTP 400 if the parameter is omitted. See [HTTP API reference](../reference/http-api.md).
-
----
-
-## Step 7: (optional) Use run_dev_combined
-
-For iterative local development, `run_dev_combined()` is more convenient than the CLI. It starts the handler and worker in one process, auto-provisions credentials, and kicks off a workflow automatically.
+For local development, `run_dev_combined()` runs the handler and worker in one process and boots the infrastructure for you — an **embedded Dapr runtime** and an **in-process Temporal server**, both auto-downloaded and managed by the SDK. Nothing else needs to be installed or running.
 
 Create `run_dev.py`:
 
@@ -155,14 +74,81 @@ asyncio.run(
     run_dev_combined(
         HelloApp,
         example_input={"name": "Atlan"},
+        temporal_ui=True,  # serve the Temporal Web UI at http://localhost:8233
     )
 )
 ```
 
-Run with Dapr sidecar already started (Step 4):
+Run it:
 
 ```bash
-DAPR_HTTP_PORT=3500 DAPR_GRPC_PORT=50001 uv run python run_dev.py
+uv run python run_dev.py
+```
+
+The SDK starts:
+- A **handler** (FastAPI) on `http://localhost:8000`
+- A **worker** connected to the in-process Temporal server
+- An **embedded Dapr sidecar** for state, secrets, and object storage
+
+On first run it downloads `daprd` (the version pinned by the SDK) and the Temporal server into a local cache (`~/.cache/atlan-sdk/`); later runs reuse them. Because `example_input` is supplied, a workflow is kicked off automatically on startup.
+
+---
+
+## Step 4: Inspect — and re-trigger — the workflow
+
+Open [http://localhost:8233](http://localhost:8233) in your browser to see the completed workflow in the embedded Temporal UI.
+
+To trigger another run via the HTTP API:
+
+```bash
+curl -s -X POST http://localhost:8000/workflows/v1/start \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Atlan"}'
+```
+
+> **Multi-entrypoint apps:** if your `App` has multiple `@entrypoint` methods, append `?entrypoint=<name>` to select one — e.g. `POST /workflows/v1/start?entrypoint=extract-metadata`. Apps with more than one entry point return HTTP 400 if the parameter is omitted. See [HTTP API reference](../reference/http-api.md).
+
+---
+
+## Optional: run against external Dapr + Temporal
+
+The embedded runtime above is the recommended local-dev path. If you want to mirror production more closely — where the app runs against a Dapr **sidecar** and a standalone **Temporal cluster** — you only need the [Temporal CLI](https://docs.temporal.io/cli#install). You do **not** need the Dapr CLI: production runs the `daprd` runtime directly (see the SDK container entrypoint), and the SDK can fetch the same pinned `daprd` binary for you. Then:
+
+**1. Add the SDK's Dapr component definitions to your project:**
+
+```bash
+curl -sL https://github.com/atlanhq/application-sdk/archive/refs/heads/main.tar.gz \
+  | tar -xz --strip-components=2 application-sdk-main/components
+```
+
+**2. Start Temporal and a Dapr sidecar in separate terminals:**
+
+```bash
+temporal server start-dev --db-filename temporal.db
+```
+
+```bash
+# Resolve the pinned daprd binary via the SDK (downloads it on first use;
+# no Dapr CLI / `dapr init` required), then run daprd directly:
+DAPRD=$(uv run python -c "from application_sdk.dev._dapr import _ensure_daprd_binary; print(_ensure_daprd_binary())")
+
+"$DAPRD" \
+  --app-id app \
+  --app-port 8000 \
+  --dapr-http-port 3500 \
+  --dapr-grpc-port 50001 \
+  --scheduler-host-address '' \
+  --placement-host-address '' \
+  --max-body-size 1024Mi \
+  --config components/configuration.yaml \
+  --resources-path components
+```
+
+**3. Run the app in combined mode against that sidecar:**
+
+```bash
+DAPR_HTTP_PORT=3500 DAPR_GRPC_PORT=50001 \
+  uv run application-sdk --mode combined --app app:HelloApp
 ```
 
 ---

@@ -641,13 +641,7 @@ class TestPrepareColumnExtractionQueriesInlineImports:
         """Happy path: tables exist → batched → JSON files written → uploaded."""
         extractor = _make_extractor()
 
-        # Fake daft DataFrame: filtered_df.select("table_id").iter_rows()
-        fake_df = MagicMock()
-        select_result = MagicMock()
-        select_result.iter_rows.return_value = iter(
-            [{"table_id": f"t{i}"} for i in range(5)]
-        )
-        fake_df.select.return_value = select_result
+        fake_rows = [{"table_id": f"t{i}"} for i in range(5)]
 
         with (
             patch(
@@ -668,7 +662,7 @@ class TestPrepareColumnExtractionQueriesInlineImports:
             ),
             patch(
                 "application_sdk.common.incremental.column_extraction.get_tables_needing_column_extraction",
-                return_value=(fake_df, 4, 1, 0),
+                return_value=(fake_rows, 4, 1, 0),
             ),
         ):
             out = await extractor.prepare_column_extraction_queries(
@@ -699,10 +693,7 @@ class TestPrepareColumnExtractionQueriesInlineImports:
         with previous_current_state_dir = None (lines 479-484)."""
         extractor = _make_extractor()
 
-        fake_df = MagicMock()
-        select_result = MagicMock()
-        select_result.iter_rows.return_value = iter([])
-        fake_df.select.return_value = select_result
+        fake_rows: list[dict] = []
 
         # Make get_persistent_artifacts_path return a path that exists but no
         # table dir / no json files, so the download branch is taken
@@ -732,7 +723,7 @@ class TestPrepareColumnExtractionQueriesInlineImports:
             ),
             patch(
                 "application_sdk.common.incremental.column_extraction.get_tables_needing_column_extraction",
-                return_value=(fake_df, 0, 0, 0),
+                return_value=(fake_rows, 0, 0, 0),
             ),
         ):
             out = await extractor.prepare_column_extraction_queries(

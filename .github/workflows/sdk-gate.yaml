@@ -270,6 +270,8 @@ jobs:
       # conformance package (its tests embed deprecation-notice strings as fixtures)
       # and tooling so only application_sdk/ deprecations are graded.
       exclude-paths-b: "tools/,contract-toolkit/,packages/conformance/"
+      # SDK's own ledger lives inside the conformance package data dir.
+      ledger-path: "packages/conformance/conformance/data/contract_schema.lock.json"
       event_name: ${{ github.event_name }}
       # force-all the inner per-series run for conformance releases AND container
       # changes — a Dockerfile/entrypoint diff isn't .py/.github/pyproject, so

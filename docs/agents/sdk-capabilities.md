@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.17.3
-source-sha:    378ae8cf9c74ef573a49601d9f76bd2b185a3066
-source-date:   2026-06-18T16:23:50+01:00
+sdk-version:   3.19.0
+source-sha:    b8d1704887637534f8a7a9fb0e33e55f177bbbe2
+source-date:   2026-06-24T12:00:54+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -24,7 +24,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 53 |
-| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 10 |
+| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 14 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 34 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
@@ -1286,6 +1286,13 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Summary:** Wraps Temporal Worker to emit worker_start on startup and to push
 - **Defined in:** `application_sdk/execution/_temporal/worker.py`
 
+#### `RetryPolicy`
+
+- **Import:** `from application_sdk.execution import RetryPolicy`
+- **Signature:** `class RetryPolicy(max_attempts: int = 3, ...)`
+- **Summary:** Configuration for retry behavior.
+- **Defined in:** `application_sdk/execution/retry.py`
+
 #### `TemporalAuthConfig`
 
 - **Import:** `from application_sdk.execution import TemporalAuthConfig`
@@ -1299,6 +1306,13 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Signature:** `class TemporalAuthManager(config: TemporalAuthConfig, ...)`
 - **Summary:** Manages OAuth token lifecycle for Temporal client connections.
 - **Defined in:** `application_sdk/execution/_temporal/auth.py`
+
+#### `TemporalExecutorBackend`
+
+- **Import:** `from application_sdk.execution import TemporalExecutorBackend`
+- **Signature:** `class TemporalExecutorBackend(client: Client, task_queue: str = 'application-sdk')`
+- **Summary:** Temporal-based executor backend for running Apps as workflows.
+- **Defined in:** `application_sdk/execution/_temporal/backend.py`
 
 ### Functions
 
@@ -1314,6 +1328,13 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Import:** `from application_sdk.execution import create_data_converter`
 - **Signature:** `create_data_converter(additional_converters: list[EncodingPayloadConverter] | None = None)`
 - **Summary:** Create a data converter with Pydantic support.
+- **Defined in:** `application_sdk/execution/_temporal/converter.py`
+
+#### `create_data_converter_for_app`
+
+- **Import:** `from application_sdk.execution import create_data_converter_for_app`
+- **Signature:** `create_data_converter_for_app(app_class: type[App])`
+- **Summary:** Create a data converter for a specific app, including any app-specific converters.
 - **Defined in:** `application_sdk/execution/_temporal/converter.py`
 
 #### `create_temporal_client`
@@ -1343,6 +1364,11 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Signature:** `needs_lock(max_locks: int = 5, lock_name: Optional[str] = None)`
 - **Summary:** Decorator to mark activities that require distributed locking.
 - **Defined in:** `application_sdk/execution/decorators.py`
+
+#### `TemporalClient`
+
+- **Import:** `from application_sdk.execution import TemporalClient`
+- **Summary:** _(no docstring)_
 
 ## `application_sdk.handler`
 

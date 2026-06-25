@@ -244,8 +244,9 @@ Start infrastructure and run:
 # Terminal 1
 temporal server start-dev --db-filename temporal.db
 
-# Terminal 2
-dapr run \
+# Terminal 2 — resolve the pinned daprd binary via the SDK (no Dapr CLI), then run it
+DAPRD=$(uv run python -c "from application_sdk.dev._dapr import _ensure_daprd_binary; print(_ensure_daprd_binary())")
+"$DAPRD" \
   --app-id app \
   --app-port 8000 \
   --dapr-http-port 3500 \

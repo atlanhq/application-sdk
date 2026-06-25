@@ -29,6 +29,7 @@ from ._contract_common import (
     is_bytes_annotation,
     is_str_annotation,
     iter_contract_classes,
+    unmodeled_container_name,
 )
 
 _PATH_NAME_RE = re.compile(
@@ -119,6 +120,50 @@ def check_p012(
                         "FileReference field instead. If this is genuinely a string "
                         "(e.g. a URL), suppress with "
                         "'# conformance: ignore[P012] <reason>'."
+                    ),
+                    directives=directives,
+                )
+            )
+    return findings
+
+
+def check_p015(
+    tree: ast.AST,
+    filename: str,
+    directives: dict[int, _IgnoreDirective],
+) -> list[Finding]:
+    """Emit P015 for unmodeled-container fields on contract classes.
+
+    Flags ``dict``/``list``/``set``-family fields (and their :mod:`typing`
+    equivalents) whose element/value type is a primitive or ``Any`` —
+    including the bounded ``Annotated[dict[str, str], MaxItems(N)]`` form
+    that passes payload-safety validation (P001) but is still stringly-typed.
+
+    Containers of a typed class (``list[FooModel]``, ``dict[str, FooModel]``)
+    are exempt: a collection of models is the canonical bounded pattern.
+    """
+    findings: list[Finding] = []
+    foreign = collect_foreign_contract_names(tree)
+    for classdef in iter_contract_classes(tree, foreign):
+        for name, ann_node in _iter_field_annassigns(classdef):
+            container = unmodeled_container_name(ann_node.annotation)
+            if container is None:
+                continue
+            findings.append(
+                make_finding(
+                    filename=filename,
+                    rule_id="P015",
+                    node=ann_node,
+                    message=(
+                        f"Contract field '{name}' uses an unmodeled container type "
+                        f"('{container}' of primitives/Any). Even bounded forms like "
+                        f"Annotated[{container}[...], MaxItems(N)] pass payload safety "
+                        "but remain stringly-typed — the SDK contract guidance is to "
+                        "replace them with a typed nested model (a class inheriting "
+                        "from pydantic.BaseModel). Containers of a typed class "
+                        f"(e.g. {container}[FooModel]) are already exempt. Suppress "
+                        "with '# conformance: ignore[P015] <reason>' when a typed "
+                        "replacement is not feasible."
                     ),
                     directives=directives,
                 )

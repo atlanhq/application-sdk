@@ -7,9 +7,10 @@
 # owning app, and starts exactly those workers (always AE + the connector;
 # publish / query-intelligence / lineage only when the DAG references them).
 #
-# Everything runs in-runner: Temporal dev server + Dapr (slim) + one `dapr run`
-# per app. No live tenant is contacted for orchestration — only the source
-# (via injected creds) and, for the publish app, OAuth to fetch a token.
+# Everything runs in-runner: Temporal dev server + one `daprd` sidecar per app
+# (the daprd runtime invoked directly — no Dapr CLI / `dapr init` / `dapr run`).
+# No live tenant is contacted for orchestration — only the source (via injected
+# creds) and, for the publish app, OAuth to fetch a token.
 #
 # Inputs come from env (set by action.yaml):
 #   WORKSPACE         — $GITHUB_WORKSPACE (parent of all checkouts)
@@ -65,16 +66,23 @@ PYEOF
 )
 log "DAG needs sibling apps: $(echo "$NEEDS" | cut -d'|' -f1 | tr '\n' ' ' )"
 
-# ── 2. Toolchain: Dapr (slim) + Temporal CLI + uv ────────────────────────────
-DAPR_CLI_VERSION="1.18.0"
-DAPR_RUNTIME_VERSION="1.18.0"
-if ! command -v dapr >/dev/null 2>&1; then
-  wget -q "https://github.com/dapr/cli/releases/download/v${DAPR_CLI_VERSION}/dapr_linux_amd64.tar.gz" -O /tmp/dapr.tar.gz
-  tar -xzf /tmp/dapr.tar.gz -C /tmp && sudo mv /tmp/dapr /usr/local/bin/
-  dapr init --runtime-version "${DAPR_RUNTIME_VERSION}" --slim
+# ── 2. Toolchain: daprd runtime + Temporal CLI + uv ──────────────────────────
+# No Dapr CLI: we download the daprd RUNTIME binary directly from dapr/dapr
+# releases and invoke it directly (same pattern as the SDK's entrypoint.sh and
+# embedded local-dev runtime). Avoids the CLI's separate release stream, which
+# can lag the runtime (a daprd-only release leaves dapr/cli without a matching
+# tag → 404). Single source of truth for the daprd pin is __dapr_version in
+# application_sdk/version.py — three dirs up from the action dir; grep it (the
+# same one-liner check-dapr-version.yaml and the SDK docstring sanction).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DAPR_VERSION="$(grep '^__dapr_version' "$SCRIPT_DIR/../../../application_sdk/version.py" | cut -d'"' -f2)"
+[ -n "$DAPR_VERSION" ] || err "could not read __dapr_version from application_sdk/version.py"
+if ! command -v daprd >/dev/null 2>&1; then
+  wget -q "https://github.com/dapr/dapr/releases/download/v${DAPR_VERSION}/daprd_linux_amd64.tar.gz" -O /tmp/daprd.tar.gz
+  tar -xzf /tmp/daprd.tar.gz -C /tmp && sudo mv /tmp/daprd /usr/local/bin/ && sudo chmod +x /usr/local/bin/daprd
 fi
 command -v temporal >/dev/null 2>&1 || curl -sSf https://temporal.download/cli.sh | sh
-export PATH="$HOME/.dapr/bin:$HOME/.temporalio/bin:$PATH"
+export PATH="$HOME/.temporalio/bin:$PATH"
 
 # Shared object-store bucket so every app's localstorage binding resolves the
 # same files on disk (extract writes, publish/qi/lineage read).
@@ -136,8 +144,24 @@ for i in $(seq 1 30); do
   sleep 1
 done
 
+# Best-effort readiness gate for a freshly-launched daprd: poll its HTTP API
+# until it answers, then let the app start. We poll /v1.0/metadata (HTTP server
+# up) rather than /v1.0/healthz — daprd 1.14+ holds healthz until ALL components
+# finish initializing, which can outlast this bound and would needlessly serialize
+# startup. Bounded + non-fatal: the SDK's Dapr client retries connect anyway, so
+# if daprd is a touch slow we proceed and let the existing wait_ready loops absorb
+# the slack (no worse than `dapr run`, which was also async).
+wait_daprd() { # $1 dapr-http-port  $2 timeout(s, default 15)
+  local port="$1" to="${2:-15}"
+  for _ in $(seq 1 "$to"); do
+    curl -sf "http://localhost:${port}/v1.0/metadata" >/dev/null 2>&1 && return 0
+    sleep 1
+  done
+  return 0
+}
+
 # ── 4. Generic worker launcher ───────────────────────────────────────────────
-# Every app starts the same way: uv sync, dapr-run its main.py with a unique
+# Every app starts the same way: uv sync, start daprd + its main.py with a unique
 # port block + its task queue. Ports are derived from a per-app index so they
 # never collide.
 PORT_IDX=0
@@ -154,24 +178,34 @@ start_worker() {
   write_components "$dir"
   ( cd "$dir" && uv sync --all-groups >/dev/null 2>&1 || uv sync >/dev/null 2>&1 || true )
   log "starting $appid (queue=$queue, port=$app_port)"
+  # Start daprd directly (no `dapr run` wrapper), then the app process — the
+  # wrapper used to start both and inject DAPR_HTTP_PORT/DAPR_GRPC_PORT/DAPR_APP_ID
+  # into the app; doing it by hand, we export those ourselves so the SDK finds
+  # the sidecar (it keys off the standard DAPR_* vars, not the ATLAN_DAPR_* ones).
   # $extra is placed LAST so a worker can override a default (e.g. the connector
   # sets ATLAN_DEPLOYMENT_NAME=local to unlock the dev local-vault while still
   # listening on the explicit ATLAN_TASK_QUEUE below).
-  ( cd "$dir" && env \
+  (
+    cd "$dir" || exit 1
+    daprd --app-id "$appid" --app-port "$app_port" \
+      --dapr-http-port "$dhttp" --dapr-grpc-port "$dgrpc" \
+      --dapr-internal-grpc-port "$dinternal" --metrics-port "$metrics" \
+      --scheduler-host-address '' --placement-host-address '' \
+      --max-body-size 100Mi --resources-path components --log-level warn \
+      > "$LOG_DIR/${appid}-daprd.log" 2>&1 &
+    wait_daprd "$dhttp"
+    env \
       ATLAN_APPLICATION_NAME="$appname" \
       ATLAN_DEPLOYMENT_NAME="$DEPLOYMENT" \
       ATLAN_WORKFLOW_HOST=localhost ATLAN_WORKFLOW_PORT=7233 \
       ATLAN_TASK_QUEUE="$queue" \
       ATLAN_APP_HTTP_PORT="$app_port" ATLAN_HANDLER_PORT="$app_port" \
       ATLAN_DAPR_HTTP_PORT="$dhttp" ATLAN_DAPR_GRPC_PORT="$dgrpc" \
+      DAPR_HTTP_PORT="$dhttp" DAPR_GRPC_PORT="$dgrpc" DAPR_APP_ID="$appid" \
       ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS="0.0.0.0:${prom}" \
       $extra \
-      dapr run --app-id "$appid" --app-port "$app_port" \
-        --dapr-http-port "$dhttp" --dapr-grpc-port "$dgrpc" \
-        --dapr-internal-grpc-port "$dinternal" --metrics-port "$metrics" \
-        --scheduler-host-address '' --placement-host-address '' \
-        --max-body-size 100Mi --resources-path components --log-level warn \
-        -- uv run python main.py > "$LOG_DIR/${appid}.log" 2>&1 & )
+      uv run python main.py > "$LOG_DIR/${appid}.log" 2>&1 &
+  )
   STARTED="$STARTED $appid"
   PORT_IDX=$((PORT_IDX + 1))
 }
@@ -190,17 +224,23 @@ wait_ready() { # $1 app-id  $2 grep-marker  $3 timeout
 write_components "$AE_DIR"
 ( cd "$AE_DIR" && uv sync --all-groups >/dev/null 2>&1 || true )
 log "starting automation-engine on :8000"
-( cd "$AE_DIR" && env \
+(
+  cd "$AE_DIR" || exit 1
+  daprd --app-id automation-engine --app-port 8000 \
+    --dapr-http-port 3500 --dapr-grpc-port 50001 --dapr-internal-grpc-port 50002 \
+    --metrics-port 3100 --scheduler-host-address '' --placement-host-address '' \
+    --resources-path components --log-level warn \
+    > "$LOG_DIR/automation-engine-daprd.log" 2>&1 &
+  wait_daprd 3500
+  env \
     ATLAN_APPLICATION_NAME=automation-engine ATLAN_DEPLOYMENT_NAME="$DEPLOYMENT" \
     ATLAN_REGISTRY_TYPE=sql ATLAN_WORKFLOW_HOST=localhost ATLAN_WORKFLOW_PORT=7233 \
     ATLAN_APP_HTTP_PORT=8000 ATLAN_HANDLER_PORT=8000 \
     ATLAN_DAPR_HTTP_PORT=3500 ATLAN_DAPR_GRPC_PORT=50001 \
+    DAPR_HTTP_PORT=3500 DAPR_GRPC_PORT=50001 DAPR_APP_ID=automation-engine \
     ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS=0.0.0.0:9465 \
-    dapr run --app-id automation-engine --app-port 8000 \
-      --dapr-http-port 3500 --dapr-grpc-port 50001 --dapr-internal-grpc-port 50002 \
-      --metrics-port 3100 --scheduler-host-address '' --placement-host-address '' \
-      --resources-path components --log-level warn \
-      -- uv run automation_engine/main.py > "$LOG_DIR/automation-engine.log" 2>&1 & )
+    uv run automation_engine/main.py > "$LOG_DIR/automation-engine.log" 2>&1 &
+)
 for i in $(seq 1 60); do
   curl -sf "http://localhost:8000/api/v1/workflows" >/dev/null 2>&1 && { log "AE ready (${i}s)"; break; }
   [ "$i" -eq 60 ] && { tail -30 "$LOG_DIR/automation-engine.log"; err "AE failed to start"; }

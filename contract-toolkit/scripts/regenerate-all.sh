@@ -37,7 +37,9 @@ fi
 
 # Lint + format generated Python files to match what the pre-commit hooks produce.
 # ruff check --fix removes unused imports (F401); ruff format handles whitespace.
-PY_FILES=$(find examples -name '_input.py' | sort)
+# Match every generated *.py (_input.py, _e2e_base.py, _e2e_credential.py,
+# _e2e_substitutions.py, …) — not just _input.py — so none lands unformatted.
+PY_FILES=$(find examples -path '*/app/generated/*.py' | sort)
 if [ -n "$PY_FILES" ]; then
   echo ""
   echo ":: Linting and formatting generated Python files..."
