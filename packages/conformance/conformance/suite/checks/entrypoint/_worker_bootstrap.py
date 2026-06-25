@@ -8,9 +8,11 @@ Three violation classes are flagged:
 
 1. **Worker construction calls** — a call to ``create_worker(...)``,
    ``create_temporal_client(...)``, or ``AppWorker(...)`` whose binding resolves
-   to ``application_sdk.execution``.  Importing those symbols is fine (P004/P005
-   sanction the public seam); *calling* the constructor is the boot path the SDK
-   launcher owns.
+   to ``application_sdk.execution``.  Both direct-name calls (``create_worker(...)``)
+   and module-attribute calls (``ex.create_worker(...)`` after
+   ``import application_sdk.execution as ex``) are detected.  Importing those
+   symbols is fine (P004/P005 sanction the public seam); *calling* the constructor
+   is the boot path the SDK launcher owns.
 
 2. **Legacy v2 boot imports** — any import from the removed v2 surface:
    ``application_sdk.worker``, ``application_sdk.application`` (and submodules),
@@ -18,8 +20,10 @@ Three violation classes are flagged:
    presence signals an unmigrated boot path.
 
 3. **Lifecycle method calls** — a call to ``.setup_workflow(...)``,
-   ``.start_workflow(...)``, or ``.start_worker(...)`` on any object.  These are
-   distinctive enough to be reliable signals even without type information.
+   ``.start_workflow(...)``, or ``.start_worker(...)`` on a plausibly-Atlan-App
+   receiver (``self``, ``app``, or a name imported from ``application_sdk``).
+   Receiver restriction avoids false positives on ``client.start_workflow(...)``
+   (Temporal Python SDK API) and similar generic names.
 """
 
 from __future__ import annotations
@@ -29,7 +33,7 @@ import ast
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.schema.findings import Finding
 
-from ._bootstrap_common import collect_import_origins
+from ._bootstrap_common import collect_import_origins, is_app_receiver
 
 # ── Worker-construction symbols (from application_sdk.execution) ─────────────
 
@@ -53,7 +57,7 @@ _V2_BOOT_MODULE_PREFIXES: tuple[str, ...] = (
     "application_sdk.clients.temporal",
 )
 
-# ── v2 lifecycle method names ─────────────────────────────────────────────────
+# ── Lifecycle method names ────────────────────────────────────────────────────
 
 _WORKER_LIFECYCLE_METHODS: frozenset[str] = frozenset(
     {
@@ -162,18 +166,44 @@ def check_p017(
                         )
                     )
 
-            # (c) Lifecycle method calls (any object receiver)
-            elif isinstance(func, ast.Attribute):
-                if func.attr in _WORKER_LIFECYCLE_METHODS:
+            elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+                module_origin = origins.get(func.value.id, "")
+
+                # (b cont'd) module-attribute construction (e.g. ex.create_worker(...))
+                if f"{module_origin}.{func.attr}" in _WORKER_CONSTRUCTION_ORIGINS:
                     findings.append(
                         make_finding(
                             filename=filename,
                             rule_id="P017",
                             node=node,
                             message=(
-                                f"Calls '.{func.attr}(...)' — this is a v2 "
-                                "worker-lifecycle method. In v3 the SDK "
-                                "launcher manages the full boot sequence; "
+                                f"Calls '{func.value.id}.{func.attr}(...)' "
+                                "directly — worker and client construction is "
+                                "the SDK launcher's job, not the app's. Launch "
+                                "via 'application-sdk --mode worker|combined' "
+                                "(prod) or 'run_dev_combined(MyApp, ...)' "
+                                "(dev); workers are auto-discovered from "
+                                "'AppRegistry'/'TaskRegistry'. See BLDX-1411. "
+                                "Suppress with "
+                                "'# conformance: ignore[P017] <reason>'."
+                            ),
+                            directives=directives,
+                        )
+                    )
+
+                # (c) Lifecycle method calls on app-receiver only
+                elif func.attr in _WORKER_LIFECYCLE_METHODS and is_app_receiver(
+                    func.value.id, module_origin
+                ):
+                    findings.append(
+                        make_finding(
+                            filename=filename,
+                            rule_id="P017",
+                            node=node,
+                            message=(
+                                f"Calls '.{func.attr}(...)' — manual workflow "
+                                "lifecycle call that the SDK launcher manages. "
+                                "In v3 the SDK owns the full boot sequence; "
                                 "subclass 'App' and use "
                                 "'run_dev_combined'/'application-sdk'. See "
                                 "BLDX-1411. Suppress with "

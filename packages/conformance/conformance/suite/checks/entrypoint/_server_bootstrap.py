@@ -7,19 +7,21 @@ HTTP surface through ``@entrypoint`` methods and trigger them via
 
 Three violation classes are flagged:
 
-1. **FastAPI construction** — a ``FastAPI(...)`` call whose binding resolves to
-   ``fastapi.FastAPI``.  The SDK creates the FastAPI instance internally; the
-   app should never instantiate it directly.
+1. **FastAPI/uvicorn construction** — a ``FastAPI(...)`` call whose binding
+   resolves to ``fastapi.FastAPI`` or ``fastapi.applications.FastAPI``
+   (including dotted calls like ``fastapi.FastAPI(...)`` after
+   ``import fastapi``); a ``uvicorn.Server(...)`` or ``uvicorn.Config(...)``
+   call; or a ``uvicorn.run(...)`` call (either via dotted attribute access
+   after ``import uvicorn``, or as a bare name after
+   ``from uvicorn import run``).  The SDK creates and manages all of these
+   internally via the launcher.
 
-2. **uvicorn.run()** — a ``uvicorn.run(...)`` call (either via dotted attribute
-   access after ``import uvicorn``, or as a bare name after
-   ``from uvicorn import run``).  The SDK invokes uvicorn internally via the
-   launcher.
-
-3. **Lifecycle method calls** — a call to ``.setup_server(...)``,
-   ``.start_server(...)``, or ``.include_router(...)`` on any object.  These
-   are the v2 server-wiring methods that no longer apply: the SDK owns the
-   server and the app has no reference to it.
+2. **Lifecycle method calls** — a call to ``.setup_server(...)``,
+   ``.start_server(...)``, or ``.include_router(...)`` on a
+   plausibly-Atlan-App receiver (``self``, ``app``, or a name imported from
+   ``application_sdk``).  Receiver restriction avoids false positives on
+   ``asyncio.start_server(...)`` (stdlib) and routers that attach sub-routers
+   (``router.include_router(sub)``).
 """
 
 from __future__ import annotations
@@ -29,19 +31,34 @@ import ast
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.schema.findings import Finding
 
-from ._bootstrap_common import collect_import_origins
+from ._bootstrap_common import collect_import_origins, is_app_receiver
 
-# ── FastAPI and uvicorn origins ───────────────────────────────────────────────
+# ── FastAPI construction origins ──────────────────────────────────────────────
 
-# Fully-qualified origins that signal a manual FastAPI construction.
-_FASTAPI_CONSTRUCTION_ORIGINS: frozenset[str] = frozenset({"fastapi.FastAPI"})
+# fastapi.applications is FastAPI's actual module; fastapi/__init__.py re-exports
+# FastAPI from there, so both ``from fastapi import FastAPI`` and
+# ``from fastapi.applications import FastAPI`` must be caught.
+_FASTAPI_CONSTRUCTION_ORIGINS: frozenset[str] = frozenset(
+    {
+        "fastapi.FastAPI",
+        "fastapi.applications.FastAPI",
+    }
+)
 
-# Fully-qualified origins that signal a manual uvicorn call (run() from uvicorn
-# as a bound name OR the top-level "uvicorn" package used as a callable target).
+# ── uvicorn origins ───────────────────────────────────────────────────────────
+
+# Bare ``uvicorn.run(...)`` and ``uvicorn.Server(...)`` / ``uvicorn.Config(...)``
+# all signal manual server construction the SDK launcher owns.
 _UVICORN_RUN_ORIGINS: frozenset[str] = frozenset({"uvicorn.run"})
 _UVICORN_MODULE_ORIGIN = "uvicorn"
+_UVICORN_SERVER_CONSTRUCTION_ORIGINS: frozenset[str] = frozenset(
+    {
+        "uvicorn.Server",
+        "uvicorn.Config",
+    }
+)
 
-# ── v2 server-lifecycle method names ─────────────────────────────────────────
+# ── Lifecycle method names ────────────────────────────────────────────────────
 
 _SERVER_LIFECYCLE_METHODS: frozenset[str] = frozenset(
     {
@@ -73,7 +90,7 @@ def check_p018(
         if isinstance(func, ast.Name):
             origin = origins.get(func.id, "")
 
-            # (a) FastAPI(...) where FastAPI was imported from fastapi
+            # (a) FastAPI(...) where FastAPI was imported from fastapi[.applications]
             if origin in _FASTAPI_CONSTRUCTION_ORIGINS:
                 findings.append(
                     make_finding(
@@ -87,6 +104,26 @@ def check_p018(
                             "via 'application-sdk --mode handler|combined' "
                             "(prod) or 'run_dev_combined(MyApp, ...)' (dev); "
                             "express HTTP surface through '@entrypoint'. See "
+                            "BLDX-1411. Suppress with "
+                            "'# conformance: ignore[P018] <reason>'."
+                        ),
+                        directives=directives,
+                    )
+                )
+
+            # (a cont'd) uvicorn.Server(...) / uvicorn.Config(...)
+            elif origin in _UVICORN_SERVER_CONSTRUCTION_ORIGINS:
+                findings.append(
+                    make_finding(
+                        filename=filename,
+                        rule_id="P018",
+                        node=node,
+                        message=(
+                            f"Constructs '{func.id}(...)' directly — the SDK "
+                            "manages the uvicorn server internally via the "
+                            "launcher. Launch via 'application-sdk --mode "
+                            "handler|combined' (prod) or "
+                            "'run_dev_combined(MyApp, ...)' (dev). See "
                             "BLDX-1411. Suppress with "
                             "'# conformance: ignore[P018] <reason>'."
                         ),
@@ -114,13 +151,53 @@ def check_p018(
                     )
                 )
 
-        elif isinstance(func, ast.Attribute):
+        elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+            module_origin = origins.get(func.value.id, "")
+            dotted = f"{module_origin}.{func.attr}"
+
+            # (a) fastapi.FastAPI(...) after `import fastapi`
+            if dotted in _FASTAPI_CONSTRUCTION_ORIGINS:
+                findings.append(
+                    make_finding(
+                        filename=filename,
+                        rule_id="P018",
+                        node=node,
+                        message=(
+                            "Constructs 'FastAPI(...)' directly — the SDK "
+                            "creates and manages the FastAPI instance inside "
+                            "'run_handler_mode'/'run_combined_mode'. Launch "
+                            "via 'application-sdk --mode handler|combined' "
+                            "(prod) or 'run_dev_combined(MyApp, ...)' (dev); "
+                            "express HTTP surface through '@entrypoint'. See "
+                            "BLDX-1411. Suppress with "
+                            "'# conformance: ignore[P018] <reason>'."
+                        ),
+                        directives=directives,
+                    )
+                )
+
+            # (a cont'd) uvicorn.Server(...) / uvicorn.Config(...) via module attr
+            elif dotted in _UVICORN_SERVER_CONSTRUCTION_ORIGINS:
+                findings.append(
+                    make_finding(
+                        filename=filename,
+                        rule_id="P018",
+                        node=node,
+                        message=(
+                            f"Constructs '{func.value.id}.{func.attr}(...)' "
+                            "directly — the SDK manages the uvicorn server "
+                            "internally via the launcher. Launch via "
+                            "'application-sdk --mode handler|combined' (prod) "
+                            "or 'run_dev_combined(MyApp, ...)' (dev). See "
+                            "BLDX-1411. Suppress with "
+                            "'# conformance: ignore[P018] <reason>'."
+                        ),
+                        directives=directives,
+                    )
+                )
+
             # (b) uvicorn.run(...) via dotted attribute access
-            if (
-                func.attr == "run"
-                and isinstance(func.value, ast.Name)
-                and origins.get(func.value.id, "") == _UVICORN_MODULE_ORIGIN
-            ):
+            elif func.attr == "run" and module_origin == _UVICORN_MODULE_ORIGIN:
                 findings.append(
                     make_finding(
                         filename=filename,
@@ -139,20 +216,22 @@ def check_p018(
                     )
                 )
 
-            # (c) Server lifecycle method calls (any object receiver)
-            elif func.attr in _SERVER_LIFECYCLE_METHODS:
+            # (c) Server lifecycle method calls on app-receiver only
+            elif func.attr in _SERVER_LIFECYCLE_METHODS and is_app_receiver(
+                func.value.id, module_origin
+            ):
                 findings.append(
                     make_finding(
                         filename=filename,
                         rule_id="P018",
                         node=node,
                         message=(
-                            f"Calls '.{func.attr}(...)' — this is a v2 "
-                            "server-lifecycle method. In v3 the SDK owns the "
-                            "FastAPI server and the app has no reference to "
-                            "it; express HTTP surface through '@entrypoint' "
-                            "and launch via 'application-sdk'. See BLDX-1411. "
-                            "Suppress with "
+                            f"Calls '.{func.attr}(...)' — manual server "
+                            "lifecycle call that the SDK manages. In v3 the "
+                            "SDK owns the FastAPI server and the app has no "
+                            "reference to it; express HTTP surface through "
+                            "'@entrypoint' and launch via 'application-sdk'. "
+                            "See BLDX-1411. Suppress with "
                             "'# conformance: ignore[P018] <reason>'."
                         ),
                         directives=directives,

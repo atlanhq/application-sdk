@@ -102,6 +102,22 @@ class TestP017WorkerConstructionCalls:
         )
         assert _rule(src, "P017") == []
 
+    def test_fires_on_module_attr_create_worker(self) -> None:
+        """ex.create_worker(...) after `import application_sdk.execution as ex`."""
+        src = (
+            "import application_sdk.execution as ex\n"
+            "worker = ex.create_worker(client=client, task_queue='my-app')\n"
+        )
+        assert len(_rule(src, "P017")) == 1
+
+    def test_fires_on_submodule_execution_create_worker(self) -> None:
+        """execution.create_worker(...) after `from application_sdk import execution`."""
+        src = (
+            "from application_sdk import execution\n"
+            "worker = execution.create_worker(client=client, task_queue='my-app')\n"
+        )
+        assert len(_rule(src, "P017")) == 1
+
 
 class TestP017LegacyV2Imports:
     """Violation class (a): imports from removed v2 boot modules."""
@@ -152,7 +168,7 @@ class TestP017LegacyV2Imports:
 
 
 class TestP017LifecycleMethods:
-    """Violation class (c): v2 worker-lifecycle method calls."""
+    """Violation class (c): lifecycle method calls on app receivers."""
 
     def test_fires_on_setup_workflow(self) -> None:
         src = "app.setup_workflow(workflow_and_activities_classes=[(W, A())])\n"
@@ -167,6 +183,11 @@ class TestP017LifecycleMethods:
     def test_fires_on_start_worker(self) -> None:
         src = "await app.start_worker()\n"
         assert len(_rule(src, "P017")) == 1
+
+    def test_silent_on_client_start_workflow(self) -> None:
+        """client.start_workflow(...) is the Temporal SDK API — must not fire."""
+        src = "await client.start_workflow(MyWorkflow.run, id='wf-1', task_queue='q')\n"
+        assert _rule(src, "P017") == []
 
 
 class TestP017Suppression:
@@ -245,6 +266,16 @@ class TestP018FastAPIConstruction:
         )
         assert len(_rule(src, "P018")) == 1
 
+    def test_fires_on_fastapi_module_attr(self) -> None:
+        """fastapi.FastAPI(...) after `import fastapi` bypassed the ast.Name branch."""
+        src = "import fastapi\napp = fastapi.FastAPI()\n"
+        assert len(_rule(src, "P018")) == 1
+
+    def test_fires_on_fastapi_applications_import(self) -> None:
+        """FastAPI imported from fastapi.applications (the actual module)."""
+        src = "from fastapi.applications import FastAPI\napp = FastAPI()\n"
+        assert len(_rule(src, "P018")) == 1
+
     def test_silent_on_fastapi_imported_elsewhere(self) -> None:
         """FastAPI imported from a non-fastapi package must not fire."""
         src = "from mylib import FastAPI\napp = FastAPI()\n"
@@ -281,6 +312,11 @@ class TestP018UvicornRun:
         src = "from mylib import run\nrun(something)\n"
         assert _rule(src, "P018") == []
 
+    def test_fires_on_uvicorn_server(self) -> None:
+        """uvicorn.Server(Config(app)) bypassed the run() check."""
+        src = "import uvicorn\nserver = uvicorn.Server(uvicorn.Config(app))\n"
+        assert len(_rule(src, "P018")) >= 1
+
     def test_silent_on_asyncio_run(self) -> None:
         """asyncio.run(...) is the sanctioned dev launcher wrapper — not P018."""
         src = "import asyncio\nasyncio.run(main())\n"
@@ -288,7 +324,7 @@ class TestP018UvicornRun:
 
 
 class TestP018ServerLifecycleMethods:
-    """Violation class (c): v2 server-lifecycle method calls."""
+    """Violation class (c): lifecycle method calls on app receivers."""
 
     def test_fires_on_setup_server(self) -> None:
         src = "await app.setup_server()\n"
@@ -303,6 +339,16 @@ class TestP018ServerLifecycleMethods:
     def test_fires_on_include_router(self) -> None:
         src = "app.include_router(router, prefix='/api')\n"
         assert len(_rule(src, "P018")) == 1
+
+    def test_silent_on_asyncio_start_server(self) -> None:
+        """asyncio.start_server(...) is stdlib — must not fire."""
+        src = "import asyncio\nawait asyncio.start_server(handler, '0.0.0.0', 8080)\n"
+        assert _rule(src, "P018") == []
+
+    def test_silent_on_router_include_router(self) -> None:
+        """router.include_router(sub) is a sub-router attach — receiver not app/self."""
+        src = "router.include_router(sub_router, prefix='/v1')\n"
+        assert _rule(src, "P018") == []
 
 
 class TestP018Suppression:
