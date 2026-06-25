@@ -237,28 +237,53 @@ The auth-type radio's `ui.hidden` is auto-derived from `credentialAuthOptions.le
 |---|---|---|
 | `uiConfig` | UIConfig | Setup form definition with tasks, rules. |
 
-### Pools Map (preferred)
+### Deploy Configuration
 
-The `pools` map is the preferred way to configure worker pools. It is optional and explicit-overrides-only: an empty map (the default) emits nothing. Declare named pools to configure per-pool KEDA, resources, and env.
+`deploy: DeployConfig? = null` — leave unset (null, the default) to let Heracles apply platform defaults. Set to `new DeployConfig { … }` to emit a `deploy:` block (and `pools:` when pools are configured) in `atlan.yaml`.
 
-The pool key must exactly match the string passed to `@task(pool="…")` in Python — the runtime uses this name to route activities to the right task queue via `ATLAN_POOL_<POOL>_QUEUE`.
+Singleton fields (`executionMode`, `splitDeployment`, `dapr`) apply to the whole deployment. Per-pool scaling (KEDA, resources, env) goes inside `deploy.pools`.
 
-All pool classes (`Pool`, `KedaConfig`, `KedaTemporalConfig`, `ResourceConfig`) are defined in `Pool.pkl` and re-exported by `App.pkl` — amending contracts do not need a supplemental import.
+All deployment classes (`DeployConfig`, `Pool`, `DaprComponents`, `KedaConfig`, `KedaTemporalConfig`, `ResourceConfig`) are defined in `Pool.pkl` and re-exported by `App.pkl` — amending contracts do not need a supplemental import.
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `pools` | Mapping<KebabCase, Pool> | `{}` | Named worker-pool map. Empty by default — emits nothing. Add named pools to configure per-pool scaling. Pool keys must be lowercase kebab-case and match the string passed to `@task(pool="…")` in Python. |
+| `deploy` | DeployConfig? | null | Deployment configuration. Null = Heracles defaults. Set to emit `deploy:` in `atlan.yaml`. |
+
+**DeployConfig class:**
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `deploy.executionMode` | String | `"native"` | Emitted as `execution_mode`. |
+| `deploy.splitDeployment` | Boolean | `true` | Emitted as `splitDeploymentEnabled`. |
+| `deploy.dapr` | DaprComponents | `new DaprComponents {}` | Dapr sidecar toggles — app-wide, not per-pool. Emitted under `dapr:` when any component is enabled. |
+| `deploy.overrides` | Mapping<String, Any> | `{}` | Global escape hatch. Deep-merged on top of the rendered `deploy:` block after first-pool `overrides`. |
+| `deploy.pools` | Mapping<KebabCase, Pool> | `{}` | Named worker-pool map. Pool keys must be lowercase kebab-case and match `@task(pool="…")` in Python. When non-empty, emits `deploy:` (synthesised from the first pool's keda/resources/env) and `pools:`. |
 
 **Pool class:**
 
 ```pkl
 class Pool {
-  replicaCount: Int? = null                        // static replica count (ignored when keda.enabled)
+  replicaCount: Int? = null     // static replica count (ignored when keda.enabled = true)
   keda: KedaConfig = new KedaConfig {}
   resources: ResourceConfig? = null
   env: Mapping<String, String> = new Mapping {}
   envOverrides: Mapping<String, Mapping<String, String>> = new Mapping {}
-  deployOverrides: Mapping<String, Any> = new Mapping {}  // deep-merged last (escape hatch)
+  overrides: Mapping<String, Any> = new Mapping {}  // deep-merged last (escape hatch)
+}
+```
+
+**DaprComponents:**
+
+```pkl
+class DaprComponents {
+  objectstore: Boolean = false
+  secretstore: Boolean = false
+  statestore: Boolean = false
+  eventstore: Boolean = false
+  subscription: Boolean = false
+  configurationstore: Boolean = false
+  lock: Boolean = false
+  customComponents: Mapping<String, Any> = new Mapping {}
 }
 ```
 
@@ -288,17 +313,40 @@ class ResourceConfig {
 Example — two pools, hot always-on + cold scale-to-zero:
 
 ```pkl
-pools {
-  ["hot"] = new Pool {
-    keda { minReplicaCount = 1; cooldownPeriod = 300 }
-  }
-  ["cold"] = new Pool {
-    keda { minReplicaCount = 0; cooldownPeriod = 30 }
+deploy = new DeployConfig {
+  pools {
+    ["hot"] = new Pool {
+      keda { minReplicaCount = 1; cooldownPeriod = 300 }
+    }
+    ["cold"] = new Pool {
+      keda { minReplicaCount = 0; cooldownPeriod = 30 }
+    }
   }
 }
 ```
 
-For the single-pool case, use the key `"default"`. See `examples/pools/` for the full two-pool example.
+Example — single pool with Dapr sidecars and a VPA override:
+
+```pkl
+deploy = new DeployConfig {
+  dapr { objectstore = true; secretstore = true }
+  pools {
+    ["default"] = new Pool {
+      keda { enabled = true; minReplicaCount = 1; temporal { targetQueueSize = 10 } }
+      resources = new ResourceConfig {
+        requests { ["cpu"] = "500m"; ["memory"] = "1Gi" }
+        limits { ["cpu"] = "2"; ["memory"] = "4Gi" }
+      }
+      env { ["LOG_LEVEL"] = "INFO" }
+      overrides {
+        ["verticalPodAutoscaler"] = new Mapping { ["enabled"] = true; ["updateMode"] = "Auto" }
+      }
+    }
+  }
+}
+```
+
+For the single-pool case use key `"default"`. See `examples/deploy/` for the full single-pool example and `examples/pools/` for the two-pool example.
 
 ### Multi-Entrypoint Bundle
 
@@ -2685,48 +2733,83 @@ class AppInputContract(ExtractionInput):
 
 ## Migration Notes
 
-### v0.17.0 — `deploy`/`emitDeploy` removed; pools-only API; `deploy:` auto-synthesised
+### v0.17.0 — nested `deploy`/`pools` API; `deployOverrides` renamed to `overrides`
 
-**What changed:** The `deploy` property, `deployOverrides` (app-level), and `emitDeploy` flag
-are **removed** from `App.pkl`. The only way to configure deployment is via `pools`. The
-`deploy:` block in `atlan.yaml` is now synthesised automatically from the first pool's
-configuration — no extra flag or property required.
+**What changed:** The v0.16.x `deploy`, `deployOverrides`, and `emitDeploy` properties are
+**removed**. Deployment is now configured via a single nullable `deploy: DeployConfig? = null`
+property. `DeployConfig` holds the singleton deployment fields (`executionMode`,
+`splitDeployment`, `dapr`) and a nested `pools` map for per-pool scaling. The `deploy:` block
+in `atlan.yaml` is synthesised automatically — no flag required.
 
-**Who is affected:** any app that set `deploy { ... }`, `deployOverrides { ... }`, or
-`emitDeploy = true` in its contract. Apps with no deployment configuration are unaffected.
+`deployOverrides` (both the old app-level field and the old `Pool.deployOverrides`) is renamed
+to `overrides` at both levels.
 
-**Migration — `deploy { ... }` → `pools`:**
+**Who is affected:** apps that set `deploy { ... }`, `deployOverrides { ... }`, `emitDeploy`,
+or `pools { ... }` (the old top-level form) in their contract.
+
+**Migration — keda/resources/env → `deploy.pools`:**
 
 ```pkl
-// Before (v0.16.x):
-deploy {
-  keda { enabled = true; minReplicaCount = 1 }
-}
-
-// After (v0.17.0+):
+// Before (v0.16.x — flat top-level pools):
 pools {
   ["default"] = new Pool {
     keda { enabled = true; minReplicaCount = 1 }
   }
 }
+
+// After (v0.17.0+— nested under deploy):
+deploy = new DeployConfig {
+  pools {
+    ["default"] = new Pool {
+      keda { enabled = true; minReplicaCount = 1 }
+    }
+  }
+}
 ```
 
-The `deploy:` key in `atlan.yaml` is now synthesised from the first pool. Apps that had no
-`deploy` block at all are unaffected.
+The `deploy:` YAML block is synthesised from the first pool. Apps with no deployment
+configuration at all are unaffected.
 
-**Migration — app-level `deployOverrides` → per-pool `deployOverrides`:**
+**Migration — Dapr (`deployOverrides` → `deploy.dapr`):**
 
 ```pkl
 // Before (v0.16.x):
-deployOverrides {
-  ["dapr"] = new Mapping { ["objectstore"] = true }
-}
-
-// After (v0.17.0+):
 pools {
   ["default"] = new Pool {
     deployOverrides {
-      ["dapr"] = new Mapping { ["objectstore"] = true }
+      ["dapr"] = new Mapping { ["objectstore"] = true; ["secretstore"] = true }
+    }
+  }
+}
+
+// After (v0.17.0+ — dapr is a typed first-class field on DeployConfig):
+deploy = new DeployConfig {
+  dapr { objectstore = true; secretstore = true }
+  pools {
+    ["default"] = new Pool { ... }
+  }
+}
+```
+
+**Migration — other `deployOverrides` keys → `overrides`:**
+
+```pkl
+// Before:
+pools {
+  ["default"] = new Pool {
+    deployOverrides {
+      ["verticalPodAutoscaler"] = new Mapping { ["enabled"] = true }
+    }
+  }
+}
+
+// After:
+deploy = new DeployConfig {
+  pools {
+    ["default"] = new Pool {
+      overrides {
+        ["verticalPodAutoscaler"] = new Mapping { ["enabled"] = true }
+      }
     }
   }
 }
