@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**15 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P012), `suite.checks.orchestration` (P004–P007, scans test files too) (all AST-based)
+**17 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P012), `suite.checks.orchestration` (P004–P007, scans test files too) (all AST-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -38,6 +38,8 @@ reassigned.
 | [P013](#p013) | `UntypedEntrypointBoundary` | `block` | `app` | `typed-contract-boundary` | — | 0.6.0 |
 | [P014](#p014) | `UntypedTaskBoundary` | `block` | `app` | `typed-contract-boundary` | — | 0.6.0 |
 | [P015](#p015) | `UnmodeledBoundedContractField` | `warn` | `app` | `contract-modeling` | — | 0.6.0 |
+| [P016](#p016) | `ManualWorkerBootstrap` | `warn` | `app` | `entrypoint-conformance` | — | 0.6.0 |
+| [P017](#p017) | `ManualServerBootstrap` | `warn` | `app` | `entrypoint-conformance` | — | 0.6.0 |
 
 ---
 
@@ -460,5 +462,64 @@ the canonical bounded pattern and are fine.
 This rule lands as `WARN` (not `BLOCK`) because the bounded form is technically
 sanctioned — this is a modeling nudge, not a gate failure.  Suppress with `#
 conformance: ignore[P015] <reason>` when a typed replacement is not feasible.
+
+---
+
+## P016 — `ManualWorkerBootstrap` {#p016}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `entrypoint-conformance` · **Autofixable:** — · **Since:** 0.6.0
+
+> App manually constructs a Temporal worker or client instead of using the SDK launcher
+
+**Rationale:** The SDK launcher owns worker startup: the base-image CLI (`application-sdk --mode
+worker|combined`) or `run_dev_combined` in local dev auto-discovers every registered
+`App` and `task` — the app never wires workers itself. Calling `create_worker`,
+`create_temporal_client`, or `AppWorker` directly, importing removed v2 boot surface, or
+calling v2 lifecycle methods couples the app to infrastructure details that the SDK
+manages on its behalf, and breaks the guarantee that every app starts up in a
+consistent, SDK-controlled way (BLDX-1411).
+
+The app calls `create_worker(...)`, `create_temporal_client(...)`, or `AppWorker(...)`
+directly, imports removed v2 worker/client boot surface (`application_sdk.worker`,
+`application_sdk.application`, `application_sdk.clients.temporal`), or calls a
+distinctive v2 lifecycle method (`setup_workflow`, `start_workflow`, `start_worker`).
+
+The SDK launcher owns worker startup entirely — subclass `App`, define `@task` methods
+and a `run()` / `@entrypoint` method (typed `Input`/`Output`), and set
+`ATLAN_APP_MODULE=module:ClassName`. Production launches via the base-image CLI
+(`application-sdk --mode worker|combined --app ...`); local dev uses `await
+run_dev_combined(MyApp, credentials={...}, ...)`. Workers and activities are
+auto-discovered from `AppRegistry` / `TaskRegistry` — there is nothing to wire.
+
+Land as `WARN`: a justified inline `# conformance: ignore[P016] <reason>` records any
+unavoidable exception and stays visible in SARIF.
+
+---
+
+## P017 — `ManualServerBootstrap` {#p017}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `entrypoint-conformance` · **Autofixable:** — · **Since:** 0.6.0
+
+> App manually constructs a FastAPI/uvicorn HTTP server instead of using the SDK launcher
+
+**Rationale:** The SDK owns the FastAPI handler server: `run_handler_mode` and `run_combined_mode`
+create and manage the HTTP server on the app's behalf. Constructing `FastAPI(...)`
+directly, calling `uvicorn.run(...)` manually, or invoking v2 server lifecycle methods
+(`setup_server`, `start_server`, `include_router`) couples the app to server-startup
+mechanics that the SDK controls, and prevents the SDK from evolving the handler server
+safely (BLDX-1411).
+
+The app constructs `FastAPI(...)` directly (name imported from `fastapi`), calls
+`uvicorn.run(...)`, or invokes a distinctive v2 server lifecycle method (`setup_server`,
+`start_server`, `include_router`).
+
+The SDK owns the FastAPI handler server: launch via the base-image CLI (`application-sdk
+--mode handler|combined --app ...`) or `run_dev_combined` in local dev — the SDK creates
+and configures the FastAPI app and uvicorn server internally.  Express HTTP surface
+through `@entrypoint` methods on the `App` subclass; trigger them via `POST
+/workflows/v1/start?entrypoint=<name>`.
+
+Land as `WARN`: a justified inline `# conformance: ignore[P017] <reason>` records any
+unavoidable exception and stays visible in SARIF.
 
 ---

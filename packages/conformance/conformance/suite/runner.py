@@ -22,6 +22,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+import conformance.suite.checks.entrypoint as entrypoint
 import conformance.suite.checks.logging as logging_checks
 from conformance.suite.checks import (
     actions_pinning,
@@ -102,6 +103,11 @@ _CHECKS: list[CheckRegistration] = [
         discover=orchestration.discover,
         scan_path=orchestration.scan_path,
         scan_all=orchestration.scan_all,
+    ),
+    CheckRegistration(
+        series=entrypoint.SERIES,
+        discover=entrypoint.discover,
+        scan_path=entrypoint.scan_path,
     ),
     CheckRegistration(
         series=logging_checks.SERIES,

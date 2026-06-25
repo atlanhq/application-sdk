@@ -107,6 +107,10 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     through the SDK seam (BLDX-1417).  P006–P007 are SDK-only: the SDK must
     keep Temporal contained behind its seam.
 
+    P016–P017 (entrypoint-conformance) are app-scoped: the SDK's ``main.py``
+    legitimately calls ``create_worker`` and ``uvicorn.run`` — that is its job;
+    consumer apps must delegate those calls to the SDK launcher (BLDX-1411).
+
     B001 (deprecated-symbol usage) is app-scoped: the SDK deliberately retains
     and internally uses its own deprecated shims.  B002–B004 (deprecation
     authoring hygiene) are SDK-only — they grade how the SDK *declares* its
@@ -124,6 +128,8 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # P013/P014: apps must declare typed Input/Output contracts on all
     # entrypoints and tasks (BLDX-1413). P015: contract fields should use
     # typed models, not containers of primitives (BLDX-1413).
+    # P016/P017: apps must boot through the SDK launcher, not hand-roll
+    # workers or servers (BLDX-1411).
     # I001–I005: Dockerfile conformance (SDK builds the base image, not consuming it).
     # B001: consuming a deprecated SDK symbol (BLDX-1418).
     assert app_scoped == {
@@ -146,6 +152,8 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P013",
         "P014",
         "P015",
+        "P016",
+        "P017",
         "I001",
         "I002",
         "I003",
@@ -251,12 +259,13 @@ def test_catalog_d_series_present() -> None:
 
 
 def test_catalog_p_series_present() -> None:
-    """The P-series prescription rules are exactly P001–P015.
+    """The P-series prescription rules are exactly P001–P017.
 
     Strict equality (not just not-missing): P004–P007 are the orchestration-seam
     rules (BLDX-1417); P008–P012 are the storage-seam rules (BLDX-1398);
-    P013–P015 are the typed-contract-boundary rules (BLDX-1413).  A stray or
-    renumbered P-id would slip past a subset check while breaking fleet-wide
+    P013–P015 are the typed-contract-boundary rules (BLDX-1413); P016–P017 are
+    the entrypoint-conformance rules (BLDX-1411).  A stray or renumbered P-id
+    would slip past a subset check while breaking fleet-wide
     ``# conformance: ignore[Pxxx]`` suppressions.
     """
     rules = load_catalog()
@@ -277,6 +286,8 @@ def test_catalog_p_series_present() -> None:
         "P013",
         "P014",
         "P015",
+        "P016",
+        "P017",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"

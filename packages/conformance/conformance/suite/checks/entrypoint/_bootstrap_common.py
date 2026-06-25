@@ -1,0 +1,43 @@
+"""Shared helpers for the entrypoint-conformance checks (P016–P017, BLDX-1411)."""
+
+from __future__ import annotations
+
+import ast
+
+# Top-level SDK package for guard checks.
+_SDK_TOP = "application_sdk"
+
+
+def collect_import_origins(tree: ast.AST) -> dict[str, str]:
+    """Map each bound name to its fully-qualified import origin (module.name).
+
+    Walks the entire tree so lazy / in-function imports are caught.
+
+    Examples::
+
+        from application_sdk.execution import create_worker
+        -> {"create_worker": "application_sdk.execution.create_worker"}
+
+        from fastapi import FastAPI
+        -> {"FastAPI": "fastapi.FastAPI"}
+
+        import uvicorn
+        -> {"uvicorn": "uvicorn"}
+
+        from uvicorn import run
+        -> {"run": "uvicorn.run"}
+    """
+    origins: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                bound = alias.asname if alias.asname else alias.name.split(".")[0]
+                origins[bound] = alias.name
+        elif isinstance(node, ast.ImportFrom):
+            if node.level != 0:  # skip relative imports
+                continue
+            module = node.module or ""
+            for alias in node.names:
+                bound = alias.asname if alias.asname else alias.name
+                origins[bound] = f"{module}.{alias.name}" if module else alias.name
+    return origins
