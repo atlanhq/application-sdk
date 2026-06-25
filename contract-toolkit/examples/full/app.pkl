@@ -163,6 +163,7 @@ uiConfig = new UIConfig {
       inputs {
         ["credential-guid"] = new CredentialInput {
           credType = "atlan-connectors-full-featured"
+          placeholderText = "Credential GUID"
         }
       }
     }
