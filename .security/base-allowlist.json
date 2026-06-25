@@ -7,17 +7,5 @@
     "CRITICAL": 7,
     "HIGH": 30
   },
-  "_entry_schema": {
-    "_doc": "Each non-underscore key is a CVE/advisory ID. Keep entries minimal but descriptive. Required: package, severity (CRITICAL|HIGH only), reason, expires, added_by, case, ticket. Optional: fix_pr.",
-    "CVE-2026-00000": {
-      "package": "example-pkg",
-      "severity": "HIGH",
-      "reason": "Case 1: fix PR bumps example-pkg to 2.3.1; clears once merged & released.",
-      "expires": "2026-07-25",
-      "added_by": "@atlan-ci",
-      "case": 1,
-      "ticket": "BLDX-0000",
-      "fix_pr": "https://github.com/atlanhq/application-sdk/pull/0000"
-    }
-  }
+  "_entry_schema": "Each non-underscore key is a CVE/advisory ID. Required: package, severity (CRITICAL|HIGH only), reason, expires, added_by, case (1-4), ticket. Optional: fix_pr. Keep entries minimal but descriptive."
 }
