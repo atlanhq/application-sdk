@@ -312,7 +312,7 @@ def test_catalog_b_series_present() -> None:
     """The B-series backwards-compatibility / deprecation rules are all present."""
     rules = load_catalog()
     b_ids = {r.id for r in rules if r.id.startswith("B")}
-    expected = {"B001", "B002", "B003", "B004"}
+    expected = {"B001", "B002", "B003", "B004", "B005", "B006"}
     missing = expected - b_ids
     assert not missing, f"Missing B-series rules: {missing}"
     extra = b_ids - expected

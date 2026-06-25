@@ -444,6 +444,53 @@ and is UI-only — separate from `validationRules`. See `docs/reference.md` and 
 | `Widgets.CustomWidget` | `<widgetName>` | `str` |
 | `Widgets.Sage` / `Widgets.SageV2` | `sage`/`sageV2` | `str` |
 
+## Field Lifecycle — Deprecating and Sunsetting Fields
+
+Every `UIElement` carries `lifecycle` and `lifecycleMessage` properties that
+support backwards-compatible field retirement:
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `lifecycle` | `"active"\|"deprecated"\|"sunset"` | `"active"` | Lifecycle state of this field. |
+| `lifecycleMessage` | `String?` | `null` | Optional human-readable note. Ignored when `lifecycle = "active"`. |
+
+**Lifecycle states and their generated Python:**
+
+| State | Python output | Meaning |
+|---|---|---|
+| `active` | `field: T = <default>` | In active use. |
+| `deprecated` | `field: T = Field(default=..., deprecated=True)` | Accepted but consumers should migrate away. Pydantic v2 emits a `DeprecationWarning` when set. |
+| `sunset` | `field: T = Field(default=..., deprecated=True, json_schema_extra={"x-lifecycle": "sunset"})` | Retained only for backwards-compatibility; no longer consumed by the app. |
+
+**Backwards-compatibility rules (enforced by the `B005`/`B006` conformance gate):**
+
+- A field's lifecycle may only _advance_ (`active → deprecated → sunset`).
+- A field is **never removed** and its **type never changes** — these are breaking
+  contract changes.
+- To "rename" a field: deprecate/sunset the old field and add a new field with the
+  new name and a default value.
+
+```pkl
+// Mark a field as deprecated — still accepted, consumers should migrate
+["legacy_timeout"] = new NumericInput {
+  title = "Legacy timeout"
+  default = 60
+  lifecycle = "deprecated"
+  lifecycleMessage = "Use the standard pipeline timeout instead."
+}
+
+// Mark a field as sunset — retained for serialization compatibility only
+["old_batch_mode"] = new BooleanInput {
+  title = "Old batch mode"
+  default = false
+  lifecycle = "sunset"
+}
+```
+
+After changing field lifecycle in `app.pkl`, run
+`uv run atlan-application-sdk-conformance gen-contract-ledger` in the app repo
+and commit the updated `contract_schema.lock.json` in the same PR.
+
 ## App Repo Structure
 
 ```
