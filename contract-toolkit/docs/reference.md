@@ -294,9 +294,10 @@ Set `entrypoints` to serve multiple marketplace tiles from one deployment. Per-e
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `entrypoints` | Listing<Entrypoint> | `[]` | Marketplace card / SDK entrypoint definitions. When non-empty, enables bundle mode. |
+| `entrypoints` | Listing<Entrypoint> | `[]` | SDK routing endpoints and (optionally) marketplace card definitions. When non-empty, enables bundle mode. All entrypoints are routable via `?entrypoint=`; only those with `marketplaceCard=true` render as UI cards. |
 | `emitAtlanYaml` | Boolean | `true` | Emit `atlan.yaml`. |
-| `emitEntrypoints` | Boolean | `true` | Emit the `entrypoints:` block. |
+| `emitEntrypoints` | Boolean | `true` | **Deprecated** — use `marketplaceCard = false` on individual `Entrypoint`s instead. Emit the `entrypoints:` block. Will be removed in the next minor version. |
+| `emitDeploy` | Boolean | `false` | Emit the `deploy:` block into `atlan.yaml`. Defaults to `false`; Heracles applies platform defaults for most apps. Set to `true` only when explicitly configuring `deploy { ... }` or `deployOverrides { ... }`. |
 | `emitGeneratedArtifacts` | Boolean | `true` | Re-export entrypoint contract files. |
 
 **Entrypoint class:**
@@ -310,6 +311,7 @@ Set `entrypoints` to serve multiple marketplace tiles from one deployment. Per-e
 | `type` | String | `"connector"` | Card type. |
 | `source` | String? | null | Source slug. |
 | `sourceCategory` | String? | null | Source category. |
+| `marketplaceCard` | Boolean | `true` | Whether this entrypoint renders as a marketplace UI card. Set to `false` for entrypoints that are routable (`?entrypoint=`) but should not appear as user-facing cards (e.g. a lineage workflow invoked downstream by a DAG node). |
 | `contract` | Typed? | null | The entrypoint's `App.pkl` contract whose `output.files` are emitted. |
 
 Bundle output layout:

@@ -18,25 +18,11 @@ entrypoints:
   type: connector
   source: snowflake
   source_category: database
+  marketplace_card: true
 - name: miner
   display_name: Query Miner
   icon_url: https://assets.atlan.com/assets/snowflake.svg
   type: connector
   source: snowflake
   source_category: database
-deploy:
-  execution_mode: native
-  splitDeploymentEnabled: true
-  dapr:
-    objectstore: false
-    secretstore: false
-    statestore: false
-    eventstore: false
-    subscription: false
-    configurationstore: false
-    lock: false
-  keda:
-    enabled: true
-    minReplicaCount: 0
-    temporal:
-      targetQueueSize: 5
+  marketplace_card: true

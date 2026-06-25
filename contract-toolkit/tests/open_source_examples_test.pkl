@@ -212,6 +212,26 @@ facts {
     !minimalAtlanYaml.contains("tags:")
   }
 
+  ["Entrypoints always carry marketplace_card field"] {
+    // Implicit single entrypoint → marketplace_card: true
+    minimalAtlanYaml.contains("marketplace_card: true")
+    fullAtlanYaml.contains("marketplace_card: true")
+    // Bundle multi-entrypoint → both carry marketplace_card: true (default)
+    bundleApp.output.files["atlan.yaml"].text.contains("marketplace_card: true")
+  }
+
+  ["deploy block absent from atlan.yaml by default (emitDeploy = false)"] {
+    !minimalAtlanYaml.contains("deploy:")
+    !fullAtlanYaml.contains("deploy:")
+    !bundleApp.output.files["atlan.yaml"].text.contains("deploy:")
+  }
+
+  ["deploy block present when emitDeploy = true"] {
+    local deployYaml: String = deployApp.output.files["atlan.yaml"].text
+    deployYaml.contains("deploy:")
+    deployYaml.contains("keda:")
+  }
+
   ["ConnectionRef example uses public connector filters"] {
     connectionRefWorkflowJson.contains("\"widget\": \"connectionSelector\"")
     connectionRefWorkflowJson.contains("\"shouldIncludeConnectionInfo\": true")

@@ -165,7 +165,7 @@ The single entry point for all new native app contracts. Amend this module and d
 - Credential config: `credentialCommonFields`, `credentialAuthOptions`, `credentialConnectorType`
 - Workflow config: `uiConfig` (form steps and fields using `Widgets.*` types)
 - Pipeline: typed `pipeline` block (extract → parseQueries → popularity → lineage → publish)
-- Deployment: typed `deploy` block (KEDA, Dapr, resources, env)
+- Deployment: typed `deploy` block (KEDA, Dapr, resources, env) — gated by `emitDeploy = true`; omitted by default
 
 All domain classes (`FieldSpec`, `AuthOption`, `UIConfig`, `UIRule`, `Entrypoint`, pipeline step classes, `DeployConfig`, `DaprComponents`, `KedaConfig`, `ResourceConfig`, `ErrorHandlingConfig`, `DependencyCondition`, `DAGNode`, etc.) are defined in `App.pkl` and available directly in amending modules without additional imports.
 
@@ -291,6 +291,8 @@ To replace the generated node, define `extraNodes["notifications"]`.
 
 The typed `deploy` block replaces the legacy free-form mapping. The common 80% is typed; anything unmodeled goes in `deployOverrides` (deep-merged last).
 
+The `deploy:` block is **omitted from `atlan.yaml` by default** (`emitDeploy = false`). Heracles applies platform defaults for most apps; only set `emitDeploy = true` when you need to override KEDA, Dapr, resources, or environment variables.
+
 ```pkl
 deploy {
   keda {
@@ -329,6 +331,8 @@ deployOverrides {
 ## Multi-Entrypoint Bundle
 
 Multi-entrypoint apps set `entrypoints` at the root `app.pkl` and keep per-entrypoint contracts as separate files that each `amend App.pkl`.
+
+All entrypoints are always routable via `?entrypoint=`. Set `marketplaceCard = false` on entrypoints that should be routable but not appear as a user-facing marketplace card (e.g. a lineage workflow invoked downstream by a DAG node rather than directly by a user).
 
 ```pkl
 // app.pkl

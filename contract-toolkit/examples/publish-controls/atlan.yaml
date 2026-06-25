@@ -13,19 +13,4 @@ entrypoints:
   display_name: Publish Controls Example
   icon_url: https://assets.atlan.com/assets/trino.svg
   type: connector
-deploy:
-  execution_mode: native
-  splitDeploymentEnabled: true
-  dapr:
-    objectstore: false
-    secretstore: false
-    statestore: false
-    eventstore: false
-    subscription: false
-    configurationstore: false
-    lock: false
-  keda:
-    enabled: true
-    minReplicaCount: 0
-    temporal:
-      targetQueueSize: 5
+  marketplace_card: true

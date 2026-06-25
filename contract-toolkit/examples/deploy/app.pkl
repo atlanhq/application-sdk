@@ -9,6 +9,7 @@ name = "deploy"
 displayName = "Deploy Config Example"
 icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
 hasCredentialConfig = false
+emitDeploy = true
 
 // ── Deployment configuration ──────────────────────────────────────────────────
 

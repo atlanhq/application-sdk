@@ -180,8 +180,20 @@ atlanYamlOverrides: Mapping<String, Any> = new Mapping {}
 /// Whether to emit `atlan.yaml` in the output.
 emitAtlanYaml: Boolean = true
 
-/// Whether to emit the `entrypoints:` block into `atlan.yaml`.
+/// @Deprecated — use `marketplaceCard = false` on individual `Entrypoint`s instead.
+/// Will be removed in the next minor version.
+///
+/// When `true` (default), all entrypoints are emitted into the `entrypoints:` block
+/// of `atlan.yaml`. When `false`, the block is suppressed entirely. Superseded by
+/// `marketplaceCard`, which lets you express routable-but-not-card entrypoints
+/// declaratively rather than suppressing the whole block.
 emitEntrypoints: Boolean = true
+
+/// Whether to emit the `deploy:` block into `atlan.yaml`.
+/// Defaults to `false` — most apps do not need to configure deployment;
+/// Heracles applies platform defaults. Set to `true` when you explicitly
+/// configure `deploy { ... }` or `deployOverrides { ... }`.
+emitDeploy: Boolean = false
 
 /// Whether to emit `app.yaml` in the output.
 emitAppYaml: Boolean = true
@@ -1451,7 +1463,7 @@ class DeployConfig {
 
 // ── Entrypoint class ──────────────────────────────────────────────────────────
 
-/// One marketplace card / SDK entrypoint under the deployed app.
+/// One SDK routing endpoint and (optionally) marketplace UI card under the deployed app.
 open class Entrypoint {
   name: String
 
@@ -1474,6 +1486,13 @@ open class Entrypoint {
   docsUrl: String?
 
   metadata: Mapping<String, Any> = new Mapping {}
+
+  /// Whether this entrypoint renders as a marketplace UI card.
+  /// All entrypoints are always routable via `?entrypoint=`; only
+  /// `marketplaceCard=true` entries surface as cards in the marketplace (LM/GM).
+  /// Set to `false` for entrypoints that are invoked downstream by DAG nodes
+  /// but should not appear as user-facing cards.
+  marketplaceCard: Boolean = true
 
   /// Optional imported contract for this entrypoint.
   /// When set and `emitGeneratedArtifacts` is true, all files from
@@ -3082,6 +3101,7 @@ local function renderEntrypoint(e: Entrypoint): Mapping<String, Any> = new Mappi
   when (e.sourceCategory != null) { ["source_category"] = e.sourceCategory }
   when (!e.categories.isEmpty) { ["categories"] = e.categories }
   when (e.docsUrl != null) { ["docs_url"] = e.docsUrl }
+  ["marketplace_card"] = e.marketplaceCard
   ...e.metadata
 }
 
@@ -3159,7 +3179,9 @@ local generatedAtlanYamlData: Mapping<String, Any> = new Mapping {
       }
     }
   }
-  ["deploy"] = deepMergeMapping(renderDeployConfig(deploy), deployOverrides)
+  when (emitDeploy) {
+    ["deploy"] = deepMergeMapping(renderDeployConfig(deploy), deployOverrides)
+  }
 }
 
 local atlanYamlData: Mapping<String, Any> =
