@@ -355,8 +355,9 @@ class TestCreateWorker:
             "sdr:test_auth",
             "sdr:preflight_check",
             "sdr:fetch_metadata",
-            "preflight:gate",
         }.issubset(activity_names)
+        # Gate is app-namespaced ({app}:preflight) and always registered.
+        assert any(n.endswith(":preflight") for n in activity_names)
 
     def test_sdr_workflows_registered_when_handler_provided(self) -> None:
         """When ``handler`` is provided, SDR workflows + activities are appended."""
@@ -431,7 +432,7 @@ class TestCreateWorker:
         # SDR activities suppressed, but the mandatory preflight gate is a core
         # lifecycle activity — it must register regardless of the SDR opt-out.
         assert not any(n.startswith("sdr:") for n in activity_names)
-        assert "preflight:gate" in activity_names
+        assert any(n.endswith(":preflight") for n in activity_names)
 
     def test_passthrough_modules_included_in_sandbox(self) -> None:
         class _SandboxApp(App):

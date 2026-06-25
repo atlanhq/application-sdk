@@ -59,27 +59,27 @@ class TestRunPreflightGate:
     async def test_skipped_when_not_patched(self) -> None:
         exec_mock, exec_patch = _exec()
         with _patched(False), exec_patch:
-            await _run_preflight_gate(_ResolvableInput(), "crawl")
+            await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
         exec_mock.assert_not_called()
 
     async def test_skipped_for_non_resolvable_input(self) -> None:
         exec_mock, exec_patch = _exec()
         with _patched(True), exec_patch:
-            await _run_preflight_gate(_NonResolvableInput(), "crawl")
+            await _run_preflight_gate(_NonResolvableInput(), "myapp", "crawl")
         exec_mock.assert_not_called()
 
     async def test_aborts_on_canonical_failed(self) -> None:
         exec_mock, exec_patch = _exec(_output(PreflightStatus.FAILED))
         with _patched(True), exec_patch:
             with pytest.raises(ApplicationError) as excinfo:
-                await _run_preflight_gate(_ResolvableInput(), "crawl")
+                await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
         assert excinfo.value.non_retryable is True
         assert excinfo.value.type == "PreflightFailed"
 
     async def test_proceeds_on_success(self) -> None:
         exec_mock, exec_patch = _exec(_output(PreflightStatus.SUCCESS))
         with _patched(True), exec_patch:
-            result = await _run_preflight_gate(_ResolvableInput(), "crawl")
+            result = await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
         assert result is None
         exec_mock.assert_awaited_once()
 
@@ -87,7 +87,7 @@ class TestRunPreflightGate:
         # NOT_READY folds to canonical SUCCESS — back-compat must not abort.
         exec_mock, exec_patch = _exec(_output(PreflightStatus.NOT_READY))
         with _patched(True), exec_patch:
-            result = await _run_preflight_gate(_ResolvableInput(), "crawl")
+            result = await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
         assert result is None
 
     async def test_override_proceeds_on_failed_verdict(self) -> None:
@@ -98,7 +98,9 @@ class TestRunPreflightGate:
             exec_patch,
             mock.patch("application_sdk.app.base._safe_log"),
         ):
-            result = await _run_preflight_gate(_ResolvableInput(override=True), "crawl")
+            result = await _run_preflight_gate(
+                _ResolvableInput(override=True), "myapp", "crawl"
+            )
         assert result is None
         exec_mock.assert_awaited_once()
 
@@ -113,7 +115,9 @@ class TestRunPreflightGate:
             mock.patch("application_sdk.app.base.workflow.execute_activity", exec_mock),
             mock.patch("application_sdk.app.base._safe_log"),
         ):
-            result = await _run_preflight_gate(_ResolvableInput(override=True), "crawl")
+            result = await _run_preflight_gate(
+                _ResolvableInput(override=True), "myapp", "crawl"
+            )
         assert result is None
 
     async def test_handler_raise_propagates_without_override(self) -> None:
@@ -125,7 +129,7 @@ class TestRunPreflightGate:
             mock.patch("application_sdk.app.base.workflow.execute_activity", exec_mock),
         ):
             with pytest.raises(TemporalApplicationError):
-                await _run_preflight_gate(_ResolvableInput(), "crawl")
+                await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
 
     async def test_dispatches_activity_with_preflight_output_result_type(self) -> None:
         # Regression: execute_activity dispatched by name returns a raw dict
@@ -133,7 +137,7 @@ class TestRunPreflightGate:
         # on the result, which a dict doesn't have. Caught live on mysql canary.
         exec_mock, exec_patch = _exec(_output(PreflightStatus.SUCCESS))
         with _patched(True), exec_patch:
-            await _run_preflight_gate(_ResolvableInput(), "crawl")
+            await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
         _, kwargs = exec_mock.call_args
         assert kwargs.get("result_type") is PreflightOutput
 
@@ -141,10 +145,10 @@ class TestRunPreflightGate:
         exec_mock, exec_patch = _exec(_output(PreflightStatus.SUCCESS))
         with _patched(True), exec_patch:
             await _run_preflight_gate(
-                _ResolvableInput(guid="abc", method="agent"), "asset-export"
+                _ResolvableInput(guid="abc", method="agent"), "myapp", "asset-export"
             )
         args, _ = exec_mock.call_args
-        assert args[0] == "preflight:gate"
+        assert args[0] == "myapp:preflight"
         gate_input = args[1]
         assert gate_input.credential_guid == "abc"
         assert gate_input.extraction_method == "agent"

@@ -43,7 +43,16 @@ if TYPE_CHECKING:
     from application_sdk.handler.base import Handler
 
 
-PREFLIGHT_GATE_ACTIVITY = "preflight:gate"
+def preflight_gate_activity_name(app_name: str) -> str:
+    """Activity name for the gate: ``{app}:preflight``.
+
+    App-namespaced (like the app's own ``{app}:<task>`` activities) so the gate
+    reads as a native step of the workflow in the Temporal UI, rather than a
+    foreign ``sdr:``/``preflight:`` activity. The workflow's ``_run`` and the
+    worker registration must derive the name from the same ``app_name``.
+    """
+    return f"{app_name}:preflight"
+
 
 # Dispatched from the extraction workflow's _run. Bounded so a slow/unreachable
 # source can't stall extraction start indefinitely.
@@ -85,7 +94,7 @@ def build_preflight_gate_activity(
     """
     binding = _SdrBinding(handler=handler, app_name=app_name)
 
-    @activity.defn(name=PREFLIGHT_GATE_ACTIVITY)
+    @activity.defn(name=preflight_gate_activity_name(app_name))
     async def preflight_gate(input: PreflightGateInput) -> PreflightOutput:
         ref = _resolve_gate_ref(input)
         credentials: list[HandlerCredential] = []

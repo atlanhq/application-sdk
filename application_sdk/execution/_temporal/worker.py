@@ -364,10 +364,14 @@ def create_worker(
 
     # The preflight gate is a CORE extraction-lifecycle activity dispatched by
     # every generated workflow's _run — register it UNCONDITIONALLY, independent
-    # of the SDR opt-out, so the mandatory gate is always dispatchable.
+    # of the SDR opt-out, so the mandatory gate is always dispatchable. The gate
+    # name is app-namespaced ({app}:preflight), so register one per registered
+    # app to match each workflow's own app_name (single entry for single-app
+    # workers, the common case).
+    gate_app_names = [m.name for m in sdr_registered_apps] or [resolved_app_name]
     task_activities = [
         *task_activities,
-        build_preflight_gate_activity(gate_handler, resolved_app_name),
+        *(build_preflight_gate_activity(gate_handler, name) for name in gate_app_names),
     ]
 
     if enable_sdr:

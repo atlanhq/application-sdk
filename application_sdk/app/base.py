@@ -1542,7 +1542,9 @@ def _collect_interaction_relays(
     return relays
 
 
-async def _run_preflight_gate(input_data: Input, entrypoint: str) -> None:
+async def _run_preflight_gate(
+    input_data: Input, app_name: str, entrypoint: str
+) -> None:
     """Run the SDK-owned pre-extraction preflight gate (HYP-1883).
 
     Dispatches the connector's preflight handler as a mandatory first activity
@@ -1570,7 +1572,7 @@ async def _run_preflight_gate(input_data: Input, entrypoint: str) -> None:
             _GATE_RETRY,
             _GATE_SCHEDULE_TO_CLOSE,
             _GATE_START_TO_CLOSE,
-            PREFLIGHT_GATE_ACTIVITY,
+            preflight_gate_activity_name,
         )
         from application_sdk.handler.contracts import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
             PreflightGateInput,
@@ -1600,7 +1602,7 @@ async def _run_preflight_gate(input_data: Input, entrypoint: str) -> None:
 
     try:
         result = await workflow.execute_activity(
-            PREFLIGHT_GATE_ACTIVITY,
+            preflight_gate_activity_name(app_name),
             gate_input,
             result_type=PreflightOutput,
             schedule_to_close_timeout=_GATE_SCHEDULE_TO_CLOSE,
@@ -1745,7 +1747,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
             _safe_log("warning", "Failed to log input summary", exc_info=True)
 
         try:
-            await _run_preflight_gate(input_data, entrypoint_name)
+            await _run_preflight_gate(input_data, app_name, entrypoint_name)
             entry_method = getattr(app_instance, entry_method_name)
             result = await entry_method(input_data)
             return cast("Output", result)

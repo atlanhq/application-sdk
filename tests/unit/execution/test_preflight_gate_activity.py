@@ -12,8 +12,8 @@ import pytest
 from application_sdk.app.base import AppContextError
 from application_sdk.credentials.ref import CredentialResolvable
 from application_sdk.execution._temporal.preflight_gate import (
-    PREFLIGHT_GATE_ACTIVITY,
     build_preflight_gate_activity,
+    preflight_gate_activity_name,
 )
 from application_sdk.handler.base import DefaultHandler, Handler
 from application_sdk.handler.contracts import (
@@ -49,16 +49,16 @@ class _StubHandler(Handler):
 
 def _gate(handler: Handler):
     activity = build_preflight_gate_activity(handler, app_name="myapp")
-    assert getattr(activity, "__temporal_activity_definition").name == (
-        PREFLIGHT_GATE_ACTIVITY
-    )
+    assert getattr(activity, "__temporal_activity_definition").name == "myapp:preflight"
     return activity
 
 
 class TestPreflightGateActivity:
-    def test_activity_name_is_not_sdr_namespaced(self) -> None:
-        assert PREFLIGHT_GATE_ACTIVITY == "preflight:gate"
-        assert not PREFLIGHT_GATE_ACTIVITY.startswith("sdr:")
+    def test_activity_name_is_app_namespaced(self) -> None:
+        # Reads as a native workflow step ({app}:preflight), like the app's own
+        # {app}:<task> activities — not a foreign sdr:/preflight: namespace.
+        assert preflight_gate_activity_name("mysql") == "mysql:preflight"
+        assert not preflight_gate_activity_name("mysql").startswith("sdr:")
 
     def test_gate_input_satisfies_credential_resolvable(self) -> None:
         assert isinstance(PreflightGateInput(), CredentialResolvable)
