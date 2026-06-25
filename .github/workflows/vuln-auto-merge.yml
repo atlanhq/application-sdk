@@ -10,9 +10,9 @@
 # in .github/scripts/vuln_auto_merge_gate.py (unit-tested), per
 # docs/standards/ci.md. This workflow only wires the trigger and runs it.
 #
-# Why atlan-ci: atlan-ci is a CODEOWNER (the `*` rule and the explicit
-# /.security/ rule) and a bypass actor on the main ruleset, so its approval
-# satisfies require_code_owner_review and `--auto` merges once checks pass.
+# Why atlan-ci: atlan-ci is a CODEOWNER (via the `*` rule in .github/CODEOWNERS,
+# which already covers .security/) and a bypass actor on the main ruleset, so its
+# approval satisfies require_code_owner_review and `--auto` merges once checks pass.
 # GitHub auto-merge enforces "merge only when required checks pass", so a red
 # PR is never merged here.
 

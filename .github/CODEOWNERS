@@ -1,6 +1,2 @@
 * @atlan-ci @cmgrote @OnkarVO7 @louisnow @Aryamanz29 @vaibhavatlan
 /contract-toolkit/ @cmgrote @vaibhavatlan @Aryamanz29 @fyzanshaik-atlan
-# Security allowlist: SDK/security owners + atlan-ci. atlan-ci's automated
-# approval on a vuln-triage allowlist-only PR satisfies code-owner review so
-# the CVE-SLA flow can stay zero-human-touch (see vuln-auto-merge.yml).
-/.security/ @atlan-ci @cmgrote @vaibhavatlan @Aryamanz29
