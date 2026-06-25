@@ -371,9 +371,9 @@ def test_discover_includes_test_files(tmp_path: Path) -> None:
     )
     paths = discover(tmp_path)
     names = {p.name for p in paths}
-    assert "test_integration.py" in names, (
-        "Entrypoint-conformance discovery must include test files"
-    )
+    assert (
+        "test_integration.py" in names
+    ), "Entrypoint-conformance discovery must include test files"
 
 
 def test_discover_excludes_venv(tmp_path: Path) -> None:
