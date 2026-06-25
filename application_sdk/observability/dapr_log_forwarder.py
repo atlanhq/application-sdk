@@ -170,8 +170,28 @@ async def _drain_and_flush(complete: "Any") -> None:
         )
 
         await AtlanObservability.flush_all()
-    except Exception:  # noqa: S110 — best-effort shutdown flush
+    except Exception:  # noqa: S110 — best-effort flush
         pass
+
+
+async def _periodic_drain_flush(complete: "Any", interval: float) -> None:
+    """Drain + upload buffered records on this loop, every *interval* seconds.
+
+    We can't rely on the SDK's own periodic flush here: this forwarder imports
+    SDK modules before the event loop starts, so the SDK's flush task binds to a
+    background thread (the no-running-loop fallback) which doesn't reliably
+    upload from this second process. Driving the flush on the forwarder's own
+    loop makes delivery deterministic. Unlike the SDK's task, this stays alive
+    across transient upload errors instead of dying on the first one.
+    """
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            await _drain_and_flush(complete)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: S110 — keep flushing across transient errors
+            pass
 
 
 async def _run(child_cmd: list[str]) -> int:
@@ -185,6 +205,14 @@ async def _run(child_cmd: list[str]) -> int:
     )
     _install_signal_forwarding(proc)
 
+    from application_sdk.constants import (  # noqa: PLC0415 — deferred: env-driven flush cadence
+        LOG_FLUSH_INTERVAL_SECONDS,
+    )
+
+    flusher = asyncio.create_task(
+        _periodic_drain_flush(complete, LOG_FLUSH_INTERVAL_SECONDS)
+    )
+
     try:
         assert proc.stdout is not None
         async for raw in proc.stdout:
@@ -196,6 +224,11 @@ async def _run(child_cmd: list[str]) -> int:
                 # Forwarding must never interrupt the stream — fall back to raw.
                 print(line.rstrip("\n"), file=sys.stderr, flush=True)  # noqa: T201
     finally:
+        flusher.cancel()
+        try:
+            await flusher
+        except asyncio.CancelledError:
+            pass
         returncode = await proc.wait()
         await _drain_and_flush(complete)
 
