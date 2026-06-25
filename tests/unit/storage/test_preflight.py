@@ -93,13 +93,12 @@ def _fake_store() -> Any:
 
 
 async def _run_probe(
-    store: Any, put_side_effect=None, head_side_effect=None, delete_side_effect=None
+    store: Any, put_side_effect=None, head_side_effect=None
 ) -> str | None:
     """Run ``_probe_store`` with obstore functions replaced by async fakes."""
     fake_obstore = MagicMock()
     fake_obstore.put_async = AsyncMock(side_effect=put_side_effect)
     fake_obstore.head_async = AsyncMock(side_effect=head_side_effect)
-    fake_obstore.delete_async = AsyncMock(side_effect=delete_side_effect)
 
     with patch.dict("sys.modules", {"obstore": fake_obstore}):
         return await _probe_store(store, "deployment", "objectstore")
@@ -107,7 +106,7 @@ async def _run_probe(
 
 @pytest.mark.asyncio
 async def test_probe_store_success() -> None:
-    """All three operations succeed → None returned."""
+    """Write and read both succeed → None returned."""
     result = await _run_probe(_fake_store())
     assert result is None
 
@@ -138,29 +137,15 @@ async def test_probe_store_write_fails_invalid_credentials() -> None:
 
 @pytest.mark.asyncio
 async def test_probe_store_head_fails_after_write_succeeds() -> None:
-    """Write succeeds, HEAD fails → read failure returned; delete still attempted."""
+    """Write succeeds, HEAD fails → read failure returned."""
     result = await _run_probe(
         _fake_store(),
         put_side_effect=None,
         head_side_effect=Exception("403 Forbidden"),
-        delete_side_effect=None,
     )
     assert result is not None
     assert "read/head failed" in result
     assert "permission denied" in result
-
-
-@pytest.mark.asyncio
-async def test_probe_store_delete_fails_is_nonfatal() -> None:
-    """Write and HEAD succeed; delete fails → None returned (best-effort cleanup)."""
-    result = await _run_probe(
-        _fake_store(),
-        put_side_effect=None,
-        head_side_effect=None,
-        delete_side_effect=Exception("403 Forbidden on delete"),
-    )
-    # Delete failure is logged at WARNING but must not surface as a probe failure
-    assert result is None
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +191,6 @@ async def test_verify_fails_when_upstream_absent_in_sdr(monkeypatch) -> None:
     fake_obstore = MagicMock()
     fake_obstore.put_async = AsyncMock()
     fake_obstore.head_async = AsyncMock()
-    fake_obstore.delete_async = AsyncMock()
 
     infra = _make_infra(storage=fake_store, upstream_storage=None)
 
@@ -234,7 +218,6 @@ async def test_verify_fails_when_store_is_none_in_sdr(monkeypatch) -> None:
     fake_obstore = MagicMock()
     fake_obstore.put_async = AsyncMock()
     fake_obstore.head_async = AsyncMock()
-    fake_obstore.delete_async = AsyncMock()
 
     infra = _make_infra(storage=None, upstream_storage=fake_store)
 
@@ -258,7 +241,6 @@ async def test_verify_passes_both_stores_healthy(monkeypatch) -> None:
     fake_obstore = MagicMock()
     fake_obstore.put_async = AsyncMock()
     fake_obstore.head_async = AsyncMock()
-    fake_obstore.delete_async = AsyncMock()
 
     infra = _make_infra(storage=fake_store, upstream_storage=fake_store)
 
@@ -282,7 +264,6 @@ async def test_verify_timeout_classified_as_connectivity(monkeypatch) -> None:
     fake_obstore = MagicMock()
     fake_obstore.put_async = AsyncMock()
     fake_obstore.head_async = AsyncMock()
-    fake_obstore.delete_async = AsyncMock()
 
     infra = _make_infra(storage=_fake_store(), upstream_storage=fake_upstream)
 
@@ -311,7 +292,6 @@ async def test_verify_probe_failure_propagates_to_preflight_error(monkeypatch) -
     # put_async raises 403 → _probe_store returns a non-None failure string
     fake_obstore.put_async = AsyncMock(side_effect=Exception("403 Forbidden"))
     fake_obstore.head_async = AsyncMock()
-    fake_obstore.delete_async = AsyncMock()
 
     infra = _make_infra(storage=fake_store, upstream_storage=fake_store)
 

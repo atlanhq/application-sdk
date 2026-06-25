@@ -124,6 +124,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # P013/P014: apps must declare typed Input/Output contracts on all
     # entrypoints and tasks (BLDX-1413). P015: contract fields should use
     # typed models, not containers of primitives (BLDX-1413).
+    # P016: entry-point contract/code alignment — only apps have a Pkl contract
+    # and app/generated/ dirs; the SDK itself has no @entrypoint-decorated App
+    # methods and no contract to drift from (BLDX-1425).
     # I001–I005: Dockerfile conformance (SDK builds the base image, not consuming it).
     # B001: consuming a deprecated SDK symbol (BLDX-1418).
     assert app_scoped == {
@@ -146,6 +149,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P013",
         "P014",
         "P015",
+        "P016",
         "I001",
         "I002",
         "I003",
@@ -251,12 +255,13 @@ def test_catalog_d_series_present() -> None:
 
 
 def test_catalog_p_series_present() -> None:
-    """The P-series prescription rules are exactly P001–P015.
+    """The P-series prescription rules are exactly P001–P015 plus P016.
 
     Strict equality (not just not-missing): P004–P007 are the orchestration-seam
     rules (BLDX-1417); P008–P012 are the storage-seam rules (BLDX-1398);
-    P013–P015 are the typed-contract-boundary rules (BLDX-1413).  A stray or
-    renumbered P-id would slip past a subset check while breaking fleet-wide
+    P013–P015 are the typed-contract-boundary rules (BLDX-1413);
+    P016 is the entry-point contract/code alignment rule (BLDX-1425).  A stray
+    or renumbered P-id would slip past a subset check while breaking fleet-wide
     ``# conformance: ignore[Pxxx]`` suppressions.
     """
     rules = load_catalog()
@@ -277,6 +282,7 @@ def test_catalog_p_series_present() -> None:
         "P013",
         "P014",
         "P015",
+        "P016",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
@@ -306,7 +312,7 @@ def test_catalog_b_series_present() -> None:
     """The B-series backwards-compatibility / deprecation rules are all present."""
     rules = load_catalog()
     b_ids = {r.id for r in rules if r.id.startswith("B")}
-    expected = {"B001", "B002", "B003", "B004"}
+    expected = {"B001", "B002", "B003", "B004", "B005", "B006"}
     missing = expected - b_ids
     assert not missing, f"Missing B-series rules: {missing}"
     extra = b_ids - expected

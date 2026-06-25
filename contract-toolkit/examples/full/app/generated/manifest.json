@@ -24,6 +24,8 @@
           "lineage_depth": "{{lineage_depth}}",
           "table_prefix": "{{table_prefix}}",
           "custom_attributes": "{{custom_attributes}}",
+          "legacy_timeout": "{{legacy_timeout}}",
+          "old_batch_mode": "{{old_batch_mode}}",
           "schemas": "{{schemas}}"
         }
       },

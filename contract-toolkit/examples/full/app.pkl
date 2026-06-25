@@ -253,6 +253,25 @@ uiConfig = new UIConfig {
             formatOnBlur = true
           }
         }
+        // lifecycle = "deprecated": generated Python field carries Field(deprecated=True).
+        ["legacy_timeout"] = new NumericInput {
+          title = "Legacy timeout"
+          helpText = "Deprecated: use the standard pipeline timeout instead."
+          required = false
+          default = 60
+          width = 4
+          lifecycle = "deprecated"
+          lifecycleMessage = "Use the standard pipeline timeout configuration instead."
+        }
+        // lifecycle = "sunset": generated Python field carries Field(deprecated=True,
+        // json_schema_extra={"x-lifecycle": "sunset"}).
+        ["old_batch_mode"] = new BooleanInput {
+          title = "Old batch mode"
+          helpText = "Sunset: no longer consumed by the extractor."
+          required = false
+          default = false
+          lifecycle = "sunset"
+        }
       }
     }
     ["Schema selection"] {
