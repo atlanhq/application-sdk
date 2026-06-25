@@ -669,11 +669,24 @@ def _create_store_core(
 
     if store_kind == "gcs":
         bucket, gcs_config, put_attrs = _build_gcs_config(meta)
+        gcs_credential_provider = None
+        if not gcs_config:
+            # ADC / Workload-Identity path (no SA key in the binding): resolve
+            # credentials via google-auth rather than obstore's built-in GCS file
+            # decoder, which only understands service_account / authorized_user
+            # files — google-auth also handles Workload Identity Federation
+            # external_account files (GKE WI, GitHub OIDC → GCP).
+            from application_sdk.storage._credential_providers import (  # noqa: PLC0415
+                make_gcs_adc_provider,
+            )
+
+            gcs_credential_provider = make_gcs_adc_provider()
         store = make_gcs_store(
             bucket,
             # Pass ``None`` (not {}) so obstore uses Application Default Credentials.
             gcs_config if gcs_config else None,
             client_options=sdk_client_options,
+            credential_provider=gcs_credential_provider,
         )
         return store, put_attrs
 

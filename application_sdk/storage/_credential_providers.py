@@ -90,3 +90,19 @@ def make_azure_certificate_provider(
 
     credential = CertificateCredential(**cred_kwargs)
     return AzureCredentialProvider(credential=credential)
+
+
+def make_gcs_adc_provider() -> Any:
+    """Return an obstore GCS credential provider backed by google-auth (ADC).
+
+    Wraps ``obstore.auth.google.GoogleCredentialProvider``, which resolves
+    Application Default Credentials via ``google.auth.default()`` and mints a
+    short-lived OAuth token. This is the GCS ADC / Workload-Identity path —
+    notably it handles Workload Identity Federation ``external_account`` files
+    (e.g. GitHub OIDC → GCP, GKE WI), which obstore's built-in GCS
+    credential-file decoder cannot. Imported lazily so google-auth is only
+    needed when the GCS ADC path is actually exercised.
+    """
+    from obstore.auth.google import GoogleCredentialProvider  # noqa: PLC0415
+
+    return GoogleCredentialProvider()

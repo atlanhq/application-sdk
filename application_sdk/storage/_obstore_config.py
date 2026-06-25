@@ -216,19 +216,28 @@ def make_gcs_store(
     *,
     label: str = "gcs",
     client_options: ClientConfig | None = None,
+    credential_provider: object = None,
 ) -> ObjectStore:
     """Create a GCSStore with SDK-default client/retry config.
 
-    See :func:`make_s3_store` for rationale.
+    See :func:`make_s3_store` for rationale. On the ADC / Workload-Identity path
+    ``binding.py`` passes a ``credential_provider`` (obstore.auth.google, backed
+    by google-auth) instead of a key in ``config``: obstore's built-in GCS
+    credential-file decoder only understands ``service_account`` /
+    ``authorized_user`` files, NOT a Workload Identity Federation
+    ``external_account`` file — google-auth handles all of them.
     """
     from obstore.store import GCSStore  # noqa: PLC0415
 
     opts = client_options if client_options is not None else obstore_client_options()
     retry = obstore_retry_config()
     log_obstore_config(label, client_options=opts, retry_config=retry)
-    return GCSStore(
+    kw: dict[str, object] = dict(
         bucket=bucket, config=config, client_options=opts, retry_config=retry
-    )  # type: ignore[arg-type]
+    )
+    if credential_provider is not None:
+        kw["credential_provider"] = credential_provider
+    return GCSStore(**kw)  # type: ignore[arg-type]
 
 
 def log_obstore_config(

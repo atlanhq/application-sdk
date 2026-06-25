@@ -37,7 +37,6 @@ GCS tests (``gcs_integration`` marker) — Application Default Credentials:
 
 from __future__ import annotations
 
-import json
 import os
 
 import pytest
@@ -192,26 +191,6 @@ def require_gcs(request):
         pytest.skip(
             f"Real GCS access required. Missing: {', '.join(missing)}. "
             "In CI these come from the keyless WIF auth step."
-        )
-    # obstore's GCSStore decodes GOOGLE_APPLICATION_CREDENTIALS itself and only
-    # understands `service_account` / `authorized_user` files — NOT a Workload
-    # Identity Federation `external_account` file (what GitHub OIDC → GCP writes).
-    # Routing GCS ADC through obstore.auth.google.GoogleCredentialProvider (which
-    # uses google-auth and handles external_account) is a separate SDK storage-core
-    # enhancement (needs the google-auth dependency). Until it lands, skip the real
-    # GCS leg when ADC is a WIF file so CI stays green; SA-key / authorized_user
-    # ADC (e.g. local runs) still execute.
-    try:
-        with open(os.path.expandvars(GOOGLE_APPLICATION_CREDENTIALS)) as _fh:
-            _adc_type = json.load(_fh).get("type", "")
-    except (OSError, ValueError):
-        _adc_type = ""
-    if _adc_type == "external_account":
-        pytest.skip(
-            "GCS keyless (Workload Identity Federation) store support pending: "
-            "obstore GCSStore cannot decode an `external_account` credential file. "
-            "Needs the SDK to route GCS ADC via obstore.auth.google.GoogleCredentialProvider "
-            "(+ google-auth dep) — tracked as a follow-up SDK enhancement."
         )
 
 
