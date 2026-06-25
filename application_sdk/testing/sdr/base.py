@@ -56,9 +56,7 @@ from typing import Any, ClassVar
 import orjson
 
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.testing._mustache import (
-    PLACEHOLDER_RE as _PLACEHOLDER_RE,
-)
+from application_sdk.testing._mustache import PLACEHOLDER_RE as _PLACEHOLDER_RE
 from application_sdk.testing._mustache import (
     apply_mustache_subs as _apply_mustache_subs,
 )
