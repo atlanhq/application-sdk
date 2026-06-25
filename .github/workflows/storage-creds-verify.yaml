@@ -9,6 +9,10 @@ on:
   workflow_dispatch: {}
   push:
     branches: [adityachoudhury/storage-creds-verify]
+  pull_request:
+    # Azure's federated cred only authorizes the `pull_request` subject (+ main),
+    # so the Azure leg can only be verified from a PR context, not a branch push.
+    branches: [main]
 
 permissions:
   id-token: write
