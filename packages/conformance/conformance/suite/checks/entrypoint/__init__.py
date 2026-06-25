@@ -3,13 +3,13 @@
 Enforces the contract that apps boot through the SDK's prescribed entrypoint
 model rather than constructing workers, clients, or HTTP servers themselves.
 
-* ``P016`` ManualWorkerBootstrap (app) — a call to ``create_worker(...)``,
+* ``P017`` ManualWorkerBootstrap (app) — a call to ``create_worker(...)``,
   ``create_temporal_client(...)``, or ``AppWorker(...)`` whose binding resolves
   to ``application_sdk.execution``; an import of removed v2 boot surface
   (``application_sdk.worker``, ``application_sdk.application``,
   ``application_sdk.clients.temporal``); or a call to a distinctive v2
   lifecycle method (``.setup_workflow``, ``.start_workflow``, ``.start_worker``).
-* ``P017`` ManualServerBootstrap (app) — a ``FastAPI(...)`` construction whose
+* ``P018`` ManualServerBootstrap (app) — a ``FastAPI(...)`` construction whose
   binding resolves to ``fastapi``; a ``uvicorn.run(...)`` call; or a call to a
   distinctive v2 server-lifecycle method (``.setup_server``, ``.start_server``,
   ``.include_router``).
@@ -23,7 +23,7 @@ test tree.
 
 Inline suppression
 ------------------
-Add ``# conformance: ignore[P016] <reason>`` or ``[P017]`` on the offending
+Add ``# conformance: ignore[P017] <reason>`` or ``[P018]`` on the offending
 line (or the comment-only line directly above it).
 """
 
@@ -40,8 +40,8 @@ from conformance.suite.checks._ast_common import (
 )
 from conformance.suite.schema.findings import Finding
 
-from ._server_bootstrap import check_p017
-from ._worker_bootstrap import check_p016
+from ._server_bootstrap import check_p018
+from ._worker_bootstrap import check_p017
 
 SERIES = "P"
 
@@ -71,20 +71,20 @@ def discover(root: Path) -> list[Path]:
 
 
 def scan_text(text: str, file: str) -> list[Finding]:
-    """Scan a single Python source *text* for P016 and P017 findings."""
+    """Scan a single Python source *text* for P017 and P018 findings."""
     try:
         tree = ast.parse(text, filename=file)
     except SyntaxError:
         return []
     directives = _parse_directives(text)
     return [
-        *check_p016(tree, file, directives),
         *check_p017(tree, file, directives),
+        *check_p018(tree, file, directives),
     ]
 
 
 def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan a single Python file for P016 and P017 findings."""
+    """Scan a single Python file for P017 and P018 findings."""
     try:
         text = path.read_text(encoding="utf-8")
     except OSError:
@@ -99,7 +99,7 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
 main = make_cli_main(
     scan_text=scan_text,
     discover=discover,
-    description="Entrypoint-conformance P-series checks (P016-P017): scan Python files.",
+    description="Entrypoint-conformance P-series checks (P017-P018): scan Python files.",
 )
 
 

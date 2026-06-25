@@ -26,9 +26,9 @@ def test_catalog_no_duplicate_ids() -> None:
     """Every rule ID in the catalog is unique."""
     rules = load_catalog()
     ids = [r.id for r in rules]
-    assert len(ids) == len(
-        set(ids)
-    ), f"Duplicate rule IDs: {[x for x in ids if ids.count(x) > 1]}"
+    assert len(ids) == len(set(ids)), (
+        f"Duplicate rule IDs: {[x for x in ids if ids.count(x) > 1]}"
+    )
 
 
 def test_catalog_ids_match_pattern() -> None:
@@ -45,12 +45,12 @@ def test_catalog_all_have_required_fields() -> None:
     for rule in rules:
         assert rule.id, f"Rule missing id: {rule}"
         assert rule.name, f"Rule {rule.id} missing name"
-        assert isinstance(
-            rule.tier, EnforcementTier
-        ), f"Rule {rule.id} has invalid tier"
-        assert isinstance(
-            rule.mechanism, RuleMechanism
-        ), f"Rule {rule.id} has invalid mechanism"
+        assert isinstance(rule.tier, EnforcementTier), (
+            f"Rule {rule.id} has invalid tier"
+        )
+        assert isinstance(rule.mechanism, RuleMechanism), (
+            f"Rule {rule.id} has invalid mechanism"
+        )
         assert rule.category, f"Rule {rule.id} missing category"
 
 
@@ -58,9 +58,9 @@ def test_catalog_all_have_rationale() -> None:
     """Every rule in the catalog must have a non-empty rationale."""
     rules = load_catalog()
     missing = [rule.id for rule in rules if not rule.rationale.strip()]
-    assert (
-        not missing
-    ), f"Rules missing rationale (add a rationale= to each RuleDefinition): {missing}"
+    assert not missing, (
+        f"Rules missing rationale (add a rationale= to each RuleDefinition): {missing}"
+    )
 
 
 def test_catalog_all_have_scope() -> None:
@@ -128,7 +128,10 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # P013/P014: apps must declare typed Input/Output contracts on all
     # entrypoints and tasks (BLDX-1413). P015: contract fields should use
     # typed models, not containers of primitives (BLDX-1413).
-    # P016/P017: apps must boot through the SDK launcher, not hand-roll
+    # P016: entry-point contract/code alignment — only apps have a Pkl contract
+    # and app/generated/ dirs; the SDK itself has no @entrypoint-decorated App
+    # methods and no contract to drift from (BLDX-1425).
+    # P017/P018: apps must boot through the SDK launcher, not hand-roll
     # workers or servers (BLDX-1411).
     # I001–I005: Dockerfile conformance (SDK builds the base image, not consuming it).
     # B001: consuming a deprecated SDK symbol (BLDX-1418).
@@ -154,6 +157,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P015",
         "P016",
         "P017",
+        "P018",
         "I001",
         "I002",
         "I003",
@@ -259,13 +263,14 @@ def test_catalog_d_series_present() -> None:
 
 
 def test_catalog_p_series_present() -> None:
-    """The P-series prescription rules are exactly P001–P017.
+    """The P-series prescription rules are exactly P001–P018.
 
     Strict equality (not just not-missing): P004–P007 are the orchestration-seam
     rules (BLDX-1417); P008–P012 are the storage-seam rules (BLDX-1398);
-    P013–P015 are the typed-contract-boundary rules (BLDX-1413); P016–P017 are
-    the entrypoint-conformance rules (BLDX-1411).  A stray or renumbered P-id
-    would slip past a subset check while breaking fleet-wide
+    P013–P015 are the typed-contract-boundary rules (BLDX-1413);
+    P016 is the entry-point contract/code alignment rule (BLDX-1425);
+    P017–P018 are the entrypoint-conformance rules (BLDX-1411).  A stray
+    or renumbered P-id would slip past a subset check while breaking fleet-wide
     ``# conformance: ignore[Pxxx]`` suppressions.
     """
     rules = load_catalog()
@@ -288,6 +293,7 @@ def test_catalog_p_series_present() -> None:
         "P015",
         "P016",
         "P017",
+        "P018",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
@@ -317,7 +323,7 @@ def test_catalog_b_series_present() -> None:
     """The B-series backwards-compatibility / deprecation rules are all present."""
     rules = load_catalog()
     b_ids = {r.id for r in rules if r.id.startswith("B")}
-    expected = {"B001", "B002", "B003", "B004"}
+    expected = {"B001", "B002", "B003", "B004", "B005", "B006"}
     missing = expected - b_ids
     assert not missing, f"Missing B-series rules: {missing}"
     extra = b_ids - expected

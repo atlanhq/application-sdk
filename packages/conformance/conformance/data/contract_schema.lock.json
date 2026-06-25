@@ -1,0 +1,311 @@
+{
+  "fields": [
+    {
+      "contract": "ExtractionInput",
+      "field": "agent_json",
+      "status": "active",
+      "type": "AgentCredentialSpec | None"
+    },
+    {
+      "contract": "ExtractionInput",
+      "field": "connection",
+      "status": "active",
+      "type": "ConnectionRef"
+    },
+    {
+      "contract": "ExtractionInput",
+      "field": "credential_guid",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "ExtractionInput",
+      "field": "credential_ref",
+      "status": "active",
+      "type": "CredentialRef | None"
+    },
+    {
+      "contract": "ExtractionInput",
+      "field": "exclude_filter",
+      "status": "active",
+      "type": "FilterMap | str"
+    },
+    {
+      "contract": "ExtractionInput",
+      "field": "extraction_method",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "ExtractionInput",
+      "field": "include_filter",
+      "status": "active",
+      "type": "FilterMap | str"
+    },
+    {
+      "contract": "ExtractionInput",
+      "field": "output_path",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "ExtractionInput",
+      "field": "output_prefix",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "ExtractionInput",
+      "field": "source_tag_prefix",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "ExtractionInput",
+      "field": "temp_table_regex",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "ExtractionInput",
+      "field": "workflow_id",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "ExtractionOutput",
+      "field": "columns_extracted",
+      "status": "active",
+      "type": "int"
+    },
+    {
+      "contract": "ExtractionOutput",
+      "field": "databases_extracted",
+      "status": "active",
+      "type": "int"
+    },
+    {
+      "contract": "ExtractionOutput",
+      "field": "error",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "ExtractionOutput",
+      "field": "output_path",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "ExtractionOutput",
+      "field": "procedures_extracted",
+      "status": "active",
+      "type": "int"
+    },
+    {
+      "contract": "ExtractionOutput",
+      "field": "processes_extracted",
+      "status": "active",
+      "type": "int"
+    },
+    {
+      "contract": "ExtractionOutput",
+      "field": "records_uploaded",
+      "status": "active",
+      "type": "int"
+    },
+    {
+      "contract": "ExtractionOutput",
+      "field": "schemas_extracted",
+      "status": "active",
+      "type": "int"
+    },
+    {
+      "contract": "ExtractionOutput",
+      "field": "success",
+      "status": "active",
+      "type": "bool"
+    },
+    {
+      "contract": "ExtractionOutput",
+      "field": "tables_extracted",
+      "status": "active",
+      "type": "int"
+    },
+    {
+      "contract": "ExtractionOutput",
+      "field": "views_extracted",
+      "status": "active",
+      "type": "int"
+    },
+    {
+      "contract": "ExtractionOutput",
+      "field": "workflow_id",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "IncrementalExtractionInput",
+      "field": "column_batch_size",
+      "status": "active",
+      "type": "int"
+    },
+    {
+      "contract": "IncrementalExtractionInput",
+      "field": "column_chunk_size",
+      "status": "active",
+      "type": "int"
+    },
+    {
+      "contract": "IncrementalExtractionInput",
+      "field": "copy_workers",
+      "status": "active",
+      "type": "int"
+    },
+    {
+      "contract": "IncrementalExtractionInput",
+      "field": "incremental_extraction",
+      "status": "active",
+      "type": "bool"
+    },
+    {
+      "contract": "IncrementalExtractionInput",
+      "field": "prepone_marker_hours",
+      "status": "active",
+      "type": "int"
+    },
+    {
+      "contract": "IncrementalExtractionInput",
+      "field": "prepone_marker_timestamp",
+      "status": "active",
+      "type": "bool"
+    },
+    {
+      "contract": "IncrementalExtractionOutput",
+      "field": "backfill_tables",
+      "status": "active",
+      "type": "int"
+    },
+    {
+      "contract": "IncrementalExtractionOutput",
+      "field": "changed_tables",
+      "status": "active",
+      "type": "int"
+    },
+    {
+      "contract": "IncrementalExtractionOutput",
+      "field": "column_batches_executed",
+      "status": "active",
+      "type": "int"
+    },
+    {
+      "contract": "IncrementalExtractionOutput",
+      "field": "current_state_files",
+      "status": "active",
+      "type": "int"
+    },
+    {
+      "contract": "IncrementalExtractionOutput",
+      "field": "incremental_diff_files",
+      "status": "active",
+      "type": "int"
+    },
+    {
+      "contract": "IncrementalExtractionOutput",
+      "field": "marker_updated",
+      "status": "active",
+      "type": "bool"
+    },
+    {
+      "contract": "QueryExtractionInput",
+      "field": "batch_size",
+      "status": "active",
+      "type": "int"
+    },
+    {
+      "contract": "QueryExtractionInput",
+      "field": "connection",
+      "status": "active",
+      "type": "ConnectionRef"
+    },
+    {
+      "contract": "QueryExtractionInput",
+      "field": "credential_guid",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "QueryExtractionInput",
+      "field": "credential_ref",
+      "status": "active",
+      "type": "CredentialRef | None"
+    },
+    {
+      "contract": "QueryExtractionInput",
+      "field": "exclude_users",
+      "status": "active",
+      "type": "list[str]"
+    },
+    {
+      "contract": "QueryExtractionInput",
+      "field": "lookback_days",
+      "status": "active",
+      "type": "int"
+    },
+    {
+      "contract": "QueryExtractionInput",
+      "field": "output_path",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "QueryExtractionInput",
+      "field": "output_prefix",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "QueryExtractionInput",
+      "field": "workflow_id",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "QueryExtractionOutput",
+      "field": "error",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "QueryExtractionOutput",
+      "field": "records_uploaded",
+      "status": "active",
+      "type": "int"
+    },
+    {
+      "contract": "QueryExtractionOutput",
+      "field": "success",
+      "status": "active",
+      "type": "bool"
+    },
+    {
+      "contract": "QueryExtractionOutput",
+      "field": "total_batches",
+      "status": "active",
+      "type": "int"
+    },
+    {
+      "contract": "QueryExtractionOutput",
+      "field": "total_queries",
+      "status": "active",
+      "type": "int"
+    },
+    {
+      "contract": "QueryExtractionOutput",
+      "field": "workflow_id",
+      "status": "active",
+      "type": "str"
+    }
+  ],
+  "version": 1
+}

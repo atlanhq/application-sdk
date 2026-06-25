@@ -1,4 +1,4 @@
-"""Entrypoint-conformance rule definitions (P016–P017, BLDX-1411).
+"""Entrypoint-conformance rule definitions (P017–P018, BLDX-1411).
 
 Apps must boot through the SDK's prescribed entrypoint model rather than
 constructing workers, clients, or HTTP servers themselves.  The SDK launcher
@@ -33,7 +33,7 @@ from conformance.suite.schema.disposition import (
 
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
-        id="P016",
+        id="P017",
         scope=RuleScope.APP,
         name="ManualWorkerBootstrap",
         tier=EnforcementTier.WARN,
@@ -72,13 +72,13 @@ RULES: tuple[RuleDefinition, ...] = (
             "``TaskRegistry`` — there is nothing to wire.\n"
             "\n"
             "Land as ``WARN``: a justified inline\n"
-            "``# conformance: ignore[P016] <reason>`` records any unavoidable\n"
+            "``# conformance: ignore[P017] <reason>`` records any unavoidable\n"
             "exception and stays visible in SARIF.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p016",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p017",
     ),
     RuleDefinition(
-        id="P017",
+        id="P018",
         scope=RuleScope.APP,
         name="ManualServerBootstrap",
         tier=EnforcementTier.WARN,
@@ -112,9 +112,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "them via ``POST /workflows/v1/start?entrypoint=<name>``.\n"
             "\n"
             "Land as ``WARN``: a justified inline\n"
-            "``# conformance: ignore[P017] <reason>`` records any unavoidable\n"
+            "``# conformance: ignore[P018] <reason>`` records any unavoidable\n"
             "exception and stays visible in SARIF.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p017",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p018",
     ),
 )

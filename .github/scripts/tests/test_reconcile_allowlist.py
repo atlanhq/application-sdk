@@ -1,0 +1,111 @@
+"""Tests for .github/scripts/reconcile_allowlist.py (debounce + ticket plan)."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+import reconcile_allowlist as rec
+
+# ---------------------------------------------------------------------------
+# cve_ids_from_trivy
+# ---------------------------------------------------------------------------
+
+
+def test_cve_ids_from_trivy():
+    data = {
+        "Results": [
+            {
+                "Vulnerabilities": [
+                    {"VulnerabilityID": "CVE-1"},
+                    {"VulnerabilityID": "CVE-2"},
+                ]
+            },
+            {"Vulnerabilities": [{"VulnerabilityID": "CVE-2"}]},
+            {"Vulnerabilities": None},
+        ]
+    }
+    assert rec.cve_ids_from_trivy(data) == {"CVE-1", "CVE-2"}
+
+
+def test_cve_ids_from_empty():
+    assert rec.cve_ids_from_trivy({}) == set()
+
+
+# ---------------------------------------------------------------------------
+# resolved_cves — the 3-scan debounce
+# ---------------------------------------------------------------------------
+
+
+def test_resolved_when_absent_in_all_three_scans():
+    allowlisted = {"CVE-GONE", "CVE-STILL"}
+    scans = [{"CVE-STILL"}, {"CVE-STILL"}, {"CVE-STILL"}]  # CVE-GONE absent in all
+    assert rec.resolved_cves(allowlisted, scans, debounce=3) == {"CVE-GONE"}
+
+
+def test_not_resolved_if_present_in_one_recent_scan():
+    allowlisted = {"CVE-X"}
+    scans = [set(), {"CVE-X"}, set()]  # reappeared in the middle scan
+    assert rec.resolved_cves(allowlisted, scans, debounce=3) == set()
+
+
+def test_not_resolved_with_insufficient_scan_history():
+    # Only 2 scans available but debounce wants 3 → fail-safe, remove nothing.
+    allowlisted = {"CVE-X"}
+    scans = [set(), set()]
+    assert rec.resolved_cves(allowlisted, scans, debounce=3) == set()
+
+
+def test_only_allowlisted_cves_are_candidates():
+    allowlisted = {"CVE-A"}
+    scans = [set(), set(), set()]  # CVE-B never allowlisted, so never "resolved"
+    out = rec.resolved_cves(allowlisted, scans, debounce=3)
+    assert out == {"CVE-A"}
+    assert "CVE-B" not in out
+
+
+def test_debounce_of_one_resolves_on_single_clean_scan():
+    assert rec.resolved_cves({"CVE-X"}, [set()], debounce=1) == {"CVE-X"}
+
+
+# ---------------------------------------------------------------------------
+# plan_ticket_updates
+# ---------------------------------------------------------------------------
+
+
+def _ticket(ident: str, ids: list[str]) -> dict:
+    marker = f"<!-- vuln-ids: {','.join(ids)} -->"
+    return {
+        "id": f"id-{ident}",
+        "identifier": ident,
+        "description": f"body\n{marker}\n",
+    }
+
+
+def test_ticket_fully_resolved_is_closed():
+    tickets = [_ticket("BLDX-1", ["CVE-A", "CVE-B"])]
+    to_close, to_update = rec.plan_ticket_updates(tickets, {"CVE-A", "CVE-B"})
+    assert [t["identifier"] for t in to_close] == ["BLDX-1"]
+    assert to_update == []
+
+
+def test_ticket_partially_resolved_is_updated():
+    tickets = [_ticket("BLDX-2", ["CVE-A", "CVE-B"])]
+    to_close, to_update = rec.plan_ticket_updates(tickets, {"CVE-A"})
+    assert to_close == []
+    assert to_update[0]["identifier"] == "BLDX-2"
+    assert to_update[0]["remaining_ids"] == ["CVE-B"]
+
+
+def test_ticket_with_no_resolved_cves_untouched():
+    tickets = [_ticket("BLDX-3", ["CVE-A"])]
+    to_close, to_update = rec.plan_ticket_updates(tickets, {"CVE-Z"})
+    assert to_close == [] and to_update == []
+
+
+def test_ticket_with_no_marker_untouched():
+    tickets = [{"id": "x", "identifier": "BLDX-4", "description": "no marker here"}]
+    to_close, to_update = rec.plan_ticket_updates(tickets, {"CVE-A"})
+    assert to_close == [] and to_update == []

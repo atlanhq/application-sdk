@@ -1,4 +1,4 @@
-"""P017 ManualServerBootstrap — ban hand-rolling a FastAPI/uvicorn HTTP server.
+"""P018 ManualServerBootstrap — ban hand-rolling a FastAPI/uvicorn HTTP server.
 
 The SDK owns the FastAPI handler server: ``run_handler_mode`` and
 ``run_combined_mode`` create and manage it on the app's behalf.  Apps express
@@ -55,12 +55,12 @@ _SERVER_LIFECYCLE_METHODS: frozenset[str] = frozenset(
 # ── Check ─────────────────────────────────────────────────────────────────────
 
 
-def check_p017(
+def check_p018(
     tree: ast.AST,
     filename: str,
     directives: dict[int, _IgnoreDirective],
 ) -> list[Finding]:
-    """Emit P017 findings for manual server bootstrap patterns."""
+    """Emit P018 findings for manual server bootstrap patterns."""
     findings: list[Finding] = []
     origins = collect_import_origins(tree)
 
@@ -78,7 +78,7 @@ def check_p017(
                 findings.append(
                     make_finding(
                         filename=filename,
-                        rule_id="P017",
+                        rule_id="P018",
                         node=node,
                         message=(
                             "Constructs 'FastAPI(...)' directly — the SDK "
@@ -88,7 +88,7 @@ def check_p017(
                             "(prod) or 'run_dev_combined(MyApp, ...)' (dev); "
                             "express HTTP surface through '@entrypoint'. See "
                             "BLDX-1411. Suppress with "
-                            "'# conformance: ignore[P017] <reason>'."
+                            "'# conformance: ignore[P018] <reason>'."
                         ),
                         directives=directives,
                     )
@@ -99,7 +99,7 @@ def check_p017(
                 findings.append(
                     make_finding(
                         filename=filename,
-                        rule_id="P017",
+                        rule_id="P018",
                         node=node,
                         message=(
                             "Calls 'uvicorn.run(...)' directly — the SDK "
@@ -108,7 +108,7 @@ def check_p017(
                             "handler|combined' (prod) or "
                             "'run_dev_combined(MyApp, ...)' (dev). See "
                             "BLDX-1411. Suppress with "
-                            "'# conformance: ignore[P017] <reason>'."
+                            "'# conformance: ignore[P018] <reason>'."
                         ),
                         directives=directives,
                     )
@@ -124,7 +124,7 @@ def check_p017(
                 findings.append(
                     make_finding(
                         filename=filename,
-                        rule_id="P017",
+                        rule_id="P018",
                         node=node,
                         message=(
                             "Calls 'uvicorn.run(...)' directly — the SDK "
@@ -133,7 +133,7 @@ def check_p017(
                             "handler|combined' (prod) or "
                             "'run_dev_combined(MyApp, ...)' (dev). See "
                             "BLDX-1411. Suppress with "
-                            "'# conformance: ignore[P017] <reason>'."
+                            "'# conformance: ignore[P018] <reason>'."
                         ),
                         directives=directives,
                     )
@@ -144,7 +144,7 @@ def check_p017(
                 findings.append(
                     make_finding(
                         filename=filename,
-                        rule_id="P017",
+                        rule_id="P018",
                         node=node,
                         message=(
                             f"Calls '.{func.attr}(...)' — this is a v2 "
@@ -153,7 +153,7 @@ def check_p017(
                             "it; express HTTP surface through '@entrypoint' "
                             "and launch via 'application-sdk'. See BLDX-1411. "
                             "Suppress with "
-                            "'# conformance: ignore[P017] <reason>'."
+                            "'# conformance: ignore[P018] <reason>'."
                         ),
                         directives=directives,
                     )

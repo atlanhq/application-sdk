@@ -1,4 +1,4 @@
-"""P016 ManualWorkerBootstrap — ban hand-rolling a Temporal worker or client.
+"""P017 ManualWorkerBootstrap — ban hand-rolling a Temporal worker or client.
 
 The SDK launcher owns worker startup: ``application-sdk --mode worker|combined``
 (production) or ``run_dev_combined`` (local dev) auto-discovers every registered
@@ -78,12 +78,12 @@ def _is_v2_boot_module(module: str) -> bool:
 # ── Check ─────────────────────────────────────────────────────────────────────
 
 
-def check_p016(
+def check_p017(
     tree: ast.AST,
     filename: str,
     directives: dict[int, _IgnoreDirective],
 ) -> list[Finding]:
-    """Emit P016 findings for manual worker/client bootstrap patterns."""
+    """Emit P017 findings for manual worker/client bootstrap patterns."""
     findings: list[Finding] = []
     origins = collect_import_origins(tree)
 
@@ -96,7 +96,7 @@ def check_p016(
                 findings.append(
                     make_finding(
                         filename=filename,
-                        rule_id="P016",
+                        rule_id="P017",
                         node=node,
                         message=(
                             f"Imports removed v2 boot surface "
@@ -107,7 +107,7 @@ def check_p016(
                             "or 'run_dev_combined(MyApp, ...)' (dev); workers "
                             "are auto-discovered, nothing to wire. See "
                             "BLDX-1411. Suppress with "
-                            "'# conformance: ignore[P016] <reason>'."
+                            "'# conformance: ignore[P017] <reason>'."
                         ),
                         directives=directives,
                     )
@@ -119,7 +119,7 @@ def check_p016(
                     findings.append(
                         make_finding(
                             filename=filename,
-                            rule_id="P016",
+                            rule_id="P017",
                             node=node,
                             message=(
                                 f"Imports removed v2 boot module "
@@ -129,7 +129,7 @@ def check_p016(
                                 "'application-sdk --mode worker|combined' "
                                 "(prod) or 'run_dev_combined(MyApp, ...)' "
                                 "(dev). See BLDX-1411. Suppress with "
-                                "'# conformance: ignore[P016] <reason>'."
+                                "'# conformance: ignore[P017] <reason>'."
                             ),
                             directives=directives,
                         )
@@ -145,7 +145,7 @@ def check_p016(
                     findings.append(
                         make_finding(
                             filename=filename,
-                            rule_id="P016",
+                            rule_id="P017",
                             node=node,
                             message=(
                                 f"Calls '{func.id}(...)' directly — worker "
@@ -156,7 +156,7 @@ def check_p016(
                                 "(dev); workers are auto-discovered from "
                                 "'AppRegistry'/'TaskRegistry'. See BLDX-1411. "
                                 "Suppress with "
-                                "'# conformance: ignore[P016] <reason>'."
+                                "'# conformance: ignore[P017] <reason>'."
                             ),
                             directives=directives,
                         )
@@ -168,7 +168,7 @@ def check_p016(
                     findings.append(
                         make_finding(
                             filename=filename,
-                            rule_id="P016",
+                            rule_id="P017",
                             node=node,
                             message=(
                                 f"Calls '.{func.attr}(...)' — this is a v2 "
@@ -177,7 +177,7 @@ def check_p016(
                                 "subclass 'App' and use "
                                 "'run_dev_combined'/'application-sdk'. See "
                                 "BLDX-1411. Suppress with "
-                                "'# conformance: ignore[P016] <reason>'."
+                                "'# conformance: ignore[P017] <reason>'."
                             ),
                             directives=directives,
                         )
