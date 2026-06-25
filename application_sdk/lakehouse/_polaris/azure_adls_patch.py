@@ -37,7 +37,7 @@ def patch_daft_adls_io() -> None:
     Idempotent. No-op if Daft's Iceberg module is not importable.
     """
     try:
-        import daft.io.iceberg._iceberg as iceberg_mod
+        import daft.io.iceberg._iceberg as iceberg_mod  # noqa: PLC0415 -- daft is an optional extra; import must stay in-function
     except ImportError:
         return
 

@@ -8,7 +8,7 @@ and ``pyarrow.Schema`` when an SDK call needs them.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal
 
 # Conceptual primitive types. The SDK maps these to Iceberg + Arrow internally.
