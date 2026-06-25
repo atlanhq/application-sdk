@@ -2,7 +2,7 @@ import glob
 import os
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any
 
 from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.observability.logger_adaptor import get_logger
@@ -18,7 +18,6 @@ JSON_FILE_EXTENSION = ".json"
 PARQUET_FILE_EXTENSION = ".parquet"
 
 if TYPE_CHECKING:
-    import daft
     import pandas as pd
 
 
@@ -325,34 +324,17 @@ def convert_datetime_to_epoch(data: Any) -> Any:
     return data
 
 
-def is_empty_dataframe(dataframe: Union["pd.DataFrame", "daft.DataFrame"]) -> bool:
+def is_empty_dataframe(dataframe: "pd.DataFrame") -> bool:
     """Check if a DataFrame is empty.
 
-    This function determines whether a DataFrame has any rows, supporting both
-    pandas and daft DataFrame types. For pandas DataFrames, it uses the `empty`
-    property, and for daft DataFrames, it checks if the row count is 0.
-
     Args:
-        dataframe (Union[pd.DataFrame, daft.DataFrame]): The DataFrame to check,
-            can be either a pandas DataFrame or a daft DataFrame.
+        dataframe (pd.DataFrame): The DataFrame to check.
 
     Returns:
         bool: True if the DataFrame has no rows, False otherwise.
-
-    Note:
-        If daft is not available and a daft DataFrame is passed, the function
-        will log a warning and return True.
     """
     import pandas as pd  # noqa: PLC0415 — optional dep: pandas
 
     if isinstance(dataframe, pd.DataFrame):
         return dataframe.empty
-
-    try:
-        import daft  # noqa: PLC0415 — optional dep: daft
-
-        if isinstance(dataframe, daft.DataFrame):
-            return dataframe.count_rows() == 0
-    except Exception:
-        logger.warning("Module daft not found", exc_info=True)
     return True

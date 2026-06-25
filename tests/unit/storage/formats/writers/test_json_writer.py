@@ -137,3 +137,60 @@ async def test_write_error(base_output_path: str) -> None:
     # Verify counts remain unchanged after error
     assert json_output.chunk_count == 0
     assert json_output.total_record_count == 0
+
+
+# ---------------------------------------------------------------------------
+# Compat shim: DataframeType.daft constructor deprecation
+# ---------------------------------------------------------------------------
+
+
+def test_init_daft_dataframe_type_emits_deprecation_and_routes_to_pandas(
+    tmp_path: Path,
+) -> None:
+    """JsonFileWriter(dataframe_type=DataframeType.daft) must warn and route to pandas."""
+    import warnings as _warnings
+
+    from application_sdk.common.types import DataframeType
+
+    with _warnings.catch_warnings(record=True) as captured:
+        _warnings.simplefilter("always")
+        writer = JsonFileWriter(
+            path=str(tmp_path / "out"),
+            dataframe_type=DataframeType.daft,
+        )
+
+    assert writer.dataframe_type == DataframeType.pandas
+    assert any(
+        issubclass(w.category, DeprecationWarning)
+        and "DataframeType.daft is deprecated" in str(w.message)
+        for w in captured
+    )
+
+
+# ---------------------------------------------------------------------------
+# orjson.dumps: pandas.Timestamp regression (Fix BLDX-1470)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_write_chunk_handles_pandas_timestamp(tmp_path: Path) -> None:
+    """_write_chunk must not raise TypeError when a column contains pandas.Timestamp."""
+    import pandas as pd
+
+    writer = JsonFileWriter(path=str(tmp_path / "out"))
+    df = pd.DataFrame(
+        {
+            "name": ["a"],
+            "ts": [pd.Timestamp("2024-01-01T00:00:00")],
+        }
+    )
+    out_file = str(tmp_path / "out" / "chunk.json")
+    # Must not raise TypeError: Type is not JSON serializable: Timestamp
+    await writer._write_chunk(df, out_file)
+
+    import orjson
+
+    with open(out_file, "rb") as f:
+        record = orjson.loads(f.read().strip())
+    assert record["name"] == "a"
+    assert "2024-01-01" in record["ts"]

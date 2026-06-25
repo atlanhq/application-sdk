@@ -191,21 +191,35 @@ emitGeneratedArtifacts: Boolean = true
 
 // ── WORKFLOW TYPE ────────────────────────────────────────────────────────────
 
-/// Temporal workflow type written to `manifest.json` as `workflow_type` (in kebab-case).
-/// Accepts PascalCase (e.g. `"SnowflakeApp"`) or kebab-case (e.g. `"snowflake-app"`)
-/// — the toolkit converts either form to kebab-case at output time.
-/// Defaults to `name`. Also accepts colon-format identifiers (e.g. `"dbt:extract-metadata"`),
-/// which pass through the conversion unchanged.
-workflowType: String = name
+/// Temporal workflow type written to `manifest.json` as `workflow_type`.
+/// When set, the value is emitted verbatim — no conversion is applied. Use this
+/// when the runtime keys on a specific string that must not be transformed
+/// (e.g. `"NetSuiteMetadataExtractionWorkflow"` or `"teradata-app:crawler"`).
+/// When unset (the default), the toolkit derives the value by kebab-casing `name`
+/// (e.g. `name = "snowflake-app"` → `workflow_type: "snowflake-app"`). Most apps
+/// can omit this property entirely.
+workflowType: String?
 
 /// Task queue prefix for the extract node in the AE manifest.
 taskQueuePrefix: String = "atlan-\(name)"
 
 // ── E2E TEST HARNESS ──────────────────────────────────────────────────────────
 
-/// Argo WorkflowTemplate package name used by the e2e test harness.
-/// Default: `"@atlan/<name>"`. Override for apps with scoped or non-standard package names.
-argoPackageName: String = "@atlan/\(name)"
+/// Argo WorkflowTemplate package names. The single knob for Argo package
+/// naming — drives two outputs:
+///   - rendered into `atlan.yaml` as `argo_package_names` (between `visibility`
+///     and `build_tag`), consumed by the marketplace; emitted only when non-empty.
+///   - the e2e test harness's single `argo_package_name`, taken as the first
+///     entry.
+/// Single-package apps can leave this empty: the harness falls back to
+/// `"@atlan/<name>"` and `atlan.yaml` omits the key. Set one entry for a scoped
+/// or non-standard package, or several for a multi-package app.
+argoPackageNames: Listing<String> = new Listing {}
+
+/// (Derived) Single Argo package name for the e2e harness: the first entry of
+/// `argoPackageNames`, or `"@atlan/<name>"` when the list is empty.
+local resolvedArgoPackageName: String =
+  if (!argoPackageNames.isEmpty) argoPackageNames.first else "@atlan/\(name)"
 
 /// Argo WorkflowTemplate resource name as deployed in the cluster.
 /// Default: `"atlan-<name>"` — same pattern as `taskQueuePrefix`.
@@ -2350,6 +2364,15 @@ local function renderNodeArgs(node: DAGNode): Mapping<String, Any> =
     }
   else node.args
 
+/// Workflow type for the extract node: verbatim `workflowType` when set,
+/// otherwise `name` kebab-cased.
+local workflowTypeResolved: String =
+  if (workflowType != null) workflowType!!
+  else name
+    .replaceAll(Regex("([A-Z]+)([A-Z][a-z])"), "$1-$2")
+    .replaceAll(Regex("([a-z0-9])([A-Z])"), "$1-$2")
+    .toLowerCase()
+
 local function generateExtractNode(): Mapping<String, Any> =
   let (step = pipeline.extract!!)
   let (_extractEhCheck = validateWorkflowNodeErrorHandling(step.errorHandling, "pipeline.extract.errorHandling"))
@@ -2363,10 +2386,7 @@ local function generateExtractNode(): Mapping<String, Any> =
     // the runtime app class name) or failure logs won't surface (HYP-1678).
     ["app_name"] = name
     ["inputs"] = new Mapping {
-      ["workflow_type"] = workflowType
-          .replaceAll(Regex("([A-Z]+)([A-Z][a-z])"), "$1-$2")
-          .replaceAll(Regex("([a-z0-9])([A-Z])"), "$1-$2")
-          .toLowerCase()
+      ["workflow_type"] = workflowTypeResolved
       ["app_name"] = name
       ["app_id"] = ""
       ["argo_workflow_slug"] = ""
@@ -2785,7 +2805,7 @@ local function generateE2EBasePy(): FileOutput = new FileOutput {
     "from application_sdk.testing.e2e import \(baseClass)\n\n\n" +
     "class \(cname)GeneratedE2EBase(\(baseClass)):\n" +
     "    connector_short_name = \"\(escapePyStr(name))\"\n" +
-    "    argo_package_name = \"\(escapePyStr(argoPackageName))\"\n" +
+    "    argo_package_name = \"\(escapePyStr(resolvedArgoPackageName))\"\n" +
     "    argo_template_name = \"\(escapePyStr(argoTemplateName))\"\n" +
     "    app_service_url = \"\(escapePyStr(appServiceUrl))\"\n" +
     (if (emitConnType) "    connection_type = \"\(escapePyStr(connector!!.value))\"\n" else "") +
@@ -3128,6 +3148,7 @@ local generatedAtlanYamlData: Mapping<String, Any> = new Mapping {
   ["execution_mode"] = deploy.executionMode
   when (iconUrl != null) { ["icon_url"] = iconUrl }
   ["visibility"] = visibility
+  when (!argoPackageNames.isEmpty) { ["argo_package_names"] = argoPackageNames }
   ["build_tag"] = buildTag
   ["self_deployed_runtime"] = selfDeployedRuntime
   when (tags.toList().length > 0) { ["tags"] = tags }

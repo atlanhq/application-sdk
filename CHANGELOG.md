@@ -1,5 +1,21 @@
 # Changelog
 
+## v3.20.0 (June 25, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.19.0...v3.20.0
+
+### Features
+
+- export TemporalExecutorBackend and RetryPolicy from package root (#2307) (by @cmgrote in [57b187b](https://github.com/atlanhq/application-sdk/commit/57b187b))
+- expose TemporalClient and create_data_converter_for_app publicly (#2321) (by @cmgrote in [13af2c7](https://github.com/atlanhq/application-sdk/commit/13af2c7))
+- remove daft entirely, replace with pyarrow/orjson/duckdb (#2300) (by @cmgrote in [41f32e1](https://github.com/atlanhq/application-sdk/commit/41f32e1))
+
+### Bug Fixes
+
+- Surface `defaultConnectorType` in configmap (#2319) (by @AngadSethi in [e84fd71](https://github.com/atlanhq/application-sdk/commit/e84fd71))
+- isolate explicit Azure credentials from the host's ambient AZURE_* env (#2335) (by @chaitanyaatlan in [1b3b46b](https://github.com/atlanhq/application-sdk/commit/1b3b46b))
+
+
 ## v3.19.0 (June 22, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.18.0...v3.19.0

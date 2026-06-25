@@ -26,6 +26,12 @@ icon = "https://assets.atlan.com/assets/snowflake.svg"
 // Bundle root does not own a credential config; the crawler entrypoint does.
 hasCredentialConfig = false
 
+// Multi-package app: rendered into atlan.yaml as `argo_package_names`.
+argoPackageNames {
+  "@atlan/crawler"
+  "@atlan/miner"
+}
+
 entrypoints {
   new Entrypoint {
     name = "crawler"

@@ -6,6 +6,16 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.16.0] - 2026-06-25
+
+### Features
+
+- add WidgetValidation property to TextInput and TextBoxInput (#2286) ([12b72d3](https://github.com/atlanhq/application-sdk/commit/12b72d3))
+
+### Bug fixes
+
+- close App.pkl parity gaps for CredentialInput placeholder, argoPackageNames, workflowTypeOverride (#2313) ([ffae058](https://github.com/atlanhq/application-sdk/commit/ffae058))
+
 ## [0.15.0] - 2026-06-24
 
 ### Features
