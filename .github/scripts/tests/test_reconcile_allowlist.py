@@ -146,3 +146,82 @@ def test_resolve_tickets_failsafe_with_thin_history():
     scans = [set(), set()]  # only 2 scans of history (< debounce 3)
     to_close, to_update = rec.resolve_tickets(tickets, scans, debounce=3)
     assert to_close == [] and to_update == []
+
+
+def test_resolve_tickets_closes_on_first_clean_scan_with_debounce_one():
+    # Default behavior: a ticket closes as soon as its CVE is absent from the
+    # latest scan (debounce=1) — no waiting for prior scans.
+    tickets = [_ticket("BLDX-12", ["CVE-Y"])]
+    to_close, _ = rec.resolve_tickets(tickets, [set()], debounce=1)
+    assert [t["identifier"] for t in to_close] == ["BLDX-12"]
+
+
+# ---------------------------------------------------------------------------
+# defaults + close comment
+# ---------------------------------------------------------------------------
+
+
+def test_default_debounce_is_one():
+    assert rec.DEFAULT_DEBOUNCE == 1
+
+
+def test_close_comment_body_mentions_cves_and_run():
+    body = rec.close_comment_body(["CVE-2026-2303"], "https://x/run/1")
+    assert "Auto-resolved" in body
+    assert "`CVE-2026-2303`" in body
+    assert "vulnerability" in body  # singular for one CVE
+    assert "https://x/run/1" in body
+
+
+def test_close_comment_body_plural_and_no_run_url():
+    body = rec.close_comment_body(["CVE-1", "CVE-2"], "")
+    assert "vulnerabilities" in body  # plural for two
+    assert "Reconcile run:" not in body  # omitted when no run URL
+
+
+def test_resolution_phrase():
+    assert rec._resolution_phrase(1) == "the latest clean scan"
+    assert "3 consecutive" in rec._resolution_phrase(3)
+
+
+# ---------------------------------------------------------------------------
+# reconcile_tickets — side-effect wiring (close before comment; CVEs in body)
+# ---------------------------------------------------------------------------
+
+
+def _wire_linear(monkeypatch, tickets, *, close_ok=True):
+    """Monkeypatch the Linear I/O reconcile_tickets depends on; return a call log."""
+    calls: list[tuple] = []
+    monkeypatch.setenv("LINEAR_API_KEY", "k")
+    monkeypatch.setenv("LINEAR_TEAM_ID", "team-1")
+    monkeypatch.setattr(rec.ssl, "resolve_label_id", lambda *a, **k: "label-1")
+    monkeypatch.setattr(rec.ssl, "fetch_open_labelled_issues", lambda *a, **k: tickets)
+    monkeypatch.setattr(rec, "resolve_done_state_id", lambda *a, **k: "done-state")
+
+    def fake_close(issue_id, state_id):
+        calls.append(("close", issue_id))
+        return close_ok
+
+    def fake_comment(issue_id, body):
+        calls.append(("comment", issue_id, body))
+
+    monkeypatch.setattr(rec, "close_ticket", fake_close)
+    monkeypatch.setattr(rec, "comment_on_ticket", fake_comment)
+    return calls
+
+
+def test_reconcile_tickets_closes_then_comments_with_cves(monkeypatch):
+    ticket = _ticket("BLDX-1", ["CVE-A", "CVE-B"])
+    calls = _wire_linear(monkeypatch, [ticket])
+    rec.reconcile_tickets([set()], debounce=1)  # both CVEs absent → resolved
+    # Close runs before comment, each once.
+    assert [c[0] for c in calls] == ["close", "comment"]
+    body = calls[1][2]
+    assert "CVE-A" in body and "CVE-B" in body
+
+
+def test_reconcile_tickets_skips_comment_when_close_fails(monkeypatch):
+    ticket = _ticket("BLDX-2", ["CVE-A"])
+    calls = _wire_linear(monkeypatch, [ticket], close_ok=False)
+    rec.reconcile_tickets([set()], debounce=1)
+    assert [c[0] for c in calls] == ["close"]  # no comment after a failed close
