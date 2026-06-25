@@ -195,6 +195,45 @@ def test_manifest_filters_come_from_per_scenario_metadata(tmp_path) -> None:
     assert args2["exclude_filter"] == ""
 
 
+def test_manifest_warns_on_unmatched_metadata_key_and_uncovered_placeholder(
+    tmp_path,
+) -> None:
+    """A metadata key matching no placeholder (hyphen vs underscore) and a
+    placeholder no value covers are both defaulted to "" but WARNED — so a
+    missing required input / misspelt metadata key is never silently masked."""
+    extract_args = {
+        "agent_json": "{{agent-json}}",
+        "connection": "{{connection}}",
+        "include_filter": "{{include_filter}}",  # underscore — won't match hyphen metadata
+        "target": "{{target}}",  # non-filter slot, no value anywhere
+    }
+
+    class _Suite(BaseSDRIntegrationTest):
+        manifest_path = _write_manifest(tmp_path, extract_args)
+        agent_spec_template = {"agent-name": "a", "secret-path": "p"}
+        scenarios = []
+
+    sc = Scenario(
+        name="wf",
+        api="workflow",
+        assert_that={"success": lambda v: True},
+        workflow_timeout=300,
+        metadata={
+            "include-filter": '{"^db$":[]}'
+        },  # hyphen — mismatches {{include_filter}}
+    )
+    with patch("application_sdk.testing.sdr.base.logger") as mock_logger:
+        args = _Suite()._build_scenario_args(sc)
+
+    # Unresolved placeholders defaulted to "" — no literal {{...}} leaks through.
+    assert args["include_filter"] == ""
+    assert args["target"] == ""
+    # ...but both problems were warned, not silently masked.
+    warned = " ".join(str(c.args) for c in mock_logger.warning.call_args_list)
+    assert "matches no" in warned  # the hyphen-vs-underscore metadata mismatch
+    assert "{{target}}" in warned  # the uncovered non-filter slot
+
+
 def test_manifest_missing_agent_json_slot_is_not_injected(
     tmp_path, workflow_scenario: Scenario
 ) -> None:

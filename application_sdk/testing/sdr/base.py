@@ -49,17 +49,26 @@ Example:
 from __future__ import annotations
 
 import os
+import re
 import shutil
 from pathlib import Path
 from typing import Any, ClassVar
 
 import orjson
 
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.integration import (
     BaseIntegrationTest,
     Scenario,
     ScenarioResult,
 )
+
+logger = get_logger(__name__)
+
+#: A whole-value mustache placeholder (no internal braces) — matches the
+#: exact-match notion ``_apply_mustache_subs`` substitutes on, so a value like
+#: ``"{{a}}-{{b}}"`` is NOT mistaken for a single placeholder.
+_PLACEHOLDER_RE = re.compile(r"\{\{[^{}]+\}\}")
 
 
 def _apply_mustache_subs(obj: Any, subs: dict[str, Any]) -> Any:
@@ -92,7 +101,7 @@ def _collect_placeholders(obj: Any) -> set[str]:
     elif isinstance(obj, list):
         for x in obj:
             found |= _collect_placeholders(x)
-    elif isinstance(obj, str) and obj.startswith("{{") and obj.endswith("}}"):
+    elif isinstance(obj, str) and _PLACEHOLDER_RE.fullmatch(obj):
         found.add(obj)
     return found
 
@@ -183,10 +192,19 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
         ``{{exclude-filter}}`` / table regexes, or whatever another app's contract
         defines — and is resolved from the per-scenario ``metadata`` (keyed by the
         placeholder name), so the base stays connector-agnostic. Any placeholder
-        no scenario value covers defaults to "" (extract-everything) and never
-        leaks a literal ``{{...}}``. An empty ``{{credential-guid}}`` is used
-        rather than the AE-runtime ``"{{credentialGuid}}"`` — agent mode resolves
-        the credential via ``agent_json``, and an empty guid is treated-as-absent.
+        no scenario value covers is defaulted to "" (so it never leaks a literal
+        ``{{...}}``) AND logged at WARNING — for a filter slot that is
+        extract-everything, but for a non-filter slot (e.g. ``{{target}}``,
+        ``{{lookback-days}}``) "" is an empty/invalid value, i.e. a likely-missing
+        required input, so the warning flags it rather than silently masking it.
+
+        ``{{credential-guid}}`` is filled with "" rather than the AE-runtime
+        ``"{{credentialGuid}}"``; agent mode resolves the credential via
+        ``agent_json``. Note this is "absent" only at the *workflow* layer — the
+        client still sends inline credentials (an empty-string guid is present in
+        the body, so ``_call_workflow`` does not treat it as missing). For SDR
+        (agent mode) the end state matches; a direct-mode suite opted into this
+        would diverge from the legacy local-vault provisioning path.
         """
         extract_args = self._manifest_extract_inputs()
         method = "agent" if self.agent_spec_template else "direct"
@@ -205,10 +223,36 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
         # never overrides a universal slot above.
         for key, value in metadata.items():
             subs.setdefault("{{" + key + "}}", value)
-        # Anything the manifest declares but no value covered → "" (extract-
-        # everything), so an unset connector-specific slot can't leak a literal {{…}}.
-        for placeholder in _collect_placeholders(extract_args):
-            subs.setdefault(placeholder, "")
+
+        placeholders = _collect_placeholders(extract_args)
+        # A metadata key that matches no placeholder (e.g. hyphen-vs-underscore:
+        # metadata ``include-filter`` against a manifest ``{{include_filter}}``)
+        # would otherwise be silently ignored — surface it.
+        for key in metadata:
+            if "{{" + key + "}}" not in placeholders:
+                logger.warning(
+                    "SDR manifest %s: scenario metadata key %r matches no "
+                    "{{%s}} placeholder in the extract args — value ignored "
+                    "(check hyphen vs underscore spelling).",
+                    self.manifest_path,
+                    key,
+                    key,
+                )
+        # Default any still-unresolved placeholder to "" so it can't leak a literal
+        # {{...}} into the workflow input — but WARN, because this is only
+        # "extract-everything" for a filter slot; for a non-filter slot (e.g.
+        # {{target}}, {{lookback-days}}) "" is an empty/invalid value and most
+        # likely a missing required input that should be supplied via metadata.
+        for placeholder in placeholders:
+            if placeholder not in subs:
+                logger.warning(
+                    "SDR manifest %s: placeholder %s had no value (not a universal "
+                    "SDR slot, not a scenario-metadata key) — defaulting to ''. If "
+                    "it is a required input, add it to the scenario's metadata.",
+                    self.manifest_path,
+                    placeholder,
+                )
+                subs[placeholder] = ""
         wf_args = _apply_mustache_subs(extract_args, subs)
         # Carry credentials through for the start endpoint (agent mode resolves
         # via agent_json; direct mode + the client's credential provisioning use
