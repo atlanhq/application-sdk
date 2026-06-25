@@ -317,8 +317,12 @@ class TestCreateWorker:
 
         assert app_worker._start_event_params["max_concurrent_workflow_tasks"] == 3
 
-    def test_sdr_workflows_skipped_when_no_handler(self) -> None:
-        """SDR registration is silently skipped when no Handler is provided."""
+    def test_sdr_workflows_registered_with_default_handler_when_no_handler(
+        self,
+    ) -> None:
+        """SDR/gate activities are ALWAYS registered (the preflight gate is
+        mandatory): with no app Handler, DefaultHandler is bound so the
+        injected sdr:preflight_gate is still dispatchable."""
 
         class _NoHandlerApp(App):
             async def run(self, input: _WorkerInput) -> _WorkerOutput:
@@ -341,13 +345,18 @@ class TestCreateWorker:
         from application_sdk.execution._temporal.sdr import SDR_WORKFLOWS
 
         for sdr_wf in SDR_WORKFLOWS:
-            assert sdr_wf not in captured["workflows"]
-        activity_names = [
-            getattr(a, "__temporal_activity_definition", None).name  # type: ignore[union-attr]
+            assert sdr_wf in captured["workflows"]
+        activity_names = {
+            getattr(a, "__temporal_activity_definition").name  # type: ignore[union-attr]
             for a in captured["activities"]
             if hasattr(a, "__temporal_activity_definition")
-        ]
-        assert not any(n.startswith("sdr:") for n in activity_names)
+        }
+        assert {
+            "sdr:test_auth",
+            "sdr:preflight_check",
+            "sdr:fetch_metadata",
+            "sdr:preflight_gate",
+        }.issubset(activity_names)
 
     def test_sdr_workflows_registered_when_handler_provided(self) -> None:
         """When ``handler`` is provided, SDR workflows + activities are appended."""

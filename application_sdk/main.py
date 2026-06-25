@@ -901,7 +901,9 @@ async def run_worker_mode(config: AppConfig) -> None:
         logger.info("Background token refresh started")
 
     # Discover the app's Handler so SDR workflows can be registered on the
-    # worker.  When no Handler is found, create_worker silently skips SDR.
+    # worker.  When no Handler is found, create_worker binds DefaultHandler so
+    # the SDR/gate activities are still registered (the preflight gate is
+    # mandatory; DefaultHandler's no-op keeps it non-blocking).
     handler_class_for_sdr = load_handler_class(
         config.app_module,
         handler_module_path=config.handler_module,

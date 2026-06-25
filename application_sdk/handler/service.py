@@ -71,6 +71,9 @@ from application_sdk.handler.contracts import (
     PreflightOutput,
     SubscriptionConfig,
 )
+from application_sdk.handler.contracts import (
+    flatten_credentials_to_pairs as _flatten_to_pairs,
+)
 from application_sdk.handler.manifest import AppManifest
 from application_sdk.handler.service_errors import (
     InvalidConfigIdError,
@@ -132,12 +135,6 @@ def _record_proxy_failure(
     logger.warning(log_message, *log_args, exc_info=exc_info)
 
 
-def _serialize_credential_value(v: Any) -> str:
-    if isinstance(v, str):
-        return v
-    return json.dumps(v)
-
-
 _CREDENTIAL_KEYS = frozenset(
     {
         "host",
@@ -150,22 +147,6 @@ _CREDENTIAL_KEYS = frozenset(
         "extra",
     }
 )
-
-
-def _flatten_to_pairs(creds_dict: dict[str, Any]) -> list[dict[str, str]]:
-    """Convert a flat credential dict to v3 [{key, value}] pairs."""
-    pairs: list[dict[str, str]] = []
-    extra = creds_dict.pop("extra", None)
-    for k, v in creds_dict.items():
-        if v is not None:
-            pairs.append({"key": k, "value": _serialize_credential_value(v)})
-    if isinstance(extra, dict):
-        for k, v in extra.items():
-            if v is not None:
-                pairs.append(
-                    {"key": f"extra.{k}", "value": _serialize_credential_value(v)}
-                )
-    return pairs
 
 
 # v2-compat: remove when Heracles sends credentials in v3 list[{key, value}] format.

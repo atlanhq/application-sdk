@@ -14,6 +14,7 @@ on ingress (``model_validate``), direct JSON serialization on egress
 
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -21,6 +22,8 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 from application_sdk.contracts.base import SerializableEnum
+from application_sdk.credentials.ref import CredentialRef
+from application_sdk.credentials.spec import AgentCredentialSpec
 
 
 class _DictLikeConfigBase(BaseModel):
@@ -175,6 +178,47 @@ class HandlerCredential(BaseModel):
 
     value: str
     """Credential value (sensitive — never log this directly)."""
+
+    @classmethod
+    def list_from_raw(cls, creds_dict: dict[str, Any]) -> list[HandlerCredential]:
+        """Build a credential list from a raw resolved credential dict.
+
+        Produces the same v3 ``[{key, value}]`` shape Heracles sends on the
+        HTTP path, so a handler's ``input.credentials`` round-trips identically
+        whether creds arrive over HTTP or are resolved inside the injected
+        preflight gate. Nested ``extra`` keys flatten to ``extra.<k>``.
+        """
+        return [
+            cls(key=pair["key"], value=pair["value"])
+            for pair in flatten_credentials_to_pairs(creds_dict)
+        ]
+
+
+def _serialize_credential_value(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    return json.dumps(value)
+
+
+def flatten_credentials_to_pairs(creds_dict: dict[str, Any]) -> list[dict[str, str]]:
+    """Flatten a credential dict to v3 ``[{key, value}]`` pairs.
+
+    Nested ``extra`` is hoisted to ``extra.<k>`` keys. Shared by the HTTP
+    preflight path (heracles-normalized requests) and the injected gate's
+    resolved-credential conversion so both emit identical shapes.
+    """
+    pairs: list[dict[str, str]] = []
+    extra = creds_dict.pop("extra", None)
+    for key, value in creds_dict.items():
+        if value is not None:
+            pairs.append({"key": key, "value": _serialize_credential_value(value)})
+    if isinstance(extra, dict):
+        for key, value in extra.items():
+            if value is not None:
+                pairs.append(
+                    {"key": f"extra.{key}", "value": _serialize_credential_value(value)}
+                )
+    return pairs
 
 
 class AuthStatus(SerializableEnum):
@@ -431,6 +475,39 @@ class PreflightOutput(BaseModel):
             checks=checks or [],
             total_duration_ms=total_duration_ms,
         )
+
+
+class PreflightGateInput(BaseModel):
+    """Credential-routing fields the injected preflight gate threads from the
+    extraction input into the gate activity.
+
+    Built deterministically inside the generated workflow ``_run`` from the
+    extraction ``input_data`` (which satisfies
+    :class:`~application_sdk.credentials.ref.CredentialResolvable`). Carries
+    only secret-free references — resolution happens inside the gate activity,
+    never in the deterministic workflow. Declares the
+    ``extraction_method``/``credential_guid``/``agent_json`` triple so it
+    satisfies ``CredentialResolvable`` and ``CredentialRef.resolve`` works on
+    it directly.
+    """
+
+    extraction_method: str = ""
+    """Credential routing mode (e.g. ``agent`` / ``direct``)."""
+
+    credential_guid: str = ""
+    """Platform credential GUID for direct (vault) resolution."""
+
+    agent_json: AgentCredentialSpec | None = None
+    """Agent-shape credential spec for inline (secret-manager) resolution."""
+
+    credential_ref: CredentialRef | None = None
+    """Pre-built reference, when the extraction input already carries one."""
+
+    entrypoint: str = ""
+    """Bare entry-point name of the gated workflow (for per-entrypoint checks)."""
+
+    metadata: BaseMetadataConfig = Field(default_factory=BaseMetadataConfig)
+    """Form-level metadata forwarded to the handler, mirroring the HTTP path."""
 
 
 # ---------------------------------------------------------------------------

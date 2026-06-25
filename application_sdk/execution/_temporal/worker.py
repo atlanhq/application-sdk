@@ -345,11 +345,18 @@ def create_worker(
     app_workflows = get_all_app_workflows()
     task_activities = get_all_task_activities()
 
-    if enable_sdr and handler is not None:
-        from application_sdk.execution._temporal.sdr import (  # noqa: PLC0415 — lazy: only load SDR/handler modules when a Handler is provided
+    if enable_sdr:
+        from application_sdk.execution._temporal.sdr import (  # noqa: PLC0415 — lazy: only load SDR modules when SDR is enabled
             SDR_WORKFLOWS,
             build_sdr_activities,
         )
+        from application_sdk.handler.base import DefaultHandler  # noqa: PLC0415
+
+        # Preflight is a mandatory SDK-owned gate, so the SDR/gate activities
+        # must always be registered for the injected sdr:preflight_gate to be
+        # dispatchable. When the app ships no Handler, DefaultHandler's no-op
+        # (canonical success) keeps the gate present but non-blocking.
+        sdr_handler = handler if handler is not None else DefaultHandler()
 
         sdr_registry = AppRegistry.get_instance()
         sdr_registered_apps = sdr_registry.list_all()
@@ -361,11 +368,11 @@ def create_worker(
         app_workflows = [*app_workflows, *SDR_WORKFLOWS]
         task_activities = [
             *task_activities,
-            *build_sdr_activities(handler, sdr_app_name),
+            *build_sdr_activities(sdr_handler, sdr_app_name),
         ]
         logger.info(
             "SDR workflows registered for handler %s (app=%s)",
-            type(handler).__name__,
+            type(sdr_handler).__name__,
             sdr_app_name,
         )
 
