@@ -81,7 +81,7 @@ def resolved_cves(
     fewer than ``debounce`` scans we cannot confirm the debounce, so nothing is
     resolved (fail-safe — never yank a suppression on thin evidence).
     """
-    if len([s for s in scan_sets if s is not None]) < debounce:
+    if len(scan_sets) < debounce:
         return set()
     seen_in_any = set().union(*scan_sets) if scan_sets else set()
     return {cve for cve in allowlisted if cve not in seen_in_any}

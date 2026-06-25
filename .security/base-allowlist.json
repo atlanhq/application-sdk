@@ -1,6 +1,6 @@
 {
   "_comment": "Central allowlist for SDK base image vulnerabilities. Shared across all connector repos. Auto-maintained by the vuln-triage rover; CODEOWNERS: SDK/security team + @atlan-ci (auto-merge of allowlist-only PRs).",
-  "_base_image": "application-sdk-main",
+  "_base_image": "app-runtime-base:3",
   "_updated": "2026-06-25",
   "_renewal_note": "Expiry dates are the remediation SLA per severity, measured from first detection. CRITICAL: 7 days. HIGH: 30 days. MEDIUM/LOW are NOT allowlisted (tracked on Linear tickets only). The gate (check_allowlist.py) passes while an entry is unexpired and fails once it expires. Enforced by .github/scripts/validate_allowlist.py via _expiry_policy below.",
   "_expiry_policy": {

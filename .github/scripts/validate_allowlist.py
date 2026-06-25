@@ -29,7 +29,7 @@ without touching code:
 
 import json
 import sys
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 ALLOWLIST_PATH = ".security/base-allowlist.json"
 DEFAULT_POLICY = {"CRITICAL": 7, "HIGH": 30}
@@ -63,7 +63,7 @@ def main() -> int:
         return 1
 
     policy = {**DEFAULT_POLICY, **data.get("_expiry_policy", {})}
-    today = datetime.utcnow().date()
+    today = datetime.now(UTC).date()
     errors = []
 
     entries = {k: v for k, v in data.items() if not k.startswith("_")}
