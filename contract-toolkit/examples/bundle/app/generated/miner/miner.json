@@ -7,6 +7,7 @@
       "credential-guid": {
         "type": "string",
         "required": false,
+        "lifecycle": "active",
         "ui": {
           "widget": "credential",
           "label": "",
@@ -20,6 +21,7 @@
       "lookback-days": {
         "type": "number",
         "required": false,
+        "lifecycle": "active",
         "ui": {
           "widget": "inputNumber",
           "label": "Query lookback (days)",
@@ -32,6 +34,7 @@
       "max-queries": {
         "type": "number",
         "required": false,
+        "lifecycle": "active",
         "ui": {
           "widget": "inputNumber",
           "label": "Max queries",

@@ -229,6 +229,25 @@ abstract class UIElement {
   /// Default fallback value to use for the element if nothing is selected or entered in the UI.
   hidden fallback: Any? = null
 
+  /// Field lifecycle state.
+  ///
+  /// * `active` (default) — field is in active use.
+  /// * `deprecated` — still accepted but discouraged; consumers should migrate away.
+  ///   The generated Python field carries `Field(deprecated=True)`, which emits a
+  ///   runtime `DeprecationWarning` when the field is set.
+  /// * `sunset` — retained for backwards-compatibility but no longer consumed by
+  ///   the app; a stronger form of deprecated.  The generated Python field carries
+  ///   `Field(deprecated=True, json_schema_extra={"x-lifecycle": "sunset"})`.
+  ///
+  /// A field's lifecycle may only advance (active → deprecated → sunset).  The field
+  /// is NEVER removed and its type NEVER changes — removal or type change is a
+  /// breaking contract change caught by the B005 conformance rule.
+  lifecycle: "active"|"deprecated"|"sunset" = "active"
+
+  /// Optional human-readable note displayed alongside the deprecation warning.
+  /// Ignored when `lifecycle` is `"active"`.
+  lifecycleMessage: String?
+
   /// (Generated) UI configuration for the element.
   fixed ui: Widget|Mapping<String, Any> = new Widget {
     label = if (emitUiLabel) title else null

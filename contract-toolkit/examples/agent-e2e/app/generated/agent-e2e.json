@@ -7,6 +7,7 @@
       "extraction-method": {
         "type": "conditional",
         "required": true,
+        "lifecycle": "active",
         "ui": {
           "widget": "radio",
           "label": "Extraction method",
@@ -39,6 +40,7 @@
       "credential-guid": {
         "type": "string",
         "required": false,
+        "lifecycle": "active",
         "ui": {
           "widget": "credential",
           "label": "",
@@ -52,6 +54,7 @@
       "agent-json": {
         "type": "object",
         "required": false,
+        "lifecycle": "active",
         "ui": {
           "widget": "agent",
           "label": "",
@@ -64,6 +67,7 @@
       "connection": {
         "type": "string",
         "required": false,
+        "lifecycle": "active",
         "ui": {
           "widget": "connection",
           "label": "",

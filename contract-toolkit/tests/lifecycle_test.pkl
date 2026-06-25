@@ -1,0 +1,90 @@
+/// Lifecycle marker tests — verifies `applyLifecycle` emits the correct Pydantic
+/// markers in generated `_input.py` for active, deprecated, and sunset fields.
+amends "pkl:test"
+
+import "../src/App.pkl" as App
+
+// ── Fixture ─────────────────────────────────────────────────────────────────
+
+local lifecycleApp = (App) {
+  name = "lifecycle-test"
+  displayName = "Lifecycle Test"
+  icon = "https://assets.atlan.com/assets/dummy.svg"
+  hasCredentialConfig = false
+  pipeline { publish = null }
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Settings"] {
+        inputs {
+          // active — plain default, no Field() wrapping
+          ["active_field"] = new App.NumericInput {
+            title = "Active field"
+            default = 10
+          }
+          // deprecated simple field
+          ["deprecated_field"] = new App.NumericInput {
+            title = "Deprecated field"
+            default = 99
+            lifecycle = "deprecated"
+            lifecycleMessage = "Use active_field instead."
+          }
+          // sunset simple field (BooleanInput generates bool = False)
+          ["sunset_field"] = new App.BooleanInput {
+            title = "Sunset field"
+            default = false
+            lifecycle = "sunset"
+          }
+          // deprecated factory field (TagsInput generates Field(default_factory=list))
+          ["factory_deprecated"] = new App.TagsInput {
+            title = "Factory deprecated"
+            lifecycle = "deprecated"
+          }
+          // sunset factory field
+          ["factory_sunset"] = new App.TagsInput {
+            title = "Factory sunset"
+            lifecycle = "sunset"
+          }
+        }
+      }
+    }
+  }
+}
+
+local inputPy: String = lifecycleApp.output.files["app/generated/_input.py"].text
+
+facts {
+  ["active field generates a plain default — no Field() wrapping"] {
+    inputPy.contains("active_field: int = 10")
+  }
+
+  ["active field has no deprecated= annotation"] {
+    !inputPy.replaceAll("deprecated_field", "").replaceAll("factory_deprecated", "").contains("deprecated=True")
+      || inputPy.contains("active_field: int = 10")
+  }
+
+  ["deprecated NumericInput field carries Field(default=..., deprecated=True)"] {
+    inputPy.contains("deprecated_field: int = Field(default=99, deprecated=True)")
+  }
+
+  ["sunset BooleanInput field carries deprecated=True and x-lifecycle: sunset"] {
+    inputPy.contains("sunset_field") &&
+      inputPy.contains("deprecated=True") &&
+      inputPy.contains("x-lifecycle") &&
+      inputPy.contains("\"sunset\"")
+  }
+
+  ["sunset field also carries deprecated=True (sunset is a stronger form of deprecated)"] {
+    inputPy.contains("sunset_field: bool = Field(") &&
+      inputPy.contains("deprecated=True")
+  }
+
+  ["deprecated TagsInput (factory field) carries deprecated=True inside Field(...)"] {
+    inputPy.contains("factory_deprecated") && inputPy.contains("deprecated=True")
+  }
+
+  ["sunset TagsInput (factory field) carries both deprecated=True and x-lifecycle: sunset"] {
+    inputPy.contains("factory_sunset") &&
+      inputPy.contains("deprecated=True") &&
+      inputPy.contains("x-lifecycle")
+  }
+}

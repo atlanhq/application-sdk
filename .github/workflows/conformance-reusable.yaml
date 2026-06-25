@@ -348,6 +348,27 @@ jobs:
           name: conformance-${{ matrix.slug }}-sarif
           path: ${{ matrix.slug }}.sarif
 
+  # ── Contract ledger append-only guard ─────────────────────────────────────
+  # Runs the .github/scripts/contract_ledger_guard.py script to verify that
+  # no entry was deleted from contract_schema.lock.json and no recorded type
+  # was changed between origin/main and HEAD.  Adding entries and status
+  # changes (active→deprecated→sunset) are always allowed.
+  #
+  # Requires fetch-depth: 0 so the full git history (and origin/main) is
+  # available to `git show`.  Skipped on push to main (no base-ref diff).
+  contract-ledger-guard:
+    name: "Contract Ledger Guard"
+    runs-on: ubuntu-latest
+    if: inputs.event_name != 'push'
+    steps:
+      - name: "Checkout (full history)"
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: "Guard contract_schema.lock.json (append-only)"
+        run: python .github/scripts/contract_ledger_guard.py --base-ref origin/main --ledger-path packages/conformance/conformance/data/contract_schema.lock.json
+
   # ── Required gate ─────────────────────────────────────────────────────────
   # Always runs so it can be marked a required check without ever becoming
   # "skipped" and blocking the merge queue.  A matrix job's aggregate result is

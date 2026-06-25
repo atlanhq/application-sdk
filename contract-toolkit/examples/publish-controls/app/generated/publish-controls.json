@@ -7,6 +7,7 @@
       "extraction-method": {
         "type": "string",
         "required": false,
+        "lifecycle": "active",
         "ui": {
           "widget": "input",
           "label": "Extraction method",
@@ -20,6 +21,7 @@
       "credential-guid": {
         "type": "string",
         "required": false,
+        "lifecycle": "active",
         "ui": {
           "widget": "credential",
           "label": "",
@@ -33,6 +35,7 @@
       "connection": {
         "type": "string",
         "required": false,
+        "lifecycle": "active",
         "ui": {
           "widget": "connection",
           "label": "",
@@ -45,6 +48,7 @@
       "load-to-atlan": {
         "type": "boolean",
         "required": false,
+        "lifecycle": "active",
         "ui": {
           "widget": "boolean",
           "label": "Load to Atlan",

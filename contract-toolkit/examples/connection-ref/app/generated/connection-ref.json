@@ -7,6 +7,7 @@
       "connection": {
         "type": "string",
         "required": true,
+        "lifecycle": "active",
         "ui": {
           "widget": "connectionSelector",
           "label": "Connection",
@@ -23,6 +24,7 @@
       "connections": {
         "type": "string",
         "required": false,
+        "lifecycle": "active",
         "ui": {
           "widget": "connectionSelector",
           "label": "Connections",

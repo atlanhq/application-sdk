@@ -50,6 +50,16 @@ def _cmd_gen_deprecations(argv: list[str]) -> int:
         return int(e.code) if e.code is not None else 0
 
 
+def _cmd_gen_contract_ledger(argv: list[str]) -> int:
+    from conformance.tools.generate_contract_ledger import main
+
+    try:
+        main(argv)
+        return 0
+    except SystemExit as e:
+        return int(e.code) if e.code is not None else 0
+
+
 def _cmd_remediate(argv: list[str]) -> int:
     """Print the resolved programs path + version, then exit.
 
@@ -231,6 +241,7 @@ _COMMANDS = {
     "programs-dir": _cmd_programs_dir,
     "gen-rule-docs": _cmd_gen_rule_docs,
     "gen-deprecations": _cmd_gen_deprecations,
+    "gen-contract-ledger": _cmd_gen_contract_ledger,
     "remediate": _cmd_remediate,
     "bootstrap": _cmd_bootstrap,
     "renovate-scan": _cmd_renovate_scan,
@@ -244,6 +255,10 @@ commands:
   programs-dir   Print the absolute path to the bundled .prose.md programs
   gen-rule-docs  Regenerate rule docs from Python rule definitions
   gen-deprecations  Regenerate the deprecated-symbol manifest from SDK source
+  gen-contract-ledger  Regenerate the entrypoint-contract ledger (contract_schema.lock.json)
+                       --repo DIR    repo root to scan (default: auto-detected)
+                       --outfile PATH  ledger path (default: package data)
+                       --check       verify ledger is current; exit 1 if stale
   remediate      Print programs path + version banner (SKILL.md drives execution)
   bootstrap      Write .claude/skills/remediate/SKILL.md + all standard CI workflow
                  shims into .github/workflows/. The 14 managed shims always overwrite
