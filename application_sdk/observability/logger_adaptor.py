@@ -885,6 +885,18 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             return False
         return is_replaying()
 
+    def _is_enabled(self, level_no: int) -> bool:
+        """Return True if at least one active sink accepts records at *level_no*.
+
+        Used as a fast pre-flight guard before %-style arg formatting so that
+        string interpolation is skipped entirely when the level is filtered —
+        the same laziness stdlib logging.Logger provides for free.
+        """
+        try:
+            return level_no >= self.logger._core.min_level
+        except TypeError:
+            return True
+
     def debug(self, msg: str, *args: Any, **kwargs: Any):
         """Log a debug level message.
 
@@ -894,6 +906,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             **kwargs: Additional keyword arguments for context
         """
         if self._suppress_replay_log():
+            return
+        if not self._is_enabled(SEVERITY_MAPPING["DEBUG"]):
             return
         try:
             msg, args = _format_printf_args(msg, args)
@@ -918,6 +932,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         """
         if self._suppress_replay_log():
             return
+        if not self._is_enabled(SEVERITY_MAPPING["INFO"]):
+            return
         try:
             msg, args = _format_printf_args(msg, args)
             exc_info = kwargs.pop("exc_info", False)
@@ -940,6 +956,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             **kwargs: Additional keyword arguments for context
         """
         if self._suppress_replay_log():
+            return
+        if not self._is_enabled(SEVERITY_MAPPING["WARNING"]):
             return
         try:
             msg, args = _format_printf_args(msg, args)
@@ -965,6 +983,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         Note: Forces an immediate flush of logs when called.
         """
         if self._suppress_replay_log():
+            return
+        if not self._is_enabled(SEVERITY_MAPPING["ERROR"]):
             return
         try:
             msg, args = _format_printf_args(msg, args)
@@ -1007,6 +1027,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         Note: Forces an immediate flush of logs when called.
         """
         if self._suppress_replay_log():
+            return
+        if not self._is_enabled(SEVERITY_MAPPING["CRITICAL"]):
             return
         try:
             msg, args = _format_printf_args(msg, args)
@@ -1069,6 +1091,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         """
         if self._suppress_replay_log():
             return
+        if not self._is_enabled(SEVERITY_MAPPING["ACTIVITY"]):
+            return
         try:
             msg, args = _format_printf_args(msg, args)
             local_kwargs = kwargs.copy()
@@ -1090,6 +1114,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         This method adds metric-specific context to the log message.
         """
         if self._suppress_replay_log():
+            return
+        if not self._is_enabled(SEVERITY_MAPPING["METRIC"]):
             return
         try:
             msg, args = _format_printf_args(msg, args)
@@ -1155,6 +1181,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         This method adds trace-specific context to the log message.
         """
         if self._suppress_replay_log():
+            return
+        if not self._is_enabled(SEVERITY_MAPPING["TRACING"]):
             return
         msg, args = _format_printf_args(msg, args)
         local_kwargs = kwargs.copy()

@@ -2456,69 +2456,99 @@ local function getPyDefaultFactoryField(k: String, fieldType: String, factory: S
   else
     "\(k): \(fieldType) = Field(\n        default_factory=\(factory)\n    )"
 
+/// Wrap a generated field line with a Pydantic lifecycle marker when the field is
+/// deprecated or sunset.  The existing default value is preserved inside Field(...).
+///
+/// active  → pass through unchanged
+/// deprecated → `x: T = expr`          → `x: T = Field(default=expr, deprecated=True)`
+///              `x: T = Field(...)`     → `x: T = Field(..., deprecated=True)`
+/// sunset  → same as deprecated but also appends `json_schema_extra={"x-lifecycle": "sunset"}`
+local function applyLifecycle(fieldLine: String, u: Widgets.UIElement): String =
+  if (u.lifecycle == "active")
+    fieldLine
+  else
+    let (deprecatedKwarg =
+      if (u.lifecycleMessage != null)
+        "deprecated=\"\(u.lifecycleMessage!!)\""
+      else
+        "deprecated=True")
+    let (lifecycleKwargs =
+      if (u.lifecycle == "sunset")
+        ", \(deprecatedKwarg), json_schema_extra={\"x-lifecycle\": \"sunset\"}"
+      else
+        ", \(deprecatedKwarg)")
+    if (fieldLine.contains("= Field("))
+      // Already has a Field(...) call — append lifecycle kwargs before the final closing )
+      fieldLine.replaceFirst(Regex("\\)\\s*$"), "\(lifecycleKwargs))")
+    else
+      // Simple `name: Type = expr` form — rewrite as Field(default=expr, ...)
+      fieldLine.replaceFirst(Regex(" = (.+)$"), " = Field(default=$1\(lifecycleKwargs))")
+
 local function getInputPyField(k: String, u: Widgets.UIElement): String =
   let (k = toPyName(k))
-  if (u is Widgets.BooleanInput)
-    "\(k): bool = \(if ((u as Widgets.BooleanInput).default) "True" else "False")"
-  else if (u is Widgets.Switcher)
-    "\(k): bool = \(if ((u as Widgets.Switcher).default) "True" else "False")"
-  else if (u is Widgets.NumericInput)
-    "\(k): int = \(if ((u as Widgets.NumericInput).default != null) (u as Widgets.NumericInput).default!!.toInt() else 0)"
-  else if (u is Widgets.DateInput)
-    "\(k): int = 0"
-  else if (u is Widgets.FileUploader)
-    "\(k): FileReference | None = None"
-  else if (u is Widgets.ConnectionCreator)
-    "\(k): ConnectionRef | None = None"
-  else if (u is Widgets.ConnectionRefInput)
-    (if ((u as Widgets.ConnectionRefInput).multiSelect)
-      getPyDefaultFactoryField(k, "Annotated[list[ConnectionRef], MaxItems(1000)]", "list")
-    else
-      "\(k): ConnectionRef | None = None")
-  else if (u is Widgets.ConnectionSelector)
-    "\(k): str = \"\""
-  else if (u is Widgets.CredentialInput)
-    "\(k): str = \"\""
-  else if (u is Widgets.PasswordInput)
-    "\(k): str = \"\""
-  else if (u is Widgets.TagsInput)
-    getPyDefaultFactoryField(k, "Annotated[list[str], MaxItems(1000)]", "list")
-  else if (u is Widgets.InputRepeater)
-    getPyDefaultFactoryField(k, "Annotated[list[str], MaxItems(1000)]", "list")
-  else if (u is Widgets.DropDown)
-    (if ((u as Widgets.DropDown).multiSelect)
-      getPyDefaultFactoryField(k, "Annotated[list[str], MaxItems(1000)]", "list")
-    else
-      "\(k): str = \"\(if ((u as Widgets.DropDown).default != null) (u as Widgets.DropDown).default!! else "")\"")
-  else if (u is Widgets.Radio)
-    "\(k): str = \"\(if ((u as Widgets.Radio).default != null) (u as Widgets.Radio).default!! else "")\""
-  else if (u is Widgets.CloudProvider)
-    "\(k): str = \"\""
-  else if (u is Widgets.Sage || u is Widgets.SageV2)
-    "\(k): str = \"\""
-  else if (u is Widgets.InfoBanner || u is Widgets.GlossarySelector)
-    "\(k): str = \"\""
-  else if (u is Widgets.CustomWidget)
-    "\(k): str = \"\""
-  else if (u is Widgets.TextInput)
-    "\(k): str = \"\(if ((u as Widgets.TextInput).default != null) (u as Widgets.TextInput).default!! else "")\""
-  else if (u is Widgets.TextBoxInput)
-    "\(k): str = \"\""
-  else if (u is Widgets.ConditionalInput)
-    (let (ci = u as Widgets.ConditionalInput)
-      if (ci.outputValueType == "object")
-        getPyDefaultFactoryField(k, "Annotated[dict[str, Any], MaxItems(1000)]", "dict")
+  let (baseLine =
+    if (u is Widgets.BooleanInput)
+      "\(k): bool = \(if ((u as Widgets.BooleanInput).default) "True" else "False")"
+    else if (u is Widgets.Switcher)
+      "\(k): bool = \(if ((u as Widgets.Switcher).default) "True" else "False")"
+    else if (u is Widgets.NumericInput)
+      "\(k): int = \(if ((u as Widgets.NumericInput).default != null) (u as Widgets.NumericInput).default!!.toInt() else 0)"
+    else if (u is Widgets.DateInput)
+      "\(k): int = 0"
+    else if (u is Widgets.FileUploader)
+      "\(k): FileReference | None = None"
+    else if (u is Widgets.ConnectionCreator)
+      "\(k): ConnectionRef | None = None"
+    else if (u is Widgets.ConnectionRefInput)
+      (if ((u as Widgets.ConnectionRefInput).multiSelect)
+        getPyDefaultFactoryField(k, "Annotated[list[ConnectionRef], MaxItems(1000)]", "list")
       else
-        "\(k): str = \"\(if (ci.default != null) ci.default!!.toString() else "")\"")
-  else if (u is Widgets.SqlTree)
-    // Values are bounded strings (schema names / JSON-encoded selections); `str` avoids
-    // the SDK's AAF-CTR-002 rejection of `Any`.  Pydantic's lax mode coerces non-string
-    // leaf values (e.g. booleans) to str during model construction.
-    getPyDefaultFactoryField(k, "Annotated[dict[str, str], MaxItems(1000)]", "dict")
-  else if (u is Widgets.NestedInput || u is Widgets.APITree || u is Widgets.ApiTreeSelect || u is Widgets.DsnTreeMap || u is Widgets.AgentSelector)
-    getPyDefaultFactoryField(k, "Annotated[dict[str, Any], MaxItems(1000)]", "dict")
-  else
-    "\(k): str = \"\""
+        "\(k): ConnectionRef | None = None")
+    else if (u is Widgets.ConnectionSelector)
+      "\(k): str = \"\""
+    else if (u is Widgets.CredentialInput)
+      "\(k): str = \"\""
+    else if (u is Widgets.PasswordInput)
+      "\(k): str = \"\""
+    else if (u is Widgets.TagsInput)
+      getPyDefaultFactoryField(k, "Annotated[list[str], MaxItems(1000)]", "list")
+    else if (u is Widgets.InputRepeater)
+      getPyDefaultFactoryField(k, "Annotated[list[str], MaxItems(1000)]", "list")
+    else if (u is Widgets.DropDown)
+      (if ((u as Widgets.DropDown).multiSelect)
+        getPyDefaultFactoryField(k, "Annotated[list[str], MaxItems(1000)]", "list")
+      else
+        "\(k): str = \"\(if ((u as Widgets.DropDown).default != null) (u as Widgets.DropDown).default!! else "")\"")
+    else if (u is Widgets.Radio)
+      "\(k): str = \"\(if ((u as Widgets.Radio).default != null) (u as Widgets.Radio).default!! else "")\""
+    else if (u is Widgets.CloudProvider)
+      "\(k): str = \"\""
+    else if (u is Widgets.Sage || u is Widgets.SageV2)
+      "\(k): str = \"\""
+    else if (u is Widgets.InfoBanner || u is Widgets.GlossarySelector)
+      "\(k): str = \"\""
+    else if (u is Widgets.CustomWidget)
+      "\(k): str = \"\""
+    else if (u is Widgets.TextInput)
+      "\(k): str = \"\(if ((u as Widgets.TextInput).default != null) (u as Widgets.TextInput).default!! else "")\""
+    else if (u is Widgets.TextBoxInput)
+      "\(k): str = \"\""
+    else if (u is Widgets.ConditionalInput)
+      (let (ci = u as Widgets.ConditionalInput)
+        if (ci.outputValueType == "object")
+          getPyDefaultFactoryField(k, "Annotated[dict[str, Any], MaxItems(1000)]", "dict")
+        else
+          "\(k): str = \"\(if (ci.default != null) ci.default!!.toString() else "")\"")
+    else if (u is Widgets.SqlTree)
+      // Values are bounded strings (schema names / JSON-encoded selections); `str` avoids
+      // the SDK's AAF-CTR-002 rejection of `Any`.  Pydantic's lax mode coerces non-string
+      // leaf values (e.g. booleans) to str during model construction.
+      getPyDefaultFactoryField(k, "Annotated[dict[str, str], MaxItems(1000)]", "dict")
+    else if (u is Widgets.NestedInput || u is Widgets.APITree || u is Widgets.ApiTreeSelect || u is Widgets.DsnTreeMap || u is Widgets.AgentSelector)
+      getPyDefaultFactoryField(k, "Annotated[dict[str, Any], MaxItems(1000)]", "dict")
+    else
+      "\(k): str = \"\"")
+  applyLifecycle(baseLine, u)
 
 local function needsJsonObjectStringCoercion(u: Widgets.UIElement): Boolean =
   u is Widgets.NestedInput
