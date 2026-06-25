@@ -1043,6 +1043,11 @@ class TestGenerateWorkflowClass:
         stack.enter_context(
             mock.patch("application_sdk.app.base.workflow.info", return_value=info_mock)
         )
+        # Preflight gate (HYP-1883) runs at the head of _run; these tests target
+        # the entry-method path, so disable the gate via the unpatched branch.
+        stack.enter_context(
+            mock.patch("application_sdk.app.base.workflow.patched", return_value=False)
+        )
         stack.enter_context(mock.patch("application_sdk.app.base._safe_log"))
         stack.enter_context(
             mock.patch(

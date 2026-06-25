@@ -1542,6 +1542,74 @@ def _collect_interaction_relays(
     return relays
 
 
+async def _run_preflight_gate(input_data: Input, entrypoint: str) -> None:
+    """Run the SDK-owned pre-extraction preflight gate (HYP-1883).
+
+    Dispatches the connector's preflight handler as a mandatory first activity
+    and aborts before extraction on a canonical ``failed`` verdict. Called at
+    the head of every generated workflow's ``_run``.
+
+    Guards:
+      * ``workflow.patched("preflight-gate")`` — workflows started before this
+        code shipped replay the pre-gate branch deterministically (no new
+        command in their history). New runs take the gated branch.
+      * ``isinstance(input_data, CredentialResolvable)`` — only inputs that
+        carry credential routing are gated; source-less apps skip entirely.
+
+    Credential resolution happens inside the activity, not here — the
+    deterministic workflow only forwards secret-free references.
+    """
+    if not workflow.patched("preflight-gate"):
+        return
+
+    with workflow.unsafe.imports_passed_through():
+        from application_sdk.credentials.ref import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
+            CredentialResolvable,
+        )
+        from application_sdk.execution._temporal.sdr import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
+            _GATE_RETRY,
+            _GATE_SCHEDULE_TO_CLOSE,
+            _GATE_START_TO_CLOSE,
+            SDR_PREFLIGHT_GATE_ACTIVITY,
+        )
+        from application_sdk.handler.contracts import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
+            PreflightGateInput,
+            PreflightStatus,
+        )
+
+    if not isinstance(input_data, CredentialResolvable):
+        return
+
+    metadata = getattr(input_data, "metadata", None)
+    gate_input = PreflightGateInput(
+        extraction_method=getattr(input_data, "extraction_method", "") or "",
+        credential_guid=getattr(input_data, "credential_guid", "") or "",
+        agent_json=getattr(input_data, "agent_json", None),
+        credential_ref=getattr(input_data, "credential_ref", None),
+        entrypoint=entrypoint,
+        **({"metadata": metadata} if metadata is not None else {}),
+    )
+
+    result = await workflow.execute_activity(
+        SDR_PREFLIGHT_GATE_ACTIVITY,
+        gate_input,
+        schedule_to_close_timeout=_GATE_SCHEDULE_TO_CLOSE,
+        start_to_close_timeout=_GATE_START_TO_CLOSE,
+        retry_policy=_GATE_RETRY,
+    )
+
+    if result.canonical_status() is PreflightStatus.FAILED:
+        from application_sdk.execution.errors import (  # noqa: PLC0415 — circular: execution/__init__ imports app.base
+            ApplicationError,
+        )
+
+        raise ApplicationError(
+            result.message or "Preflight check failed; aborting before extraction",
+            type="PreflightFailed",
+            non_retryable=True,
+        )
+
+
 def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> type:
     """Generate a Temporal workflow class for one entry point.
 
@@ -1563,6 +1631,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
         app_cls._app_name if ep.implicit else f"{app_cls._app_name}:{ep.name}"
     )
     entry_method_name = ep.method_name
+    entrypoint_name = ep.name
     input_type = ep.input_type
     output_type = ep.output_type
     app_name = app_cls._app_name
@@ -1643,6 +1712,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
             _safe_log("warning", "Failed to log input summary", exc_info=True)
 
         try:
+            await _run_preflight_gate(input_data, entrypoint_name)
             entry_method = getattr(app_instance, entry_method_name)
             result = await entry_method(input_data)
             return cast("Output", result)

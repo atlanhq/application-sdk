@@ -76,6 +76,13 @@ _AUTH_RETRY = RetryPolicy(maximum_attempts=1)
 # by schedule_to_close above.
 _DEFAULT_RETRY = RetryPolicy(maximum_attempts=2, backoff_coefficient=2)
 
+# Injected gate (sdr:preflight_gate) dispatched from the extraction workflow's
+# _run. Mirrors the preflight caps: bounded so a slow/unreachable source can't
+# stall extraction start indefinitely.
+_GATE_SCHEDULE_TO_CLOSE = timedelta(seconds=60)
+_GATE_START_TO_CLOSE = timedelta(seconds=55)
+_GATE_RETRY = RetryPolicy(maximum_attempts=2, backoff_coefficient=2)
+
 
 @workflow.defn(name="sdr:test_auth")
 class SdrTestAuthWorkflow:
