@@ -1,70 +1,18 @@
-# Daft, DuckDB, and RocksDB Patterns
+# DuckDB and RocksDB Patterns
 
-This reference covers how the SDK uses Daft (lazy DataFrames), DuckDB (file-backed SQL),
-and RocksDB (disk-backed key-value store) internally, and what app developers need to know.
+This reference covers how the SDK uses DuckDB (file-backed SQL) and RocksDB (disk-backed
+key-value store) internally, and what app developers need to know.
 
 ## Overview
 
 | Technology | Purpose | Used By | App Developer Action |
 |------------|---------|---------|---------------------|
-| **Daft** | Lazy DataFrame analysis of table metadata | `prepare_column_extraction_queries` | None - SDK handles |
-| **DuckDB** | File-backed SQL queries on JSON files | `get_backfill_tables`, `get_table_qns_from_columns` | None - SDK handles |
+| **DuckDB** | File-backed SQL analysis and queries on JSON files | `prepare_column_extraction_queries`, `get_backfill_tables`, `get_table_qns_from_columns` | None - SDK handles |
 | **RocksDB** | Disk-backed key-value state storage | `TableScope.table_states` | None - SDK handles |
 
-App developers do NOT need to write Daft, DuckDB, or RocksDB code.
+App developers do NOT need to write DuckDB or RocksDB code.
 The SDK handles all of this internally. This reference is for understanding
 how it works under the hood.
-
-## Daft: Lazy DataFrame Analysis
-
-### What It Does
-
-Daft is used in `prepare_column_extraction_queries` to lazily analyze table
-metadata and identify which tables need column extraction:
-
-```python
-# SDK internal: application_sdk/common/incremental/column_extraction/analysis.py
-import daft
-
-def get_tables_needing_column_extraction(transformed_dir, backfill_qns):
-    """Use Daft to identify tables needing column extraction."""
-    # Read all table JSON files lazily (no full memory load)
-    df = daft.read_json(str(transformed_dir / "table" / "*.json"))
-
-    # Filter to CREATED/UPDATED tables (changed since last run)
-    changed = df.where(
-        (df["attributes"].struct.get("incremental_state") == "CREATED") |
-        (df["attributes"].struct.get("incremental_state") == "UPDATED")
-    )
-
-    # Also include backfill tables (detected by DuckDB comparison)
-    if backfill_qns:
-        backfill = df.where(
-            df["attributes"].struct.get("qualifiedName").is_in(backfill_qns)
-        )
-        filtered = changed.concat(backfill)
-    else:
-        filtered = changed
-
-    return filtered, changed_count, backfill_count, no_change_count
-```
-
-### Why Daft?
-
-- **Lazy execution**: Doesn't load all JSON files into memory
-- **Struct field access**: Can query nested JSON fields (e.g., `attributes.incremental_state`)
-- **Memory efficient**: Processes large datasets without OOM
-- **Parallel**: Automatically parallelizes reads across files
-
-### Daft Struct Field Access Pattern
-
-```python
-# Access nested struct fields in Daft DataFrames
-df["attributes"].struct.get("qualifiedName")     # Get field from struct
-df["attributes"].struct.get("incremental_state")  # Get incremental state
-```
-
-**Important**: Daft API changed in 0.7.2+. Use `.struct.get("field")` not `.struct["field"]`.
 
 ## DuckDB: File-Backed SQL Queries
 
@@ -72,11 +20,44 @@ df["attributes"].struct.get("incremental_state")  # Get incremental state
 
 DuckDB is used for two key operations:
 
-1. **Backfill Detection**: Compare current vs previous state to find tables
-   that exist now but weren't in the previous extraction
+1. **Table State Analysis**: Identify which tables need column extraction by reading
+   transformed JSON files and filtering by incremental state (CREATED/UPDATED/BACKFILL).
 
-2. **Column Table Extraction**: Query column JSON files to find which tables
-   have extracted columns
+2. **Backfill Detection**: Compare current vs previous state to find tables
+   that exist now but weren't in the previous extraction.
+
+3. **Column Table Extraction**: Query column JSON files to find which tables
+   have extracted columns.
+
+### Table State Analysis
+
+```python
+# SDK internal: application_sdk/common/incremental/column_extraction/analysis.py
+
+def get_tables_needing_column_extraction(transformed_dir, backfill_qns):
+    """Use DuckDB to identify tables needing column extraction."""
+    from application_sdk.common.incremental.storage.duckdb_utils import (
+        DuckDBConnectionManager, json_scan,
+    )
+    json_files = list((transformed_dir / "table").glob("*.json"))
+    json_source = json_scan(json_files)
+
+    with DuckDBConnectionManager() as db:
+        conn = db.connection
+        # State counts
+        state_counts = conn.execute(f"""
+            SELECT incremental_state, COUNT(*) AS cnt
+            FROM (
+                SELECT COALESCE(
+                    json_extract_string(to_json(customAttributes), '$.incremental_state'),
+                    'NO CHANGE'
+                ) AS incremental_state
+                FROM {json_source}
+            )
+            GROUP BY incremental_state
+        """).fetchall()
+        ...
+```
 
 ### Backfill Detection
 
@@ -114,26 +95,19 @@ def get_backfill_tables(current_transformed_dir, previous_current_state_dir):
 ```python
 # SDK internal: application_sdk/common/incremental/storage/duckdb_utils.py
 
-def get_duckdb_connection(db_path=None):
-    """Create file-backed DuckDB connection with memory limits."""
-    import duckdb
-
-    if db_path is None:
-        db_path = os.path.join(DUCKDB_COMMON_TEMP_FOLDER, "incremental.duckdb")
-
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
-
-    conn = duckdb.connect(db_path)
-    conn.execute(f"SET memory_limit = '{DUCKDB_DEFAULT_MEMORY_LIMIT}'")
-    conn.execute(f"SET temp_directory = '{DUCKDB_COMMON_TEMP_FOLDER}'")
-
-    return conn
+# File-backed, memory-limited connection (use as context manager)
+with DuckDBConnectionManager() as db:
+    conn = db.connection
+    result = conn.execute("SELECT ...").fetchall()
+# DuckDB temp files cleaned up automatically on exit
 ```
 
 Key points:
 - **File-backed**: DuckDB uses a file instead of memory for large datasets
 - **Memory limited**: Default 2GB, configurable
 - **Temp directory**: Uses `/tmp/incremental_duckdb`
+- **`json_scan(files)`**: Helper that builds a DuckDB SQL fragment for reading
+  JSONL files with `read_json_auto` and normalises `customAttributes` as JSON
 
 ## RocksDB: Disk-Backed State Storage
 
@@ -218,10 +192,10 @@ persistent-artifacts/
 # BAD: Load all data into memory
 all_tables = json.loads(Path("table/").read_text())
 
-# GOOD: Stream with Daft lazy execution
-df = daft.read_json("table/*.json")  # Lazy - no memory until .collect()
-for row in df.iter_rows():  # Stream rows one at a time
-    process(row)
+# GOOD: Stream with DuckDB + row-by-row fetch
+with DuckDBConnectionManager() as db:
+    for row in db.connection.execute("SELECT ... FROM json_scan(...)").fetchmany(1000):
+        process(row)
 ```
 
 ### 2. File-Backed over In-Memory
@@ -230,9 +204,9 @@ for row in df.iter_rows():  # Stream rows one at a time
 # BAD: In-memory DuckDB
 conn = duckdb.connect()  # In-memory, will OOM on large datasets
 
-# GOOD: File-backed DuckDB with memory limits
-conn = duckdb.connect("/tmp/incremental.duckdb")
-conn.execute("SET memory_limit = '2GB'")
+# GOOD: File-backed DuckDB with memory limits (use DuckDBConnectionManager)
+with DuckDBConnectionManager() as db:
+    conn = db.connection  # File-backed, 2GB limit, temp files auto-cleaned
 ```
 
 ### 3. Disk-Backed State
@@ -250,13 +224,16 @@ table_states = Rdict("/tmp/states.db")  # Disk-backed, handles millions
 ```toml
 [project]
 dependencies = [
-    "atlan-application-sdk[daft,iam-auth,sqlalchemy,tests,workflows,pandas]==X.Y.Z",
+    "atlan-application-sdk[incremental,iam-auth,tests,workflows]==X.Y.Z",
     "rocksdict>=0.3.0",
 ]
 ```
 
-The `[daft]` extra brings in:
-- `daft` - Lazy DataFrame library
-- `duckdb` - File-backed SQL engine (Daft dependency)
+The `[incremental]` extra brings in:
+- `duckdb` + `duckdb-engine` — file-backed SQL engine
+- `pyarrow` — columnar data I/O
+- `pandas` — tabular helpers
+- `sqlalchemy[asyncio]` — async DB connectivity
+- `rocksdict` (via `[storage]`) — disk-backed state
 
-`rocksdict` must be listed separately as it's not part of the SDK extras (yet).
+`rocksdict` is also available as a standalone `[storage]` extra for non-incremental connectors.

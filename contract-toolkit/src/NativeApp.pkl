@@ -55,6 +55,14 @@ helpdeskLink: String = ""
 ///
 /// Set this when using SDK v3 convention (class name auto-derives workflow type).
 /// Either workflowType or workflowTypeOverride must be provided.
+///
+/// → App.pkl migration: App.pkl's `workflowType` is emitted verbatim (no
+///   PascalCase→kebab conversion). When migrating, replace the PascalCase
+///   value with its kebab form explicitly:
+///     NativeApp: workflowType = "SodaApp"          // → manifest: "soda-app"
+///     App.pkl:   workflowType = "soda-app"          // verbatim
+///   If the kebab form equals `name` (e.g. name = "soda-app"), omit
+///   `workflowType` entirely — App.pkl defaults to kebab-casing `name`.
 workflowType: String = ""
 
 /// Explicit workflow type for the manifest, used as-is (no conversion).
@@ -65,6 +73,10 @@ workflowType: String = ""
 /// Example — app with explicit name override in Python:
 ///   # Python: name: ClassVar[str] = "RedshiftMetadataExtractionWorkflow"
 ///   workflowTypeOverride = "RedshiftMetadataExtractionWorkflow"
+///
+/// → App.pkl migration: use `workflowType` directly — App.pkl emits it verbatim:
+///     NativeApp: workflowTypeOverride = "teradata-app:crawler"
+///     App.pkl:   workflowType = "teradata-app:crawler"
 workflowTypeOverride: String?
 
 /// Validation: at least one of workflowType or workflowTypeOverride must be non-empty.

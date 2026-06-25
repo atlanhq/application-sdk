@@ -13,7 +13,7 @@ annotated-doc==0.0.4
     #   typer
 annotated-types==0.7.0
     # via pydantic
-anyio==4.14.0
+anyio==4.14.1
     # via
     #   httpx
     #   starlette
@@ -49,7 +49,7 @@ cfgv==3.5.0
     # via pre-commit
 charset-normalizer==3.4.7
     # via requests
-click==8.4.1
+click==8.4.2
     # via
     #   rich-toolkit
     #   uvicorn
@@ -288,7 +288,7 @@ pytest==9.1.1
     #   pytest-socket
     #   pytest-timeout
 pytest-asyncio==1.4.0
-pytest-rerunfailures==15.1
+pytest-rerunfailures==16.3
 pytest-socket==0.8.0
 pytest-timeout==2.4.0
 python-dateutil==2.9.0.post0

@@ -240,6 +240,86 @@ class TestS3StaticCredentials:
         config = mock_s3_cls.call_args.kwargs["config"]
         assert config["aws_session_token"] == "TOKEN"
 
+    @patch("obstore.store.S3Store")
+    def test_access_key_only_warns_and_omits_credentials(
+        self, mock_s3_cls: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Empirically confirmed: obstore mixes config access_key_id with env
+        # secret_access_key when only one half of the pair is in config.  The
+        # mismatched pair signs requests as the wrong identity (if env creds are
+        # present) or fails authentication.  We must emit neither key so the
+        # store falls back cleanly to the ambient credential chain.
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "ENV-ACCESS-KEY")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "ENV-SECRET-KEY")
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.aws.s3",
+            {"bucket": "b", "region": "us-east-1", "accessKey": "AK"},
+        )
+        mock_s3_cls.return_value = MagicMock()
+        with patch("application_sdk.storage.binding._get_logger") as mock_logger_fn:
+            mock_logger = MagicMock()
+            mock_logger_fn.return_value = mock_logger
+            create_store_from_binding("objectstore", components_dir=components_dir)
+
+        config = mock_s3_cls.call_args.kwargs["config"] or {}
+        assert "aws_access_key_id" not in config
+        assert "aws_secret_access_key" not in config
+        mock_logger.warning.assert_called_once()
+        assert "only one was set" in mock_logger.warning.call_args.args[0]
+
+    @patch("obstore.store.S3Store")
+    def test_secret_key_only_warns_and_omits_credentials(
+        self, mock_s3_cls: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "ENV-ACCESS-KEY")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "ENV-SECRET-KEY")
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.aws.s3",
+            {"bucket": "b", "region": "us-east-1", "secretKey": "SK"},
+        )
+        mock_s3_cls.return_value = MagicMock()
+        with patch("application_sdk.storage.binding._get_logger") as mock_logger_fn:
+            mock_logger = MagicMock()
+            mock_logger_fn.return_value = mock_logger
+            create_store_from_binding("objectstore", components_dir=components_dir)
+
+        config = mock_s3_cls.call_args.kwargs["config"] or {}
+        assert "aws_access_key_id" not in config
+        assert "aws_secret_access_key" not in config
+        mock_logger.warning.assert_called_once()
+
+    @patch("obstore.store.S3Store")
+    def test_session_token_without_key_pair_warns_and_is_ignored(
+        self, mock_s3_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        # STS session tokens require base credentials by definition; a bare
+        # sessionToken is a misconfiguration that should warn rather than
+        # silently fall back (symmetric with the half-pair warning above).
+        components_dir = _write_component(
+            tmp_path,
+            "objectstore",
+            "bindings.aws.s3",
+            {"bucket": "b", "region": "us-east-1", "sessionToken": "TOKEN"},
+        )
+        mock_s3_cls.return_value = MagicMock()
+        with patch("application_sdk.storage.binding._get_logger") as mock_logger_fn:
+            mock_logger = MagicMock()
+            mock_logger_fn.return_value = mock_logger
+            create_store_from_binding("objectstore", components_dir=components_dir)
+
+        config = mock_s3_cls.call_args.kwargs["config"] or {}
+        assert "aws_session_token" not in config
+        assert "aws_access_key_id" not in config
+        assert "aws_secret_access_key" not in config
+        mock_logger.warning.assert_called_once()
+        assert (
+            "sessionToken requires accessKey" in mock_logger.warning.call_args.args[0]
+        )
+
 
 class TestS3EmptyConfigHardening:
     @patch("obstore.store.S3Store")

@@ -831,42 +831,6 @@ def test_get_sqlalchemy_connection_string_requires_db_config():
         client.get_sqlalchemy_connection_string()
 
 
-# ---------- _execute_query_daft (drives `import daft`) ----------
-
-
-def test_execute_query_daft_requires_engine(sql_client: BaseSQLClient):
-    sql_client.engine = None
-    with pytest.raises(EngineNotInitializedError):
-        sql_client._execute_query_daft("SELECT 1", chunksize=None)
-
-
-def test_execute_query_daft_with_string_engine(sql_client: BaseSQLClient):
-    """When engine is a connection string, daft.read_sql is called with the string directly."""
-    sql_client.engine = "postgresql://u:p@h/db"
-    fake_daft = MagicMock()
-    fake_daft.read_sql.return_value = "df-string-engine"
-    with patch.dict("sys.modules", {"daft": fake_daft}):
-        result = sql_client._execute_query_daft("SELECT 1", chunksize=10)
-    assert result == "df-string-engine"
-    fake_daft.read_sql.assert_called_once_with(
-        "SELECT 1", "postgresql://u:p@h/db", infer_schema_length=10
-    )
-
-
-def test_execute_query_daft_with_engine_object(sql_client: BaseSQLClient):
-    """When engine is a SQLAlchemy engine, daft.read_sql is called with engine.connect."""
-    fake_engine = MagicMock()
-    sql_client.engine = fake_engine
-    fake_daft = MagicMock()
-    fake_daft.read_sql.return_value = "df-engine-obj"
-    with patch.dict("sys.modules", {"daft": fake_daft}):
-        result = sql_client._execute_query_daft("SELECT 1", chunksize=None)
-    assert result == "df-engine-obj"
-    fake_daft.read_sql.assert_called_once_with(
-        "SELECT 1", fake_engine.connect, infer_schema_length=None
-    )
-
-
 # ---------- _execute_query / _execute_pandas_query (drives pandas imports) ----------
 
 

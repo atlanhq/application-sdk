@@ -3,41 +3,24 @@
 These tests cover branches in AtlasTransformer that are not exercised by the
 existing per-entity tests:
 
-- transform_metadata: iterates a (mocked) daft.DataFrame, exercises the inline
-  `import daft` (BLDX-1129 anchor), exercises the success / skipped / error
-  branches around transform_row, and confirms daft.from_pylist is invoked.
+- transform_metadata: iterates a list of dicts, exercises the success / skipped
+  / error branches around transform_row, and confirms the return value is a list.
 - transform_row: unknown typename returns None and emits an error log.
 - _enrich_entity_with_metadata: timestamp conversions, source_owner, comment
   fallback, source_id custom attribute.
 
-No real threads, no asyncio, no HTTP, no real daft DataFrame, no file I/O. The
-only side effect is in-memory mutation of stub objects.
+No real threads, no asyncio, no HTTP, no file I/O. The only side effect is
+in-memory mutation of stub objects.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from application_sdk.transformers.atlas import AtlasTransformer
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-class _FakeDataFrame:
-    """A minimal stand-in for `daft.DataFrame` exposing iter_rows()."""
-
-    def __init__(self, rows: list[dict[str, Any]]):
-        self._rows = rows
-
-    def iter_rows(self):  # pragma: no cover - generator protocol trivial
-        for row in self._rows:
-            yield row
 
 
 @pytest.fixture
@@ -325,41 +308,34 @@ def test_transform_row_uses_entity_class_to_construct_entity(
 
 
 # ---------------------------------------------------------------------------
-# transform_metadata (BLDX-1129 anchor: `import daft` is inline)
+# transform_metadata
 # ---------------------------------------------------------------------------
 
 
-def test_transform_metadata_invokes_daft_from_pylist_with_transformed_rows(
+def test_transform_metadata_returns_transformed_rows(
     transformer: AtlasTransformer,
 ):
-    """Patch `daft.from_pylist` to verify the inline `import daft` runs and the
-    transformed row list is forwarded. This is the BLDX-1129 protection: if the
-    inline import is removed or renamed, this test fails."""
+    """transform_metadata accepts a list of dicts directly and returns a list
+    of transformed rows."""
     rows = [
         {"database_name": "DB1"},
         {"database_name": "DB2"},
     ]
-    df = _FakeDataFrame(rows)
 
-    sentinel = object()
-    with patch("daft.from_pylist", return_value=sentinel) as mock_from_pylist:
-        result = transformer.transform_metadata(
-            "DATABASE",
-            df,
-            workflow_id="wf",
-            workflow_run_id="run",
-            connection={
-                "connection_name": "conn",
-                "connection_qualified_name": "default/snowflake/1728518400",
-            },
-        )
+    result = transformer.transform_metadata(
+        "DATABASE",
+        rows,
+        workflow_id="wf",
+        workflow_run_id="run",
+        connection={
+            "connection_name": "conn",
+            "connection_qualified_name": "default/snowflake/1728518400",
+        },
+    )
 
-    assert result is sentinel
-    mock_from_pylist.assert_called_once()
-    [transformed_list] = mock_from_pylist.call_args[0]
-    # Both rows successfully transformed
-    assert len(transformed_list) == 2
-    assert all(item["typeName"] == "Database" for item in transformed_list)
+    assert isinstance(result, list)
+    assert len(result) == 2
+    assert all(item["typeName"] == "Database" for item in result)
 
 
 def test_transform_metadata_skips_rows_that_return_none(
@@ -371,23 +347,21 @@ def test_transform_metadata_skips_rows_that_return_none(
         {"database_name": "DB1"},
         {},  # invalid -> get_attributes raises -> transform_row returns None
     ]
-    df = _FakeDataFrame(rows)
 
-    with patch("daft.from_pylist") as mock_from_pylist:
-        transformer.transform_metadata(
-            "DATABASE",
-            df,
-            workflow_id="wf",
-            workflow_run_id="run",
-            connection={
-                "connection_name": "conn",
-                "connection_qualified_name": "default/snowflake/1728518400",
-            },
-        )
+    result = transformer.transform_metadata(
+        "DATABASE",
+        rows,
+        workflow_id="wf",
+        workflow_run_id="run",
+        connection={
+            "connection_name": "conn",
+            "connection_qualified_name": "default/snowflake/1728518400",
+        },
+    )
 
-    [transformed_list] = mock_from_pylist.call_args[0]
     # Only the valid row survives
-    assert len(transformed_list) == 1
+    assert isinstance(result, list)
+    assert len(result) == 1
 
 
 def test_transform_metadata_handles_iter_rows_exception_per_row(
@@ -397,7 +371,6 @@ def test_transform_metadata_handles_iter_rows_exception_per_row(
     iteration continues (logger.error)."""
 
     rows = [{"database_name": "DB_OK"}, {"database_name": "DB_BAD"}]
-    df = _FakeDataFrame(rows)
 
     real_transform_row = transformer.transform_row
     call_count = {"n": 0}
@@ -409,41 +382,35 @@ def test_transform_metadata_handles_iter_rows_exception_per_row(
         return real_transform_row(*args, **kwargs)
 
     with patch.object(transformer, "transform_row", side_effect=flaky):
-        with patch("daft.from_pylist") as mock_from_pylist:
-            transformer.transform_metadata(
-                "DATABASE",
-                df,
-                workflow_id="wf",
-                workflow_run_id="run",
-                connection={
-                    "connection_name": "conn",
-                    "connection_qualified_name": "default/snowflake/1728518400",
-                },
-            )
+        result = transformer.transform_metadata(
+            "DATABASE",
+            rows,
+            workflow_id="wf",
+            workflow_run_id="run",
+            connection={
+                "connection_name": "conn",
+                "connection_qualified_name": "default/snowflake/1728518400",
+            },
+        )
 
-    [transformed_list] = mock_from_pylist.call_args[0]
-    assert len(transformed_list) == 1
+    assert isinstance(result, list)
+    assert len(result) == 1
 
 
 def test_transform_metadata_without_connection_kwarg_uses_none_connection(
     transformer: AtlasTransformer,
 ):
     """If no connection kwarg is provided, connection_name and
-    connection_qualified_name fall through as None. No exception expected; the
-    inline `import daft` still runs."""
-    df = _FakeDataFrame([])
+    connection_qualified_name fall through as None. No exception expected."""
+    result = transformer.transform_metadata(
+        "DATABASE",
+        [],
+        workflow_id="wf",
+        workflow_run_id="run",
+    )
 
-    with patch("daft.from_pylist") as mock_from_pylist:
-        transformer.transform_metadata(
-            "DATABASE",
-            df,
-            workflow_id="wf",
-            workflow_run_id="run",
-        )
-
-    mock_from_pylist.assert_called_once()
-    [rows] = mock_from_pylist.call_args[0]
-    assert rows == []
+    assert isinstance(result, list)
+    assert result == []
 
 
 def test_transform_metadata_uses_custom_entity_class_definitions(
@@ -464,22 +431,19 @@ def test_transform_metadata_uses_custom_entity_class_definitions(
     )
     custom_defs = {"CUSTOM": fake_entity_class}
 
-    df = _FakeDataFrame([{"k": "v"}])
-    with patch("daft.from_pylist") as mock_from_pylist:
-        transformer.transform_metadata(
-            "CUSTOM",
-            df,
-            workflow_id="wf",
-            workflow_run_id="run",
-            entity_class_definitions=custom_defs,
-            connection={
-                "connection_name": "conn",
-                "connection_qualified_name": "default/snowflake/1728518400",
-            },
-        )
+    result = transformer.transform_metadata(
+        "CUSTOM",
+        [{"k": "v"}],
+        workflow_id="wf",
+        workflow_run_id="run",
+        entity_class_definitions=custom_defs,
+        connection={
+            "connection_name": "conn",
+            "connection_qualified_name": "default/snowflake/1728518400",
+        },
+    )
 
-    [transformed_list] = mock_from_pylist.call_args[0]
-    assert transformed_list == [{"typeName": "X"}]
+    assert result == [{"typeName": "X"}]
 
 
 # ---------------------------------------------------------------------------
