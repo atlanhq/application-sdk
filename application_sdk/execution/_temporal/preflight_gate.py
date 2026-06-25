@@ -1,0 +1,116 @@
+"""Injected pre-extraction preflight gate (HYP-1883).
+
+A CORE SDK extraction-lifecycle activity — deliberately separate from SDR.
+Every generated workflow's ``_run`` dispatches ``preflight:gate`` as its first
+step (see :func:`application_sdk.app.base._run_preflight_gate`); on a canonical
+``failed`` verdict the run aborts before extraction.
+
+This is NOT an SDR feature: SDR exposes the handler operations as durable
+Temporal *workflows* for remote control-plane calls, whereas the gate is an
+in-workflow guard that runs in every extraction worker. The only thing reused
+from :mod:`application_sdk.execution._temporal.sdr` is the handler-context
+binder (``_bind_context``), so the gate invokes ``handler.preflight_check`` the
+exact same way the HTTP and SDR paths do. Credential resolution happens *inside*
+the activity (mirrors ``templates/sql_app.py`` ``_init_sql_client``) — the
+deterministic workflow only forwards secret-free references.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
+from datetime import timedelta
+from typing import TYPE_CHECKING, Any
+
+from temporalio import activity, workflow
+from temporalio.common import RetryPolicy
+
+with workflow.unsafe.imports_passed_through():
+    from application_sdk.credentials.ref import CredentialRef, legacy_credential_ref
+    from application_sdk.credentials.resolver import CredentialResolver
+    from application_sdk.execution._temporal.sdr import _bind_context, _SdrBinding
+    from application_sdk.handler.contracts import (
+        HandlerCredential,
+        PreflightGateInput,
+        PreflightInput,
+        PreflightOutput,
+    )
+    from application_sdk.infrastructure.context import get_infrastructure
+    from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from application_sdk.handler.base import Handler
+
+
+PREFLIGHT_GATE_ACTIVITY = "preflight:gate"
+
+# Dispatched from the extraction workflow's _run. Bounded so a slow/unreachable
+# source can't stall extraction start indefinitely.
+_GATE_SCHEDULE_TO_CLOSE = timedelta(seconds=60)
+_GATE_START_TO_CLOSE = timedelta(seconds=55)
+_GATE_RETRY = RetryPolicy(maximum_attempts=2, backoff_coefficient=2)
+
+
+def _resolve_gate_ref(input: PreflightGateInput) -> CredentialRef | None:
+    """Resolve the credential reference for the injected gate.
+
+    Mirrors the extraction path's ``_resolve_credential_ref``: prefer an
+    already-built ``credential_ref``, else derive one via ``CredentialRef.resolve``
+    (handles direct GUID + agent modes), falling back to ``legacy_credential_ref``.
+    Returns ``None`` when the input carries no credential routing at all — the
+    handler then runs with empty credentials (e.g. the no-op DefaultHandler).
+    """
+    if input.credential_ref is not None:
+        return input.credential_ref
+    if not (input.credential_guid or input.agent_json):
+        return None
+    try:
+        return CredentialRef.resolve(input)
+    except (ValueError, TypeError):
+        if input.credential_guid:
+            return legacy_credential_ref(input.credential_guid)
+        return None
+
+
+def build_preflight_gate_activity(
+    handler: Handler,
+    app_name: str,
+) -> Callable[..., Awaitable[Any]]:
+    """Build the injected preflight-gate activity (``preflight:gate``).
+
+    Registered unconditionally by the worker (independent of the SDR opt-out)
+    because the gate is mandatory. Reuses SDR's ``_bind_context`` so the handler
+    runs with the same per-invocation context the HTTP/SDR paths provide.
+    """
+    binding = _SdrBinding(handler=handler, app_name=app_name)
+
+    @activity.defn(name=PREFLIGHT_GATE_ACTIVITY)
+    async def preflight_gate(input: PreflightGateInput) -> PreflightOutput:
+        ref = _resolve_gate_ref(input)
+        credentials: list[HandlerCredential] = []
+        if ref is not None:
+            infra = get_infrastructure()
+            secret_store = infra.secret_store if infra is not None else None
+            if secret_store is not None:
+                raw = await CredentialResolver(secret_store).resolve_raw(ref) or {}
+                credentials = HandlerCredential.list_from_raw(raw)
+        preflight_input = PreflightInput(
+            credentials=credentials,
+            entrypoint=input.entrypoint,
+            metadata=input.metadata,
+        )
+        with _bind_context(binding, credentials):
+            result = await binding.handler.preflight_check(preflight_input)
+        # Verdict record for debuggability: the canonical status the gate keys
+        # on, plus the raw handler status when they differ (legacy folds).
+        logger.info(
+            "Preflight gate verdict: %s (entrypoint=%s, handler_status=%s, checks=%d)",
+            result.canonical_status().value,
+            input.entrypoint or "<implicit>",
+            result.status.value,
+            len(result.checks),
+        )
+        return result
+
+    return preflight_gate

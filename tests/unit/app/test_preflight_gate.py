@@ -144,7 +144,7 @@ class TestRunPreflightGate:
                 _ResolvableInput(guid="abc", method="agent"), "asset-export"
             )
         args, _ = exec_mock.call_args
-        assert args[0] == "sdr:preflight_gate"
+        assert args[0] == "preflight:gate"
         gate_input = args[1]
         assert gate_input.credential_guid == "abc"
         assert gate_input.extraction_method == "agent"

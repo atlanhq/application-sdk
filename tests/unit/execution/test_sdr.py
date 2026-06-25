@@ -8,11 +8,9 @@ from unittest import mock
 import pytest
 
 from application_sdk.app.base import AppContextError
-from application_sdk.credentials.ref import CredentialResolvable
 from application_sdk.execution._temporal.sdr import (
     SDR_FETCH_METADATA_ACTIVITY,
     SDR_PREFLIGHT_ACTIVITY,
-    SDR_PREFLIGHT_GATE_ACTIVITY,
     SDR_TEST_AUTH_ACTIVITY,
     SDR_WORKFLOWS,
     SdrFetchMetadataWorkflow,
@@ -20,13 +18,12 @@ from application_sdk.execution._temporal.sdr import (
     SdrTestAuthWorkflow,
     build_sdr_activities,
 )
-from application_sdk.handler.base import DefaultHandler, Handler
+from application_sdk.handler.base import Handler
 from application_sdk.handler.contracts import (
     AuthInput,
     AuthOutput,
     AuthStatus,
     MetadataInput,
-    PreflightGateInput,
     PreflightInput,
     PreflightOutput,
     PreflightStatus,
@@ -113,16 +110,15 @@ class TestSdrTimeoutsAndRetries:
 class TestBuildSdrActivities:
     """Tests for build_sdr_activities()."""
 
-    def test_returns_all_activities_with_sdr_names(self) -> None:
+    def test_returns_three_activities_with_sdr_names(self) -> None:
         handler = _StubHandler()
         activities = build_sdr_activities(handler, app_name="myapp")
-        assert len(activities) == 4
+        assert len(activities) == 3
         names = [getattr(a, "__temporal_activity_definition").name for a in activities]
         assert set(names) == {
             SDR_TEST_AUTH_ACTIVITY,
             SDR_PREFLIGHT_ACTIVITY,
             SDR_FETCH_METADATA_ACTIVITY,
-            SDR_PREFLIGHT_GATE_ACTIVITY,
         }
 
     async def test_test_auth_activity_dispatches_and_sets_context(self) -> None:
@@ -298,83 +294,3 @@ class TestBuildSdrActivities:
 
         # Each concurrent call must have seen only its own credential.
         assert set(seen_credentials) == {"user-A", "user-B"}
-
-
-def _gate_activity(handler: Handler):
-    activities = build_sdr_activities(handler, app_name="myapp")
-    by_name = {getattr(a, "__temporal_activity_definition").name: a for a in activities}
-    return by_name[SDR_PREFLIGHT_GATE_ACTIVITY]
-
-
-class TestPreflightGateActivity:
-    """The injected sdr:preflight_gate activity: resolve refs inside the
-    activity, then dispatch the same handler.preflight_check."""
-
-    def test_gate_input_satisfies_credential_resolvable(self) -> None:
-        # The deterministic workflow relies on this protocol both to decide
-        # whether to gate and to feed CredentialRef.resolve.
-        assert isinstance(PreflightGateInput(), CredentialResolvable)
-
-    async def test_gate_with_default_handler_returns_canonical_success(self) -> None:
-        gate = _gate_activity(DefaultHandler())
-
-        result = await gate(PreflightGateInput())
-
-        assert result.canonical_status() is PreflightStatus.SUCCESS
-
-    async def test_gate_resolves_guid_and_calls_handler_with_flattened_creds(
-        self,
-    ) -> None:
-        handler = _StubHandler()
-        gate = _gate_activity(handler)
-
-        resolver = mock.MagicMock()
-        resolver.resolve_raw = mock.AsyncMock(
-            return_value={"host": "db", "username": "u", "extra": {"role": "r"}}
-        )
-        fake_infra = mock.MagicMock()
-        fake_infra.secret_store = mock.MagicMock(name="SecretStore")
-
-        with (
-            mock.patch(
-                "application_sdk.execution._temporal.sdr.get_infrastructure",
-                return_value=fake_infra,
-            ),
-            mock.patch(
-                "application_sdk.execution._temporal.sdr.CredentialResolver",
-                return_value=resolver,
-            ),
-        ):
-            result = await gate(
-                PreflightGateInput(credential_guid="guid-123", entrypoint="crawl")
-            )
-
-        assert result.status is PreflightStatus.READY
-        assert handler.preflight_input is not None
-        seen = {c.key: c.value for c in handler.preflight_input.credentials}
-        assert seen == {"host": "db", "username": "u", "extra.role": "r"}
-        assert handler.preflight_input.entrypoint == "crawl"
-        resolver.resolve_raw.assert_awaited_once()
-
-    async def test_gate_without_routing_skips_resolution(self) -> None:
-        handler = _StubHandler()
-        gate = _gate_activity(handler)
-
-        # No guid / agent_json -> no resolver call, handler gets empty creds.
-        with mock.patch(
-            "application_sdk.execution._temporal.sdr.CredentialResolver",
-        ) as resolver_cls:
-            await gate(PreflightGateInput())
-
-        resolver_cls.assert_not_called()
-        assert handler.preflight_input is not None
-        assert handler.preflight_input.credentials == []
-
-    async def test_gate_clears_context_after_call(self) -> None:
-        handler = _StubHandler()
-        gate = _gate_activity(handler)
-
-        await gate(PreflightGateInput())
-
-        with pytest.raises(AppContextError):
-            _ = handler.context

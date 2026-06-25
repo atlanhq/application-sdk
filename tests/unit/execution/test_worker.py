@@ -355,7 +355,7 @@ class TestCreateWorker:
             "sdr:test_auth",
             "sdr:preflight_check",
             "sdr:fetch_metadata",
-            "sdr:preflight_gate",
+            "preflight:gate",
         }.issubset(activity_names)
 
     def test_sdr_workflows_registered_when_handler_provided(self) -> None:
@@ -423,6 +423,15 @@ class TestCreateWorker:
 
         for sdr_wf in SDR_WORKFLOWS:
             assert sdr_wf not in captured["workflows"]
+        activity_names = {
+            getattr(a, "__temporal_activity_definition").name  # type: ignore[union-attr]
+            for a in captured["activities"]
+            if hasattr(a, "__temporal_activity_definition")
+        }
+        # SDR activities suppressed, but the mandatory preflight gate is a core
+        # lifecycle activity — it must register regardless of the SDR opt-out.
+        assert not any(n.startswith("sdr:") for n in activity_names)
+        assert "preflight:gate" in activity_names
 
     def test_passthrough_modules_included_in_sandbox(self) -> None:
         class _SandboxApp(App):

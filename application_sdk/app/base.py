@@ -1566,11 +1566,11 @@ async def _run_preflight_gate(input_data: Input, entrypoint: str) -> None:
         from application_sdk.credentials.ref import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
             CredentialResolvable,
         )
-        from application_sdk.execution._temporal.sdr import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
+        from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
             _GATE_RETRY,
             _GATE_SCHEDULE_TO_CLOSE,
             _GATE_START_TO_CLOSE,
-            SDR_PREFLIGHT_GATE_ACTIVITY,
+            PREFLIGHT_GATE_ACTIVITY,
         )
         from application_sdk.handler.contracts import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
             PreflightGateInput,
@@ -1600,7 +1600,7 @@ async def _run_preflight_gate(input_data: Input, entrypoint: str) -> None:
 
     try:
         result = await workflow.execute_activity(
-            SDR_PREFLIGHT_GATE_ACTIVITY,
+            PREFLIGHT_GATE_ACTIVITY,
             gate_input,
             result_type=PreflightOutput,
             schedule_to_close_timeout=_GATE_SCHEDULE_TO_CLOSE,
