@@ -459,70 +459,125 @@ class TestTaskPool:
         assert metadata is not None
         assert metadata.pool is None
 
-    def test_pool_env_var_resolution(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """ATLAN_POOL_<POOL>_QUEUE env var resolves to a task queue string."""
-        import os
-
-        monkeypatch.setenv("ATLAN_POOL_EXCEPTIONAL_QUEUE", "app-queue-cold")
-        pool = "exceptional"
-        resolved = os.environ.get(f"ATLAN_POOL_{pool.upper()}_QUEUE") or None
-        assert resolved == "app-queue-cold"
-
-    def test_missing_pool_env_var_derives_from_base_queue(
+    def test_pool_queue_threaded_to_execute_activity(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Missing ATLAN_POOL_<POOL>_QUEUE derives queue from ATLAN_TASK_QUEUE."""
-        import os
+        """Wrapper passes task_queue='qi-app-queue-heavy' for pool='heavy'.
 
-        monkeypatch.delenv("ATLAN_POOL_EXCEPTIONAL_QUEUE", raising=False)
+        This is the definitive end-to-end check: it calls through
+        _create_task_activity_wrapper (not a re-implementation) so it catches
+        regressions in resolution order, closure capture, .upper() casing, and
+        kwarg-threading shape in one shot.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.app.base import _create_task_activity_wrapper
+
+        monkeypatch.delenv("ATLAN_POOL_HEAVY_QUEUE", raising=False)
         monkeypatch.setenv("ATLAN_TASK_QUEUE", "qi-app-queue")
-        pool = "exceptional"
-        explicit = os.environ.get(f"ATLAN_POOL_{pool.upper()}_QUEUE")
-        base_queue = os.environ.get("ATLAN_TASK_QUEUE", "")
-        resolved = explicit or (f"{base_queue}-{pool}" if base_queue else None)
-        assert resolved == "qi-app-queue-exceptional"
 
-    def test_missing_both_env_vars_resolves_to_none(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Missing both ATLAN_POOL_<POOL>_QUEUE and ATLAN_TASK_QUEUE → None."""
-        import os
-
-        monkeypatch.delenv("ATLAN_POOL_EXCEPTIONAL_QUEUE", raising=False)
-        monkeypatch.delenv("ATLAN_TASK_QUEUE", raising=False)
-        pool = "exceptional"
-        explicit = os.environ.get(f"ATLAN_POOL_{pool.upper()}_QUEUE")
-        base_queue = os.environ.get("ATLAN_TASK_QUEUE", "")
-        resolved = explicit or (f"{base_queue}-{pool}" if base_queue else None)
-        assert resolved is None
-
-    def test_two_apps_same_pool_name_get_different_queues(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Different base queues produce different pool queues for the same pool name."""
-        import os
-
-        pool = "heavy"
-        for app_base, expected in [
-            ("qi-app-queue", "qi-app-queue-heavy"),
-            ("other-app-queue", "other-app-queue-heavy"),
-        ]:
-            monkeypatch.delenv("ATLAN_POOL_HEAVY_QUEUE", raising=False)
-            monkeypatch.setenv("ATLAN_TASK_QUEUE", app_base)
-            base_queue = os.environ.get("ATLAN_TASK_QUEUE", "")
-            resolved = os.environ.get(f"ATLAN_POOL_{pool.upper()}_QUEUE") or (
-                f"{base_queue}-{pool}" if base_queue else None
+        with patch(
+            "application_sdk.execution._temporal.eviction_retry.execute_activity_with_eviction_retry",
+            new_callable=AsyncMock,
+        ) as mock_exec:
+            mock_exec.return_value = MagicMock()
+            wrapper = _create_task_activity_wrapper(
+                app_name="qi-app",
+                task_name="analyse-heavy",
+                timeout_seconds=600,
+                retry_max_attempts=3,
+                retry_max_interval_seconds=30,
+                output_type=SimpleOutput,
+                context_data={"run_id": "r1", "correlation_id": "c1"},
+                pool="heavy",
             )
-            assert resolved == expected
+            import asyncio
 
-    def test_pool_different_cases(self) -> None:
-        """Pool string is stored verbatim (case preserved)."""
+            asyncio.run(wrapper(MagicMock()))
 
-        class MyApp:
-            @task(pool="HotPool")
-            async def my_task(self, input: SimpleInput) -> SimpleOutput:
-                return SimpleOutput()
+        assert mock_exec.call_args.kwargs["task_queue"] == "qi-app-queue-heavy"
 
-        metadata = get_task_metadata(MyApp.my_task)
-        assert metadata is not None
-        assert metadata.pool == "HotPool"
+    def test_pool_explicit_env_var_overrides_derived_queue(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Explicit ATLAN_POOL_<POOL>_QUEUE takes precedence over derived queue."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.app.base import _create_task_activity_wrapper
+
+        monkeypatch.setenv("ATLAN_POOL_HEAVY_QUEUE", "custom-heavy-queue")
+        monkeypatch.setenv("ATLAN_TASK_QUEUE", "qi-app-queue")
+
+        with patch(
+            "application_sdk.execution._temporal.eviction_retry.execute_activity_with_eviction_retry",
+            new_callable=AsyncMock,
+        ) as mock_exec:
+            mock_exec.return_value = MagicMock()
+            wrapper = _create_task_activity_wrapper(
+                app_name="qi-app",
+                task_name="analyse-heavy",
+                timeout_seconds=600,
+                retry_max_attempts=3,
+                retry_max_interval_seconds=30,
+                output_type=SimpleOutput,
+                context_data={"run_id": "r1", "correlation_id": "c1"},
+                pool="heavy",
+            )
+            import asyncio
+
+            asyncio.run(wrapper(MagicMock()))
+
+        assert mock_exec.call_args.kwargs["task_queue"] == "custom-heavy-queue"
+
+    def test_no_pool_no_task_queue_kwarg(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Wrapper without pool passes no task_queue kwarg (backward-compatible)."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.app.base import _create_task_activity_wrapper
+
+        with patch(
+            "application_sdk.execution._temporal.eviction_retry.execute_activity_with_eviction_retry",
+            new_callable=AsyncMock,
+        ) as mock_exec:
+            mock_exec.return_value = MagicMock()
+            wrapper = _create_task_activity_wrapper(
+                app_name="qi-app",
+                task_name="analyse",
+                timeout_seconds=600,
+                retry_max_attempts=3,
+                retry_max_interval_seconds=30,
+                output_type=SimpleOutput,
+                context_data={"run_id": "r1", "correlation_id": "c1"},
+            )
+            import asyncio
+
+            asyncio.run(wrapper(MagicMock()))
+
+        assert "task_queue" not in mock_exec.call_args.kwargs
+
+    def test_pool_uppercase_raises_error(self) -> None:
+        """@task(pool='HotPool') raises TaskContractError — pool must be lowercase kebab-case."""
+        with pytest.raises(TaskContractError, match="lowercase kebab-case"):
+
+            class MyApp:
+                @task(pool="HotPool")
+                async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                    return SimpleOutput()
+
+    def test_pool_empty_string_raises_error(self) -> None:
+        """@task(pool='') raises TaskContractError."""
+        with pytest.raises(TaskContractError, match="empty or whitespace"):
+
+            class MyApp:
+                @task(pool="")
+                async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                    return SimpleOutput()
+
+    def test_pool_whitespace_only_raises_error(self) -> None:
+        """@task(pool='  ') raises TaskContractError."""
+        with pytest.raises(TaskContractError, match="empty or whitespace"):
+
+            class MyApp:
+                @task(pool="  ")
+                async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                    return SimpleOutput()

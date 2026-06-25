@@ -2715,6 +2715,36 @@ class AppInputContract(ExtractionInput):
 
 ---
 
+## Migration Notes
+
+### v0.10.0 — `emitDeploy` defaults to `false`
+
+**What changed:** `App.pkl` gained an `emitDeploy: Boolean` flag (default `false`). Before
+v0.10.0 the `deploy:` block was always emitted when `deploy { ... }` was configured; now it is
+suppressed unless you explicitly opt in.
+
+**Who is affected:** apps that configure `deploy { ... }` or `deployOverrides { ... }` and
+expect a `deploy:` block in the generated `atlan.yaml`. After bumping to v0.10.0 and re-running
+`pkl eval`, those apps will generate an `atlan.yaml` without a `deploy:` block — Heracles will
+apply its own platform defaults instead.
+
+**Fix:** add `emitDeploy = true` to your contract:
+
+```pkl
+amends "@app-contract-toolkit/App.pkl"
+
+emitDeploy = true
+
+deploy {
+  keda { minReplicaCount = 1 }
+}
+```
+
+Apps that rely entirely on platform defaults (no explicit `deploy { ... }`) are unaffected —
+they never emitted a `deploy:` block and continue to work as before.
+
+---
+
 ## Credential.pkl — Legacy Module
 
 For Argo-era apps only. Uses `Config.pkl` widget classes instead of `FieldSpec`. Do not use for new native apps.

@@ -346,8 +346,12 @@ def task(
         pool: Logical worker-pool name for this task. When set, the framework
             routes this activity to the task queue registered for that pool via
             ``ATLAN_POOL_<POOL>_QUEUE``. Must match a key in the app's pkl
-            contract ``pools { … }``. Unset tasks run on the workflow's own
-            task queue (default, backward-compatible behavior).
+            contract ``pools { … }``. Must be a non-empty lowercase kebab-case
+            string (e.g. ``"heavy"``, ``"cold-tier"``). The env-var key is
+            derived by uppercasing the pool name (``ATLAN_POOL_HEAVY_QUEUE``),
+            so mixed or upper case would create a lookup mismatch. Unset tasks
+            run on the workflow's own task queue (default, backward-compatible
+            behavior).
 
     Returns:
         The decorated function with task metadata attached.
@@ -355,6 +359,25 @@ def task(
     Raises:
         TaskContractError: If the method doesn't follow the contract pattern.
     """
+    if pool is not None:
+        if not pool or not pool.strip():
+            raise TaskContractError(
+                "pool must not be empty or whitespace-only. "
+                "Use a lowercase kebab-case string (e.g. 'heavy', 'cold-tier') "
+                "matching a key in pools { ... } in your app contract."
+            )
+        if not (
+            pool[0].islower()
+            and all(c.islower() or c.isdigit() or c == "-" for c in pool)
+        ):
+            raise TaskContractError(
+                f"pool={pool!r} must be lowercase kebab-case "
+                "(e.g. 'heavy', 'cold-tier'). "
+                "Pool keys must match entries in pools { ... } in App.pkl; "
+                "the ATLAN_POOL_<POOL>_QUEUE env-var key is derived by uppercasing "
+                "the pool name, so mixed or upper case creates a lookup mismatch."
+            )
+
     # Resolve sentinels at decoration time so test-side monkeypatching of
     # _DEFAULT_* constants takes effect on subsequent @task uses; env-var values
     # themselves are read once at module import via env_int().

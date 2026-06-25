@@ -203,8 +203,14 @@ emitEntrypoints: Boolean = true
 
 /// Whether to emit the `deploy:` block into `atlan.yaml`.
 /// Defaults to `false` — most apps do not need to configure deployment;
-/// Heracles applies platform defaults. Set to `true` when you explicitly
-/// configure `deploy { ... }` or `deployOverrides { ... }`.
+/// Heracles applies platform defaults when the block is absent.
+/// Set to `true` when you explicitly configure `deploy { ... }` or
+/// `deployOverrides { ... }`.
+///
+/// **Migration note (introduced in v0.10.0):** if your app previously relied
+/// on a `deploy:` block being emitted by default, add `emitDeploy = true` to
+/// your contract. Without it the block is suppressed and Heracles will apply
+/// its own platform defaults, which may differ from your prior explicit config.
 emitDeploy: Boolean = false
 
 /// Whether to emit `app.yaml` in the output.

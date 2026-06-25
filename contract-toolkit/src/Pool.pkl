@@ -33,6 +33,10 @@ class ResourceConfig {
 /// `App.pkl`'s `pools` property) is the same string used in
 /// `@task(pool="…")` in Python — no separate profile indirection.
 ///
+/// Until conformance rule P016 (BLDX-1485) ships, the pool-key / `@task(pool=…)`
+/// alignment is enforced only by reading. A typo silently routes activities to an
+/// unstaffed queue and they hang until `start_to_close_timeout`.
+///
 /// Simple apps never configure this — the platform default applies.
 /// Multi-pool apps declare named pools:
 ///
@@ -70,5 +74,4 @@ class DeployConfig {
   resources: ResourceConfig? = null
   env: Mapping<String, String> = new Mapping {}
   envOverrides: Mapping<String, Mapping<String, String>> = new Mapping {}
-  deployOverrides: Mapping<String, Any> = new Mapping {}
 }

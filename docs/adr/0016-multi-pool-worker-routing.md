@@ -212,7 +212,27 @@ The pool key in `pools { ["hot"] = new Pool { ... } }` is the **exact same strin
 `@task(pool="hot")` in Python. There is no intermediate name-mapping layer. This eliminates the
 two-declaration problem: you cannot typo one side without P016 failing the CI build.
 
-Queue names are resolved at worker-wrapper construction time using a two-level lookup:
+**Pool key format:** pool keys must be **lowercase kebab-case** (e.g. `"heavy"`, `"cold-tier"`).
+This is enforced at decoration time by the `@task` validator and mirrors `App.pkl` `name` keys.
+The `ATLAN_POOL_<POOL>_QUEUE` env-var key is derived by uppercasing the pool name
+(`ATLAN_POOL_HEAVY_QUEUE`), so mixed or upper-case pool keys would cause an env-var lookup
+mismatch and silently fall through to the derived queue name.
+
+Queue names are resolved **at workflow-run time** — specifically when `_create_task_activity_wrapper`
+is called from `_wrap_instance_tasks` inside `@workflow.run`. Env vars are read via
+`os.environ.get(...)` at that point and captured in the wrapper closure.
+
+**Rollout-drain contract:** because the resolved queue name is captured at workflow-run time
+(not at worker startup), a Helm rollout that changes `ATLAN_POOL_<POOL>_QUEUE` or
+`ATLAN_TASK_QUEUE` mid-flight can cause non-determinism if an in-progress workflow is replayed
+on a pod with different env vars. The `task_queue=` kwarg recorded in Temporal history would
+differ from the value computed on replay, and Temporal raises a non-determinism error. To avoid
+this: **drain all running workflows before changing pool-related env vars** (standard
+Single-Deployment rollout practice — ensure old pods are drained before new ones pick up work).
+This matches the existing `on_complete` pattern (line 1282 of `base.py`) and is safe for the
+common case where all pods in a cohort share identical env.
+
+Queue name resolution order:
 
 1. `ATLAN_POOL_<POOL>_QUEUE` — explicit override (Helm sets this if a custom queue name is needed).
 2. `{ATLAN_TASK_QUEUE}-{pool}` — derived from the app's base queue (default, requires no extra config).
