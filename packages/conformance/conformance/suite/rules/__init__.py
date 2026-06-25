@@ -13,6 +13,7 @@ from conformance.suite.rules.ci import RULES as _CI_RULES
 from conformance.suite.rules.dependency import RULES as _D_RULES
 from conformance.suite.rules.deprecation import RULES as _B_RULES
 from conformance.suite.rules.dockerfile import RULES as _I_RULES
+from conformance.suite.rules.entrypoint_alignment import RULES as _EP_ALIGNMENT_RULES
 from conformance.suite.rules.error_handling import RULES as _E_RULES
 from conformance.suite.rules.logging import RULES as _L_RULES
 from conformance.suite.rules.optimizations import RULES as _O_RULES
@@ -44,6 +45,7 @@ _ALL_SERIES: tuple[tuple[RuleDefinition, ...], ...] = (
     _P_RULES,
     _ORCHESTRATION_RULES,
     _STORAGE_RULES,
+    _EP_ALIGNMENT_RULES,
     _T_RULES,
     _B_RULES,
 )

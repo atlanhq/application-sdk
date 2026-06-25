@@ -196,7 +196,13 @@ jobs:
           - series: P
             name: "Prescriptions"
             slug: prescriptions
-            paths: "**/*.py"
+            # P016 reads both Python sources (@entrypoint code) and the
+            # app/generated/ + contract/ trees (contract-side artifacts), so a
+            # PR that only re-runs pkl eval and commits regenerated app/generated/
+            # files — the canonical BLDX-1425 drift shape — must still trigger
+            # this leg.  Brace expansion (micromatch) covers all three sources
+            # with a single paths filter entry and no template change.
+            paths: "{**/*.py,app/generated/**,contract/**}"
             exclude_paths: ${{ inputs.exclude-paths-p }}
           - series: O
             name: "Optimizations"

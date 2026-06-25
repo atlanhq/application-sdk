@@ -29,6 +29,7 @@ from conformance.suite.checks import (
     dependency_conformance,
     deprecation,
     dockerfile_conformance,
+    entrypoint_alignment,
     error_handling,
     gitignore_entries,
     integration_marking,
@@ -124,6 +125,12 @@ _CHECKS: list[CheckRegistration] = [
         discover=deprecation.discover,
         scan_path=deprecation.scan_path,
         scan_all=deprecation.scan_all,
+    ),
+    CheckRegistration(
+        series=entrypoint_alignment.SERIES,
+        discover=entrypoint_alignment.discover,
+        scan_path=entrypoint_alignment.scan_path,
+        scan_all=entrypoint_alignment.scan_all,
     ),
 ]
 
