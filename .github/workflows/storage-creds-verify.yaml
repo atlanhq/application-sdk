@@ -1,0 +1,102 @@
+name: storage-creds-verify
+
+# THROWAWAY verifier for the keyless (GitHub OIDC) real-cloud storage creds
+# provisioned for the storage-integration tests (BLDX-1341 / DISTR-784).
+# Per cloud: do the OIDC exchange, prove identity, DISCOVER the bucket/container,
+# and run a write→read→list→delete roundtrip. Dispatch-only; delete after.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  aws:
+    name: verify AWS S3 (OIDC role)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      AWS_ROLE_ARN: arn:aws:iam::361996608881:role/atlan-sdk-integ-ci-role
+      AWS_REGION: ap-south-1
+      S3_BUCKET: atlan-sdk-integ-test
+    steps:
+      - name: Configure AWS creds (assume role via OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Identity + discover buckets + roundtrip
+        run: |
+          set -x
+          aws sts get-caller-identity
+          echo "=== buckets visible to the role ==="
+          aws s3 ls || echo "(s3 ls denied — role may be bucket-scoped)"
+          echo "=== roundtrip on s3://${S3_BUCKET} (region ${AWS_REGION}) ==="
+          KEY="integ-verify/$(date +%s)-probe.txt"
+          echo "hello-from-ci" > /tmp/probe.txt
+          aws s3 cp /tmp/probe.txt "s3://${S3_BUCKET}/${KEY}" --region "${AWS_REGION}"
+          aws s3 cp "s3://${S3_BUCKET}/${KEY}" /tmp/probe.out --region "${AWS_REGION}"
+          diff /tmp/probe.txt /tmp/probe.out && echo "✓ AWS read-back OK"
+          aws s3 ls "s3://${S3_BUCKET}/integ-verify/" --region "${AWS_REGION}"
+          aws s3 rm "s3://${S3_BUCKET}/${KEY}" --region "${AWS_REGION}"
+          echo "✓ AWS S3 roundtrip OK on ${S3_BUCKET}"
+
+  azure:
+    name: verify Azure Blob (OIDC federated SP)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      AZURE_STORAGE_ACCOUNT: atlansdkintegtest
+      AZURE_CONTAINER: integ-test
+    steps:
+      - name: Azure login (federated, no secret)
+        uses: azure/login@v2
+        with:
+          client-id: 78a314da-227e-440f-b5f5-10cba2ade0d5
+          tenant-id: 5386c12b-65e5-479c-b137-99dcef2a6563
+          subscription-id: 629d2ea8-1283-47e4-a605-11b43c92a396
+      - name: Identity + discover containers + AAD roundtrip
+        run: |
+          set -x
+          az account show -o json | python3 -c 'import sys,json;d=json.load(sys.stdin);print("sub:",d.get("id"),"tenant:",d.get("tenantId"))'
+          echo "=== storage account ==="
+          az storage account show --name "${AZURE_STORAGE_ACCOUNT}" -o tsv --query '[name,provisioningState,allowSharedKeyAccess]' || echo "(account show failed)"
+          echo "=== containers (AAD auth) ==="
+          az storage container list --account-name "${AZURE_STORAGE_ACCOUNT}" --auth-mode login -o tsv --query '[].name' || echo "(container list denied — SP may lack Blob Data role)"
+          echo "=== ensure + roundtrip on container ${AZURE_CONTAINER} (AAD) ==="
+          az storage container create --account-name "${AZURE_STORAGE_ACCOUNT}" --name "${AZURE_CONTAINER}" --auth-mode login || echo "(container create failed/exists)"
+          BLOB="integ-verify/$(date +%s)-probe.txt"
+          echo "hello-from-ci" > /tmp/probe.txt
+          az storage blob upload --account-name "${AZURE_STORAGE_ACCOUNT}" --container-name "${AZURE_CONTAINER}" --name "${BLOB}" --file /tmp/probe.txt --auth-mode login --overwrite
+          az storage blob download --account-name "${AZURE_STORAGE_ACCOUNT}" --container-name "${AZURE_CONTAINER}" --name "${BLOB}" --file /tmp/probe.out --auth-mode login
+          diff /tmp/probe.txt /tmp/probe.out && echo "✓ Azure read-back OK"
+          az storage blob delete --account-name "${AZURE_STORAGE_ACCOUNT}" --container-name "${AZURE_CONTAINER}" --name "${BLOB}" --auth-mode login
+          echo "✓ Azure Blob roundtrip OK on ${AZURE_STORAGE_ACCOUNT}/${AZURE_CONTAINER}"
+
+  gcs:
+    name: verify GCS (WIF) [re-confirm]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GCS_BUCKET: atlan-sdk-integ-test
+    steps:
+      - name: GCP auth (Workload Identity Federation)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/546276822164/locations/global/workloadIdentityPools/github-pool/providers/github
+          service_account: atlan-sdk-integ-ci@development-platform-370010.iam.gserviceaccount.com
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Identity + roundtrip
+        run: |
+          set -x
+          gcloud auth list
+          KEY="integ-verify/$(date +%s)-probe.txt"
+          echo "hello-from-ci" > /tmp/probe.txt
+          gcloud storage cp /tmp/probe.txt "gs://${GCS_BUCKET}/${KEY}"
+          gcloud storage cp "gs://${GCS_BUCKET}/${KEY}" /tmp/probe.out
+          diff /tmp/probe.txt /tmp/probe.out && echo "✓ GCS read-back OK"
+          gcloud storage ls "gs://${GCS_BUCKET}/integ-verify/"
+          gcloud storage rm "gs://${GCS_BUCKET}/${KEY}"
+          echo "✓ GCS roundtrip OK on ${GCS_BUCKET}"
