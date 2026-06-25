@@ -7,7 +7,6 @@
       "credential-guid": {
         "type": "string",
         "required": false,
-        "lifecycle": "active",
         "ui": {
           "widget": "credential",
           "label": "",

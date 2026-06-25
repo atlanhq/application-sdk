@@ -7,7 +7,6 @@
       "credential-guid": {
         "type": "string",
         "required": false,
-        "lifecycle": "active",
         "ui": {
           "widget": "credential",
           "label": "",
@@ -22,7 +21,6 @@
       "connection": {
         "type": "string",
         "required": false,
-        "lifecycle": "active",
         "ui": {
           "widget": "connection",
           "label": "",
@@ -35,7 +33,6 @@
       "include_filter": {
         "type": "string",
         "required": false,
-        "lifecycle": "active",
         "ui": {
           "widget": "input",
           "label": "Include filter",
@@ -48,7 +45,6 @@
       "output_format": {
         "type": "string",
         "required": true,
-        "lifecycle": "active",
         "ui": {
           "widget": "radio",
           "label": "Output format",
@@ -69,7 +65,6 @@
       "max_results": {
         "type": "number",
         "required": false,
-        "lifecycle": "active",
         "ui": {
           "widget": "inputNumber",
           "label": "Max results",
@@ -90,7 +85,6 @@
       "enable_lineage": {
         "type": "boolean",
         "required": false,
-        "lifecycle": "active",
         "ui": {
           "widget": "boolean",
           "label": "Enable lineage parsing",
@@ -103,7 +97,6 @@
       "load-to-atlan": {
         "type": "boolean",
         "required": false,
-        "lifecycle": "active",
         "ui": {
           "widget": "boolean",
           "label": "Publish to Atlan",
@@ -116,7 +109,6 @@
       "log_level": {
         "type": "string",
         "required": false,
-        "lifecycle": "active",
         "ui": {
           "widget": "select",
           "label": "Log level",
@@ -140,7 +132,6 @@
       "lineage_depth": {
         "type": "number",
         "required": false,
-        "lifecycle": "active",
         "ui": {
           "widget": "inputNumber",
           "label": "Lineage depth",
@@ -153,7 +144,6 @@
       "table_prefix": {
         "type": "string",
         "required": false,
-        "lifecycle": "active",
         "ui": {
           "widget": "input",
           "label": "Table prefix",
@@ -178,7 +168,6 @@
       "custom_attributes": {
         "type": "string",
         "required": false,
-        "lifecycle": "active",
         "ui": {
           "widget": "TextInput",
           "label": "Custom attributes",
@@ -195,8 +184,6 @@
       "legacy_timeout": {
         "type": "number",
         "required": false,
-        "lifecycle": "deprecated",
-        "lifecycleMessage": "Use the standard pipeline timeout configuration instead.",
         "ui": {
           "widget": "inputNumber",
           "label": "Legacy timeout",
@@ -209,7 +196,6 @@
       "old_batch_mode": {
         "type": "boolean",
         "required": false,
-        "lifecycle": "sunset",
         "ui": {
           "widget": "boolean",
           "label": "Old batch mode",
@@ -222,7 +208,6 @@
       "schemas": {
         "type": "object",
         "required": false,
-        "lifecycle": "active",
         "ui": {
           "widget": "sqltree",
           "label": "Schemas to include",

@@ -7,7 +7,6 @@
       "target": {
         "type": "string",
         "required": false,
-        "lifecycle": "active",
         "ui": {
           "widget": "input",
           "label": "Target",

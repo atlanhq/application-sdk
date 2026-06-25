@@ -7,7 +7,6 @@
       "credential-guid": {
         "type": "string",
         "required": false,
-        "lifecycle": "active",
         "ui": {
           "widget": "credential",
           "label": "",
@@ -21,7 +20,6 @@
       "connection": {
         "type": "string",
         "required": false,
-        "lifecycle": "active",
         "ui": {
           "widget": "connection",
           "label": "",
@@ -34,7 +32,6 @@
       "include-filter": {
         "type": "object",
         "required": false,
-        "lifecycle": "active",
         "ui": {
           "widget": "sqltree",
           "label": "Include schemas",
@@ -54,7 +51,6 @@
       "exclude-filter": {
         "type": "object",
         "required": false,
-        "lifecycle": "active",
         "ui": {
           "widget": "sqltree",
           "label": "Exclude schemas",

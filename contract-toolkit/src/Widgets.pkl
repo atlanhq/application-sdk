@@ -242,11 +242,11 @@ abstract class UIElement {
   /// A field's lifecycle may only advance (active → deprecated → sunset).  The field
   /// is NEVER removed and its type NEVER changes — removal or type change is a
   /// breaking contract change caught by the B005 conformance rule.
-  lifecycle: "active"|"deprecated"|"sunset" = "active"
+  hidden lifecycle: "active"|"deprecated"|"sunset" = "active"
 
   /// Optional human-readable note displayed alongside the deprecation warning.
   /// Ignored when `lifecycle` is `"active"`.
-  lifecycleMessage: String?
+  hidden lifecycleMessage: String?
 
   /// (Generated) UI configuration for the element.
   fixed ui: Widget|Mapping<String, Any> = new Widget {
