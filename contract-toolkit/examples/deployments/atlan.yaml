@@ -1,0 +1,50 @@
+# AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY.
+# To regenerate: pkl eval -m . contract/app.pkl
+name: deployments-example
+display_name: Deployments Map Example
+type: connector
+execution_mode: native
+icon_url: https://assets.atlan.com/assets/fullscreen-open.svg
+visibility: public
+build_tag: v1
+self_deployed_runtime: true
+entrypoints:
+- name: deployments-example
+  display_name: Deployments Map Example
+  icon_url: https://assets.atlan.com/assets/fullscreen-open.svg
+  type: connector
+  marketplace_card: true
+deployments:
+  hot:
+    profiles:
+    - main
+    keda:
+      enabled: true
+      minReplicaCount: 1
+      cooldownPeriod: 300
+      temporal:
+        targetQueueSize: 10
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: '2'
+        memory: 4Gi
+    env:
+      WORKER_TYPE: hot
+  cold:
+    profiles:
+    - exceptional
+    keda:
+      enabled: true
+      minReplicaCount: 0
+      cooldownPeriod: 30
+      temporal:
+        targetQueueSize: 5
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+    env:
+      WORKER_TYPE: cold

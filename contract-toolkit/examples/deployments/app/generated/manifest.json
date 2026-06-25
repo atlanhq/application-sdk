@@ -1,0 +1,21 @@
+{
+  "execution_mode": "automation-engine",
+  "dag": {
+    "extract": {
+      "activity_name": "execute_workflow",
+      "activity_display_name": "Extract Deployments Map Example Metadata",
+      "app_name": "deployments-example",
+      "inputs": {
+        "workflow_type": "deployments-example",
+        "app_name": "deployments-example",
+        "app_id": "",
+        "argo_workflow_slug": "",
+        "task_queue": "atlan-deployments-example-{deployment_name}",
+        "args": {
+          "credential": "{{credential}}",
+          "target": "{{target}}"
+        }
+      }
+    }
+  }
+}

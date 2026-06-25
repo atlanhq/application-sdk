@@ -237,9 +237,52 @@ The auth-type radio's `ui.hidden` is auto-derived from `credentialAuthOptions.le
 |---|---|---|
 | `uiConfig` | UIConfig | Setup form definition with tasks, rules. |
 
-### Deploy Block
+### Deployments Map (new — preferred)
 
-The typed `deploy` block replaces the legacy free-form mapping. The deploy config classes (`DeployConfig`, `DaprComponents`, `KedaConfig`, `KedaTemporalConfig`, `ResourceConfig`) are defined in `Deployment.pkl` and re-exported by `App.pkl` — amending contracts do not need a supplemental import.
+The `deployments` map is the preferred way to configure worker pools. It is optional and explicit-overrides-only: an empty map (the default) emits nothing. Declare named pools to configure per-pool KEDA, resources, env, and profiles.
+
+All deployment classes (`Deployment`, `DeployConfig`, `DaprComponents`, `KedaConfig`, `KedaTemporalConfig`, `ResourceConfig`) are defined in `Deployment.pkl` and re-exported by `App.pkl` — amending contracts do not need a supplemental import.
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `deployments` | Mapping<String, Deployment> | `{}` | Named worker-pool map. Empty by default — emits nothing. Add named pools to configure per-pool scaling and profiles. |
+
+**Deployment class:**
+
+```pkl
+class Deployment {
+  profiles: Listing<String> = new Listing {}       // logical profiles this pool serves
+  replicaCount: Int? = null                        // static replica count (ignored when keda.enabled)
+  keda: KedaConfig = new KedaConfig {}
+  resources: ResourceConfig? = null
+  env: Mapping<String, String> = new Mapping {}
+  envOverrides: Mapping<String, Mapping<String, String>> = new Mapping {}
+  deployOverrides: Mapping<String, Any> = new Mapping {}  // deep-merged last (escape hatch)
+}
+```
+
+Example — two pools, hot always-on + cold scale-to-zero:
+
+```pkl
+deployments {
+  ["hot"] = new Deployment {
+    profiles { "main" }
+    keda { minReplicaCount = 1; cooldownPeriod = 300 }
+  }
+  ["cold"] = new Deployment {
+    profiles { "exceptional" }
+    keda { minReplicaCount = 0; cooldownPeriod = 30 }
+  }
+}
+```
+
+See `examples/deployments/` for the full two-pool example.
+
+### Deploy Block (deprecated)
+
+> **Deprecated** — use `deployments` instead. `deploy:` will be removed in the next minor version.
+
+The `deploy` block was the original single-pool deployment configuration. It requires `emitDeploy = true` to emit anything.
 
 | Property | Type | Default | Description |
 |---|---|---|---|
@@ -272,12 +315,13 @@ class DaprComponents {
 class KedaConfig {
   enabled: Boolean = true
   minReplicaCount: Int = 0
+  cooldownPeriod: Int? = null  // seconds to wait after queue drains before scaling to zero
   temporal: KedaTemporalConfig = new { targetQueueSize = 5 }
 }
 class KedaTemporalConfig { targetQueueSize: Int }
 ```
 
-Note: `targetQueueSize` must be set via `keda.temporal.targetQueueSize`, not `keda.targetQueueSize`.
+Note: `targetQueueSize` must be set via `keda.temporal.targetQueueSize`, not `keda.targetQueueSize`. `cooldownPeriod` is omitted from the rendered output when not set (Helm chart default applies).
 
 **ResourceConfig:**
 

@@ -33,6 +33,11 @@ class KedaTemporalConfig {
 class KedaConfig {
   enabled: Boolean = true
   minReplicaCount: Int = 0
+  /// Seconds KEDA waits after the queue drains before scaling to zero.
+  /// Omit to use the Helm chart default.
+  /// Use a small value (e.g. 30) for exceptional scale-to-zero pools;
+  /// a larger value (e.g. 300) for hot pools where spin-up latency matters.
+  cooldownPeriod: Int? = null
   temporal: KedaTemporalConfig = new KedaTemporalConfig {}
 }
 
@@ -41,7 +46,46 @@ class ResourceConfig {
   limits: Mapping<String, String> = new Mapping {}
 }
 
+/// Per-pool deployment configuration. Declares the logical profiles this
+/// worker pool serves and its scaling/resource settings.
+///
+/// Simple apps never configure this — the single "default" pool serves all
+/// profiles with platform defaults. Multi-pool apps declare named pools:
+///
+/// ```pkl
+/// deployments {
+///   ["hot"] = new Deployment {
+///     profiles { "main" }
+///     keda { minReplicaCount = 1; cooldownPeriod = 300 }
+///   }
+///   ["cold"] = new Deployment {
+///     profiles { "exceptional" }
+///     keda { minReplicaCount = 0; cooldownPeriod = 30 }
+///     resources = new ResourceConfig { requests { ["cpu"] = "100m" } }
+///   }
+/// }
+/// ```
+class Deployment {
+  /// Logical profiles this worker pool serves.
+  /// Empty (default) → pool serves the app's default profile at render time.
+  /// Corresponds to `@task(profile="…")` in Python app code.
+  profiles: Listing<String> = new Listing {}
+
+  /// Override replica count. Ignored when `keda.enabled = true`.
+  replicaCount: Int? = null
+
+  keda: KedaConfig = new KedaConfig {}
+  resources: ResourceConfig? = null
+  env: Mapping<String, String> = new Mapping {}
+  envOverrides: Mapping<String, Mapping<String, String>> = new Mapping {}
+
+  /// Per-pool escape hatch for `atlan.yaml` keys not yet modelled above.
+  /// Deep-merged on top of the rendered pool block last.
+  deployOverrides: Mapping<String, Any> = new Mapping {}
+}
+
 /// Typed deployment configuration rendered into `atlan.yaml`'s `deploy:` block.
+/// @Deprecated — use `deployments` instead. Will be removed in the next minor version.
 class DeployConfig {
   executionMode: String = "native"
   splitDeployment: Boolean = true

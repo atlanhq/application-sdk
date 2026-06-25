@@ -4,6 +4,7 @@ import "../examples/bundle/app.pkl" as bundleApp
 import "../examples/card-split/app.pkl" as cardSplitApp
 import "../examples/connection-ref/app.pkl" as connectionRefApp
 import "../examples/deploy/app.pkl" as deployApp
+import "../examples/deployments/app.pkl" as deploymentsApp
 import "../examples/fanin/app.pkl" as faninApp
 import "../examples/full/app.pkl" as fullApp
 import "../examples/minimal/app.pkl" as minimalApp
@@ -81,6 +82,7 @@ local nativeHelpTextOnlyApp = (NativeApp) {
 local helpTextOnlyInputPy: String = helpTextOnlyApp.output.files["app/generated/_input.py"].text
 local nativeHelpTextOnlyInputPy: String = nativeHelpTextOnlyApp.output.files["_input.py"].text
 local cardSplitAtlanYaml: String = cardSplitApp.output.files["atlan.yaml"].text
+local deploymentsAtlanYaml: String = deploymentsApp.output.files["atlan.yaml"].text
 
 facts {
   ["Minimal example generates all standard output files"] {
@@ -364,6 +366,33 @@ facts {
     // No app/generated files — pipeline is publish=null and no extract node
     !cardSplitApp.output.files.containsKey("app/generated/card-split.json")
     !cardSplitApp.output.files.containsKey("app/generated/manifest.json")
+  }
+
+  ["Deployments example: emits deployments block with both pools"] {
+    deploymentsAtlanYaml.contains("deployments:")
+    deploymentsAtlanYaml.contains("hot:")
+    deploymentsAtlanYaml.contains("cold:")
+  }
+
+  ["Deployments example: cooldownPeriod emitted in keda"] {
+    deploymentsAtlanYaml.contains("cooldownPeriod: 300")
+    deploymentsAtlanYaml.contains("cooldownPeriod: 30")
+  }
+
+  ["Deployments example: profiles emitted per pool"] {
+    deploymentsAtlanYaml.contains("profiles:")
+    deploymentsAtlanYaml.contains("- main")
+    deploymentsAtlanYaml.contains("- exceptional")
+  }
+
+  ["Deployments example: no legacy deploy: block"] {
+    !deploymentsAtlanYaml.contains("\ndeploy:")
+  }
+
+  ["Existing deploy example still emits legacy deploy: block (deprecated path still works)"] {
+    local deployYaml: String = deployApp.output.files["atlan.yaml"].text
+    deployYaml.contains("deploy:")
+    !deployYaml.contains("deployments:")
   }
 
 }
