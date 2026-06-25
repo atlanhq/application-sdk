@@ -127,6 +127,16 @@ class TestRunPreflightGate:
             with pytest.raises(TemporalApplicationError):
                 await _run_preflight_gate(_ResolvableInput(), "crawl")
 
+    async def test_dispatches_activity_with_preflight_output_result_type(self) -> None:
+        # Regression: execute_activity dispatched by name returns a raw dict
+        # unless result_type is set — and the workflow calls .canonical_status()
+        # on the result, which a dict doesn't have. Caught live on mysql canary.
+        exec_mock, exec_patch = _exec(_output(PreflightStatus.SUCCESS))
+        with _patched(True), exec_patch:
+            await _run_preflight_gate(_ResolvableInput(), "crawl")
+        _, kwargs = exec_mock.call_args
+        assert kwargs.get("result_type") is PreflightOutput
+
     async def test_forwards_routing_fields_to_activity(self) -> None:
         exec_mock, exec_patch = _exec(_output(PreflightStatus.SUCCESS))
         with _patched(True), exec_patch:
