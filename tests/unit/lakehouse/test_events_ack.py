@@ -38,8 +38,21 @@ class TestEventsAckBuildArrow(unittest.TestCase):
         arrow = _build_ack_arrow(events, results)
         self.assertEqual(arrow.num_rows, 2)
         self.assertEqual(arrow["event_id"].to_pylist(), ["e1", "e2"])
-        self.assertEqual(arrow["status"].to_pylist(), ["SUCCESS", "FAILED"])
+        # wire format is AE's lowercase vocabulary, not the public uppercase enum
+        self.assertEqual(arrow["status"].to_pylist(), ["success", "failed"])
         self.assertEqual(arrow["error_message"].to_pylist(), [None, "boom"])
+
+    def test_maps_status_to_ae_wire_vocabulary(self):
+        events = [{"event_id": "e1"}, {"event_id": "e2"}, {"event_id": "e3"}]
+        results = [
+            EventResult(status="SUCCESS"),
+            EventResult(status="FAILED"),
+            EventResult(status="RETRY"),
+        ]
+        arrow = _build_ack_arrow(events, results)
+        # RETRY→failed: AE has no 'retry' ack status; a 'failed' ack drives
+        # AE's bounded retry_count machinery (retry until max, then terminal).
+        self.assertEqual(arrow["status"].to_pylist(), ["success", "failed", "failed"])
 
     def test_raises_on_length_mismatch(self):
         with self.assertRaises(ValueError):
@@ -71,7 +84,7 @@ class TestEventsAck(unittest.IsolatedAsyncioTestCase):
         # round-trip the parquet bytes to verify the schema
         arrow_back = pq.read_table(io.BytesIO(kwargs["content"]))
         self.assertEqual(arrow_back["event_id"].to_pylist(), ["e1"])
-        self.assertEqual(arrow_back["status"].to_pylist(), ["SUCCESS"])
+        self.assertEqual(arrow_back["status"].to_pylist(), ["success"])
 
     @patch(
         "application_sdk.lakehouse.events_ack.upload_file_from_bytes",

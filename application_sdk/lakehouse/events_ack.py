@@ -48,6 +48,9 @@ _ACK_SCHEMA = pa.schema(
     ]
 )
 
+# AE cleanup matches lowercase 'success'/'failed' only; RETRY→'failed' drives AE's bounded retry_count machinery (no 'retry' ack status exists).
+_ACK_STATUS_WIRE = {"SUCCESS": "success", "FAILED": "failed", "RETRY": "failed"}
+
 
 def _validate(label: str, value: str, pattern: re.Pattern[str]) -> None:
     if not pattern.match(value):
@@ -80,7 +83,7 @@ def _build_ack_arrow(
     return pa.table(
         {
             "event_id": [e["event_id"] for e in events],
-            "status": [r.status for r in results],
+            "status": [_ACK_STATUS_WIRE[r.status] for r in results],
             "error_message": [r.error_message for r in results],
         },
         schema=_ACK_SCHEMA,
