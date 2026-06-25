@@ -1540,7 +1540,9 @@ class TestLevelFiltering:
             self.calls += 1
             return "tracked"
 
-    def test_debug_below_info_level_drops_call(self, logger_adapter: AtlanLoggerAdapter):
+    def test_debug_below_info_level_drops_call(
+        self, logger_adapter: AtlanLoggerAdapter
+    ):
         t = self._Tracker()
         logger_adapter.debug("msg: %s", t)
         assert t.calls == 0, "debug arg __str__ was called when level is below INFO"
