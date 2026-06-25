@@ -2,8 +2,8 @@
 ///   Gap 1 — Widgets.CredentialInput renders `placeholderText` as `ui.placeholder`.
 ///   Gap 2 — `argoPackageNames` renders to atlan.yaml as `argo_package_names`,
 ///           in canonical position between `visibility` and `build_tag`.
-///   Gap 3 — `workflowTypeOverride` emits a verbatim `workflow_type`, bypassing
-///           the PascalCase→kebab conversion applied to `workflowType`.
+///   Gap 3 — `workflowType` emits its value verbatim when set; when unset the
+///           `name` is kebab-cased to derive the default `workflow_type`.
 amends "pkl:test"
 
 import "pkl:json"
@@ -94,7 +94,7 @@ local noArgoYaml = appNoArgoPkgs.output.files["atlan.yaml"].text
 local argoE2eBase = appArgoPkgs.output.files["app/generated/_e2e_base.py"].text
 local noArgoE2eBase = appNoArgoPkgs.output.files["app/generated/_e2e_base.py"].text
 
-// ── Gap 3: workflowTypeOverride verbatim vs kebab ───────────────────────────
+// ── Gap 3: workflowType verbatim vs default ──────────────────────────────────
 local workflowUiConfig = new App.UIConfig {
   tasks {
     ["Configuration"] {
@@ -105,44 +105,30 @@ local workflowUiConfig = new App.UIConfig {
   }
 }
 
-local appWorkflowOverride = (App) {
-  name = "wf-override-test"
-  displayName = "WF Override Test"
+local appWorkflowVerbatim = (App) {
+  name = "wf-verbatim-test"
+  displayName = "WF Verbatim Test"
   icon = "https://example.com/icon.svg"
   hasCredentialConfig = false
   pipeline { publish = null }
-  workflowType = "WfKebabTest"
-  workflowTypeOverride = "WfOverrideTest"
+  workflowType = "WfVerbatimTest"
   uiConfig = workflowUiConfig
 }
 
-local appWorkflowKebab = (App) {
-  name = "wf-kebab-test"
-  displayName = "WF Kebab Test"
+local appWorkflowDefault = (App) {
+  name = "wf-default-test"
+  displayName = "WF Default Test"
   icon = "https://example.com/icon.svg"
   hasCredentialConfig = false
   pipeline { publish = null }
-  workflowType = "WfKebabTest"
+  // workflowType unset → derives from name
   uiConfig = workflowUiConfig
 }
 
-local appWorkflowEmptyOverride = (App) {
-  name = "wf-empty-override-test"
-  displayName = "WF Empty Override Test"
-  icon = "https://example.com/icon.svg"
-  hasCredentialConfig = false
-  pipeline { publish = null }
-  workflowType = "WfKebabTest"
-  workflowTypeOverride = ""
-  uiConfig = workflowUiConfig
-}
-
-local overrideManifest = new json.Parser { useMapping = true }.parse(appWorkflowOverride.output.files["app/generated/manifest.json"].text)
-local kebabManifest = new json.Parser { useMapping = true }.parse(appWorkflowKebab.output.files["app/generated/manifest.json"].text)
-local emptyOverrideManifest = new json.Parser { useMapping = true }.parse(appWorkflowEmptyOverride.output.files["app/generated/manifest.json"].text)
-local overrideWorkflowType = overrideManifest["dag"]["extract"]["inputs"]["workflow_type"]
-local kebabWorkflowType = kebabManifest["dag"]["extract"]["inputs"]["workflow_type"]
-local emptyOverrideWorkflowType = emptyOverrideManifest["dag"]["extract"]["inputs"]["workflow_type"]
+local verbatimManifest = new json.Parser { useMapping = true }.parse(appWorkflowVerbatim.output.files["app/generated/manifest.json"].text)
+local defaultManifest = new json.Parser { useMapping = true }.parse(appWorkflowDefault.output.files["app/generated/manifest.json"].text)
+local verbatimWorkflowType = verbatimManifest["dag"]["extract"]["inputs"]["workflow_type"]
+local defaultWorkflowType = defaultManifest["dag"]["extract"]["inputs"]["workflow_type"]
 
 facts {
   ["Gap 1: CredentialInput renders placeholderText as ui.placeholder"] {
@@ -171,15 +157,11 @@ facts {
     noArgoE2eBase.contains("argo_package_name = \"@atlan/no-argo-pkgs-test\"")
   }
 
-  ["Gap 3: workflowTypeOverride emits a verbatim workflow_type, winning over workflowType"] {
-    overrideWorkflowType == "WfOverrideTest"
+  ["Gap 3: workflowType when set is emitted verbatim with no conversion"] {
+    verbatimWorkflowType == "WfVerbatimTest"
   }
 
-  ["Gap 3: empty-string workflowTypeOverride is treated as unset and falls back to kebab"] {
-    emptyOverrideWorkflowType == "wf-kebab-test"
-  }
-
-  ["Gap 3: workflowType is PascalCase→kebab-cased when no override is set"] {
-    kebabWorkflowType == "wf-kebab-test"
+  ["Gap 3: workflowType when unset defaults to kebab-cased name"] {
+    defaultWorkflowType == "wf-default-test"
   }
 }

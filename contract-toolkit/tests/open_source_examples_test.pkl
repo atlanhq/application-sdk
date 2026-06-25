@@ -89,7 +89,7 @@ facts {
     minimalApp.output.files.containsKey("app.yaml")
     // No credential configmap — hasCredentialConfig = false
     !minimalApp.output.files.containsKey("app/generated/atlan-connectors-minimal.json")
-    // workflowType defaults to PascalCase of name ("minimal" → "Minimal" → "minimal")
+    // workflowType unset → name kebab-cased: "minimal" → "minimal"
     minimalManifestJson.contains("\"workflow_type\": \"minimal\"")
   }
 
