@@ -1,10 +1,23 @@
 {
-  "_comment": "Central allowlist for SDK base image vulnerabilities. Shared across all connector repos. Updated by SDK team. CODEOWNERS: SDK/security team only.",
+  "_comment": "Central allowlist for SDK base image vulnerabilities. Shared across all connector repos. Auto-maintained by the vuln-triage rover; CODEOWNERS: SDK/security team + @atlan-ci (auto-merge of allowlist-only PRs).",
   "_base_image": "application-sdk-main",
-  "_updated": "2026-06-19",
-  "_renewal_note": "Expiry dates staggered by severity. CRITICAL: 15 days. HIGH: 30 days. Review before expiry. Enforced by .github/scripts/validate_allowlist.py via _expiry_policy below.",
+  "_updated": "2026-06-25",
+  "_renewal_note": "Expiry dates are the remediation SLA per severity, measured from first detection. CRITICAL: 7 days. HIGH: 30 days. MEDIUM/LOW are NOT allowlisted (tracked on Linear tickets only). The gate (check_allowlist.py) passes while an entry is unexpired and fails once it expires. Enforced by .github/scripts/validate_allowlist.py via _expiry_policy below.",
   "_expiry_policy": {
-    "CRITICAL": 15,
+    "CRITICAL": 7,
     "HIGH": 30
+  },
+  "_entry_schema": {
+    "_doc": "Each non-underscore key is a CVE/advisory ID. Keep entries minimal but descriptive. Required: package, severity (CRITICAL|HIGH only), reason, expires, added_by, case, ticket. Optional: fix_pr.",
+    "CVE-2026-00000": {
+      "package": "example-pkg",
+      "severity": "HIGH",
+      "reason": "Case 1: fix PR bumps example-pkg to 2.3.1; clears once merged & released.",
+      "expires": "2026-07-25",
+      "added_by": "@atlan-ci",
+      "case": 1,
+      "ticket": "BLDX-0000",
+      "fix_pr": "https://github.com/atlanhq/application-sdk/pull/0000"
+    }
   }
 }
