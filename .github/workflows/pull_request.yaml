@@ -483,23 +483,50 @@ jobs:
       ) && github.event.pull_request.head.repo.fork != true
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Keyless: all three clouds authenticate via GitHub OIDC (no static secrets).
+    # Resource identifiers are non-secret repo variables (vars.*_INTEG_*).
+    permissions:
+      id-token: write
+      contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: "./.github/actions/setup-deps"
-      - name: Write GCS service-account key
-        run: printf '%s' '${{ secrets.GCS_SERVICE_ACCOUNT_JSON }}' > /tmp/gcs-sa-key.json
-      - name: Run storage integration tests
+      - name: AWS — assume the integration role (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_INTEG_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_INTEG_REGION }}
+      - name: Azure — login (OIDC federated, no secret)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_INTEG_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_INTEG_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_INTEG_SUBSCRIPTION_ID }}
+      - name: GCS — Workload Identity Federation (sets ADC)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_INTEG_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_INTEG_SA }}
+      - name: Azure — write the federated token file for obstore WI auth
+        run: |
+          curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" \
+            | python3 -c 'import sys,json;sys.stdout.write(json.load(sys.stdin)["value"])' \
+            > "${RUNNER_TEMP}/azure-federated-token"
+      - name: Run storage integration tests (keyless)
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
-          S3_BUCKET: ${{ secrets.S3_BUCKET }}
-          AZURE_STORAGE_ACCOUNT: ${{ secrets.AZURE_STORAGE_ACCOUNT }}
-          AZURE_STORAGE_KEY: ${{ secrets.AZURE_STORAGE_KEY }}
-          AZURE_STORAGE_CONTAINER: ${{ secrets.AZURE_STORAGE_CONTAINER }}
-          GCS_BUCKET: ${{ secrets.GCS_BUCKET }}
-          GCS_PROJECT_ID: ${{ secrets.GCS_PROJECT_ID }}
-          GOOGLE_APPLICATION_CREDENTIALS: /tmp/gcs-sa-key.json
+          # AWS: ambient creds (AWS_ACCESS_KEY_ID/SECRET/SESSION_TOKEN) set by the OIDC step.
+          S3_BUCKET: ${{ vars.S3_INTEG_BUCKET }}
+          AWS_DEFAULT_REGION: ${{ vars.AWS_INTEG_REGION }}
+          # Azure: federated workload identity (shared-key is disabled on the account).
+          AZURE_STORAGE_ACCOUNT: ${{ vars.AZURE_INTEG_STORAGE_ACCOUNT }}
+          AZURE_STORAGE_CONTAINER: ${{ vars.AZURE_INTEG_CONTAINER }}
+          AZURE_CLIENT_ID: ${{ vars.AZURE_INTEG_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_INTEG_TENANT_ID }}
+          AZURE_FEDERATED_TOKEN_FILE: ${{ runner.temp }}/azure-federated-token
+          # GCS: ADC (GOOGLE_APPLICATION_CREDENTIALS) set by the WIF step.
+          GCS_BUCKET: ${{ vars.GCS_INTEG_BUCKET }}
+          GCS_PROJECT_ID: ${{ vars.GCS_INTEG_PROJECT_ID }}
         run: |
           uv run pytest tests/integration/storage/ \
             -m "s3_integration or azure_integration or gcs_integration" \
