@@ -361,6 +361,49 @@ def test_p016_non_literal_name_fires(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Duplicate wire names
+# ---------------------------------------------------------------------------
+
+
+def test_p016_duplicate_wire_name_fires(tmp_path: Path) -> None:
+    """Two @entrypoint methods with the same wire name → findings for each duplicate."""
+    py = {
+        "app/my_app.py": dedent("""\
+            from application_sdk.app import App, entrypoint
+            class MyApp(App):
+                @entrypoint(name="crawler")
+                async def crawl_v1(self, input: Input) -> Output: ...
+                @entrypoint(name="crawler")
+                async def crawl_v2(self, input: Input) -> Output: ...
+        """)
+    }
+    findings = _run(tmp_path, py, ["crawler"])
+    p016 = [f for f in findings if f.rule_id == "P016"]
+    assert len(p016) == 2
+    assert all("more than one" in f.message for f in p016)
+
+
+def test_p016_duplicate_wire_name_halts_set_check(tmp_path: Path) -> None:
+    """Duplicate detection short-circuits before the set-equality pass."""
+    py = {
+        "app/my_app.py": dedent("""\
+            from application_sdk.app import App, entrypoint
+            class MyApp(App):
+                @entrypoint(name="crawler")
+                async def crawl_a(self, input: Input) -> Output: ...
+                @entrypoint(name="crawler")
+                async def crawl_b(self, input: Input) -> Output: ...
+        """)
+    }
+    # Contract also has "crawler" — but the duplicate must still be flagged
+    # and no contract-only finding should be emitted (short-circuit).
+    findings = _run(tmp_path, py, ["crawler"])
+    p016 = [f for f in findings if f.rule_id == "P016"]
+    assert all("more than one" in f.message for f in p016)
+    assert not any("not in code" in f.message for f in p016)
+
+
+# ---------------------------------------------------------------------------
 # Inline suppression
 # ---------------------------------------------------------------------------
 

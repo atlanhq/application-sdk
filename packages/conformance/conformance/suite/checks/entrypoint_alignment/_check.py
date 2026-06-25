@@ -21,6 +21,7 @@ In all modes, unresolvable ``name=`` values produce an additional finding.
 from __future__ import annotations
 
 import ast
+from collections import Counter
 
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.schema.findings import Finding
@@ -129,6 +130,30 @@ def check_p016(
                     ),
                 )
             )
+        return findings
+
+    # ── Duplicate wire names in code (any mode) ──────────────────────────────
+    # frozenset collapses duplicates silently; catch them here before the
+    # set-equality check so two methods registering the same name both produce
+    # a finding rather than neutralising each other.
+    name_counts = Counter(ep.name for ep in code.entrypoints)
+    for ep in code.entrypoints:
+        if name_counts[ep.name] > 1:
+            findings.append(
+                make_finding(
+                    filename=ep.filename,
+                    rule_id=_RULE_ID,
+                    node=ep.node,
+                    message=(
+                        f"Entry point '{ep.name}' is registered by more than one "
+                        f"@entrypoint-decorated method ({name_counts[ep.name]} methods). "
+                        "The SDK raises at registration time, but the duplicate must be "
+                        "resolved: give each method a unique name= argument."
+                    ),
+                    directives=directives_by_file.get(ep.filename, _empty_directives()),
+                )
+            )
+    if any(c > 1 for c in name_counts.values()):
         return findings
 
     # ── Multi-entry-point mode: exact set equality ────────────────────────────

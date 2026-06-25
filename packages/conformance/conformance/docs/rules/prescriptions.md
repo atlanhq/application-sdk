@@ -479,12 +479,13 @@ returns 404 — with no caller-side workaround (BLDX-1425).
 
 An app's entry-point names are declared in two independent places:
 
-1. **Contract (toolkit-owned):** `contract/app.pkl` → `pkl eval` ->
-`app/generated/<name>/manifest.json`.  The `<name>` is what callers    pass as
-`?entrypoint=<name>` and the Automation Engine `workflow_type`. 2. **Code
-(developer-owned):** `@entrypoint`-decorated `App` methods.    The registered wire name
-is the explicit `name=` argument or the    method name in kebab-case (`extract_metadata`
--> `extract-metadata`).
+1. **Contract (toolkit-owned):** `contract/app.pkl` → `pkl eval` →
+`app/generated/<name>/manifest.json`.  The `<name>` is what callers pass as
+`?entrypoint=<name>` and the Automation Engine `workflow_type`.
+
+2. **Code (developer-owned):** `@entrypoint`-decorated `App` methods. The registered
+wire name is the explicit `name=` argument or the method name in kebab-case
+(`extract_metadata` → `extract-metadata`).
 
 `poe generate` only runs `pkl eval`; it never imports app code, so the two can drift
 silently.  Drift causes the HTTP create path to fail — `/manifest?entrypoint=crawler`
@@ -493,35 +494,43 @@ workaround (BLDX-1425).
 
 **This rule checks (per repo):**
 
-* **Multi-entry-point apps** (`app/generated/` has named subdirs each   containing
-`manifest.json`): the set of `@entrypoint` wire names must   exactly equal the set of
-subdir names. * **Single-entry-point apps** (root `app/generated/manifest.json`, no
-subdirs): at most one `@entrypoint` is permitted in code.  The name is   not constrained
-— the single entry point is the implicit default. * **Non-literal `name=`:** a
-`@entrypoint(name=variable)` that cannot   be statically resolved is flagged as
-unverifiable. * **No `app/generated/`:** the repo is not a native-app-contract repo;
-this rule is a no-op.
+* **Multi-entry-point apps** (`app/generated/` has named subdirs each containing
+`manifest.json`): the set of `@entrypoint` wire names must exactly equal the set of
+subdir names.
+
+* **Single-entry-point apps** (root `app/generated/manifest.json`, no subdirs): at most
+one `@entrypoint` is permitted in code.  The name is not constrained — the single entry
+point is the implicit default.
+
+* **Non-literal `name=`:** a `@entrypoint(name=variable)` that cannot be statically
+resolved is flagged as unverifiable.
+
+* **No `app/generated/`:** the repo is not a native-app-contract repo; this rule is a
+no-op.
 
 **Remediation**
 
 The contract `app/generated/` tree is the authoritative source; align code to it as the
 default fix:
 
-1. For each `@entrypoint` name in *code* that is not in the contract,    pin it:
-`@entrypoint(name="<contract-name>")`.  Confirm the pairing    (code name -> contract
-name) intentionally — renaming an entry point is    a **breaking wire change** (the
-Temporal workflow type and    `?entrypoint=` value both change; coordinate with
-callers). 2. For each contract name not matched in code, add or rename an
-`@entrypoint(name="<missing-name>")` on the corresponding App method. 3. If the *code*
-name is the intended one and the contract is wrong, update    the `entrypoints { new
-Entrypoint { name = "..." } }` block in    `contract/app.pkl` and re-run `pkl eval` so
-the    `app/generated/<name>/` dir and `workflow_type` follow — never    hand-edit
-`app/generated/` (C002 catches stale generated artifacts). 4. For a single-entry-point
-app that now has multiple `@entrypoint`s,    either add named `Entrypoint` blocks in
-`contract/app.pkl` or    remove the extra `@entrypoint`.
+1. For each `@entrypoint` name in *code* that is not in the contract, pin it:
+`@entrypoint(name="<contract-name>")`.  Confirm the pairing (code name → contract name)
+intentionally — renaming an entry point is a **breaking wire change** (the Temporal
+workflow type and `?entrypoint=` value both change; coordinate with callers).
 
-Suppress an unavoidable exception with::
+2. For each contract name not matched in code, add or rename an
+`@entrypoint(name="<missing-name>")` on the corresponding App method.
 
-    # conformance: ignore[P016] <reason>     @entrypoint(name="...")
+3. If the *code* name is the intended one and the contract is wrong, update the
+`entrypoints { new Entrypoint { name = "..." } }` block in `contract/app.pkl` and re-run
+`pkl eval` so the `app/generated/<name>/` dir and `workflow_type` follow — never
+hand-edit `app/generated/` (C002 catches stale generated artifacts).
+
+4. For a single-entry-point app that now has multiple `@entrypoint`s, either add named
+`Entrypoint` blocks in `contract/app.pkl` or remove the extra `@entrypoint`.
+
+Land as `BLOCK`: a justified inline `# conformance: ignore[P016] <reason>` on the
+decorator line (or the comment-only line directly above it) records the exception and
+stays visible in SARIF.
 
 ---
