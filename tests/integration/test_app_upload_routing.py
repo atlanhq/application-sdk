@@ -713,9 +713,10 @@ async def test_app_upload_dual_write_failure_required_raises_after_upstream(
 async def test_upload_path_embeds_workflow_id_from_context(tmp_path):
     """App.upload() run_prefix must embed context.workflow_id, not the sentinel.
 
-    Regression guard for the activity-side AppContext construction bug where
-    workflow_id was never plumbed from activity.info().workflow_id, causing
-    uploads to land under the 'local-no-temporal' sentinel in production.
+    Regression guard: workflow_id was never set on the activity-side AppContext,
+    so uploads landed under the 'local-no-temporal' sentinel in production.
+    The fix threads workflow_id through TaskContext so both construction sites
+    read from one transport (TaskContext.workflow_id).
     """
     store = create_local_store(tmp_path / "store")
     src = tmp_path / "artifact.jsonl"
@@ -732,6 +733,6 @@ async def test_upload_path_embeds_workflow_id_from_context(tmp_path):
     assert storage_path is not None
     assert real_workflow_id in storage_path, (
         f"Expected workflow_id '{real_workflow_id}' in storage path '{storage_path}'. "
-        f"Activities must set app_context.workflow_id from activity.info().workflow_id."
+        f"workflow_id must flow from TaskContext.workflow_id into app_context."
     )
     assert "local-no-temporal" not in storage_path

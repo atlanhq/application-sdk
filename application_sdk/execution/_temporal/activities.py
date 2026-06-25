@@ -210,7 +210,7 @@ def create_activity_from_task(
 
             all_refs = _find_file_refs(input_data) + _find_file_refs(result)
             if all_refs:
-                _track_file_refs(activity.info().workflow_id, *all_refs)
+                _track_file_refs(context.workflow_id, *all_refs)
 
             return cast("Output", result)
 
