@@ -451,3 +451,31 @@ class TaskRegistry:
             Activity name in format ``{app_name}:{task_name}``.
         """
         return f"{app_name}:{task_name}"
+
+
+def resolve_pool_queue(pool: str) -> str | None:
+    """Resolve the Temporal task queue for a named worker pool.
+
+    Resolution order (ADR-0016):
+
+    1. ``ATLAN_POOL_<POOL>_QUEUE`` explicit override — hyphens in the pool
+       name are normalised to underscores so ``"cold-tier"`` looks up
+       ``ATLAN_POOL_COLD_TIER_QUEUE``.
+    2. ``{ATLAN_TASK_QUEUE}-{pool}`` derived from the app's base queue.
+    3. ``None`` — neither env var is set; the caller must handle this.
+
+    Args:
+        pool: Validated lowercase kebab-case pool name
+            (e.g. ``"heavy"``, ``"cold-tier"``).
+
+    Returns:
+        Resolved task-queue string, or ``None`` if unresolvable.
+    """
+    import os  # noqa: PLC0415
+
+    env_key = f"ATLAN_POOL_{pool.upper().replace('-', '_')}_QUEUE"
+    explicit = os.environ.get(env_key)
+    if explicit:
+        return explicit
+    base_queue = os.environ.get("ATLAN_TASK_QUEUE", "")
+    return f"{base_queue}-{pool}" if base_queue else None

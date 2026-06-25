@@ -37,7 +37,7 @@ from application_sdk.app.context import (
     _is_atlan_logger,
 )
 from application_sdk.app.entrypoint import EntryPointMetadata
-from application_sdk.app.registry import AppMetadata
+from application_sdk.app.registry import AppMetadata, resolve_pool_queue
 from application_sdk.app.task import get_task_metadata, is_task, task
 from application_sdk.contracts.base import HeartbeatDetails, Input, Output
 from application_sdk.contracts.cleanup import (
@@ -1850,14 +1850,7 @@ def _create_task_activity_wrapper(
     # Resolution order: explicit ATLAN_POOL_<POOL>_QUEUE override first, then
     # derive from ATLAN_TASK_QUEUE so two apps sharing a pool name (e.g.
     # "heavy") never collide on the same Temporal queue.
-    pool_queue: str | None = None
-    if pool:
-        explicit = os.environ.get(f"ATLAN_POOL_{pool.upper()}_QUEUE")
-        if explicit:
-            pool_queue = explicit
-        else:
-            base_queue = os.environ.get("ATLAN_TASK_QUEUE", "")
-            pool_queue = f"{base_queue}-{pool}" if base_queue else None
+    pool_queue: str | None = resolve_pool_queue(pool) if pool else None
     from application_sdk.execution.retry import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
         RetryPolicy as _RP,
     )

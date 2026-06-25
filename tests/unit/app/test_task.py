@@ -611,3 +611,35 @@ class TestTaskPool:
         metadata = get_task_metadata(MyApp.my_task)
         assert metadata is not None
         assert metadata.pool == "cold-tier"
+
+    def test_pool_hyphen_normalised_to_underscore_in_env_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """pool='cold-tier' resolves ATLAN_POOL_COLD_TIER_QUEUE, not ATLAN_POOL_COLD-TIER_QUEUE."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.app.base import _create_task_activity_wrapper
+
+        monkeypatch.setenv("ATLAN_POOL_COLD_TIER_QUEUE", "explicit-cold-queue")
+        monkeypatch.setenv("ATLAN_TASK_QUEUE", "base-queue")
+
+        with patch(
+            "application_sdk.execution._temporal.eviction_retry.execute_activity_with_eviction_retry",
+            new_callable=AsyncMock,
+        ) as mock_exec:
+            mock_exec.return_value = MagicMock()
+            wrapper = _create_task_activity_wrapper(
+                app_name="qi-app",
+                task_name="cold-export",
+                timeout_seconds=600,
+                retry_max_attempts=3,
+                retry_max_interval_seconds=30,
+                output_type=SimpleOutput,
+                context_data={"run_id": "r1", "correlation_id": "c1"},
+                pool="cold-tier",
+            )
+            import asyncio
+
+            asyncio.run(wrapper(MagicMock()))
+
+        assert mock_exec.call_args.kwargs["task_queue"] == "explicit-cold-queue"

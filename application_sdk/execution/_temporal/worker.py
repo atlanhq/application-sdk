@@ -17,7 +17,7 @@ from temporalio.worker import Interceptor as TemporalInterceptor
 from temporalio.worker import Worker, WorkerDeploymentConfig, WorkerDeploymentVersion
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 
-from application_sdk.app.registry import AppRegistry, TaskRegistry
+from application_sdk.app.registry import AppRegistry, TaskRegistry, resolve_pool_queue
 from application_sdk.constants import (
     APP_BUILD_ID,
     APP_DEPLOYMENT_NAME,
@@ -428,19 +428,16 @@ def create_worker(
     for _tasks in task_registry.get_all_tasks().values():
         for _tm in _tasks:
             if _tm.pool and _tm.pool not in _pool_queue_map:
-                _explicit = os.environ.get(f"ATLAN_POOL_{_tm.pool.upper()}_QUEUE")
-                _base = os.environ.get("ATLAN_TASK_QUEUE", "")
-                if _explicit:
-                    _pool_queue_map[_tm.pool] = _explicit
-                elif _base:
-                    _pool_queue_map[_tm.pool] = f"{_base}-{_tm.pool}"
+                _queue = resolve_pool_queue(_tm.pool)
+                if _queue is not None:
+                    _pool_queue_map[_tm.pool] = _queue
                 else:
                     logger.warning(
                         "Pool %r has no resolvable queue: "
                         "set ATLAN_POOL_%s_QUEUE or ATLAN_TASK_QUEUE. "
                         "Activities dispatched to this pool will run on the workflow's default queue.",
                         _tm.pool,
-                        _tm.pool.upper(),
+                        _tm.pool.upper().replace("-", "_"),
                     )
     if _pool_queue_map:
         logger.info("Pool queue map: %s", _pool_queue_map)

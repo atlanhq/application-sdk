@@ -349,9 +349,10 @@ def task(
             ``ATLAN_POOL_<POOL>_QUEUE``. Must match a key in the app's pkl
             contract ``pools { … }``. Must be a non-empty lowercase kebab-case
             string (e.g. ``"heavy"``, ``"cold-tier"``). The env-var key is
-            derived by uppercasing the pool name (``ATLAN_POOL_HEAVY_QUEUE``),
-            so mixed or upper case would create a lookup mismatch. Unset tasks
-            run on the workflow's own task queue (default, backward-compatible
+            derived by uppercasing the pool name and replacing hyphens with
+            underscores (``"cold-tier"`` → ``ATLAN_POOL_COLD_TIER_QUEUE``), so
+            mixed or upper case would create a lookup mismatch. Unset tasks run
+            on the workflow's own task queue (default, backward-compatible
             behavior).
 
     Returns:

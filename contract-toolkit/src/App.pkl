@@ -423,7 +423,7 @@ deployOverrides: Mapping<String, Any> = new Mapping {}
 ///   }
 /// }
 /// ```
-pools: Mapping<String, Pool> = new Mapping {}
+pools: Mapping<KebabCase, Pool> = new Mapping {}
 
 // ── ENTRYPOINTS ──────────────────────────────────────────────────────────────
 

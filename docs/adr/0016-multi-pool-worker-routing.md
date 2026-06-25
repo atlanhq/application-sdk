@@ -214,9 +214,10 @@ two-declaration problem: you cannot typo one side without P016 failing the CI bu
 
 **Pool key format:** pool keys must be **lowercase kebab-case** (e.g. `"heavy"`, `"cold-tier"`).
 This is enforced at decoration time by the `@task` validator and mirrors `App.pkl` `name` keys.
-The `ATLAN_POOL_<POOL>_QUEUE` env-var key is derived by uppercasing the pool name
-(`ATLAN_POOL_HEAVY_QUEUE`), so mixed or upper-case pool keys would cause an env-var lookup
-mismatch and silently fall through to the derived queue name.
+The `ATLAN_POOL_<POOL>_QUEUE` env-var key is derived by uppercasing the pool name **and
+replacing hyphens with underscores** (`"cold-tier"` → `ATLAN_POOL_COLD_TIER_QUEUE`). Mixed or
+upper-case pool keys are rejected at decoration time; the `-` → `_` normalization is handled
+automatically by `resolve_pool_queue` in `application_sdk/app/registry.py`.
 
 Queue names are resolved **at workflow-run time** — specifically when `_create_task_activity_wrapper`
 is called from `_wrap_instance_tasks` inside `@workflow.run`. Env vars are read via
