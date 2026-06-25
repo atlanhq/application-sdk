@@ -6,10 +6,15 @@ stdout/stderr and never reach the SDK observability sink — which means, in SDR
 mode, they never reach the central lakehouse either. Operators can only see them
 by reading the customer's pod/container logs directly.
 
-This module closes that gap. When ``ATLAN_ENABLE_DAPR_LOG_FORWARDING`` is set,
-the entrypoint runs daprd *under* this module:
+This module closes that gap. In SDR mode (``ENABLE_ATLAN_UPLOAD=true``) — the
+same signal that tells the app it runs on customer infra with no node-level log
+collector — the entrypoint runs daprd *under* this module:
 
     python -m application_sdk.observability.dapr_log_forwarder -- daprd <flags> --log-as-json
+
+On atlan-infra (``ENABLE_ATLAN_UPLOAD=false``) the node-level filelog collector
+already scrapes the container's stdout (daprd included), so forwarding is a
+no-op there and the child is exec'd directly.
 
 It spawns daprd as a child, reads its (JSON) log stream line by line, and
 re-emits each line through a ``dapr.runtime`` logger obtained from
@@ -147,14 +152,15 @@ def main(argv: "list[str] | None" = None) -> int:
         )
         return 2
 
-    # Defensive double-gate: if forwarding is off, behave exactly like running
-    # the child directly. The entrypoint only wraps when the flag is on, but this
-    # keeps the module safe to invoke unconditionally.
-    from application_sdk.constants import (  # noqa: PLC0415 — deferred: read at call time so the flag is patchable/env-fresh
-        ENABLE_DAPR_LOG_FORWARDING,
+    # Defensive double-gate: forwarding is only meaningful in SDR mode, where the
+    # app runs on customer infra with no node-level log collector. Outside SDR
+    # mode, behave exactly like running the child directly. The entrypoint only
+    # wraps in SDR mode, but this keeps the module safe to invoke unconditionally.
+    from application_sdk.constants import (  # noqa: PLC0415 — deferred: read at call time so the flag is env-fresh/patchable
+        ENABLE_ATLAN_UPLOAD,
     )
 
-    if not ENABLE_DAPR_LOG_FORWARDING:
+    if not ENABLE_ATLAN_UPLOAD:
         _exec_transparently(child_cmd)  # never returns
 
     emit = _make_emitter()

@@ -518,18 +518,6 @@ ENABLE_OBSERVABILITY_STORE_SINK: bool = (
     ).lower()
     == "true"
 )
-
-#: Forward the daprd sidecar's own logs into the SDK observability pipeline so
-#: they reach the same store sink (and, in SDR mode, the central lakehouse) as
-#: the application's logs. When enabled, the container entrypoint runs daprd
-#: under ``application_sdk.observability.dapr_log_forwarder``, which streams each
-#: daprd log line into a ``dapr.runtime`` logger while still echoing it to the
-#: container's own stdout. Defaults to off — daprd is chatty, so this is opt-in
-#: and pairs best with ``DAPR_LOG_LEVEL=warn``.
-ENABLE_DAPR_LOG_FORWARDING: bool = (
-    os.getenv("ATLAN_ENABLE_DAPR_LOG_FORWARDING", "false").lower() == "true"
-)
-
 # REMOVED: ATLAN_API_TOKEN_GUID, ATLAN_API_KEY, ATLAN_CLIENT_ID, ATLAN_CLIENT_SECRET — unused.
 # ATLAN_BASE_URL is still used by events interceptor (deferred import).
 ATLAN_BASE_URL = os.getenv("ATLAN_BASE_URL")

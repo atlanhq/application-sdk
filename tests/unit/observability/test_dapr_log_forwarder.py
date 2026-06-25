@@ -120,11 +120,12 @@ class TestMain:
     def test_no_child_command_returns_error_code(self):
         assert dlf.main(["dapr_log_forwarder", "--"]) == 2
 
-    def test_transparent_exec_when_flag_disabled(self):
+    def test_transparent_exec_when_not_sdr_mode(self):
+        # Outside SDR mode (ENABLE_ATLAN_UPLOAD=false) the child is exec'd directly.
         # os.execvp never returns in reality; simulate that with SystemExit so
         # main() doesn't fall through into the forwarding path.
         with (
-            patch("application_sdk.constants.ENABLE_DAPR_LOG_FORWARDING", False),
+            patch("application_sdk.constants.ENABLE_ATLAN_UPLOAD", False),
             patch.object(
                 dlf, "_exec_transparently", side_effect=SystemExit(0)
             ) as exec_mock,
@@ -145,7 +146,7 @@ class TestMain:
 
         emitted: list[tuple[str, str]] = []
         with (
-            patch("application_sdk.constants.ENABLE_DAPR_LOG_FORWARDING", True),
+            patch("application_sdk.constants.ENABLE_ATLAN_UPLOAD", True),
             patch.object(
                 dlf,
                 "_make_emitter",
@@ -166,7 +167,7 @@ class TestMain:
         fake_proc.wait.return_value = 3
 
         with (
-            patch("application_sdk.constants.ENABLE_DAPR_LOG_FORWARDING", True),
+            patch("application_sdk.constants.ENABLE_ATLAN_UPLOAD", True),
             patch.object(dlf, "_make_emitter", return_value=lambda *a: None),
             patch.object(dlf.subprocess, "Popen", return_value=fake_proc),
             patch.object(dlf.signal, "signal"),
