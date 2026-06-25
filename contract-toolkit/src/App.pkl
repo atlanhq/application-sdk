@@ -2397,12 +2397,16 @@ local function generateExtractNode(): Mapping<String, Any> =
         // run can carry its credential spec (`agent_json`) even when the app's
         // hand-authored uiConfig doesn't model an `agent-json` field — the gap
         // that silently broke MSSQL's SDR rollout (atlan-mssql-app#177). Skipped
-        // when the app DOES model `agent-json` (the loop below already emits it),
-        // to avoid a duplicate key. Harmless for direct-only runs: AE leaves the
-        // unused slot empty. The guard mirrors the loop's emit condition exactly
-        // (`containsKey && includeInManifest`) — so an app that models `agent-json`
-        // but sets `includeInManifest = false` still gets the default rather than
-        // ending up with no slot at all.
+        // when the app DOES model `agent-json` (the `uiConfig.properties` loop
+        // below already emits it), to avoid a duplicate key. Harmless for
+        // direct-only runs: AE leaves the unused slot empty. The guard mirrors the
+        // loop's emit condition exactly (`containsKey && includeInManifest`) — so
+        // an app that models `agent-json` but sets `includeInManifest = false`
+        // still gets the default rather than ending up with no slot at all. This
+        // is a DELIBERATE, field-specific semantic (PR #2312): `agent_json` is
+        // structurally required for SDR credential routing, so for this one field
+        // `includeInManifest = false` does NOT suppress the manifest slot — unlike
+        // every other field, where it does.
         when (uiConfig == null || !(uiConfig!!.properties.containsKey("agent-json") && uiConfig!!.properties["agent-json"].includeInManifest)) {
           ["agent_json"] = "{{agent-json}}"
         }

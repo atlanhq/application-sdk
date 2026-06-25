@@ -49,7 +49,6 @@ Example:
 from __future__ import annotations
 
 import os
-import re
 import shutil
 from pathlib import Path
 from typing import Any, ClassVar
@@ -57,6 +56,12 @@ from typing import Any, ClassVar
 import orjson
 
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.testing._mustache import (
+    PLACEHOLDER_RE as _PLACEHOLDER_RE,
+)
+from application_sdk.testing._mustache import (
+    apply_mustache_subs as _apply_mustache_subs,
+)
 from application_sdk.testing.integration import (
     BaseIntegrationTest,
     Scenario,
@@ -64,28 +69,6 @@ from application_sdk.testing.integration import (
 )
 
 logger = get_logger(__name__)
-
-#: A whole-value mustache placeholder (no internal braces) — matches the
-#: exact-match notion ``_apply_mustache_subs`` substitutes on, so a value like
-#: ``"{{a}}-{{b}}"`` is NOT mistaken for a single placeholder.
-_PLACEHOLDER_RE = re.compile(r"\{\{[^{}]+\}\}")
-
-
-def _apply_mustache_subs(obj: Any, subs: dict[str, Any]) -> Any:
-    """Recursively replace exact-match ``{{...}}`` strings with ``subs`` values.
-
-    Mirrors the walker the e2e / full_dag manifest harnesses use
-    (``application_sdk.testing.e2e.base._apply_mustache_subs``); kept local so
-    the SDR harness can substitute a manifest's ``extract`` args without
-    depending on the AE-publish base class.
-    """
-    if isinstance(obj, dict):
-        return {k: _apply_mustache_subs(v, subs) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_apply_mustache_subs(x, subs) for x in obj]
-    if isinstance(obj, str) and obj in subs:
-        return subs[obj]
-    return obj
 
 
 def _collect_placeholders(obj: Any) -> set[str]:
