@@ -1,5 +1,8 @@
 module com.atlan.app.contract.Pool
 
+/// Lowercase kebab-case string: `[a-z][a-z0-9]*(-[a-z0-9]+)*`.
+typealias KebabCase = String(matches(Regex("[a-z][a-z0-9]*(-[a-z0-9]+)*")))
+
 class DaprComponents {
   objectstore: Boolean = false
   secretstore: Boolean = false
@@ -29,24 +32,23 @@ class ResourceConfig {
   limits: Mapping<String, String> = new Mapping {}
 }
 
-/// Per-pool deployment configuration. The pool key (the mapping key in
-/// `App.pkl`'s `pools` property) is the same string used in
-/// `@task(pool="…")` in Python — no separate profile indirection.
+/// Per-pool deployment configuration. The pool key must be lowercase kebab-case
+/// and exactly match the string passed to `@task(pool="…")` in Python — the
+/// runtime routes activities to the corresponding task queue via that name.
 ///
 /// Until conformance rule P016 (BLDX-1485) ships, the pool-key / `@task(pool=…)`
 /// alignment is enforced only by reading. A typo silently routes activities to an
 /// unstaffed queue and they hang until `start_to_close_timeout`.
 ///
-/// Simple apps never configure this — the platform default applies.
-/// Multi-pool apps declare named pools:
-///
 /// ```pkl
-/// pools {
-///   ["hot"] = new Pool {
-///     keda { minReplicaCount = 1; cooldownPeriod = 300 }
-///   }
-///   ["cold"] = new Pool {
-///     keda { minReplicaCount = 0; cooldownPeriod = 30 }
+/// deploy = new DeployConfig {
+///   pools {
+///     ["hot"] = new Pool {
+///       keda { minReplicaCount = 1; cooldownPeriod = 300 }
+///     }
+///     ["cold"] = new Pool {
+///       keda { minReplicaCount = 0; cooldownPeriod = 30 }
+///     }
 ///   }
 /// }
 /// ```
@@ -57,21 +59,43 @@ class Pool {
   resources: ResourceConfig? = null
   env: Mapping<String, String> = new Mapping {}
   envOverrides: Mapping<String, Mapping<String, String>> = new Mapping {}
-  /// Per-pool escape hatch for `atlan.yaml` keys not yet modelled above.
+  /// Per-pool escape hatch for `atlan.yaml` keys not yet modelled as typed fields.
   /// Deep-merged on top of the rendered pool block last.
-  deployOverrides: Mapping<String, Any> = new Mapping {}
+  overrides: Mapping<String, Any> = new Mapping {}
 }
 
-/// @Deprecated — use `pools` on App.pkl instead. Will be removed in the next minor version.
+/// Deployment configuration for the app. Set `deploy = new DeployConfig { … }` in
+/// your app contract to configure deployment. Leave unset (null, the default) to
+/// let Heracles apply platform defaults.
 ///
-/// Single-pool deployment configuration. Emitted automatically when set (non-null).
+/// Singleton fields (`executionMode`, `splitDeployment`, `dapr`) apply to the whole
+/// deployment. Per-pool KEDA, resources, and env go inside `pools`.
+///
+/// Example — single default pool with Dapr sidecars:
+///
+/// ```pkl
+/// deploy = new DeployConfig {
+///   dapr { objectstore = true; secretstore = true }
+///   pools {
+///     ["default"] = new Pool {
+///       keda { minReplicaCount = 1 }
+///       resources = new ResourceConfig {
+///         requests { ["cpu"] = "500m"; ["memory"] = "1Gi" }
+///       }
+///     }
+///   }
+/// }
+/// ```
 class DeployConfig {
   executionMode: String = "native"
   splitDeployment: Boolean = true
-  replicaCount: Int? = null
+  /// Dapr sidecar component toggles. App-wide — not per-pool.
   dapr: DaprComponents = new DaprComponents {}
-  keda: KedaConfig = new KedaConfig {}
-  resources: ResourceConfig? = null
-  env: Mapping<String, String> = new Mapping {}
-  envOverrides: Mapping<String, Mapping<String, String>> = new Mapping {}
+  /// Global escape hatch for `atlan.yaml` keys not yet modelled as typed fields.
+  /// Deep-merged on top of the rendered `deploy:` block after pool-level
+  /// `overrides` from the first pool are applied.
+  overrides: Mapping<String, Any> = new Mapping {}
+  /// Named worker-pool map. Pool keys must be lowercase kebab-case.
+  /// An empty map (the default) emits no `pools:` block in `atlan.yaml`.
+  pools: Mapping<KebabCase, Pool> = new Mapping {}
 }

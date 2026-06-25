@@ -1,5 +1,5 @@
-/// Pools map example — demonstrates named worker pools with per-pool
-/// KEDA, resources, cooldownPeriod, and per-pool env.
+/// Multi-pool deployment example — two named worker pools with per-pool
+/// KEDA, resources, cooldownPeriod, and env.
 ///
 /// Two pools:
 ///   "hot"  — always-on (minReplicaCount=1), lenient cooldown (300 s)
@@ -17,47 +17,49 @@ displayName = "Pools Map Example"
 icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
 hasCredentialConfig = false
 
-pools {
-  ["hot"] = new Pool {
-    keda {
-      enabled = true
-      minReplicaCount = 1
-      cooldownPeriod = 300
-      temporal {
-        targetQueueSize = 10
+deploy = new DeployConfig {
+  pools {
+    ["hot"] = new Pool {
+      keda {
+        enabled = true
+        minReplicaCount = 1
+        cooldownPeriod = 300
+        temporal {
+          targetQueueSize = 10
+        }
+      }
+      resources = new ResourceConfig {
+        requests {
+          ["cpu"] = "500m"
+          ["memory"] = "1Gi"
+        }
+        limits {
+          ["cpu"] = "2"
+          ["memory"] = "4Gi"
+        }
+      }
+      env {
+        ["WORKER_TYPE"] = "hot"
       }
     }
-    resources = new ResourceConfig {
-      requests {
-        ["cpu"] = "500m"
-        ["memory"] = "1Gi"
+    ["cold"] = new Pool {
+      keda {
+        enabled = true
+        minReplicaCount = 0
+        cooldownPeriod = 30
+        temporal {
+          targetQueueSize = 5
+        }
       }
-      limits {
-        ["cpu"] = "2"
-        ["memory"] = "4Gi"
+      resources = new ResourceConfig {
+        requests {
+          ["cpu"] = "100m"
+          ["memory"] = "256Mi"
+        }
       }
-    }
-    env {
-      ["WORKER_TYPE"] = "hot"
-    }
-  }
-  ["cold"] = new Pool {
-    keda {
-      enabled = true
-      minReplicaCount = 0
-      cooldownPeriod = 30
-      temporal {
-        targetQueueSize = 5
+      env {
+        ["WORKER_TYPE"] = "cold"
       }
-    }
-    resources = new ResourceConfig {
-      requests {
-        ["cpu"] = "100m"
-        ["memory"] = "256Mi"
-      }
-    }
-    env {
-      ["WORKER_TYPE"] = "cold"
     }
   }
 }

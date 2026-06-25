@@ -17,6 +17,14 @@ entrypoints:
 deploy:
   execution_mode: native
   splitDeploymentEnabled: true
+  dapr:
+    objectstore: true
+    secretstore: true
+    statestore: false
+    eventstore: false
+    subscription: false
+    configurationstore: false
+    lock: false
   keda:
     enabled: true
     minReplicaCount: 1
@@ -32,14 +40,6 @@ deploy:
   env:
     LOG_LEVEL: INFO
     MAX_WORKERS: '4'
-  dapr:
-    objectstore: true
-    secretstore: true
-    statestore: false
-    eventstore: false
-    subscription: false
-    configurationstore: false
-    lock: false
   verticalPodAutoscaler:
     enabled: true
     updateMode: Auto
@@ -60,14 +60,6 @@ pools:
     env:
       LOG_LEVEL: INFO
       MAX_WORKERS: '4'
-    dapr:
-      objectstore: true
-      secretstore: true
-      statestore: false
-      eventstore: false
-      subscription: false
-      configurationstore: false
-      lock: false
     verticalPodAutoscaler:
       enabled: true
       updateMode: Auto

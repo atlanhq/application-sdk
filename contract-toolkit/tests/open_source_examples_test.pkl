@@ -330,7 +330,7 @@ facts {
     bundleApp.output.files["atlan.yaml"].text.contains("name: miner")
   }
 
-  ["Deploy example atlan.yaml includes KEDA, resources, env, and pool deployOverrides"] {
+  ["Deploy example atlan.yaml includes KEDA, resources, env, dapr, and pool overrides"] {
     deployApp.output.files.containsKey("atlan.yaml")
     local deployYaml: String = deployApp.output.files["atlan.yaml"].text
     // execution_mode at top level (read by global-marketplace and atlan-local-marketplace-app)
@@ -338,7 +338,7 @@ facts {
     // KEDA settings
     deployYaml.contains("enabled: true")
     deployYaml.contains("targetQueueSize: 10")
-    // Dapr via deployOverrides
+    // Dapr via deploy.dapr (global sidecar toggles)
     deployYaml.contains("objectstore: true")
     deployYaml.contains("secretstore: true")
     // Resources
@@ -346,7 +346,7 @@ facts {
     deployYaml.contains("memory: 4Gi")
     // Env
     deployYaml.contains("LOG_LEVEL: INFO")
-    // pool deployOverrides deep-merged (VPA)
+    // pool overrides deep-merged (VPA)
     deployYaml.contains("verticalPodAutoscaler:")
     deployYaml.contains("updateMode: Auto")
   }

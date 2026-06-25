@@ -370,36 +370,30 @@ pipeline: Pipeline = new Pipeline {}
 
 // ── DEPLOY CONFIG ─────────────────────────────────────────────────────────────
 
-/// Named worker-pool configuration map. FULLY OPTIONAL.
+/// Deployment configuration. Leave unset (null, the default) to let Heracles
+/// apply platform defaults. Set to configure the `deploy:` block in `atlan.yaml`.
 ///
-/// An empty map (default) emits nothing — platform defaults apply.
-/// Declare named pools to configure per-pool KEDA, resources, or env.
-/// The pool key here must exactly match the string passed to `@task(pool="…")`
-/// in Python — the runtime uses this name to route activities to the right queue.
+/// Singleton fields (`executionMode`, `splitDeployment`, `dapr`) apply to the
+/// whole deployment. Per-pool KEDA, resources, and env go inside `pools`.
 ///
 /// Example (two pools — hot always-on + cold scale-to-zero):
 ///
 /// ```pkl
-/// pools {
-///   ["hot"] = new Pool {
-///     keda { minReplicaCount = 1; cooldownPeriod = 300 }
-///   }
-///   ["cold"] = new Pool {
-///     keda { minReplicaCount = 0; cooldownPeriod = 30 }
+/// deploy = new DeployConfig {
+///   pools {
+///     ["hot"] = new Pool {
+///       keda { minReplicaCount = 1; cooldownPeriod = 300 }
+///     }
+///     ["cold"] = new Pool {
+///       keda { minReplicaCount = 0; cooldownPeriod = 30 }
+///     }
 ///   }
 /// }
 /// ```
 ///
-/// For the single-pool case, declare one entry named `"default"`:
-///
-/// ```pkl
-/// pools {
-///   ["default"] = new Pool {
-///     keda { minReplicaCount = 1 }
-///   }
-/// }
-/// ```
-pools: Mapping<KebabCase, Pool> = new Mapping {}
+/// For the single-pool case, use the key `"default"`. See `examples/deploy/` for
+/// a full example with Dapr, KEDA, resources, env, and overrides.
+deploy: DeployConfig? = null
 
 // ── ENTRYPOINTS ──────────────────────────────────────────────────────────────
 
@@ -3141,6 +3135,49 @@ local function renderPool(p: Pool): Mapping<String, Any> = new Mapping {
   when (!p.envOverrides.isEmpty) { ["envOverrides"] = p.envOverrides }
 }
 
+local function renderDapr(d: DaprComponents): Mapping<String, Any> = new Mapping {
+  ["objectstore"] = d.objectstore
+  ["secretstore"] = d.secretstore
+  ["statestore"] = d.statestore
+  ["eventstore"] = d.eventstore
+  ["subscription"] = d.subscription
+  ["configurationstore"] = d.configurationstore
+  ["lock"] = d.lock
+  for (k, v in d.customComponents) {
+    [k] = v
+  }
+}
+
+local function renderDeployYaml(d: DeployConfig): Mapping<String, Any> =
+  let (hasDapr = d.dapr.objectstore || d.dapr.secretstore || d.dapr.statestore ||
+        d.dapr.eventstore || d.dapr.subscription || d.dapr.configurationstore ||
+        d.dapr.lock || !d.dapr.customComponents.isEmpty)
+  let (globalFields: Mapping<String, Any> = new Mapping {
+    ["execution_mode"] = d.executionMode
+    ["splitDeploymentEnabled"] = d.splitDeployment
+    when (hasDapr) { ["dapr"] = renderDapr(d.dapr) }
+  })
+  if (d.pools.isEmpty)
+    deepMergeMapping(globalFields, d.overrides)
+  else
+    let (firstPool: Pool = (new Listing<Pool> { for (_, p in d.pools) { p } }).first)
+    let (poolFields: Mapping<String, Any> = new Mapping {
+      when (firstPool.replicaCount != null) { ["replicaCount"] = firstPool.replicaCount }
+      ["keda"] = renderKedaConfig(firstPool.keda)
+      when (firstPool.resources != null) {
+        ["resources"] = new Mapping {
+          when (!firstPool.resources!!.requests.isEmpty) { ["requests"] = firstPool.resources!!.requests }
+          when (!firstPool.resources!!.limits.isEmpty) { ["limits"] = firstPool.resources!!.limits }
+        }
+      }
+      when (!firstPool.env.isEmpty) { ["env"] = firstPool.env }
+      when (!firstPool.envOverrides.isEmpty) { ["envOverrides"] = firstPool.envOverrides }
+    })
+    deepMergeMapping(
+      deepMergeMapping(globalFields, poolFields),
+      deepMergeMapping(d.overrides, firstPool.overrides)
+    )
+
 
 local effectiveEntrypoints: Listing<Entrypoint> =
   if (!entrypoints.isEmpty) entrypoints
@@ -3181,25 +3218,13 @@ local generatedAtlanYamlData: Mapping<String, Any> = new Mapping {
       }
     }
   }
-  when (!pools.isEmpty) {
-    local firstPool: Pool = (new Listing<Pool> { for (_, p in pools) { p } }).first
-    ["deploy"] = deepMergeMapping(new Mapping {
-      ["execution_mode"] = "native"
-      ["splitDeploymentEnabled"] = true
-      when (firstPool.replicaCount != null) { ["replicaCount"] = firstPool.replicaCount }
-      ["keda"] = renderKedaConfig(firstPool.keda)
-      when (firstPool.resources != null) {
-        ["resources"] = new Mapping {
-          when (!firstPool.resources!!.requests.isEmpty) { ["requests"] = firstPool.resources!!.requests }
-          when (!firstPool.resources!!.limits.isEmpty) { ["limits"] = firstPool.resources!!.limits }
+  when (deploy != null) {
+    ["deploy"] = renderDeployYaml(deploy!!)
+    when (!deploy!!.pools.isEmpty) {
+      ["pools"] = new Mapping {
+        for (poolName, pool in deploy!!.pools) {
+          [poolName] = deepMergeMapping(renderPool(pool), pool.overrides)
         }
-      }
-      when (!firstPool.env.isEmpty) { ["env"] = firstPool.env }
-      when (!firstPool.envOverrides.isEmpty) { ["envOverrides"] = firstPool.envOverrides }
-    }, firstPool.deployOverrides)
-    ["pools"] = new Mapping {
-      for (poolName, pool in pools) {
-        [poolName] = deepMergeMapping(renderPool(pool), pool.deployOverrides)
       }
     }
   }
