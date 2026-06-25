@@ -125,12 +125,15 @@ def regenerate(contract_dir: str) -> bool:
 
 
 def _format_generated(out_dir: Path) -> None:
-    """ruff-fix + format the generated _input.py, mirroring
-    contract-toolkit/scripts/regenerate-all.sh. Best-effort: this commit
-    bypasses pre-commit, so we format here for apps that lint app/generated,
-    but a ruff hiccup must not fail the sync (many apps exclude app/generated
-    from lint entirely)."""
-    inputs = sorted((out_dir / "app" / "generated").rglob("_input.py"))
+    """ruff-fix + format every generated *.py, mirroring
+    contract-toolkit/scripts/regenerate-all.sh. The contract emits more than
+    _input.py (e.g. _e2e_base.py, _e2e_credential.py, _e2e_substitutions.py);
+    every one must match what pre-commit's ruff-format would produce, or the
+    consumer's pre-commit reformats it on the renovate PR and fails CI. This
+    sync commit bypasses pre-commit, so we format here. Best-effort: a ruff
+    hiccup must not fail the sync (many apps exclude app/generated from lint
+    entirely)."""
+    inputs = sorted((out_dir / "app" / "generated").rglob("*.py"))
     if not inputs:
         return
     paths = [str(p) for p in inputs]
