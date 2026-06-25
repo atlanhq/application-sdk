@@ -1507,6 +1507,10 @@ class TestLoggingMethodsForwardToLoguru:
         self, logger_adapter: AtlanLoggerAdapter
     ):
         # Make `process` blow up; debug() must not propagate.
+        # _wire_mock replaces self.logger so _is_enabled returns True
+        # (the mocked _core.min_level triggers the TypeError fallback),
+        # letting the call reach process() where the exception is raised.
+        self._wire_mock(logger_adapter)
         with (
             mock.patch.object(
                 logger_adapter, "process", side_effect=RuntimeError("explode")
