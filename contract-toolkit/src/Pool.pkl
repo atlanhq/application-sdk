@@ -64,7 +64,7 @@ class Pool {
 
 /// @Deprecated — use `pools` on App.pkl instead. Will be removed in the next minor version.
 ///
-/// Single-pool deployment configuration. Requires `emitDeploy = true` to emit.
+/// Single-pool deployment configuration. Emitted automatically when set (non-null).
 class DeployConfig {
   executionMode: String = "native"
   splitDeployment: Boolean = true

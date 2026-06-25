@@ -9,11 +9,11 @@ name = "deploy"
 displayName = "Deploy Config Example"
 icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
 hasCredentialConfig = false
-emitDeploy = true
 
 // ── Deployment configuration ──────────────────────────────────────────────────
 
-deploy {
+// deploy is nullable — set it with `new DeployConfig { ... }` to emit the block.
+deploy = new DeployConfig {
   // KEDA: scale-to-zero based on Temporal task-queue depth.
   // targetQueueSize must be set via temporal.targetQueueSize — NOT keda.targetQueueSize.
   keda {

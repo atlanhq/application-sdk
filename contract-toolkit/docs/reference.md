@@ -2717,31 +2717,35 @@ class AppInputContract(ExtractionInput):
 
 ## Migration Notes
 
-### v0.17.0 — `emitDeploy` defaults to `false`
+### v0.17.0 — `deploy` block emitted automatically when configured
 
-**What changed:** `App.pkl` gained an `emitDeploy: Boolean` flag (default `false`). Before
-v0.17.0 the `deploy:` block was always emitted when `deploy { ... }` was configured; now it is
-suppressed unless you explicitly opt in.
+**What changed:** `App.pkl`'s `deploy` property is now nullable (default `null`). When you
+set `deploy { ... }` the block is emitted into `atlan.yaml` automatically — no extra flag
+required. When `deploy` is left unset (null), the block is omitted and Heracles applies its
+own platform defaults.
 
-**Who is affected:** apps that configure `deploy { ... }` or `deployOverrides { ... }` and
-expect a `deploy:` block in the generated `atlan.yaml`. After bumping to v0.17.0 and re-running
-`pkl eval`, those apps will generate an `atlan.yaml` without a `deploy:` block — Heracles will
-apply its own platform defaults instead.
+**Who is affected:** apps that previously relied on the `deploy:` block always being present
+even when `deploy { ... }` was not explicitly configured. Those apps were emitting an empty or
+default `deploy:` block; they should now either set `deploy { ... }` explicitly with the values
+they need, or leave it unset and let Heracles apply platform defaults.
 
-**Fix:** add `emitDeploy = true` to your contract:
+Apps that already set `deploy { ... }` explicitly **must update the syntax** to
+`deploy = new DeployConfig { ... }` because `deploy` is now nullable and Pkl's amendment
+shorthand (`deploy { ... }`) cannot amend a `null` value:
 
 ```pkl
-amends "@app-contract-toolkit/App.pkl"
-
-emitDeploy = true
-
+// Before (v0.16.x):
 deploy {
-  keda { minReplicaCount = 1 }
+  keda { enabled = true; minReplicaCount = 1 }
+}
+
+// After (v0.17.0+):
+deploy = new DeployConfig {
+  keda { enabled = true; minReplicaCount = 1 }
 }
 ```
 
-Apps that rely entirely on platform defaults (no explicit `deploy { ... }`) are unaffected —
-they never emitted a `deploy:` block and continue to work as before.
+Apps that did not configure `deploy { ... }` are unaffected.
 
 ---
 

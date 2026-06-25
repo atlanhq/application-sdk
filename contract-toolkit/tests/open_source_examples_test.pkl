@@ -4,7 +4,7 @@ import "../examples/bundle/app.pkl" as bundleApp
 import "../examples/card-split/app.pkl" as cardSplitApp
 import "../examples/connection-ref/app.pkl" as connectionRefApp
 import "../examples/deploy/app.pkl" as deployApp
-import "../examples/deploy-no-emit/app.pkl" as deployNoEmitApp
+
 import "../examples/pools/app.pkl" as poolsApp
 import "../examples/fanin/app.pkl" as faninApp
 import "../examples/full/app.pkl" as fullApp
@@ -225,20 +225,13 @@ facts {
     bundleApp.output.files["atlan.yaml"].text.contains("marketplace_card: true")
   }
 
-  ["deploy block absent from atlan.yaml by default (emitDeploy = false)"] {
+  ["deploy block absent from atlan.yaml when deploy is not configured"] {
     !minimalAtlanYaml.contains("deploy:")
     !fullAtlanYaml.contains("deploy:")
     !bundleApp.output.files["atlan.yaml"].text.contains("deploy:")
   }
 
-  ["deploy block absent when deploy is configured but emitDeploy not set (migration guard)"] {
-    // Regression guard for the v0.10.0 emitDeploy=false default: an app that
-    // configures deploy { ... } but omits emitDeploy must NOT emit a deploy:
-    // block — the operator must explicitly opt in with emitDeploy = true.
-    !deployNoEmitApp.output.files["atlan.yaml"].text.contains("deploy:")
-  }
-
-  ["deploy block present when emitDeploy = true"] {
+  ["deploy block present when deploy is explicitly configured"] {
     local deployYaml: String = deployApp.output.files["atlan.yaml"].text
     deployYaml.contains("deploy:")
     deployYaml.contains("keda:")

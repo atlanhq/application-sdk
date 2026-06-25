@@ -201,18 +201,6 @@ emitAtlanYaml: Boolean = true
 /// declaratively rather than suppressing the whole block.
 emitEntrypoints: Boolean = true
 
-/// Whether to emit the `deploy:` block into `atlan.yaml`.
-/// Defaults to `false` — most apps do not need to configure deployment;
-/// Heracles applies platform defaults when the block is absent.
-/// Set to `true` when you explicitly configure `deploy { ... }` or
-/// `deployOverrides { ... }`.
-///
-/// **Migration note (introduced in v0.17.0):** if your app previously relied
-/// on a `deploy:` block being emitted by default, add `emitDeploy = true` to
-/// your contract. Without it the block is suppressed and Heracles will apply
-/// its own platform defaults, which may differ from your prior explicit config.
-emitDeploy: Boolean = false
-
 /// Whether to emit `app.yaml` in the output.
 emitAppYaml: Boolean = true
 
@@ -385,9 +373,10 @@ pipeline: Pipeline = new Pipeline {}
 /// @Deprecated — use `pools` instead. Will be removed in the next minor version.
 ///
 /// Typed deployment configuration rendered into `atlan.yaml`'s `deploy:` block.
-/// Requires `emitDeploy = true` to emit. For new apps, use `pools { ... }`
-/// which is explicit-overrides-only by default and supports multiple named pools.
-deploy: DeployConfig = new DeployConfig {}
+/// When set (non-null), the block is emitted automatically — no extra flag needed.
+/// When `null` (default), the block is omitted and Heracles applies platform defaults.
+/// For new apps, use `pools { ... }` which supports multiple named pools.
+deploy: DeployConfig? = null
 
 /// Deep-merged on top of the rendered `deploy` block last.
 /// Use this for marketplace keys the toolkit does not yet model (VPA, canary,
@@ -3217,7 +3206,7 @@ local generatedAtlanYamlData: Mapping<String, Any> = new Mapping {
   when (docsUrl != "") { ["docs_url"] = docsUrl }
   when (creatorOrg != null) { ["creator_org"] = creatorOrg }
   ["type"] = type
-  ["execution_mode"] = deploy.executionMode
+  ["execution_mode"] = deploy?.executionMode ?? "native"
   when (iconUrl != null) { ["icon_url"] = iconUrl }
   ["visibility"] = visibility
   when (!argoPackageNames.isEmpty) { ["argo_package_names"] = argoPackageNames }
@@ -3231,8 +3220,9 @@ local generatedAtlanYamlData: Mapping<String, Any> = new Mapping {
       }
     }
   }
-  when (emitDeploy) {
-    ["deploy"] = deepMergeMapping(renderDeployConfig(deploy), deployOverrides)
+  when (deploy != null) {
+    local d: DeployConfig = deploy!!
+    ["deploy"] = deepMergeMapping(renderDeployConfig(d), deployOverrides)
   }
   when (!pools.isEmpty) {
     ["pools"] = new Mapping {
