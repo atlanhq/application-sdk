@@ -1,4 +1,4 @@
-"""Unit tests for the injected preflight-gate activity (``preflight:gate``).
+"""Unit tests for the injected preflight-gate activity (``{app}:preflight``).
 
 Separate from the SDR activity tests — the gate is its own module/concern.
 """

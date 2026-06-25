@@ -208,10 +208,11 @@ def flatten_credentials_to_pairs(creds_dict: dict[str, Any]) -> list[dict[str, s
     resolved-credential conversion so both emit identical shapes.
     """
     pairs: list[dict[str, str]] = []
-    extra = creds_dict.pop("extra", None)
+    extra = creds_dict.get("extra")
     for key, value in creds_dict.items():
-        if value is not None:
-            pairs.append({"key": key, "value": _serialize_credential_value(value)})
+        if key == "extra" or value is None:
+            continue
+        pairs.append({"key": key, "value": _serialize_credential_value(value)})
     if isinstance(extra, dict):
         for key, value in extra.items():
             if value is not None:

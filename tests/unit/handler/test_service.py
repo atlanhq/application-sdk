@@ -2882,11 +2882,11 @@ class TestFlattenToPairs:
         keys = {p["key"] for p in result}
         assert keys == {"host"}
 
-    def test_mutates_input_extra_key(self) -> None:
-        """_flatten_to_pairs pops 'extra' from the input dict."""
+    def test_does_not_mutate_input(self) -> None:
+        """_flatten_to_pairs must not mutate its argument (shared helper)."""
         creds = {"host": "db.example.com", "extra": {"role": "ADMIN"}}
         _flatten_to_pairs(creds)
-        assert "extra" not in creds
+        assert creds == {"host": "db.example.com", "extra": {"role": "ADMIN"}}
 
 
 class TestStartCredentialStripping:

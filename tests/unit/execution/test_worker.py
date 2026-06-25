@@ -322,7 +322,7 @@ class TestCreateWorker:
     ) -> None:
         """SDR/gate activities are ALWAYS registered (the preflight gate is
         mandatory): with no app Handler, DefaultHandler is bound so the
-        injected sdr:preflight_gate is still dispatchable."""
+        injected {app}:preflight gate is still dispatchable."""
 
         class _NoHandlerApp(App):
             async def run(self, input: _WorkerInput) -> _WorkerOutput:
