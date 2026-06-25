@@ -57,7 +57,7 @@ demonstrates distinct feature surface, verified by `tests/*.pkl`.
 - `bundle`: multi-entrypoint app (crawler + miner); shared credential configmap;
   per-entrypoint artifact subfolders.
 - `deploy`: typed `deploy` block (deprecated single-pool path) — KEDA, Dapr, resources, env, `deployOverrides`.
-- `deployments`: `deployments` map (preferred) — named hot/cold worker pools with per-pool `cooldownPeriod`, `profiles`, resources.
+- `pools`: `pools` map (preferred) — named hot/cold worker pools with per-pool `cooldownPeriod` and resources.
 - `connection-ref`: `ConnectionRefInput` widget, `pipeline.publish = null`.
 - `publish-controls`: publish toggles, `includeInputFields`, `errorHandling`.
 - `fanin`: multi-parent fan-in via `dependsOn`, explicit `DependencyCondition`.

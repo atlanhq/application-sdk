@@ -237,21 +237,22 @@ The auth-type radio's `ui.hidden` is auto-derived from `credentialAuthOptions.le
 |---|---|---|
 | `uiConfig` | UIConfig | Setup form definition with tasks, rules. |
 
-### Deployments Map (new — preferred)
+### Pools Map (preferred)
 
-The `deployments` map is the preferred way to configure worker pools. It is optional and explicit-overrides-only: an empty map (the default) emits nothing. Declare named pools to configure per-pool KEDA, resources, env, and profiles.
+The `pools` map is the preferred way to configure worker pools. It is optional and explicit-overrides-only: an empty map (the default) emits nothing. Declare named pools to configure per-pool KEDA, resources, and env.
 
-All deployment classes (`Deployment`, `DeployConfig`, `DaprComponents`, `KedaConfig`, `KedaTemporalConfig`, `ResourceConfig`) are defined in `Deployment.pkl` and re-exported by `App.pkl` — amending contracts do not need a supplemental import.
+The pool key must exactly match the string passed to `@task(pool="…")` in Python — the runtime uses this name to route activities to the right task queue via `ATLAN_POOL_<POOL>_QUEUE`.
+
+All pool classes (`Pool`, `DeployConfig`, `DaprComponents`, `KedaConfig`, `KedaTemporalConfig`, `ResourceConfig`) are defined in `Pool.pkl` and re-exported by `App.pkl` — amending contracts do not need a supplemental import.
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `deployments` | Mapping<String, Deployment> | `{}` | Named worker-pool map. Empty by default — emits nothing. Add named pools to configure per-pool scaling and profiles. |
+| `pools` | Mapping<String, Pool> | `{}` | Named worker-pool map. Empty by default — emits nothing. Add named pools to configure per-pool scaling. |
 
-**Deployment class:**
+**Pool class:**
 
 ```pkl
-class Deployment {
-  profiles: Listing<String> = new Listing {}       // logical profiles this pool serves
+class Pool {
   replicaCount: Int? = null                        // static replica count (ignored when keda.enabled)
   keda: KedaConfig = new KedaConfig {}
   resources: ResourceConfig? = null
@@ -264,23 +265,21 @@ class Deployment {
 Example — two pools, hot always-on + cold scale-to-zero:
 
 ```pkl
-deployments {
-  ["hot"] = new Deployment {
-    profiles { "main" }
+pools {
+  ["hot"] = new Pool {
     keda { minReplicaCount = 1; cooldownPeriod = 300 }
   }
-  ["cold"] = new Deployment {
-    profiles { "exceptional" }
+  ["cold"] = new Pool {
     keda { minReplicaCount = 0; cooldownPeriod = 30 }
   }
 }
 ```
 
-See `examples/deployments/` for the full two-pool example.
+For the single-pool case, use the key `"default"`. See `examples/pools/` for the full two-pool example.
 
 ### Deploy Block (deprecated)
 
-> **Deprecated** — use `deployments` instead. `deploy:` will be removed in the next minor version.
+> **Deprecated** — use `pools` instead. `deploy:` will be removed in the next minor version.
 
 The `deploy` block was the original single-pool deployment configuration. It requires `emitDeploy = true` to emit anything.
 

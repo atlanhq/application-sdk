@@ -29,7 +29,7 @@
 open module com.atlan.app.contract.App
 
 import "Connectors.pkl"
-import "Deployment.pkl" as DeploymentPkg
+import "Pool.pkl" as PoolPkg
 import "Widgets.pkl"
 
 // ── WIDGET TYPE RE-EXPORTS ────────────────────────────────────────────────────
@@ -88,14 +88,14 @@ typealias CustomWidget = Widgets.CustomWidget
 
 // ── DEPLOYMENT TYPE RE-EXPORTS ────────────────────────────────────────────────
 // Typealiases so amending contracts write `new DeployConfig { }`, `new KedaConfig { }`, etc.
-// without needing a supplemental `import "@app-contract-toolkit/Deployment.pkl"`.
+// without needing a supplemental `import "@app-contract-toolkit/Pool.pkl"`.
 
-typealias DaprComponents = DeploymentPkg.DaprComponents
-typealias KedaTemporalConfig = DeploymentPkg.KedaTemporalConfig
-typealias KedaConfig = DeploymentPkg.KedaConfig
-typealias ResourceConfig = DeploymentPkg.ResourceConfig
-typealias DeployConfig = DeploymentPkg.DeployConfig
-typealias Deployment = DeploymentPkg.Deployment
+typealias DaprComponents = PoolPkg.DaprComponents
+typealias KedaTemporalConfig = PoolPkg.KedaTemporalConfig
+typealias KedaConfig = PoolPkg.KedaConfig
+typealias ResourceConfig = PoolPkg.ResourceConfig
+typealias DeployConfig = PoolPkg.DeployConfig
+typealias Pool = PoolPkg.Pool
 
 // ── CONSTRAINED TYPES ────────────────────────────────────────────────────────
 
@@ -376,10 +376,10 @@ pipeline: Pipeline = new Pipeline {}
 
 // ── DEPLOY CONFIG ─────────────────────────────────────────────────────────────
 
-/// @Deprecated — use `deployments` instead. Will be removed in the next minor version.
+/// @Deprecated — use `pools` instead. Will be removed in the next minor version.
 ///
 /// Typed deployment configuration rendered into `atlan.yaml`'s `deploy:` block.
-/// Requires `emitDeploy = true` to emit. For new apps, use `deployments { ... }`
+/// Requires `emitDeploy = true` to emit. For new apps, use `pools { ... }`
 /// which is explicit-overrides-only by default and supports multiple named pools.
 deploy: DeployConfig = new DeployConfig {}
 
@@ -388,28 +388,36 @@ deploy: DeployConfig = new DeployConfig {}
 /// extraVolumes, securityContext, appExternalResources, etc.).
 deployOverrides: Mapping<String, Any> = new Mapping {}
 
-/// Named worker-pool deployment map. FULLY OPTIONAL.
+/// Named worker-pool configuration map. FULLY OPTIONAL.
 ///
 /// An empty map (default) emits nothing — platform defaults apply.
-/// Declare named pools to configure per-pool KEDA, resources, env, or profiles.
-/// Use the deprecated `deploy:` property for the single-pool case until
-/// `deploy:` is removed in the next minor version.
+/// Declare named pools to configure per-pool KEDA, resources, or env.
+/// The pool key here must exactly match the string passed to `@task(pool="…")`
+/// in Python — the runtime uses this name to route activities to the right queue.
 ///
 /// Example (two pools — hot always-on + cold scale-to-zero):
 ///
 /// ```pkl
-/// deployments {
-///   ["hot"] = new Deployment {
-///     profiles { "main" }
+/// pools {
+///   ["hot"] = new Pool {
 ///     keda { minReplicaCount = 1; cooldownPeriod = 300 }
 ///   }
-///   ["cold"] = new Deployment {
-///     profiles { "exceptional" }
+///   ["cold"] = new Pool {
 ///     keda { minReplicaCount = 0; cooldownPeriod = 30 }
 ///   }
 /// }
 /// ```
-deployments: Mapping<String, Deployment> = new Mapping {}
+///
+/// For the single-pool case, declare one entry named `"default"`:
+///
+/// ```pkl
+/// pools {
+///   ["default"] = new Pool {
+///     keda { minReplicaCount = 1 }
+///   }
+/// }
+/// ```
+pools: Mapping<String, Pool> = new Mapping {}
 
 // ── ENTRYPOINTS ──────────────────────────────────────────────────────────────
 
@@ -3108,18 +3116,17 @@ local function renderKedaConfig(k: KedaConfig): Mapping<String, Any> = new Mappi
   }
 }
 
-local function renderDeployment(d: Deployment): Mapping<String, Any> = new Mapping {
-  when (!d.profiles.isEmpty) { ["profiles"] = d.profiles }
-  when (d.replicaCount != null) { ["replicaCount"] = d.replicaCount }
-  ["keda"] = renderKedaConfig(d.keda)
-  when (d.resources != null) {
+local function renderPool(p: Pool): Mapping<String, Any> = new Mapping {
+  when (p.replicaCount != null) { ["replicaCount"] = p.replicaCount }
+  ["keda"] = renderKedaConfig(p.keda)
+  when (p.resources != null) {
     ["resources"] = new Mapping {
-      when (!d.resources!!.requests.isEmpty) { ["requests"] = d.resources!!.requests }
-      when (!d.resources!!.limits.isEmpty) { ["limits"] = d.resources!!.limits }
+      when (!p.resources!!.requests.isEmpty) { ["requests"] = p.resources!!.requests }
+      when (!p.resources!!.limits.isEmpty) { ["limits"] = p.resources!!.limits }
     }
   }
-  when (!d.env.isEmpty) { ["env"] = d.env }
-  when (!d.envOverrides.isEmpty) { ["envOverrides"] = d.envOverrides }
+  when (!p.env.isEmpty) { ["env"] = p.env }
+  when (!p.envOverrides.isEmpty) { ["envOverrides"] = p.envOverrides }
 }
 
 local function renderDeployConfig(d: DeployConfig): Mapping<String, Any> = new Mapping {
@@ -3191,10 +3198,10 @@ local generatedAtlanYamlData: Mapping<String, Any> = new Mapping {
   when (emitDeploy) {
     ["deploy"] = deepMergeMapping(renderDeployConfig(deploy), deployOverrides)
   }
-  when (!deployments.isEmpty) {
-    ["deployments"] = new Mapping {
-      for (poolName, pool in deployments) {
-        [poolName] = deepMergeMapping(renderDeployment(pool), pool.deployOverrides)
+  when (!pools.isEmpty) {
+    ["pools"] = new Mapping {
+      for (poolName, pool in pools) {
+        [poolName] = deepMergeMapping(renderPool(pool), pool.deployOverrides)
       }
     }
   }

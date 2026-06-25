@@ -105,11 +105,12 @@ class TaskMetadata:
     """Default timeout for this task. Defaults to ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS
     env var, or 600s (10 minutes) if unset."""
 
-    profile: str | None = None
-    """Logical worker-pool profile for this task.
+    pool: str | None = None
+    """Logical worker-pool name for this task.
     When set, the framework routes this activity to the task queue registered
-    for that profile via ``ATLAN_PROFILE_<PROFILE>_QUEUE``. Tasks without a
-    profile run on the workflow's own task queue (default behavior).
+    for that pool via ``ATLAN_POOL_<POOL>_QUEUE``. Tasks without a pool run
+    on the workflow's own task queue (default behavior). Must match a key
+    declared in the app's pkl contract ``pools { ["name"] = new Pool { … } }``.
     """
 
     retry_policy: "RetryPolicy | None" = field(default=None, compare=False)
@@ -249,7 +250,7 @@ def task(
     retry_max_interval_seconds: int = 30,
     heartbeat_timeout_seconds: int | None | object = _USE_DEFAULT,
     auto_heartbeat_seconds: int | None | object = _USE_DEFAULT,
-    profile: str | None = None,
+    pool: str | None = None,
 ) -> Callable[[F], F]: ...
 
 
@@ -264,7 +265,7 @@ def task(
     retry_max_interval_seconds: int = 30,
     heartbeat_timeout_seconds: int | None | object = _USE_DEFAULT,
     auto_heartbeat_seconds: int | None | object = _USE_DEFAULT,
-    profile: str | None = None,
+    pool: str | None = None,
 ) -> F | Callable[[F], F]:
     """Decorator to mark a method as a task (Temporal activity).
 
@@ -342,10 +343,11 @@ def task(
         auto_heartbeat_seconds: Auto-heartbeat interval - framework sends
             heartbeats at this rate in a background task. Set to None to disable
             auto-heartbeating (manual only). Default: 10 seconds (~1/6 of timeout).
-        profile: Logical worker-pool profile for this task. When set, the
-            framework routes this activity to the task queue registered for that
-            profile via ``ATLAN_PROFILE_<PROFILE>_QUEUE``. Unset tasks run on
-            the workflow's own task queue (default, backward-compatible behavior).
+        pool: Logical worker-pool name for this task. When set, the framework
+            routes this activity to the task queue registered for that pool via
+            ``ATLAN_POOL_<POOL>_QUEUE``. Must match a key in the app's pkl
+            contract ``pools { … }``. Unset tasks run on the workflow's own
+            task queue (default, backward-compatible behavior).
 
     Returns:
         The decorated function with task metadata attached.
@@ -387,7 +389,7 @@ def task(
             app_name="",  # Will be set by App registration
             description=description or fn.__doc__ or "",
             timeout_seconds=resolved_timeout,
-            profile=profile,
+            pool=pool,
             retry_policy=retry_policy,
             retry_max_attempts=retry_max_attempts,
             retry_max_interval_seconds=retry_max_interval_seconds,

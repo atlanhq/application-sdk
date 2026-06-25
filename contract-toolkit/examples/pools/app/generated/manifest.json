@@ -3,14 +3,14 @@
   "dag": {
     "extract": {
       "activity_name": "execute_workflow",
-      "activity_display_name": "Extract Deployments Map Example Metadata",
-      "app_name": "deployments-example",
+      "activity_display_name": "Extract Pools Map Example Metadata",
+      "app_name": "pools-example",
       "inputs": {
-        "workflow_type": "deployments-example",
-        "app_name": "deployments-example",
+        "workflow_type": "pools-example",
+        "app_name": "pools-example",
         "app_id": "",
         "argo_workflow_slug": "",
-        "task_queue": "atlan-deployments-example-{deployment_name}",
+        "task_queue": "atlan-pools-example-{deployment_name}",
         "args": {
           "credential": "{{credential}}",
           "target": "{{target}}"

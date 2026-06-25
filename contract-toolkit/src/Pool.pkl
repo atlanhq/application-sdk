@@ -1,0 +1,74 @@
+module com.atlan.app.contract.Pool
+
+class DaprComponents {
+  objectstore: Boolean = false
+  secretstore: Boolean = false
+  statestore: Boolean = false
+  eventstore: Boolean = false
+  subscription: Boolean = false
+  configurationstore: Boolean = false
+  lock: Boolean = false
+  customComponents: Mapping<String, Any> = new Mapping {}
+}
+
+class KedaTemporalConfig {
+  targetQueueSize: Int = 5
+}
+
+class KedaConfig {
+  enabled: Boolean = true
+  minReplicaCount: Int = 0
+  /// Seconds KEDA waits after the queue drains before scaling to zero.
+  /// Omit to use the Helm chart default.
+  cooldownPeriod: Int? = null
+  temporal: KedaTemporalConfig = new KedaTemporalConfig {}
+}
+
+class ResourceConfig {
+  requests: Mapping<String, String> = new Mapping {}
+  limits: Mapping<String, String> = new Mapping {}
+}
+
+/// Per-pool deployment configuration. The pool key (the mapping key in
+/// `App.pkl`'s `pools` property) is the same string used in
+/// `@task(pool="…")` in Python — no separate profile indirection.
+///
+/// Simple apps never configure this — the platform default applies.
+/// Multi-pool apps declare named pools:
+///
+/// ```pkl
+/// pools {
+///   ["hot"] = new Pool {
+///     keda { minReplicaCount = 1; cooldownPeriod = 300 }
+///   }
+///   ["cold"] = new Pool {
+///     keda { minReplicaCount = 0; cooldownPeriod = 30 }
+///   }
+/// }
+/// ```
+class Pool {
+  /// Override replica count. Ignored when `keda.enabled = true`.
+  replicaCount: Int? = null
+  keda: KedaConfig = new KedaConfig {}
+  resources: ResourceConfig? = null
+  env: Mapping<String, String> = new Mapping {}
+  envOverrides: Mapping<String, Mapping<String, String>> = new Mapping {}
+  /// Per-pool escape hatch for `atlan.yaml` keys not yet modelled above.
+  /// Deep-merged on top of the rendered pool block last.
+  deployOverrides: Mapping<String, Any> = new Mapping {}
+}
+
+/// @Deprecated — use `pools` on App.pkl instead. Will be removed in the next minor version.
+///
+/// Single-pool deployment configuration. Requires `emitDeploy = true` to emit.
+class DeployConfig {
+  executionMode: String = "native"
+  splitDeployment: Boolean = true
+  replicaCount: Int? = null
+  dapr: DaprComponents = new DaprComponents {}
+  keda: KedaConfig = new KedaConfig {}
+  resources: ResourceConfig? = null
+  env: Mapping<String, String> = new Mapping {}
+  envOverrides: Mapping<String, Mapping<String, String>> = new Mapping {}
+  deployOverrides: Mapping<String, Any> = new Mapping {}
+}

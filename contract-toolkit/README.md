@@ -99,7 +99,7 @@ The `examples/` directory contains executable contracts that teach stable toolki
 - [`examples/bundle/`](examples/bundle/) — multi-entrypoint app (crawler + miner); shared credential configmap; per-entrypoint artifact subfolders.
 - [`examples/card-split/`](examples/card-split/) — two entrypoints where only one is a marketplace UI card (`marketplaceCard = false` on the route-only entrypoint).
 - [`examples/deploy/`](examples/deploy/) — typed `deploy` block (deprecated single-pool path): KEDA, Dapr, resources, env, `deployOverrides`.
-- [`examples/deployments/`](examples/deployments/) — `deployments` map (preferred): named hot/cold worker pools with per-pool KEDA `cooldownPeriod`, `profiles`, and resources.
+- [`examples/pools/`](examples/pools/) — `pools` map (preferred): named hot/cold worker pools with per-pool KEDA `cooldownPeriod` and resources.
 - [`examples/connection-ref/`](examples/connection-ref/) — `ConnectionRefInput` widget, `pipeline.publish = null`.
 - [`examples/publish-controls/`](examples/publish-controls/) — publish toggles, `includeInputFields`, `errorHandling`.
 - [`examples/fanin/`](examples/fanin/) — multi-parent fan-in via `dependsOn`, explicit `DependencyCondition`.
@@ -167,9 +167,9 @@ The single entry point for all new native app contracts. Amend this module and d
 - Credential config: `credentialCommonFields`, `credentialAuthOptions`, `credentialConnectorType`
 - Workflow config: `uiConfig` (form steps and fields using `Widgets.*` types)
 - Pipeline: typed `pipeline` block (extract → parseQueries → popularity → lineage → publish)
-- Deployment: `deployments` map (preferred, explicit-overrides-only) or deprecated `deploy` block — see `Deployment.pkl`
+- Deployment: `pools` map (preferred, explicit-overrides-only) or deprecated `deploy` block — see `Pool.pkl`
 
-All domain classes (`FieldSpec`, `AuthOption`, `UIConfig`, `UIRule`, `Entrypoint`, pipeline step classes, `Deployment`, `DeployConfig`, `DaprComponents`, `KedaConfig`, `ResourceConfig`, `ErrorHandlingConfig`, `DependencyCondition`, `DAGNode`, etc.) are available directly in amending modules without additional imports. Deployment classes (`Deployment`, `DeployConfig`, `DaprComponents`, `KedaConfig`, `KedaTemporalConfig`, `ResourceConfig`) are defined in `Deployment.pkl` and re-exported by `App.pkl`.
+All domain classes (`FieldSpec`, `AuthOption`, `UIConfig`, `UIRule`, `Entrypoint`, pipeline step classes, `Pool`, `DeployConfig`, `DaprComponents`, `KedaConfig`, `ResourceConfig`, `ErrorHandlingConfig`, `DependencyCondition`, `DAGNode`, etc.) are available directly in amending modules without additional imports. Pool and deployment classes (`Pool`, `DeployConfig`, `DaprComponents`, `KedaConfig`, `KedaTemporalConfig`, `ResourceConfig`) are defined in `Pool.pkl` and re-exported by `App.pkl`.
 
 Widget types are re-exported via `Widgets` (itself re-exported from `App.pkl`). Amending modules use `Widgets.TextInput`, `Widgets.SqlTree`, etc.
 
@@ -289,22 +289,22 @@ To replace the generated node, define `extraNodes["notifications"]`.
 
 `extraNodes` is still available as an escape hatch for nodes that fall outside the canonical pipeline (e.g. custom fan-in steps).
 
-## Deployments Map (preferred)
+## Pools Map (preferred)
 
-The `deployments` map declares named worker pools. It is **fully optional and explicit-overrides-only** — an empty map (the default) emits nothing. Declare named pools to configure per-pool KEDA, profiles, resources, or env.
+The `pools` map declares named worker pools. It is **fully optional and explicit-overrides-only** — an empty map (the default) emits nothing. Declare named pools to configure per-pool KEDA, resources, or env.
+
+The pool key must exactly match the string passed to `@task(pool="…")` in Python.
 
 ```pkl
-deployments {
-  ["hot"] = new Deployment {
-    profiles { "main" }          // corresponds to @task(profile="main") in Python
+pools {
+  ["hot"] = new Pool {
     keda {
       minReplicaCount = 1        // always-on
       cooldownPeriod = 300       // lenient cooldown — don't kill warm workers between bursts
       temporal { targetQueueSize = 10 }
     }
   }
-  ["cold"] = new Deployment {
-    profiles { "exceptional" }
+  ["cold"] = new Pool {
     keda {
       minReplicaCount = 0        // scale-to-zero
       cooldownPeriod = 30        // aggressive cooldown — reclaim resources fast
@@ -313,11 +313,11 @@ deployments {
 }
 ```
 
-See `examples/deployments/` for a full two-pool example.
+For the single-pool case, use the key `"default"`. See `examples/pools/` for a full two-pool example.
 
 ## Deploy Block (deprecated)
 
-> **Deprecated** — use `deployments` instead. Will be removed in the next minor version.
+> **Deprecated** — use `pools` instead. Will be removed in the next minor version.
 
 The `deploy` block was the original single-pool deployment configuration. Anything unmodeled goes in `deployOverrides` (deep-merged last). Requires `emitDeploy = true` to emit anything.
 

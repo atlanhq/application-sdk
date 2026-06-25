@@ -1,22 +1,24 @@
-/// Deployments map example — demonstrates named worker pools with per-pool
-/// KEDA, profiles, resources, and cooldownPeriod.
+/// Pools map example — demonstrates named worker pools with per-pool
+/// KEDA, resources, cooldownPeriod, and per-pool env.
 ///
 /// Two pools:
-///   "hot"  — always-on (minReplicaCount=1), serves the "main" profile,
-///             lenient cooldown (300 s) so warm workers are not killed
-///             between bursts.
-///   "cold" — scale-to-zero (minReplicaCount=0), serves the "exceptional"
-///             profile, aggressive cooldown (30 s) to reclaim resources fast.
+///   "hot"  — always-on (minReplicaCount=1), lenient cooldown (300 s)
+///             so warm workers survive bursts.
+///   "cold" — scale-to-zero (minReplicaCount=0), aggressive cooldown
+///             (30 s) to reclaim resources fast.
+///
+/// Pool keys here must match the strings used in @task(pool="…")
+/// in Python. The runtime resolves them to task queues via
+/// ATLAN_POOL_<POOL>_QUEUE env vars.
 amends "../../src/App.pkl"
 
-name = "deployments-example"
-displayName = "Deployments Map Example"
+name = "pools-example"
+displayName = "Pools Map Example"
 icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
 hasCredentialConfig = false
 
-deployments {
-  ["hot"] = new Deployment {
-    profiles { "main" }
+pools {
+  ["hot"] = new Pool {
     keda {
       enabled = true
       minReplicaCount = 1
@@ -39,8 +41,7 @@ deployments {
       ["WORKER_TYPE"] = "hot"
     }
   }
-  ["cold"] = new Deployment {
-    profiles { "exceptional" }
+  ["cold"] = new Pool {
     keda {
       enabled = true
       minReplicaCount = 0

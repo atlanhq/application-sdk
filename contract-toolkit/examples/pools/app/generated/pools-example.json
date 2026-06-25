@@ -1,6 +1,6 @@
 {
-  "id": "deployments-example",
-  "name": "Deployments Map Example",
+  "id": "pools-example",
+  "name": "Pools Map Example",
   "logo": "https://assets.atlan.com/assets/fullscreen-open.svg",
   "config": {
     "properties": {

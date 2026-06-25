@@ -1,7 +1,7 @@
 # AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY.
 # To regenerate: pkl eval -m . contract/app.pkl
-name: deployments-example
-display_name: Deployments Map Example
+name: pools-example
+display_name: Pools Map Example
 type: connector
 execution_mode: native
 icon_url: https://assets.atlan.com/assets/fullscreen-open.svg
@@ -9,15 +9,13 @@ visibility: public
 build_tag: v1
 self_deployed_runtime: true
 entrypoints:
-- name: deployments-example
-  display_name: Deployments Map Example
+- name: pools-example
+  display_name: Pools Map Example
   icon_url: https://assets.atlan.com/assets/fullscreen-open.svg
   type: connector
   marketplace_card: true
-deployments:
+pools:
   hot:
-    profiles:
-    - main
     keda:
       enabled: true
       minReplicaCount: 1
@@ -34,8 +32,6 @@ deployments:
     env:
       WORKER_TYPE: hot
   cold:
-    profiles:
-    - exceptional
     keda:
       enabled: true
       minReplicaCount: 0

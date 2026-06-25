@@ -7,5 +7,5 @@ from pydantic import Field
 from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
 
 
-class DeploymentsExampleMustacheSubstitutions(MustacheSubstitutions):
+class PoolsExampleMustacheSubstitutions(MustacheSubstitutions):
     target: str = Field(default="", alias="{{target}}")
