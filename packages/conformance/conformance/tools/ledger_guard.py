@@ -14,9 +14,9 @@ Usage
 -----
 Called from CI after ``fetch-depth: 0`` so the full git history is available:
 
-    python .github/scripts/contract_ledger_guard.py \\
+    uvx atlan-application-sdk-conformance ledger-guard \\
         --base-ref origin/main \\
-        --ledger-path packages/conformance/conformance/data/contract_schema.lock.json
+        --ledger-path contract_schema.lock.json
 """
 
 from __future__ import annotations

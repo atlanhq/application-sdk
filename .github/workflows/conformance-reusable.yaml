@@ -156,6 +156,16 @@ on:
         required: false
         default: ""
         type: string
+      ledger-path:
+        description: >
+          Repo-relative path to the app's committed contract ledger
+          (contract_schema.lock.json).  The guard compares this file between
+          origin/main and HEAD and blocks any deletion or type change.
+          Default: contract_schema.lock.json (repo root — convention for app repos).
+          The SDK overrides this to packages/conformance/conformance/data/contract_schema.lock.json.
+        required: false
+        default: "contract_schema.lock.json"
+        type: string
       force-all:
         description: >
           Run every rule series regardless of which paths changed.  Same effect
@@ -349,10 +359,14 @@ jobs:
           path: ${{ matrix.slug }}.sarif
 
   # ── Contract ledger append-only guard ─────────────────────────────────────
-  # Runs the .github/scripts/contract_ledger_guard.py script to verify that
-  # no entry was deleted from contract_schema.lock.json and no recorded type
-  # was changed between origin/main and HEAD.  Adding entries and status
-  # changes (active→deprecated→sunset) are always allowed.
+  # Verifies that no entry was deleted from the committed contract ledger and
+  # no recorded type was changed between origin/main and HEAD.  Adding entries
+  # and status changes (active→deprecated→sunset) are always allowed.
+  #
+  # Uses `uvx atlan-application-sdk-conformance ledger-guard` so the guard
+  # travels with the published package — no local script copy needed in app repos.
+  # The ledger-path input lets each caller point to its own ledger; the SDK
+  # overrides the default via conformance.yaml / sdk-gate.yaml.
   #
   # Requires fetch-depth: 0 so the full git history (and origin/main) is
   # available to `git show`.  Skipped on push to main (no base-ref diff).
@@ -366,8 +380,23 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: "Guard contract_schema.lock.json (append-only)"
-        run: python .github/scripts/contract_ledger_guard.py --base-ref origin/main --ledger-path packages/conformance/conformance/data/contract_schema.lock.json
+      - name: "Set up uv"
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v5.4.0
+
+      - name: "Guard contract_schema.lock.json (published package)"
+        if: inputs.conformance-ref == ''
+        env:
+          LEDGER_PATH: ${{ inputs.ledger-path }}
+        run: uvx atlan-application-sdk-conformance ledger-guard --base-ref origin/main --ledger-path "$LEDGER_PATH"
+
+      - name: "Guard contract_schema.lock.json (in-flight conformance-ref)"
+        if: inputs.conformance-ref != ''
+        env:
+          LEDGER_PATH: ${{ inputs.ledger-path }}
+        run: >-
+          uvx
+          --from "atlan-application-sdk-conformance @ git+https://github.com/atlanhq/application-sdk@${{ inputs.conformance-ref }}#subdirectory=packages/conformance"
+          atlan-application-sdk-conformance ledger-guard --base-ref origin/main --ledger-path "$LEDGER_PATH"
 
   # ── Required gate ─────────────────────────────────────────────────────────
   # Always runs so it can be marked a required check without ever becoming

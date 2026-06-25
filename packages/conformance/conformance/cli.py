@@ -50,6 +50,12 @@ def _cmd_gen_deprecations(argv: list[str]) -> int:
         return int(e.code) if e.code is not None else 0
 
 
+def _cmd_ledger_guard(argv: list[str]) -> int:
+    from conformance.tools.ledger_guard import main
+
+    return main(argv)
+
+
 def _cmd_gen_contract_ledger(argv: list[str]) -> int:
     from conformance.tools.generate_contract_ledger import main
 
@@ -242,6 +248,7 @@ _COMMANDS = {
     "gen-rule-docs": _cmd_gen_rule_docs,
     "gen-deprecations": _cmd_gen_deprecations,
     "gen-contract-ledger": _cmd_gen_contract_ledger,
+    "ledger-guard": _cmd_ledger_guard,
     "remediate": _cmd_remediate,
     "bootstrap": _cmd_bootstrap,
     "renovate-scan": _cmd_renovate_scan,
@@ -259,6 +266,10 @@ commands:
                        --repo DIR    repo root to scan (default: auto-detected)
                        --outfile PATH  ledger path (default: package data)
                        --check       verify ledger is current; exit 1 if stale
+  ledger-guard         CI append-only guard: block ledger deletions and type changes between
+                       base ref and HEAD (run after fetch-depth: 0 checkout)
+                         --base-ref REF      git ref for the base (default: origin/main)
+                         --ledger-path PATH  repo-relative path to the ledger file
   remediate      Print programs path + version banner (SKILL.md drives execution)
   bootstrap      Write .claude/skills/remediate/SKILL.md + all standard CI workflow
                  shims into .github/workflows/. The 14 managed shims always overwrite

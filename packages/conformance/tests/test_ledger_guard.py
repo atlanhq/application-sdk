@@ -1,18 +1,8 @@
-"""Tests for .github/scripts/contract_ledger_guard.py.
-
-Per CLAUDE.md, CI scripts with conditional logic live in .github/scripts/
-(not inlined in YAML) and have a pytest here so the logic is regression-tested.
-"""
+"""Tests for conformance.tools.ledger_guard (the CI append-only ledger guard)."""
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-# Ensure the scripts directory is importable without installing
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from contract_ledger_guard import _index_fields, check
+from conformance.tools.ledger_guard import _index_fields, check
 
 # ── _index_fields ─────────────────────────────────────────────────────────────
 
