@@ -102,7 +102,16 @@ def make_gcs_adc_provider() -> Any:
     (e.g. GitHub OIDC → GCP, GKE WI), which obstore's built-in GCS
     credential-file decoder cannot. Imported lazily so google-auth is only
     needed when the GCS ADC path is actually exercised.
+
+    Credentials are scoped to ``cloud-platform``: ``google.auth.default()`` yields
+    unscoped credentials, but the WIF ``external_account`` → service-account
+    impersonation ``generateAccessToken`` call requires a non-empty scope (an
+    unscoped request fails with HTTP 400 INVALID_ARGUMENT).
     """
+    import google.auth  # noqa: PLC0415
     from obstore.auth.google import GoogleCredentialProvider  # noqa: PLC0415
 
-    return GoogleCredentialProvider()
+    credentials, _ = google.auth.default(
+        scopes=["https://www.googleapis.com/auth/cloud-platform"]
+    )
+    return GoogleCredentialProvider(credentials=credentials)
