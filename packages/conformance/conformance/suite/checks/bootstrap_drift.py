@@ -49,6 +49,16 @@ _RENOVATE_JSON = "renovate.json"
 # Managed shim (in MANAGED_WORKFLOWS) that tolerates a sanctioned per-repo override.
 _RENOVATE_PKL_SYNC = "renovate-pkl-sync.yaml"
 
+# Matches a pinned SHA (40 lowercase hex chars) and its optional trailing version
+# comment so automated pin bumps (Renovate/Dependabot) are not flagged as drift.
+# Example: "@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3" → "@<pinned>"
+_ACTION_PIN_RE = re.compile(r"@[0-9a-f]{40}(?:[ \t]+#[^\n]*)?")
+
+
+def _strip_action_pins(text: str) -> str:
+    return _ACTION_PIN_RE.sub("@<pinned>", text)
+
+
 # The renovate-pkl-sync caller regenerates contract artifacts by default
 # (the reusable's regenerate-contract input defaults to true). An app may opt
 # out by adding a `with: regenerate-contract: false` override to the caller.
@@ -185,7 +195,7 @@ def _scan_managed_shim(path: Path, root: Path) -> list[Finding]:
 
     canonical = render(name, **kwargs)
 
-    if on_disk == canonical:
+    if _strip_action_pins(on_disk) == _strip_action_pins(canonical):
         return []
 
     return [
@@ -231,7 +241,7 @@ def _scan_renovate_json(path: Path, root: Path) -> list[Finding]:
     on_disk = path.read_text(encoding="utf-8")
     canonical = render(_RENOVATE_JSON)
 
-    if on_disk == canonical:
+    if _strip_action_pins(on_disk) == _strip_action_pins(canonical):
         return []
 
     return [
@@ -281,7 +291,7 @@ def _scan_tests_yaml(path: Path, root: Path) -> list[Finding]:
     params = _extract_tests_yaml_params(on_disk)
     canonical = render(_TESTS_WORKFLOW, **params)
 
-    if on_disk == canonical:
+    if _strip_action_pins(on_disk) == _strip_action_pins(canonical):
         return []
 
     return [
