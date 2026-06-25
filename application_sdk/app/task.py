@@ -105,6 +105,13 @@ class TaskMetadata:
     """Default timeout for this task. Defaults to ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS
     env var, or 600s (10 minutes) if unset."""
 
+    profile: str | None = None
+    """Logical worker-pool profile for this task.
+    When set, the framework routes this activity to the task queue registered
+    for that profile via ``ATLAN_PROFILE_<PROFILE>_QUEUE``. Tasks without a
+    profile run on the workflow's own task queue (default behavior).
+    """
+
     retry_policy: "RetryPolicy | None" = field(default=None, compare=False)
     """Full retry policy for this task. When provided, takes precedence over
     retry_max_attempts and retry_max_interval_seconds."""
@@ -242,6 +249,7 @@ def task(
     retry_max_interval_seconds: int = 30,
     heartbeat_timeout_seconds: int | None | object = _USE_DEFAULT,
     auto_heartbeat_seconds: int | None | object = _USE_DEFAULT,
+    profile: str | None = None,
 ) -> Callable[[F], F]: ...
 
 
@@ -256,6 +264,7 @@ def task(
     retry_max_interval_seconds: int = 30,
     heartbeat_timeout_seconds: int | None | object = _USE_DEFAULT,
     auto_heartbeat_seconds: int | None | object = _USE_DEFAULT,
+    profile: str | None = None,
 ) -> F | Callable[[F], F]:
     """Decorator to mark a method as a task (Temporal activity).
 
@@ -333,6 +342,10 @@ def task(
         auto_heartbeat_seconds: Auto-heartbeat interval - framework sends
             heartbeats at this rate in a background task. Set to None to disable
             auto-heartbeating (manual only). Default: 10 seconds (~1/6 of timeout).
+        profile: Logical worker-pool profile for this task. When set, the
+            framework routes this activity to the task queue registered for that
+            profile via ``ATLAN_PROFILE_<PROFILE>_QUEUE``. Unset tasks run on
+            the workflow's own task queue (default, backward-compatible behavior).
 
     Returns:
         The decorated function with task metadata attached.
@@ -374,6 +387,7 @@ def task(
             app_name="",  # Will be set by App registration
             description=description or fn.__doc__ or "",
             timeout_seconds=resolved_timeout,
+            profile=profile,
             retry_policy=retry_policy,
             retry_max_attempts=retry_max_attempts,
             retry_max_interval_seconds=retry_max_interval_seconds,

@@ -1803,6 +1803,7 @@ def _wrap_instance_tasks(app_instance: Any, context_data: dict[str, Any]) -> Non
                     task_meta.heartbeat_timeout_seconds,
                     task_meta.auto_heartbeat_seconds,
                     task_meta.retry_policy,
+                    profile=task_meta.profile,
                 )
                 setattr(app_instance, attr_name, wrapper)
 
@@ -1818,6 +1819,8 @@ def _create_task_activity_wrapper(
     heartbeat_timeout_seconds: int | None = 60,
     auto_heartbeat_seconds: int | None = 10,
     retry_policy: Any = None,
+    *,
+    profile: str | None = None,
 ) -> Any:
     """Create a wrapper that executes a task as a Temporal activity.
 
@@ -1832,10 +1835,19 @@ def _create_task_activity_wrapper(
         heartbeat_timeout_seconds: Heartbeat timeout. None disables.
         auto_heartbeat_seconds: Auto-heartbeat interval. None disables.
         retry_policy: Full retry policy (overrides max_attempts/interval if set).
+        profile: Logical worker-pool profile. When set, the activity is routed
+            to the queue registered via ``ATLAN_PROFILE_<PROFILE>_QUEUE``.
 
     Returns:
         Async function that executes the task as an activity.
     """
+    # Resolve profile → task queue at construction time. Env vars are fixed for
+    # the process lifetime, so capturing the result in the closure is safe.
+    profile_queue: str | None = (
+        os.environ.get(f"ATLAN_PROFILE_{profile.upper()}_QUEUE") or None
+        if profile
+        else None
+    )
     from application_sdk.execution.retry import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
         RetryPolicy as _RP,
     )
@@ -1885,6 +1897,8 @@ def _create_task_activity_wrapper(
         # Execute as activity, routed through the SDK eviction-retry loop so
         # worker pod evictions (SIGTERM mid-activity) re-dispatch as fresh
         # attempts without burning the application-error retry budget.
+        # When a profile_queue is set the activity is dispatched to the task
+        # queue for that pool; otherwise it runs on the workflow's own queue.
         result: Output = await execute_activity_with_eviction_retry(
             f"{app_name}:{task_name}",
             args=[task_context, input_data],
@@ -1893,6 +1907,7 @@ def _create_task_activity_wrapper(
             retry_policy=temporal_retry_policy,
             result_type=output_type,
             summary=summary,
+            **({"task_queue": profile_queue} if profile_queue else {}),
         )
 
         return result

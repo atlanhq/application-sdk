@@ -413,3 +413,80 @@ class TestTaskEnvVarDefaults:
         monkeypatch.setenv("ATLAN_HEARTBEAT_TIMEOUT_SECONDS", "not-a-number")
         result = env_int("ATLAN_HEARTBEAT_TIMEOUT_SECONDS", 60)
         assert result == 60
+
+
+# =============================================================================
+# @task profile field
+# =============================================================================
+
+
+class TestTaskProfile:
+    """Tests for @task(profile=...) — logical worker-pool routing."""
+
+    def test_task_without_profile_has_none(self) -> None:
+        """Tasks without profile default to None."""
+
+        class MyApp:
+            @task
+            async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.my_task)
+        assert metadata is not None
+        assert metadata.profile is None
+
+    def test_task_with_profile_stores_it(self) -> None:
+        """@task(profile='main') stores the profile string."""
+
+        class MyApp:
+            @task(profile="main")
+            async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.my_task)
+        assert metadata is not None
+        assert metadata.profile == "main"
+
+    def test_task_profile_empty_parens_is_none(self) -> None:
+        """@task() without profile= still defaults to None."""
+
+        class MyApp:
+            @task()
+            async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.my_task)
+        assert metadata is not None
+        assert metadata.profile is None
+
+    def test_profile_env_var_resolution(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """ATLAN_PROFILE_<PROFILE>_QUEUE env var resolves to a task queue string."""
+        import os
+
+        monkeypatch.setenv("ATLAN_PROFILE_EXCEPTIONAL_QUEUE", "app-queue-cold")
+        profile = "exceptional"
+        resolved = os.environ.get(f"ATLAN_PROFILE_{profile.upper()}_QUEUE") or None
+        assert resolved == "app-queue-cold"
+
+    def test_missing_profile_env_var_resolves_to_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Missing ATLAN_PROFILE_<PROFILE>_QUEUE falls back to None (default queue)."""
+        import os
+
+        monkeypatch.delenv("ATLAN_PROFILE_EXCEPTIONAL_QUEUE", raising=False)
+        profile = "exceptional"
+        resolved = os.environ.get(f"ATLAN_PROFILE_{profile.upper()}_QUEUE") or None
+        assert resolved is None
+
+    def test_profile_different_cases(self) -> None:
+        """Profile string is stored verbatim (case preserved)."""
+
+        class MyApp:
+            @task(profile="HotPool")
+            async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.my_task)
+        assert metadata is not None
+        assert metadata.profile == "HotPool"
