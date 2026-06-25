@@ -16,8 +16,8 @@ not configurable from this repo.
 | `PROXY_BASE` | mothership credential proxy | base URL for LiteLLM (GPT) + Linear proxies |
 | `PROXY_JWT` | mothership credential proxy | bearer for the proxies above |
 
-The run prompt also passes: `TICKET` (Linear identifier to triage), `RUN_DATE`,
-`GHA_RUN_URL`.
+The run prompt also passes: `TICKET` (Linear identifier to triage), `SEVERITY`
+(the ticket's severity bucket), `RUN_DATE`, `GHA_RUN_URL`.
 
 ## Git + GitHub
 
@@ -30,21 +30,46 @@ cd /workspace/application-sdk
 ```
 
 Used for: read-only work (scan artifacts, advisories, inspecting
-`pyproject.toml`/`uv.lock`) **and**, for **Case 1 only**, pushing a branch +
-opening a **draft** PR. Never push to `main`, never mark ready, never merge. For
-Cases 2/3/4 you do not touch git — the recommendation goes into the ticket.
+`pyproject.toml`/`uv.lock`) **and** pushing branches + opening the two
+auto-mergeable PR shapes. Never push to `main`, never merge — the GHA gate
+(`vuln-auto-merge.yml`) approves + merges once CI is green.
+
+### Allowlist PR (Critical / High — every case)
+
+Touches **only** `.security/base-allowlist.json`. Compute `expires` from the
+severity SLA:
 
 ```bash
-# Case 1 ONLY (our dependency, scan-confirmed fix). Draft PR — human finalizes.
+# CRITICAL = 7 days, HIGH = 30 days from the run date.
+EXPIRES=$(date -u -d "${RUN_DATE} + 7 days" +%Y-%m-%d)    # CRITICAL
+EXPIRES=$(date -u -d "${RUN_DATE} + 30 days" +%Y-%m-%d)   # HIGH
+
+git checkout -b chore/allowlist-<cve-id> origin/main
+# add one entry per CVE to .security/base-allowlist.json (see ORCHESTRATION 4-pre)
+uv run python .github/scripts/validate_allowlist.py   # MUST pass before pushing
+git add .security/base-allowlist.json
+git commit -m "chore(security): allowlist <CVE-IDs> with <severity> SLA"
+git push origin chore/allowlist-<cve-id>
+gh pr create --repo atlanhq/application-sdk --base main \
+  --title "chore(security): allowlist <CVE-IDs> (<severity>, SLA <N>d)" \
+  --label "vuln-auto-merge" \
+  --body "<per-CVE: case, package, expires/SLA, ticket link, GHA_RUN_URL>"
+```
+
+### Bump PR (Case 1 only — our dependency, scan-confirmed fix)
+
+Touches **only** `pyproject.toml`, `uv.lock`, `requirements.txt`.
+
+```bash
 git checkout -b fix/bump-<pkg>-<version>-<cve-id> origin/main
 # ... run the uv recipe + validation greps below ...
 git push origin fix/bump-<pkg>-<version>-<cve-id>
-gh pr create --draft --repo atlanhq/application-sdk --base main \
+gh pr create --repo atlanhq/application-sdk --base main \
   --title "fix(security): bump <pkg> to <version> to resolve <CVE-IDs>" \
-  --label "vulnerabilities" \
+  --label "vuln-auto-merge" \
   --body "..."
-# Link the draft PR on the ticket + tag Vaibhav/Chris. Do NOT @sdk-review,
-# do NOT mark ready, do NOT merge.
+# If the bump needs source-code edits or a check fails: open it as a DRAFT
+# WITHOUT the label and tag a human. Do NOT force it onto the auto-merge path.
 ```
 
 ## The scan artifacts (source of truth for ALL CVEs)
@@ -124,13 +149,17 @@ curl -s "$PROXY_BASE/proxy/linear" \
   -d '{"query": "mutation($input: CommentCreateInput!){ commentCreate(input: $input){ success } }", "variables": {"input": {"issueId": "<issue_id>", "body": "..."}}}'
 ```
 
-Leave the ticket open and awaiting Vaibhav/Chris — do not set "Done" and do not
-move it to a review column (the Case-1 PR is a draft they finalize).
+Leave the ticket open — do not set "Done". Reconciliation
+(`reconcile_allowlist.py`) closes it once the scanner confirms its CVEs are gone
+for 3 consecutive scans.
 
 ## Prohibited
 
 - No direct Linear API calls outside the proxy.
-- No pushing to `main`. No force-push. No `git add -A` / `git add .`.
-- No marking a PR ready / merging — Case-1 PRs are drafts the team finalizes.
-- No committing an allowlist entry (Case 2) — recommend it on the ticket only.
+- No pushing to `main`. No force-push. No `git add -A` / `git add .` — stage only
+  the specific file(s) each PR shape allows.
+- No merging — the GHA gate (`vuln-auto-merge.yml`) approves + merges.
+- No allowlist entry for **Medium/Low** (the validator rejects them).
+- No mixing PR shapes — an allowlist PR touches ONLY `.security/base-allowlist.json`;
+  a bump PR touches ONLY the dep manifests. A mixed PR will not auto-merge.
 - No editing the Dockerfile / base image; no `apk` workarounds (Case 4 → rebuild).
