@@ -243,11 +243,11 @@ The `pools` map is the preferred way to configure worker pools. It is optional a
 
 The pool key must exactly match the string passed to `@task(pool="…")` in Python — the runtime uses this name to route activities to the right task queue via `ATLAN_POOL_<POOL>_QUEUE`.
 
-All pool classes (`Pool`, `DeployConfig`, `DaprComponents`, `KedaConfig`, `KedaTemporalConfig`, `ResourceConfig`) are defined in `Pool.pkl` and re-exported by `App.pkl` — amending contracts do not need a supplemental import.
+All pool classes (`Pool`, `KedaConfig`, `KedaTemporalConfig`, `ResourceConfig`) are defined in `Pool.pkl` and re-exported by `App.pkl` — amending contracts do not need a supplemental import.
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `pools` | Mapping<String, Pool> | `{}` | Named worker-pool map. Empty by default — emits nothing. Add named pools to configure per-pool scaling. |
+| `pools` | Mapping<KebabCase, Pool> | `{}` | Named worker-pool map. Empty by default — emits nothing. Add named pools to configure per-pool scaling. Pool keys must be lowercase kebab-case and match the string passed to `@task(pool="…")` in Python. |
 
 **Pool class:**
 
@@ -259,6 +259,29 @@ class Pool {
   env: Mapping<String, String> = new Mapping {}
   envOverrides: Mapping<String, Mapping<String, String>> = new Mapping {}
   deployOverrides: Mapping<String, Any> = new Mapping {}  // deep-merged last (escape hatch)
+}
+```
+
+**KedaConfig:**
+
+```pkl
+class KedaConfig {
+  enabled: Boolean = true
+  minReplicaCount: Int = 0
+  cooldownPeriod: Int? = null  // seconds to wait after queue drains before scaling to zero
+  temporal: KedaTemporalConfig = new { targetQueueSize = 5 }
+}
+class KedaTemporalConfig { targetQueueSize: Int }
+```
+
+`targetQueueSize` must be set via `keda.temporal.targetQueueSize`. `cooldownPeriod` is omitted from the rendered output when not set (Helm chart default applies).
+
+**ResourceConfig:**
+
+```pkl
+class ResourceConfig {
+  requests: Mapping<String, String>
+  limits: Mapping<String, String>
 }
 ```
 
@@ -277,60 +300,6 @@ pools {
 
 For the single-pool case, use the key `"default"`. See `examples/pools/` for the full two-pool example.
 
-### Deploy Block (deprecated)
-
-> **Deprecated** — use `pools` instead. `deploy:` will be removed in the next minor version.
-
-The `deploy` block was the original single-pool deployment configuration. It requires `emitDeploy = true` to emit anything.
-
-| Property | Type | Default | Description |
-|---|---|---|---|
-| `deploy.executionMode` | String | `"native"` | Execution mode. |
-| `deploy.splitDeployment` | Boolean | `true` | Emitted as `splitDeploymentEnabled`. |
-| `deploy.replicaCount` | Int? | null | Honoured only when `keda.enabled = false`. |
-| `deploy.dapr` | DaprComponents | `new DaprComponents {}` | Dapr sidecar toggles. |
-| `deploy.keda` | KedaConfig | `new KedaConfig {}` | KEDA autoscaling config. |
-| `deploy.resources` | ResourceConfig? | null | Kubernetes resource requests/limits. |
-| `deploy.env` | Mapping<String, String> | `{}` | Static container environment variables. |
-| `deployOverrides` | Mapping<String, Any> | `{}` | Deep-merged on top of the rendered deploy section (VPA, extraVolumes, securityContext, etc.). |
-
-**DaprComponents:**
-
-```pkl
-class DaprComponents {
-  objectstore: Boolean = false
-  secretstore: Boolean = false
-  statestore: Boolean = false
-  eventstore: Boolean = false
-  subscription: Boolean = false
-  configurationstore: Boolean = false
-  lock: Boolean = false
-}
-```
-
-**KedaConfig:**
-
-```pkl
-class KedaConfig {
-  enabled: Boolean = true
-  minReplicaCount: Int = 0
-  cooldownPeriod: Int? = null  // seconds to wait after queue drains before scaling to zero
-  temporal: KedaTemporalConfig = new { targetQueueSize = 5 }
-}
-class KedaTemporalConfig { targetQueueSize: Int }
-```
-
-Note: `targetQueueSize` must be set via `keda.temporal.targetQueueSize`, not `keda.targetQueueSize`. `cooldownPeriod` is omitted from the rendered output when not set (Helm chart default applies).
-
-**ResourceConfig:**
-
-```pkl
-class ResourceConfig {
-  requests: Mapping<String, String>
-  limits: Mapping<String, String>
-}
-```
-
 ### Multi-Entrypoint Bundle
 
 Set `entrypoints` to serve multiple marketplace tiles from one deployment. Per-entrypoint contracts are separate files that each `amend App.pkl`.
@@ -340,7 +309,6 @@ Set `entrypoints` to serve multiple marketplace tiles from one deployment. Per-e
 | `entrypoints` | Listing<Entrypoint> | `[]` | SDK routing endpoints and (optionally) marketplace card definitions. When non-empty, enables bundle mode. All entrypoints are routable via `?entrypoint=`; only those with `marketplaceCard=true` render as UI cards. |
 | `emitAtlanYaml` | Boolean | `true` | Emit `atlan.yaml`. |
 | `emitEntrypoints` | Boolean | `true` | **Deprecated** — use `marketplaceCard = false` on individual `Entrypoint`s instead. Emit the `entrypoints:` block. Will be removed in the next minor version. |
-| `emitDeploy` | Boolean | `false` | Emit the `deploy:` block into `atlan.yaml`. Defaults to `false`; Heracles applies platform defaults for most apps. Set to `true` only when explicitly configuring `deploy { ... }` or `deployOverrides { ... }`. |
 | `emitGeneratedArtifacts` | Boolean | `true` | Re-export entrypoint contract files. |
 
 **Entrypoint class:**
@@ -2717,19 +2685,17 @@ class AppInputContract(ExtractionInput):
 
 ## Migration Notes
 
-### v0.17.0 — `deploy` block emitted automatically when configured
+### v0.17.0 — `deploy`/`emitDeploy` removed; pools-only API; `deploy:` auto-synthesised
 
-**What changed:** `App.pkl`'s `deploy` property is now nullable (default `null`). When you
-set `deploy { ... }` the block is emitted into `atlan.yaml` automatically — no extra flag
-required. When `deploy` is left unset (null), the block is omitted and Heracles applies its
-own platform defaults.
+**What changed:** The `deploy` property, `deployOverrides` (app-level), and `emitDeploy` flag
+are **removed** from `App.pkl`. The only way to configure deployment is via `pools`. The
+`deploy:` block in `atlan.yaml` is now synthesised automatically from the first pool's
+configuration — no extra flag or property required.
 
-**Who is affected:** apps that previously relied on the `deploy:` block always being present
-even when `deploy { ... }` was not explicitly configured. Those apps were emitting an empty or
-default `deploy:` block; they should now either set `deploy { ... }` explicitly with the values
-they need, or leave it unset and let Heracles apply platform defaults.
+**Who is affected:** any app that set `deploy { ... }`, `deployOverrides { ... }`, or
+`emitDeploy = true` in its contract. Apps with no deployment configuration are unaffected.
 
-Apps that configured a `deploy { ... }` block must migrate to `pools`:
+**Migration — `deploy { ... }` → `pools`:**
 
 ```pkl
 // Before (v0.16.x):
@@ -2745,16 +2711,20 @@ pools {
 }
 ```
 
-The `deploy:` block in `atlan.yaml` is now synthesised automatically from the first pool's
-configuration. Apps that did not configure a `deploy` block at all are unaffected.
+The `deploy:` key in `atlan.yaml` is now synthesised from the first pool. Apps that had no
+`deploy` block at all are unaffected.
 
-**`deployOverrides` migration:** if you used the app-level `deployOverrides` mapping (e.g.
-for Dapr, VPA), move those keys into the pool's own `deployOverrides`:
+**Migration — app-level `deployOverrides` → per-pool `deployOverrides`:**
 
 ```pkl
+// Before (v0.16.x):
+deployOverrides {
+  ["dapr"] = new Mapping { ["objectstore"] = true }
+}
+
+// After (v0.17.0+):
 pools {
   ["default"] = new Pool {
-    keda { enabled = true; minReplicaCount = 1 }
     deployOverrides {
       ["dapr"] = new Mapping { ["objectstore"] = true }
     }

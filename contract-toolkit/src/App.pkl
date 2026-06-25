@@ -14,7 +14,7 @@
 /// Connector constants are accessible as `Connectors.*`.
 ///
 /// **Single-entrypoint apps** (the common case): set `uiConfig`, `pipeline`,
-/// and optionally `deploy`, then run:
+/// and optionally `pools`, then run:
 ///
 ///   `pkl eval -m . contract/app.pkl`
 ///
