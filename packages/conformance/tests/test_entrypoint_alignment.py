@@ -384,7 +384,14 @@ def test_p016_duplicate_wire_name_fires(tmp_path: Path) -> None:
 
 
 def test_p016_duplicate_wire_name_halts_set_check(tmp_path: Path) -> None:
-    """Duplicate detection short-circuits before the set-equality pass."""
+    """Duplicate detection short-circuits before the set-equality pass.
+
+    The contract includes 'miner', which is absent from code.  Without the
+    short-circuit guard, the set-equality pass would emit a contract-only
+    "'miner' is defined in the contract ... but not in code" finding alongside
+    the duplicate findings.  With the guard, only the 2 duplicate findings
+    are returned.
+    """
     py = {
         "app/my_app.py": dedent("""\
             from application_sdk.app import App, entrypoint
@@ -395,10 +402,11 @@ def test_p016_duplicate_wire_name_halts_set_check(tmp_path: Path) -> None:
                 async def crawl_b(self, input: Input) -> Output: ...
         """)
     }
-    # Contract also has "crawler" — but the duplicate must still be flagged
-    # and no contract-only finding should be emitted (short-circuit).
-    findings = _run(tmp_path, py, ["crawler"])
+    # Contract has "crawler" AND "miner".  If the short-circuit were absent,
+    # the set-equality pass would add a "miner ... not in code" finding.
+    findings = _run(tmp_path, py, ["crawler", "miner"])
     p016 = [f for f in findings if f.rule_id == "P016"]
+    assert len(p016) == 2, f"expected exactly 2 duplicate findings, got {len(p016)}"
     assert all("more than one" in f.message for f in p016)
     assert not any("not in code" in f.message for f in p016)
 
@@ -429,9 +437,9 @@ def test_p016_suppressed_by_inline_directive(tmp_path: Path) -> None:
         for f in findings
         if f.rule_id == "P016" and "'extract-metadata' is defined in code" in f.message
     ]
-    assert (
-        code_only
-    ), "expected at least one code-side P016 finding for extract-metadata"
+    assert code_only, (
+        "expected at least one code-side P016 finding for extract-metadata"
+    )
     assert all(f.suppressed for f in code_only)
 
 
