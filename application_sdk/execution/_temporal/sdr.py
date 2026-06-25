@@ -42,6 +42,9 @@ with workflow.unsafe.imports_passed_through():
         PreflightOutput,
     )
     from application_sdk.infrastructure.context import get_infrastructure
+    from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from application_sdk.handler.base import Handler
@@ -197,7 +200,17 @@ def build_sdr_activities(
             metadata=input.metadata,
         )
         with _bind_context(binding, credentials):
-            return await binding.handler.preflight_check(preflight_input)
+            result = await binding.handler.preflight_check(preflight_input)
+        # Verdict record for debuggability: the canonical status the gate keys
+        # on, plus the raw handler status when they differ (legacy folds).
+        logger.info(
+            "Preflight gate verdict: %s (entrypoint=%s, handler_status=%s, checks=%d)",
+            result.canonical_status().value,
+            input.entrypoint or "<implicit>",
+            result.status.value,
+            len(result.checks),
+        )
+        return result
 
     return [test_auth, preflight_check, fetch_metadata, preflight_gate]
 
