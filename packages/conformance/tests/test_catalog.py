@@ -107,7 +107,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     through the SDK seam (BLDX-1417).  P006–P007 are SDK-only: the SDK must
     keep Temporal contained behind its seam.
 
-    P016–P017 (entrypoint-conformance) are app-scoped: the SDK's ``main.py``
+    P017–P018 (entrypoint-conformance) are app-scoped: the SDK's ``main.py``
     legitimately calls ``create_worker`` and ``uvicorn.run`` — that is its job;
     consumer apps must delegate those calls to the SDK launcher (BLDX-1411).
 

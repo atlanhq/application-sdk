@@ -1,11 +1,8 @@
-"""Shared helpers for the entrypoint-conformance checks (P016–P017, BLDX-1411)."""
+"""Shared helpers for the entrypoint-conformance checks (P017–P018, BLDX-1411)."""
 
 from __future__ import annotations
 
 import ast
-
-# Top-level SDK package for guard checks.
-_SDK_TOP = "application_sdk"
 
 
 def collect_import_origins(tree: ast.AST) -> dict[str, str]:
