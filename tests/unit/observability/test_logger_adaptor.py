@@ -1522,6 +1522,73 @@ class TestLoggingMethodsForwardToLoguru:
             fl.assert_called_once()
 
 
+class TestLevelFiltering:
+    """_is_enabled guard: calls below LOG_LEVEL are dropped before any work;
+    calls at or above LOG_LEVEL are processed normally.
+
+    Fixture LOG_LEVEL=INFO → min_level=20.
+    debug=10 is below; info=20 is at; warning=30 is above.
+    """
+
+    class _Tracker:
+        """Records how many times __str__ was called (simulates an expensive arg)."""
+
+        def __init__(self):
+            self.calls = 0
+
+        def __str__(self):
+            self.calls += 1
+            return "tracked"
+
+    def test_debug_below_info_level_drops_call(self, logger_adapter: AtlanLoggerAdapter):
+        t = self._Tracker()
+        logger_adapter.debug("msg: %s", t)
+        assert t.calls == 0, "debug arg __str__ was called when level is below INFO"
+
+    def test_debug_below_info_level_skips_process(
+        self, logger_adapter: AtlanLoggerAdapter
+    ):
+        with mock.patch.object(logger_adapter, "process") as proc:
+            logger_adapter.debug("msg")
+            proc.assert_not_called()
+
+    def test_info_at_info_level_formats_arg(self, logger_adapter: AtlanLoggerAdapter):
+        t = self._Tracker()
+        logger_adapter.info("msg: %s", t)
+        assert t.calls == 1, "info arg __str__ was not called at INFO level"
+
+    def test_warning_above_info_level_formats_arg(
+        self, logger_adapter: AtlanLoggerAdapter
+    ):
+        t = self._Tracker()
+        logger_adapter.warning("msg: %s", t)
+        assert t.calls == 1, "warning arg __str__ was not called above INFO level"
+
+    def test_is_enabled_false_below_min(self, logger_adapter: AtlanLoggerAdapter):
+        from application_sdk.observability.logger_adaptor import SEVERITY_MAPPING
+
+        logger_adapter.logger._core.min_level = SEVERITY_MAPPING["INFO"]
+        assert not logger_adapter._is_enabled(SEVERITY_MAPPING["DEBUG"])
+
+    def test_is_enabled_true_at_min(self, logger_adapter: AtlanLoggerAdapter):
+        from application_sdk.observability.logger_adaptor import SEVERITY_MAPPING
+
+        logger_adapter.logger._core.min_level = SEVERITY_MAPPING["INFO"]
+        assert logger_adapter._is_enabled(SEVERITY_MAPPING["INFO"])
+
+    def test_is_enabled_true_above_min(self, logger_adapter: AtlanLoggerAdapter):
+        from application_sdk.observability.logger_adaptor import SEVERITY_MAPPING
+
+        logger_adapter.logger._core.min_level = SEVERITY_MAPPING["INFO"]
+        assert logger_adapter._is_enabled(SEVERITY_MAPPING["WARNING"])
+
+    def test_is_enabled_falls_back_true_on_mock_logger(
+        self, logger_adapter: AtlanLoggerAdapter
+    ):
+        logger_adapter.logger = mock.MagicMock()
+        assert logger_adapter._is_enabled(10)
+
+
 class TestProcessV3CorrelationBridge:
     """`process()` falls back to v3 CorrelationContext when legacy ctx empty.
 
