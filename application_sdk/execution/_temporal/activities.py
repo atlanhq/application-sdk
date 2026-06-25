@@ -116,6 +116,7 @@ def create_activity_from_task(
             app_name=context.app_name,
             app_version=app_metadata.version,
             run_id=run_id,
+            workflow_id=activity.info().workflow_id,
             correlation_id=correlation_id,
         )
 

@@ -221,8 +221,6 @@ class AppContext:
     _cancelled: bool = field(default=False, repr=False)
 
     def __post_init__(self) -> None:
-        if not self.workflow_id:
-            self.workflow_id = "local-no-temporal"
         if not self.correlation_id:
             self.correlation_id = str(self.run_id)
 

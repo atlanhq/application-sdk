@@ -470,6 +470,10 @@ class _AfnOut(Output, allow_unbounded_fields=True):
     greeting: str = ""
 
 
+class _WfIdOut(Output, allow_unbounded_fields=True):
+    captured_workflow_id: str = ""
+
+
 class TestTrackFileRefs:
     """Tests for _track_file_refs (exercises inline import of _app_state*)."""
 
@@ -578,9 +582,9 @@ class TestActivityFnExecution:
                 "application_sdk.infrastructure.context.get_infrastructure",
                 return_value=None,
             ),
+            pytest.raises(ApplicationError) as exc_info,
         ):
-            with pytest.raises(ApplicationError) as exc_info:
-                await activity_fn(ctx, _AfnIn(name="x"))
+            await activity_fn(ctx, _AfnIn(name="x"))
         # ApplicationError should be flagged non-retryable.
         assert exc_info.value.non_retryable is True
 
@@ -617,9 +621,9 @@ class TestActivityFnExecution:
                 "application_sdk.infrastructure.context.get_infrastructure",
                 return_value=None,
             ),
+            pytest.raises(ValueError, match="ordinary failure"),
         ):
-            with pytest.raises(ValueError, match="ordinary failure"):
-                await activity_fn(ctx, _AfnIn(name="x"))
+            await activity_fn(ctx, _AfnIn(name="x"))
 
     @pytest.mark.asyncio
     async def test_starts_and_stops_auto_heartbeat_loop(self) -> None:
@@ -690,3 +694,48 @@ class TestActivityFnExecution:
         ):
             result = await activity_fn(ctx, _AfnIn(name="i"))
         assert result.greeting == "hi i"
+
+    @pytest.mark.asyncio
+    async def test_workflow_id_plumbed_from_activity_info(self) -> None:
+        """activity_fn must set app_context.workflow_id from activity.info().workflow_id.
+
+        Regression guard: previously AppContext was constructed without workflow_id,
+        so it silently fell back to the 'local-no-temporal' sentinel. This caused
+        App.upload() to write under the wrong object-store prefix in production.
+        """
+
+        class _WfIdApp(App):
+            @task(timeout_seconds=60)
+            async def capture(self, input: _AfnIn) -> _WfIdOut:
+                return _WfIdOut(captured_workflow_id=self.context.workflow_id)
+
+            async def run(self, input: _AfnIn) -> _WfIdOut:
+                return await self.capture(input)
+
+        task_registry = TaskRegistry.get_instance()
+        tasks = task_registry.get_tasks_for_app("_wf-id-app")
+        capture_task = next(t for t in tasks if t.name == "capture")
+        activity_fn = create_activity_from_task(capture_task)
+
+        ctx = TaskContext(
+            app_name="_wf-id-app",
+            task_name="capture",
+            run_id="run-wfid",
+            heartbeat_timeout_seconds=None,
+            auto_heartbeat_seconds=None,
+        )
+
+        with (
+            mock.patch.object(
+                activities_module.activity,
+                "info",
+                return_value=mock.MagicMock(workflow_id="wf-from-temporal"),
+            ),
+            mock.patch(
+                "application_sdk.infrastructure.context.get_infrastructure",
+                return_value=None,
+            ),
+        ):
+            result = await activity_fn(ctx, _AfnIn(name="x"))
+
+        assert result.captured_workflow_id == "wf-from-temporal"
