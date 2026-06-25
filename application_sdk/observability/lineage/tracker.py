@@ -15,7 +15,7 @@ each activity owns its own tracker; partials are merged in a dedicated reduce st
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 
 from application_sdk.observability.lineage.metrics import MissingLineageMetrics
 from application_sdk.observability.lineage.types import (
@@ -23,7 +23,6 @@ from application_sdk.observability.lineage.types import (
     ObservabilityConfig,
     RunContext,
 )
-from application_sdk.observability.lineage.writers import ChunkedOutputHandler
 
 if TYPE_CHECKING:
     from application_sdk.observability.lineage.registry import ReasonCodeRegistry
@@ -46,7 +45,6 @@ class LineageObservabilityTracker:
         config: Optional[ObservabilityConfig] = None,
         metrics: Optional[MissingLineageMetrics] = None,
         log_successful_lineage: bool = False,
-        asset_details_handler: Optional[ChunkedOutputHandler] = None,
     ):
         """
         Args:
@@ -55,7 +53,11 @@ class LineageObservabilityTracker:
             metrics: Optional metrics sink. Called on each record_missing_reason().
             log_successful_lineage: Deprecated — use config.log_successful_lineage instead.
                 Kept for backward compatibility with existing Tableau instantiation.
-            asset_details_handler: Optional ChunkedOutputHandler for per-asset JSONL.
+
+        The tracker is a pure in-memory aggregator: it computes coverage
+        (:meth:`build_output`) and returns per-asset records
+        (:meth:`build_asset_details`). It writes NO files — persistence is the
+        connector's job (it already owns its object-store/output layer).
         """
         self.connector_type = connector_type
         if config is not None:
@@ -63,7 +65,6 @@ class LineageObservabilityTracker:
         else:
             self.log_successful_lineage = log_successful_lineage
         self.metrics = metrics
-        self.asset_details_handler = asset_details_handler
         self.asset_index: Dict[str, Dict[str, Any]] = {}
         self.asset_details: Dict[str, Dict[str, Any]] = {}
         self.totals = {
@@ -78,7 +79,17 @@ class LineageObservabilityTracker:
         self.counts_by_failed_path: Dict[str, int] = {}
         # ADDITIVE (AE): ARS intent edges recorded for the publish-side stitch.
         # Does not participate in build_output(); read by the distributed writer.
+        # This is also the per-entity "arsIdentity we sent to publish" debug log.
         self.intent_edges: List[Dict[str, Any]] = []
+        # ADDITIVE (AE): ARS-dependent assets — bearers of BI->warehouse edges
+        # whose Process is minted by the publish-app at resolution time, not by
+        # the connector at transform. A SEPARATE bucket: NOT counted as
+        # withLineage (the connector created no Process) and NOT counted as
+        # missingLineage (the connector did emit the arsIdentity). Demoted out of
+        # the shouldHaveLineage denominator so the build_output() coverage ratio
+        # reflects native (BI->BI) lineage only.
+        self.ars_dependent_keys: Set[str] = set()
+        self.counts_ars_dependent_by_type: Dict[str, int] = {}
         # ADDITIVE (AE): run identity + active registry, attached by create_tracker
         # for the distributed writer / telemetry layers. Not used by build_output().
         self.run_context: Optional["RunContext"] = None
@@ -134,7 +145,16 @@ class LineageObservabilityTracker:
                     "qualifiedName"
                 ):
                     self.asset_details[key]["qualifiedName"] = qualified_name
-            if should_have_lineage and not state.get("shouldHaveLineage"):
+            # Do NOT re-promote an ARS-dependent asset: emit_intent demoted it
+            # out of the BI→BI denominator, and a later default-True
+            # register_asset (e.g. from the backstop's record_missing_reason, or
+            # a second intent edge) must not silently undo that. Only an explicit
+            # native mark (_promote_from_ars_dependent) restores it.
+            if (
+                should_have_lineage
+                and not state.get("shouldHaveLineage")
+                and not state.get("arsDependent")
+            ):
                 state["shouldHaveLineage"] = True
                 self.totals["shouldHaveLineage"] += 1
                 self.counts_by_type[asset_type]["shouldHaveLineage"] += 1
@@ -186,6 +206,28 @@ class LineageObservabilityTracker:
             self.asset_details[key].pop("reason", None)
             self.asset_details[key].pop("reasonDetails", None)
 
+    def _promote_from_ars_dependent(self, key: str, asset_type: str) -> None:
+        """A native (BI->BI) edge supersedes a prior ARS-dependent classification.
+
+        Restores the asset to the shouldHaveLineage denominator and removes it
+        from the ARS-dependent bucket before it is marked covered. No-op for the
+        common case (asset was never ARS-dependent), so argo behavior is intact.
+        """
+        state = self.asset_index.get(key)
+        if not state or not state.get("arsDependent"):
+            return
+        state["arsDependent"] = False
+        self.ars_dependent_keys.discard(key)
+        if asset_type in self.counts_ars_dependent_by_type:
+            self.counts_ars_dependent_by_type[asset_type] = max(
+                0, self.counts_ars_dependent_by_type[asset_type] - 1
+            )
+        if not state.get("shouldHaveLineage"):
+            state["shouldHaveLineage"] = True
+            self.totals["shouldHaveLineage"] += 1
+            if asset_type in self.counts_by_type:
+                self.counts_by_type[asset_type]["shouldHaveLineage"] += 1
+
     def mark_output_lineage(
         self,
         asset_type: str,
@@ -200,6 +242,7 @@ class LineageObservabilityTracker:
         if not state:
             LOGGER.warning("Skipping mark_output_lineage for invalid asset: %s", key)
             return
+        self._promote_from_ars_dependent(key, asset_type)
         self._clear_missing_state(key, asset_type)
         if not state["hasLineage"]:
             state["hasLineage"] = True
@@ -308,6 +351,11 @@ class LineageObservabilityTracker:
         # Don't record missing reason if asset already has lineage
         if state["hasLineage"]:
             return
+        # Don't record missing for an ARS-dependent asset — it's a separate
+        # bucket (the arsIdentity was emitted to publish), neither created nor
+        # missing. This is what makes the data-model backstop safe.
+        if state.get("arsDependent"):
+            return
         if state.get("missingRecorded"):
             return
         state["missingRecorded"] = True
@@ -403,13 +451,16 @@ class LineageObservabilityTracker:
         if source_details_dict:
             self.asset_details[key]["lineageSourceDetails"] = source_details_dict
 
-    def write_asset_details(self) -> None:
-        if not self.asset_details_handler:
-            return
-        for asset in self.asset_details.values():
-            output = self._build_asset_output(asset)
-            self.asset_details_handler.write(output)
-        self.asset_details_handler.close()
+    def build_asset_details(self) -> List[Dict[str, Any]]:
+        """Return the per-asset detail records for the connector to persist.
+
+        These are the reactive RCA artifacts: one compact dict per asset that
+        has a recorded miss (plus successes when ``log_successful_lineage`` is
+        on, and ARS-dependent assets). The SDK ships no writer — the connector
+        persists this list however it likes (its own ChunkedOutputHandler,
+        object store, etc.).
+        """
+        return [self._build_asset_output(asset) for asset in self.asset_details.values()]
 
     def build_output(self) -> Dict[str, Any]:
         totals = self.totals
@@ -461,27 +512,35 @@ class LineageObservabilityTracker:
             },
         }
 
-    def flush(self) -> Dict[str, Any]:
-        """Convenience: write asset details + build coverage output."""
-        self.write_asset_details()
-        return self.build_output()
 
     # ------------------------------------------------------------------
     # ADDITIVE (AE) — do not touch build_output() semantics
     # ------------------------------------------------------------------
 
     def emit_intent(self, edge: IntentEdge) -> None:
-        """Record an ARS (BI→warehouse) intent edge for the publish-side stitch.
+        """Record an ARS (BI→warehouse) intent edge — an "ARS-dependent" asset.
 
-        Registers the bearing asset as lineage-capable and stamps the canonical
-        identity hash so the publish resolution outcome can be joined back. The
-        edge is intent (``PENDING``), not a success or a miss — coverage is only
-        resolved end-to-end after the publish reconcile.
+        Always logs the exact ``arsIdentity`` (``components`` + canonical
+        ``identity_hash``) the connector sent to the publish-app, so a missing
+        end-to-end lineage can be traced to what was (or wasn't) requested. The
+        full per-edge log is :attr:`intent_edges`.
+
+        Classification: the bearing asset is **ARS-dependent** — its Process is
+        minted by the publish-app at resolution time, not by the connector at
+        transform. So it is NOT counted as ``withLineage`` (the connector created
+        nothing) and NOT counted as ``missingLineage`` (the connector did its
+        job). It is demoted out of the ``shouldHaveLineage`` denominator so the
+        :meth:`build_output` coverage ratio reflects native (BI→BI) lineage only,
+        and is reported as a separate bucket via :meth:`ars_summary`. If the
+        asset already has native lineage, the intent is logged for debugging
+        without changing its covered status (and :meth:`mark_output_lineage`
+        likewise supersedes a prior ARS-dependent classification).
         """
         if not edge.entity_type or not edge.entity_id:
             LOGGER.warning("Skipping emit_intent for invalid edge: %s", edge)
             return
         self.register_asset(edge.entity_type, edge.entity_id, edge.qualified_name)
+        key = self._key(edge.entity_type, edge.entity_id)
         self.intent_edges.append(
             {
                 "entityType": edge.entity_type,
@@ -496,6 +555,44 @@ class LineageObservabilityTracker:
                 "edgeIntent": edge.edge_intent,
             }
         )
+        state = self.asset_index.get(key)
+        if not state or state.get("hasLineage"):
+            # Already created natively (or invalid) — identity logged above; do
+            # not change the covered status.
+            return
+        # ARS-dependent: clear any prior miss and demote out of the BI→BI
+        # coverage denominator, exactly once per asset.
+        self._clear_missing_state(key, edge.entity_type)
+        if key not in self.ars_dependent_keys:
+            self.ars_dependent_keys.add(key)
+            state["arsDependent"] = True
+            self.counts_ars_dependent_by_type[edge.entity_type] = (
+                self.counts_ars_dependent_by_type.get(edge.entity_type, 0) + 1
+            )
+            if state.get("shouldHaveLineage"):
+                state["shouldHaveLineage"] = False
+                self.totals["shouldHaveLineage"] = max(
+                    0, self.totals["shouldHaveLineage"] - 1
+                )
+                if edge.entity_type in self.counts_by_type:
+                    self.counts_by_type[edge.entity_type]["shouldHaveLineage"] = max(
+                        0,
+                        self.counts_by_type[edge.entity_type]["shouldHaveLineage"] - 1,
+                    )
+
+    def ars_summary(self) -> Dict[str, Any]:
+        """ARS-dependent bucket summary — the separate bucket beside build_output().
+
+        ``arsDependentAssets``  : distinct assets whose lineage is ARS (resolved
+                                  at publish), excluded from the coverage ratio.
+        ``arsDependentByType``  : per-asset-type breakdown.
+        ``arsIntentEdges``      : number of arsIdentities logged in intent_edges.
+        """
+        return {
+            "arsDependentAssets": len(self.ars_dependent_keys),
+            "arsDependentByType": dict(self.counts_ars_dependent_by_type),
+            "arsIntentEdges": len(self.intent_edges),
+        }
 
     def success_keys(self) -> set:
         """Return the ``{assetType}:{assetId}`` keys that have lineage.

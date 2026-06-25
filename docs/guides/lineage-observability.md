@@ -123,7 +123,6 @@ application_sdk/observability/lineage/
 ├── identity.py        # components_hash, canonical_identity_string, stitch_key,
 │                       #   IDENTITY_FIELDS, IDENTITY_SCHEMA_VERSION
 ├── schema.py          # AssetRecord, CoverageSummary, ArsEdgeInfo (pydantic, camelCase)
-├── writers.py         # ChunkedOutputHandler, write_coverage_json, create_asset_details_handler
 └── metrics.py         # MissingLineageMetrics (Protocol)
 
 application_sdk/execution/_temporal/interceptors/lineage.py
@@ -143,7 +142,6 @@ def create_tracker(
     connector_type: str = "",
     config: Optional[ObservabilityConfig] = None,
     metrics: Optional[MissingLineageMetrics] = None,
-    asset_details_handler: Optional[ChunkedOutputHandler] = None,
     *,
     run_context: Optional[RunContext] = None,
     registry: Optional[ReasonCodeRegistry] = None,
@@ -178,17 +176,21 @@ Less common:
 ```python
 tracker.mark_input_lineage(...)          # informational; does NOT set hasLineage
 tracker.apply_relationship_lineage(...)  # sets hasLineage via relationship (not a Process)
-tracker.emit_intent(edge: IntentEdge)    # ARS BI→warehouse intent → PENDING (AE-additive)
+tracker.emit_intent(edge: IntentEdge)    # ARS BI→warehouse → "ARS-dependent" (see §5.1)
+tracker.ars_summary() -> dict            # {arsDependentAssets, arsDependentByType, arsIntentEdges}
 tracker.success_keys() -> set[str]       # "{assetType}:{assetId}" for hasLineage assets (reduce numerator)
 ```
 
 Output:
 
 ```python
-tracker.build_output() -> dict   # byte-stable coverage summary (see §4.3)
-tracker.write_asset_details()    # flush per-asset JSONL via asset_details_handler
-tracker.flush() -> dict          # write_asset_details() + build_output()
+tracker.build_output() -> dict          # byte-stable coverage summary (see §4.3)
+tracker.build_asset_details() -> list   # per-asset RCA records — connector persists them
 ```
+
+The tracker is **pure**: it computes and returns data, and writes nothing itself. There is no
+SDK-shipped file writer — persist `build_output()` and `build_asset_details()` with the connector's
+own output layer (its object store, its own `ChunkedOutputHandler`, etc.).
 
 ### 4.3 `build_output()` shape (exact, byte-stable)
 
@@ -257,9 +259,9 @@ publish-app import this one function, so the key can never drift.
 - **`AssetRecord` / `CoverageSummary`** (`schema.py`) — pydantic models (camelCase on the wire,
   accept snake_case in) for the v2 artifacts; carry `schemaVersion`, `identitySchemaVersion`, run
   identity, `stage`, and an `ars` sub-record.
-- **`ChunkedOutputHandler`** (`writers.py`) — line-oriented JSON writer; a falsy `chunk_size` writes
-  a single `{prefix}.json`, otherwise rolls `{prefix}-{n}.json`. `write_coverage_json` and
-  `create_asset_details_handler` are convenience helpers.
+- **No SDK file writer.** The tracker returns data (`build_output()`, `build_asset_details()`); the
+  connector persists it with its own output layer. (The SDK deliberately ships no `ChunkedOutputHandler`
+  — connectors already own their object-store/output stack, so an SDK writer was redundant.)
 - **`MissingLineageMetrics`** (`metrics.py`) — a `@runtime_checkable` Protocol with one method,
   `missing_lineage_event(reason: str)`, called once per recorded miss. Implement it (or pass `None`).
 - **`LineageObservabilityInterceptor`** (`execution/_temporal/interceptors/lineage.py`) — wraps
@@ -283,6 +285,48 @@ no-op-once-marked**, you can safely:
 
 …and the backstop will never clobber a more specific reason or a success. This is the canonical
 instrumentation pattern.
+
+### 5.1 The third bucket: ARS-dependent (BI→warehouse)
+
+Native (BI→BI) edges are resolved at transform and counted as **created**. But a BI→warehouse edge
+is **not** created at transform — the connector emits an unresolved `arsIdentity` (`components`) that
+the publish-app resolves later. Counting that as "created" overstates coverage; counting it as
+"missing" is wrong (the connector did its job). So it's a **third bucket: ARS-dependent** — neither
+created nor missing.
+
+Call `emit_intent` at every ARS edge site instead of `mark_output_lineage`:
+
+```python
+tracker.emit_intent(IntentEdge(
+    entity_id=field_key, entity_type="SigmaDataElementField",
+    qualified_name="", direction="inputs", ordinal=i,
+    components={"connectorType": vendor, "databaseName": db,
+                "schemaName": schema, "tableName": table, "columnName": col},
+    match_type_names=["Column"],
+))
+```
+
+What `emit_intent` does:
+- **Logs the exact `arsIdentity`** (`components` + canonical `identity_hash`) in `tracker.intent_edges`
+  — the per-entity "what we sent to publish" record, for tracing a missing end-to-end lineage.
+- **Reclassifies the asset as ARS-dependent**: clears any prior miss and **demotes it out of the
+  `shouldHaveLineage` denominator**, so the `build_output()` coverage ratio reflects **native (BI→BI)
+  lineage only**. The demotion is sticky — `record_missing_reason` is a no-op for ARS-dependent
+  assets (the backstop can't turn them into misses), and a default-True `register_asset` won't
+  re-promote them. Only an explicit native `mark_output_lineage` supersedes it (a BI→BI edge wins).
+- If the asset **already has native lineage**, the intent is logged for debugging only; the asset
+  stays created.
+
+Read the bucket with `tracker.ars_summary()` → `{arsDependentAssets, arsDependentByType,
+arsIntentEdges}`, and the full per-entity identities from `tracker.intent_edges`. The three buckets
+partition the lineage-capable population:
+
+> **created (BI→BI) + ars_dependent (BI→warehouse) + missing = the capable assets.**
+
+> **Note:** if the connector can't even *build* the arsIdentity (e.g. the SQL didn't parse, no column
+> match), that's still **missing** — ARS-dependent means we successfully emitted an identity to publish.
+> The publish-side reconciliation that confirms whether each `arsIdentity` actually resolved is the
+> separate ARS-stitch work (§8.2, pending).
 
 ---
 
@@ -411,11 +455,21 @@ def process_v2_metadata(..., tracker: Optional[Any] = None):
 tracker.register_asset("MyConnElement", element_id)                    # should_have_lineage=True
 tracker.register_asset("MyConnColumn", col_key, should_have_lineage=bool(formula))  # exclude non-capable
 
-# Numerator: mark wherever an edge is actually emitted
-out["element-tables"].append(row)
+# Numerator (NATIVE, BI→BI only): mark wherever a resolved Process is emitted
+out["element-models"].append(row)            # upstream is another BI asset
 tracker.mark_output_lineage("MyConnElement", element_id)
 
-# Misses: record a specific reason at each skip branch
+# ARS (BI→warehouse): emit_intent instead of mark — ARS-dependent bucket (§5.1)
+out["element-tables"].append(row)            # upstream is a warehouse table
+tracker.emit_intent(IntentEdge(
+    entity_id=element_id, entity_type="MyConnElement", qualified_name="",
+    direction="inputs", ordinal=0,
+    components={"connectorType": vendor, "databaseName": db,
+                "schemaName": schema, "tableName": table},
+    match_type_names=["Table"],
+))
+
+# Misses: record a specific reason at each skip branch (couldn't resolve any upstream)
 if not parsed_query:
     tracker.record_missing_reason("MyConnElement", element_id, "MYCONN_ELEMENT_NO_PARSED_QUERY")
     continue
@@ -431,7 +485,7 @@ Back in the orchestrating `@task`, after all processors run:
 
 ```python
 try:
-    coverage = tracker.build_output()          # or .flush() to also write per-asset artifacts
+    coverage = tracker.build_output()          # coverage summary; persist build_asset_details() too if you want the RCA artifact
     if coverage:
         emit_lineage_coverage_event(coverage, {
             "connection_qualified_name": connection_qn,
@@ -463,9 +517,10 @@ except Exception:
 - `app/lineage/reasons.py` — `TABLEAU_REASON_CODES` (~38 codes), relocated out of the SDK per the
   taxonomy split.
 - `app/lineage/bi_sql.py` — `generate_bi_sql_lineage()` creates the tracker (NoOp vs real gated on the
-  flag) with an `asset_details_handler`, runs the BI→SQL lineage generator with ~75 `register`/`mark`/
-  `record` sites, then `build_output()` → `lineage-coverage.json` + `write_asset_details()` → per-asset
-  JSONL.
+  flag), runs the BI→SQL lineage generator with ~75 `register`/`mark`/`record` sites, then
+  `build_output()` → `lineage-coverage.json` and `build_asset_details()` → per-asset JSONL written via
+  Tableau's **own** `ChunkedOutputHandler` (`app/lineage/_helpers/chunked_output.py`). (The SDK ships no
+  writer — see §4.7.)
 - `app/tableau.py` — the `ENABLE_LINEAGE_OBSERVABILITY` flag + `emit_lineage_coverage_event`
   (`tableau_lineage_coverage`).
 - Note: the engine here is the **byte-identical** SDK import, so the M1 argo Mixpanel dashboard and
@@ -515,8 +570,10 @@ summing (re-feeding JSONL through a fresh tracker double-counts and loses the nu
 
 ### 8.2 The connector↔publish ARS stitch (true end-to-end coverage)
 
-- **Transform:** connector calls `emit_intent(IntentEdge)` → the asset is `PENDING` (covered-but-pending,
-  *not* a miss; transform-stage coverage doesn't penalize the connector for publish's work).
+- **Transform (implemented — see §5.1):** the connector calls `emit_intent(IntentEdge)` at every ARS
+  edge → the asset is **ARS-dependent** (covered-but-pending, *not* a miss, *not* created; demoted from
+  the BI→BI ratio), and the exact `arsIdentity` is logged in `intent_edges` for tracing. Sigma ships
+  this today. The remaining publish-side reconciliation below is still pending.
 - **Publish:** emits a **resolution row at every drop site** (turning today's silent absence into rows):
   single-edge drops, unrouted entities, **whole-parent drops** (`arsNoNestedMatchAction='drop'`), and
   Atlas-remove 404s.

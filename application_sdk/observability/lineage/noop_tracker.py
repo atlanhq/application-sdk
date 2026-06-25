@@ -35,14 +35,14 @@ class NoOpLineageObservabilityTracker:
     def emit_intent(self, *args: Any, **kwargs: Any) -> None:
         pass
 
+    def ars_summary(self) -> Dict[str, Any]:
+        return {}
+
     def success_keys(self) -> set:
         return set()
 
     def build_output(self) -> Dict[str, Any]:
         return {}
 
-    def write_asset_details(self) -> None:
-        pass
-
-    def flush(self) -> Dict[str, Any]:
-        return {}
+    def build_asset_details(self) -> list:
+        return []

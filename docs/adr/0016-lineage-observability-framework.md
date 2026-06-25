@@ -33,7 +33,7 @@ A third concern — **distributed aggregation across Temporal activities/pods, t
 
 ### Option A1: Central in `application_sdk` (Chosen)
 
-The tracker, taxonomy, identity hash, schemas, writers, ContextVar accessor, and interceptor live in the SDK; connectors import them and own only their reason registry + skip annotations.
+The tracker, taxonomy, identity hash, schemas, ContextVar accessor, and interceptor live in the SDK; connectors import them and own only their reason registry + skip annotations. The tracker is a pure aggregator — it returns coverage (`build_output()`) and per-asset records (`build_asset_details()`) and writes no files; persistence is the connector's job, since each connector already owns its object-store/output layer (so the SDK ships no file writer).
 
 **Pros:**
 - **One implementation, all connectors.** Tableau/Sigma/Looker/MicroStrategy/PowerBI get coverage by importing, not re-implementing — directly satisfies the M2 "plug-and-play for any connector" goal.

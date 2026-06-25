@@ -1,5 +1,3 @@
-import json
-
 import pytest
 
 from application_sdk.observability.lineage import (
@@ -8,7 +6,6 @@ from application_sdk.observability.lineage import (
     create_tracker,
     ObservabilityConfig,
 )
-from application_sdk.observability.lineage import ChunkedOutputHandler
 
 
 @pytest.fixture
@@ -518,37 +515,36 @@ def test_build_asset_output_includes_reason_details():
 
 
 # ---------------------------------------------------------------------------
-# write_asset_details / build_output / flush
+# build_asset_details / build_output
 # ---------------------------------------------------------------------------
 
 
-def test_write_asset_details_streams_records(tmp_path, tracker_log_true):
-    output_prefix = str(tmp_path / "assets")
-    output_path = tmp_path / "assets.json"
-    tracker_log_true.asset_details_handler = ChunkedOutputHandler(
-        output_prefix, chunk_size=None
-    )
+def test_build_asset_details_returns_records(tracker_log_true):
     tracker_log_true.register_asset(
         "Datasource", "8", qualified_name="ds8", should_have_lineage=True
     )
     tracker_log_true.mark_output_lineage("Datasource", "8", qualified_name="ds8")
     tracker_log_true.record_missing_reason("Worksheet", "9", reason="NO_UPSTREAM")
 
-    tracker_log_true.write_asset_details()
+    records = tracker_log_true.build_asset_details()
 
-    lines = output_path.read_text().splitlines()
-    assert len(lines) == 2
-    parsed = [json.loads(line) for line in lines]
-    asset_types = {entry["assetType"] for entry in parsed}
+    assert len(records) == 2
+    asset_types = {entry["assetType"] for entry in records}
     assert asset_types == {"Datasource", "Worksheet"}
 
 
-def test_write_asset_details_noop_without_handler(tracker_log_false):
+def test_build_asset_details_misses_only_by_default(tracker_log_false):
     tracker_log_false.register_asset(
         "Ds", "wd1", qualified_name="wd1", should_have_lineage=True
     )
     tracker_log_false.record_missing_reason("Ds", "wd1", reason="MISS")
-    tracker_log_false.write_asset_details()
+    # log_successful_lineage=False → covered assets are not kept
+    tracker_log_false.register_asset("Ds", "wd2", should_have_lineage=True)
+    tracker_log_false.mark_output_lineage("Ds", "wd2")
+
+    records = tracker_log_false.build_asset_details()
+    assert [r["assetId"] for r in records] == ["wd1"]
+    assert records[0]["reason"] == "MISS"
 
 
 def test_build_output_returns_summary_without_assets(tracker_log_false):
@@ -579,23 +575,20 @@ def test_build_output_coverage_percentages(tracker_log_false):
     assert output["totalsByType"]["Ds"]["coverage"]["shouldHaveLineageCoverage"] == 70.0
 
 
-def test_flush_writes_and_returns_output(tmp_path):
-    output_prefix = str(tmp_path / "assets")
-    handler = ChunkedOutputHandler(output_prefix, chunk_size=None)
+def test_build_output_and_asset_details_are_independent():
     tracker = LineageObservabilityTracker(
-        connector_type="test",
-        log_successful_lineage=True,
-        asset_details_handler=handler,
+        connector_type="test", log_successful_lineage=True
     )
     tracker.register_asset("Ds", "f1", should_have_lineage=True)
     tracker.record_missing_reason("Ds", "f1", reason="MISS")
 
-    output = tracker.flush()
+    output = tracker.build_output()
     assert output["totals"]["missingLineage"] == 1
 
-    output_path = tmp_path / "assets.json"
-    lines = output_path.read_text().splitlines()
-    assert len(lines) == 1
+    records = tracker.build_asset_details()
+    assert len(records) == 1
+    assert records[0]["assetId"] == "f1"
+    assert records[0]["reason"] == "MISS"
 
 
 # ---------------------------------------------------------------------------
@@ -611,9 +604,10 @@ def test_noop_tracker_methods():
     noop.record_failed_path_attempt("Ds", "1", path="p", reason="r")
     noop.record_missing_reason("Ds", "1", reason="r")
     noop.apply_relationship_lineage("Ds", "1", qualified_name="qn", source_details={})
+    noop.emit_intent(None)
     assert noop.build_output() == {}
-    noop.write_asset_details()
-    assert noop.flush() == {}
+    assert noop.build_asset_details() == []
+    assert noop.ars_summary() == {}
 
 
 # ---------------------------------------------------------------------------

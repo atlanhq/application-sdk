@@ -62,12 +62,6 @@ from application_sdk.observability.lineage.types import (
     RunContext,
     Stage,
 )
-from application_sdk.observability.lineage.writers import (
-    ChunkedOutputHandler,
-    create_asset_details_handler,
-    write_coverage_json,
-)
-
 # Backward-compatible aliases for the argo / ported-AE Tableau tracker.
 LineageCoverageTracker = LineageObservabilityTracker
 NoOpLineageCoverageTracker = NoOpLineageObservabilityTracker
@@ -77,7 +71,6 @@ def create_tracker(
     connector_type: str = "",
     config: Optional[ObservabilityConfig] = None,
     metrics: Optional[MissingLineageMetrics] = None,
-    asset_details_handler: Optional[ChunkedOutputHandler] = None,
     *,
     run_context: Optional[RunContext] = None,
     registry: Optional[ReasonCodeRegistry] = None,
@@ -86,9 +79,13 @@ def create_tracker(
 
     Returns a :class:`NoOpLineageObservabilityTracker` when
     ``config.enabled is False`` (zero per-row cost). Otherwise returns a real
-    tracker, attaching ``run_context``/``registry`` for the distributed writer
+    tracker, attaching ``run_context``/``registry`` for the distributed reduce
     and telemetry layers, and registers it so :func:`get_lineage_tracker`
     returns it deeper in the call stack.
+
+    The tracker writes nothing itself: call :meth:`build_output` for the coverage
+    summary and :meth:`build_asset_details` for the per-asset records, then
+    persist them with the connector's own output layer.
     """
     if config is not None and not config.enabled:
         noop = NoOpLineageObservabilityTracker()
@@ -98,7 +95,6 @@ def create_tracker(
         connector_type=connector_type,
         config=config,
         metrics=metrics,
-        asset_details_handler=asset_details_handler,
     )
     tracker.run_context = run_context
     tracker.registry = registry
@@ -140,8 +136,4 @@ __all__ = [
     "ArsEdgeInfo",
     # metrics protocol
     "MissingLineageMetrics",
-    # writers
-    "ChunkedOutputHandler",
-    "write_coverage_json",
-    "create_asset_details_handler",
 ]
