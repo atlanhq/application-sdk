@@ -119,18 +119,26 @@ class TestMakeEmitter:
 
 
 class _FakeStdout:
-    """Async-iterable stand-in for ``proc.stdout`` yielding raw bytes lines."""
+    """StreamReader-like stand-in for ``proc.stdout`` used by the readuntil loop."""
 
     def __init__(self, lines: list[bytes]):
-        self._lines = list(lines)
+        self._buf = b"".join(lines)
 
-    def __aiter__(self):
-        return self
+    async def readuntil(self, separator: bytes = b"\n") -> bytes:
+        idx = self._buf.find(separator)
+        if idx == -1:
+            partial, self._buf = self._buf, b""
+            raise asyncio.IncompleteReadError(partial, None)
+        end = idx + len(separator)
+        chunk, self._buf = self._buf[:end], self._buf[end:]
+        return chunk
 
-    async def __anext__(self) -> bytes:
-        if not self._lines:
-            raise StopAsyncIteration
-        return self._lines.pop(0)
+    async def readexactly(self, n: int) -> bytes:
+        if len(self._buf) < n:
+            partial, self._buf = self._buf, b""
+            raise asyncio.IncompleteReadError(partial, n)
+        chunk, self._buf = self._buf[:n], self._buf[n:]
+        return chunk
 
 
 class _FakeProc:
@@ -157,9 +165,9 @@ class TestMain:
             patch.object(
                 dlf, "_exec_transparently", side_effect=SystemExit(0)
             ) as exec_mock,
+            pytest.raises(SystemExit),
         ):
-            with pytest.raises(SystemExit):
-                dlf.main(["dapr_log_forwarder", "--", "daprd", "--app-id", "app"])
+            dlf.main(["dapr_log_forwarder", "--", "daprd", "--app-id", "app"])
         exec_mock.assert_called_once_with(["daprd", "--app-id", "app"])
 
 
@@ -191,6 +199,55 @@ class TestRun:
 
         assert rc == 0
         assert emitted == [("warning", "[s] w"), ("error", "e")]
+
+    def test_oversized_line_emits_truncated_warning_and_continues(self):
+        # A line longer than the buffer limit triggers LimitOverrunError.
+        # _FakeStdoutOverrun simulates this directly.
+        oversized = b"X" * 300 + b"\n"
+        normal = (json.dumps({"level": "info", "msg": "ok"}) + "\n").encode()
+        emitted: list[tuple[str, str]] = []
+
+        class _FakeStdoutOverrun:
+            def __init__(self):
+                self._phase = 0
+
+            async def readuntil(self, separator: bytes = b"\n") -> bytes:
+                if self._phase == 0:
+                    self._phase = 1
+                    raise asyncio.LimitOverrunError("too long", 300)
+                if self._phase == 1:
+                    self._phase = 2
+                    return oversized[:300]  # readexactly result fed back; unused here
+                if self._phase == 2:
+                    self._phase = 3
+                    return normal
+                raise asyncio.IncompleteReadError(b"", None)
+
+            async def readexactly(self, n: int) -> bytes:
+                return b"X" * n
+
+        fake_proc = _FakeProc([], returncode=0)
+        fake_proc.stdout = _FakeStdoutOverrun()
+
+        async def _create(*_a, **_k):
+            return fake_proc
+
+        with (
+            patch.object(
+                dlf,
+                "_make_emitter",
+                return_value=(lambda lvl, msg: emitted.append((lvl, msg)), None),
+            ),
+            patch.object(dlf.asyncio, "create_subprocess_exec", _create),
+            patch.object(dlf, "_install_signal_forwarding"),
+            patch.object(dlf, "_drain_and_flush", new=_async_noop),
+        ):
+            rc = asyncio.run(dlf._run(["daprd"]))
+
+        assert rc == 0
+        assert emitted[0][0] == "warning"
+        assert "truncated" in emitted[0][1]
+        assert emitted[1] == ("info", "ok")
 
     def test_drains_and_flushes_on_exit(self):
         fake_proc = _FakeProc([], returncode=3)

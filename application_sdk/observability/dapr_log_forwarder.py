@@ -203,6 +203,9 @@ async def _run(child_cmd: list[str]) -> int:
         *child_cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        limit=2
+        * 1024
+        * 1024,  # 2 MiB — panic/stack traces can exceed the 64 KiB default
     )
     _install_signal_forwarding(proc)
 
@@ -216,7 +219,26 @@ async def _run(child_cmd: list[str]) -> int:
 
     try:
         assert proc.stdout is not None
-        async for raw in proc.stdout:
+        while True:
+            try:
+                raw = await proc.stdout.readuntil(b"\n")
+            except asyncio.LimitOverrunError as exc:
+                # Line longer than 2 MiB — forward a truncated prefix so the line
+                # is never silently dropped, then drain the rest of it.
+                chunk = await proc.stdout.readexactly(exc.consumed)
+                try:
+                    await proc.stdout.readuntil(b"\n")
+                except (asyncio.LimitOverrunError, asyncio.IncompleteReadError):
+                    pass
+                prefix = chunk[:256].decode("utf-8", errors="replace").rstrip("\n")
+                emit("warning", f"{prefix} ...[{exc.consumed} bytes, line truncated]")
+                continue
+            except asyncio.IncompleteReadError as exc:
+                # EOF — process any trailing bytes without a final newline.
+                if exc.partial:
+                    raw = exc.partial
+                else:
+                    break
             line = raw.decode("utf-8", errors="replace")
             try:
                 level, message = _format_line(line)
@@ -248,10 +270,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    # Defensive double-gate: forwarding is only meaningful in SDR mode, where the
-    # app runs on customer infra with no node-level log collector. Outside SDR
-    # mode, behave exactly like running the child directly. The entrypoint only
-    # wraps in SDR mode, but this keeps the module safe to invoke unconditionally.
+    # Defensive double-gate: the entrypoint.sh already gates the forwarder on
+    # ENABLE_ATLAN_UPLOAD, but `python -m application_sdk.observability.dapr_log_forwarder`
+    # is a documented entry point ("safe to invoke unconditionally"), so this gate
+    # makes direct invocation safe regardless of the environment.
     from application_sdk.constants import (  # noqa: PLC0415 — deferred: read at call time so the flag is env-fresh/patchable
         ENABLE_ATLAN_UPLOAD,
     )

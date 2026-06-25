@@ -263,6 +263,8 @@ The `daprd` sidecar's own logs go straight to the container's stdout/stderr and 
 
 So in SDR mode the SDK **automatically** forwards daprd's logs through its own pipeline (the same path as the app's logs, so they land in the lakehouse `app_logs` table with `app_name` / `is_sdr` populated), while still echoing them to the container's own logs. No configuration is required — it is gated on `ENABLE_ATLAN_UPLOAD`. Under the hood the container entrypoint runs daprd under `application_sdk.observability.dapr_log_forwarder`, which streams each daprd log line into a `dapr.runtime` logger and forwards `SIGTERM` so graceful shutdown is unaffected.
 
+> **Note (`kubectl logs` format in SDR mode):** In SDR mode daprd's stdout/stderr is piped into the forwarder, so `kubectl logs` shows the SDK's re-emitted format (with level, `app_name`, timestamp) rather than daprd's raw `--log-as-json` lines. The content is the same; only the format differs.
+
 daprd is chatty, so control the volume at the source with its log level:
 
 ```bash
