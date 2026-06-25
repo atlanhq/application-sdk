@@ -7,6 +7,8 @@ name: storage-creds-verify
 
 on:
   workflow_dispatch: {}
+  push:
+    branches: [adityachoudhury/storage-creds-verify]
 
 permissions:
   id-token: write
