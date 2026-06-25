@@ -2717,14 +2717,14 @@ class AppInputContract(ExtractionInput):
 
 ## Migration Notes
 
-### v0.10.0 — `emitDeploy` defaults to `false`
+### v0.17.0 — `emitDeploy` defaults to `false`
 
 **What changed:** `App.pkl` gained an `emitDeploy: Boolean` flag (default `false`). Before
-v0.10.0 the `deploy:` block was always emitted when `deploy { ... }` was configured; now it is
+v0.17.0 the `deploy:` block was always emitted when `deploy { ... }` was configured; now it is
 suppressed unless you explicitly opt in.
 
 **Who is affected:** apps that configure `deploy { ... }` or `deployOverrides { ... }` and
-expect a `deploy:` block in the generated `atlan.yaml`. After bumping to v0.10.0 and re-running
+expect a `deploy:` block in the generated `atlan.yaml`. After bumping to v0.17.0 and re-running
 `pkl eval`, those apps will generate an `atlan.yaml` without a `deploy:` block — Heracles will
 apply its own platform defaults instead.
 

@@ -207,7 +207,7 @@ emitEntrypoints: Boolean = true
 /// Set to `true` when you explicitly configure `deploy { ... }` or
 /// `deployOverrides { ... }`.
 ///
-/// **Migration note (introduced in v0.10.0):** if your app previously relied
+/// **Migration note (introduced in v0.17.0):** if your app previously relied
 /// on a `deploy:` block being emitted by default, add `emitDeploy = true` to
 /// your contract. Without it the block is suppressed and Heracles will apply
 /// its own platform defaults, which may differ from your prior explicit config.
