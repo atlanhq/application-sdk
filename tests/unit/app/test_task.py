@@ -468,16 +468,52 @@ class TestTaskPool:
         resolved = os.environ.get(f"ATLAN_POOL_{pool.upper()}_QUEUE") or None
         assert resolved == "app-queue-cold"
 
-    def test_missing_pool_env_var_resolves_to_none(
+    def test_missing_pool_env_var_derives_from_base_queue(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Missing ATLAN_POOL_<POOL>_QUEUE falls back to None (default queue)."""
+        """Missing ATLAN_POOL_<POOL>_QUEUE derives queue from ATLAN_TASK_QUEUE."""
         import os
 
         monkeypatch.delenv("ATLAN_POOL_EXCEPTIONAL_QUEUE", raising=False)
+        monkeypatch.setenv("ATLAN_TASK_QUEUE", "qi-app-queue")
         pool = "exceptional"
-        resolved = os.environ.get(f"ATLAN_POOL_{pool.upper()}_QUEUE") or None
+        explicit = os.environ.get(f"ATLAN_POOL_{pool.upper()}_QUEUE")
+        base_queue = os.environ.get("ATLAN_TASK_QUEUE", "")
+        resolved = explicit or (f"{base_queue}-{pool}" if base_queue else None)
+        assert resolved == "qi-app-queue-exceptional"
+
+    def test_missing_both_env_vars_resolves_to_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Missing both ATLAN_POOL_<POOL>_QUEUE and ATLAN_TASK_QUEUE → None."""
+        import os
+
+        monkeypatch.delenv("ATLAN_POOL_EXCEPTIONAL_QUEUE", raising=False)
+        monkeypatch.delenv("ATLAN_TASK_QUEUE", raising=False)
+        pool = "exceptional"
+        explicit = os.environ.get(f"ATLAN_POOL_{pool.upper()}_QUEUE")
+        base_queue = os.environ.get("ATLAN_TASK_QUEUE", "")
+        resolved = explicit or (f"{base_queue}-{pool}" if base_queue else None)
         assert resolved is None
+
+    def test_two_apps_same_pool_name_get_different_queues(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Different base queues produce different pool queues for the same pool name."""
+        import os
+
+        pool = "heavy"
+        for app_base, expected in [
+            ("qi-app-queue", "qi-app-queue-heavy"),
+            ("other-app-queue", "other-app-queue-heavy"),
+        ]:
+            monkeypatch.delenv("ATLAN_POOL_HEAVY_QUEUE", raising=False)
+            monkeypatch.setenv("ATLAN_TASK_QUEUE", app_base)
+            base_queue = os.environ.get("ATLAN_TASK_QUEUE", "")
+            resolved = os.environ.get(f"ATLAN_POOL_{pool.upper()}_QUEUE") or (
+                f"{base_queue}-{pool}" if base_queue else None
+            )
+            assert resolved == expected
 
     def test_pool_different_cases(self) -> None:
         """Pool string is stored verbatim (case preserved)."""

@@ -212,9 +212,16 @@ The pool key in `pools { ["hot"] = new Pool { ... } }` is the **exact same strin
 `@task(pool="hot")` in Python. There is no intermediate name-mapping layer. This eliminates the
 two-declaration problem: you cannot typo one side without P016 failing the CI build.
 
-Queue names are resolved from `ATLAN_POOL_<POOL>_QUEUE` env vars at worker-wrapper construction
-time — set by the Helm chart that deploys each pool. Python code never contains a queue name
-string; the env var is the seam between contract (Pkl) and deployment (Helm).
+Queue names are resolved at worker-wrapper construction time using a two-level lookup:
+
+1. `ATLAN_POOL_<POOL>_QUEUE` — explicit override (Helm sets this if a custom queue name is needed).
+2. `{ATLAN_TASK_QUEUE}-{pool}` — derived from the app's base queue (default, requires no extra config).
+
+The derived default ensures that two different apps that both declare `pool="heavy"` automatically
+get different Temporal queues (`qi-app-queue-heavy` vs `other-app-queue-heavy`), because
+`ATLAN_TASK_QUEUE` is already per-app. Python code never contains a queue name string; the seam
+between contract (Pkl) and deployment (Helm) is `ATLAN_TASK_QUEUE`, which is already set
+unconditionally for every deployment.
 
 ### 2. CI validation (P016) as the build-time gate
 

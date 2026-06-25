@@ -1836,16 +1836,28 @@ def _create_task_activity_wrapper(
         auto_heartbeat_seconds: Auto-heartbeat interval. None disables.
         retry_policy: Full retry policy (overrides max_attempts/interval if set).
         pool: Logical worker-pool name. When set, the activity is routed
-            to the queue registered via ``ATLAN_POOL_<POOL>_QUEUE``.
+            to a dedicated task queue. Queue name resolution order:
+            1. ``ATLAN_POOL_<POOL>_QUEUE`` env var (explicit override).
+            2. ``{ATLAN_TASK_QUEUE}-{pool}`` derived from the app's base queue
+               (default — ensures different apps with the same pool name get
+               different Temporal queues automatically).
 
     Returns:
         Async function that executes the task as an activity.
     """
     # Resolve pool → task queue at construction time. Env vars are fixed for
     # the process lifetime, so capturing the result in the closure is safe.
-    pool_queue: str | None = (
-        os.environ.get(f"ATLAN_POOL_{pool.upper()}_QUEUE") or None if pool else None
-    )
+    # Resolution order: explicit ATLAN_POOL_<POOL>_QUEUE override first, then
+    # derive from ATLAN_TASK_QUEUE so two apps sharing a pool name (e.g.
+    # "heavy") never collide on the same Temporal queue.
+    pool_queue: str | None = None
+    if pool:
+        explicit = os.environ.get(f"ATLAN_POOL_{pool.upper()}_QUEUE")
+        if explicit:
+            pool_queue = explicit
+        else:
+            base_queue = os.environ.get("ATLAN_TASK_QUEUE", "")
+            pool_queue = f"{base_queue}-{pool}" if base_queue else None
     from application_sdk.execution.retry import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
         RetryPolicy as _RP,
     )
