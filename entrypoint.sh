@@ -82,7 +82,26 @@ echo "[entrypoint]   metrics-port:    ${DAPR_METRICS_PORT}"
 echo "[entrypoint]   max-body-size:   ${DAPR_MAX_BODY_SIZE}"
 echo "[entrypoint]   graceful-shutdown-seconds: ${DAPR_GRACEFUL_SHUTDOWN_SECONDS}"
 
-daprd \
+# In SDR mode (ENABLE_ATLAN_UPLOAD=true) the app runs on customer infra with no
+# node-level log collector, so daprd's logs would otherwise be invisible to
+# Atlan. Forward them into the SDK observability pipeline (the same path that
+# reaches the central lakehouse): daprd runs under the forwarder module, which
+# streams its JSON log lines to a dapr.runtime logger and forwards SIGTERM for
+# graceful shutdown. On atlan-infra (ENABLE_ATLAN_UPLOAD!=true) the node-level
+# filelog collector already captures daprd's stdout, so both variables expand to
+# nothing and daprd is launched exactly as before.
+DAPR_LOG_FORWARDER=""
+DAPR_LOG_FORMAT_FLAG=""
+if [ "$(echo "${ENABLE_ATLAN_UPLOAD:-false}" | tr '[:upper:]' '[:lower:]')" = "true" ]; then
+    echo "[entrypoint] SDR mode (ENABLE_ATLAN_UPLOAD=true) — forwarding daprd logs through the SDK observability pipeline"
+    DAPR_LOG_FORWARDER="uv run --no-sync python -m application_sdk.observability.dapr_log_forwarder --"
+    DAPR_LOG_FORMAT_FLAG="--log-as-json"
+fi
+
+# Intentional unquoted expansion: the forwarder prefix is empty (no-op) when the
+# flag is off, and a multi-word command when on.
+# shellcheck disable=SC2086
+${DAPR_LOG_FORWARDER} daprd \
     --app-id "${DAPR_APP_ID}" \
     --app-port "${DAPR_APP_PORT}" \
     --dapr-http-port "${DAPR_HTTP_PORT}" \
@@ -93,7 +112,8 @@ daprd \
     --max-body-size "${DAPR_MAX_BODY_SIZE}" \
     --placement-host-address "" \
     --scheduler-host-address "${DAPR_SCHEDULER_HOST_ADDRESS}" \
-    --dapr-graceful-shutdown-seconds "${DAPR_GRACEFUL_SHUTDOWN_SECONDS}" &
+    --dapr-graceful-shutdown-seconds "${DAPR_GRACEFUL_SHUTDOWN_SECONDS}" \
+    ${DAPR_LOG_FORMAT_FLAG} &
 DAPRD_PID=$!
 echo "[entrypoint] daprd started with PID ${DAPRD_PID}"
 

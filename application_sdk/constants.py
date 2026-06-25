@@ -518,7 +518,6 @@ ENABLE_OBSERVABILITY_STORE_SINK: bool = (
     ).lower()
     == "true"
 )
-
 # REMOVED: ATLAN_API_TOKEN_GUID, ATLAN_API_KEY, ATLAN_CLIENT_ID, ATLAN_CLIENT_SECRET — unused.
 # ATLAN_BASE_URL is still used by events interceptor (deferred import).
 ATLAN_BASE_URL = os.getenv("ATLAN_BASE_URL")

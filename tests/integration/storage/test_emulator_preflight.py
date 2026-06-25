@@ -2,7 +2,7 @@
 
 Exercises ``verify_object_store_access`` against real MinIO stores, covering the
 actual obstore code paths including network I/O, credential checking, and
-round-trip write/read/delete semantics.
+write/read round-trip semantics (no delete required or performed).
 
 Marked ``storage_emulator`` (deselected by default; run in CI with a MinIO sidecar).
 Local:

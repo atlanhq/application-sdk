@@ -1133,6 +1133,50 @@ They default to the current generated shape and should only be changed when
 matching an existing hand-authored configmap or intentionally rendering static
 UI that should not become a runtime input.
 
+### Field Lifecycle — `lifecycle` and `lifecycleMessage`
+
+Every `UIElement` carries two lifecycle properties that control backwards-compatible
+field retirement:
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `lifecycle` | `"active"\|"deprecated"\|"sunset"` | `"active"` | Lifecycle state of this field (see below). |
+| `lifecycleMessage` | `String?` | null | Optional human-readable note shown alongside the deprecation warning. Ignored when `lifecycle = "active"`. |
+
+**Lifecycle states:**
+
+- **`active`** — field is in active use. Generated Python is unchanged.
+- **`deprecated`** — field is still accepted but consumers should migrate away.
+  Generated Python: `field: T = Field(default=..., deprecated=True)`. Pydantic v2 emits a
+  runtime `DeprecationWarning` when the field is set.
+- **`sunset`** — field is retained only for backwards-compatibility and is no longer consumed
+  by the app. A stronger form of deprecated.
+  Generated Python: `field: T = Field(default=..., deprecated=True, json_schema_extra={"x-lifecycle": "sunset"})`.
+
+**Invariants:**
+- A field's lifecycle may only *advance* (`active → deprecated → sunset`).
+- A field is **never removed** and its **type never changes** — these are breaking contract
+  changes caught by the `B005 NonAdditiveContractChange` conformance rule.
+- A "rename" is achieved by deprecating/sunsetting the old field and adding a new field
+  with the new name and a default value.
+
+```pkl
+// Deprecate an old field:
+["legacy_timeout"] = new NumericInput {
+  title = "Legacy timeout"
+  default = 60
+  lifecycle = "deprecated"
+  lifecycleMessage = "Use the standard pipeline timeout instead."
+}
+
+// Sunset an old field (no longer consumed):
+["old_batch_mode"] = new BooleanInput {
+  title = "Old batch mode"
+  default = false
+  lifecycle = "sunset"
+}
+```
+
 ### UIRule — Conditional Visibility
 
 ```pkl

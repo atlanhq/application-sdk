@@ -11,6 +11,10 @@ it:
   deprecations correctly: each notice names a replacement and a removal version
   (B002), no deprecation outlives its promised removal version (B003), and a
   docstring deprecation claim is backed by a real marker (B004).
+* **Contract compat (B005/B006, scope ``both``)** — entrypoint contract fields
+  are permanent: no removal, no type change.  B005 detects the violation against
+  the committed ledger; B006 fires when the ledger is stale (a live field not yet
+  recorded).
 
 Rule-id stability: B-ids are a permanent public contract (exposed in SARIF
 ``help_uri`` and referenced by inline ``# conformance: ignore[Bxxx]``
@@ -187,5 +191,96 @@ RULES: tuple[RuleDefinition, ...] = (
             "``deprecated``), biased toward low false positives at WARN.\n"
         ),
         help_uri=f"{_HELP_BASE}#b004",
+    ),
+    RuleDefinition(
+        id="B005",
+        scope=RuleScope.BOTH,
+        name="NonAdditiveContractChange",
+        tier=EnforcementTier.BLOCK,
+        mechanism=RuleMechanism.STATIC,
+        category="contract-backwards-compatibility",
+        autofixable=False,
+        since="0.7.0",
+        rationale=(
+            "Entrypoint contract fields are a serialization promise to every deployed "
+            "consumer. Removing a field or changing its type silently corrupts payloads "
+            "that already encode the old shape — the damage is invisible until runtime. "
+            "The only valid operations on an existing entrypoint field are: mark it "
+            "deprecated (keep it, discourage use), mark it sunset (keep it, stop "
+            "consuming), or leave it unchanged. A rename must be expressed as "
+            "deprecate/sunset the old field + add a new field. The committed "
+            "contract_schema.lock.json ledger (append-only, regenerated in-PR) "
+            "provides the baseline so the check is single-checkout and offline. "
+            "BLOCK from day 0: backwards-compat is a property that must already hold; "
+            "there is no warn-first window."
+        ),
+        short_description=(
+            "An entrypoint contract field was removed or had its type changed"
+        ),
+        full_description=(
+            "Fires when a ledger entry for an entrypoint contract field is either:\n"
+            "\n"
+            "* **absent from the live contract** — the field was removed (a rename is\n"
+            "  caught here: the old name is gone); or\n"
+            "* **present with a different canonical type** — the field's annotation\n"
+            "  changed (e.g. ``str`` → ``int``, or ``Optional[str]`` → ``str``).\n"
+            "\n"
+            "Type comparison uses canonical normalized strings: ``Optional[X]`` and\n"
+            "``X | None`` are equivalent, as are ``List[X]`` and ``list[X]``, so\n"
+            "purely syntactic rewrites do not trigger a false positive.\n"
+            "\n"
+            "Only entrypoint contracts are gated — Input/Output classes bound to an\n"
+            "``@entrypoint``-decorated method or an ``App.run()`` method.  ``@task``\n"
+            "boundary contracts are explicitly excluded: tasks are internal and may\n"
+            "evolve with breaking changes.\n"
+            "\n"
+            "The ledger is append-only and machine-generated, so regeneration can\n"
+            "only *add* — it can never launder a removal.  To retire a field: mark\n"
+            "it ``deprecated`` or ``sunset`` in the Pkl widget definition, regenerate\n"
+            "the contract, run ``gen-contract-ledger`` to record the new status, and\n"
+            "commit the updated ledger in the same PR.\n"
+        ),
+        help_uri=f"{_HELP_BASE}#b005",
+    ),
+    RuleDefinition(
+        id="B006",
+        scope=RuleScope.BOTH,
+        name="StaleContractLedger",
+        tier=EnforcementTier.BLOCK,
+        mechanism=RuleMechanism.STATIC,
+        category="contract-backwards-compatibility",
+        autofixable=False,
+        since="0.7.0",
+        rationale=(
+            "B005 can only guard removals and type changes against the committed "
+            "ledger. If a new entrypoint field is not recorded in the ledger, B005 "
+            "has a blind spot: the next PR that removes it will see no ledger entry "
+            "and pass silently. B006 closes that gap — a live field not in the ledger "
+            "means the ledger was not regenerated after the field was added. Because "
+            "the generator is append-only (it can never delete entries or change a "
+            "recorded type), regeneration is always safe: it can only add. BLOCK "
+            "because a stale ledger defeats the backwards-compat guarantee."
+        ),
+        short_description=(
+            "An entrypoint contract field is missing from contract_schema.lock.json"
+        ),
+        full_description=(
+            "Fires when a live entrypoint contract field has no corresponding entry in\n"
+            "``contract_schema.lock.json``.  This means the ledger was not regenerated\n"
+            "after the field was introduced.\n"
+            "\n"
+            "Fix: run ``uv run atlan-application-sdk-conformance gen-contract-ledger``\n"
+            "and commit the updated ledger in the same PR as the contract change.\n"
+            "\n"
+            "The generator is append-only — it appends new live fields and refreshes\n"
+            "``status`` from source but never deletes an entry or rewrites a recorded\n"
+            "``type``.  Regenerating after a removal will therefore *not* launder the\n"
+            "removal: B005 will still fire against the persisted ledger entry.\n"
+            "\n"
+            "Suppression: ``# conformance: ignore[B006] <reason>`` on the field line.\n"
+            "Only appropriate when the contract is pre-deployment (no consumers) and\n"
+            "the ledger will be regenerated before the first deploy.\n"
+        ),
+        help_uri=f"{_HELP_BASE}#b006",
     ),
 )
