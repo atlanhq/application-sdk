@@ -71,12 +71,12 @@ def _split_child_command(argv: list[str]) -> list[str]:
     return argv[1:]
 
 
-def _exec_transparently(child_cmd: list[str]) -> "None":
+def _exec_transparently(child_cmd: list[str]) -> None:
     """Replace this process with *child_cmd* (used when forwarding is disabled)."""
     os.execvp(child_cmd[0], child_cmd)
 
 
-def _make_emitter() -> "tuple[Any, Any]":
+def _make_emitter() -> tuple[Any, Any]:
     """Return ``(emit, complete)`` backed by the SDK logger.
 
     ``emit(level, message)`` never raises — if the SDK logger can't be set up it
@@ -116,7 +116,7 @@ def _make_emitter() -> "tuple[Any, Any]":
     return _emit, _complete
 
 
-def _format_line(raw: str) -> "tuple[str, str]":
+def _format_line(raw: str) -> tuple[str, str]:
     """Parse one daprd log line into ``(level, message)``.
 
     daprd emits JSON when run with ``--log-as-json``. The ``scope`` field (e.g.
@@ -139,13 +139,14 @@ def _format_line(raw: str) -> "tuple[str, str]":
     return level, message
 
 
-def _install_signal_forwarding(proc: "asyncio.subprocess.Process") -> None:
+def _install_signal_forwarding(proc: asyncio.subprocess.Process) -> None:
     """Forward SIGTERM/SIGINT to daprd so its graceful shutdown runs."""
 
     def _forward(signum: int) -> None:
         if proc.returncode is None:
             try:
                 proc.send_signal(signum)
+            # conformance: ignore[E002] TOCTOU race: daprd exited between returncode check and send_signal; no logger available in this signal-handler closure
             except ProcessLookupError:  # pragma: no cover - daprd already gone
                 pass
 
@@ -157,7 +158,7 @@ def _install_signal_forwarding(proc: "asyncio.subprocess.Process") -> None:
             signal.signal(sig, lambda s, _f: _forward(s))
 
 
-async def _drain_and_flush(complete: "Any") -> None:
+async def _drain_and_flush(complete: Any) -> None:
     """Drain async sinks and flush buffered records so daprd logs aren't lost."""
     if complete is not None:
         try:
@@ -174,7 +175,7 @@ async def _drain_and_flush(complete: "Any") -> None:
         pass
 
 
-async def _periodic_drain_flush(complete: "Any", interval: float) -> None:
+async def _periodic_drain_flush(complete: Any, interval: float) -> None:
     """Drain + upload buffered records on this loop, every *interval* seconds.
 
     We can't rely on the SDK's own periodic flush here: this forwarder imports
@@ -227,6 +228,7 @@ async def _run(child_cmd: list[str]) -> int:
         flusher.cancel()
         try:
             await flusher
+        # conformance: ignore[E002] expected: CancelledError is the normal result of awaiting an explicitly cancelled asyncio task
         except asyncio.CancelledError:
             pass
         returncode = await proc.wait()
@@ -235,7 +237,7 @@ async def _run(child_cmd: list[str]) -> int:
     return returncode
 
 
-def main(argv: "list[str] | None" = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     """Run daprd as a child and forward its logs to the observability pipeline."""
     argv = list(sys.argv if argv is None else argv)
     child_cmd = _split_child_command(argv)
