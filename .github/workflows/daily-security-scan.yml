@@ -216,7 +216,7 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # ── Create Linear issue (all severities, deduped against open
+      # ── Create Linear issues (one per severity, deduped against open
       #    issues carrying the "vulnerabilities" label so we don't refile
       #    the same vulns every day). New issues land in the team's
       #    "Backlog" state.
@@ -234,14 +234,53 @@ jobs:
           export SCAN_DATE=$(date -u +%Y-%m-%d)
           python3 .github/scripts/security_scan_create_linear.py
 
-      # ── Dispatch the vuln-triage rover for the newly-created ticket. Only
-      #    fires when a *new* (non-deduped) issue was filed this run, so the
-      #    heavy VPN/mothership job runs only when there's something to triage.
-      - name: Dispatch vuln-triage rover
-        if: steps.linear.outputs.new_issue_identifier != ''
+      # ── Dispatch the vuln-triage rover once per newly-created ticket (one
+      #    per severity). Only fires when a *new* (non-deduped) issue was filed
+      #    this run, so the heavy VPN/mothership job runs only when there's
+      #    something to triage. The loop lives in dispatch_vuln_triage.py
+      #    (tested) rather than inlined here — see docs/standards/ci.md.
+      - name: Dispatch vuln-triage rover (one per new ticket)
+        if: steps.linear.outputs.new_issues != '' && steps.linear.outputs.new_issues != '[]'
         env:
           GH_TOKEN: ${{ github.token }}
-          TICKET: ${{ steps.linear.outputs.new_issue_identifier }}
+          NEW_ISSUES: ${{ steps.linear.outputs.new_issues }}
+          GH_REF: ${{ github.ref_name }}
+        run: python3 .github/scripts/dispatch_vuln_triage.py
+
+  # ── Reconcile the allowlist + tickets against what the scanner still sees.
+  #    Runs every scan (even with no new findings) so resolved CVEs are retired
+  #    automatically. A CVE is only removed after 3 consecutive clean scans
+  #    (debounce) — see reconcile_allowlist.py. Checks out as atlan-ci so the
+  #    removal PR it opens is auto-merged by vuln-auto-merge.yml.
+  reconcile:
+    name: Reconcile allowlist + tickets
+    needs: scan-and-ticket
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read # download this run's scan artifact
+    steps:
+      - name: Checkout (as atlan-ci so the removal PR auto-merges)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          token: ${{ secrets.ORG_PAT_GITHUB }}
+
+      - name: Download this run's scan results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: security-scan-raw-results
+
+      - name: Reconcile resolved CVEs (3-scan debounce)
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          REPO: ${{ github.repository }}
+          SCAN_WORKFLOW: daily-security-scan.yml
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_TEAM_ID: ${{ vars.LINEAR_SECURITY_SCAN_TEAM_ID }}
         run: |
-          echo "Dispatching vuln-triage rover for ticket: $TICKET"
-          gh workflow run vuln-triage-cron.yml --ref "${{ github.ref_name }}" -f ticket="$TICKET"
+          export RUN_DATE=$(date -u +%Y-%m-%d)
+          git config user.name "atlan-ci"
+          git config user.email "atlan-ci@users.noreply.github.com"
+          python3 .github/scripts/reconcile_allowlist.py

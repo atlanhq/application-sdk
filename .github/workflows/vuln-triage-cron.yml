@@ -28,6 +28,11 @@ on:
         description: 'Linear ticket identifier to triage (e.g. BLDX-1234)'
         required: true
         type: string
+      severity:
+        description: 'Severity bucket of the ticket (CRITICAL/HIGH/MEDIUM/LOW)'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -74,6 +79,7 @@ jobs:
           MOTHERSHIP_URL: ${{ vars.MOTHERSHIP_URL }}
           HARNESS_TOKEN: ${{ secrets.HARNESS_TOKEN }}
           TICKET: ${{ inputs.ticket }}
+          SEVERITY: ${{ inputs.severity }}
           GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -109,6 +115,7 @@ jobs:
 
           Run metadata (use these verbatim):
             TICKET:       ${TICKET}        # the Linear ticket to triage
+            SEVERITY:     ${SEVERITY}      # severity bucket of this ticket
             RUN_DATE:     ${RUN_DATE}
             GHA_RUN_URL:  ${GHA_RUN_URL}
 
@@ -116,13 +123,18 @@ jobs:
           GitHub operations.
 
           Triage every CVE listed on ticket ${TICKET}. For each, classify per
-          ORCHESTRATION.md, then either:
-            - Case 1 (our dependency, scan-confirmed fix) → open a DRAFT PR with
-              the bump (never ready, never merged); or
-            - Case 2/3/4 (allowlist / alternative / base-image rebuild) → detail
-              the recommended remediation on the ticket.
-          Tag Vaibhav or Chris to act. Include a link to GHA_RUN_URL in the
-          ticket summary. Never merge, never push to main.
+          ORCHESTRATION.md, then enact the SLA flow:
+            - Critical/High → open an allowlist PR (touching ONLY
+              .security/base-allowlist.json, label "vuln-auto-merge") with
+              expires = detection + SLA (CRITICAL 7d, HIGH 30d). For Case 1 also
+              open a bump PR (touching ONLY the dep manifests, same label).
+            - Medium/Low → detail on the ticket with its SLA; never allowlist.
+          Both PR shapes auto-merge via vuln-auto-merge.yml once CI is green —
+          never merge or push to main yourself. Keep the two PR shapes separate
+          (the GHA path-allowlist refuses anything mixed). Include a link to
+          GHA_RUN_URL in the ticket summary. Tag Vaibhav or Chris only when human
+          action is genuinely required (a bump needing source edits, or a
+          base-image rebuild).
 
           Linear / GPT proxy access: use the \$PROXY_BASE and \$PROXY_JWT
           env vars injected by mothership (see tools.md).
