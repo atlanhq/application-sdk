@@ -1615,7 +1615,11 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
             self._app_instance = app_instance
         app_instance._context = context
 
-        context_data = {"run_id": run_id, "correlation_id": context.correlation_id}
+        context_data = {
+            "run_id": run_id,
+            "workflow_id": workflow_id,
+            "correlation_id": context.correlation_id,
+        }
         # BLDX-878: inter-app calls deactivated pending review.
         # app_instance._client = WorkflowAppClient(context_data)
         _wrap_instance_tasks(app_instance, context_data)
@@ -1781,7 +1785,7 @@ def _wrap_instance_tasks(app_instance: Any, context_data: dict[str, Any]) -> Non
 
     Args:
         app_instance: The app instance.
-        context_data: Context dict with run_id and correlation_id.
+        context_data: Context dict with run_id, workflow_id, and correlation_id.
     """
     for attr_name in dir(app_instance):
         if attr_name.startswith("_"):
@@ -1830,7 +1834,7 @@ def _create_task_activity_wrapper(
         retry_max_attempts: Maximum retry attempts.
         retry_max_interval_seconds: Maximum interval between retries.
         output_type: The typed output class for deserialization.
-        context_data: Context dict with run_id and correlation_id.
+        context_data: Context dict with run_id, workflow_id, and correlation_id.
         heartbeat_timeout_seconds: Heartbeat timeout. None disables.
         auto_heartbeat_seconds: Auto-heartbeat interval. None disables.
         retry_policy: Full retry policy (overrides max_attempts/interval if set).
@@ -1870,6 +1874,7 @@ def _create_task_activity_wrapper(
             app_name=app_name,
             task_name=task_name,
             run_id=context_data.get("run_id", ""),
+            workflow_id=context_data.get("workflow_id", ""),
             heartbeat_timeout_seconds=heartbeat_timeout_seconds,
             auto_heartbeat_seconds=auto_heartbeat_seconds,
         )

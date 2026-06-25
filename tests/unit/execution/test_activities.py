@@ -696,12 +696,15 @@ class TestActivityFnExecution:
         assert result.greeting == "hi i"
 
     @pytest.mark.asyncio
-    async def test_workflow_id_plumbed_from_activity_info(self) -> None:
-        """activity_fn must set app_context.workflow_id from activity.info().workflow_id.
+    async def test_workflow_id_plumbed_through_task_context(self) -> None:
+        """workflow_id must flow from TaskContext into app_context.workflow_id.
 
         Regression guard: previously AppContext was constructed without workflow_id,
         so it silently fell back to the 'local-no-temporal' sentinel. This caused
         App.upload() to write under the wrong object-store prefix in production.
+
+        TaskContext is now the single transport — the workflow side sets workflow_id
+        once; the activity side reads it from context rather than activity.info().
         """
 
         class _WfIdApp(App):
@@ -721,6 +724,7 @@ class TestActivityFnExecution:
             app_name="_wf-id-app",
             task_name="capture",
             run_id="run-wfid",
+            workflow_id="wf-from-temporal",
             heartbeat_timeout_seconds=None,
             auto_heartbeat_seconds=None,
         )
@@ -729,7 +733,7 @@ class TestActivityFnExecution:
             mock.patch.object(
                 activities_module.activity,
                 "info",
-                return_value=mock.MagicMock(workflow_id="wf-from-temporal"),
+                return_value=mock.MagicMock(workflow_id="wf-should-not-be-used"),
             ),
             mock.patch(
                 "application_sdk.infrastructure.context.get_infrastructure",

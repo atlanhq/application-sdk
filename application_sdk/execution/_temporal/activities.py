@@ -45,6 +45,9 @@ class TaskContext:
     run_id: str
     """Workflow run ID."""
 
+    workflow_id: str = ""
+    """Temporal workflow ID. Set by the workflow side so both sites read from one transport."""
+
     heartbeat_timeout_seconds: int | None = 60
     """Heartbeat timeout in seconds. Set to None to disable heartbeating."""
 
@@ -116,7 +119,7 @@ def create_activity_from_task(
             app_name=context.app_name,
             app_version=app_metadata.version,
             run_id=run_id,
-            workflow_id=activity.info().workflow_id,
+            workflow_id=context.workflow_id,
             correlation_id=correlation_id,
         )
 
