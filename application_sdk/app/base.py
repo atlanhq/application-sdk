@@ -1580,6 +1580,13 @@ async def _run_preflight_gate(input_data: Input, entrypoint: str) -> None:
     if not isinstance(input_data, CredentialResolvable):
         return
 
+    # Per-run "run anyway" override (HYP-1883): the gate still runs and logs,
+    # but observes instead of aborting. Scheduled/automated runs leave this
+    # False and stay hard-gated. FailureError covers a handler that *raises*
+    # its own typed preflight error (e.g. the teradata style) — observe
+    # suppresses that the same way it suppresses a returned ``failed`` verdict.
+    override = bool(getattr(input_data, "preflight_override", False))
+
     metadata = getattr(input_data, "metadata", None)
     gate_input = PreflightGateInput(
         extraction_method=getattr(input_data, "extraction_method", "") or "",
@@ -1590,24 +1597,48 @@ async def _run_preflight_gate(input_data: Input, entrypoint: str) -> None:
         **({"metadata": metadata} if metadata is not None else {}),
     )
 
-    result = await workflow.execute_activity(
-        SDR_PREFLIGHT_GATE_ACTIVITY,
-        gate_input,
-        schedule_to_close_timeout=_GATE_SCHEDULE_TO_CLOSE,
-        start_to_close_timeout=_GATE_START_TO_CLOSE,
-        retry_policy=_GATE_RETRY,
+    try:
+        result = await workflow.execute_activity(
+            SDR_PREFLIGHT_GATE_ACTIVITY,
+            gate_input,
+            schedule_to_close_timeout=_GATE_SCHEDULE_TO_CLOSE,
+            start_to_close_timeout=_GATE_START_TO_CLOSE,
+            retry_policy=_GATE_RETRY,
+        )
+    except FailureError:
+        # Handler raised its own preflight error. asyncio.CancelledError is a
+        # BaseException, so workflow cancellation is never swallowed here.
+        if override:
+            _safe_log(
+                "warning",
+                "Preflight gate errored; proceeding (preflight_override set)",
+                entrypoint=entrypoint,
+                exc_info=True,
+            )
+            return
+        raise
+
+    if result.canonical_status() is not PreflightStatus.FAILED:
+        return
+
+    if override:
+        _safe_log(
+            "warning",
+            "Preflight failed; proceeding (preflight_override set)",
+            entrypoint=entrypoint,
+            preflight_message=result.message,
+        )
+        return
+
+    from application_sdk.execution.errors import (  # noqa: PLC0415 — circular: execution/__init__ imports app.base
+        ApplicationError,
     )
 
-    if result.canonical_status() is PreflightStatus.FAILED:
-        from application_sdk.execution.errors import (  # noqa: PLC0415 — circular: execution/__init__ imports app.base
-            ApplicationError,
-        )
-
-        raise ApplicationError(
-            result.message or "Preflight check failed; aborting before extraction",
-            type="PreflightFailed",
-            non_retryable=True,
-        )
+    raise ApplicationError(
+        result.message or "Preflight check failed; aborting before extraction",
+        type="PreflightFailed",
+        non_retryable=True,
+    )
 
 
 def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> type:

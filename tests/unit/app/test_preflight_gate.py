@@ -27,11 +27,13 @@ class _ResolvableInput:
         agent_json=None,
         credential_ref=None,
         metadata=None,
+        override: bool = False,
     ) -> None:
         self.extraction_method = method
         self.credential_guid = guid
         self.agent_json = agent_json
         self.credential_ref = credential_ref
+        self.preflight_override = override
         if metadata is not None:
             self.metadata = metadata
 
@@ -87,6 +89,43 @@ class TestRunPreflightGate:
         with _patched(True), exec_patch:
             result = await _run_preflight_gate(_ResolvableInput(), "crawl")
         assert result is None
+
+    async def test_override_proceeds_on_failed_verdict(self) -> None:
+        # "Run anyway": gate runs, logs, but does NOT abort on canonical failed.
+        exec_mock, exec_patch = _exec(_output(PreflightStatus.FAILED))
+        with (
+            _patched(True),
+            exec_patch,
+            mock.patch("application_sdk.app.base._safe_log"),
+        ):
+            result = await _run_preflight_gate(_ResolvableInput(override=True), "crawl")
+        assert result is None
+        exec_mock.assert_awaited_once()
+
+    async def test_override_proceeds_when_handler_raises(self) -> None:
+        # A handler that raises its own typed error surfaces as a FailureError;
+        # override suppresses it symmetrically with a failed verdict.
+        from temporalio.exceptions import ApplicationError as TemporalApplicationError
+
+        exec_mock = mock.AsyncMock(side_effect=TemporalApplicationError("boom"))
+        with (
+            _patched(True),
+            mock.patch("application_sdk.app.base.workflow.execute_activity", exec_mock),
+            mock.patch("application_sdk.app.base._safe_log"),
+        ):
+            result = await _run_preflight_gate(_ResolvableInput(override=True), "crawl")
+        assert result is None
+
+    async def test_handler_raise_propagates_without_override(self) -> None:
+        from temporalio.exceptions import ApplicationError as TemporalApplicationError
+
+        exec_mock = mock.AsyncMock(side_effect=TemporalApplicationError("boom"))
+        with (
+            _patched(True),
+            mock.patch("application_sdk.app.base.workflow.execute_activity", exec_mock),
+        ):
+            with pytest.raises(TemporalApplicationError):
+                await _run_preflight_gate(_ResolvableInput(), "crawl")
 
     async def test_forwards_routing_fields_to_activity(self) -> None:
         exec_mock, exec_patch = _exec(_output(PreflightStatus.SUCCESS))
