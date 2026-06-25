@@ -370,19 +370,6 @@ pipeline: Pipeline = new Pipeline {}
 
 // ── DEPLOY CONFIG ─────────────────────────────────────────────────────────────
 
-/// @Deprecated — use `pools` instead. Will be removed in the next minor version.
-///
-/// Typed deployment configuration rendered into `atlan.yaml`'s `deploy:` block.
-/// When set (non-null), the block is emitted automatically — no extra flag needed.
-/// When `null` (default), the block is omitted and Heracles applies platform defaults.
-/// For new apps, use `pools { ... }` which supports multiple named pools.
-deploy: DeployConfig? = null
-
-/// Deep-merged on top of the rendered `deploy` block last.
-/// Use this for marketplace keys the toolkit does not yet model (VPA, canary,
-/// extraVolumes, securityContext, appExternalResources, etc.).
-deployOverrides: Mapping<String, Any> = new Mapping {}
-
 /// Named worker-pool configuration map. FULLY OPTIONAL.
 ///
 /// An empty map (default) emits nothing — platform defaults apply.
@@ -3154,32 +3141,6 @@ local function renderPool(p: Pool): Mapping<String, Any> = new Mapping {
   when (!p.envOverrides.isEmpty) { ["envOverrides"] = p.envOverrides }
 }
 
-local function renderDeployConfig(d: DeployConfig): Mapping<String, Any> = new Mapping {
-  ["execution_mode"] = d.executionMode
-  ["splitDeploymentEnabled"] = d.splitDeployment
-  when (d.replicaCount != null) { ["replicaCount"] = d.replicaCount }
-  ["dapr"] = new Mapping {
-    ["objectstore"] = d.dapr.objectstore
-    ["secretstore"] = d.dapr.secretstore
-    ["statestore"] = d.dapr.statestore
-    ["eventstore"] = d.dapr.eventstore
-    ["subscription"] = d.dapr.subscription
-    ["configurationstore"] = d.dapr.configurationstore
-    ["lock"] = d.dapr.lock
-    for (k, v in d.dapr.customComponents) {
-      [k] = v
-    }
-  }
-  ["keda"] = renderKedaConfig(d.keda)
-  when (d.resources != null) {
-    ["resources"] = new Mapping {
-      when (!d.resources!!.requests.isEmpty) { ["requests"] = d.resources!!.requests }
-      when (!d.resources!!.limits.isEmpty) { ["limits"] = d.resources!!.limits }
-    }
-  }
-  when (!d.env.isEmpty) { ["env"] = d.env }
-  when (!d.envOverrides.isEmpty) { ["envOverrides"] = d.envOverrides }
-}
 
 local effectiveEntrypoints: Listing<Entrypoint> =
   if (!entrypoints.isEmpty) entrypoints
@@ -3206,7 +3167,7 @@ local generatedAtlanYamlData: Mapping<String, Any> = new Mapping {
   when (docsUrl != "") { ["docs_url"] = docsUrl }
   when (creatorOrg != null) { ["creator_org"] = creatorOrg }
   ["type"] = type
-  ["execution_mode"] = deploy?.executionMode ?? "native"
+  ["execution_mode"] = "native"
   when (iconUrl != null) { ["icon_url"] = iconUrl }
   ["visibility"] = visibility
   when (!argoPackageNames.isEmpty) { ["argo_package_names"] = argoPackageNames }
@@ -3220,11 +3181,22 @@ local generatedAtlanYamlData: Mapping<String, Any> = new Mapping {
       }
     }
   }
-  when (deploy != null) {
-    local d: DeployConfig = deploy!!
-    ["deploy"] = deepMergeMapping(renderDeployConfig(d), deployOverrides)
-  }
   when (!pools.isEmpty) {
+    local firstPool: Pool = (new Listing<Pool> { for (_, p in pools) { p } }).first
+    ["deploy"] = deepMergeMapping(new Mapping {
+      ["execution_mode"] = "native"
+      ["splitDeploymentEnabled"] = true
+      when (firstPool.replicaCount != null) { ["replicaCount"] = firstPool.replicaCount }
+      ["keda"] = renderKedaConfig(firstPool.keda)
+      when (firstPool.resources != null) {
+        ["resources"] = new Mapping {
+          when (!firstPool.resources!!.requests.isEmpty) { ["requests"] = firstPool.resources!!.requests }
+          when (!firstPool.resources!!.limits.isEmpty) { ["limits"] = firstPool.resources!!.limits }
+        }
+      }
+      when (!firstPool.env.isEmpty) { ["env"] = firstPool.env }
+      when (!firstPool.envOverrides.isEmpty) { ["envOverrides"] = firstPool.envOverrides }
+    }, firstPool.deployOverrides)
     ["pools"] = new Mapping {
       for (poolName, pool in pools) {
         [poolName] = deepMergeMapping(renderPool(pool), pool.deployOverrides)

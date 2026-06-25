@@ -2729,9 +2729,7 @@ even when `deploy { ... }` was not explicitly configured. Those apps were emitti
 default `deploy:` block; they should now either set `deploy { ... }` explicitly with the values
 they need, or leave it unset and let Heracles apply platform defaults.
 
-Apps that already set `deploy { ... }` explicitly **must update the syntax** to
-`deploy = new DeployConfig { ... }` because `deploy` is now nullable and Pkl's amendment
-shorthand (`deploy { ... }`) cannot amend a `null` value:
+Apps that configured a `deploy { ... }` block must migrate to `pools`:
 
 ```pkl
 // Before (v0.16.x):
@@ -2740,12 +2738,29 @@ deploy {
 }
 
 // After (v0.17.0+):
-deploy = new DeployConfig {
-  keda { enabled = true; minReplicaCount = 1 }
+pools {
+  ["default"] = new Pool {
+    keda { enabled = true; minReplicaCount = 1 }
+  }
 }
 ```
 
-Apps that did not configure `deploy { ... }` are unaffected.
+The `deploy:` block in `atlan.yaml` is now synthesised automatically from the first pool's
+configuration. Apps that did not configure a `deploy` block at all are unaffected.
+
+**`deployOverrides` migration:** if you used the app-level `deployOverrides` mapping (e.g.
+for Dapr, VPA), move those keys into the pool's own `deployOverrides`:
+
+```pkl
+pools {
+  ["default"] = new Pool {
+    keda { enabled = true; minReplicaCount = 1 }
+    deployOverrides {
+      ["dapr"] = new Mapping { ["objectstore"] = true }
+    }
+  }
+}
+```
 
 ---
 

@@ -330,7 +330,7 @@ facts {
     bundleApp.output.files["atlan.yaml"].text.contains("name: miner")
   }
 
-  ["Deploy example atlan.yaml includes typed KEDA, Dapr, resources, env, and deployOverrides"] {
+  ["Deploy example atlan.yaml includes KEDA, resources, env, and pool deployOverrides"] {
     deployApp.output.files.containsKey("atlan.yaml")
     local deployYaml: String = deployApp.output.files["atlan.yaml"].text
     // execution_mode at top level (read by global-marketplace and atlan-local-marketplace-app)
@@ -338,7 +338,7 @@ facts {
     // KEDA settings
     deployYaml.contains("enabled: true")
     deployYaml.contains("targetQueueSize: 10")
-    // Dapr — enabled components
+    // Dapr via deployOverrides
     deployYaml.contains("objectstore: true")
     deployYaml.contains("secretstore: true")
     // Resources
@@ -346,7 +346,7 @@ facts {
     deployYaml.contains("memory: 4Gi")
     // Env
     deployYaml.contains("LOG_LEVEL: INFO")
-    // deployOverrides deep-merged (VPA)
+    // pool deployOverrides deep-merged (VPA)
     deployYaml.contains("verticalPodAutoscaler:")
     deployYaml.contains("updateMode: Auto")
   }
@@ -384,14 +384,16 @@ facts {
     !poolsAtlanYaml.contains("profiles:")
   }
 
-  ["Pools example: no legacy deploy: block"] {
-    !poolsAtlanYaml.contains("\ndeploy:")
+  ["Pools example: deploy: block synthesised from first pool"] {
+    poolsAtlanYaml.contains("deploy:")
+    poolsAtlanYaml.contains("keda:")
   }
 
-  ["Existing deploy example still emits legacy deploy: block (deprecated path still works)"] {
+  ["Deploy example emits both deploy: (from first pool) and pools: blocks"] {
     local deployYaml: String = deployApp.output.files["atlan.yaml"].text
     deployYaml.contains("deploy:")
-    !deployYaml.contains("pools:")
+    deployYaml.contains("keda:")
+    deployYaml.contains("pools:")
   }
 
 }

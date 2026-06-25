@@ -1,8 +1,8 @@
-/// Deploy config example — demonstrates every deployment knob in App.pkl.
+/// Single-pool deployment example — shows KEDA, resources, env, and per-pool
+/// deployOverrides for marketplace keys (Dapr, VPA, etc.) not yet modelled
+/// as typed fields on Pool.
 ///
-/// Shows KEDA autoscaling, Dapr sidecar components, resource requests/limits,
-/// environment variables, and deployOverrides for marketplace keys the typed
-/// block does not yet model.
+/// For the multi-pool case, see the `pools` example.
 amends "../../src/App.pkl"
 
 name = "deploy"
@@ -10,56 +10,52 @@ displayName = "Deploy Config Example"
 icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
 hasCredentialConfig = false
 
-// ── Deployment configuration ──────────────────────────────────────────────────
-
-// deploy is nullable — set it with `new DeployConfig { ... }` to emit the block.
-deploy = new DeployConfig {
-  // KEDA: scale-to-zero based on Temporal task-queue depth.
-  // targetQueueSize must be set via temporal.targetQueueSize — NOT keda.targetQueueSize.
-  keda {
-    enabled = true
-    minReplicaCount = 1
-    temporal {
-      targetQueueSize = 10
+pools {
+  ["default"] = new Pool {
+    // KEDA: scale-to-zero based on Temporal task-queue depth.
+    keda {
+      enabled = true
+      minReplicaCount = 1
+      temporal {
+        targetQueueSize = 10
+      }
     }
-  }
 
-  // Dapr sidecars required by this app.
-  dapr {
-    objectstore = true
-    secretstore = true
-    statestore = false
-    eventstore = false
-    subscription = false
-    configurationstore = false
-    lock = false
-  }
-
-  // Kubernetes resource requests and limits.
-  resources = new ResourceConfig {
-    requests {
-      ["cpu"] = "500m"
-      ["memory"] = "1Gi"
+    // Kubernetes resource requests and limits.
+    resources = new ResourceConfig {
+      requests {
+        ["cpu"] = "500m"
+        ["memory"] = "1Gi"
+      }
+      limits {
+        ["cpu"] = "2"
+        ["memory"] = "4Gi"
+      }
     }
-    limits {
-      ["cpu"] = "2"
-      ["memory"] = "4Gi"
+
+    // Static environment variables injected into the app container.
+    env {
+      ["LOG_LEVEL"] = "INFO"
+      ["MAX_WORKERS"] = "4"
     }
-  }
 
-  // Static environment variables injected into the app container.
-  env {
-    ["LOG_LEVEL"] = "INFO"
-    ["MAX_WORKERS"] = "4"
-  }
-}
-
-// Marketplace keys not yet modelled by the typed deploy block.
-// Deep-merged on top of the rendered deploy section last.
-deployOverrides {
-  ["verticalPodAutoscaler"] = new Mapping {
-    ["enabled"] = true
-    ["updateMode"] = "Auto"
+    // Marketplace keys not yet modelled by Pool typed fields.
+    // Deep-merged on top of the rendered deploy/pool block last.
+    deployOverrides {
+      ["dapr"] = new Mapping {
+        ["objectstore"] = true
+        ["secretstore"] = true
+        ["statestore"] = false
+        ["eventstore"] = false
+        ["subscription"] = false
+        ["configurationstore"] = false
+        ["lock"] = false
+      }
+      ["verticalPodAutoscaler"] = new Mapping {
+        ["enabled"] = true
+        ["updateMode"] = "Auto"
+      }
+    }
   }
 }
 

@@ -14,6 +14,24 @@ entrypoints:
   icon_url: https://assets.atlan.com/assets/fullscreen-open.svg
   type: connector
   marketplace_card: true
+deploy:
+  execution_mode: native
+  splitDeploymentEnabled: true
+  keda:
+    enabled: true
+    minReplicaCount: 1
+    cooldownPeriod: 300
+    temporal:
+      targetQueueSize: 10
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: '2'
+      memory: 4Gi
+  env:
+    WORKER_TYPE: hot
 pools:
   hot:
     keda:
