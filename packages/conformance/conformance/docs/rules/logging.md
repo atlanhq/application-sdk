@@ -47,14 +47,19 @@ Suppress a finding on the violating line or the line directly above it:
 
 **Rationale:** %-style message bodies are the fleet-wide logging convention: one consistent call-site
 style keeps log statements legible and reviewable, and the SDK's loguru bridge renders
-the values in. f-strings render identically here — the %-bridge is eager — so this is
-about consistency and readability, not lazy evaluation; when a hot path genuinely needs
-deferred rendering, use opt(lazy=True) with {}-style.
+the values in. Beyond consistency, %-style now carries a real performance guarantee: the
+SDK adapter short-circuits before interpolation when the level is filtered, so __str__
+is never called on the arguments — the same laziness stdlib logging provides for free.
+f-strings always evaluate eagerly at the call site regardless of level, so they pay the
+formatting cost even when the record is never emitted.
 
 Using an f-string creates a unique message string per call, breaking log grouping and
-aggregation in Grafana/ClickHouse.  It also always evaluates eagerly.  Rewrite as
-%-style message body: embed context directly in the format string, do not move values to
-kwargs.
+aggregation in Grafana/ClickHouse.  It also always evaluates eagerly — __str__ /
+__format__ is called on every interpolated value even when the level is filtered and the
+record is never emitted.  %-style avoids both: the SDK adapter's _is_enabled guard
+short-circuits before interpolation, so argument __str__ is skipped entirely for
+filtered levels.  Rewrite as %-style message body: embed context directly in the format
+string, do not move values to kwargs.
 
 ---
 
@@ -179,13 +184,26 @@ on the observability platform.
 
 > Expensive computation in logger.debug() argument — evaluates eagerly
 
-**Rationale:** Log-call arguments evaluate eagerly regardless of level. An unguarded expensive
-serialisation inside logger.debug() runs on every call in production — invisible
-CPU/memory overhead that compounds on hot paths.
+**Rationale:** Python evaluates all function arguments before calling the log method, so an expensive
+expression in a log argument — json.dumps(big), obj.serialize(), a comprehension — runs
+unconditionally even when the level is filtered. The SDK adapter's _is_enabled guard
+short-circuits %-style __str__ interpolation for simple object args, but it fires inside
+the method, after Python has already evaluated every argument expression. Calls with
+expensive argument expressions still need an explicit guard.
 
-Arguments to log calls are evaluated eagerly regardless of whether the level is enabled.
-Guard expensive serialization / computation with `if
-logger.isEnabledFor(logging.DEBUG):`.
+Python evaluates all arguments before calling the log method, so expensive expressions
+in log arguments run on every call regardless of level:
+
+    logger.debug('snapshot: %s', json.dumps(big_dict))  # json.dumps always runs
+
+Note: the SDK adapter's _is_enabled guard does skip %-style __str__ calls for simple
+object args (logger.debug('x: %s', obj) — obj.__str__ not called when filtered).  But
+that guard fires inside the method, after Python has evaluated the argument expressions.
+When the expensive work is in the expression itself, an explicit level guard is still
+required::
+
+    if logger.isEnabledFor(logging.DEBUG):         logger.debug('snapshot: %s',
+json.dumps(big_dict))
 
 ---
 
