@@ -228,6 +228,7 @@ async def _run(child_cmd: list[str]) -> int:
                 chunk = await proc.stdout.readexactly(exc.consumed)
                 try:
                     await proc.stdout.readuntil(b"\n")
+                # conformance: ignore[E002] draining the remainder of an oversized line; both exceptions are expected best-effort outcomes (further overrun or EOF mid-line)
                 except (asyncio.LimitOverrunError, asyncio.IncompleteReadError):
                     pass
                 prefix = chunk[:256].decode("utf-8", errors="replace").rstrip("\n")
