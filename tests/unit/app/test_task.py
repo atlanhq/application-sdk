@@ -581,3 +581,33 @@ class TestTaskPool:
                 @task(pool="  ")
                 async def my_task(self, input: SimpleInput) -> SimpleOutput:
                     return SimpleOutput()
+
+    def test_pool_trailing_dash_raises_error(self) -> None:
+        """@task(pool='pool-') raises TaskContractError — trailing dash is not kebab-case."""
+        with pytest.raises(TaskContractError, match="lowercase kebab-case"):
+
+            class MyApp:
+                @task(pool="pool-")
+                async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                    return SimpleOutput()
+
+    def test_pool_consecutive_dashes_raises_error(self) -> None:
+        """@task(pool='pool--name') raises TaskContractError — consecutive dashes rejected."""
+        with pytest.raises(TaskContractError, match="lowercase kebab-case"):
+
+            class MyApp:
+                @task(pool="pool--name")
+                async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                    return SimpleOutput()
+
+    def test_pool_valid_kebab_with_hyphen_accepted(self) -> None:
+        """@task(pool='cold-tier') is valid kebab-case."""
+
+        class MyApp:
+            @task(pool="cold-tier")
+            async def my_task(self, input: SimpleInput) -> SimpleOutput:
+                return SimpleOutput()
+
+        metadata = get_task_metadata(MyApp.my_task)
+        assert metadata is not None
+        assert metadata.pool == "cold-tier"

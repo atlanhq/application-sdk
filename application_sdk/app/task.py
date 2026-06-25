@@ -16,6 +16,7 @@ Tasks support heartbeating for long-running operations:
 """
 
 import inspect
+import re
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -366,10 +367,7 @@ def task(
                 "Use a lowercase kebab-case string (e.g. 'heavy', 'cold-tier') "
                 "matching a key in pools { ... } in your app contract."
             )
-        if not (
-            pool[0].islower()
-            and all(c.islower() or c.isdigit() or c == "-" for c in pool)
-        ):
+        if not re.fullmatch(r"[a-z][a-z0-9]*(-[a-z0-9]+)*", pool):
             raise TaskContractError(
                 f"pool={pool!r} must be lowercase kebab-case "
                 "(e.g. 'heavy', 'cold-tier'). "
