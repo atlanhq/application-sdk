@@ -109,3 +109,40 @@ def test_ticket_with_no_marker_untouched():
     tickets = [{"id": "x", "identifier": "BLDX-4", "description": "no marker here"}]
     to_close, to_update = rec.plan_ticket_updates(tickets, {"CVE-A"})
     assert to_close == [] and to_update == []
+
+
+# ---------------------------------------------------------------------------
+# resolve_tickets — ticket closing decoupled from the allowlist
+# ---------------------------------------------------------------------------
+
+
+def test_medium_ticket_closes_without_any_allowlist_entry():
+    # Regression for BLDX-1465: a Medium CVE ticket (never allowlisted) must
+    # still close once the scanner stops seeing it for `debounce` scans.
+    tickets = [_ticket("BLDX-1465", ["CVE-2026-2303"])]
+    scans = [set(), set(), set()]  # gone in all 3 scans; no allowlist involved
+    to_close, to_update = rec.resolve_tickets(tickets, scans, debounce=3)
+    assert [t["identifier"] for t in to_close] == ["BLDX-1465"]
+    assert to_update == []
+
+
+def test_resolve_tickets_keeps_ticket_with_present_cve():
+    tickets = [_ticket("BLDX-9", ["CVE-STILL"])]
+    scans = [{"CVE-STILL"}, {"CVE-STILL"}, {"CVE-STILL"}]
+    to_close, to_update = rec.resolve_tickets(tickets, scans, debounce=3)
+    assert to_close == [] and to_update == []
+
+
+def test_resolve_tickets_trims_marker_when_partially_resolved():
+    tickets = [_ticket("BLDX-10", ["CVE-GONE", "CVE-STILL"])]
+    scans = [{"CVE-STILL"}, {"CVE-STILL"}, {"CVE-STILL"}]  # CVE-GONE absent in all
+    to_close, to_update = rec.resolve_tickets(tickets, scans, debounce=3)
+    assert to_close == []
+    assert to_update[0]["remaining_ids"] == ["CVE-STILL"]
+
+
+def test_resolve_tickets_failsafe_with_thin_history():
+    tickets = [_ticket("BLDX-11", ["CVE-X"])]
+    scans = [set(), set()]  # only 2 scans of history (< debounce 3)
+    to_close, to_update = rec.resolve_tickets(tickets, scans, debounce=3)
+    assert to_close == [] and to_update == []
