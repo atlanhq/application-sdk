@@ -119,12 +119,14 @@ _SERIES_META: list[SeriesMeta] = [
         source_module=(
             "conformance/suite/rules/prescriptions.py, "
             "conformance/suite/rules/orchestration.py, "
-            "conformance/suite/rules/storage.py"
+            "conformance/suite/rules/storage.py, "
+            "conformance/suite/rules/entrypoint_alignment.py"
         ),
         output_filename="prescriptions.md",
         checker=(
-            "`suite.checks.prescriptions` (P001–P003, P008–P012), "
-            "`suite.checks.orchestration` (P004–P007, scans test files too) "
+            "`suite.checks.prescriptions` (P001–P003, P008–P015), "
+            "`suite.checks.orchestration` (P004–P007, scans test files too), "
+            "`suite.checks.entrypoint_alignment` (P016) "
             "(all AST-based)"
         ),
         suppression_example="# conformance: ignore[P001] intentional: generic cleanup payload",
