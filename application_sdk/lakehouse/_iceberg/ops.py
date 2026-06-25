@@ -107,11 +107,3 @@ def append_records(
     arrow_table = pa.Table.from_pylist(records, schema=arrow_schema)
     table.append(arrow_table)
     return arrow_table.num_rows
-
-
-def table_exists(catalog: Catalog, namespace: str, table_name: str) -> bool:
-    try:
-        catalog.load_table(_identifier.identifier(namespace, table_name))
-        return True
-    except Exception:
-        return False
