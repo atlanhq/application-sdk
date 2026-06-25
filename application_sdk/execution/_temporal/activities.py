@@ -21,7 +21,7 @@ from temporalio import activity
 
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import TaskMetadata
-from application_sdk.constants import TRACKED_FILE_REFS_KEY
+from application_sdk.constants import LOCAL_WORKFLOW_ID, TRACKED_FILE_REFS_KEY
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import FileReference
 from application_sdk.observability.logger_adaptor import get_logger
@@ -45,7 +45,7 @@ class TaskContext:
     run_id: str
     """Workflow run ID."""
 
-    workflow_id: str = "local-no-temporal"
+    workflow_id: str = LOCAL_WORKFLOW_ID
     """Temporal workflow ID. Set by the workflow side so both sites read from one transport."""
 
     heartbeat_timeout_seconds: int | None = 60
