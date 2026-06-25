@@ -45,7 +45,7 @@ class TaskContext:
     run_id: str
     """Workflow run ID."""
 
-    workflow_id: str = ""
+    workflow_id: str = "local-no-temporal"
     """Temporal workflow ID. Set by the workflow side so both sites read from one transport."""
 
     heartbeat_timeout_seconds: int | None = 60

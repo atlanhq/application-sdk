@@ -70,6 +70,7 @@ def app_context(
     return AppContext(
         app_name="test-app",
         app_version="0.0.1",
+        workflow_id="local-no-temporal",
         _state_store=mock_state_store,
         _secret_store=mock_secret_store,
     )
