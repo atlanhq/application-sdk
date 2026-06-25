@@ -105,7 +105,7 @@ Apps must not import from these underscore-prefixed packages.
 
 from application_sdk.lakehouse.events_ack import events_ack
 from application_sdk.lakehouse.events_read import events_read
-from application_sdk.lakehouse.models import EventResult
+from application_sdk.lakehouse.models import EventResult, EventsReadResult
 from application_sdk.lakehouse.query import LakehouseQuery
 from application_sdk.lakehouse.reader import LakehouseReader
 from application_sdk.lakehouse.schema import Field, PartitionBy, Schema
@@ -113,6 +113,7 @@ from application_sdk.lakehouse.writer import LakehouseWriter
 
 __all__ = [
     "EventResult",
+    "EventsReadResult",
     "Field",
     "LakehouseQuery",
     "LakehouseReader",

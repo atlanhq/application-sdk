@@ -16,22 +16,21 @@ whatever shape the app needs.
 Batching
 --------
 
-``batch_size`` controls how many events are fetched + dispatched per loop
-iteration. ``max_events`` caps the total number of events processed across
-all iterations. The combinations:
+``events_read`` does a **single** scan — the stateless Iceberg reader has no
+cursor, so re-fetching with the same filter would just re-read the same head
+rows. ``max_events`` caps that scan; ``batch_size`` then chunks the already
+-fetched set for handler dispatch. The combinations:
 
-* ``batch_size=None, max_events=None``  → single fetch, returns everything
-  available in one call. Handler is invoked once.
-* ``batch_size=N, max_events=None``     → loops in batches of N until the
-  source is exhausted (CAUTION: unbounded — only safe if the events table
-  is known to be finite within the activity timeout).
-* ``batch_size=None, max_events=M``     → single fetch capped at M.
-* ``batch_size=N, max_events=M``        → loops in batches of N, total
-  capped at M (recommended for AE-triggered apps — bounds workflow run
-  time and keeps each handler call within heartbeat/memory limits).
+* ``max_events=None`` → scan returns the full filtered set;
+  ``max_events=M`` → scan returns at most M (the oldest M when ``sort_by``
+  is set, since the sort+slice happens in-process).
+* ``batch_size=None`` → the handler is invoked once with everything fetched;
+  ``batch_size=N`` → the handler is invoked once per N-event chunk of the
+  fetched set (keeps each handler call within heartbeat/memory limits).
 
-The returned ``(events, results)`` are the concatenation across all batches
-and remain aligned 1:1.
+Returns an :class:`~application_sdk.lakehouse.models.EventsReadResult` whose
+``events`` and ``results`` align 1:1 and cover every fetched event;
+``complete`` is ``False`` when the run aborted early (see below).
 
 What this earns its keep doing
 ------------------------------
@@ -88,12 +87,30 @@ from __future__ import annotations
 import logging
 from typing import Any, Awaitable, Callable
 
-from application_sdk.lakehouse.models import EventResult
+from application_sdk.lakehouse.models import EventResult, EventsReadResult
 from application_sdk.lakehouse.reader import LakehouseReader
 
 logger = logging.getLogger(__name__)
 
 EventHandler = Callable[[list[dict[str, Any]]], Awaitable[list[EventResult]]]
+
+
+def _aborted(
+    done_events: list[dict[str, Any]],
+    done_results: list[EventResult],
+    remaining: list[dict[str, Any]],
+    reason: str,
+) -> EventsReadResult:
+    """Build an aborted result: prior successes + every remaining (failed batch
+    and not-yet-attempted) event marked RETRY, with ``complete=False``."""
+    return EventsReadResult(
+        events=[*done_events, *remaining],
+        results=[
+            *done_results,
+            *(EventResult(status="RETRY", error_message=reason) for _ in remaining),
+        ],
+        complete=False,
+    )
 
 
 async def events_read(
@@ -105,16 +122,19 @@ async def events_read(
     sort_by: str | None = None,
     batch_size: int | None = None,
     max_events: int | None = None,
-) -> tuple[list[dict[str, Any]], list[EventResult]]:
-    """Fetch events in batches and dispatch each batch to ``handler``.
+) -> EventsReadResult:
+    """Fetch events in one scan and dispatch them to ``handler`` in chunks.
 
-    Returns ``(events, results)`` — the concatenation across all batches —
-    where ``results[i]`` corresponds to ``events[i]``. If the handler
-    raises in any batch, that batch's events are marked RETRY and the
-    loop aborts (any prior batches' results are returned as-is).
+    Returns an :class:`~application_sdk.lakehouse.models.EventsReadResult`
+    where ``results[i]`` corresponds to ``events[i]`` and both cover every
+    fetched event. If the handler raises (or returns a mismatched count) for
+    a chunk, that chunk **and** any not-yet-attempted events are marked
+    ``RETRY`` and ``complete`` is set ``False`` — so the caller can ack the
+    partials (letting AE re-trigger) yet still distinguish an abort from a
+    clean run that merely contained per-event ``RETRY`` verdicts.
 
-    See the module docstring for the full ``batch_size`` / ``max_events``
-    matrix and the known limits of the callable-injection pattern.
+    See the module docstring for the ``batch_size`` / ``max_events``
+    semantics and the known limits of the callable-injection pattern.
 
     ``where`` and ``sort_by`` default to ``None`` — ``events_read`` makes
     no assumption about the events-table schema. The AE convention is
@@ -142,7 +162,7 @@ async def events_read(
                     ))
             return out
 
-        events, results = await events_read(
+        result = await events_read(
             namespace="automation_engine",
             table="reverse_sync_description",
             handler=handler,
@@ -151,81 +171,67 @@ async def events_read(
             batch_size=1000,
             max_events=5000,
         )
-        # events: list[dict]   (every batch concatenated)
-        # results: list[EventResult]  (aligned 1:1 with events)
+        # result.events:   list[dict]          (every fetched event)
+        # result.results:  list[EventResult]   (aligned 1:1 with events)
+        # result.complete: bool                (False if the run aborted)
     """
     reader = LakehouseReader.from_env()
+
+    # Single scan. The stateless Iceberg reader has no cursor, so re-fetching
+    # with the same filter would re-read the same head rows — ``batch_size``
+    # only chunks this already-fetched set for handler dispatch, and
+    # ``max_events`` caps the scan itself.
+    events = reader.fetch_records(
+        namespace,
+        table,
+        where=where,
+        sort_by=sort_by,
+        limit=max_events,
+    )
+    if not events:
+        return EventsReadResult([], [], complete=True)
+
+    step = batch_size if batch_size and batch_size > 0 else len(events)
+
     all_events: list[dict[str, Any]] = []
     all_results: list[EventResult] = []
 
-    while True:
-        if max_events is not None:
-            remaining = max_events - len(all_events)
-            if remaining <= 0:
-                break
-            this_limit = min(batch_size, remaining) if batch_size else remaining
-        else:
-            this_limit = batch_size  # may be None for unbounded single fetch
-
-        events = reader.fetch_records(
-            namespace,
-            table,
-            where=where,
-            sort_by=sort_by,
-            limit=this_limit,
-        )
-        if not events:
-            break
-
+    for start in range(0, len(events), step):
+        chunk = events[start : start + step]
         logger.info(
-            "Processing %d events from %s.%s (total so far: %d)",
-            len(events),
+            "Processing %d events from %s.%s (total so far: %d/%d)",
+            len(chunk),
             namespace,
             table,
-            len(all_events) + len(events),
+            len(all_events) + len(chunk),
+            len(events),
         )
 
         try:
-            results = await handler(events)
+            results = await handler(chunk)
         except Exception:
             logger.error(
-                "Unhandled error in handler — marking %d events as RETRY "
-                "and aborting loop",
-                len(events),
+                "Unhandled error in handler — marking the failed batch and "
+                "%d not-yet-processed event(s) as RETRY and aborting",
+                len(events) - start,
                 exc_info=True,
             )
-            results = [
-                EventResult(status="RETRY", error_message="batch processing failed")
-                for _ in events
-            ]
-            all_events.extend(events)
-            all_results.extend(results)
-            break
-
-        if len(results) != len(events):
-            logger.error(
-                "handler returned %d results for %d events — marking as RETRY "
-                "and aborting loop",
-                len(results),
-                len(events),
+            return _aborted(
+                all_events, all_results, events[start:], "batch processing failed"
             )
-            results = [
-                EventResult(status="RETRY", error_message="result count mismatch")
-                for _ in events
-            ]
-            all_events.extend(events)
-            all_results.extend(results)
-            break
 
-        all_events.extend(events)
+        if len(results) != len(chunk):
+            logger.error(
+                "handler returned %d results for %d events — marking the failed "
+                "batch and remaining event(s) as RETRY and aborting",
+                len(results),
+                len(chunk),
+            )
+            return _aborted(
+                all_events, all_results, events[start:], "result count mismatch"
+            )
+
+        all_events.extend(chunk)
         all_results.extend(results)
 
-        # Source exhausted: fewer rows came back than we asked for.
-        if this_limit is not None and len(events) < this_limit:
-            break
-
-        # Single-fetch mode: no batch_size means we read everything available.
-        if batch_size is None:
-            break
-
-    return all_events, all_results
+    return EventsReadResult(all_events, all_results, complete=True)

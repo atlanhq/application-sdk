@@ -101,13 +101,14 @@ class LakehouseEventApp(App):
 
     @task(timeout_seconds=1800, heartbeat_timeout_seconds=60)
     async def handle_events(self, input: ProcessEventsInput) -> ProcessEventsOutput:
-        """Read pending events in batches and publish the AE ack.
+        """Read pending events in one scan and publish the AE ack.
 
-        ``events_read`` loops internally — fetching ``_BATCH_SIZE`` events
-        per call, dispatching to ``_handler``, and stopping when the source
-        is exhausted or ``_MAX_EVENTS`` total are processed. After the
-        loop, ``events_ack`` writes a single Parquet ack covering every
-        event processed.
+        ``events_read`` does a single scan capped at ``_MAX_EVENTS``, then
+        dispatches the fetched set to ``_handler`` in chunks of
+        ``_BATCH_SIZE``. It returns an ``EventsReadResult`` (``events`` /
+        ``results`` aligned 1:1, plus a ``complete`` flag that is ``False``
+        if the run aborted). ``events_ack`` then writes a single Parquet ack
+        covering every event processed.
         """
 
         async def _handler(events: list[dict[str, Any]]) -> list[EventResult]:
@@ -117,7 +118,7 @@ class LakehouseEventApp(App):
             # Replace this with your real per-event business logic.
             return [EventResult(status="SUCCESS") for _ in events]
 
-        events, results = await events_read(
+        result = await events_read(
             namespace=input.events_namespace,
             table=input.iceberg_table_name,
             handler=_handler,
@@ -126,26 +127,26 @@ class LakehouseEventApp(App):
             batch_size=_BATCH_SIZE,
             max_events=_MAX_EVENTS,
         )
-        if not events:
+        if not result.events:
             return ProcessEventsOutput()
 
         # Map AE's CloudEvent ``id`` column to the ``event_id`` key that
         # ``events_ack`` writes into the ack Parquet. Until the SDK key
         # mismatch is resolved, every events_read→events_ack caller needs
         # this shim.
-        events_for_ack = [{"event_id": e["id"]} for e in events]
+        events_for_ack = [{"event_id": e["id"]} for e in result.events]
         ack_path = await events_ack(
             events_for_ack,
-            results,
+            result.results,
             app_name=_APP_NAME,
             workflow_name=_WORKFLOW_NAME,
             workflow_run_id=activity.info().workflow_run_id,
         )
 
-        success = sum(1 for r in results if r.status == "SUCCESS")
-        failed = sum(1 for r in results if r.status == "FAILED")
+        success = sum(1 for r in result.results if r.status == "SUCCESS")
+        failed = sum(1 for r in result.results if r.status == "FAILED")
         return ProcessEventsOutput(
-            processed=len(events),
+            processed=len(result.events),
             success=success,
             failed=failed,
             ack_path=ack_path,

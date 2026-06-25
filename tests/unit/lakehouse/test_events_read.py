@@ -9,7 +9,7 @@ def _make_handler(results=None, raise_in_handler=False, raise_after_n_calls=None
     """Build an async handler for tests, recording invocations.
 
     ``raise_after_n_calls`` raises only on the Nth+ call (1-indexed), useful
-    for tests that drive the loop a few iterations before failing.
+    for tests that drive a few chunks before failing.
     """
     state = {"calls": [], "raise": raise_in_handler}
 
@@ -30,23 +30,17 @@ def _make_handler(results=None, raise_in_handler=False, raise_after_n_calls=None
     return fn
 
 
-def _scripted_reader(batches):
-    """Patch LakehouseReader.from_env to return a reader that yields ``batches``
-    one fetch_records() call at a time, then ``[]`` forever after.
-
-    Respects the ``limit`` kwarg by truncating the next batch to it — matches
-    real reader behaviour so cap-and-loop logic exercises correctly.
+def _stateless_reader(rows):
+    """Patch LakehouseReader.from_env with a reader that has NO cursor — it
+    re-applies ``limit`` to a FIXED row set on every call, exactly like the
+    real Iceberg reader. Crucially it does NOT advance: calling fetch twice
+    with the same limit returns the same head rows (this is what the real
+    reader does and what the old iterator-based mock failed to model).
     """
     fake_reader = MagicMock()
-    iterator = iter(batches)
 
-    def _fetch(*_args, **kwargs):
-        try:
-            batch = next(iterator)
-        except StopIteration:
-            return []
-        limit = kwargs.get("limit")
-        return batch[:limit] if limit is not None else batch
+    def _fetch(*_args, limit=None, **_kwargs):
+        return list(rows[:limit]) if limit is not None else list(rows)
 
     fake_reader.fetch_records = MagicMock(side_effect=_fetch)
     return patch(
@@ -55,66 +49,68 @@ def _scripted_reader(batches):
     ), fake_reader
 
 
-def _flat_reader(events):
-    """Single-fetch reader: returns ``events`` once, then ``[]``."""
-    return _scripted_reader([events])
-
-
 class TestEventsReadSingleFetch(unittest.IsolatedAsyncioTestCase):
-    async def test_no_events_returns_empty_pair_and_skips_handler(self):
+    async def test_no_events_returns_empty_and_skips_handler(self):
         handler = _make_handler()
-        ctx, _ = _flat_reader([])
+        ctx, _ = _stateless_reader([])
         with ctx:
-            events, results = await events_read(
+            result = await events_read(
                 namespace="automation_engine", table="events", handler=handler
             )
-        self.assertEqual(events, [])
-        self.assertEqual(results, [])
+        self.assertEqual(result.events, [])
+        self.assertEqual(result.results, [])
+        self.assertTrue(result.complete)
         self.assertEqual(handler.calls, [])
 
     async def test_dispatches_events_to_handler(self):
         events = [{"event_id": "e1"}, {"event_id": "e2"}]
         handler = _make_handler()
-        ctx, _ = _flat_reader(events)
+        ctx, _ = _stateless_reader(events)
         with ctx:
-            out_events, results = await events_read(
+            result = await events_read(
                 namespace="automation_engine", table="events", handler=handler
             )
-        self.assertEqual(out_events, events)
-        self.assertEqual([r.status for r in results], ["SUCCESS", "SUCCESS"])
+        self.assertEqual(result.events, events)
+        self.assertEqual([r.status for r in result.results], ["SUCCESS", "SUCCESS"])
+        self.assertTrue(result.complete)
+        # batch_size None → one handler call with everything
         self.assertEqual(handler.calls, [events])
 
-    async def test_handler_exception_marks_all_retry(self):
+    async def test_handler_exception_marks_all_retry_and_incomplete(self):
         events = [{"event_id": "e1"}, {"event_id": "e2"}]
         handler = _make_handler(raise_in_handler=True)
-        ctx, _ = _flat_reader(events)
+        ctx, _ = _stateless_reader(events)
         with ctx:
-            _, results = await events_read(
+            result = await events_read(
                 namespace="automation_engine", table="events", handler=handler
             )
-        self.assertEqual(len(results), 2)
-        self.assertTrue(all(r.status == "RETRY" for r in results))
+        self.assertEqual(len(result.results), 2)
+        self.assertTrue(all(r.status == "RETRY" for r in result.results))
+        self.assertFalse(result.complete)
         self.assertTrue(
-            all("batch processing failed" in (r.error_message or "") for r in results)
+            all(
+                "batch processing failed" in (r.error_message or "")
+                for r in result.results
+            )
         )
 
-    async def test_result_count_mismatch_marks_all_retry(self):
+    async def test_result_count_mismatch_marks_all_retry_and_incomplete(self):
         events = [{"event_id": "e1"}, {"event_id": "e2"}, {"event_id": "e3"}]
         handler = _make_handler(results=[EventResult(status="SUCCESS")])
-        ctx, _ = _flat_reader(events)
+        ctx, _ = _stateless_reader(events)
         with ctx:
-            _, results = await events_read(
+            result = await events_read(
                 namespace="automation_engine", table="events", handler=handler
             )
-        self.assertEqual(len(results), 3)
-        self.assertTrue(all(r.status == "RETRY" for r in results))
+        self.assertEqual(len(result.results), 3)
+        self.assertTrue(all(r.status == "RETRY" for r in result.results))
+        self.assertFalse(result.complete)
         self.assertTrue(
-            all("count mismatch" in (r.error_message or "") for r in results)
+            all("count mismatch" in (r.error_message or "") for r in result.results)
         )
 
-    async def test_passes_filter_and_sort_to_reader(self):
-        events = [{"event_id": "e1"}]
-        ctx, fake_reader = _flat_reader(events)
+    async def test_passes_filter_and_sort_to_reader_once(self):
+        ctx, fake_reader = _stateless_reader([{"event_id": "e1"}])
         with ctx:
             await events_read(
                 namespace="automation_engine",
@@ -131,9 +127,9 @@ class TestEventsReadSingleFetch(unittest.IsolatedAsyncioTestCase):
             limit=None,
         )
 
-    async def test_max_events_only_caps_single_fetch(self):
+    async def test_max_events_caps_the_scan(self):
         events = [{"event_id": f"e{i}"} for i in range(3)]
-        ctx, fake_reader = _flat_reader(events)
+        ctx, fake_reader = _stateless_reader(events)
         with ctx:
             await events_read(
                 namespace="automation_engine",
@@ -141,7 +137,6 @@ class TestEventsReadSingleFetch(unittest.IsolatedAsyncioTestCase):
                 handler=_make_handler(),
                 max_events=10,
             )
-        # Single call with limit=max_events
         fake_reader.fetch_records.assert_called_once()
         self.assertEqual(fake_reader.fetch_records.call_args.kwargs["limit"], 10)
 
@@ -154,126 +149,131 @@ class TestEventsReadSingleFetch(unittest.IsolatedAsyncioTestCase):
             from_env.return_value = fake_reader
 
             await events_read(
-                namespace="automation_engine",
-                table="events",
-                handler=_make_handler(),
+                namespace="automation_engine", table="events", handler=_make_handler()
             )
             await events_read(
-                namespace="automation_engine",
-                table="events",
-                handler=_make_handler(),
+                namespace="automation_engine", table="events", handler=_make_handler()
             )
             self.assertEqual(from_env.call_count, 2)
 
 
-class TestEventsReadBatching(unittest.IsolatedAsyncioTestCase):
-    async def test_batch_size_loops_until_exhausted(self):
-        b1 = [{"event_id": f"e{i}"} for i in range(1000)]
-        b2 = [
-            {"event_id": f"e{i}"} for i in range(1000, 1500)
-        ]  # short batch — exhausted
+class TestEventsReadChunking(unittest.IsolatedAsyncioTestCase):
+    async def test_batch_size_chunks_a_single_scan(self):
+        rows = [{"event_id": f"e{i}"} for i in range(1500)]
         handler = _make_handler()
-        ctx, fake_reader = _scripted_reader([b1, b2])
+        ctx, fake_reader = _stateless_reader(rows)
         with ctx:
-            events, results = await events_read(
+            result = await events_read(
                 namespace="automation_engine",
                 table="events",
                 handler=handler,
                 batch_size=1000,
             )
-        self.assertEqual(len(events), 1500)
-        self.assertEqual(len(results), 1500)
-        # Two handler calls, one per batch
-        self.assertEqual(len(handler.calls), 2)
-        self.assertEqual(len(handler.calls[0]), 1000)
-        self.assertEqual(len(handler.calls[1]), 500)
-        # Reader called twice with limit=1000 each time
-        self.assertEqual(fake_reader.fetch_records.call_count, 2)
-        for call in fake_reader.fetch_records.call_args_list:
-            self.assertEqual(call.kwargs["limit"], 1000)
+        self.assertEqual(len(result.events), 1500)
+        self.assertEqual(len(result.results), 1500)
+        self.assertTrue(result.complete)
+        # ONE scan, then dispatched in chunks of 1000 / 500
+        self.assertEqual(fake_reader.fetch_records.call_count, 1)
+        self.assertEqual([len(c) for c in handler.calls], [1000, 500])
 
-    async def test_batch_size_with_max_events_caps_total(self):
-        b1 = [{"event_id": f"e{i}"} for i in range(1000)]
-        b2 = [{"event_id": f"e{i}"} for i in range(1000, 2000)]
-        b3 = [{"event_id": f"e{i}"} for i in range(2000, 3000)]
+    async def test_no_duplicate_event_ids_across_chunks(self):
+        # Regression for the batch-loop bug: against a stateless reader the old
+        # loop re-read the same head rows every iteration, returning duplicates
+        # and never advancing. A single scan + in-memory chunking must not.
+        rows = [{"event_id": f"e{i}"} for i in range(2500)]
         handler = _make_handler()
-        ctx, fake_reader = _scripted_reader([b1, b2, b3])
+        ctx, fake_reader = _stateless_reader(rows)
         with ctx:
-            events, results = await events_read(
+            result = await events_read(
                 namespace="automation_engine",
                 table="events",
                 handler=handler,
                 batch_size=1000,
                 max_events=2500,
             )
-        self.assertEqual(len(events), 2500)
-        self.assertEqual(len(results), 2500)
-        # Three reader calls: 1000, 1000, 500 (last shrunk to fit max_events)
-        limits = [c.kwargs["limit"] for c in fake_reader.fetch_records.call_args_list]
-        self.assertEqual(limits, [1000, 1000, 500])
+        ids = [e["event_id"] for e in result.events]
+        self.assertEqual(len(ids), 2500)
+        self.assertEqual(len(set(ids)), 2500)  # no duplicates
+        self.assertEqual(fake_reader.fetch_records.call_count, 1)  # single scan
+        self.assertTrue(result.complete)
 
-    async def test_handler_exception_aborts_loop_after_current_batch(self):
-        b1 = [{"event_id": f"e{i}"} for i in range(10)]
-        b2 = [{"event_id": f"e{i}"} for i in range(10, 20)]
-        b3 = [{"event_id": f"e{i}"} for i in range(20, 30)]
-        # Raise on the 2nd call (during batch 2)
-        handler = _make_handler(raise_after_n_calls=2)
-        ctx, fake_reader = _scripted_reader([b1, b2, b3])
+    async def test_max_events_caps_then_chunks(self):
+        rows = [{"event_id": f"e{i}"} for i in range(3000)]
+        handler = _make_handler()
+        ctx, fake_reader = _stateless_reader(rows)
         with ctx:
-            events, results = await events_read(
+            result = await events_read(
+                namespace="automation_engine",
+                table="events",
+                handler=handler,
+                batch_size=1000,
+                max_events=2500,
+            )
+        self.assertEqual(len(result.events), 2500)
+        self.assertTrue(result.complete)
+        # single scan capped at max_events, then chunked 1000/1000/500
+        self.assertEqual(fake_reader.fetch_records.call_count, 1)
+        self.assertEqual(fake_reader.fetch_records.call_args.kwargs["limit"], 2500)
+        self.assertEqual([len(c) for c in handler.calls], [1000, 1000, 500])
+
+    async def test_handler_exception_marks_failed_chunk_and_tail_retry(self):
+        rows = [{"event_id": f"e{i}"} for i in range(30)]
+        handler = _make_handler(raise_after_n_calls=2)  # fail on the 2nd chunk
+        ctx, fake_reader = _stateless_reader(rows)
+        with ctx:
+            result = await events_read(
                 namespace="automation_engine",
                 table="events",
                 handler=handler,
                 batch_size=10,
                 max_events=100,
             )
-        # Got batch 1 (SUCCESS) + batch 2 (RETRY) — batch 3 never read
-        self.assertEqual(len(events), 20)
-        self.assertEqual(len(results), 20)
-        self.assertEqual(set(r.status for r in results[:10]), {"SUCCESS"})
-        self.assertEqual(set(r.status for r in results[10:]), {"RETRY"})
-        # Reader called twice — third batch not requested
-        self.assertEqual(fake_reader.fetch_records.call_count, 2)
+        # All 30 fetched events are accounted for: chunk 1 SUCCESS, the failed
+        # chunk + untouched tail (20) RETRY. complete=False signals the abort.
+        self.assertEqual(len(result.events), 30)
+        self.assertEqual(len(result.results), 30)
+        self.assertEqual({r.status for r in result.results[:10]}, {"SUCCESS"})
+        self.assertEqual({r.status for r in result.results[10:]}, {"RETRY"})
+        self.assertFalse(result.complete)
+        self.assertEqual(fake_reader.fetch_records.call_count, 1)
 
-    async def test_count_mismatch_aborts_loop_after_current_batch(self):
-        b1 = [{"event_id": f"e{i}"} for i in range(10)]
-        b2 = [{"event_id": f"e{i}"} for i in range(10, 20)]
-
-        # First call returns matching results, second returns wrong count.
-        handler_calls = {"n": 0}
+    async def test_count_mismatch_marks_failed_chunk_and_tail_retry(self):
+        rows = [{"event_id": f"e{i}"} for i in range(20)]
+        calls = {"n": 0}
 
         async def handler(events):
-            handler_calls["n"] += 1
-            if handler_calls["n"] == 1:
+            calls["n"] += 1
+            if calls["n"] == 1:
                 return [EventResult(status="SUCCESS") for _ in events]
-            return [EventResult(status="SUCCESS")]  # count mismatch
+            return [EventResult(status="SUCCESS")]  # wrong count on chunk 2
 
-        ctx, fake_reader = _scripted_reader([b1, b2])
+        ctx, _ = _stateless_reader(rows)
         with ctx:
-            events, results = await events_read(
+            result = await events_read(
                 namespace="automation_engine",
                 table="events",
                 handler=handler,
                 batch_size=10,
                 max_events=100,
             )
-        self.assertEqual(len(events), 20)
-        self.assertEqual(len(results), 20)
-        self.assertEqual(set(r.status for r in results[:10]), {"SUCCESS"})
-        self.assertEqual(set(r.status for r in results[10:]), {"RETRY"})
+        self.assertEqual(len(result.events), 20)
+        self.assertEqual({r.status for r in result.results[:10]}, {"SUCCESS"})
+        self.assertEqual({r.status for r in result.results[10:]}, {"RETRY"})
+        self.assertFalse(result.complete)
 
-    async def test_empty_first_batch_returns_empty_pair(self):
-        ctx, fake_reader = _scripted_reader([[]])
+    async def test_empty_scan_returns_empty_complete(self):
+        ctx, fake_reader = _stateless_reader([])
         with ctx:
-            events, results = await events_read(
+            result = await events_read(
                 namespace="automation_engine",
                 table="events",
                 handler=_make_handler(),
                 batch_size=1000,
                 max_events=5000,
             )
-        self.assertEqual(events, [])
-        self.assertEqual(results, [])
+        self.assertEqual(result.events, [])
+        self.assertEqual(result.results, [])
+        self.assertTrue(result.complete)
         self.assertEqual(fake_reader.fetch_records.call_count, 1)
 
     async def test_accepts_bound_method_as_handler(self):
@@ -289,14 +289,15 @@ class TestEventsReadBatching(unittest.IsolatedAsyncioTestCase):
 
         w = Worker()
         events = [{"event_id": "e1"}]
-        ctx, _ = _flat_reader(events)
+        ctx, _ = _stateless_reader(events)
         with ctx:
-            _, results = await events_read(
+            result = await events_read(
                 namespace="automation_engine",
                 table="events",
                 handler=w.process_batch,
             )
-        self.assertEqual([r.status for r in results], ["SUCCESS"])
+        self.assertEqual([r.status for r in result.results], ["SUCCESS"])
+        self.assertTrue(result.complete)
         self.assertEqual(w.received, [events])
 
 

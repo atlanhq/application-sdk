@@ -252,7 +252,7 @@ async def handler(events: list[dict]) -> list[EventResult]:
             out.append(EventResult(status="FAILED", error_message=str(exc)))
     return out
 
-events, results = await events_read(
+result = await events_read(
     namespace="automation_engine",
     table="reverse_sync_description",
     handler=handler,
@@ -261,20 +261,21 @@ events, results = await events_read(
     batch_size=1000,
     max_events=5000,
 )
-# events: list[dict]  — concatenated across batches (up to max_events)
-# results: list[EventResult]  — aligned 1:1 with events
+# result.events:   list[dict]         — every fetched event (up to max_events)
+# result.results:  list[EventResult]  — aligned 1:1 with events
+# result.complete: bool               — False if the run aborted early
 ```
 
 ### Batching
 
-| `batch_size` | `max_events` | Behaviour |
-|---|---|---|
-| `None` | `None` | Single fetch, returns everything available. |
-| `N` | `None` | Loop in batches of N until exhausted (CAUTION: unbounded — only safe if the table is known to be finite within the activity timeout). |
-| `None` | `M` | Single fetch capped at M. |
-| `N` | `M` | Loop in batches of N, total capped at M. **Recommended** for AE-triggered apps — bounds workflow run time and keeps each handler call within heartbeat / memory limits. |
+`events_read` does a **single** scan — the stateless Iceberg reader has no cursor, so re-fetching the same filter would only re-read the same head rows. `max_events` caps that scan; `batch_size` then chunks the fetched set for handler dispatch.
 
-The handler is called once per batch. If a handler call raises (or returns the wrong number of results), that batch's events are marked RETRY and the loop aborts — earlier batches' results are returned as-is.
+| Parameter | Effect |
+|---|---|
+| `max_events=M` | Scan returns at most M events (the oldest M when `sort_by` is set). `None` → the full filtered set. |
+| `batch_size=N` | Handler is invoked once per N-event chunk of the fetched set (keeps each call within heartbeat / memory limits). `None` → one call with everything. |
+
+If a handler call raises (or returns the wrong number of results), that chunk **and** any not-yet-attempted events are marked RETRY and `complete` is set `False` — the caller can still ack the partials (so AE re-triggers) while telling an abort apart from a clean run that merely contained per-event RETRYs.
 
 `events_read` builds its `LakehouseReader` from env credentials each call. No catalog or credentials passed in.
 
@@ -319,7 +320,7 @@ class MyActivities:
         async def _handler(events: list[dict]) -> list[EventResult]:
             return [EventResult(status="SUCCESS") for _ in events]
 
-        events, results = await events_read(
+        result = await events_read(
             namespace="automation_engine",
             table=events_table,
             handler=_handler,
@@ -328,12 +329,12 @@ class MyActivities:
             batch_size=1000,
             max_events=5000,
         )
-        if not events:
+        if not result.events:
             return ""
 
         return await events_ack(
-            events,
-            results,
+            result.events,
+            result.results,
             app_name="myapp",
             workflow_name="ingestion",
             workflow_run_id=run_id,
