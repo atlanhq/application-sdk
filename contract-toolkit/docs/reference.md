@@ -390,6 +390,20 @@ To enable, set `notifications = true`. To retarget the alert (different
 
 > **Deprecated.** New contracts should amend `App.pkl`. `NativeApp.pkl` remains resolvable for existing apps during the v0.10.x transition period; the hard cutover is planned for v1.0.
 
+### Migrating `workflowType` / `workflowTypeOverride` to App.pkl
+
+The biggest mechanical difference when switching the `amends` line is how the
+manifest `workflow_type` is derived. NativeApp auto-converts PascalCase to
+kebab-case; App.pkl does not — it emits the value verbatim.
+
+| NativeApp.pkl | Manifest value | App.pkl equivalent |
+|---|---|---|
+| `workflowType = "SodaApp"` | `"soda-app"` | `workflowType = "soda-app"` |
+| `workflowType = "SodaApp"` and `name = "soda-app"` | `"soda-app"` | *(omit — App.pkl defaults to kebab-casing `name`)* |
+| `workflowTypeOverride = "teradata-app:crawler"` | `"teradata-app:crawler"` | `workflowType = "teradata-app:crawler"` |
+
+Rule of thumb: take whatever string the old contract would have written into the manifest and set that as `workflowType` in App.pkl. If that string is identical to `name`, omit `workflowType` entirely.
+
 Developers amend this module. It defines the app's identity, credentials, workflow form, and manifest.
 
 ### App Metadata
