@@ -381,7 +381,7 @@ jobs:
           fetch-depth: 0
 
       - name: "Set up uv"
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v5.4.0
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
 
       - name: "Guard contract_schema.lock.json (published package)"
         if: inputs.conformance-ref == ''

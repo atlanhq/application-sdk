@@ -16,7 +16,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from conformance.suite.checks.deprecation import scan_all
 from conformance.suite.checks.deprecation._contract_compat import scan_contract_compat
 from conformance.suite.checks.deprecation._ledger_schema import (
     ContractField,
@@ -169,6 +168,104 @@ def test_b005_optional_and_union_none_equivalent(tmp_path: Path) -> None:
     assert "B005" not in _ids(findings_union), "str | None should match str | None"
 
 
+# ── B005: canonical type normalization (typing aliases + Annotated + Union) ───
+
+_EP_LIST_STR = """\
+from application_sdk.app import App
+from typing import List
+
+class MyInput:
+    items: List[str]
+
+class MyApp(App):
+    async def run(self, input: MyInput) -> None:
+        pass
+"""
+
+_EP_LIST_STR_LOWER = """\
+from application_sdk.app import App
+
+class MyInput:
+    items: list[str]
+
+class MyApp(App):
+    async def run(self, input: MyInput) -> None:
+        pass
+"""
+
+_EP_DICT = """\
+from application_sdk.app import App
+from typing import Dict
+
+class MyInput:
+    mapping: Dict[str, int]
+
+class MyApp(App):
+    async def run(self, input: MyInput) -> None:
+        pass
+"""
+
+_EP_ANNOTATED = """\
+from application_sdk.app import App
+from typing import Annotated
+
+class MyInput:
+    count: Annotated[int, "metadata"]
+
+class MyApp(App):
+    async def run(self, input: MyInput) -> None:
+        pass
+"""
+
+_EP_UNION_THREE = """\
+from application_sdk.app import App
+from typing import Union
+
+class MyInput:
+    value: Union[str, int, None]
+
+class MyApp(App):
+    async def run(self, input: MyInput) -> None:
+        pass
+"""
+
+
+def test_b005_list_capitalized_equivalent(tmp_path: Path) -> None:
+    """List[str] and list[str] normalize to the same canonical type."""
+    ledger = _make_ledger(ContractField("MyInput", "items", "list[str]", "active"))
+    findings_cap = _scan(tmp_path / "cap", {"app.py": _EP_LIST_STR}, ledger)
+    findings_low = _scan(tmp_path / "low", {"app.py": _EP_LIST_STR_LOWER}, ledger)
+    assert "B005" not in _ids(findings_cap), "List[str] should match list[str]"
+    assert "B005" not in _ids(findings_low), "list[str] should match list[str]"
+
+
+def test_b005_dict_capitalized_equivalent(tmp_path: Path) -> None:
+    """Dict[str, int] and dict[str, int] normalize to the same canonical type."""
+    ledger = _make_ledger(
+        ContractField("MyInput", "mapping", "dict[str, int]", "active")
+    )
+    findings = _scan(tmp_path, {"app.py": _EP_DICT}, ledger)
+    assert "B005" not in _ids(findings), "Dict[str, int] should match dict[str, int]"
+
+
+def test_b005_annotated_strips_metadata(tmp_path: Path) -> None:
+    """Annotated[int, ...] strips metadata and matches plain int."""
+    ledger = _make_ledger(ContractField("MyInput", "count", "int", "active"))
+    findings = _scan(tmp_path, {"app.py": _EP_ANNOTATED}, ledger)
+    assert "B005" not in _ids(findings), "Annotated[int, ...] should match int"
+
+
+def test_b005_union_three_way(tmp_path: Path) -> None:
+    """Union[str, int, None] normalizes to str | int | None."""
+    ledger = _make_ledger(
+        ContractField("MyInput", "value", "str | int | None", "active")
+    )
+    findings = _scan(tmp_path, {"app.py": _EP_UNION_THREE}, ledger)
+    assert "B005" not in _ids(
+        findings
+    ), "Union[str, int, None] should match str | int | None"
+
+
 # ── B005: @entrypoint decorator variant ───────────────────────────────────────
 
 _EP_DECORATOR = """\
@@ -253,6 +350,7 @@ def test_b006_field_recorded_silent(tmp_path: Path) -> None:
     ledger = _make_ledger(ContractField("MyInput", "name", "str", "active"))
     findings = _scan(tmp_path, {"app.py": _EP_WITH_RUN}, ledger)
     assert "B006" not in _ids(findings)
+    assert "B005" not in _ids(findings)
 
 
 # ── B005 suppress via inline directive ────────────────────────────────────────
@@ -280,39 +378,47 @@ def test_b005_inline_suppress_clears(tmp_path: Path) -> None:
 
 
 def test_b005_block_violation_fails_gate(tmp_path: Path) -> None:
-    """Full suite: B005 finding makes runner exit non-zero (BLOCK tier)."""
+    """B005 fires on a removed field, and the runner exits 1 (BLOCK tier)."""
+    import os
     import subprocess
     import sys
-
-    ledger_path = tmp_path / "contract_schema.lock.json"
-    ledger = _make_ledger(ContractField("MyInput", "name", "str", "active"))
-    ledger_path.write_text(serialize(ledger), encoding="utf-8")
 
     src_file = tmp_path / "app.py"
     src_file.write_text(_EP_WITHOUT_FIELD, encoding="utf-8")
 
+    ledger = _make_ledger(ContractField("MyInput", "name", "str", "active"))
+    ledger_file = tmp_path / "contract_schema.lock.json"
+    ledger_file.write_text(serialize(ledger), encoding="utf-8")
+
+    # Direct scan: B005 must fire
+    findings = scan_contract_compat([src_file], tmp_path, ledger)
+    assert "B005" in {f.rule_id for f in findings if not f.suppressed}
+
+    # Subprocess: runner must exit 1; pass the temp ledger via env var.
+    # Add conformance package to PYTHONPATH so the subprocess can import it
+    # regardless of which venv Python is resolved to by sys.executable.
+    conformance_pkg_root = str(Path(__file__).parent.parent)
+    pythonpath = conformance_pkg_root + os.pathsep + os.environ.get("PYTHONPATH", "")
     result = subprocess.run(
         [
             sys.executable,
             "-m",
             "conformance.suite.runner",
-            "--root",
+            "--repo",
             str(tmp_path),
-            str(src_file),
+            "--series",
+            "B",
         ],
         capture_output=True,
         text=True,
+        env={
+            **os.environ,
+            "ATLAN_CONTRACT_LEDGER_PATH": str(ledger_file),
+            "PYTHONPATH": pythonpath,
+        },
     )
-    # The runner exits 1 when there are BLOCK findings
-    # (We pass a custom ledger path via env override in a real run;
-    # here we just confirm the scan_all integration produces B005 findings
-    # by calling scan_all directly with a patched ledger)
-    ledger_obj = ContractLedger(
-        version=1, fields=[ContractField("MyInput", "name", "str", "active")]
+    assert result.returncode == 1, (
+        f"expected exit 1, got {result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
-    findings = scan_all([src_file], tmp_path)
-    # B005 fires through the integrated path (ledger is empty from package data in SDK,
-    # but the scan still produces B006 for the un-ledgered fields if any)
-    # The important test is that the findings are emitted at all and carry BLOCK tier
-    b005_rule = get_rule("B005")
-    assert b005_rule.tier is EnforcementTier.BLOCK
+    assert "B005" in result.stdout + result.stderr

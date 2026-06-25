@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import importlib.resources as _ir
 import json
+import os
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -83,6 +84,9 @@ def load_ledger(path: Path | None = None) -> ContractLedger:
     degradation — an older wheel without the file simply produces no B005
     findings).  A **malformed** ledger is different and is reported to stderr.
     """
+    if path is None:
+        env_override = os.environ.get("ATLAN_CONTRACT_LEDGER_PATH")
+        path = Path(env_override) if env_override else None
     try:
         if path is None:
             text = (

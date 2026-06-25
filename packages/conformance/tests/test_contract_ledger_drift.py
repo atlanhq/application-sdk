@@ -10,9 +10,11 @@ in the same PR:
 
     uv run atlan-application-sdk-conformance gen-contract-ledger
 
-The SDK itself has no entrypoint contracts (it is a library), so the committed
-ledger is empty — but it still must exist, be valid JSON, and match what the
-generator would produce from the SDK source.
+The SDK seeds the ledger from its template contracts
+(``application_sdk/templates/contracts/``) — ``ExtractionInput``,
+``ExtractionOutput``, ``IncrementalExtraction*``, and ``QueryExtraction*``.
+The committed ledger must exist, be valid JSON, and match what the generator
+would produce from the current SDK source.
 """
 
 from __future__ import annotations

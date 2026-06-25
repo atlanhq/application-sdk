@@ -244,7 +244,9 @@ abstract class UIElement {
   /// breaking contract change caught by the B005 conformance rule.
   hidden lifecycle: "active"|"deprecated"|"sunset" = "active"
 
-  /// Optional human-readable note displayed alongside the deprecation warning.
+  /// Optional deprecation message passed to Pydantic's `Field(deprecated="<msg>")`.
+  /// When set, the generated field uses `Field(deprecated="<message>")` instead of
+  /// `Field(deprecated=True)`, providing a richer runtime warning.
   /// Ignored when `lifecycle` is `"active"`.
   hidden lifecycleMessage: String?
 

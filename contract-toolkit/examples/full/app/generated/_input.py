@@ -36,11 +36,9 @@ class AppInputContract(ExtractionInput):
     """Only extract tables whose name starts with this prefix."""
     custom_attributes: str = ""
     """Extra attributes to attach to every asset, as a JSON object."""
-    legacy_timeout: int = Field(default=60, deprecated=True)
+    legacy_timeout: int = Field(default=60, deprecated="Use the standard pipeline timeout configuration instead.")
     """Deprecated: use the standard pipeline timeout instead."""
-    old_batch_mode: bool = Field(
-        default=False, deprecated=True, json_schema_extra={"x-lifecycle": "sunset"}
-    )
+    old_batch_mode: bool = Field(default=False, deprecated=True, json_schema_extra={"x-lifecycle": "sunset"})
     """Sunset: no longer consumed by the extractor."""
     schemas: Annotated[dict[str, str], MaxItems(1000)] = Field(default_factory=dict)
 

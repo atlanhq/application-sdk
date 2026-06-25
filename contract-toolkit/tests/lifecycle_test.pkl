@@ -44,6 +44,19 @@ local lifecycleApp = (App) {
             title = "Factory sunset"
             lifecycle = "sunset"
           }
+          // deprecated TextInput (string default) — exercises regex on quoted-string default
+          ["deprecated_text"] = new App.TextInput {
+            title = "Deprecated text field"
+            default = "legacy"
+            lifecycle = "deprecated"
+          }
+          // deprecated field with lifecycleMessage — message wires into Field(deprecated="...")
+          ["deprecated_with_msg"] = new App.NumericInput {
+            title = "Deprecated with message"
+            default = 7
+            lifecycle = "deprecated"
+            lifecycleMessage = "Use active_field instead."
+          }
         }
       }
     }
@@ -58,12 +71,11 @@ facts {
   }
 
   ["active field has no deprecated= annotation"] {
-    !inputPy.replaceAll("deprecated_field", "").replaceAll("factory_deprecated", "").contains("deprecated=True")
-      || inputPy.contains("active_field: int = 10")
+    inputPy.contains("active_field: int = 10") && !inputPy.contains("active_field: int = Field(")
   }
 
-  ["deprecated NumericInput field carries Field(default=..., deprecated=True)"] {
-    inputPy.contains("deprecated_field: int = Field(default=99, deprecated=True)")
+  ["deprecated NumericInput field with lifecycleMessage carries Field(deprecated=<message>)"] {
+    inputPy.contains("deprecated_field: int = Field(default=99, deprecated=\"Use active_field instead.\")")
   }
 
   ["sunset BooleanInput field carries deprecated=True and x-lifecycle: sunset"] {
@@ -86,5 +98,13 @@ facts {
     inputPy.contains("factory_sunset") &&
       inputPy.contains("deprecated=True") &&
       inputPy.contains("x-lifecycle")
+  }
+
+  ["deprecated TextInput carries Field(default=..., deprecated=True)"] {
+    inputPy.contains("deprecated_text: str = Field(default=\"legacy\", deprecated=True)")
+  }
+
+  ["deprecated field with lifecycleMessage carries Field(deprecated=<message>)"] {
+    inputPy.contains("deprecated_with_msg: int = Field(default=7, deprecated=\"Use active_field instead.\")")
   }
 }

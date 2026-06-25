@@ -2454,11 +2454,16 @@ local function applyLifecycle(fieldLine: String, u: Widgets.UIElement): String =
   if (u.lifecycle == "active")
     fieldLine
   else
+    let (deprecatedKwarg =
+      if (u.lifecycleMessage != null)
+        "deprecated=\"\(u.lifecycleMessage!!)\""
+      else
+        "deprecated=True")
     let (lifecycleKwargs =
       if (u.lifecycle == "sunset")
-        ", deprecated=True, json_schema_extra={\"x-lifecycle\": \"sunset\"}"
+        ", \(deprecatedKwarg), json_schema_extra={\"x-lifecycle\": \"sunset\"}"
       else
-        ", deprecated=True")
+        ", \(deprecatedKwarg)")
     if (fieldLine.contains("= Field("))
       // Already has a Field(...) call — append lifecycle kwargs before the final closing )
       fieldLine.replaceFirst(Regex("\\)\\s*$"), "\(lifecycleKwargs))")

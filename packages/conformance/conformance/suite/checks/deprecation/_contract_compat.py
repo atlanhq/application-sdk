@@ -54,39 +54,75 @@ def _is_none_node(node: ast.expr) -> bool:
     )
 
 
+def _is_named(node: ast.expr, name: str) -> bool:
+    """True if node is Name(id=name) or Attribute(attr=name) (e.g. typing.Optional)."""
+    return (isinstance(node, ast.Name) and node.id == name) or (
+        isinstance(node, ast.Attribute) and node.attr == name
+    )
+
+
+_TYPING_LOWER: dict[str, str] = {
+    "List": "list",
+    "Dict": "dict",
+    "Tuple": "tuple",
+    "Set": "set",
+    "FrozenSet": "frozenset",
+    "Type": "type",
+}
+
+
 def _normalize_type_node(node: ast.expr) -> ast.expr:
     """Recursively normalize an annotation AST node to canonical form.
 
     Rules:
     - ``Annotated[X, ...]`` → normalize(X)
     - ``Optional[X]`` → normalize(X) | None
+    - ``Union[X, Y, ...]`` → normalize(X) | normalize(Y) | ... (None on right)
     - ``None | X`` → normalize(X) | None  (canonical: non-None on left)
     - Recurse into subscript slices and union arms.
+    - Lowercase typing aliases (List→list, Dict→dict, …) via AST rewrite.
+    Handles both ``ast.Name`` and ``ast.Attribute`` forms (e.g. ``typing.Optional``).
     """
-    # Strip Annotated[X, ...] → X, then recurse
+    # Strip Annotated[X, ...] → X (ast.Name form handled by _unwrap_annotated)
     unwrapped = _unwrap_annotated(node)
     if unwrapped is not node:
         return _normalize_type_node(unwrapped)
+    # typing.Annotated[X, ...] — ast.Attribute form not handled by _unwrap_annotated
+    if isinstance(node, ast.Subscript) and _is_named(node.value, "Annotated"):
+        slice_ = node.slice
+        inner = slice_.elts[0] if isinstance(slice_, ast.Tuple) else slice_
+        return _normalize_type_node(inner)
 
-    # Optional[X] → normalize(X) | None
-    if (
-        isinstance(node, ast.Subscript)
-        and isinstance(node.value, ast.Name)
-        and node.value.id == "Optional"
-    ):
+    # Optional[X] → normalize(X) | None (handles ast.Name and ast.Attribute)
+    if isinstance(node, ast.Subscript) and _is_named(node.value, "Optional"):
         inner = _normalize_type_node(node.slice)
         return ast.BinOp(left=inner, op=ast.BitOr(), right=ast.Constant(value=None))
+
+    # Union[X, Y, ...] → X | Y | ... with None moved to the right
+    if isinstance(node, ast.Subscript) and _is_named(node.value, "Union"):
+        slice_ = node.slice
+        elts = slice_.elts if isinstance(slice_, ast.Tuple) else [slice_]
+        arms = [_normalize_type_node(e) for e in elts]
+        result: ast.expr = arms[0]
+        for arm in arms[1:]:
+            result = ast.BinOp(left=result, op=ast.BitOr(), right=arm)
+        return _normalize_type_node(result)  # re-normalize to canonicalize None
 
     # BinOp X | Y — recurse into arms; canonicalize None to the right
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
         left = _normalize_type_node(node.left)
         right = _normalize_type_node(node.right)
         if _is_none_node(left):
-            # None | X → X | None
             return ast.BinOp(left=right, op=ast.BitOr(), right=left)
         return ast.BinOp(left=left, op=ast.BitOr(), right=right)
 
-    # Subscript (e.g. list[str], dict[str, int]) — recurse into slice
+    # Lowercase typing aliases — rewrite AST node before unparsing
+    if isinstance(node, ast.Attribute) and node.attr in _TYPING_LOWER:
+        return ast.Name(id=_TYPING_LOWER[node.attr], ctx=ast.Load())
+    if isinstance(node, ast.Name) and node.id in _TYPING_LOWER:
+        return ast.Name(id=_TYPING_LOWER[node.id], ctx=ast.Load())
+
+    # Subscript — recurse into value and slice
     if isinstance(node, ast.Subscript):
         return ast.Subscript(
             value=_normalize_type_node(node.value),
@@ -94,7 +130,7 @@ def _normalize_type_node(node: ast.expr) -> ast.expr:
             ctx=node.ctx,
         )
 
-    # Tuple slice (dict[K, V] → Tuple(K, V)) — recurse into elements
+    # Tuple slice — recurse into elements
     if isinstance(node, ast.Tuple):
         return ast.Tuple(
             elts=[_normalize_type_node(e) for e in node.elts],
@@ -104,27 +140,32 @@ def _normalize_type_node(node: ast.expr) -> ast.expr:
     return node
 
 
+def _flatten_union(node: ast.expr) -> list[ast.expr]:
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        return _flatten_union(node.left) + _flatten_union(node.right)
+    return [node]
+
+
 def _canonical_type(node: ast.expr) -> str:
-    """Return a normalized type string for stable ledger comparison.
-
-    Normalizations:
-    - ``Annotated[X, ...]`` → ``X``
-    - ``Optional[X]`` / ``None | X`` → ``X | None``
-    - Legacy capitalized aliases: ``List[`` → ``list[``, ``Dict[`` → ``dict[``, etc.
-    """
-    raw = ast.unparse(_normalize_type_node(node))
-
-    for old, new in (
-        ("List[", "list["),
-        ("Dict[", "dict["),
-        ("Tuple[", "tuple["),
-        ("Set[", "set["),
-        ("FrozenSet[", "frozenset["),
-        ("Type[", "type["),
-    ):
-        raw = raw.replace(old, new)
-
-    return raw
+    """Return a normalized type string for stable ledger comparison."""
+    normalized = _normalize_type_node(node)
+    # Dedupe duplicate None arms (e.g. Optional[Optional[X]] → X | None not X | None | None)
+    arms = _flatten_union(normalized)
+    seen_none = False
+    deduped: list[ast.expr] = []
+    for arm in arms:
+        if _is_none_node(arm):
+            if not seen_none:
+                seen_none = True
+                deduped.append(arm)
+        else:
+            deduped.append(arm)
+    if len(deduped) == 1:
+        return ast.unparse(deduped[0])
+    result: ast.expr = deduped[0]
+    for arm in deduped[1:]:
+        result = ast.BinOp(left=result, op=ast.BitOr(), right=arm)
+    return ast.unparse(result)
 
 
 # ── Field extraction ──────────────────────────────────────────────────────────
@@ -164,7 +205,7 @@ def _field_status(ann_node: ast.AnnAssign) -> str:
         if (
             kw.arg == "deprecated"
             and isinstance(kw.value, ast.Constant)
-            and kw.value.value is True
+            and kw.value.value  # True or a non-empty string message
         ):
             deprecated_true = True
         if kw.arg == "json_schema_extra" and isinstance(kw.value, ast.Dict):
@@ -177,7 +218,7 @@ def _field_status(ann_node: ast.AnnAssign) -> str:
                 ):
                     is_sunset = True
 
-    if is_sunset and deprecated_true:
+    if is_sunset:
         return "sunset"
     if deprecated_true:
         return "deprecated"
