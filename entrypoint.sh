@@ -82,7 +82,24 @@ echo "[entrypoint]   metrics-port:    ${DAPR_METRICS_PORT}"
 echo "[entrypoint]   max-body-size:   ${DAPR_MAX_BODY_SIZE}"
 echo "[entrypoint]   graceful-shutdown-seconds: ${DAPR_GRACEFUL_SHUTDOWN_SECONDS}"
 
-daprd \
+# Optionally forward daprd's own logs into the SDK observability pipeline so they
+# reach the same store sink (and, in SDR mode, the central lakehouse) as the app.
+# When enabled, daprd runs under the forwarder module (which streams its JSON log
+# lines to a dapr.runtime logger and forwards SIGTERM for graceful shutdown) and
+# emits structured JSON so the forwarder can parse it. When disabled, both
+# variables expand to nothing and daprd is launched exactly as before.
+DAPR_LOG_FORWARDER=""
+DAPR_LOG_FORMAT_FLAG=""
+if [ "${ATLAN_ENABLE_DAPR_LOG_FORWARDING:-false}" = "true" ]; then
+    echo "[entrypoint] daprd log forwarding enabled — routing daprd logs through the SDK observability pipeline"
+    DAPR_LOG_FORWARDER="uv run --no-sync python -m application_sdk.observability.dapr_log_forwarder --"
+    DAPR_LOG_FORMAT_FLAG="--log-as-json"
+fi
+
+# Intentional unquoted expansion: the forwarder prefix is empty (no-op) when the
+# flag is off, and a multi-word command when on.
+# shellcheck disable=SC2086
+${DAPR_LOG_FORWARDER} daprd \
     --app-id "${DAPR_APP_ID}" \
     --app-port "${DAPR_APP_PORT}" \
     --dapr-http-port "${DAPR_HTTP_PORT}" \
@@ -93,7 +110,8 @@ daprd \
     --max-body-size "${DAPR_MAX_BODY_SIZE}" \
     --placement-host-address "" \
     --scheduler-host-address "${DAPR_SCHEDULER_HOST_ADDRESS}" \
-    --dapr-graceful-shutdown-seconds "${DAPR_GRACEFUL_SHUTDOWN_SECONDS}" &
+    --dapr-graceful-shutdown-seconds "${DAPR_GRACEFUL_SHUTDOWN_SECONDS}" \
+    ${DAPR_LOG_FORMAT_FLAG} &
 DAPRD_PID=$!
 echo "[entrypoint] daprd started with PID ${DAPRD_PID}"
 

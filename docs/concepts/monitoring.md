@@ -251,3 +251,23 @@ ATLAN_LOG_FLUSH_INTERVAL_SECONDS=10
 ```
 
 See [Configuration](../configuration.md#logging) for all observability variables.
+
+---
+
+## Forwarding daprd Sidecar Logs
+
+By default the `daprd` sidecar's own logs go straight to the container's stdout/stderr and never enter the SDK observability pipeline — so in SDR (customer-infra) deployments, where there's no node-level log collector, they never reach the central lakehouse. They're only visible in the customer's own pod/container logs.
+
+Enable forwarding to route daprd's logs through the SDK pipeline (the same path as the app's own logs, so they land in the lakehouse `app_logs` table with `app_name` / `is_sdr` populated), while still echoing them to the container's own logs:
+
+```bash
+ATLAN_ENABLE_DAPR_LOG_FORWARDING=true   # default: false
+```
+
+When enabled, the container entrypoint runs daprd under `application_sdk.observability.dapr_log_forwarder`, which streams each daprd log line into a `dapr.runtime` logger and forwards `SIGTERM` so graceful shutdown is unaffected. daprd is chatty, so this is opt-in and pairs best with a conservative source level:
+
+```bash
+DAPR_LOG_LEVEL=warn   # forward warn + error (and above); raise to error to drop the rest
+```
+
+`DAPR_LOG_LEVEL` is a minimum-severity floor at the source — `warn` captures both warnings **and** errors. It's the recommended knob for controlling daprd log volume reaching the lakehouse.

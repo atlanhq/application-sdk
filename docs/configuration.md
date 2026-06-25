@@ -213,6 +213,7 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 | `OTEL_BATCH_SIZE` | `512` | Maximum export batch size. |
 | `OTEL_QUEUE_SIZE` | `2048` | Maximum export queue size. |
 | `ATLAN_ENABLE_OBSERVABILITY_STORE_SINK` | `true` | Write observability data to the object store sink. **Fallback:** `ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK`. |
+| `ATLAN_ENABLE_DAPR_LOG_FORWARDING` | `false` | Forward the daprd sidecar's own logs into the SDK observability pipeline (and, in SDR mode, the central lakehouse). Opt-in; pairs best with `DAPR_LOG_LEVEL=warn`. |
 | `ATLAN_BASE_URL` | _(empty)_ | Atlan instance base URL. Used by the events interceptor. |
 
 ---
