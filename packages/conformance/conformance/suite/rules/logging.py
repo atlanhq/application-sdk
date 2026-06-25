@@ -23,17 +23,23 @@ RULES: tuple[RuleDefinition, ...] = (
         rationale=(
             "%-style message bodies are the fleet-wide logging convention: one consistent "
             "call-site style keeps log statements legible and reviewable, and the SDK's "
-            "loguru bridge renders the values in. f-strings render identically here — the "
-            "%-bridge is eager — so this is about consistency and readability, not lazy "
-            "evaluation; when a hot path genuinely needs deferred rendering, use "
-            "opt(lazy=True) with {}-style."
+            "loguru bridge renders the values in. Beyond consistency, %-style now carries "
+            "a real performance guarantee: the SDK adapter short-circuits before interpolation "
+            "when the level is filtered, so __str__ is never called on the arguments — the "
+            "same laziness stdlib logging provides for free. f-strings always evaluate "
+            "eagerly at the call site regardless of level, so they pay the formatting cost "
+            "even when the record is never emitted."
         ),
         short_description="f-string in log message — breaks log grouping and aggregation",
         full_description=(
             "Using an f-string creates a unique message string per call, breaking log\n"
             "grouping and aggregation in Grafana/ClickHouse.  It also always evaluates\n"
-            "eagerly.  Rewrite as %-style message body: embed context directly in the\n"
-            "format string, do not move values to kwargs.\n"
+            "eagerly — __str__ / __format__ is called on every interpolated value even\n"
+            "when the level is filtered and the record is never emitted.  %-style avoids\n"
+            "both: the SDK adapter's _is_enabled guard short-circuits before interpolation,\n"
+            "so argument __str__ is skipped entirely for filtered levels.  Rewrite as\n"
+            "%-style message body: embed context directly in the format string, do not\n"
+            "move values to kwargs.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l001",
     ),
@@ -209,15 +215,29 @@ RULES: tuple[RuleDefinition, ...] = (
         autofixable=False,
         since="0.4.0",
         rationale=(
-            "Log-call arguments evaluate eagerly regardless of level. An unguarded expensive "
-            "serialisation inside logger.debug() runs on every call in production — invisible "
-            "CPU/memory overhead that compounds on hot paths."
+            "Python evaluates all function arguments before calling the log method, so an "
+            "expensive expression in a log argument — json.dumps(big), obj.serialize(), a "
+            "comprehension — runs unconditionally even when the level is filtered. "
+            "The SDK adapter's _is_enabled guard short-circuits %-style __str__ interpolation "
+            "for simple object args, but it fires inside the method, after Python has already "
+            "evaluated every argument expression. Calls with expensive argument expressions "
+            "still need an explicit guard."
         ),
         short_description="Expensive computation in logger.debug() argument — evaluates eagerly",
         full_description=(
-            "Arguments to log calls are evaluated eagerly regardless of whether the\n"
-            "level is enabled.  Guard expensive serialization / computation with\n"
-            "``if logger.isEnabledFor(logging.DEBUG):``.\n"
+            "Python evaluates all arguments before calling the log method, so expensive\n"
+            "expressions in log arguments run on every call regardless of level:\n"
+            "\n"
+            "    logger.debug('snapshot: %s', json.dumps(big_dict))  # json.dumps always runs\n"
+            "\n"
+            "Note: the SDK adapter's _is_enabled guard does skip %-style __str__ calls for\n"
+            "simple object args (logger.debug('x: %s', obj) — obj.__str__ not called when\n"
+            "filtered).  But that guard fires inside the method, after Python has evaluated\n"
+            "the argument expressions.  When the expensive work is in the expression itself,\n"
+            "an explicit level guard is still required::\n"
+            "\n"
+            "    if logger.isEnabledFor(logging.DEBUG):\n"
+            "        logger.debug('snapshot: %s', json.dumps(big_dict))\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l008",
     ),
