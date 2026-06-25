@@ -221,8 +221,15 @@ def load_prior_scan_cves(
     return sets
 
 
+def _resolution_phrase(debounce: int) -> str:
+    """Honest rationale string for any DEBOUNCE_SCANS value."""
+    if debounce <= 1:
+        return "the latest clean scan"
+    return f"{debounce} consecutive clean scans"
+
+
 def open_removal_pr(
-    repo: str, removed: list[str], run_date: str, runner: Runner
+    repo: str, removed: list[str], run_date: str, debounce: int, runner: Runner
 ) -> None:
     """Drop resolved entries from the allowlist and open an auto-merge PR."""
     data = json.loads(Path(ALLOWLIST_PATH).read_text())
@@ -261,8 +268,8 @@ def open_removal_pr(
             "--label",
             "vuln-auto-merge",
             "--body",
-            "Resolved by 3 consecutive clean scans (scanner no longer reports "
-            "these CVEs):\n\n" + "\n".join(f"- `{c}`" for c in removed),
+            f"Resolved by {_resolution_phrase(debounce)} — the scanner no longer "
+            "reports these CVEs:\n\n" + "\n".join(f"- `{c}`" for c in removed),
         ],
         check=True,
     )
@@ -289,8 +296,8 @@ def resolve_done_state_id(team_id: str) -> str | None:
     return None
 
 
-def close_ticket(issue_id: str, state_id: str) -> None:
-    ssl.gql(
+def close_ticket(issue_id: str, state_id: str) -> bool:
+    data = ssl.gql(
         """
         mutation Close($id: String!, $stateId: String!) {
           issueUpdate(id: $id, input: { stateId: $stateId }) { success }
@@ -298,6 +305,7 @@ def close_ticket(issue_id: str, state_id: str) -> None:
         """,
         {"id": issue_id, "stateId": state_id},
     )
+    return bool((data.get("issueUpdate") or {}).get("success"))
 
 
 def comment_on_ticket(issue_id: str, body: str) -> None:
@@ -378,15 +386,21 @@ def reconcile_tickets(scan_sets: list[set[str]], debounce: int) -> None:
     done_state = resolve_done_state_id(team_id) if to_close else None
     run_url = _run_url()
     for t in to_close:
-        if done_state:
-            cves = sorted(ssl.extract_vuln_ids_from_description(t.get("description")))
-            comment_on_ticket(t["id"], close_comment_body(cves, run_url))
-            close_ticket(t["id"], done_state)
-            print(f"Closed {t['identifier']} (all tracked CVEs resolved).")
-        else:
+        if not done_state:
             print(
                 f"Could not resolve a completed state — leaving {t['identifier']} open."
             )
+            continue
+        # Close FIRST; only comment once the close succeeds. If the close fails we
+        # post nothing (no self-contradicting "closing" note), and if the comment
+        # later fails the ticket is already closed so the next run won't re-close
+        # or duplicate it.
+        if not close_ticket(t["id"], done_state):
+            print(f"Failed to close {t['identifier']} — will retry next run.")
+            continue
+        cves = sorted(ssl.extract_vuln_ids_from_description(t.get("description")))
+        comment_on_ticket(t["id"], close_comment_body(cves, run_url))
+        print(f"Closed {t['identifier']} (all tracked CVEs resolved).")
     for t in to_update:
         rewrite_marker(t["id"], t.get("description", ""), t["remaining_ids"])
         print(f"Updated {t['identifier']} marker (dropped resolved CVEs).")
@@ -430,7 +444,7 @@ def main(runner: Runner = subprocess.run) -> int:
         print(
             f"Allowlist entries resolved (gone for {debounce} scans): {', '.join(removed)}"
         )
-        open_removal_pr(repo, removed, run_date, runner)
+        open_removal_pr(repo, removed, run_date, debounce, runner)
     else:
         print(
             f"No allowlisted CVE absent across {debounce} scans "
