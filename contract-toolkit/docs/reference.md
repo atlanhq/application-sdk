@@ -239,7 +239,7 @@ The auth-type radio's `ui.hidden` is auto-derived from `credentialAuthOptions.le
 
 ### Deploy Block
 
-The typed `deploy` block replaces the legacy free-form mapping.
+The typed `deploy` block replaces the legacy free-form mapping. The deploy config classes (`DeployConfig`, `DaprComponents`, `KedaConfig`, `KedaTemporalConfig`, `ResourceConfig`) are defined in `Deployment.pkl` and re-exported by `App.pkl` — amending contracts do not need a supplemental import.
 
 | Property | Type | Default | Description |
 |---|---|---|---|

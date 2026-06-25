@@ -1,6 +1,7 @@
 amends "pkl:test"
 
 import "../examples/bundle/app.pkl" as bundleApp
+import "../examples/card-split/app.pkl" as cardSplitApp
 import "../examples/connection-ref/app.pkl" as connectionRefApp
 import "../examples/deploy/app.pkl" as deployApp
 import "../examples/fanin/app.pkl" as faninApp
@@ -79,6 +80,7 @@ local nativeHelpTextOnlyApp = (NativeApp) {
 }
 local helpTextOnlyInputPy: String = helpTextOnlyApp.output.files["app/generated/_input.py"].text
 local nativeHelpTextOnlyInputPy: String = nativeHelpTextOnlyApp.output.files["_input.py"].text
+local cardSplitAtlanYaml: String = cardSplitApp.output.files["atlan.yaml"].text
 
 facts {
   ["Minimal example generates all standard output files"] {
@@ -344,6 +346,24 @@ facts {
     // deployOverrides deep-merged (VPA)
     deployYaml.contains("verticalPodAutoscaler:")
     deployYaml.contains("updateMode: Auto")
+  }
+
+  ["Card-split example: two entrypoints, one card and one route-only"] {
+    cardSplitApp.output.files.containsKey("atlan.yaml")
+    cardSplitApp.output.files.containsKey("app.yaml")
+    // Two distinct entrypoints present
+    cardSplitAtlanYaml.contains("name: extract")
+    cardSplitAtlanYaml.contains("name: extract-lineage")
+    // Only the primary entrypoint is a marketplace card
+    cardSplitAtlanYaml.contains("marketplace_card: true")
+    cardSplitAtlanYaml.contains("marketplace_card: false")
+  }
+
+  ["Card-split example: no deploy block, no workflow config (no-pipeline app)"] {
+    !cardSplitAtlanYaml.contains("deploy:")
+    // No app/generated files — pipeline is publish=null and no extract node
+    !cardSplitApp.output.files.containsKey("app/generated/card-split.json")
+    !cardSplitApp.output.files.containsKey("app/generated/manifest.json")
   }
 
 }

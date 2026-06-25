@@ -1,0 +1,21 @@
+# AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY.
+# To regenerate: pkl eval -m . contract/app.pkl
+name: card-split
+display_name: Card Split Example
+type: connector
+execution_mode: native
+icon_url: https://assets.atlan.com/assets/fullscreen-open.svg
+visibility: public
+build_tag: v1
+self_deployed_runtime: true
+entrypoints:
+- name: extract
+  display_name: Extract
+  icon_url: https://assets.atlan.com/assets/fullscreen-open.svg
+  type: connector
+  marketplace_card: true
+- name: extract-lineage
+  display_name: Extract Lineage
+  icon_url: https://assets.atlan.com/assets/fullscreen-open.svg
+  type: connector
+  marketplace_card: false

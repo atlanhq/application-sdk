@@ -29,6 +29,7 @@
 open module com.atlan.app.contract.App
 
 import "Connectors.pkl"
+import "Deployment.pkl"
 import "Widgets.pkl"
 
 // ── WIDGET TYPE RE-EXPORTS ────────────────────────────────────────────────────
@@ -84,6 +85,16 @@ typealias Condition = Widgets.Condition
 typealias InputRepeater = Widgets.InputRepeater
 typealias Schedule = Widgets.Schedule
 typealias CustomWidget = Widgets.CustomWidget
+
+// ── DEPLOYMENT TYPE RE-EXPORTS ────────────────────────────────────────────────
+// Typealiases so amending contracts write `new DeployConfig { }`, `new KedaConfig { }`, etc.
+// without needing a supplemental `import "@app-contract-toolkit/Deployment.pkl"`.
+
+typealias DaprComponents = Deployment.DaprComponents
+typealias KedaTemporalConfig = Deployment.KedaTemporalConfig
+typealias KedaConfig = Deployment.KedaConfig
+typealias ResourceConfig = Deployment.ResourceConfig
+typealias DeployConfig = Deployment.DeployConfig
 
 // ── CONSTRAINED TYPES ────────────────────────────────────────────────────────
 
@@ -1412,53 +1423,6 @@ class Pipeline {
 
   /// Publish step. Default-on. Set to `null` to opt out.
   publish: PublishStep? = new PublishStep {}
-}
-
-// ── Deploy config classes ─────────────────────────────────────────────────────
-
-/// Dapr component flags. Each boolean controls whether the component sidecar
-/// is wired into the app deployment.
-class DaprComponents {
-  objectstore: Boolean = false
-  secretstore: Boolean = false
-  statestore: Boolean = false
-  eventstore: Boolean = false
-  subscription: Boolean = false
-  configurationstore: Boolean = false
-  lock: Boolean = false
-  /// Full-spec Dapr components that can't be expressed as boolean flags
-  /// (e.g. pubsub.kafka with custom metadata).
-  customComponents: Mapping<String, Any> = new Mapping {}
-}
-
-class KedaTemporalConfig {
-  /// Only `targetQueueSize` is read by the Helm chart — NOT the top-level
-  /// `keda.targetQueueSize`. Always set via this nested path.
-  targetQueueSize: Int = 5
-}
-
-class KedaConfig {
-  enabled: Boolean = true
-  minReplicaCount: Int = 0
-  temporal: KedaTemporalConfig = new KedaTemporalConfig {}
-}
-
-class ResourceConfig {
-  requests: Mapping<String, String> = new Mapping {}
-  limits: Mapping<String, String> = new Mapping {}
-}
-
-/// Typed deployment configuration rendered into `atlan.yaml`'s `deploy:` block.
-class DeployConfig {
-  executionMode: String = "native"
-  splitDeployment: Boolean = true
-  /// Ignored when keda.enabled = true (KEDA manages replica count).
-  replicaCount: Int? = null
-  dapr: DaprComponents = new DaprComponents {}
-  keda: KedaConfig = new KedaConfig {}
-  resources: ResourceConfig? = null
-  env: Mapping<String, String> = new Mapping {}
-  envOverrides: Mapping<String, Mapping<String, String>> = new Mapping {}
 }
 
 // ── Entrypoint class ──────────────────────────────────────────────────────────

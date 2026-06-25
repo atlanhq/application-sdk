@@ -97,6 +97,7 @@ The `examples/` directory contains executable contracts that teach stable toolki
 - [`examples/minimal/`](examples/minimal/) — smallest possible contract; uses all defaults. Start here.
 - [`examples/full/`](examples/full/) — every overridable feature: JDBC URL auth, all pipeline steps, diverse widgets, UIRules, extraNodes.
 - [`examples/bundle/`](examples/bundle/) — multi-entrypoint app (crawler + miner); shared credential configmap; per-entrypoint artifact subfolders.
+- [`examples/card-split/`](examples/card-split/) — two entrypoints where only one is a marketplace UI card (`marketplaceCard = false` on the route-only entrypoint).
 - [`examples/deploy/`](examples/deploy/) — typed `deploy` block: KEDA, Dapr, resources, env, `deployOverrides`.
 - [`examples/connection-ref/`](examples/connection-ref/) — `ConnectionRefInput` widget, `pipeline.publish = null`.
 - [`examples/publish-controls/`](examples/publish-controls/) — publish toggles, `includeInputFields`, `errorHandling`.
@@ -167,7 +168,7 @@ The single entry point for all new native app contracts. Amend this module and d
 - Pipeline: typed `pipeline` block (extract → parseQueries → popularity → lineage → publish)
 - Deployment: typed `deploy` block (KEDA, Dapr, resources, env) — gated by `emitDeploy = true`; omitted by default
 
-All domain classes (`FieldSpec`, `AuthOption`, `UIConfig`, `UIRule`, `Entrypoint`, pipeline step classes, `DeployConfig`, `DaprComponents`, `KedaConfig`, `ResourceConfig`, `ErrorHandlingConfig`, `DependencyCondition`, `DAGNode`, etc.) are defined in `App.pkl` and available directly in amending modules without additional imports.
+All domain classes (`FieldSpec`, `AuthOption`, `UIConfig`, `UIRule`, `Entrypoint`, pipeline step classes, `DeployConfig`, `DaprComponents`, `KedaConfig`, `ResourceConfig`, `ErrorHandlingConfig`, `DependencyCondition`, `DAGNode`, etc.) are available directly in amending modules without additional imports. Deploy config classes (`DeployConfig`, `DaprComponents`, `KedaConfig`, `KedaTemporalConfig`, `ResourceConfig`) are defined in `Deployment.pkl` and re-exported by `App.pkl`.
 
 Widget types are re-exported via `Widgets` (itself re-exported from `App.pkl`). Amending modules use `Widgets.TextInput`, `Widgets.SqlTree`, etc.
 
