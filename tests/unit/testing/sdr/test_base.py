@@ -131,7 +131,6 @@ def test_manifest_driven_args_built_from_extract_node(
             "typeName": "Connection",
             "attributes": {"qualifiedName": "default/mssql/1700000000"},
         }
-        include_filter = '{"include":"db"}'
         scenarios = []
 
     args = _ManifestSuite()._build_scenario_args(workflow_scenario)
@@ -139,7 +138,6 @@ def test_manifest_driven_args_built_from_extract_node(
     assert args["agent_json"] == _ManifestSuite.agent_spec_template
     assert args["extraction_method"] == "agent"
     assert args["connection"] == _ManifestSuite.default_connection
-    assert args["include_filter"] == '{"include":"db"}'
     assert args["preflight_check"] is True
     # The manifest's sibling inputs.workflow_type (the AE workflow-type slug) must
     # NOT leak into the start body — it's not an SDK entrypoint name and the start
@@ -164,25 +162,37 @@ def test_manifest_workflow_type_is_class_controlled_not_from_manifest(
 
 
 def test_manifest_filters_come_from_per_scenario_metadata(tmp_path) -> None:
-    """Per-scenario metadata filters override class-level defaults, so scenarios
-    that differ only by filter still produce distinct workflow inputs."""
+    """Connector-specific filters are supplied per-scenario via metadata (the base
+    does NOT enumerate them); a placeholder no scenario covers defaults to "" —
+    never a literal {{...}}."""
 
     class _FilterSuite(BaseSDRIntegrationTest):
         manifest_path = _write_manifest(tmp_path, dict(_ARGS_WITH_AGENT_JSON))
         agent_spec_template = {"agent-name": "a", "secret-path": "p"}
-        include_filter = "CLASS_DEFAULT"
         scenarios = []
 
-    sc = Scenario(
+    with_meta = Scenario(
         name="wf",
         api="workflow",
         assert_that={"success": lambda v: True},
         workflow_timeout=300,
         metadata={"include-filter": '{"^db$":[]}', "exclude-filter": "{}"},
     )
-    args = _FilterSuite()._build_scenario_args(sc)
-    assert args["include_filter"] == '{"^db$":[]}'  # scenario metadata wins
+    args = _FilterSuite()._build_scenario_args(with_meta)
+    assert args["include_filter"] == '{"^db$":[]}'  # from scenario metadata
     assert args["exclude_filter"] == "{}"
+
+    # No metadata for the filter → defaults to "" (extract-everything), and the
+    # placeholder is not left as a literal "{{include-filter}}".
+    without_meta = Scenario(
+        name="wf2",
+        api="workflow",
+        assert_that={"success": lambda v: True},
+        workflow_timeout=300,
+    )
+    args2 = _FilterSuite()._build_scenario_args(without_meta)
+    assert args2["include_filter"] == ""
+    assert args2["exclude_filter"] == ""
 
 
 def test_manifest_missing_agent_json_slot_is_not_injected(

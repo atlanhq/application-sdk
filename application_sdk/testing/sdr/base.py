@@ -79,6 +79,24 @@ def _apply_mustache_subs(obj: Any, subs: dict[str, Any]) -> Any:
     return obj
 
 
+def _collect_placeholders(obj: Any) -> set[str]:
+    """Every exact-match ``{{...}}`` string anywhere in ``obj``.
+
+    Used to default any manifest placeholder no substitution covers to "",
+    so an unset connector-specific slot never leaks a literal ``{{...}}``.
+    """
+    found: set[str] = set()
+    if isinstance(obj, dict):
+        for v in obj.values():
+            found |= _collect_placeholders(v)
+    elif isinstance(obj, list):
+        for x in obj:
+            found |= _collect_placeholders(x)
+    elif isinstance(obj, str) and obj.startswith("{{") and obj.endswith("}}"):
+        found.add(obj)
+    return found
+
+
 class BaseSDRIntegrationTest(BaseIntegrationTest):
     """Base class for SDR integration tests.
 
@@ -110,12 +128,6 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
     #: fails, instead of the test silently passing with a hand-supplied value.
     #: Empty string ("") keeps the legacy hand-written behaviour.
     manifest_path: ClassVar[str] = ""
-
-    #: Table include/exclude filters substituted into the manifest's
-    #: ``{{include-filter}}`` / ``{{exclude-filter}}`` placeholders (manifest
-    #: path only). Default empty — extract everything.
-    include_filter: ClassVar[str] = ""
-    exclude_filter: ClassVar[str] = ""
 
     def _build_scenario_args(self, scenario: Scenario) -> dict[str, Any]:
         args = super()._build_scenario_args(scenario)
@@ -163,31 +175,40 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
         """Build workflow input from the manifest's extract args + substitutions.
 
         Only ``dag.extract.inputs.args`` is substituted — exactly like the e2e /
-        full_dag walker. The substitution keys are the manifest mustache
-        literals; the map is a *superset* of
-        :class:`application_sdk.testing.e2e.substitutions.SQLMustacheSubstitutions`
-        (it also fills ``{{temp-table-regex}}``, and uses an empty
-        ``{{credential-guid}}`` rather than the AE-runtime ``"{{credentialGuid}}"``
-        default — agent mode resolves the credential via ``agent_json``, and an
-        empty guid is falsy / treated-as-absent by the extractor).
+        full_dag walker. The base fills the *universal* SDR slots every
+        SDR-capable connector has (``connection``, ``credential`` /
+        ``credential-guid``, ``extraction-method``, ``agent-json``,
+        ``preflight-check``). Every other ``{{placeholder}}`` the manifest
+        declares is connector-specific — SQL's ``{{include-filter}}`` /
+        ``{{exclude-filter}}`` / table regexes, or whatever another app's contract
+        defines — and is resolved from the per-scenario ``metadata`` (keyed by the
+        placeholder name), so the base stays connector-agnostic. Any placeholder
+        no scenario value covers defaults to "" (extract-everything) and never
+        leaks a literal ``{{...}}``. An empty ``{{credential-guid}}`` is used
+        rather than the AE-runtime ``"{{credentialGuid}}"`` — agent mode resolves
+        the credential via ``agent_json``, and an empty guid is treated-as-absent.
         """
         extract_args = self._manifest_extract_inputs()
         method = "agent" if self.agent_spec_template else "direct"
-        # Per-scenario metadata filters win over the class-level defaults, so
-        # scenarios that differ only by filter still exercise distinct inputs.
         metadata = base_args.get("metadata") or {}
+        # Universal SDR slots — present in every SDR-capable connector's extract args.
         subs: dict[str, Any] = {
             "{{credential}}": None,
             "{{credential-guid}}": "",
             "{{connection}}": base_args.get("connection") or {},
             "{{extraction-method}}": method,
             "{{agent-json}}": self.agent_spec_template or None,
-            "{{include-filter}}": metadata.get("include-filter", self.include_filter),
-            "{{exclude-filter}}": metadata.get("exclude-filter", self.exclude_filter),
-            "{{exclude-table-regex}}": metadata.get("exclude-table-regex", ""),
-            "{{temp-table-regex}}": metadata.get("temp-table-regex", ""),
             "{{preflight-check}}": True,
         }
+        # Connector-specific placeholders are NOT enumerated here — each scenario
+        # supplies them via metadata (keyed by placeholder name). A metadata key
+        # never overrides a universal slot above.
+        for key, value in metadata.items():
+            subs.setdefault("{{" + key + "}}", value)
+        # Anything the manifest declares but no value covered → "" (extract-
+        # everything), so an unset connector-specific slot can't leak a literal {{…}}.
+        for placeholder in _collect_placeholders(extract_args):
+            subs.setdefault(placeholder, "")
         wf_args = _apply_mustache_subs(extract_args, subs)
         # Carry credentials through for the start endpoint (agent mode resolves
         # via agent_json; direct mode + the client's credential provisioning use
