@@ -205,6 +205,7 @@ class AppContext:
     app_name: str
     app_version: str
     run_id: str = field(default_factory=lambda: str(uuid4()))
+    workflow_id: str = field(default="")
     correlation_id: str = field(default="")
     parent_run_id: str | None = None
     started_at: datetime = field(default_factory=_utc_now)
@@ -220,6 +221,8 @@ class AppContext:
     _cancelled: bool = field(default=False, repr=False)
 
     def __post_init__(self) -> None:
+        if not self.workflow_id:
+            self.workflow_id = "local-no-temporal"
         if not self.correlation_id:
             self.correlation_id = str(self.run_id)
 

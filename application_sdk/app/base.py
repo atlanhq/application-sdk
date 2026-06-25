@@ -930,7 +930,7 @@ class App(ABC):
                 (single, "upstream" if single is upstream else "deployment", True)
             ]
 
-        run_prefix = f"artifacts/apps/{self._app_name}/workflows/{self.context.run_id}"
+        run_prefix = f"artifacts/apps/{self._app_name}/workflows/{self.context.workflow_id}/{self.context.run_id}"
         app_prefix = input.tier.upload_prefix(
             run_prefix=run_prefix, app_name=self._app_name
         )
@@ -1574,6 +1574,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
         # from application_sdk.app.client import WorkflowAppClient
         start_time = _safe_now()
         run_id = workflow.info().run_id
+        workflow_id = workflow.info().workflow_id
 
         try:
             with workflow.unsafe.imports_passed_through():
@@ -1596,6 +1597,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
             app_name=app_name,
             app_version=app_version,
             run_id=run_id,
+            workflow_id=workflow_id,
             correlation_id=correlation_id,
             started_at=start_time,
         )
