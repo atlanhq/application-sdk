@@ -146,3 +146,34 @@ def test_resolve_tickets_failsafe_with_thin_history():
     scans = [set(), set()]  # only 2 scans of history (< debounce 3)
     to_close, to_update = rec.resolve_tickets(tickets, scans, debounce=3)
     assert to_close == [] and to_update == []
+
+
+def test_resolve_tickets_closes_on_first_clean_scan_with_debounce_one():
+    # Default behavior: a ticket closes as soon as its CVE is absent from the
+    # latest scan (debounce=1) — no waiting for prior scans.
+    tickets = [_ticket("BLDX-12", ["CVE-Y"])]
+    to_close, _ = rec.resolve_tickets(tickets, [set()], debounce=1)
+    assert [t["identifier"] for t in to_close] == ["BLDX-12"]
+
+
+# ---------------------------------------------------------------------------
+# defaults + close comment
+# ---------------------------------------------------------------------------
+
+
+def test_default_debounce_is_one():
+    assert rec.DEFAULT_DEBOUNCE == 1
+
+
+def test_close_comment_body_mentions_cves_and_run():
+    body = rec.close_comment_body(["CVE-2026-2303"], "https://x/run/1")
+    assert "Auto-resolved" in body
+    assert "`CVE-2026-2303`" in body
+    assert "vulnerability" in body  # singular for one CVE
+    assert "https://x/run/1" in body
+
+
+def test_close_comment_body_plural_and_no_run_url():
+    body = rec.close_comment_body(["CVE-1", "CVE-2"], "")
+    assert "vulnerabilities" in body  # plural for two
+    assert "Reconcile run:" not in body  # omitted when no run URL

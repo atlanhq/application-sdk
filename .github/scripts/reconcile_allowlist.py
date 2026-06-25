@@ -5,11 +5,11 @@ Closing the loop on the zero-human-touch CVE flow: once a CVE stops showing up
 in the scan (its bump merged & shipped, or the base image was rebuilt), its
 allowlist entry and Linear ticket should be retired automatically.
 
-**3-consecutive-clean-scan debounce.** A CVE is treated as *resolved* only if it
-is absent from the current scan AND the previous two hourly scans (three runs in
-agreement). CVEs vanish transiently — Trivy DB reclassification, a partial scan,
-or the `uv sync` native-lockfile step not materializing a wheel — so a single
-clean scan is not enough to yank a valid suppression.
+**Resolution & debounce.** By default a CVE is treated as *resolved* as soon as
+it is absent from the latest scan (`DEBOUNCE_SCANS` = 1). Raise `DEBOUNCE_SCANS`
+to require it to be absent from that many consecutive successful scans before
+acting — a debounce against transient drops (Trivy DB reclassification, a partial
+scan, or the `uv sync` native-lockfile step not materializing a wheel).
 
 Two INDEPENDENT actions run off the same scan history (don't couple them):
   * **Allowlist removal PR** — for *allowlisted* CVEs gone for `debounce` scans:
@@ -34,7 +34,8 @@ Environment:
 
 Optional:
     LINEAR_VULN_LABEL_NAME  default 'vulnerabilities'
-    DEBOUNCE_SCANS          default 3 (this scan + N-1 prior)
+    DEBOUNCE_SCANS          default 1 — act on the first clean scan (this scan +
+                            N-1 prior successful scans); raise to debounce churn
 """
 
 from __future__ import annotations
@@ -56,6 +57,10 @@ Runner = Callable[..., subprocess.CompletedProcess]
 ALLOWLIST_PATH = ".security/base-allowlist.json"
 TRIVY_FILES = ["trivy-image-results.json", "trivy-fs-results.json"]
 DEFAULT_WORKFLOW = "daily-security-scan.yml"
+# Act on the first clean scan by default; both the allowlist removal PR and the
+# ticket close are gated on this same window. Raise via DEBOUNCE_SCANS to require
+# N consecutive clean scans (debounce against transient scanner drops).
+DEFAULT_DEBOUNCE = 1
 
 
 # ---------------------------------------------------------------------------
@@ -295,6 +300,41 @@ def close_ticket(issue_id: str, state_id: str) -> None:
     )
 
 
+def comment_on_ticket(issue_id: str, body: str) -> None:
+    ssl.gql(
+        """
+        mutation Comment($input: CommentCreateInput!) {
+          commentCreate(input: $input) { success }
+        }
+        """,
+        {"input": {"issueId": issue_id, "body": body}},
+    )
+
+
+def _run_url() -> str:
+    """The reconcile workflow run URL, from GitHub-provided env (empty locally)."""
+    server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
+    repo = os.environ.get("GITHUB_REPOSITORY", "")
+    run_id = os.environ.get("GITHUB_RUN_ID", "")
+    return f"{server}/{repo}/actions/runs/{run_id}" if repo and run_id else ""
+
+
+def close_comment_body(cves: list[str], run_url: str) -> str:
+    """The explanatory comment posted on a ticket as it is auto-closed."""
+    plural = "y" if len(cves) == 1 else "ies"
+    cve_list = ", ".join(f"`{c}`" for c in sorted(cves))
+    lines = [
+        "**Auto-resolved by the hourly security scan.**",
+        "",
+        f"The scanner no longer reports the tracked vulnerabilit{plural} "
+        f"({cve_list}), so this ticket is being closed automatically. If the "
+        "finding resurfaces, the next scan files a fresh ticket.",
+    ]
+    if run_url:
+        lines += ["", f"Reconcile run: {run_url}"]
+    return "\n".join(lines)
+
+
 def rewrite_marker(issue_id: str, description: str, remaining_ids: list[str]) -> None:
     marker = (
         f"{ssl.VULN_MARKER_PREFIX}{','.join(remaining_ids)}{ssl.VULN_MARKER_SUFFIX}"
@@ -336,8 +376,11 @@ def reconcile_tickets(scan_sets: list[set[str]], debounce: int) -> None:
         print("No open ticket has its tracked CVE(s) resolved — nothing to close.")
         return
     done_state = resolve_done_state_id(team_id) if to_close else None
+    run_url = _run_url()
     for t in to_close:
         if done_state:
+            cves = sorted(ssl.extract_vuln_ids_from_description(t.get("description")))
+            comment_on_ticket(t["id"], close_comment_body(cves, run_url))
             close_ticket(t["id"], done_state)
             print(f"Closed {t['identifier']} (all tracked CVEs resolved).")
         else:
@@ -366,7 +409,7 @@ def main(runner: Runner = subprocess.run) -> int:
     repo = os.environ.get("REPO", "atlanhq/application-sdk")
     workflow = os.environ.get("SCAN_WORKFLOW", DEFAULT_WORKFLOW)
     run_date = os.environ.get("RUN_DATE", "")
-    debounce = int(os.environ.get("DEBOUNCE_SCANS", "3"))
+    debounce = int(os.environ.get("DEBOUNCE_SCANS", str(DEFAULT_DEBOUNCE)))
 
     current = load_current_cves()
     priors = load_prior_scan_cves(repo, workflow, debounce - 1, runner)
