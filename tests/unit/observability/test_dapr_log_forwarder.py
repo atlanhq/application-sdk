@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import MagicMock, patch
 
@@ -81,7 +82,7 @@ class TestMakeEmitter:
             "application_sdk.observability.logger_adaptor.get_logger",
             return_value=fake_logger,
         ):
-            emit = dlf._make_emitter()
+            emit, _complete = dlf._make_emitter()
             emit("warning", "hello")
         fake_logger.warning.assert_called_once_with("hello")
 
@@ -91,7 +92,7 @@ class TestMakeEmitter:
             "application_sdk.observability.logger_adaptor.get_logger",
             return_value=fake_logger,
         ):
-            emit = dlf._make_emitter()
+            emit, _complete = dlf._make_emitter()
             emit("nonsense", "hello")
         fake_logger.info.assert_called_once_with("hello")
 
@@ -100,8 +101,9 @@ class TestMakeEmitter:
             "application_sdk.observability.logger_adaptor.get_logger",
             side_effect=RuntimeError("boom"),
         ):
-            emit = dlf._make_emitter()
+            emit, complete = dlf._make_emitter()
             emit("error", "still visible")
+        assert complete is None
         assert "still visible" in capsys.readouterr().err
 
     def test_emit_failure_falls_back_to_stderr(self, capsys):
@@ -111,9 +113,35 @@ class TestMakeEmitter:
             "application_sdk.observability.logger_adaptor.get_logger",
             return_value=fake_logger,
         ):
-            emit = dlf._make_emitter()
+            emit, _complete = dlf._make_emitter()
             emit("warning", "fallback line")
         assert "fallback line" in capsys.readouterr().err
+
+
+class _FakeStdout:
+    """Async-iterable stand-in for ``proc.stdout`` yielding raw bytes lines."""
+
+    def __init__(self, lines: list[bytes]):
+        self._lines = list(lines)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> bytes:
+        if not self._lines:
+            raise StopAsyncIteration
+        return self._lines.pop(0)
+
+
+class _FakeProc:
+    def __init__(self, lines: list[bytes], returncode: int):
+        self.stdout = _FakeStdout(lines)
+        self.returncode = None
+        self._rc = returncode
+
+    async def wait(self) -> int:
+        self.returncode = self._rc
+        return self._rc
 
 
 class TestMain:
@@ -134,46 +162,57 @@ class TestMain:
                 dlf.main(["dapr_log_forwarder", "--", "daprd", "--app-id", "app"])
         exec_mock.assert_called_once_with(["daprd", "--app-id", "app"])
 
+
+class TestRun:
     def test_forwards_each_line_and_returns_child_exit_code(self):
         lines = [
-            json.dumps({"level": "warning", "msg": "w", "scope": "s"}) + "\n",
-            json.dumps({"level": "error", "msg": "e"}) + "\n",
+            (
+                json.dumps({"level": "warning", "msg": "w", "scope": "s"}) + "\n"
+            ).encode(),
+            (json.dumps({"level": "error", "msg": "e"}) + "\n").encode(),
         ]
-        fake_proc = MagicMock()
-        fake_proc.stdout = iter(lines)
-        fake_proc.poll.return_value = None
-        fake_proc.wait.return_value = 0
-
+        fake_proc = _FakeProc(lines, returncode=0)
         emitted: list[tuple[str, str]] = []
+
+        async def _create(*_a, **_k):
+            return fake_proc
+
         with (
-            patch("application_sdk.constants.ENABLE_ATLAN_UPLOAD", True),
             patch.object(
                 dlf,
                 "_make_emitter",
-                return_value=lambda lvl, msg: emitted.append((lvl, msg)),
+                return_value=(lambda lvl, msg: emitted.append((lvl, msg)), None),
             ),
-            patch.object(dlf.subprocess, "Popen", return_value=fake_proc),
-            patch.object(dlf.signal, "signal"),
-            patch.object(dlf, "_flush_observability"),
+            patch.object(dlf.asyncio, "create_subprocess_exec", _create),
+            patch.object(dlf, "_install_signal_forwarding"),
+            patch.object(dlf, "_drain_and_flush", new=_async_noop),
         ):
-            rc = dlf.main(["dapr_log_forwarder", "--", "daprd"])
+            rc = asyncio.run(dlf._run(["daprd"]))
 
         assert rc == 0
         assert emitted == [("warning", "[s] w"), ("error", "e")]
 
-    def test_flushes_observability_on_exit(self):
-        fake_proc = MagicMock()
-        fake_proc.stdout = iter([])
-        fake_proc.wait.return_value = 3
+    def test_drains_and_flushes_on_exit(self):
+        fake_proc = _FakeProc([], returncode=3)
+        flushed: list[bool] = []
+
+        async def _create(*_a, **_k):
+            return fake_proc
+
+        async def _drain(_complete):
+            flushed.append(True)
 
         with (
-            patch("application_sdk.constants.ENABLE_ATLAN_UPLOAD", True),
-            patch.object(dlf, "_make_emitter", return_value=lambda *a: None),
-            patch.object(dlf.subprocess, "Popen", return_value=fake_proc),
-            patch.object(dlf.signal, "signal"),
-            patch.object(dlf, "_flush_observability") as flush_mock,
+            patch.object(dlf, "_make_emitter", return_value=(lambda *a: None, None)),
+            patch.object(dlf.asyncio, "create_subprocess_exec", _create),
+            patch.object(dlf, "_install_signal_forwarding"),
+            patch.object(dlf, "_drain_and_flush", new=_drain),
         ):
-            rc = dlf.main(["dapr_log_forwarder", "--", "daprd"])
+            rc = asyncio.run(dlf._run(["daprd"]))
 
         assert rc == 3
-        flush_mock.assert_called_once()
+        assert flushed == [True]
+
+
+async def _async_noop(*_args, **_kwargs):
+    return None
