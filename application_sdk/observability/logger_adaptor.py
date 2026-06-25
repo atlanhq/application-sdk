@@ -2,6 +2,7 @@ import asyncio
 import logging
 import sys
 import threading
+import time
 import traceback as tb_module
 from typing import Any, ClassVar
 
@@ -17,8 +18,10 @@ from application_sdk.constants import (
     ENABLE_OBSERVABILITY_STORE_SINK,
     ENABLE_OTLP_LOGS,
     ENABLE_OTLP_WORKFLOW_LOGS,
+    ENABLE_WORKFLOW_REPLAY_LOGS,
     LOG_BATCH_SIZE,
     LOG_CLEANUP_ENABLED,
+    LOG_CLOUDFLARE_504_SUMMARY_INTERVAL_SECONDS,
     LOG_FILE_NAME,
     LOG_FLUSH_INTERVAL_SECONDS,
     LOG_LEVEL,
@@ -31,7 +34,14 @@ from application_sdk.constants import (
     OTEL_WORKFLOW_LOGS_ENDPOINT,
     SERVICE_NAME,
 )
-from application_sdk.observability.context import correlation_context, request_context
+from application_sdk.observability.context import (
+    correlation_context,
+    is_replaying,
+    request_context,
+)
+from application_sdk.observability.logger_adaptor_errors import (
+    UnsupportedLogRecordError,
+)
 from application_sdk.observability.observability import AtlanObservability
 from application_sdk.observability.utils import (
     build_otel_resource,
@@ -131,6 +141,10 @@ _PREFIXES_PASSTHROUGH = (
     "otel.",  # OTel semconv: otel.status_code
     "temporal.",  # SDK convention: temporal.workflow.id, etc.
     "tenant.",
+    "workflow_run.",  # AE convention: workflow_run.terminated / workflow_run.node
+    # events emitted from AutomationEngineWorkflow's finally block,
+    # carrying typed FailureDetails (category, code, audience,
+    # retryable, evidence) projected from the cause chain.
 )
 
 
@@ -226,8 +240,9 @@ def _format_printf_args(msg: str, args: tuple[Any, ...]) -> tuple[str, tuple[Any
     if args:
         try:
             return msg % args, ()
+        # conformance: ignore[E002] %-substitution mismatch; loguru handles {}-style — logging adapter, would recurse
         except (TypeError, ValueError):
-            pass  # {} style or mismatch — let loguru handle it
+            pass
     return msg, args
 
 
@@ -243,6 +258,7 @@ def _has_remote_otlp_endpoint() -> bool:
 
         host = urlparse(ep).hostname or ""
         return host not in ("", "localhost", "127.0.0.1", "::1")
+    # conformance: ignore[E004] probe/feature-detect for OTEL endpoint; swallows parse errors and treats as local
     except Exception:
         logging.debug("OTEL endpoint check failed, treating as local", exc_info=True)
         return False
@@ -260,6 +276,68 @@ _LOGRECORD_RESERVED_ATTRS: frozenset[str] = frozenset(
 )
 
 
+def _apply_atlan_context(kwargs: dict[str, Any], *, prefer_caller: bool) -> None:
+    """Inject request / workflow / correlation context into log ``kwargs``.
+
+    Called by both :meth:`AtlanLoggerAdapter.process` (the SDK-adapter path)
+    and :meth:`InterceptHandler.emit` (the stdlib-bridge path) so that every
+    log record — SDK-emitted or stdlib / third-party — carries the same Atlan
+    context fields (``app_name``, ``request_id``, workflow / activity context,
+    ``trace_id`` / ``correlation_id``, ``atlan-`` / ``temporal.`` / ``tenant.``
+    prefixed headers).
+
+    Args:
+        kwargs: Mutable dict of log kwargs (these become loguru ``extra``).
+        prefer_caller: If ``True``, only fill keys that aren't already present —
+            caller-supplied ``extra={...}`` wins over auto-injection. Used by
+            the stdlib-bridge path. If ``False``, overwrite existing keys —
+            the legacy SDK-adapter behaviour.
+    """
+    assign = kwargs.setdefault if prefer_caller else kwargs.__setitem__
+
+    ctx = request_context.get()
+    if ctx and "request_id" in ctx:
+        assign("request_id", ctx["request_id"])
+
+    workflow_context = get_workflow_context()
+    if (
+        workflow_context.get("in_workflow") == "true"
+        or workflow_context.get("in_activity") == "true"
+    ):
+        if prefer_caller:
+            for k, v in workflow_context.items():
+                kwargs.setdefault(k, v)
+        else:
+            kwargs.update(workflow_context)
+
+    # Add correlation context (atlan-, temporal., tenant. prefixed keys,
+    # trace_id, correlation_id) to kwargs.
+    corr_ctx = correlation_context.get()
+    if corr_ctx:
+        if corr_ctx.get("trace_id"):
+            assign("trace_id", str(corr_ctx["trace_id"]))
+        if corr_ctx.get("correlation_id"):
+            assign("correlation_id", str(corr_ctx["correlation_id"]))
+        for key, value in corr_ctx.items():
+            if key.startswith(("atlan-", "temporal.", "tenant.")) and value:
+                if isinstance(value, (bool, int, float, str, bytes)):
+                    assign(key, value)
+                else:
+                    assign(key, str(value))
+
+    # Bridge: if legacy correlation_context dict didn't supply correlation_id,
+    # read from v3 CorrelationContext ContextVar (set by the v3
+    # CorrelationContextInterceptor).
+    if "correlation_id" not in kwargs:
+        from application_sdk.observability.correlation import (  # noqa: PLC0415 — circular: observability is imported transitively by many modules; lifting risks circles
+            get_correlation_context,
+        )
+
+        v3_ctx = get_correlation_context()
+        if v3_ctx and v3_ctx.correlation_id:
+            kwargs["correlation_id"] = v3_ctx.correlation_id
+
+
 class InterceptHandler(logging.Handler):
     """Bridge Python's stdlib logging into loguru, preserving ``extra={...}``.
 
@@ -271,10 +349,16 @@ class InterceptHandler(logging.Handler):
     """
 
     def emit(self, record: logging.LogRecord) -> None:
+        # Suppress stdlib/third-party logs emitted from within a replaying
+        # workflow so they don't duplicate alongside SDK-adapter logs.
+        # Honour the same ENABLE_WORKFLOW_REPLAY_LOGS env toggle.
+        if not ENABLE_WORKFLOW_REPLAY_LOGS and is_replaying():
+            return
+
         # Get corresponding Loguru level if it exists
         try:
             level = logger.level(record.levelname).name
-        except ValueError:
+        except ValueError:  # conformance: ignore[E009] unknown log level; numeric levelno fallback is benign
             level = record.levelno
 
         # Find caller from where originated the logged message
@@ -291,7 +375,7 @@ class InterceptHandler(logging.Handler):
         # Forward caller-supplied ``extra={...}``. Python's stdlib spreads
         # ``extra`` directly into ``record.__dict__``; the delta vs. a blank
         # LogRecord is exactly what the caller passed.
-        logger_extras: dict[str, object] = {
+        logger_extras: dict[str, Any] = {
             k: v
             for k, v in record.__dict__.items()
             if k not in _LOGRECORD_RESERVED_ATTRS
@@ -299,14 +383,77 @@ class InterceptHandler(logging.Handler):
         # SDK convention: ``logger_name`` always tracks ``record.name``.
         # Set last so callers can't shadow it via ``extra``.
         logger_extras["logger_name"] = record.name
+        # Mirror :meth:`AtlanLoggerAdapter.process` enrichment so stdlib /
+        # third-party log records (httpx, boto3, ``logging.getLogger(__name__)``)
+        # carry the same Atlan context as SDK-adapter records. ``prefer_caller``
+        # / ``setdefault`` preserves any field the caller explicitly set via
+        # ``extra={"app_name": "X", ...}``.
+        logger_extras.setdefault("app_name", APPLICATION_NAME)
+        _apply_atlan_context(logger_extras, prefer_caller=True)
 
         logger.opt(depth=depth, exception=record.exc_info).bind(**logger_extras).log(
             level, record.getMessage()
         )
 
 
+class _CloudflareTimeoutFilter(logging.Filter):
+    """Suppress Cloudflare 504 long-poll noise from the Temporal gRPC bridge.
+
+    Cloudflare closes idle long-poll connections with an HTTP 504 whose HTML body
+    the Rust Temporal SDK misreads as an invalid gRPC compression flag (ASCII
+    '<' = 60).  The SDK logs this at ERROR and immediately retries — the worker
+    is unaffected.  See TFKB ERROR-NET-001.
+
+    An INFO summary is emitted on the first occurrence and at most once per
+    minute thereafter, so the pattern stays visible without flooding logs.
+    """
+
+    _WARN_INTERVAL: ClassVar[float] = LOG_CLOUDFLARE_504_SUMMARY_INTERVAL_SECONDS
+    _last_emitted: ClassVar[dict[str, float]] = {}
+    _counts: ClassVar[dict[str, int]] = {}
+    _lock: ClassVar[threading.Lock] = threading.Lock()
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            if record.levelno != logging.ERROR or not record.name.startswith(
+                "temporalio"
+            ):
+                return True
+            msg = record.getMessage()
+            if (
+                "invalid compression flag: 60"
+                in msg  # ASCII '<' = first byte of HTML 504
+                and "504 Gateway Timeout" in msg
+                and "poll_workflow_task_queue" in msg
+            ):
+                with self._lock:
+                    self._counts[record.name] = self._counts.get(record.name, 0) + 1
+                    count = self._counts[record.name]
+                    now = time.monotonic()
+                    # Seed with now - interval so the very first occurrence always fires
+                    last = self._last_emitted.get(
+                        record.name, now - self._WARN_INTERVAL
+                    )
+                    should_emit = (now - last) >= self._WARN_INTERVAL
+                    if should_emit:
+                        self._last_emitted[record.name] = now
+                if should_emit:
+                    get_logger(__name__).info(
+                        f"Cloudflare 504 timeout on poll_workflow_task_queue"
+                        f" (occurrence {count} — expected, worker retrying normally,"
+                        " TFKB ERROR-NET-001)"
+                    )
+                return False
+            return True
+        # conformance: ignore[E004] filter infra; any failure safely defaults to emitting the record
+        except Exception:
+            return True  # conformance: ignore[E007] logging adapter; log call would recurse; returning default is correct fallback
+
+
+_intercept_handler = InterceptHandler()
+_intercept_handler.addFilter(_CloudflareTimeoutFilter())
 logging.basicConfig(
-    level=logging.getLevelNamesMapping()[LOG_LEVEL], handlers=[InterceptHandler()]
+    level=logging.getLevelNamesMapping()[LOG_LEVEL], handlers=[_intercept_handler]
 )
 
 DEPENDENCY_LOGGERS = ["daft_io.stats", "tracing.span", "httpx"]
@@ -374,6 +521,17 @@ class _LazyLoggerProxy:
         except Exception:
             logging.error("Error in lazy critical logging", exc_info=True)
 
+    def log(self, level: int, msg: str, *args: Any, **kwargs: Any) -> None:
+        """Dispatch to the named level method matching stdlib integer *level*."""
+        if level >= logging.ERROR:
+            self.error(msg, *args, **kwargs)
+        elif level >= logging.WARNING:
+            self.warning(msg, *args, **kwargs)
+        elif level >= logging.INFO:
+            self.info(msg, *args, **kwargs)
+        else:
+            self.debug(msg, *args, **kwargs)
+
 
 class AtlanLoggerAdapter(AtlanObservability[Any]):
     """A custom logger adapter for Atlan that extends AtlanObservability.
@@ -430,6 +588,13 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         self.logger_name = logger_name
         # Bind the logger name when creating the logger instance
         self.logger = logger
+        # Suppress workflow-body logs during Temporal replay by default,
+        # matching the behaviour of Temporal's native ``workflow.logger``
+        # (``log_during_replay=False``).  Set to True on this instance — or
+        # export ENABLE_WORKFLOW_REPLAY_LOGS=true — to re-enable replay logs
+        # for debugging (e.g. when using ``temporalio.worker.Replayer``
+        # locally to inspect workflow history).
+        self.log_during_replay: bool = ENABLE_WORKFLOW_REPLAY_LOGS
 
         if AtlanLoggerAdapter._initialized:
             return
@@ -606,7 +771,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         if isinstance(record, dict):
             return record
 
-        raise ValueError(f"Unsupported record format: {type(record)}")
+        raise UnsupportedLogRecordError(observed_type=type(record).__name__)
 
     def export_record(self, record: Any) -> None:
         """Export a log record to external systems.
@@ -701,53 +866,24 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         """
         kwargs["logger_name"] = self.logger_name
         kwargs["app_name"] = APPLICATION_NAME
-
-        # Get request context
-        ctx = request_context.get()
-        if ctx and "request_id" in ctx:
-            kwargs["request_id"] = ctx["request_id"]
-
-        workflow_context = get_workflow_context()
-
-        if (
-            workflow_context.get("in_workflow") == "true"
-            or workflow_context.get("in_activity") == "true"
-        ):
-            kwargs.update(workflow_context)
-
-        # Add correlation context (atlan-, temporal., tenant. prefixed keys, trace_id, correlation_id) to kwargs
-        corr_ctx = correlation_context.get()
-        if corr_ctx:
-            # Add trace_id if present (for log format display)
-            if corr_ctx.get("trace_id"):
-                kwargs["trace_id"] = str(corr_ctx["trace_id"])
-            # Add correlation_id if present (AppWorkflowRun GUID for e2e correlation)
-            if corr_ctx.get("correlation_id"):
-                kwargs["correlation_id"] = str(corr_ctx["correlation_id"])
-            # Add atlan-* headers for OTEL
-            for key, value in corr_ctx.items():
-                if (
-                    key.startswith("atlan-")
-                    or key.startswith("temporal.")
-                    or key.startswith("tenant.")
-                ) and value:
-                    if isinstance(value, (bool, int, float, str, bytes)):
-                        kwargs[key] = value
-                    else:
-                        kwargs[key] = str(value)
-
-        # Bridge: if legacy correlation_context dict is empty, read from v3
-        # CorrelationContext ContextVar (set by the v3 CorrelationContextInterceptor).
-        if "correlation_id" not in kwargs:
-            from application_sdk.observability.correlation import (  # noqa: PLC0415 — circular: observability is imported transitively by many modules; lifting risks circles
-                get_correlation_context,
-            )
-
-            v3_ctx = get_correlation_context()
-            if v3_ctx and v3_ctx.correlation_id:
-                kwargs["correlation_id"] = v3_ctx.correlation_id
-
+        # Enrichment is shared with :class:`InterceptHandler` so stdlib-bridged
+        # records carry the same Atlan context; see :func:`_apply_atlan_context`.
+        # ``prefer_caller=False`` preserves the historic SDK-adapter behaviour
+        # of overwriting any caller-supplied value with the live context.
+        _apply_atlan_context(kwargs, prefer_caller=False)
         return msg, kwargs
+
+    def _suppress_replay_log(self) -> bool:
+        """Return True when the current log call should be dropped.
+
+        Suppresses if ``log_during_replay`` is False AND the current execution
+        is inside a replaying Temporal workflow.  Returns False immediately
+        (single ContextVar.get()) for all non-workflow contexts — activities,
+        HTTP, CLI, tests — with no callable invocation or exception overhead.
+        """
+        if self.log_during_replay:
+            return False
+        return is_replaying()
 
     def debug(self, msg: str, *args: Any, **kwargs: Any):
         """Log a debug level message.
@@ -757,6 +893,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             *args: Additional positional arguments
             **kwargs: Additional keyword arguments for context
         """
+        if self._suppress_replay_log():
+            return
         try:
             msg, args = _format_printf_args(msg, args)
             exc_info = kwargs.pop("exc_info", False)
@@ -778,6 +916,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             *args: Additional positional arguments
             **kwargs: Additional keyword arguments for context
         """
+        if self._suppress_replay_log():
+            return
         try:
             msg, args = _format_printf_args(msg, args)
             exc_info = kwargs.pop("exc_info", False)
@@ -799,6 +939,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             *args: Additional positional arguments
             **kwargs: Additional keyword arguments for context
         """
+        if self._suppress_replay_log():
+            return
         try:
             msg, args = _format_printf_args(msg, args)
             exc_info = kwargs.pop("exc_info", False)
@@ -822,6 +964,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
 
         Note: Forces an immediate flush of logs when called.
         """
+        if self._suppress_replay_log():
+            return
         try:
             msg, args = _format_printf_args(msg, args)
             exc_info = kwargs.pop("exc_info", False)
@@ -862,6 +1006,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
 
         Note: Forces an immediate flush of logs when called.
         """
+        if self._suppress_replay_log():
+            return
         try:
             msg, args = _format_printf_args(msg, args)
             exc_info = kwargs.pop("exc_info", False)
@@ -876,6 +1022,23 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         except Exception:
             logging.error("Error in critical logging", exc_info=True)
             self._sync_flush()
+
+    def log(self, level: int, msg: str, *args: Any, **kwargs: Any) -> None:
+        """Dispatch to the named level method matching stdlib integer *level*.
+
+        Accepts the same stdlib ``logging.DEBUG`` / ``logging.INFO`` /
+        ``logging.WARNING`` / ``logging.ERROR`` integer constants so callers
+        can vary the level at runtime without building a dispatch table
+        themselves.
+        """
+        if level >= logging.ERROR:
+            self.error(msg, *args, **kwargs)
+        elif level >= logging.WARNING:
+            self.warning(msg, *args, **kwargs)
+        elif level >= logging.INFO:
+            self.info(msg, *args, **kwargs)
+        else:
+            self.debug(msg, *args, **kwargs)
 
     def opt(
         self, *, lazy: bool = False, **loguru_opt_kwargs: Any
@@ -904,6 +1067,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
 
         This method adds activity-specific context to the log message.
         """
+        if self._suppress_replay_log():
+            return
         try:
             msg, args = _format_printf_args(msg, args)
             local_kwargs = kwargs.copy()
@@ -924,6 +1089,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
 
         This method adds metric-specific context to the log message.
         """
+        if self._suppress_replay_log():
+            return
         try:
             msg, args = _format_printf_args(msg, args)
             local_kwargs = kwargs.copy()
@@ -987,6 +1154,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
 
         This method adds trace-specific context to the log message.
         """
+        if self._suppress_replay_log():
+            return
         msg, args = _format_printf_args(msg, args)
         local_kwargs = kwargs.copy()
         local_kwargs["log_type"] = "trace"

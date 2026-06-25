@@ -1,0 +1,65 @@
+{
+  "id": "miner",
+  "name": "Query Miner",
+  "logo": "https://assets.atlan.com/assets/snowflake.svg",
+  "config": {
+    "properties": {
+      "credential-guid": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "credential",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "grid": 8,
+          "credentialType": "atlan-connectors-bundle",
+          "isTestAuthenticationDisabled": false
+        }
+      },
+      "lookback-days": {
+        "type": "number",
+        "required": false,
+        "ui": {
+          "widget": "inputNumber",
+          "label": "Query lookback (days)",
+          "hidden": false,
+          "help": "Number of days of query history to mine.",
+          "grid": 4
+        },
+        "default": 30
+      },
+      "max-queries": {
+        "type": "number",
+        "required": false,
+        "ui": {
+          "widget": "inputNumber",
+          "label": "Max queries",
+          "hidden": false,
+          "help": "Cap on the number of queries to mine per run. 0 = unlimited.",
+          "grid": 4
+        },
+        "default": 0
+      }
+    },
+    "steps": [
+      {
+        "title": "Credential",
+        "description": "",
+        "id": "credential",
+        "properties": [
+          "credential-guid"
+        ]
+      },
+      {
+        "title": "Settings",
+        "description": "",
+        "id": "settings",
+        "properties": [
+          "lookback-days",
+          "max-queries"
+        ]
+      }
+    ]
+  }
+}

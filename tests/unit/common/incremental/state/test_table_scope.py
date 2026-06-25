@@ -98,7 +98,7 @@ class TestGetTableState:
                 super().__init__()
                 self.key_may_exist_calls: list[str] = []
 
-            def key_may_exist(self, key: str) -> bool:  # noqa: D401
+            def key_may_exist(self, key: str) -> bool:
                 self.key_may_exist_calls.append(key)
                 return key in self
 
@@ -168,21 +168,23 @@ class TestGetCurrentTableScope:
 
     def test_loads_tables_with_explicit_states(self):
         """Tables with customAttributes.incremental_state are loaded as-is."""
-        with patch(
-            "application_sdk.common.incremental.state.table_scope.TableScope",
-            side_effect=lambda: TableScope(table_states={}),
+        with (
+            patch(
+                "application_sdk.common.incremental.state.table_scope.TableScope",
+                side_effect=lambda: TableScope(table_states={}),
+            ),
+            tempfile.TemporaryDirectory() as tmp,
         ):
-            with tempfile.TemporaryDirectory() as tmp:
-                transformed = Path(tmp) / "transformed"
-                _write_jsonl(
-                    transformed / "table" / "chunk-0.json",
-                    [
-                        _table("db/s/t1", "CREATED"),
-                        _table("db/s/t2", "UPDATED"),
-                        _table("db/s/t3", "NO CHANGE"),
-                    ],
-                )
-                scope = get_current_table_scope(transformed)
+            transformed = Path(tmp) / "transformed"
+            _write_jsonl(
+                transformed / "table" / "chunk-0.json",
+                [
+                    _table("db/s/t1", "CREATED"),
+                    _table("db/s/t2", "UPDATED"),
+                    _table("db/s/t3", "NO CHANGE"),
+                ],
+            )
+            scope = get_current_table_scope(transformed)
 
         assert scope is not None
         assert get_scope_length(scope) == 3
@@ -191,17 +193,19 @@ class TestGetCurrentTableScope:
 
     def test_falls_back_to_default_state_when_missing(self):
         """Missing customAttributes → default state INCREMENTAL_DEFAULT_STATE."""
-        with patch(
-            "application_sdk.common.incremental.state.table_scope.TableScope",
-            side_effect=lambda: TableScope(table_states={}),
+        with (
+            patch(
+                "application_sdk.common.incremental.state.table_scope.TableScope",
+                side_effect=lambda: TableScope(table_states={}),
+            ),
+            tempfile.TemporaryDirectory() as tmp,
         ):
-            with tempfile.TemporaryDirectory() as tmp:
-                transformed = Path(tmp) / "transformed"
-                _write_jsonl(
-                    transformed / "table" / "chunk-0.json",
-                    [_table("db/s/t1", state=None)],
-                )
-                scope = get_current_table_scope(transformed)
+            transformed = Path(tmp) / "transformed"
+            _write_jsonl(
+                transformed / "table" / "chunk-0.json",
+                [_table("db/s/t1", state=None)],
+            )
+            scope = get_current_table_scope(transformed)
 
         assert scope is not None
         # Default state is "NO CHANGE"
@@ -209,55 +213,64 @@ class TestGetCurrentTableScope:
 
     def test_drops_rows_with_null_qualified_name(self):
         """Rows with null qualifiedName are filtered out via DELETE."""
-        with patch(
-            "application_sdk.common.incremental.state.table_scope.TableScope",
-            side_effect=lambda: TableScope(table_states={}),
+        with (
+            patch(
+                "application_sdk.common.incremental.state.table_scope.TableScope",
+                side_effect=lambda: TableScope(table_states={}),
+            ),
+            tempfile.TemporaryDirectory() as tmp,
         ):
-            with tempfile.TemporaryDirectory() as tmp:
-                transformed = Path(tmp) / "transformed"
-                _write_jsonl(
-                    transformed / "table" / "chunk-0.json",
-                    [
-                        _table("db/s/t1", "CREATED"),
-                        # Row with no qualifiedName attribute
-                        {
-                            "typeName": "Table",
-                            "attributes": {"name": "ghost"},
-                            "customAttributes": "{}",
-                        },
-                    ],
-                )
-                scope = get_current_table_scope(transformed)
+            transformed = Path(tmp) / "transformed"
+            _write_jsonl(
+                transformed / "table" / "chunk-0.json",
+                [
+                    _table("db/s/t1", "CREATED"),
+                    # Row with no qualifiedName attribute
+                    {
+                        "typeName": "Table",
+                        "attributes": {"name": "ghost"},
+                        "customAttributes": "{}",
+                    },
+                ],
+            )
+            scope = get_current_table_scope(transformed)
 
         assert scope is not None
         assert get_scope_length(scope) == 1
         assert "db/s/t1" in scope.table_qualified_names
 
-    def test_failure_closes_scope_and_rewraps(self):
-        """Any DuckDB error is re-wrapped via rewrap and scope closed."""
-        with patch(
-            "application_sdk.common.incremental.state.table_scope.TableScope",
-            side_effect=lambda: TableScope(table_states={}),
-        ):
-            with patch(
+    def test_failure_closes_scope_and_raises_typed_error(self):
+        """Any DuckDB error is raised as TableScopeLoadError and scope closed."""
+        with (
+            patch(
+                "application_sdk.common.incremental.state.table_scope.TableScope",
+                side_effect=lambda: TableScope(table_states={}),
+            ),
+            patch(
                 "application_sdk.common.incremental.state.table_scope.close_states_db"
-            ) as mock_close:
-                with patch(
+            ) as mock_close,
+        ):
+            with (
+                patch(
                     "application_sdk.common.incremental.state.table_scope."
                     "managed_duckdb_connection",
                     side_effect=RuntimeError("boom"),
-                ):
-                    with tempfile.TemporaryDirectory() as tmp:
-                        transformed = Path(tmp) / "transformed"
-                        (transformed / "table").mkdir(parents=True)
-                        (transformed / "table" / "chunk-0.json").write_text(
-                            json.dumps(_table("db/s/t1", "CREATED"))
-                        )
-                        with pytest.raises(
-                            Exception, match="Failed to load table scope"
-                        ):
-                            get_current_table_scope(transformed)
-                mock_close.assert_called_once()
+                ),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
+                transformed = Path(tmp) / "transformed"
+                (transformed / "table").mkdir(parents=True)
+                (transformed / "table" / "chunk-0.json").write_text(
+                    json.dumps(_table("db/s/t1", "CREATED"))
+                )
+                from application_sdk.common.incremental.incremental_errors import (
+                    TableScopeLoadError,
+                )
+
+                with pytest.raises(TableScopeLoadError) as excinfo:
+                    get_current_table_scope(transformed)
+                assert excinfo.value.code == "INTERNAL_INCREMENTAL_TABLE_SCOPE"
+            mock_close.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -311,13 +324,15 @@ class TestGetTableQnsFromColumns:
 
     def test_returns_none_on_duckdb_error(self):
         """DuckDB errors are caught and None is returned (logged)."""
-        with patch(
-            "application_sdk.common.incremental.state.table_scope."
-            "managed_duckdb_connection",
-            side_effect=RuntimeError("explode"),
+        with (
+            patch(
+                "application_sdk.common.incremental.state.table_scope."
+                "managed_duckdb_connection",
+                side_effect=RuntimeError("explode"),
+            ),
+            tempfile.TemporaryDirectory() as tmp,
         ):
-            with tempfile.TemporaryDirectory() as tmp:
-                col_dir = Path(tmp) / "column"
-                _write_jsonl(col_dir / "chunk-0.json", [_column("c1", "db/s/t1")])
-                qns = get_table_qns_from_columns(col_dir)
+            col_dir = Path(tmp) / "column"
+            _write_jsonl(col_dir / "chunk-0.json", [_column("c1", "db/s/t1")])
+            qns = get_table_qns_from_columns(col_dir)
         assert qns is None

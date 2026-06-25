@@ -6,7 +6,7 @@ description: >
   implementation: activities class (build_incremental_column_sql, SQL
   placeholders, fetch overrides), workflow class, SQL templates
   (extract_table_incremental.sql, extract_column_incremental.sql), Pydantic
-  models, Daft/DuckDB integration, state management, and testing patterns.
+  models, DuckDB integration, state management, and testing patterns.
   Use when adding incremental extraction to a new database connector or
   understanding the SDK's incremental extraction architecture.
 metadata:
@@ -18,7 +18,6 @@ metadata:
     - application-sdk
     - metadata-extraction
     - temporal-workflows
-    - daft
     - duckdb
     - rocksdb
     - sql-connector
@@ -30,7 +29,7 @@ metadata:
 
 You are an expert in implementing incremental metadata extraction using the Atlan
 Application SDK. You have deep knowledge of the SDK's single inheritance chain
-pattern, Temporal workflows, Daft lazy DataFrames, DuckDB file-backed queries,
+pattern, Temporal workflows, DuckDB file-backed queries,
 and RocksDB disk-backed state storage.
 
 ## When to Use This Skill
@@ -71,7 +70,7 @@ BaseSQLMetadataExtractionWorkflow (SDK)
 | **Marker management** | S3 fetch/persist, timestamp normalization, prepone logic | Nothing (inherited) |
 | **State management** | Current-state read/write, S3 upload/download, ancestral merge | Nothing (inherited) |
 | **Table extraction** | Switching between full/incremental SQL, placeholder resolution, auto-loading `incremental_table_sql` from `app/sql/` | `extract_table_incremental.sql` file, `resolve_database_placeholders()` (optional) |
-| **Column extraction** | Table analysis (Daft), backfill detection (DuckDB), batching, parallel execution, auto-loading `incremental_column_sql` from `app/sql/` | `build_incremental_column_sql()` - the SQL building strategy, `extract_column_incremental.sql` file |
+| **Column extraction** | Table analysis (DuckDB), backfill detection (DuckDB), batching, parallel execution, auto-loading `incremental_column_sql` from `app/sql/` | `build_incremental_column_sql()` - the SQL building strategy, `extract_column_incremental.sql` file |
 | **SQL execution** | Query execution, result counting, output path management | Nothing (inherited) |
 
 ### Workflow 4-Phase Execution
@@ -82,7 +81,7 @@ Phase 1: Setup
 
 Phase 2: Base Extraction (inherited from BaseSQLMetadataExtractionWorkflow)
   fetch_databases → fetch_schemas → fetch_tables → fetch_columns (skipped if incremental)
-  → fetch_procedures → transform_data → upload_to_atlan
+  → fetch_procedures → transform_data → App.upload()
 
 Phase 3: Incremental Column Extraction (if prerequisites met)
   prepare_column_extraction_queries → execute_single_column_batch (parallel) → transform_data
@@ -131,7 +130,7 @@ See the reference files for detailed implementation of each step:
 2. **`references/sql-templates.md`** - SQL template patterns for incremental queries
 3. **`references/workflow-implementation.md`** - Workflow class setup
 4. **`references/testing-patterns.md`** - Unit test patterns
-5. **`references/daft-duckdb-patterns.md`** - Daft and DuckDB usage patterns
+5. **`references/duckdb-patterns.md`** - DuckDB usage patterns
 
 ## Quick Start: Minimal Implementation
 
@@ -254,12 +253,12 @@ SELECT ... FROM ... WHERE ... IN ({table_ids_in_clause})
 ```toml
 [project]
 dependencies = [
-    "atlan-application-sdk[daft,iam-auth,sqlalchemy,tests,workflows,pandas]==X.Y.Z",
+    "atlan-application-sdk[incremental,iam-auth,tests,workflows]==X.Y.Z",
     "rocksdict>=0.3.0",
 ]
 ```
 
-The `[daft]` extra is required for incremental extraction (Daft lazy DataFrames).
+The `[incremental]` extra brings in DuckDB, pyarrow, pandas, and sqlalchemy.
 `rocksdict` is required for disk-backed table state storage.
 
 ## Common Pitfalls

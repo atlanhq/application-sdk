@@ -4,24 +4,30 @@ Lean reference for Claude Code. See `AGENTS.md` for the full repo guide.
 
 ## What This Repo Is
 
-PKL toolkit for Atlan native app contracts. Contracts generate:
+PKL toolkit for Atlan native app contracts. A single amend line is all a
+consuming app needs:
 
-- workflow setup config: `{name}.json`
-- credential config: `atlan-connectors-{name}.json`
-- Automation Engine manifest: `manifest.json`
-- typed SDK input model: `_input.py`
-- bundle metadata: optional generated `atlan.yaml`
+```pkl
+amends "@app-contract-toolkit/App.pkl"
+```
 
-Default consuming-app output path is `app/generated`. Root `atlan.yaml` is still required; generated `app/generated/atlan.yaml` must be synced to root if PKL owns it.
+Contracts generate — from one `pkl eval -m . contract/app.pkl` at repo root:
+
+- `atlan.yaml` — marketplace deployment manifest (repo root)
+- `app.yaml` — SDR CI shim: `app_name`, `app_image`, `app_port` (repo root)
+- `app/generated/{name}.json` — workflow setup config
+- `app/generated/atlan-connectors-{name}.json` — credential config
+- `app/generated/manifest.json` — Automation Engine DAG
+- `app/generated/_input.py` — typed SDK input model
 
 ## Main Files
 
-- `src/NativeApp.pkl`: single-entrypoint native app contracts.
-- `src/NativeAppBundle.pkl`: multi-entrypoint apps and `atlan.yaml`.
-- `src/AgentConfig.pkl`: shared secure-agent config.
-- `src/Config.pkl`: workflow UI widgets.
-- `src/Credential.pkl`: legacy credential module.
-- `src/Renderers.pkl`: legacy renderers.
+- `src/App.pkl`: **canonical template** for all new native app contracts.
+- `src/Widgets.pkl`: widget catalog re-exported from `App.pkl`.
+- `src/Connectors.pkl`: connector type registry (still imported explicitly by consumers).
+- Legacy modules (reference only, not for new apps):
+  - `src/NativeApp.pkl`, `src/NativeAppBundle.pkl`, `src/AgentConfig.pkl`
+  - `src/Config.pkl`, `src/Credential.pkl`, `src/Renderers.pkl`
 - `examples/*/app.pkl`: executable reference contracts.
 - `tests/*_test.pkl`: Pkl behavior tests.
 
@@ -34,27 +40,33 @@ pkl test tests/*.pkl
 python scripts/test-sdk-import.py
 ```
 
-Generate one example:
+Generate one example (example dir acts as the consuming app's repo root):
 
 ```bash
-pkl eval -m examples/trino/generated examples/trino/app.pkl
+pkl eval -m examples/full examples/full/app.pkl
 ```
 
 ## Current Examples
 
-- `openapi`: OpenAPI loader with extra object-store credential output.
-- `postgres`: basic open-source SQL datasource.
-- `trino`: multi-catalog SQL tree.
-- `connection-ref`: `ConnectionRefInput`.
-- `publish-controls`: publish toggles.
-- `fanin`: dependency conditions.
+Examples serve as toolkit unit tests — no source-specific examples. Each
+demonstrates distinct feature surface, verified by `tests/*.pkl`.
+
+- `minimal`: smallest possible contract; uses all defaults. Start here.
+- `full`: shows every overridable feature: JDBC URL auth, all pipeline steps,
+  diverse widgets, UIRules, extraNodes.
+- `bundle`: multi-entrypoint app (crawler + miner); shared credential configmap;
+  per-entrypoint artifact subfolders.
+- `deploy`: typed `deploy` block — KEDA, Dapr, resources, env, `deployOverrides`.
+- `connection-ref`: `ConnectionRefInput` widget, `pipeline.publish = null`.
+- `publish-controls`: publish toggles, `includeInputFields`, `errorHandling`.
+- `fanin`: multi-parent fan-in via `dependsOn`, explicit `DependencyCondition`.
 
 ## Editing Rules
 
 - Prefer typed APIs over raw mappings.
-- New native credential behavior belongs in `NativeApp.pkl`, not `Credential.pkl`.
-- New workflow widgets belong in `Config.pkl`.
-- Native rendering belongs in `NativeApp.pkl` / `NativeAppBundle.pkl`, not `Renderers.pkl`.
+- New workflow widgets belong in `Widgets.pkl`; re-export via typealias in `App.pkl`.
+- All native rendering behavior belongs in `App.pkl`.
+- Legacy modules (`NativeApp.pkl`, `Config.pkl`, etc.) are frozen reference material.
 - If `src/` changes, update `README.md` and `docs/reference.md`.
 - Add or update an example when adding behavior.
 - Commit regenerated example outputs with the source change.

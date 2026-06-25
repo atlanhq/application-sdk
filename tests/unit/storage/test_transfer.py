@@ -135,6 +135,53 @@ class TestUploadDirectory:
             await upload(str(tmp_path), "errtest", store=store)
 
 
+class TestUploadRaiseOnEmpty:
+    """BLDX-1255: opt-in fail-loud when upload finds zero files.
+
+    Default is ``raise_on_empty=False`` (preserve historical silent-zero
+    behavior that incremental extractors rely on). Connectors hit by
+    silent-failure incidents (Tableau / Looker / Coalesce / dbt) opt in by
+    passing ``raise_on_empty=True``.
+    """
+
+    async def test_empty_dir_with_raise_on_empty_true_raises(
+        self, store, tmp_path
+    ) -> None:
+        from application_sdk.storage.errors import StorageEmptyUploadError
+
+        empty = tmp_path / "empty"
+        empty.mkdir()
+
+        with pytest.raises(StorageEmptyUploadError, match="contains zero files"):
+            await upload(str(empty), "myprefix", store=store, raise_on_empty=True)
+
+    async def test_empty_dir_with_raise_on_empty_false_returns_zero_count(
+        self, store, tmp_path
+    ) -> None:
+        """Regression pin: default behavior (silent zero) preserved when opt-in not set.
+
+        Incremental extractors that legitimately have quiet-day runs (no
+        new data since last watermark) rely on this. Flipping this would
+        break ~19 production connectors — see BLDX-1255 audit.
+        """
+        empty = tmp_path / "empty"
+        empty.mkdir()
+
+        out = await upload(str(empty), "myprefix", store=store)
+        assert out.ref.file_count == 0
+        assert out.synced is False
+
+    async def test_non_empty_dir_with_raise_on_empty_true_succeeds(
+        self, store, tmp_path
+    ) -> None:
+        (tmp_path / "a.txt").write_bytes(b"a")
+        (tmp_path / "b.txt").write_bytes(b"b")
+
+        out = await upload(str(tmp_path), "myprefix", store=store, raise_on_empty=True)
+        assert out.ref.file_count == 2
+        assert out.synced is True
+
+
 class TestUploadStorageSubdir:
     """Tests for the storage_subdir parameter on upload."""
 
@@ -183,12 +230,15 @@ class TestUploadStorageSubdir:
     async def test_storage_subdir_path_traversal_rejected(
         self, store, tmp_path
     ) -> None:
+        from application_sdk.storage.errors import UnsafeUploadPathError
+
         f = tmp_path / "data.txt"
         f.write_bytes(b"x")
-        with pytest.raises(ValueError, match="path traversal"):
+        with pytest.raises(UnsafeUploadPathError) as exc_info:
             await upload(
                 str(f), store=store, _app_prefix="run/123", storage_subdir="../../etc"
             )
+        assert exc_info.value.code == "INVALID_INPUT_UPLOAD_PATH_UNSAFE"
 
 
 class TestUploadSensitivePathBlocking:
@@ -196,44 +246,58 @@ class TestUploadSensitivePathBlocking:
 
     @pytest.mark.skipif(_IS_WINDOWS, reason="Unix-only sensitive paths")
     async def test_etc_blocked(self, store) -> None:
-        with pytest.raises(ValueError, match="sensitive system path"):
+        from application_sdk.storage.errors import UnsafeUploadPathError
+
+        with pytest.raises(UnsafeUploadPathError):
             await upload("/etc/passwd", store=store)
 
     @pytest.mark.skipif(_IS_WINDOWS, reason="Unix-only sensitive paths")
     async def test_proc_blocked(self, store) -> None:
-        with pytest.raises(ValueError, match="sensitive system path"):
+        from application_sdk.storage.errors import UnsafeUploadPathError
+
+        with pytest.raises(UnsafeUploadPathError):
             await upload("/proc/self/environ", store=store)
 
     async def test_aws_dir_blocked(self, store, tmp_path) -> None:
+        from application_sdk.storage.errors import UnsafeUploadPathError
+
         aws_dir = tmp_path / ".aws"
         aws_dir.mkdir()
         creds = aws_dir / "credentials"
         creds.write_bytes(b"secret")
-        with pytest.raises(ValueError, match="sensitive directory"):
+        with pytest.raises(UnsafeUploadPathError):
             await upload(str(creds), store=store)
 
     async def test_ssh_dir_blocked(self, store, tmp_path) -> None:
+        from application_sdk.storage.errors import UnsafeUploadPathError
+
         ssh_dir = tmp_path / ".ssh"
         ssh_dir.mkdir()
         key = ssh_dir / "id_rsa"
         key.write_bytes(b"private-key")
-        with pytest.raises(ValueError, match="sensitive directory"):
+        with pytest.raises(UnsafeUploadPathError):
             await upload(str(key), store=store)
 
     async def test_env_file_blocked(self, store, tmp_path) -> None:
+        from application_sdk.storage.errors import UnsafeUploadPathError
+
         env_file = tmp_path / ".env"
         env_file.write_bytes(b"SECRET=value")
-        with pytest.raises(ValueError, match="sensitive file"):
+        with pytest.raises(UnsafeUploadPathError):
             await upload(str(env_file), store=store)
 
     async def test_env_local_file_blocked(self, store, tmp_path) -> None:
+        from application_sdk.storage.errors import UnsafeUploadPathError
+
         env_file = tmp_path / ".env.local"
         env_file.write_bytes(b"SECRET=value")
-        with pytest.raises(ValueError, match="sensitive file"):
+        with pytest.raises(UnsafeUploadPathError):
             await upload(str(env_file), store=store)
 
     async def test_path_traversal_blocked(self, store, tmp_path) -> None:
-        with pytest.raises(ValueError, match="Path traversal"):
+        from application_sdk.storage.errors import UnsafeUploadPathError
+
+        with pytest.raises(UnsafeUploadPathError):
             await upload(str(tmp_path / ".." / "etc" / "passwd"), store=store)
 
     async def test_normal_path_allowed(self, store, tmp_path) -> None:
@@ -262,7 +326,9 @@ class TestUploadSensitivePathBlocking:
         monkeypatch.setenv(
             "ATLAN_UPLOAD_FILE_BLOCKED_PATHS", "custom_secrets,.credentials"
         )
-        with pytest.raises(ValueError, match="ATLAN_UPLOAD_FILE_BLOCKED_PATHS"):
+        from application_sdk.storage.errors import UnsafeUploadPathError
+
+        with pytest.raises(UnsafeUploadPathError):
             await upload(str(secret), store=store)
 
 
@@ -325,3 +391,101 @@ class TestDownloadDirectory:
         # Only 1 real file — sidecar should not appear in file_count or on disk
         assert dl.ref.file_count == 1
         assert not (dest / "data.txt.sha256").exists()
+
+    async def test_path_traversal_in_listed_key_rejected(self, store, tmp_path) -> None:
+        """A listed key containing ``..`` must not write outside dest_dir.
+
+        obstore rejects ``..`` keys on put, so we patch ``list_keys`` to plant
+        a hostile listing and assert the containment guard fires before any
+        write happens (issue #1694).
+        """
+        from unittest.mock import AsyncMock, patch
+
+        from application_sdk.storage.errors import StorageError
+
+        dest = tmp_path / "dest"
+        canary = tmp_path / "canary.txt"
+        # Trailing slash in storage_path puts download() straight into prefix
+        # mode, so only the prefix listing is consulted.
+        with (
+            patch(
+                "application_sdk.storage.batch.list_keys",
+                new=AsyncMock(return_value=["p/safe/../../canary.txt"]),
+            ),
+            pytest.raises(StorageError, match="Path traversal"),
+        ):
+            await download("p/", str(dest), store=store)
+        assert not canary.exists()
+
+
+class TestUploadDirectoryListingRace:
+    """Inject the rglob listing transient (cpython#146646) and assert
+    ``upload`` still returns the correct file_count. Mocking
+    ``Path.rglob`` to return empty/partial proves the upload path is
+    independent of pathlib's silent-swallow bug.
+    """
+
+    async def test_upload_finds_files_when_rglob_returns_empty(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        from pathlib import Path
+
+        (tmp_path / "a.txt").write_bytes(b"a")
+        (tmp_path / "b.txt").write_bytes(b"b")
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        (sub / "c.txt").write_bytes(b"c")
+
+        # Inject the listing race: Path.rglob returns empty even though
+        # the directory has 3 files.
+        # Regression guard: a future revert to Path.rglob would re-trigger this mock.
+        monkeypatch.setattr(Path, "rglob", lambda self, pat: iter([]))
+
+        out = await upload(str(tmp_path), "race_prefix", store=store)
+
+        # On main: file_count==0 (production silent-failure mode).
+        # After fix: safe_list_directory bypasses rglob via os.scandir.
+        assert out.ref.file_count == 3
+        assert out.synced is True
+
+    async def test_upload_finds_all_files_when_rglob_returns_partial(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        """Partial-result variant: rglob silently truncates after a
+        mid-walk OSError. The caller would see an undercount."""
+        from pathlib import Path
+
+        (tmp_path / "a.txt").write_bytes(b"a")
+        (tmp_path / "b.txt").write_bytes(b"b")
+        (tmp_path / "c.txt").write_bytes(b"c")
+
+        # Return only 1 of the 3 files — simulating partial-truncation.
+        # Regression guard: a future revert to Path.rglob would re-trigger this mock.
+        partial = [tmp_path / "a.txt"]
+        monkeypatch.setattr(Path, "rglob", lambda self, pat: iter(partial))
+
+        out = await upload(str(tmp_path), "partial_race", store=store)
+
+        # On main: file_count==1 (silent undercount).
+        # After fix: file_count==3 (all found via os.scandir).
+        assert out.ref.file_count == 3
+        assert out.synced is True
+
+    async def test_upload_with_raise_on_empty_unaffected_by_rglob_transient(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        """raise_on_empty=True must not misfire on a transient empty
+        rglob when the directory actually has files."""
+        from pathlib import Path
+
+        (tmp_path / "a.txt").write_bytes(b"a")
+        (tmp_path / "b.txt").write_bytes(b"b")
+
+        # Regression guard: a future revert to Path.rglob would re-trigger this mock.
+        monkeypatch.setattr(Path, "rglob", lambda self, pat: iter([]))
+
+        out = await upload(
+            str(tmp_path), "race_prefix", store=store, raise_on_empty=True
+        )
+
+        assert out.ref.file_count == 2

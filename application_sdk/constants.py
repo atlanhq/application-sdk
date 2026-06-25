@@ -52,6 +52,7 @@ Example:
 """
 
 import os
+import warnings
 from enum import Enum
 
 import httpx
@@ -268,9 +269,14 @@ WORKFLOW_AUTH_CLIENT_SECRET_KEY = os.getenv(
 )
 
 # REMOVED: HEARTBEAT_TIMEOUT, START_TO_CLOSE_TIMEOUT, GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS
-# These were never used. See ExecutionSettings for the actual runtime values:
+# The env-var fallbacks for heartbeat and start-to-close timeouts are now read in
+# application_sdk/app/task.py (_DEFAULT_HEARTBEAT_TIMEOUT_SECONDS,
+# _DEFAULT_TIMEOUT_SECONDS) and used as the defaults for TaskMetadata fields and
+# the @task decorator. Per-task overrides still take precedence.
+#   ATLAN_HEARTBEAT_TIMEOUT_SECONDS → default heartbeat_timeout_seconds for @task
+#   ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS → default timeout_seconds for @task
+# ExecutionSettings owns the graceful shutdown timeout:
 #   - ExecutionSettings.graceful_shutdown_timeout_seconds (TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT)
-#   - @task(timeout_seconds=..., heartbeat_timeout_seconds=...) for per-task timeouts
 
 #: Delay before initiating worker shutdown after receiving a termination signal.
 #: This gives the event loop time to flush in-flight activity completions
@@ -294,6 +300,10 @@ def _load_worker_eviction_max_retries() -> int:
     try:
         value = int(raw)
     except ValueError:
+        warnings.warn(
+            f"ATLAN_WORKER_EVICTION_MAX_RETRIES={raw!r} is not a valid integer; falling back to 3",
+            stacklevel=2,
+        )
         return 3
     return max(0, value)
 
@@ -311,8 +321,13 @@ STATE_STORE_NAME = os.getenv("STATE_STORE_NAME", "statestore")
 SECRET_STORE_NAME = os.getenv("SECRET_STORE_NAME", "secretstore")
 #: Name of the deployment object store component in DAPR
 DEPLOYMENT_OBJECT_STORE_NAME = os.getenv("DEPLOYMENT_OBJECT_STORE_NAME", "objectstore")
-#: Name of the upstream object store component in DAPR
-UPSTREAM_OBJECT_STORE_NAME = os.getenv("UPSTREAM_OBJECT_STORE_NAME", "objectstore")
+#: Name of the upstream object store component in DAPR.
+#: Default differs from DEPLOYMENT_OBJECT_STORE_NAME so that non-SDR deployments
+#: — which only ship the deployment binding — cause create_store_from_binding_optional
+#: to return None, leaving upstream_storage unset and routing to fall back to storage.
+UPSTREAM_OBJECT_STORE_NAME = os.getenv(
+    "UPSTREAM_OBJECT_STORE_NAME", "atlan-objectstore"
+)
 #: Name of the pubsub component in DAPR
 EVENT_STORE_NAME = os.getenv("EVENT_STORE_NAME", "eventstore")
 #: DAPR binding operation for creating resources
@@ -334,6 +349,36 @@ _HTTP_POOL_TIMEOUT_SECONDS = 30.0
 
 #: Whether to enable Atlan storage upload
 ENABLE_ATLAN_UPLOAD = os.getenv("ENABLE_ATLAN_UPLOAD", "false").lower() == "true"
+
+# Dual-write — BLDX-1464: when both stores are configured (SDR), App.upload writes
+# to the deployment (customer) store first, then to upstream (Atlan), at the same
+# run-scoped key.  See ADR-0014 §"App.upload() — dual-write when both stores are
+# configured (BLDX-1464)" for the full rationale.
+#
+# ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE accepts three values:
+#   disabled    — upstream only; pre-BLDX-1464 behaviour.
+#   best_effort — dual-write; deployment failure logs WARNING and run succeeds.
+#   required    — dual-write; deployment failure logs ERROR, upstream still runs,
+#                 then the run fails (customer copy missing is surfaced).
+_DEPLOYMENT_ARTIFACT_DUAL_WRITE: str = os.getenv(
+    "ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE", "best_effort"
+).lower()
+#: True when dual-write is active (best_effort or required).
+DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED: bool = (
+    _DEPLOYMENT_ARTIFACT_DUAL_WRITE != "disabled"
+)
+#: True only when dual-write is required (a failed deployment write fails the run).
+DEPLOYMENT_ARTIFACT_DUAL_WRITE_REQUIRED: bool = (
+    _DEPLOYMENT_ARTIFACT_DUAL_WRITE == "required"
+)
+if DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED:
+    import logging as _logging  # stdlib: constants.py cannot import from observability
+
+    _logging.getLogger(__name__).info(
+        "BLDX-1464 dual-write active (ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE=%s): "
+        "App.upload writes to both deployment and upstream stores per run.",
+        _DEPLOYMENT_ARTIFACT_DUAL_WRITE,
+    )
 # Dapr Client Configuration
 #: Maximum gRPC message length in bytes for Dapr client.
 #:
@@ -371,6 +416,13 @@ OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
 )
 #: Whether to enable OpenTelemetry log export
 ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true"
+#: Whether to emit SDK logger output during Temporal workflow replay.
+#: Default is False, matching Temporal's native ``workflow.logger`` behaviour.
+#: Set to True to re-enable replay logs for debugging (e.g. when using the
+#: ``temporalio.worker.Replayer`` to inspect history locally).
+ENABLE_WORKFLOW_REPLAY_LOGS: bool = (
+    os.getenv("ENABLE_WORKFLOW_REPLAY_LOGS", "false").lower() == "true"
+)
 #: Whether to enable a secondary OpenTelemetry log exporter for workflow-log
 #: archival (e.g. S3 sink). When true, logs are emitted to both the primary
 #: OTEL_EXPORTER_OTLP_ENDPOINT and OTEL_WORKFLOW_LOGS_ENDPOINT.
@@ -399,6 +451,12 @@ AWS_SESSION_NAME = os.getenv("AWS_SESSION_NAME", "temp-session")
 # Log batching configuration
 LOG_BATCH_SIZE = int(os.environ.get("ATLAN_LOG_BATCH_SIZE", 100))
 LOG_FLUSH_INTERVAL_SECONDS = int(os.environ.get("ATLAN_LOG_FLUSH_INTERVAL_SECONDS", 10))
+#: Minimum seconds between repeated INFO summaries for the Cloudflare 504
+#: long-poll suppression filter (TFKB ERROR-NET-001).  Increase for very
+#: chatty multi-worker deployments; decrease to see summaries more frequently.
+LOG_CLOUDFLARE_504_SUMMARY_INTERVAL_SECONDS = float(
+    os.environ.get("ATLAN_LOG_CLOUDFLARE_504_SUMMARY_INTERVAL_SECONDS", "60")
+)
 
 # Log Retention configuration
 LOG_RETENTION_DAYS = int(os.environ.get("ATLAN_LOG_RETENTION_DAYS", 30))
@@ -438,6 +496,19 @@ SEGMENT_BATCH_TIMEOUT_SECONDS = float(
 #: Whether to register Temporal's OTel TracingInterceptor and emit spans.
 #: Production does not yet support traces; default is False.
 ENABLE_OTLP_TRACES = os.getenv("ATLAN_ENABLE_OTLP_TRACES", "false").lower() == "true"
+
+
+def _read_enable_tri_state(name: str) -> tuple[str | None, bool | None]:
+    """Return ``(raw, parsed)`` for an ``ATLAN_ENABLE_*`` env var.
+
+    ``raw`` is the literal env value (or ``None`` if unset).
+    ``parsed`` is ``True``/``False`` for "true"/"false", ``None`` if unset.
+    """
+    raw = os.getenv(name)
+    if raw is None:
+        return None, None
+    return raw, raw.strip().lower() == "true"
+
 
 # Store Sink Configuration (defaults to enabled)
 ENABLE_OBSERVABILITY_STORE_SINK: bool = (

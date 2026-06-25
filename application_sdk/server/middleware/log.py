@@ -30,7 +30,9 @@ class LogMiddleware(BaseHTTPMiddleware):
         token = request_context.set({"request_id": request_id})
         start_time = time.time()
 
-        should_log = request.url.path not in EXCLUDED_LOG_PATHS
+        # Suffix match so excluded paths are suppressed regardless of mount
+        # prefix (e.g. `/automation/server/health` still matches `/server/health`).
+        should_log = not any(request.url.path.endswith(p) for p in EXCLUDED_LOG_PATHS)
 
         if should_log:
             client_host = request.client.host if request.client else None

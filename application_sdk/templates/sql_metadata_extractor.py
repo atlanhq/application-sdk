@@ -32,13 +32,20 @@ import warnings
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 from application_sdk.app.task import task
-from application_sdk.common.exc_utils import rewrap
-from application_sdk.common.sql_filters import normalize_filters
+from application_sdk.common.sql_filters import (
+    normalize_filters,
+    safe_substitute_placeholders,
+)
 from application_sdk.contracts.storage import UploadInput
 from application_sdk.contracts.types import StorageTier
 from application_sdk.credentials import CredentialResolver, legacy_credential_ref
 from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.templates._template_errors import (
+    SqlCredentialRefMissingError,
+    SqlMetadataExtractorNotImplementedError,
+    SqlSecretStoreMissingError,
+)
 from application_sdk.templates.base_metadata_extractor import BaseMetadataExtractor
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
@@ -165,11 +172,11 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
             legacy_credential_ref(cred_guid) if cred_guid else None
         )
         if ref is None:
-            raise ValueError("No credential reference or GUID available in task input")
+            raise SqlCredentialRefMissingError()
 
         secret_store = infra.secret_store if infra else None
         if secret_store is None:
-            raise ValueError("No secret store available for credential resolution")
+            raise SqlSecretStoreMissingError()
 
         resolver = CredentialResolver(secret_store)
         return await resolver.resolve_raw(ref)
@@ -178,12 +185,15 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         """Create and load a SQL client using resolved credentials.
 
         Raises:
-            NotImplementedError: If ``sql_client_class`` is not set.
+            SqlMetadataExtractorNotImplementedError: If ``sql_client_class`` is not set.
         """
         if self.sql_client_class is None:
-            raise NotImplementedError(
-                f"{type(self).__name__} must set sql_client_class to use "
-                "default SQL execution from super()."
+            raise SqlMetadataExtractorNotImplementedError(
+                message=(
+                    f"{type(self).__name__} must set sql_client_class to use "
+                    "default SQL execution from super()."
+                ),
+                operation="sql_client_class",
             )
         credentials = await self._get_credentials(input)
         client = self.sql_client_class()
@@ -196,8 +206,10 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         """Substitute filter placeholders in a SQL template.
 
         Replaces ``{normalized_exclude_regex}``, ``{normalized_include_regex}``,
-        and ``{temp_table_regex_sql}`` with values derived from *input*.
-        Uses str.replace() to avoid conflicts with any other curly braces.
+        and ``{temp_table_regex_sql}`` with values derived from *input* using a
+        single-pass substitution (``safe_substitute_placeholders``) so that
+        replacement values are never re-scanned for further matches — eliminating
+        the cascading-replace hazard present in chained ``str.replace()`` calls.
 
         Warning:
             SQL templates that use these placeholders MUST wrap each substitution
@@ -205,6 +217,12 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
             Single quotes in filter values are blocked by the SQL injection guard
             in ``_validate_no_sql_injection``. Templates that omit the surrounding
             quotes are not protected.
+
+            Connectors that perform additional placeholder substitution on the
+            returned SQL (e.g. ``{schema_list}``) must use ``str.replace()``
+            rather than ``str.format()`` — ``str.format()`` interprets regex
+            quantifiers such as ``{2}`` embedded in the substituted values as
+            positional argument references and raises ``IndexError`` (APP-2291).
         """
         # Filters can be dict (structured from AE) or str (raw regex / JSON string).
         # Dict filters are normalized via sql_filters; strings are used directly.
@@ -238,10 +256,13 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
                     "{exclude_table_regex}", input.temp_table_regex
                 )
 
-        return (
-            sql.replace("{normalized_exclude_regex}", exclude_regex)
-            .replace("{normalized_include_regex}", include_regex)
-            .replace("{temp_table_regex_sql}", temp_table_sql)
+        return safe_substitute_placeholders(
+            sql,
+            {
+                "{normalized_exclude_regex}": exclude_regex,
+                "{normalized_include_regex}": include_regex,
+                "{temp_table_regex_sql}": temp_table_sql,
+            },
         )
 
     # ------------------------------------------------------------------
@@ -257,10 +278,13 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         two class attributes and call ``super()`` — to use this default.
         """
         if not self.fetch_database_sql:
-            raise NotImplementedError(
-                f"{type(self).__name__} must implement fetch_databases() "
-                "or set fetch_database_sql. "
-                "See application_sdk.templates.sql_metadata_extractor for examples."
+            raise SqlMetadataExtractorNotImplementedError(
+                message=(
+                    f"{type(self).__name__} must implement fetch_databases() "
+                    "or set fetch_database_sql. "
+                    "See application_sdk.templates.sql_metadata_extractor for examples."
+                ),
+                operation="fetch_databases",
             )
         client = await self._load_sql_client(input)
         try:
@@ -287,9 +311,12 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         Default implementation executes ``self.fetch_schema_sql``.
         """
         if not self.fetch_schema_sql:
-            raise NotImplementedError(
-                f"{type(self).__name__} must implement fetch_schemas() "
-                "or set fetch_schema_sql."
+            raise SqlMetadataExtractorNotImplementedError(
+                message=(
+                    f"{type(self).__name__} must implement fetch_schemas() "
+                    "or set fetch_schema_sql."
+                ),
+                operation="fetch_schemas",
             )
         client = await self._load_sql_client(input)
         try:
@@ -316,9 +343,12 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         Default implementation executes ``self.fetch_table_sql``.
         """
         if not self.fetch_table_sql:
-            raise NotImplementedError(
-                f"{type(self).__name__} must implement fetch_tables() "
-                "or set fetch_table_sql."
+            raise SqlMetadataExtractorNotImplementedError(
+                message=(
+                    f"{type(self).__name__} must implement fetch_tables() "
+                    "or set fetch_table_sql."
+                ),
+                operation="fetch_tables",
             )
         client = await self._load_sql_client(input)
         try:
@@ -345,9 +375,12 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         Default implementation executes ``self.fetch_column_sql``.
         """
         if not self.fetch_column_sql:
-            raise NotImplementedError(
-                f"{type(self).__name__} must implement fetch_columns() "
-                "or set fetch_column_sql."
+            raise SqlMetadataExtractorNotImplementedError(
+                message=(
+                    f"{type(self).__name__} must implement fetch_columns() "
+                    "or set fetch_column_sql."
+                ),
+                operation="fetch_columns",
             )
         client = await self._load_sql_client(input)
         try:
@@ -377,17 +410,21 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
         Override this method in your connector subclass if procedure extraction
         is required.
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} must implement fetch_procedures(), "
-            "or return FetchProceduresOutput() with zero counts for connectors "
-            "that do not support stored procedures."
+        raise SqlMetadataExtractorNotImplementedError(
+            message=(
+                f"{type(self).__name__} must implement fetch_procedures(), "
+                "or return FetchProceduresOutput() with zero counts for connectors "
+                "that do not support stored procedures."
+            ),
+            operation="fetch_procedures",
         )
 
     @task(timeout_seconds=1800)
     async def transform_data(self, input: TransformInput) -> TransformOutput:
         """Transform raw extracted data into the target format."""
-        raise NotImplementedError(
-            f"{type(self).__name__} must implement transform_data()."
+        raise SqlMetadataExtractorNotImplementedError(
+            message=f"{type(self).__name__} must implement transform_data().",
+            operation="transform_data",
         )
 
     async def run(self, input: ExtractionInput) -> ExtractionOutput:  # type: ignore[override]
@@ -469,7 +506,12 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
                 output_prefix=input.output_prefix,
             )
 
+        # conformance: ignore[E004] re-raises immediately as typed SqlMetadataExtractionError; no information lost
         except Exception as e:
-            raise rewrap(
-                e, f"SQL metadata extraction failed (workflow_id={workflow_id})"
+            from application_sdk.templates._template_errors import (  # noqa: PLC0415
+                SqlMetadataExtractionError,
+            )
+
+            raise SqlMetadataExtractionError(
+                workflow_id=str(workflow_id), cause=e
             ) from e

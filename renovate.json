@@ -1,0 +1,16 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "application-sdk dogfood config — extends its own fleet preset (renovate-config/default.json).",
+  "extends": [
+    "github>atlanhq/application-sdk//renovate-config/default.json"
+  ],
+  "semanticCommitType": "chore",
+  "ignorePaths": [
+    "contract-toolkit/examples/**",
+    "requirements.txt"
+  ],
+  "ignoreDeps": [
+    "cgr.dev/atlan.com/app-framework-golden",
+    "daft"
+  ]
+}

@@ -4,10 +4,10 @@
 
 ## Background
 
-The legacy transformer pipeline converts raw Daft DataFrames into Atlas entity JSONL via one of two strategies:
+The legacy transformer pipeline converts raw table data into Atlas entity JSONL via one of two strategies:
 
 ```
-Raw SQL query results (daft.DataFrame)
+Raw SQL query results (list[dict] or pyarrow.Table)
         │
         ▼
   TransformerInterface.transform_metadata()  ← AtlasTransformer or QueryBasedTransformer
@@ -16,7 +16,7 @@ Raw SQL query results (daft.DataFrame)
   Atlas entity JSONL
         │
         ▼
-  upload_to_atlan() → Atlan ingestion API
+  App.upload() → atlan-objectstore (Atlan-owned)
 ```
 
 This pipeline is used internally by `SqlMetadataExtractor.transform_data()`. If you subclass `SqlMetadataExtractor` today without overriding `transform_data()`, you are running through this legacy path.
@@ -25,7 +25,7 @@ This pipeline is used internally by `SqlMetadataExtractor.transform_data()`. If 
 
 For new connectors, and when upgrading existing ones, use the simpler pattern documented in the upgrade guide:
 
-- [Step 2: Upgrade SQL Metadata Extraction](../upgrade-guide-v3.md#step-2-upgrade-sql-metadata-extraction) — replace `AtlasTransformer` + Daft with typed records → pure mapper functions → `pyatlan_v9` Asset instances
+- [Step 2: Upgrade SQL Metadata Extraction](../upgrade-guide-v3.md#step-2-upgrade-sql-metadata-extraction) — replace `AtlasTransformer` with typed records → pure mapper functions → `pyatlan_v9` Asset instances
 - Reference implementations: `atlan-openapi-app`, `atlan-azure-event-hub-app`
 
 The import rewriter (`tools/migrate_v3/rewrite_imports.py`) will leave `# TODO(upgrade-v3)` markers on transformer code because it cannot auto-convert this pattern; apply the migration manually.
@@ -60,21 +60,15 @@ class MyConnectorApp(SqlMetadataExtractor):
 
 ### `QueryBasedTransformer`
 
-A YAML-template-driven transformer. SQL queries defined in YAML files are executed against raw Daft DataFrames to produce transformed output. See the upgrade guide for why this approach is being retired.
+A YAML-template-driven transformer. SQL queries defined in YAML files are executed against input data via DuckDB to produce transformed output. See the upgrade guide for why this approach is being retired.
 
 ```python
 from application_sdk.transformers.query import QueryBasedTransformer  # deep import — legacy
 ```
 
-### Daft Dependency
+### Engine
 
-Daft is an optional dependency pulled in by the `sql` extra:
-
-```bash
-uv add "atlan-application-sdk[sql]"
-```
-
-Transformers import Daft lazily so the package loads without Daft installed — you'll only get an `ImportError` if you actually invoke a transformer without the extra.
+Both transformers use pyarrow and DuckDB internally (already included in the `sql` extra). No additional extras are needed beyond `[sql]`.
 
 ## See Also
 

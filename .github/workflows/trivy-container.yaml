@@ -3,7 +3,6 @@
 # Runs Trivy, checks findings against the centralized base-allowlist in the SDK
 # repo (.security/base-allowlist.json), posts a summary comment on PRs, and
 # fails on new/expired entries.
-# Snyk is handled separately via verify-snyk-status.yml (central org workflow).
 
 name: Atlan Application Trivy container scan
 
@@ -39,10 +38,10 @@ jobs:
     runs-on: "ubuntu-24.04"
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Checkout base allowlist from SDK
-        uses: actions/checkout@v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: atlanhq/application-sdk
           ref: main
@@ -74,7 +73,7 @@ jobs:
 
       - name: Comment on PR
         if: always() && github.event_name == 'pull_request'
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const fs = require('fs');

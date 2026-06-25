@@ -1,29 +1,38 @@
 """Integration test configuration and shared fixtures.
 
-Requires a running Temporal dev server:
-    temporal server start-dev
+Temporal and Dapr are provisioned **in-process** by the SDK's own embedded
+dev helpers (``application_sdk.dev.embedded_runtime`` /
+``embedded_dapr``) — the same code path local development uses. No external
+``temporal server start-dev`` or ``daprd`` is required; the binaries are
+fetched to ``~/.cache`` on first use and reused thereafter.
 
-Set TEMPORAL_HOST env var to override the default localhost:7233.
+Set ``TEMPORAL_HOST`` to point the suite at an already-running Temporal
+server instead of booting an embedded one (handy when iterating locally
+against ``uv run poe start-deps``).
 """
 
 from __future__ import annotations
 
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
+import pytest_asyncio
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(autouse=True)
 def _integration_env_vars():
-    """Disable interceptors and Dapr sinks for the integration test session.
+    """Disable interceptors and Dapr sinks for the duration of each integration test.
 
-    Using a session-scoped fixture rather than module-level os.environ calls
-    prevents these settings from leaking into unit tests when the full test
-    suite is run with ``pytest tests/``.  The module-level pattern runs at
-    conftest import time (before any tests) and poisons the process env for
-    tests in other directories that rely on the defaults.
+    Function-scoped — setup runs before every integration test, teardown
+    restores ``os.environ`` after each test. Function scope is required
+    because session-scoped autouse would activate for the first integration
+    test that runs and leak its env-var mutations to every later test in
+    the same ``pytest tests/`` session (including unit tests that follow,
+    if any integration test reaches the fixture before the unit job's
+    ``test_on_complete`` tests run — see BLDX-1283 PR fallout).
     """
     overrides = {
         "ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK": "false",
@@ -46,13 +55,39 @@ def task_queue() -> str:
     return f"integ-test-{uuid4().hex[:8]}"
 
 
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def temporal_host():
+    """``host:port`` of an embedded Temporal dev server for the whole session.
+
+    Booted once per test session via the SDK's :func:`embedded_runtime`
+    (same code path as local development); the dev-server binary is fetched
+    to ``~/.cache`` on first use. Yields only the *host string* — which has
+    no event-loop affinity — so each function-scoped :func:`temporal_client`
+    can build its own client on its own loop. If ``TEMPORAL_HOST`` is set,
+    that external server is used instead and nothing is booted.
+    """
+    host_override = os.environ.get("TEMPORAL_HOST")
+    if host_override:
+        yield host_override
+        return
+
+    from application_sdk.dev import embedded_runtime
+
+    async with embedded_runtime() as runtime:
+        yield runtime.host
+
+
 @pytest.fixture
-async def temporal_client():
-    """Temporal client connected to the dev server."""
+async def temporal_client(temporal_host):
+    """Temporal client connected to the session's embedded dev server.
+
+    Connects via :func:`create_temporal_client` so the client keeps its
+    production pydantic data converter — only the *host* comes from the
+    shared embedded runtime.
+    """
     from application_sdk.execution._temporal.backend import create_temporal_client
 
-    host = os.environ.get("TEMPORAL_HOST", "localhost:7233")
-    return await create_temporal_client(host, connect_max_attempts=1)
+    return await create_temporal_client(temporal_host, connect_max_attempts=1)
 
 
 @pytest.fixture(autouse=True)
@@ -125,6 +160,29 @@ async def executor(temporal_client, task_queue):
     from application_sdk.execution._temporal.backend import TemporalExecutorBackend
 
     return TemporalExecutorBackend(temporal_client, task_queue)
+
+
+# Checked-in JSON secrets file the Dapr HTTP tests assert against. Passed to
+# the embedded sidecar as a file path (not values) so hyphenated keys like
+# ``api-key`` round-trip — ``local.env`` mangles them.
+_DAPR_SECRETS_FILE = str(Path(__file__).parent / "secrets.json")
+
+
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
+async def embedded_dapr_sidecar():
+    """Embedded ``daprd`` for the module, provisioned in-process by the SDK.
+
+    Uses :func:`embedded_dapr` (same code path as local development); the
+    ``daprd`` binary is fetched to ``~/.cache`` on first use. On entry it
+    sets ``DAPR_HTTP_PORT`` etc. in the environment, so an
+    :class:`AsyncDaprClient` constructed with no explicit base URL connects
+    to it automatically. Yields the :class:`EmbeddedDapr` connection info
+    (no event-loop affinity), booted once per test module.
+    """
+    from application_sdk.dev import embedded_dapr
+
+    async with embedded_dapr(secrets_file=_DAPR_SECRETS_FILE) as dapr:
+        yield dapr
 
 
 # =============================================================================

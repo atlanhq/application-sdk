@@ -144,7 +144,7 @@ READ (with prepone)        EXTRACT                   PERSIST (after publish)
        |                       |                            |
        v                       v                            v
   fetch_marker()        run extraction            persist_marker(now_iso)
-  prepone by N min      using cutoff              only after upload_to_atlan
+  prepone by N min      using cutoff              only after App.upload()
   to handle clock       from marker               succeeds
   skew / overlap
 ```
@@ -152,7 +152,7 @@ READ (with prepone)        EXTRACT                   PERSIST (after publish)
 - **Prepone**: Subtract a safety window (e.g., 5 minutes) from the stored marker
   to handle clock skew between your system and the upstream API.
 - **First run**: If no marker exists, treat as full extraction (all entities changed).
-- **Persist timing**: ALWAYS persist the new marker AFTER `upload_to_atlan` succeeds.
+- **Persist timing**: ALWAYS persist the new marker AFTER `App.upload()` succeeds (formerly `upload_to_atlan` in v2).
   If upload fails, the next run re-extracts the same window — idempotent and safe.
 
 ### 2.3 Entity List (Filter-Change & Delete Detection)
@@ -294,7 +294,7 @@ persistent-artifacts/apps/{app_name}/connection/{connection_id}/
 |
 |-- marker.txt
 |   # ISO timestamp of last successful extraction completion.
-|   # Written ONLY after upload_to_atlan succeeds.
+|   # Written ONLY after App.upload() succeeds.
 |   # Read at start of next run, preponed by safety window.
 |   # Lifecycle: created on first run, overwritten every run.
 |
@@ -302,7 +302,7 @@ persistent-artifacts/apps/{app_name}/connection/{connection_id}/
 |   # Array of workbook IDs that passed the project/site filter
 |   # on the previous run. Used for delete detection and
 |   # filter-change detection on the next run.
-|   # Lifecycle: overwritten every run after upload_to_atlan.
+|   # Lifecycle: overwritten every run after App.upload().
 |
 |-- filtered-datasources.json
 |   # Same pattern for datasources (one file per entity type).
@@ -316,7 +316,7 @@ persistent-artifacts/apps/{app_name}/connection/{connection_id}/
 |   |-- _index.json
 |   |   # v2 index: maps each datasource ID to its chunk file,
 |   |   # start line, and line count. Small file (~1KB per entity).
-|   |   # Lifecycle: overwritten every run after upload_to_atlan.
+|   |   # Lifecycle: overwritten every run after App.upload().
 |   |
 |   |-- datasource/
 |   |   |-- result-0.json    # NDJSON chunk (~50MB max)
@@ -336,7 +336,7 @@ persistent-artifacts/apps/{app_name}/connection/{connection_id}/
 ```
 
 All files under this tree are **overwritten** on every successful run. There is no
-append-only log. If a run fails before `upload_to_atlan`, the old state is preserved
+append-only log. If a run fails before `App.upload()`, the old state is preserved
 and the next run retries cleanly.
 
 ---
@@ -366,7 +366,7 @@ STEP  ACTIVITY                             INCREMENTAL?   NOTES
 8a.   backfill_unchanged_datasources       << NEW >>      From S3 extracts via index
 9.    filter_data                          existing       Apply project/site filters
 10.   transform                            existing       YAML transformers (unchanged)
-11.   upload_to_atlan                      existing       Publish to Atlan (unchanged)
+11.   App.upload()                         existing       Publish to Atlan (in v3; v2: upload_to_atlan)
 11a.  persist_incremental_state            << NEW >>      Marker + entity lists + cache + extracts
 ```
 
@@ -380,7 +380,7 @@ STEP  ACTIVITY                             INCREMENTAL?   NOTES
    (sheets, dashboards, fields) and datasource details (columns, connections)
    are the expensive calls. These are the ones we skip for unchanged entities.
 
-3. **State persistence is ALWAYS after `upload_to_atlan`.** If upload fails,
+3. **State persistence is ALWAYS after `App.upload()`.** If upload fails,
    the marker is not advanced and entity lists are not updated. The next run
    retries the exact same window. This guarantees no data loss.
 
@@ -429,8 +429,9 @@ class ExtractionWorkflow:
         )
 
         # Phase 5: Transform + Upload (existing, unchanged)
+        # v3: self.upload(UploadInput(...)) in App.run(); v2-native: upload_to_atlan activity
         await workflow.execute_activity(transform, ...)
-        await workflow.execute_activity(upload_to_atlan, ...)
+        await workflow.execute_activity(upload_to_atlan, ...)  # v2-native; in v3 use self.upload()
 
         # Phase 6: State persistence (new, MUST be after upload)
         await workflow.execute_activity(

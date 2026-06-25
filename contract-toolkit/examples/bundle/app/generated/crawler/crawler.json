@@ -1,0 +1,99 @@
+{
+  "id": "crawler",
+  "name": "Crawler",
+  "logo": "https://assets.atlan.com/assets/snowflake.svg",
+  "config": {
+    "properties": {
+      "credential-guid": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "credential",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "grid": 8,
+          "credentialType": "atlan-connectors-bundle",
+          "isTestAuthenticationDisabled": false
+        }
+      },
+      "connection": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "connection",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "placeholder": "Connection Name",
+          "grid": 8
+        }
+      },
+      "include-filter": {
+        "type": "object",
+        "required": false,
+        "ui": {
+          "widget": "sqltree",
+          "label": "Include schemas",
+          "hidden": false,
+          "help": "",
+          "grid": 4,
+          "connectorConfigName": "atlan-connectors-bundle",
+          "credential": "credential-guid",
+          "sql": "show atlan schemas",
+          "description": "Only selected databases and schemas will be extracted."
+        },
+        "additionalProperties": {
+          "type": "array"
+        },
+        "default": "{}"
+      },
+      "exclude-filter": {
+        "type": "object",
+        "required": false,
+        "ui": {
+          "widget": "sqltree",
+          "label": "Exclude schemas",
+          "hidden": false,
+          "help": "",
+          "grid": 4,
+          "connectorConfigName": "atlan-connectors-bundle",
+          "credential": "credential-guid",
+          "sql": "show atlan schemas",
+          "description": "Selected databases and schemas will be skipped."
+        },
+        "additionalProperties": {
+          "type": "array"
+        },
+        "default": "{}"
+      }
+    },
+    "steps": [
+      {
+        "title": "Credential",
+        "description": "",
+        "id": "credential",
+        "properties": [
+          "credential-guid"
+        ]
+      },
+      {
+        "title": "Connection",
+        "description": "",
+        "id": "connection",
+        "properties": [
+          "connection"
+        ]
+      },
+      {
+        "title": "Metadata",
+        "description": "",
+        "id": "metadata",
+        "properties": [
+          "include-filter",
+          "exclude-filter"
+        ]
+      }
+    ]
+  }
+}

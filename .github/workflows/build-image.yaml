@@ -22,7 +22,7 @@ jobs:
       lowercase_branch: ${{ steps.get_lowercase_branch.outputs.lowercase_branch }}
       sha: ${{ steps.get_sha.outputs.sha }}
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
 
@@ -47,23 +47,23 @@ jobs:
       cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
 
       - name: Set up Buildx
         id: buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
 
       - name: Login to GitHub Registry
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.ORG_PAT_GITHUB }}
 
       - name: Log in to Chainguard Container Registry
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
         with:
           registry: cgr.dev
           username: ${{ secrets.CHAINGUARD_USERNAME }}
@@ -74,11 +74,6 @@ jobs:
         uses: ./.github/actions/secure-build-push-apps
         with:
           branch: ${{ github.ref_name }}
-          snyk-token: ${{ secrets.SNYK_TOKEN_BU_APPS }}
-          snyk-ghcr-integration-id: ${{ secrets.SNYK_GHCR_INTEGRATION_ID }}
-          snyk-docker-integration-id: ${{ secrets.SNYK_DOCKER_INTEGRATION_ID }}
-          snyk-integration-id: ${{ secrets.SNYK_INTEGRATION_ID }}
-          snyk-org-id: ${{ secrets.SNYK_ORG_ID }}
           context: .
           file: ./Dockerfile
           push: true

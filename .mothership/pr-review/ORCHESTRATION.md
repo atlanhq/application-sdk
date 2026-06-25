@@ -1,0 +1,1038 @@
+# SDK Review — Orchestration Playbook
+
+Follow these phases EXACTLY. Do not skip phases. Do not reorder.
+Print `[Phase N complete]` after each phase.
+
+## Time Budgets
+
+Budgets scale with PR size. Determine the tier in Phase 0, then use
+the corresponding column. If approaching the limit, finalize with what
+you have — a partial review is better than no review.
+
+| Phase | Small (<2K lines) | Large (2K-20K) | Massive (20K+) | What to cut if over |
+|-------|-------------------|----------------|----------------|---------------------|
+| Phase 0: Orient | 30s | 30s | 60s | Nothing — fast |
+| Phase 1: Context | 60s | 2 min | 5 min | Skip reachability, grep-only |
+| Phase 2: Review | 5 min | 10 min | 15 min | Drop to 2 agents, skip adversarial |
+| Phase 3: Submit | 30s | 30s | 60s | Nothing — just a curl call |
+
+| PR Size | Total Budget | Hard Stop |
+|---------|-------------|-----------|
+| Small (<2K lines) | ~10 min | 15 min |
+| Large (2K-20K) | ~18 min | 25 min |
+| Massive (20K+) | ~26 min | 35 min |
+
+If the sandbox has been running past the hard stop, finalize immediately
+with whatever findings you have. Post the review summary + commit
+status — never exit without posting to the PR.
+
+---
+
+## Phase 0: Orient (~30s)
+
+The dispatch prompt passes the PR context directly. Read these values
+from the prompt header (do NOT re-derive):
+
+```
+PR_NUMBER, PR_URL, REPO, HEAD_SHA, BASE_REF, HEAD_REF,
+COMMENTER, COMMENT_ID, COMMENTER_INTENT
+```
+
+1. **Set working directory** — mothership cloned the repo on the PR head
+   ref into `/workspace/application-sdk`:
+   ```bash
+   cd /workspace/application-sdk
+
+   # Background: install deps so uv run pre-commit/pytest don't wait
+   uv sync --all-extras 2>/dev/null &
+   ```
+
+2. **Auth setup** — `$GITHUB_TOKEN` is injected by mothership from its
+   GitHub App installation (see snapshots/_base). Make `gh` use it:
+   ```bash
+   echo "$GITHUB_TOKEN" | gh auth login --with-token 2>/dev/null
+   ```
+
+3. **Fetch authoritative PR metadata** (no session/PR.md anymore):
+   ```bash
+   gh pr view "$PR_NUMBER" --repo "$REPO" \
+     --json number,state,isDraft,mergeable,mergeStateStatus,headRefName,baseRefName,headRefOid,title,body,labels \
+     > /tmp/PR.json
+   ```
+
+4. **Fetch authoritative diff** (no session/DIFF.patch anymore):
+   ```bash
+   gh pr diff "$PR_NUMBER" --repo "$REPO" > /tmp/DIFF.patch
+   ```
+
+4b. **Reset per-run review artifacts** — these files are load-bearing signals
+    across later phases, so never let a prior iteration in the same sandbox
+    affect the current verdict or public post:
+    ```bash
+    rm -f /tmp/TOOLKIT_ROVER_NOTE.md
+    : > /tmp/TOOLKIT_VALIDATION.md
+    : > /tmp/TOOLKIT_PR_ARTIFACTS.txt
+    : > /tmp/TOOLKIT_CHANGED_FILES.txt
+    : > /tmp/TOOLKIT_CONSUMERS.md
+    mkdir -p /tmp/inline-comments
+    find /tmp/inline-comments -type f \( -name '*.md' -o -name '*.json' \) -delete
+    ```
+
+5. **Stale SHA guard** — bail if the PR has moved since dispatch:
+   ```bash
+   CURRENT_SHA=$(jq -r '.headRefOid' /tmp/PR.json)
+   if [ "$CURRENT_SHA" != "$HEAD_SHA" ]; then
+     echo "PR moved from $HEAD_SHA to $CURRENT_SHA since dispatch — aborting cleanly."
+     # Submit a minimal review so the status check doesn't stay pending,
+     # then exit. A fresh @sdk-review on the new HEAD gets a new session.
+     exit 0
+   fi
+   ```
+
+6. **Read in-repo orchestration assets** — these are the source of truth
+   for SDK review behavior. All paths are relative to the repo root:
+   - `.mothership/pr-review/CLAUDE.md`
+   - `.mothership/pr-review/severity-rubric.yaml`
+   - `.mothership/pr-review/modes/standard.md`
+   - `.mothership/pr-review/references/*.md`
+   - `.mothership/pr-review/agents/*.md`
+   - `.mothership/review-policy.md`
+   - `.mothership/review.yaml`
+
+6b. **Load prior review into context (re-review continuity)** — if a
+    previous `<!-- SDK_REVIEW -->` summary comment exists on this
+    PR, read its full body and write it to `/tmp/PRIOR_REVIEW.md`. The
+    body becomes **input** to Phase 2 reasoning (not just a labeling
+    reference for §2d at the end): it tells the agents what was flagged
+    before, what the author said in response, and what should be
+    carried forward, downgraded, or re-checked given the current HEAD.
+
+    ```bash
+    PRIOR_REVIEW=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+      --paginate \
+      --jq '[.[] | select(.body | contains("<!-- SDK_REVIEW -->"))] | last | .body // ""')
+
+    if [ -n "$PRIOR_REVIEW" ]; then
+      printf '%s\n' "$PRIOR_REVIEW" > /tmp/PRIOR_REVIEW.md
+      echo "[bootstrap] prior sdk-review summary found — loaded into /tmp/PRIOR_REVIEW.md"
+    else
+      : > /tmp/PRIOR_REVIEW.md
+      echo "[bootstrap] no prior sdk-review summary — fresh review"
+    fi
+    ```
+
+    **CRITICAL — jq idiom:** wrap the selection in `[ ... ] | last`
+    and take `.body` from the array element. A naive
+    `--jq '.[] | select(...) | .body' | head -1` collapses the raw
+    multiline body to its first line (the `<!-- SDK_REVIEW -->`
+    HTML marker) and silently drops the entire review content.
+
+    Every subsequent phase that reasons about the PR (Phase 2 agents,
+    cross-model debias, verdict determination) should treat
+    `/tmp/PRIOR_REVIEW.md` as additional context when non-empty —
+    not because it's authoritative, but because it captures both the
+    prior bot's reasoning and (often, in author replies on inline
+    threads) the human's response, which materially changes what
+    counts as a "new" finding vs a known-and-discussed one.
+
+7. **Always run a standard review.** There is a single mode. Ignore any
+   free-form text after `@sdk-review` (`COMMENTER_INTENT`) — there are no
+   commands to parse (no auto-fix, stop, challenge, override, or focus
+   modes). Every trigger runs the full multi-agent review for the PR's
+   `review_scope`, posts findings, and exits.
+
+   **Re-review continuity:** if `/tmp/PRIOR_REVIEW.md` is non-empty (a prior
+   `<!-- SDK_REVIEW -->` summary exists — loaded in Phase 0 step 6b), this
+   run is a **re-review**: prior findings + author replies are part of the
+   input. Carry forward findings that are still present, label resolved ones
+   explicitly, surface new ones, and downgrade ones the author successfully
+   addressed in inline-comment threads. See §2d for the labeling rules.
+
+   The review is **read-only**: it never commits or pushes to the PR branch.
+
+8. **Branch freshness + conflict resolution** (before reviewing):
+   ```bash
+   MERGE_STATUS=$(jq -r '.mergeStateStatus' /tmp/PR.json)
+   ```
+
+   If `BEHIND`:
+   ```bash
+   # Tier 1: GitHub-side update (merges base into the PR branch)
+   gh api "repos/$REPO/pulls/$PR_NUMBER/update-branch" \
+     -X PUT -f update_method=merge 2>/dev/null
+   sleep 10
+   # Re-fetch — SHA changed after merge
+   git fetch origin "$HEAD_REF" && git reset --hard "origin/$HEAD_REF"
+   # Re-fetch authoritative PR metadata and diff after the update
+   gh pr view "$PR_NUMBER" --repo "$REPO" --json number,state,isDraft,mergeable,mergeStateStatus,headRefName,baseRefName,headRefOid,title,body,labels > /tmp/PR.json
+   gh pr diff "$PR_NUMBER" --repo "$REPO" > /tmp/DIFF.patch
+   ```
+
+   If `CONFLICTING`:
+   ```bash
+   # Tier 2: local git merge (handles non-overlapping conflicts)
+   git fetch origin "$BASE_REF"
+   git merge "origin/$BASE_REF" --no-edit 2>/dev/null
+   ```
+   If merge succeeds → `git push origin HEAD`, then re-fetch `/tmp/PR.json`
+   and `/tmp/DIFF.patch` and continue review of the merged result.
+   If merge fails:
+   ```bash
+   git merge --abort
+   ```
+   Submit minimal review: "PR has merge conflicts. Please rebase or
+   comment `@sdk-review` after resolving conflicts." Set the verdict in
+   §3e to `NEEDS_REBASE` (the structured marker is `<!-- VERDICT:
+   NEEDS_REBASE -->`); the GHA layer applies the `sdk-review-needs-rebase`
+   label from there. EXIT.
+
+9. **CI status read** (feeds the verdict — the review never fixes CI):
+   ```bash
+   FAILING=$(gh pr checks "$PR_NUMBER" --repo "$REPO" \
+     --json name,conclusion --jq '.[] | select(.conclusion=="failure") | .name' 2>/dev/null)
+   ```
+   Record `FAILING` for the verdict (G7) and the `**CI:**` summary line. The
+   review is **read-only**: it does NOT run pre-commit, read CI logs, fix CI,
+   commit, or push. CI reports its own failures, and
+   `sdk-review-downgrade-on-ci-failure.yml` strips the approval if a
+   non-review check fails. A real CI failure on its own → verdict
+   NEEDS_FIXES (per §2g).
+
+10. Read the repo's `CLAUDE.md` for project conventions.
+
+11. **Smart agent routing** — classify the PR by which area it touches, and
+    dispatch only the matching specialist(s):
+    ```bash
+    gh pr view "$PR_NUMBER" --repo "$REPO" --json files --jq '.files[].path' > /tmp/PR_FILES.txt
+    TOTAL_FILES=$(wc -l < /tmp/PR_FILES.txt)
+    CT_FILES=$(grep -cE '^contract-toolkit/' /tmp/PR_FILES.txt || true)
+    SDK_FILES=$(grep -cE '^application_sdk/' /tmp/PR_FILES.txt || true)
+    CONF_FILES=$(grep -cE '^(packages/conformance/|remediation/)' /tmp/PR_FILES.txt || true)
+    TEST_FILES=$(grep -cE '^(tests/|contract-toolkit/tests/)' /tmp/PR_FILES.txt || true)
+    DOC_FILES=$(grep -cE '^(docs/|contract-toolkit/docs/|.*README\.md$)' /tmp/PR_FILES.txt || true)
+    CONFIG_FILES=$(grep -cE '^(pyproject\.toml|uv\.lock|\.pre-commit|\.github/|helm/)' /tmp/PR_FILES.txt || true)
+    SOURCE_FILES=$((TOTAL_FILES - CONF_FILES - TEST_FILES - DOC_FILES - CONFIG_FILES))
+    ```
+   This file-list based classification includes deleted files; do not classify
+   only from `+++ b/` diff headers. Apply in order; **first match wins**:
+   - If `CT_FILES > 0 && SDK_FILES == 0 && CONF_FILES == 0 && CONFIG_FILES == 0` → `review_scope=contract-toolkit`
+     (toolkit-review.md only; mandatory private consumer validation based on affected surface)
+   - If `CT_FILES > 0 && (SDK_FILES > 0 || CONFIG_FILES > 0)` → `review_scope=mixed-sdk-toolkit`
+     (standard SDK review agents + toolkit-review.md)
+   - If `SOURCE_FILES == 0 && CONF_FILES > 0 && CT_FILES == 0` → `review_scope=conformance-only`
+     (`conformance.md` agent only — the conformance-suite specialist for
+     `packages/conformance/**` + `remediation/**`: SARIF detector correctness,
+     rule-catalog consistency, rule scope (sdk/app/both), the two CI gates, and
+     the paired remediation program in the SAME PR. NOT the SDK CORRECTNESS
+     agent — conformance code is AST/rule logic, not Temporal/Dapr runtime.
+     If `CONFIG_FILES > 0` too, also dispatch `ci-config.md` on the config slice.)
+   - If `SOURCE_FILES == 0 && TEST_FILES > 0` → `review_scope=tests-only`
+     (QUALITY agent only — focused on test patterns, coverage, assertions)
+   - If `SOURCE_FILES == 0 && DOC_FILES > 0 && TEST_FILES == 0` → `review_scope=docs-only`
+     (Skip Phase 2 — submit APPROVE with "Docs-only PR, no code review needed")
+   - If `SOURCE_FILES == 0 && CONFIG_FILES > 0` → `review_scope=config-only`
+     (`ci-config.md` agent only — the CI/workflow/deps/infra specialist, NOT
+     the SDK CORRECTNESS agent. Reviews GHA injection/permissions/pinning,
+     shell robustness, dependency/supply-chain, and `helm/**`.)
+   - If `SOURCE_FILES <= 2 && TEST_FILES >= SOURCE_FILES * 3` → `review_scope=tests-focused`
+     (QUALITY agent + lightweight CORRECTNESS — mostly tests with a few source changes)
+   - Otherwise → `review_scope=full` (correctness + quality + structure)
+
+12. Check diff size for tier:
+    - < 2000 lines → `review_tier = "full"`
+    - 2000-20000 → `review_tier = "partitioned"`
+    - > 20000 → `review_tier = "staged"`
+
+Print: `[Phase 0 complete] PR #<N>, scope=<scope>, tier=<tier>`
+
+---
+
+## Phase 1: Context Gather (~60s)
+
+### 1a. Holistic File Assessment (NO LLM)
+
+For each changed source file in `/tmp/DIFF.patch`:
+```bash
+wc -l <file>                                           # line count
+rg -l "from.*<module>.*import" application_sdk/ -t py | wc -l  # callers
+rg "def <function_name>" application_sdk/execution/ application_sdk/infrastructure/ -t py -l  # v3 replacement?
+rg "warnings\.warn\|DeprecationWarning" <file>          # deprecated?
+```
+
+Build annotations: lines, callers, DUMPING_GROUND/V3_REPLACEMENT/DEPRECATED flags.
+
+### 1b. Dispatch Reachability Agent (if review_scope=full or mixed-sdk-toolkit)
+
+Use Agent tool to dispatch `agents/reachability.md` — classifies each
+changed symbol as temporal-workflow, temporal-activity, public-http,
+internal, test, or dead.
+
+Skip if review_scope is contract-toolkit, conformance-only, tests-only, docs-only, or config-only.
+
+### 1b-toolkit. Private Toolkit Consumer Setup (if review_scope=contract-toolkit or mixed-sdk-toolkit)
+
+Read:
+
+- `contract-toolkit/AGENTS.md`
+- `.mothership/pr-review/agents/toolkit-review.md`
+- `.mothership/pr-review/references/toolkit-consumer-registry.md`
+
+Classify the affected toolkit surfaces from `/tmp/DIFF.patch`. Then clone or
+reuse every mandatory consumer target from the registry. This validation setup
+is mandatory for affected surfaces; do not approve if a required check cannot
+run.
+
+Create a private validation ledger. This is the source of truth for toolkit
+compatibility status and verdict gating:
+
+```bash
+: > /tmp/TOOLKIT_VALIDATION.md
+printf '## Toolkit Validation Ledger\n\n' >> /tmp/TOOLKIT_VALIDATION.md
+```
+
+First run local PR-bound toolkit checks when toolkit source, examples, or
+generated output changed:
+
+```bash
+contract-toolkit/scripts/regenerate-all.sh
+contract-toolkit/scripts/check-invariants.sh
+(cd contract-toolkit && pkl test tests/*.pkl)
+uv run --extra workflows python contract-toolkit/scripts/test-sdk-import.py
+git diff --check
+```
+
+If any command fails due to PR code or stale generated output, add a finding.
+If the command cannot run due to Rover environment/tooling failure, create
+`/tmp/TOOLKIT_ROVER_NOTE.md` with the sanitized note below.
+
+Record successful local checks privately:
+
+```bash
+printf -- '- Generated SDK input contract: validated (local generated imports and Pkl tests passed)\n' >> /tmp/TOOLKIT_VALIDATION.md
+```
+
+Capture PR-generated artifacts as the input to downstream checks. Do not use a
+consumer repository's released toolkit dependency as proof for this PR:
+
+```bash
+find contract-toolkit/examples -path '*/generated/*' -type f | sort > /tmp/TOOLKIT_PR_ARTIFACTS.txt
+git diff --name-only -- contract-toolkit/examples contract-toolkit/src > /tmp/TOOLKIT_CHANGED_FILES.txt
+```
+
+Use `/tmp/toolkit-review-consumers` for scratch clones:
+
+```bash
+mkdir -p /tmp/toolkit-review-consumers
+
+# Core consumers. Use existing /workspace checkout if present; otherwise clone.
+# Record branch and SHA privately in /tmp/TOOLKIT_CONSUMERS.md.
+for spec in \
+  "atlan-frontend beta" \
+  "blaze main" \
+  "heracles beta" \
+  "atlan-automation-engine-app main"
+do
+  repo="${spec% *}"
+  branch="${spec#* }"
+  if [ -d "/workspace/${repo}/.git" ]; then
+    target="/workspace/${repo}"
+  else
+    target="/tmp/toolkit-review-consumers/${repo}"
+    if [ ! -d "${target}/.git" ] && ! git clone "https://github.com/atlanhq/${repo}.git" "${target}"; then
+      printf '%s\n' "Review note: one required compatibility check could not be completed due to a Rover execution issue. Please re-run @sdk-review or request human review before merge." > /tmp/TOOLKIT_ROVER_NOTE.md
+      continue
+    fi
+  fi
+  if ! git -C "${target}" fetch origin "${branch}"; then
+    printf '%s\n' "Review note: one required compatibility check could not be completed due to a Rover execution issue. Please re-run @sdk-review or request human review before merge." > /tmp/TOOLKIT_ROVER_NOTE.md
+    continue
+  fi
+  printf '%s %s %s\n' "${repo}" "origin/${branch}" "$(git -C "${target}" rev-parse "origin/${branch}")" >> /tmp/TOOLKIT_CONSUMERS.md
+done
+```
+
+Cloning/fetching only establishes the validation target. It is not validation.
+For each affected capability, run the corresponding minimum actionable check in
+the registry using PR-generated artifacts or a scratch contract rewritten to
+amend/import `/workspace/application-sdk/contract-toolkit/src/*.pkl`. If no
+PR-bound command or inspection is possible, mark that capability `needs rerun`
+and do not approve.
+
+Each mandatory capability must append exactly one private status line to
+`/tmp/TOOLKIT_VALIDATION.md`:
+
+```text
+- UI rendering compatibility: validated (<private evidence recorded>)
+- Manifest substitution compatibility: validated (<private evidence recorded>)
+- Workflow execution contract: validated (<private evidence recorded>)
+- Generated SDK input contract: validated (<private evidence recorded>)
+- Representative app pattern: not applicable (<why>)
+```
+
+Allowed statuses are `validated`, `not applicable`, and `needs rerun`. Any
+`needs rerun` status forces `NEEDS_HUMAN`.
+The public review must mirror these as a `### Cross-Repo Validation` section
+using only capability aliases and status values. Do not include private
+consumer repository names, package names, branch names, SHAs, local paths, or
+system-app implementation details in the public section.
+
+For representative app patterns, inspect PR title, body, and diff for trigger
+terms from the registry. Clone/fetch only the matching pattern repos. Optional
+field additions do not require adoption in the representative app unless the PR
+claims compatibility or changes required generated/runtime behavior.
+
+Use these pattern specs after a trigger match:
+
+```bash
+# Pattern specs: "<pattern> <repo> <branch>"
+# query-intelligence atlan-query-intelligence-app main
+# publish atlan-publish-app main
+# popularity atlan-popularity-app main
+# lineage atlan-lineage-app main
+```
+
+For each matched pattern, reuse `/workspace/<repo>` if present, otherwise clone
+to `/tmp/toolkit-review-consumers/<repo>`, fetch the listed branch, and append
+the private SHA to `/tmp/TOOLKIT_CONSUMERS.md`.
+
+When validating a representative app contract, work only in a scratch copy. If
+the contract imports `@app-contract-toolkit/...`, rewrite that scratch copy to
+import the PR checkout source under
+`/workspace/application-sdk/contract-toolkit/src/` before running `pkl eval`.
+
+Scratch rewrite pattern:
+
+```bash
+scratch="/tmp/toolkit-review-consumers/scratch/<pattern>"
+mkdir -p "$scratch"
+cp -R "<consumer-contract-dir>"/. "$scratch"/
+rg -l '@app-contract-toolkit/' "$scratch" \
+  | xargs perl -0pi -e 's#@app-contract-toolkit/#/workspace/application-sdk/contract-toolkit/src/#g'
+pkl eval -m "$scratch/generated" "$scratch/app.pkl"
+```
+
+If the representative app does not have a contract yet, do not fail adoption.
+Validate the generic PR-generated artifact shape and record the representative
+pattern as `not applicable` with the reason.
+
+All consumer repo names, local paths, and SHAs are private evidence. Public PR
+comments may only use capability aliases:
+
+- `UI rendering compatibility`
+- `Manifest substitution compatibility`
+- `Workflow execution contract`
+- `Generated SDK input contract`
+- `Representative app pattern`
+
+If clone/fetch/auth/network fails for a mandatory target, create
+`/tmp/TOOLKIT_ROVER_NOTE.md` with exactly this public note and continue to
+Phase 2 so the review can request a rerun or human review:
+
+```text
+Review note: one required compatibility check could not be completed due to a Rover execution issue. Please re-run @sdk-review or request human review before merge.
+```
+
+### 1c. Prepare Context by Tier
+
+**Token budgets per agent call (hard limits — never exceed):**
+
+| Content | Max tokens (approx) |
+|---------|-------------------|
+| PR diff sent to agent | 60K tokens (~240K chars) |
+| Full file contents sent to agent | 30K tokens (~120K chars) |
+| Reference rules + preamble | 10K tokens (~40K chars) |
+| **Total per agent** | **100K tokens** |
+
+1 token ≈ 4 chars. Measure with `wc -c` and divide by 4.
+
+#### Tier: Full (< 2K lines changed)
+
+Read ALL changed source + test files completely. Send full diff.
+This fits within budget for most PRs.
+
+**Safety check:** Before sending to agents, measure total context:
+```bash
+DIFF_CHARS=$(wc -c < /tmp/DIFF.patch)
+FILE_CHARS=0
+for f in <changed_files>; do
+  FILE_CHARS=$((FILE_CHARS + $(wc -c < "$f")))
+done
+TOTAL=$((DIFF_CHARS + FILE_CHARS))
+echo "Total context: $TOTAL chars (~$((TOTAL/4)) tokens)"
+```
+
+If total > 400K chars (~100K tokens): **auto-upgrade to Partitioned tier.**
+
+#### Tier: Partitioned (2K-20K lines changed)
+
+Split files by directory. Each agent gets only its partition:
+
+| Agent | Gets full content of | Gets file list only for |
+|-------|---------------------|------------------------|
+| CORRECTNESS | `app/`, `execution/`, `credentials/`, `contracts/`, `infrastructure/`, `handler/` | everything else |
+| QUALITY | `tests/`, `common/`, remaining source files | high-risk dirs |
+| STRUCTURE | top 10 most-changed files (by line count) | everything else |
+
+**Diff splitting:** Each agent gets only the hunks for files in its partition:
+```bash
+# Extract hunks for specific files from the full diff
+grep -A 9999 "^diff --git a/<file>" /tmp/DIFF.patch | \
+  sed '/^diff --git a\//q' | head -n -1
+```
+
+**Per-agent safety check:** If a partition still exceeds 100K tokens:
+- Truncate the LARGEST files: send first 500 lines + last 100 lines + function index
+- Format truncated files as:
+  ```
+  === FILE: path/to/large_file.py (2100 lines, TRUNCATED) ===
+  [Lines 1-500]
+  <content>
+
+  [Lines 501-2000 OMITTED — function index:]
+  - def function_a: line 520
+  - class MyClass: line 680
+  - def function_b: line 1200
+
+  [Lines 2001-2100]
+  <content>
+  ```
+
+#### Tier: Staged (20K+ lines changed)
+
+This is for migration PRs, bulk refactors, generated code.
+
+**Step 1: Classify files (deterministic, no LLM):**
+```bash
+for f in <changed_files>; do
+  # HIGH_RISK: critical dirs, public API, security-sensitive
+  if echo "$f" | grep -qE "^(application_sdk/(app|execution|credentials|contracts|infrastructure|handler)/|.*__init__\.py$)"; then
+    echo "HIGH $f"
+  # MEDIUM: other source + tests
+  elif echo "$f" | grep -qE "\.(py)$"; then
+    echo "MED $f"
+  # LOW: docs, config, generated, lock files
+  else
+    echo "LOW $f"
+  fi
+done
+```
+
+**Step 2: Budget allocation:**
+- HIGH_RISK files: full content + their diff hunks (up to 60K tokens)
+- MEDIUM files: diff hunks only, no full file content (up to 30K tokens)
+- LOW files: skipped entirely
+
+**Step 3: If HIGH_RISK alone exceeds 60K tokens:**
+- Sort HIGH_RISK by line count descending
+- Include files until budget is reached
+- Remaining HIGH_RISK files: downgrade to MEDIUM treatment (hunks only)
+
+**Step 4: Note in review comment:**
+```
+> **Large PR (N files, M lines).** Full review applied to X high-risk files.
+> Hunk review applied to Y medium-risk files. Z low-risk files skipped.
+> Re-run `@sdk-review` on specific files if needed.
+```
+
+#### Single-file overflow (any tier)
+
+If ANY single file exceeds 2000 lines:
+```
+=== FILE: path/to/huge_file.py (3500 lines, SUMMARIZED) ===
+
+[Imports: lines 1-45]
+<content>
+
+[Class/function index:]
+- class App(Base): line 50 (400 lines)
+  - def __init__: line 52
+  - def run: line 102
+  - def _register: line 300
+- def helper_a: line 460
+- def helper_b: line 520
+...
+
+[Changed sections with 50-line context above/below:]
+--- Section at lines 142-195 (CHANGED) ---
+<full content of lines 92-245>
+
+--- Section at lines 1200-1230 (CHANGED) ---
+<full content of lines 1150-1280>
+
+[Unchanged sections omitted]
+```
+
+This ensures agents see the structure + the actual changes, without
+blowing up the context with 3500 lines of unchanged code.
+
+#### Never fail on large diffs
+
+If despite all truncation the context STILL exceeds limits:
+1. Drop STRUCTURE agent (least critical)
+2. Drop GPT adversarial
+3. Send only the diff (no full file contents) to remaining agents
+4. Note in review: "Context truncated due to PR size. Some issues may be missed."
+
+**A truncated review is always better than a failed review.**
+
+Print: `[Phase 1 complete] <N> files assessed, tier=<tier>, <M> files truncated`
+
+---
+
+## Phase 2: Review (budget from tier table)
+
+### 2a. Wave 1 — Opus Domain Agents (parallel, native)
+
+Based on `review_scope`, dispatch agents via the Agent tool:
+
+| review_scope | Agents dispatched |
+|---|---|
+| `full` | correctness.md + quality.md + structure.md (all 3) |
+| `contract-toolkit` | toolkit-review.md only |
+| `mixed-sdk-toolkit` | correctness.md + quality.md + structure.md + toolkit-review.md |
+| `tests-only` | quality.md only |
+| `tests-focused` | quality.md + correctness.md (lightweight) |
+| `conformance-only` | conformance.md only (conformance-suite specialist) |
+| `config-only` | ci-config.md only (CI/workflow/deps/infra specialist) |
+| `docs-only` | SKIP Phase 2 entirely |
+
+**Mixed partitions:** when a `full` or `tests-focused` PR ALSO changes config
+or conformance files, additionally dispatch the matching specialist scoped to
+**only** that partition — never hand it to the SDK domain agents:
+- `CONFIG_FILES > 0` (`.github/**`, `pyproject.toml`, `uv.lock`, `.pre-commit*`,
+  `helm/**`) → also dispatch `ci-config.md` on the config slice. (Skip if the
+  only config file is incidental `uv.lock` churn with no `.github/`/`helm/`/
+  `pyproject` change.)
+- `CONF_FILES > 0` (`packages/conformance/**`, `remediation/**`) → also
+  dispatch `conformance.md` on the conformance slice.
+
+The SDK domain agents (correctness/quality/structure) review `application_sdk/**`
++ tests and must NOT be handed `.github/**`, `helm/**`, or
+`packages/conformance/**` for Temporal/Dapr review.
+
+Each agent receives: PR diff (or partition), full file contents,
+holistic annotations, their reference rules, reachability output.
+For `mixed-sdk-toolkit`, partition context by path: SDK agents receive only
+`application_sdk/**`, SDK tests, and config files relevant to SDK behavior;
+`toolkit-review.md` receives `contract-toolkit/**` and toolkit-related config.
+Do not send `contract-toolkit/**` content to SDK agents for Temporal/Dapr
+review.
+For `toolkit-review.md`, also pass `contract-toolkit/AGENTS.md`,
+`.mothership/pr-review/references/toolkit-consumer-registry.md`,
+`/tmp/TOOLKIT_CONSUMERS.md` when present, `/tmp/TOOLKIT_VALIDATION.md`,
+`/tmp/TOOLKIT_PR_ARTIFACTS.txt`, and `/tmp/TOOLKIT_ROVER_NOTE.md` when
+present. The toolkit agent must not include private consumer repo names, paths,
+or SHAs in public findings.
+
+**Degradation priority** (if running over time budget):
+1. Drop STRUCTURE agent first (holistic opinions, least urgent)
+2. Drop QUALITY agent second (code patterns, pre-commit catches most)
+3. CORRECTNESS is ALWAYS kept (catches guardrail violations G1-G5)
+
+Parse JSON findings from each agent response.
+
+### 2b. Wave 2 — GPT-5.3-codex Adversarial (via proxy)
+
+After Wave 1, call GPT to challenge your findings.
+
+**Skip conditions** (no adversarial):
+- `review_scope` is tests-only, conformance-only, config-only, or docs-only
+- `review_scope` is contract-toolkit and toolkit-review.md produced zero findings
+- `review_tier` is "staged" (massive PR — too much context for one GPT call)
+- Wave 1 produced zero findings (nothing to challenge)
+- Time budget already over 70% consumed
+
+If not skipped:
+
+```bash
+curl -s "$PROXY_BASE/proxy/litellm/chat/completions" \
+  -H "Authorization: Bearer $PROXY_JWT" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-5.3-codex",
+    "temperature": 0.2,
+    "max_tokens": 16000,
+    "messages": [
+      {"role": "system", "content": "<agents/adversarial.md content>"},
+      {"role": "user", "content": "<Wave 1 findings + PR diff + annotations>"}
+    ]
+  }'
+```
+
+GPT challenges every Opus finding. GPT also discovers findings Opus missed.
+
+If GPT unavailable or skipped: keep all Opus findings >= 80%.
+Note in review: "Cross-model adversarial: <skipped (reason) | ran | unavailable>."
+
+### 2c. De-Bias (deterministic)
+
+| Opus (Wave 1) | GPT (Wave 2) | Action |
+|---|---|---|
+| >= 90% confidence | AGREE or not reviewed | Keep |
+| >= 80% confidence | AGREE | Keep |
+| >= 80% confidence | DISAGREE | **Drop** |
+| >= 80% confidence | PARTIAL | Keep, downgrade severity |
+| Not flagged | GPT >= 90% | Keep (blind spot) |
+| Not flagged | GPT < 90% | Drop |
+| **Guardrail violation** | **Any** | **Always keep** |
+
+If GPT was unavailable or skipped: keep all Opus findings >= 80%.
+
+### 2d. Delta Tracking (if previous review exists)
+
+The previous review should already be loaded into context in Phase 0
+step 6b (`PRIOR_REVIEW` / `/tmp/PRIOR_REVIEW.md`) and used as input
+to Phase 2 reasoning. This section is the **labeling pass on the
+output**: for each finding in the new review, decide whether it's
+RESOLVED / STILL PRESENT / NEW relative to the prior review and tag
+it accordingly in the summary.
+
+If for any reason `PRIOR_REVIEW` is empty here, re-fetch using the
+same query Phase 0 uses — wrap the selection in an array and pick
+`last | .body` so the full body of the most recent matching comment
+lands as a single string (a naive `... | .body | head -1` truncates
+to the first LINE of the body, which is just the HTML marker, and
+silently breaks downstream consumers):
+
+```bash
+PRIOR_REVIEW=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+  --paginate \
+  --jq '[.[] | select(.body | contains("<!-- SDK_REVIEW -->"))] | last | .body // ""')
+```
+
+Labeling rules:
+- Finding was in previous review, code at that line CHANGED → **RESOLVED**
+- Finding was in previous review, code UNCHANGED → **STILL PRESENT**
+- Finding is new (not in previous review) → **NEW**
+
+Include the delta status in the review summary (and inline body
+where applicable) so the author sees at a glance what was fixed vs
+what remains.
+
+### 2e. Guardrails G1-G8
+
+Check consolidated findings. Any G1/G2/G3/G5 → BLOCKED.
+
+### 2f. Holistic Path Forward (Critical + High only)
+
+For BLOCKING/CRITICAL/HIGH findings, include a `path_forward` in the
+inline comment body:
+- **Immediate fix** — "Fix this now, it will break in production. Do X."
+- **Temporary fix + follow-up** — "Quick fix: X. Right solution: Y (follow-up ticket)."
+- **Wrong approach** — "This approach won't work because X. Instead, do Y."
+- **Design decision needed** — "Two valid options: A or B. Needs team discussion."
+
+MEDIUM/LOW/INFO findings: one-line suggested_fix only. No path_forward.
+
+### 2g. Determine Verdict
+
+| Verdict | Condition | approval_recommendation |
+|---|---|---|
+| BLOCKED | G1/G2/G3/G5 violation | REJECT |
+| NEEDS_HUMAN | DESIGN_CHANGE scope | REQUEST_CHANGES |
+| NEEDS_HUMAN | `review_scope` is `contract-toolkit` or `mixed-sdk-toolkit`, and non-empty `/tmp/TOOLKIT_ROVER_NOTE.md` exists or `/tmp/TOOLKIT_VALIDATION.md` has any mandatory toolkit compatibility check with status `needs rerun` | REQUEST_CHANGES |
+| NEEDS_FIXES | Critical, G4/G6, **any Important**, CI failing | REQUEST_CHANGES |
+| READY_TO_MERGE | **0 Critical AND 0 Important**, CI passing | APPROVE |
+
+`READY_TO_MERGE` is strict: a single Important finding forces
+`NEEDS_FIXES`. Nits do not block. If you believe an Important should
+be downgraded, downgrade it explicitly in §2d with a one-line reason
+— do not silently approve over the top of it.
+
+Print: `[Phase 2 complete] <N> findings, verdict=<verdict>`
+
+---
+
+## Phase 3: Submit Review (~30s)
+
+### 3a. Build Payload
+
+For each finding, build the object matching the in-sandbox review
+payload schema (used for the inline-comment loop in 3f below).
+
+**Strip fields not in the schema** — the handler will 422 on unknown fields.
+Only include: title, pattern_id, severity, category, confidence, file, line,
+evidence, attack_path, reachable_from, by_design_check, suggested_fix,
+escalate_to_linear. Do NOT include scope, domain_tag, guardrail, path_forward
+in the findings array — put those in the summary or inline comment body instead.
+
+### 3b. Inline Comments
+
+For BLOCKING/CRITICAL/HIGH findings, create inline comments:
+- `file` and `line` must be in DIFF.patch (added lines only)
+- Max 15 inline comments
+- Write each inline body to `/tmp/inline-comments/<n>.md` and the matching
+  path/line metadata to `/tmp/inline-comments/<n>.json` before Phase 3f. The
+  staged markdown file is the only source allowed for the posted `body`.
+  Do not post from an in-memory body string for toolkit reviews; that bypasses
+  the redaction gate.
+- Format:
+  ```
+  **[SEVERITY]** [TAG] — description
+
+  **Evidence:** <quoted code>
+  **Path Forward:** <immediate fix / temporary fix + follow-up / design decision>
+  **Fix:** <exact code suggestion if PATCH scope>
+  ```
+
+### 3c. Verdict-Stamp: Owned by the GHA runner (sandbox does nothing)
+
+There is no mothership-side handler, and the sandbox **does not post
+`gh pr review`** and **does not apply labels**. Both happen outside
+the sandbox:
+
+- **Approval**: `sdk-review-approve-on-verdict.yml` fires on
+  `issue_comment: created` from `mothership-ai[bot]` with the
+  `<!-- SDK_REVIEW -->` marker (within ~5s of the verdict comment
+  landing). It parses the verdict from the structured
+  `<!-- VERDICT: X -->` marker in §3e, applies the
+  `sdk-review-approved` / `sdk-review-needs-human` /
+  `sdk-review-needs-rebase` labels, sets the `sdk-review` commit
+  status, and posts the formal `atlan-ci` approval if the verdict is
+  `READY_TO_MERGE`. `sdk-review.yml`'s "Approve PR as atlan-ci" step
+  runs the same logic after the SSE stream ends as a fallback —
+  idempotency guards (label present + no existing approval) prevent
+  double-approval. atlan-ci is in CODEOWNERS, so its approval
+  satisfies `require_code_owner_review` on `main`;
+  `mothership-ai[bot]` is a GitHub App and can't be.
+- **Dismiss on human activity**: `sdk-review-dismiss-on-human.yml`
+  fires on `issue_comment` / `pull_request_review` from humans and
+  dismisses the atlan-ci approval + strips the label. So the bot can
+  unblock merges by itself until a human pushes back.
+- **Reset on push**: `sdk-review-reset-on-push.yml` fires on
+  `pull_request: synchronize` and strips the label + flips the
+  `sdk-review` status to pending on the new HEAD. Branch protection
+  separately auto-dismisses the approval (`dismiss_stale_reviews_on_push`).
+- **CI-failure downgrade**: `sdk-review-downgrade-on-ci-failure.yml`
+  fires on `check_suite: completed`; if a non-sdk-review check
+  failed on a HEAD that carries `sdk-review-approved`, it strips
+  the label, dismisses the approval, and flips status to failure.
+
+**Implication for the sandbox**: don't `gh pr edit --add-label` or
+`gh pr review --approve` from inside the orchestration. The verdict
+flows out via the structured marker in the summary comment in §3e;
+the GHA layer reads that and does the rest.
+
+The structured verdict marker is the contract. Keep
+`<!-- VERDICT: X -->` in sync with `### Verdict: ...` in the summary
+template. The token must be one of:
+`READY_TO_MERGE`, `NEEDS_FIXES`, `BLOCKED`, `NEEDS_HUMAN`, `NEEDS_REBASE`.
+
+### 3d. Resolve Inline Threads (on APPROVE)
+
+If verdict = READY_TO_MERGE, resolve ALL open inline review threads from
+previous SDK Review comments. The handler does NOT do this — you must:
+
+```bash
+# Get all review threads
+gh api graphql -f query='
+  query($owner: String!, $repo: String!, $pr: Int!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $pr) {
+        reviewThreads(first: 100) {
+          nodes {
+            id
+            isResolved
+            comments(first: 1) {
+              nodes { body author { login } }
+            }
+          }
+        }
+      }
+    }
+  }' -F owner=atlanhq -F repo=application-sdk -F pr=$PR
+
+# For each unresolved thread posted by the bot, resolve it
+gh api graphql -f query='
+  mutation($id: ID!) {
+    resolveReviewThread(input: {threadId: $id}) {
+      thread { isResolved }
+    }
+  }' -F id="<thread_id>"
+```
+
+Only resolve threads from bot-posted comments (check `author.login`).
+Do NOT resolve threads from human reviewers.
+
+### 3e. Summary
+
+Use this template. The leading `<!-- SDK_REVIEW -->` HTML comment is
+the marker the orchestration uses to find prior reviews on subsequent
+runs; do NOT remove it. The second marker `<!-- VERDICT: X -->` is the
+machine-readable verdict the GHA approval workflows parse — keep it
+in sync with the human-readable `### Verdict:` line below. The token
+after `VERDICT:` MUST be one of: `READY_TO_MERGE`, `NEEDS_FIXES`,
+`BLOCKED`, `NEEDS_HUMAN`, `NEEDS_REBASE`.
+
+```
+<!-- SDK_REVIEW -->
+<!-- VERDICT: READY_TO_MERGE | NEEDS_FIXES | BLOCKED | NEEDS_HUMAN | NEEDS_REBASE -->
+## SDK <Review | Re-review> (mothership): PR #<number> — <title>
+<!-- For review_scope=contract-toolkit, write this heading as:
+     "Contract Toolkit <Review | Re-review> (mothership)".
+     Keep the SDK_REVIEW marker above unchanged. -->
+
+### Verdict: <READY TO MERGE | NEEDS FIXES | BLOCKED | NEEDS HUMAN REVIEW>
+
+> <2-3 sentence summary. Include the holistic assessment:
+>  is this fixing symptoms or causes? What's the right path forward?>
+
+---
+
+### Affected Toolkit Surfaces             <!-- ONLY when review_scope=contract-toolkit or mixed-sdk-toolkit -->
+- `<surface>` — <why it is affected>
+
+### Cross-Repo Validation                 <!-- ONLY when review_scope=contract-toolkit or mixed-sdk-toolkit -->
+- UI rendering compatibility: validated | not applicable | needs rerun
+- Manifest substitution compatibility: validated | not applicable | needs rerun
+- Workflow execution contract: validated | not applicable | needs rerun
+- Generated SDK input contract: validated | not applicable | needs rerun
+- Representative app pattern: validated | not applicable | needs rerun
+
+### Delta from previous review            <!-- ONLY when PRIOR_REVIEW non-empty -->
+- **Resolved (<N>)**: <one line per finding the author fixed>
+- **Still present (<N>)**: <one line per finding that wasn't addressed>
+- **New (<N>)**: <one line per finding introduced by the latest changes>
+- **Downgraded (<N>)**: <one line per finding the author successfully
+  challenged in an inline thread — explain why it was downgraded>
+
+### Findings
+
+> **Format is MANDATORY: file-by-file grouped bullets.** Do NOT
+> substitute a Markdown table (`| Severity | Domain | Where | Summary |`).
+> Group findings under a bold file-path header, then one bullet per
+> finding starting with the severity. Each bullet MUST include the
+> domain tag in square brackets, the line reference (`L<n>` or
+> `L<n>-<m>`), a description, and an italicised `*Path: …*` clause
+> describing the fix. Findings spanning multiple files appear under
+> each affected file's header. Sort files alphabetically; within a
+> file, sort by severity (Critical → Important → Nit) then by line
+> number. PR-metadata-level findings go under
+> a `**PR metadata**` pseudo-header.
+
+**`<path/to/file.py>`**
+- **Critical** [SEC] L42 — description. *Path: immediate fix — <what to do>*
+- **Important** [ARCH] L88 — description. *Path: follow-up ticket — <why>*
+- **Nit** [QUAL] L120 — description. *Path: optional cleanup — <why>*
+
+**`<path/to/other_file.py>`**
+- **Nit** [STRUCT] L15 — description. *Path: <…>*
+
+### Holistic Recommendations (if any)
+- Root cause assessment: is this PR treating symptoms or causes?
+- Suggested approach if the current approach is wrong
+
+### Strengths
+- <what the PR does well>
+
+### Review Note                           <!-- ONLY when /tmp/TOOLKIT_ROVER_NOTE.md exists -->
+<contents of /tmp/TOOLKIT_ROVER_NOTE.md>
+
+---
+**CI:** all passing | N failing
+**Models:** Claude Opus 4.6 (review) + GPT-5.3-codex (adversarial)
+**Cross-model agreement:** X/Y confirmed by both
+**Run:** [view workflow logs + cost](<GHA_RUN_URL>)
+```
+
+**Title selection — "Review" vs "Re-review":**
+- If `/tmp/PRIOR_REVIEW.md` is empty (or this is the first
+  `<!-- SDK_REVIEW -->` comment on the PR) → use **"SDK Review
+  (mothership)"**.
+- If a prior summary exists → use **"SDK Re-review (mothership)"**.
+  This tells the human reading the PR-comment timeline that this
+  pass loaded the previous review as context and reasoned about
+  deltas (per Phase 0 §6b + §2d), not that it ignored history and
+  reran the full review from scratch.
+- If `review_scope=contract-toolkit`, replace `SDK` in the visible
+  heading with `Contract Toolkit`. Keep `<!-- SDK_REVIEW -->` unchanged
+  because the approval workflow parses that stable marker.
+
+**Delta section — only on re-reviews:**
+- Omit the entire `### Delta from previous review` block on a first
+  review.
+- On re-reviews, include the block before `### Findings` so the
+  human sees what changed without scrolling. Counts can be zero
+  (e.g. "Resolved (0)") if a category is empty — that's information
+  too. If a finding moved from Critical → Important because the
+  author's inline reply provided new context, list it under
+  "Downgraded" with a one-line "why" so the reasoning is traceable.
+
+The trailing **Run:** line is required on every summary. Substitute
+`<GHA_RUN_URL>` with the value passed in the prompt header. The link
+takes readers to the GitHub Actions run that produced this review,
+where they can inspect: the streamed event log (started → action →
+complete), the final `cost_usd`, the sandbox + session IDs, and any
+warnings. This is your audit trail — never omit it.
+
+### 3f. Submit
+
+There is no mothership-side `submit-review` endpoint. Use the
+`gh` CLI directly from the sandbox to post the summary as a PR
+comment and each finding as an inline review comment.
+
+```bash
+# Redaction gate for toolkit reviews. Public review bodies must not include
+# private consumer repo names, scratch paths, or fetched SHAs. If this fires,
+# rewrite the public body using capability aliases before posting.
+if [ "$review_scope" = "contract-toolkit" ] || [ "$review_scope" = "mixed-sdk-toolkit" ]; then
+  .mothership/pr-review/scripts/redact-toolkit-public-review.sh /tmp/review-summary.md
+  for body in /tmp/inline-comments/*.md; do
+    [ -f "$body" ] || continue
+    .mothership/pr-review/scripts/redact-toolkit-public-review.sh "$body"
+  done
+fi
+
+# Summary comment (the body built in 3a, including the
+# <!-- SDK_REVIEW --> marker and the <!-- REVIEW_DATA --> JSON):
+gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/review-summary.md
+
+# Inline finding comments — post one per finding via
+# `gh api repos/$REPO/pulls/$PR_NUMBER/comments` so each can target a
+# specific path + line in the diff. The formal verdict review
+# (--approve | --comment) is already submitted in §3c — do NOT submit
+# a second `gh pr review` here.
+#
+# For toolkit reviews, every inline body must already exist under
+# /tmp/inline-comments/*.md and must have passed the redaction gate above.
+# Post inline comments by reading the body from that staged file only.
+
+# Commit status — set the sdk-review check explicitly.
+gh api "repos/$REPO/statuses/$HEAD_SHA" \
+  -f context="sdk-review" \
+  -f state="$STATE" \
+  -f description="$DESCRIPTION"
+# where STATE ∈ success|failure|pending and DESCRIPTION ≤ 140 chars
+```
+
+Retry once on 5xx from the GitHub API. On 422 (malformed inline
+comment because the line is not in the diff), drop that one finding
+and continue with the rest.
+
+### 3g. CI Check — note failures (read-only)
+
+After posting the review, re-check CI via `gh pr checks "$PR_NUMBER" --repo "$REPO"`.
+The review does NOT fix CI and does NOT push. Reflect the failing checks
+in the `**CI:**` summary line and the verdict (a real CI failure →
+NEEDS_FIXES per §2g). `sdk-review-downgrade-on-ci-failure.yml` independently
+strips any approval if a non-review check fails, so the gate is covered
+without the reviewer mutating the branch.
+
+Print: `[Phase 3 complete] Review submitted`
+
+---
+
+## If You Cannot Finish
+
+Always post the summary comment + set the commit status before
+exiting (see Phase 3f). A PR with no review comment
+and no status update is the worst outcome.
+
+Submit minimal:
+```json
+{
+  "approval_recommendation": "REQUEST_CHANGES",
+  "summary": "SDK Review (mothership) could not complete: <reason>. Re-trigger with @sdk-review.",
+  "findings": []
+}
+```

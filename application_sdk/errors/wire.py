@@ -78,7 +78,7 @@ class FailureDetails(BaseModel):
             or any(k.lower().endswith(s) for s in _SUFFIX_DENYLIST)
         }
         if bad:
-            raise ValueError(
+            raise ValueError(  # stdlib-interop: pydantic field_validator requires ValueError
                 "evidence keys may not use secret-named fields: %s" % sorted(bad)
             )
         return v

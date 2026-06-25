@@ -45,15 +45,21 @@ permissions:
 jobs:
   update:
     name: Update Dashboard
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.head_branch == github.event.repository.default_branch
+    # Skip when triggered by the Conformance workflow — it produces no Trivy
+    # artifacts, so the security dashboard job has nothing to download.
+    # The conformance job below runs for all triggers on the default branch.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (github.event.workflow_run.head_branch == github.event.repository.default_branch
+          && github.event.workflow_run.name != 'Conformance')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Checkout dashboard assets from SDK
-        uses: actions/checkout@v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: atlanhq/application-sdk
           path: _sdk
@@ -65,15 +71,29 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SCAN_WORKFLOW: ${{ inputs.scan_workflow }}
+          # When invoked via workflow_run (the normal path), this is the run
+          # that just completed and uploaded the artifacts we want. Reading
+          # it directly avoids the prior "gh run list latest" race where
+          # an older run could be picked if API listing lagged behind.
+          TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           mkdir -p /tmp/scan-artifacts
 
-          RUN_ID=$(gh run list \
-            --workflow="${SCAN_WORKFLOW}" \
-            --status=completed \
-            --limit=5 \
-            --json databaseId,conclusion \
-            --jq '[.[] | select(.conclusion=="success" or .conclusion=="failure")] | .[0].databaseId')
+          # Prefer the triggering workflow_run's ID. Fall back to "latest
+          # completed run of SCAN_WORKFLOW" only for manual workflow_dispatch
+          # invocations (where TRIGGER_RUN_ID is empty).
+          if [ -n "$TRIGGER_RUN_ID" ]; then
+            RUN_ID="$TRIGGER_RUN_ID"
+            echo "Using triggering run: $RUN_ID"
+          else
+            RUN_ID=$(gh run list \
+              --workflow="${SCAN_WORKFLOW}" \
+              --status=completed \
+              --limit=5 \
+              --json databaseId,conclusion \
+              --jq '[.[] | select(.conclusion=="success" or .conclusion=="failure")] | .[0].databaseId')
+            echo "Manual dispatch fallback — latest completed run: $RUN_ID"
+          fi
 
           if [ -z "$RUN_ID" ]; then
             echo "::warning::No completed runs found for workflow ${SCAN_WORKFLOW}"
@@ -83,10 +103,9 @@ jobs:
 
           echo "Downloading artifacts from run $RUN_ID"
           gh run download "$RUN_ID" --name trivy-results --dir /tmp/scan-artifacts || echo "No trivy results"
-          gh run download "$RUN_ID" --name snyk-results --dir /tmp/scan-artifacts || echo "No snyk results"
 
           # If no scan results at all, skip dashboard update to avoid overwriting with zeros
-          if [ ! -f /tmp/scan-artifacts/trivy_results.json ] && [ ! -f /tmp/scan-artifacts/snyk_results.json ]; then
+          if [ ! -f /tmp/scan-artifacts/trivy_results.json ]; then
             echo "::warning::No scan artifacts found (expired?). Skipping dashboard update to preserve existing data."
             echo "has_artifacts=false" >> "$GITHUB_OUTPUT"
           else
@@ -167,68 +186,6 @@ jobs:
           except json.JSONDecodeError as e:
               print(f"Warning: Trivy results invalid JSON: {e}")
 
-          # Parse Snyk
-          try:
-              with open("/tmp/scan-artifacts/snyk_results.json") as f:
-                  snyk = json.load(f)
-              if not snyk.get("error"):
-                  trivy_ids = {v["id"] for v in all_vulns}
-
-                  # Top-level vulns — infer source_type from package manager
-                  for vuln in snyk.get("vulnerabilities", []):
-                      vid = vuln.get("id")
-                      if vid:
-                          cves = vuln.get("identifiers", {}).get("CVE", [])
-                          if vid in trivy_ids or any(c in trivy_ids for c in cves):
-                              continue
-                          lang = vuln.get("language", "").lower()
-                          pkg_manager = vuln.get("packageManager", "").lower()
-                          is_app = lang in ("python", "js", "ruby") or pkg_manager in ("pip", "npm", "yarn", "poetry", "uv")
-                          entry = allowlist.get(vid)
-                          if entry:
-                              status = "expired" if today > entry.get("expires", "9999-12-31") else "allowlisted"
-                          else:
-                              status = "new"
-                          if vid in base_ids:
-                              src = "base_image"
-                          else:
-                              src = "app" if is_app else "base_image"
-                          all_vulns.append({
-                              "id": vid,
-                              "severity": vuln.get("severity", "").upper(),
-                              "package": vuln.get("packageName") or vuln.get("name", ""),
-                              "installed": vuln.get("version", ""),
-                              "fixed": ", ".join(vuln.get("fixedIn", [])) if vuln.get("fixedIn") else "",
-                              "scanner": "snyk",
-                              "source_type": src,
-                              "status": status,
-                          })
-
-                  # Application dependencies
-                  for app in snyk.get("applications", []):
-                      for vuln in app.get("vulnerabilities", []):
-                          vid = vuln.get("id")
-                          if vid and vid not in trivy_ids:
-                              entry = allowlist.get(vid)
-                              if entry:
-                                  status = "expired" if today > entry.get("expires", "9999-12-31") else "allowlisted"
-                              else:
-                                  status = "new"
-                              all_vulns.append({
-                                  "id": vid,
-                                  "severity": vuln.get("severity", "").upper(),
-                                  "package": vuln.get("packageName") or vuln.get("name", ""),
-                                  "installed": vuln.get("version", ""),
-                                  "fixed": ", ".join(vuln.get("fixedIn", [])) if vuln.get("fixedIn") else "",
-                                  "scanner": "snyk",
-                                  "source_type": "base_image" if vid in base_ids else "app",
-                                  "status": status,
-                              })
-          except FileNotFoundError:
-              print("Warning: no Snyk results")
-          except json.JSONDecodeError as e:
-              print(f"Warning: Snyk results invalid JSON: {e}")
-
           # Deduplicate
           seen = set()
           unique = []
@@ -238,20 +195,40 @@ jobs:
                   unique.append(v)
 
           # Write per-repo data file (not shared data.json)
-          # Extract SDK version from Dockerfile
+          # Extract SDK version from the repo's Dockerfile. Compared to the
+          # previous "open ./Dockerfile, take first FROM, stop", this:
+          #   1. Searches common Dockerfile locations (./Dockerfile, deploy/,
+          #      docker/) — many repos put their Dockerfile in a subdir.
+          #   2. Reads ALL FROM lines, then prefers one whose image matches a
+          #      known SDK base registry — so multi-stage builds whose first
+          #      FROM is a builder layer (node:20-alpine etc.) no longer leak
+          #      that builder tag into the SDK version column.
+          #   3. Falls back to the LAST FROM (final runtime stage) when no
+          #      SDK-base FROM is found. Same "no :tag → unknown" behaviour.
           import re as _re
           sdk_version = "unknown"
-          try:
-              with open("Dockerfile") as f:
-                  for line in f:
-                      if line.strip().startswith("FROM "):
-                          image = line.strip().split()[1]
-                          # Extract tag after ':'
-                          if ":" in image:
-                              sdk_version = image.split(":")[-1]
-                          break
-          except FileNotFoundError:
-              pass
+          SDK_BASE_PATTERNS = (
+              "registry.atlan.com/public/app-runtime-base",
+              "registry.atlan.com/public/application-sdk",
+              "ghcr.io/atlanhq/application-sdk-main",
+          )
+          dockerfile_candidates = ["Dockerfile", "deploy/Dockerfile", "docker/Dockerfile"]
+          froms = []
+          for path in dockerfile_candidates:
+              try:
+                  with open(path) as f:
+                      for line in f:
+                          s = line.strip()
+                          if s.startswith("FROM "):
+                              froms.append(s.split()[1])
+                  break  # use the first existing Dockerfile
+              except FileNotFoundError:
+                  continue
+          chosen = next((i for i in froms if any(p in i for p in SDK_BASE_PATTERNS)), None)
+          if not chosen and froms:
+              chosen = froms[-1]
+          if chosen and ":" in chosen:
+              sdk_version = chosen.split(":")[-1]
 
           repo_slug = repo_name.replace("/", "_")
           app_count = sum(1 for v in unique if v["source_type"] == "app")
@@ -322,7 +299,7 @@ jobs:
 
       - name: Setup AWS Credentials
         if: steps.download.outputs.has_artifacts == 'true'
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6
         with:
           aws-region: ap-south-1
           role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess
@@ -374,3 +351,247 @@ jobs:
           aws s3 cp /tmp/merged_history.jsonl "s3://kryptonite-store/${{ inputs.dashboard_path }}/${HISTORY_FILE}"
 
           echo "Dashboard updated at https://k.atlan.dev/${{ inputs.dashboard_path }}/"
+
+  conformance:
+    name: Update Conformance Dashboard
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.head_branch == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Serialize concurrent runs so the history-file download→merge→upload
+    # sequence is never racing against itself. cancel-in-progress: false
+    # queues the later run rather than dropping it.
+    concurrency:
+      group: conformance-dashboard-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - name: Discover latest Conformance run
+        id: discover
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The workflow_run trigger fires on "Vulnerability Scan", not
+          # "Conformance". Conformance artifacts live in a separate run —
+          # discover the latest completed one on the default branch.
+          RUN_ID=$(gh run list \
+            --repo "${{ github.repository }}" \
+            --workflow=conformance.yaml \
+            --status=completed \
+            --branch="${{ github.event.repository.default_branch || 'main' }}" \
+            --limit=20 \
+            --json databaseId,conclusion \
+            --jq '[.[] | select(.conclusion=="success" or .conclusion=="failure")] | .[0].databaseId')
+
+          if [ -z "${RUN_ID:-}" ] || [ "$RUN_ID" = "null" ]; then
+            echo "::warning::No completed (success/failure) Conformance run found in the last 20 runs — all recent runs may be cancelled; skipping conformance dashboard update"
+            echo "has_run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          COMMIT_SHA=$(gh run view "$RUN_ID" --repo "${{ github.repository }}" --json headSha  --jq '.headSha')
+          BRANCH=$(gh run view "$RUN_ID"     --repo "${{ github.repository }}" --json headBranch --jq '.headBranch')
+          echo "Conformance run: $RUN_ID  sha=$COMMIT_SHA  branch=$BRANCH"
+          echo "run_id=$RUN_ID"         >> "$GITHUB_OUTPUT"
+          echo "commit_sha=$COMMIT_SHA" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH"         >> "$GITHUB_OUTPUT"
+          echo "has_run=true"           >> "$GITHUB_OUTPUT"
+
+      - name: Download SARIF artifacts
+        id: download
+        if: steps.discover.outputs.has_run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.discover.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/sarif
+          found=0
+          # All 7 series — download each separately so a missing slug
+          # (e.g. a repo scoped to sdk-only) doesn't fail the whole step.
+          for slug in ci error-handling prescriptions optimizations dependency logging tests; do
+            gh run download "$RUN_ID" \
+              --repo "${{ github.repository }}" \
+              --name "conformance-${slug}-sarif" \
+              --dir /tmp/sarif 2>/dev/null \
+              && found=$((found + 1)) || true
+          done
+          echo "Downloaded $found / 7 series SARIF artifacts"
+          if [ "$found" -eq 0 ]; then
+            echo "::warning::No SARIF artifacts found for run $RUN_ID (expired?) — skipping"
+            echo "has_artifacts=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_artifacts=true"  >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Parse SARIF and generate per-repo summary
+        if: steps.download.outputs.has_artifacts == 'true'
+        env:
+          CONFORMANCE_SHA: ${{ steps.discover.outputs.commit_sha }}
+          CONFORMANCE_BRANCH: ${{ steps.discover.outputs.branch }}
+        run: |
+          python3 - <<'PYEOF'
+          import glob, json, os
+          from datetime import datetime, timezone
+
+          repo_name   = os.environ.get("GITHUB_REPOSITORY", "unknown")
+          commit_sha  = os.environ.get("CONFORMANCE_SHA", "")
+          branch      = os.environ.get("CONFORMANCE_BRANCH", "")
+
+          tool_versions: set  = set()
+          profile_version = "v1"
+          rule_catalog: dict = {}
+          summary        = {"failing": 0, "warning": 0, "suppressing": 0}
+          by_rule: dict  = {}
+          excluded_paths: set  = set()
+          suppressions_list: list = []
+
+          for sarif_path in sorted(glob.glob("/tmp/sarif/*.sarif")):
+              try:
+                  with open(sarif_path) as f:
+                      sarif = json.load(f)
+              except (FileNotFoundError, json.JSONDecodeError) as e:
+                  print(f"Warning: skipping {sarif_path}: {e}")
+                  continue
+
+              for run in sarif.get("runs", []):
+                  driver = run.get("tool", {}).get("driver", {})
+                  if driver.get("version"):
+                      tool_versions.add(driver["version"])
+
+                  # Build rule catalog from the embedded descriptors — carry
+                  # tier/category/series/since so connector-pulse never needs
+                  # to re-fetch the rule metadata separately.
+                  for rule in driver.get("rules", []):
+                      rid = rule.get("id")
+                      if rid and rid not in rule_catalog:
+                          props = rule.get("properties", {})
+                          rule_catalog[rid] = {
+                              "name":     rule.get("name", ""),
+                              "tier":     props.get("atlan/tier", ""),
+                              "category": props.get("atlan/category", ""),
+                              "series":   props.get("atlan/series", ""),
+                              "since":    props.get("atlan/since", ""),
+                              "helpUri":  rule.get("helpUri", ""),
+                          }
+
+                  # Run-level pre-computed summary (accurate counts from the suite).
+                  run_props = run.get("properties", {})
+                  run_sum   = run_props.get("atlan/summary", {})
+                  summary["failing"]    += run_sum.get("failing", 0)
+                  summary["warning"]    += run_sum.get("warning", 0)
+                  summary["suppressing"] += run_sum.get("suppressing", 0)
+                  excluded_paths.update(run_props.get("atlan/excludedPaths", []))
+                  if run_props.get("atlan/profileVersion"):
+                      profile_version = run_props["atlan/profileVersion"]
+
+                  # Per-result pass for byRule breakdown + suppression justifications.
+                  for result in run.get("results", []):
+                      rule_id = result.get("ruleId", "")
+                      if not rule_id or result.get("kind") == "pass":
+                          continue
+                      supps = result.get("suppressions") or []
+                      entry = by_rule.setdefault(rule_id, {"failing": 0, "suppressing": 0})
+                      if supps:
+                          entry["suppressing"] += 1
+                          for s in supps:
+                              just = s.get("justification", "").strip()
+                              if just:
+                                  suppressions_list.append({"ruleId": rule_id, "justification": just})
+                      else:
+                          entry["failing"] += 1
+
+          # Emit a single toolVersion when all series agree; surface the
+          # disagreement explicitly when they don't (partial publish, two
+          # artifacts from different runs) so connector-pulse can flag it.
+          if len(tool_versions) == 1:
+              tool_version = next(iter(tool_versions))
+          elif len(tool_versions) > 1:
+              tool_version = "skew:" + ",".join(sorted(tool_versions))
+          else:
+              tool_version = "unknown"
+
+          repo_slug = repo_name.replace("/", "_")
+          repo_data = {
+              "repo":          repo_name,
+              "collectedAt":   datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "commit":        commit_sha,
+              "branch":        branch,
+              "toolVersion":   tool_version,
+              "profileVersion": profile_version,
+              "summary":       summary,
+              "byRule":        by_rule,
+              "excludedPaths": sorted(excluded_paths),
+              "suppressions":  suppressions_list,
+              # Rule metadata carried so connector-pulse can build the fleet
+              # catalog without re-fetching any source; one authoritative copy
+              # per repo, consistent across all series SARIF files.
+              "ruleCatalog":   rule_catalog,
+          }
+
+          os.makedirs("/tmp/conformance-deploy/repos", exist_ok=True)
+          with open(f"/tmp/conformance-deploy/repos/{repo_slug}.json", "w") as f:
+              json.dump(repo_data, f, indent=2)
+
+          # Append-only history for trend tracking.
+          history_entry = {
+              "date":        datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+              "repo":        repo_name,
+              "toolVersion": tool_version,
+              "failing":     summary["failing"],
+              "warning":     summary["warning"],
+              "suppressing": summary["suppressing"],
+          }
+          with open(f"/tmp/conformance-deploy/history_{repo_slug}.jsonl", "a") as f:
+              f.write(json.dumps(history_entry) + "\n")
+
+          print(f"Conformance data for {repo_name}:")
+          print(f"  toolVersion:  {tool_version}")
+          print(f"  failing:      {summary['failing']}")
+          print(f"  warning:      {summary['warning']}")
+          print(f"  suppressing:  {summary['suppressing']}")
+          print(f"  rules active: {len(by_rule)}")
+          print(f"  suppressions: {len(suppressions_list)}")
+          PYEOF
+
+      - name: Setup AWS Credentials
+        if: steps.download.outputs.has_artifacts == 'true'
+        uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6
+        with:
+          aws-region: ap-south-1
+          role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess
+
+      - name: Deploy to Kryptonite (conformance)
+        if: steps.download.outputs.has_artifacts == 'true'
+        env:
+          REPO_SLUG: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          SLUG=$(echo "$REPO_SLUG" | tr '/' '_')
+          PREFIX="conformance-dashboard"
+
+          # Per-repo summary
+          aws s3 cp "/tmp/conformance-deploy/repos/${SLUG}.json" \
+            "s3://kryptonite-store/${PREFIX}/repos/${SLUG}.json"
+
+          # Regenerate manifest of all repo files present in S3
+          aws s3 ls "s3://kryptonite-store/${PREFIX}/repos/" \
+            | grep '\.json$' | awk '{print $4}' \
+            | python3 -c "import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))" \
+            > /tmp/conformance-deploy/repos.json
+          aws s3 cp /tmp/conformance-deploy/repos.json \
+            "s3://kryptonite-store/${PREFIX}/repos.json"
+
+          # Append history (download existing → merge → re-upload, same as
+          # the Trivy history path above; sort -u deduplicates same-day reruns).
+          HISTORY_FILE="history/${SLUG}.jsonl"
+          aws s3 cp \
+            "s3://kryptonite-store/${PREFIX}/${HISTORY_FILE}" \
+            /tmp/existing_conformance_history.jsonl 2>/dev/null || true
+          cat /tmp/existing_conformance_history.jsonl \
+            "/tmp/conformance-deploy/history_${SLUG}.jsonl" 2>/dev/null \
+            | sort -u \
+            > /tmp/merged_conformance_history.jsonl
+          aws s3 cp /tmp/merged_conformance_history.jsonl \
+            "s3://kryptonite-store/${PREFIX}/${HISTORY_FILE}"
+
+          echo "Conformance dashboard updated: https://k.atlan.dev/${PREFIX}/"

@@ -1,8 +1,10 @@
+import logging
 import sys
 import warnings
 from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import datetime
+from typing import Any
 from unittest import mock
 
 import pytest
@@ -1564,8 +1566,13 @@ class TestProcessRecord:
     def test_unsupported_type_raises_value_error(
         self, logger_adapter: AtlanLoggerAdapter
     ):
-        with pytest.raises(ValueError):
+        from application_sdk.observability.logger_adaptor_errors import (
+            UnsupportedLogRecordError,
+        )
+
+        with pytest.raises(UnsupportedLogRecordError) as exc_info:
             logger_adapter.process_record(12345)
+        assert exc_info.value.code == "INTERNAL_LOGGER_UNSUPPORTED_RECORD_FORMAT"
 
     def test_loguru_like_record_is_normalized(self, logger_adapter: AtlanLoggerAdapter):
         msg = mock.MagicMock()
@@ -1809,12 +1816,19 @@ class TestInterceptHandlerStdlibBridge:
         bind_kwargs = mock_log.opt.return_value.bind.call_args.kwargs
         assert bind_kwargs["logger_name"] == "real_logger"
 
-    def test_record_with_no_extras_only_forwards_logger_name(self) -> None:
+    def test_record_with_no_extras_does_not_leak_builtin_record_fields(
+        self,
+    ) -> None:
         """A vanilla stdlib log call (no ``extra=``) shouldn't accidentally
-        forward built-in record attributes as caller fields."""
+        forward built-in ``LogRecord`` attributes (``name``, ``msg``,
+        ``levelname`` etc.) as caller fields. SDK-injected enrichment
+        (``logger_name``, ``app_name``, …) is expected to be present."""
         import logging
 
-        from application_sdk.observability.logger_adaptor import InterceptHandler
+        from application_sdk.observability.logger_adaptor import (
+            _LOGRECORD_RESERVED_ATTRS,
+            InterceptHandler,
+        )
 
         handler = InterceptHandler()
         record = logging.LogRecord(
@@ -1833,8 +1847,133 @@ class TestInterceptHandlerStdlibBridge:
             handler.emit(record)
 
         bind_kwargs = mock_log.opt.return_value.bind.call_args.kwargs
-        # Only the SDK-injected key, no spurious built-in record fields.
-        assert bind_kwargs == {"logger_name": "vanilla"}
+        # SDK-injected fields are present.
+        assert bind_kwargs["logger_name"] == "vanilla"
+        assert "app_name" in bind_kwargs
+        # No built-in LogRecord field leaked through as a caller extra.
+        leaked = set(bind_kwargs) & _LOGRECORD_RESERVED_ATTRS
+        assert leaked == set(), f"built-in record fields leaked to bind: {leaked}"
+
+    @staticmethod
+    def _emit(name: str = "third_party") -> dict[str, Any]:
+        """Emit a vanilla stdlib record through ``InterceptHandler`` and
+        return the kwargs that the bridge bound on the loguru record."""
+        import logging
+
+        from application_sdk.observability.logger_adaptor import InterceptHandler
+
+        handler = InterceptHandler()
+        record = logging.LogRecord(
+            name=name,
+            level=logging.WARNING,
+            pathname=__file__,
+            lineno=1,
+            msg="m",
+            args=(),
+            exc_info=None,
+        )
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor.logger"
+        ) as mock_log:
+            handler.emit(record)
+        return mock_log.opt.return_value.bind.call_args.kwargs
+
+    def test_stdlib_emit_injects_app_name(self) -> None:
+        """Stdlib bridge must inject ``app_name`` so third-party / library
+        logs (httpx, boto3, …) are attributable in OTLP — this is the
+        :issue:`BLDX-1297` regression: 17.6M log rows landed in central LH
+        with ``app_name=None`` because the bridge skipped enrichment."""
+        from application_sdk.constants import APPLICATION_NAME
+
+        bind_kwargs = self._emit()
+
+        assert bind_kwargs["app_name"] == APPLICATION_NAME
+
+    def test_stdlib_emit_injects_workflow_context(self) -> None:
+        """Stdlib log inside a Temporal workflow must carry workflow_id,
+        workflow_run_id, etc. — matching the SDK adapter path."""
+        set_execution_context(
+            ExecutionContext(
+                execution_type="workflow",
+                workflow_id="wf-123",
+                workflow_run_id="run-abc",
+                workflow_type="t",
+                namespace="ns",
+                task_queue="q",
+                attempt=1,
+            )
+        )
+        try:
+            bind_kwargs = self._emit()
+
+            assert bind_kwargs["workflow_id"] == "wf-123"
+            assert bind_kwargs["workflow_run_id"] == "run-abc"
+            assert bind_kwargs["task_queue"] == "q"
+        finally:
+            set_execution_context(ExecutionContext())
+
+    def test_stdlib_emit_injects_correlation_and_trace_id(self) -> None:
+        """Stdlib log must pick up ``correlation_id`` / ``trace_id`` from the
+        correlation ContextVar — same as the SDK adapter."""
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor.correlation_context"
+        ) as mock_corr_context:
+            mock_corr_context.get.return_value = {
+                "trace_id": "trace-xyz",
+                "correlation_id": "corr-abc",
+                "atlan-workflow-name": "publish",
+                "tenant.id": "cars-vc",
+                "temporal.task_queue": "q",
+                # Empty / falsy values must be filtered out.
+                "atlan-empty": "",
+            }
+            bind_kwargs = self._emit()
+
+        assert bind_kwargs["trace_id"] == "trace-xyz"
+        assert bind_kwargs["correlation_id"] == "corr-abc"
+        assert bind_kwargs["atlan-workflow-name"] == "publish"
+        assert bind_kwargs["tenant.id"] == "cars-vc"
+        assert bind_kwargs["temporal.task_queue"] == "q"
+        assert "atlan-empty" not in bind_kwargs
+
+    def test_caller_extra_app_name_wins_over_injection(self) -> None:
+        """A caller passing ``extra={"app_name": "custom"}`` must keep its
+        value — auto-injection only fills gaps (``setdefault``)."""
+        import logging
+
+        from application_sdk.observability.logger_adaptor import InterceptHandler
+
+        handler = InterceptHandler()
+        record = logging.LogRecord(
+            name="caller",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=1,
+            msg="m",
+            args=(),
+            exc_info=None,
+        )
+        record.app_name = "explicit-override"
+        record.correlation_id = "caller-corr"
+
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor.correlation_context"
+        ) as mock_corr_context:
+            mock_corr_context.get.return_value = {
+                "correlation_id": "context-corr",
+                "trace_id": "context-trace",
+            }
+            with mock.patch(
+                "application_sdk.observability.logger_adaptor.logger"
+            ) as mock_log:
+                handler.emit(record)
+
+        bind_kwargs = mock_log.opt.return_value.bind.call_args.kwargs
+        # Caller wins.
+        assert bind_kwargs["app_name"] == "explicit-override"
+        assert bind_kwargs["correlation_id"] == "caller-corr"
+        # But the auto-fill still adds anything the caller didn't specify.
+        assert bind_kwargs["trace_id"] == "context-trace"
 
 
 class TestSecondaryWorkflowLogsExporter:
@@ -1936,3 +2075,353 @@ class TestSecondaryWorkflowLogsExporter:
         )
         endpoints = self._endpoints_passed_to_exporter(mock_exporter)
         assert "" not in endpoints
+
+
+# ---------------------------------------------------------------------------
+# _CloudflareTimeoutFilter
+# ---------------------------------------------------------------------------
+
+_CF504_MSG = (
+    "gRPC call poll_workflow_task_queue retried 60 times\n"
+    'error=Status { code: Internal, message: "protocol error: received message with '
+    "invalid compression flag: 60 (valid flags are 0 and 1) while receiving response "
+    'with status: 504 Gateway Timeout", metadata: ... }'
+)
+
+
+def _make_temporalio_record(
+    msg: str = _CF504_MSG,
+    level: int = logging.ERROR,
+    name: str = "temporalio.client.retry",
+) -> logging.LogRecord:
+    return logging.LogRecord(
+        name=name,
+        level=level,
+        pathname=__file__,
+        lineno=1,
+        msg=msg,
+        args=(),
+        exc_info=None,
+    )
+
+
+class TestCloudflareTimeoutFilter:
+    @pytest.fixture(autouse=True)
+    def _reset_state(self):
+        from application_sdk.observability.logger_adaptor import (
+            _CloudflareTimeoutFilter,
+        )
+
+        _CloudflareTimeoutFilter._counts.clear()
+        _CloudflareTimeoutFilter._last_emitted.clear()
+        yield
+        _CloudflareTimeoutFilter._counts.clear()
+        _CloudflareTimeoutFilter._last_emitted.clear()
+
+    def test_matching_record_suppressed(self):
+        from application_sdk.observability.logger_adaptor import (
+            _CloudflareTimeoutFilter,
+        )
+
+        f = _CloudflareTimeoutFilter()
+        with mock.patch("application_sdk.observability.logger_adaptor.get_logger"):
+            assert f.filter(_make_temporalio_record()) is False
+
+    def test_non_temporalio_record_passes_through(self):
+        from application_sdk.observability.logger_adaptor import (
+            _CloudflareTimeoutFilter,
+        )
+
+        f = _CloudflareTimeoutFilter()
+        assert f.filter(_make_temporalio_record(name="some.other.logger")) is True
+
+    def test_non_error_level_passes_through(self):
+        from application_sdk.observability.logger_adaptor import (
+            _CloudflareTimeoutFilter,
+        )
+
+        f = _CloudflareTimeoutFilter()
+        assert f.filter(_make_temporalio_record(level=logging.WARNING)) is True
+
+    def test_different_temporalio_error_passes_through(self):
+        from application_sdk.observability.logger_adaptor import (
+            _CloudflareTimeoutFilter,
+        )
+
+        f = _CloudflareTimeoutFilter()
+        assert (
+            f.filter(_make_temporalio_record(msg="auth failure: credentials rejected"))
+            is True
+        )
+
+    def test_partial_match_passes_through(self):
+        """All three anchors must be present — two out of three still passes through."""
+        from application_sdk.observability.logger_adaptor import (
+            _CloudflareTimeoutFilter,
+        )
+
+        f = _CloudflareTimeoutFilter()
+        partial = "poll_workflow_task_queue retried\ninvalid compression flag: 60"
+        assert f.filter(_make_temporalio_record(msg=partial)) is True
+
+    def test_info_emitted_on_first_occurrence(self):
+        from application_sdk.observability.logger_adaptor import (
+            _CloudflareTimeoutFilter,
+        )
+
+        f = _CloudflareTimeoutFilter()
+        mock_adapter = mock.MagicMock()
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor.get_logger",
+            return_value=mock_adapter,
+        ):
+            f.filter(_make_temporalio_record())
+        mock_adapter.info.assert_called_once()
+
+    def test_info_suppressed_within_interval(self):
+        from application_sdk.observability.logger_adaptor import (
+            _CloudflareTimeoutFilter,
+        )
+
+        f = _CloudflareTimeoutFilter()
+        mock_adapter = mock.MagicMock()
+        with (
+            mock.patch(
+                "application_sdk.observability.logger_adaptor.time"
+            ) as mock_time,
+            mock.patch(
+                "application_sdk.observability.logger_adaptor.get_logger",
+                return_value=mock_adapter,
+            ),
+        ):
+            mock_time.monotonic.return_value = 1000.0
+            f.filter(_make_temporalio_record())  # first — emits
+            f.filter(_make_temporalio_record())  # within interval — suppressed
+            assert mock_adapter.info.call_count == 1
+
+    def test_info_emitted_again_after_interval(self):
+        from application_sdk.observability.logger_adaptor import (
+            _CloudflareTimeoutFilter,
+        )
+
+        f = _CloudflareTimeoutFilter()
+        mock_adapter = mock.MagicMock()
+        with (
+            mock.patch(
+                "application_sdk.observability.logger_adaptor.time"
+            ) as mock_time,
+            mock.patch(
+                "application_sdk.observability.logger_adaptor.get_logger",
+                return_value=mock_adapter,
+            ),
+        ):
+            mock_time.monotonic.return_value = 1000.0
+            f.filter(_make_temporalio_record())
+            mock_time.monotonic.return_value = 1060.1  # past 60 s interval
+            f.filter(_make_temporalio_record())
+            assert mock_adapter.info.call_count == 2
+
+    def test_count_in_summary_message(self):
+        """Cumulative occurrence count must appear in the INFO message."""
+        from application_sdk.observability.logger_adaptor import (
+            _CloudflareTimeoutFilter,
+        )
+
+        f = _CloudflareTimeoutFilter()
+        mock_adapter = mock.MagicMock()
+        with (
+            mock.patch(
+                "application_sdk.observability.logger_adaptor.time"
+            ) as mock_time,
+            mock.patch(
+                "application_sdk.observability.logger_adaptor.get_logger",
+                return_value=mock_adapter,
+            ),
+        ):
+            mock_time.monotonic.return_value = 1000.0
+            f.filter(_make_temporalio_record())
+            mock_time.monotonic.return_value = 1060.1
+            f.filter(_make_temporalio_record())
+            second_msg = mock_adapter.info.call_args_list[1][0][0]
+            assert "2" in second_msg
+
+
+# ---------------------------------------------------------------------------
+# TestReplayLogSuppression
+# ---------------------------------------------------------------------------
+
+
+class TestReplayLogSuppression:
+    """Tests for replay-aware log suppression in AtlanLoggerAdapter.
+
+    The adapter must drop workflow-body logs during Temporal replay
+    (matching ``workflow.logger``'s default ``log_during_replay=False``).
+    All checks are done by injecting a replay predicate via ContextVar —
+    no temporalio mocking required.
+    """
+
+    @pytest.fixture(autouse=True)
+    def reset_replay_predicate(self):
+        """Clear the replay predicate before and after each test."""
+        from application_sdk.observability.context import set_replay_predicate
+
+        set_replay_predicate(None)
+        yield
+        set_replay_predicate(None)
+
+    def _make_adapter_with_sink(self) -> tuple[AtlanLoggerAdapter, list[str]]:
+        """Return an adapter and a list that collects emitted log messages.
+
+        The capture sink is added AFTER adapter construction because
+        ``AtlanLoggerAdapter.__init__`` calls ``logger.remove()`` to clear
+        all existing sinks before registering its own — adding the sink first
+        would have it removed immediately.
+        """
+        AtlanLoggerAdapter._reset_for_testing()
+        from loguru import logger as loguru_logger
+
+        # ENABLE_WORKFLOW_REPLAY_LOGS is read once at import and frozen as a
+        # module-level constant, so patching os.environ after import is a
+        # no-op. Patch the constant in the adapter module directly when a test
+        # needs to control it; here we only need the default (False) so no
+        # patch is required.
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "LOG_LEVEL": "DEBUG",
+                "ENABLE_OTLP_LOGS": "false",
+                "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317",
+            },
+        ):
+            adapter = AtlanLoggerAdapter("test_replay")
+
+        # Add capture sink after __init__ so it isn't removed by logger.remove()
+        emitted: list[str] = []
+
+        def _capture_sink(msg: object) -> None:
+            emitted.append(str(msg))
+
+        loguru_logger.add(_capture_sink, format="{message}", level="DEBUG")
+        return adapter, emitted
+
+    def test_suppresses_all_methods_when_replaying(self):
+        """All log methods must be silent during replay (predicate=True)."""
+        from application_sdk.observability.context import set_replay_predicate
+
+        adapter, emitted = self._make_adapter_with_sink()
+        set_replay_predicate(lambda: True)
+
+        adapter.debug("should-suppress-debug")
+        adapter.info("should-suppress-info")
+        adapter.warning("should-suppress-warning")
+        adapter.error("should-suppress-error")
+        adapter.critical("should-suppress-critical")
+        adapter.activity("should-suppress-activity")
+        adapter.metric("should-suppress-metric")
+        adapter.tracing("should-suppress-tracing")
+
+        assert not any(
+            "should-suppress" in m for m in emitted
+        ), f"Expected no emission during replay, got: {emitted}"
+
+    def test_emits_when_not_replaying(self):
+        """Log methods must emit normally when predicate returns False."""
+        from application_sdk.observability.context import set_replay_predicate
+
+        adapter, emitted = self._make_adapter_with_sink()
+        set_replay_predicate(lambda: False)
+
+        adapter.info("live-log")
+
+        assert any(
+            "live-log" in m for m in emitted
+        ), f"Expected 'live-log' in emissions, got: {emitted}"
+
+    def test_emits_when_predicate_is_none(self):
+        """No predicate set (default outside Temporal) → normal emission."""
+        adapter, emitted = self._make_adapter_with_sink()
+        # predicate is None by default (reset_replay_predicate fixture)
+
+        adapter.info("outside-temporal-log")
+
+        assert any(
+            "outside-temporal-log" in m for m in emitted
+        ), f"Expected 'outside-temporal-log' in emissions, got: {emitted}"
+
+    def test_log_during_replay_true_overrides_suppression(self):
+        """When log_during_replay=True the guard is bypassed even during replay."""
+        from application_sdk.observability.context import set_replay_predicate
+
+        adapter, emitted = self._make_adapter_with_sink()
+        adapter.log_during_replay = True
+        set_replay_predicate(lambda: True)
+
+        adapter.info("replay-with-opt-in")
+
+        assert any(
+            "replay-with-opt-in" in m for m in emitted
+        ), f"Expected emission with log_during_replay=True, got: {emitted}"
+
+    def test_suppression_is_per_emission_not_one_shot(self):
+        """Guard evaluates live per call: suppressed on replay, emitted on live."""
+        from application_sdk.observability.context import set_replay_predicate
+
+        adapter, emitted = self._make_adapter_with_sink()
+
+        replaying = True
+
+        def _live_predicate() -> bool:
+            return replaying
+
+        set_replay_predicate(_live_predicate)
+
+        adapter.info("during-replay")  # suppressed
+
+        replaying = False  # simulate replay → live transition
+
+        adapter.info("after-replay")  # should emit
+
+        assert not any(
+            "during-replay" in m for m in emitted
+        ), f"Expected 'during-replay' suppressed, got: {emitted}"
+        assert any(
+            "after-replay" in m for m in emitted
+        ), f"Expected 'after-replay' emitted, got: {emitted}"
+
+    def test_intercept_handler_suppressed_during_replay(self):
+        """The stdlib bridge (InterceptHandler) also drops records during replay."""
+        from application_sdk.observability.context import set_replay_predicate
+        from application_sdk.observability.logger_adaptor import InterceptHandler
+
+        AtlanLoggerAdapter._reset_for_testing()
+        set_replay_predicate(lambda: True)
+
+        handler = InterceptHandler()
+        emitted: list[str] = []
+
+        with mock.patch(
+            "application_sdk.observability.logger_adaptor.logger"
+        ) as mock_loguru:
+            mock_loguru.opt.return_value.bind.return_value.log = mock.MagicMock(
+                side_effect=lambda *a, **kw: emitted.append(a[1] if len(a) > 1 else "")
+            )
+            record = logging.LogRecord(
+                name="test",
+                level=logging.INFO,
+                pathname="",
+                lineno=0,
+                msg="stdlib-during-replay",
+                args=(),
+                exc_info=None,
+            )
+            handler.emit(record)
+
+        assert (
+            not emitted
+        ), f"Expected InterceptHandler to suppress during replay, got: {emitted}"
+        mock_loguru.opt.assert_not_called()
+
+    def test_default_log_during_replay_is_false(self):
+        """log_during_replay defaults to False (env flag default=false)."""
+        adapter, _ = self._make_adapter_with_sink()
+        assert adapter.log_during_replay is False

@@ -239,7 +239,7 @@ class SegmentClient:
             await asyncio.wait_for(asyncio.wrap_future(future), timeout=10.0)
         except TimeoutError:
             future.cancel()
-            logging.warning("Segment queue flush timed out")
+            logging.warning("Segment queue flush timed out", exc_info=True)
         except Exception:
             logging.warning("Error flushing Segment queue", exc_info=True)
 
@@ -301,8 +301,7 @@ class SegmentClient:
                     )
                     batch.append(metric_record)
                     self._queue.task_done()
-                except TimeoutError:
-                    # Timeout - send batch if we have any events
+                except TimeoutError:  # conformance: ignore[E002,E014] queue.get timeout = flush the partial batch now
                     pass
 
                 current_time = asyncio.get_running_loop().time()
@@ -343,7 +342,7 @@ class SegmentClient:
                 metric_record = self._queue.get_nowait()
                 batch.append(metric_record)
                 self._queue.task_done()
-            except asyncio.QueueEmpty:
+            except asyncio.QueueEmpty:  # conformance: ignore[E014] QueueEmpty on get_nowait terminates drain loop; not an error
                 break
         if batch:
             await self._send_batch_to_segment(batch)
@@ -371,9 +370,26 @@ class SegmentClient:
         if metric_record.unit:
             event_properties["unit"] = metric_record.unit
 
+        # Per-tenant identity. Without this, every event across every customer
+        # tenant shares one Mixpanel distinct_id and per-customer analytics
+        # collapse to a single synthetic user. The default user id is kept as
+        # a namespace prefix so events across services remain easy to group;
+        # the tenant identifier is appended when present in labels. Candidates
+        # are checked in increasing-genericity order.
+        tenant_suffix = (
+            metric_record.labels.get("tenant_name")
+            or metric_record.labels.get("atlan_base_url")
+            or metric_record.labels.get("tenant_id")
+        )
+        user_id = (
+            f"{self._default_user_id}:{tenant_suffix}"
+            if tenant_suffix
+            else self._default_user_id
+        )
+
         # Create and return Pydantic model
         return SegmentTrackEvent(
-            userId=self._default_user_id,
+            userId=user_id,
             event=metric_record.name,
             properties=event_properties,
             timestamp=datetime.fromtimestamp(metric_record.timestamp).isoformat(),

@@ -24,9 +24,12 @@ from application_sdk.infrastructure import (
 | `secret_store` | `SecretStore` | `DaprSecretStore` | `MockSecretStore` |
 | `state_store` | `StateStore` | `DaprStateStore` | `MockStateStore` |
 | `storage` | `ObjectStore` | obstore S3/GCS/Azure | local filesystem |
+| `upstream_storage` | `ObjectStore \| None` | `atlan-objectstore` (SDR only) | `None` |
 | `event_binding` | `Binding` | `DaprBinding` | `MockBinding` |
 
 All fields are optional (`None` by default). Accessing a `None` field raises a configuration error at runtime.
+
+**Two-store architecture:** `storage` and `upstream_storage` serve distinct purposes. `storage` is the customer-owned deployment store used by the activity interceptor for task-to-task `FileReference` durability — intermediate data stays inside the customer's perimeter. `upstream_storage` is an Atlan-owned store provisioned by the atlan-configurator in SDR deployments; `App.upload()` routes through it so Atlan system apps (publish, QI, lineage) can read connector artifacts. When `upstream_storage` is `None` (local dev, Atlan-hosted), `App.upload()` falls back to `storage`. See [ADR-0014](../adr/0014-two-store-storage-architecture.md) and [Storage](storage.md) for full details.
 
 `PubSub` and `CapacityPool` are separate infrastructure capabilities managed by their own module-level singletons — see [State, Secrets, Pub/Sub & Bindings](state-secrets-pubsub.md) for usage.
 

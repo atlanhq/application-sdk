@@ -134,11 +134,14 @@ class TestPersistFileReference:
         assert a_side.decode().strip() == _hash_bytes(b"a")
 
     async def test_retained_tier_requires_run_prefix(self, store, tmp_path) -> None:
+        from application_sdk.contracts.types_errors import RunPrefixRequiredError
+
         f = tmp_path / "data.bin"
         f.write_bytes(b"x")
         ref = FileReference(local_path=str(f), tier=StorageTier.RETAINED)
-        with pytest.raises(ValueError):
+        with pytest.raises(RunPrefixRequiredError) as exc_info:
             await persist_file_reference(store, ref)
+        assert exc_info.value.code == "INVALID_INPUT_RUN_PREFIX_REQUIRED"
 
     async def test_retained_tier_with_output_path(self, store, tmp_path) -> None:
         f = tmp_path / "data.bin"
@@ -362,6 +365,34 @@ class TestMaterializeFileReference:
         assert result.local_path is not None
         # Cleanup
         Path(result.local_path).joinpath("x.txt").unlink(missing_ok=True)
+
+    async def test_directory_materialize_path_traversal_rejected(
+        self, store, tmp_path
+    ) -> None:
+        """A listed key containing ``..`` must not write outside *local_path*.
+
+        obstore rejects ``..`` keys on put, so we patch ``list_keys`` to plant
+        a hostile listing and assert the containment guard fires before any
+        write happens (issue #1694).
+        """
+        from unittest.mock import AsyncMock
+
+        local_dir = tmp_path / "out"
+        canary = tmp_path / "canary.txt"
+        ref = FileReference(
+            local_path=str(local_dir),
+            is_durable=True,
+            storage_path="dirkey",
+        )
+        with (
+            patch(
+                "application_sdk.storage.batch.list_keys",
+                new=AsyncMock(return_value=["dirkey/../../canary.txt"]),
+            ),
+            pytest.raises(StorageError, match="Path traversal"),
+        ):
+            await materialize_file_reference(store, ref)
+        assert not canary.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -605,3 +636,35 @@ class TestDirectoryPersistConcurrent:
 
         assert result.file_count == 6
         assert max_active <= 2, f"Expected max 2 concurrent uploads, got {max_active}"
+
+
+class TestPersistFileReferenceListingRace:
+    """Inject the rglob listing transient (cpython#146646) and assert
+    ``persist_file_reference`` still uploads every file.
+    """
+
+    async def test_directory_upload_finds_files_when_rglob_returns_empty(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        (tmp_path / "a.txt").write_bytes(b"a")
+        (tmp_path / "b.txt").write_bytes(b"b")
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        (sub / "c.txt").write_bytes(b"c")
+
+        ref = FileReference(local_path=str(tmp_path), tier=StorageTier.TRANSIENT)
+
+        # Inject the listing race.
+        # Regression guard: a future revert to Path.rglob would re-trigger this mock.
+        monkeypatch.setattr(Path, "rglob", lambda self, pat: iter([]))
+
+        result = await persist_file_reference(store, ref)
+
+        # On main: file_count == 0 (the bug). After fix: 3.
+        assert result.file_count == 3
+        # And the bytes actually made it to storage
+        prefix = result.storage_path
+        assert prefix is not None
+        assert await _get_bytes(f"{prefix}a.txt", store, normalize=False) == b"a"
+        assert await _get_bytes(f"{prefix}b.txt", store, normalize=False) == b"b"
+        assert await _get_bytes(f"{prefix}sub/c.txt", store, normalize=False) == b"c"

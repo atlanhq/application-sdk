@@ -142,7 +142,7 @@ async def auto_heartbeat_loop(
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
             break
-        except TimeoutError:
+        except TimeoutError:  # conformance: ignore[E002,E014] wait_for timeout = heartbeat interval elapsed; loop continues
             pass
 
         actual_elapsed = time.monotonic() - loop_start
@@ -171,6 +171,7 @@ async def auto_heartbeat_loop(
                 e,
                 exc_info=True,
             )
+        # conformance: ignore[E004] catch-and-reraise for Temporal CancelledError; logged at debug then immediately re-raised
         except BaseException:
             logger.debug(
                 "Auto-heartbeat loop stopping: activity cancelled for task '%s'",

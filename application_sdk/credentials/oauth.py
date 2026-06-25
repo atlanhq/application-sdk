@@ -19,6 +19,9 @@ Usage::
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
+import time
 from datetime import UTC, datetime, timedelta
 from typing import ClassVar
 
@@ -32,10 +35,30 @@ logger = get_logger(__name__)
 _EXPIRY_BUFFER_SECONDS = 60
 
 
+def _parse_jwt_exp(token: str) -> float | None:
+    """Extract the exp claim from a JWT payload, or None for opaque tokens.
+
+    Uses the server-issued exp rather than locally-computed now()+expires_in so
+    that current_expires_at is immune to container clock drift on sleep/wake.
+    """
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return None
+        padded = parts[1] + "=" * (-len(parts[1]) % 4)
+        claims: dict[str, object] = json.loads(base64.urlsafe_b64decode(padded))
+        exp = claims.get("exp")
+        return float(exp) if exp is not None else None  # type: ignore[arg-type]
+    # conformance: ignore[E004] probe that decodes opaque/non-JWT tokens; None return is the intended fallback for any parse failure
+    except Exception:  # noqa: BLE001
+        # conformance: ignore[E007] probe returning None on parse failure; logging every non-JWT token decode attempt would be noisy
+        return None
+
+
 class OAuthTokenError(AuthError):
     """Raised when an OAuth 2.0 token exchange or refresh fails (category=AUTH)."""
 
-    code: ClassVar[str] = "OAUTH_TOKEN"
+    code: ClassVar[str] = "AUTH_OAUTH_TOKEN"
 
     def __init__(self, message: str, *, cause: Exception | None = None) -> None:
         AuthError.__init__(self, message=message, cause=cause)
@@ -48,6 +71,13 @@ class OAuthTokenService:
     acquire → cache → refresh before expiry.  Safe for concurrent use within
     a single asyncio event loop (an internal ``asyncio.Lock`` serialises
     exchange requests so only one HTTP call is in-flight at a time).
+
+    Clock-drift correction: each successful token exchange derives a
+    server–local clock offset from the JWT ``iat`` claim via
+    ``_calibrate_clock_offset``.  The offset is exposed as
+    ``clock_offset_seconds`` so callers can compute a correct
+    ``server_now = time.time() + svc.clock_offset_seconds`` without
+    reinventing the calibration themselves.
 
     This service is intentionally credential-source-agnostic: callers are
     responsible for constructing the ``OAuthClientCredential`` (from env vars,
@@ -64,6 +94,9 @@ class OAuthTokenService:
         self._base = credential
         self._current = credential
         self._lock: asyncio.Lock = asyncio.Lock()
+        # Seconds by which the server clock leads the local clock (positive =
+        # local is slow).  Derived from the JWT iat claim on each exchange.
+        self._clock_offset_seconds: float = 0.0
 
     # ------------------------------------------------------------------
     # Public API
@@ -116,22 +149,74 @@ class OAuthTokenService:
                 expiry = expiry.replace(tzinfo=UTC)
             return expiry
         except ValueError:
+            logger.warning(
+                "Failed to parse token expiry from ISO format; returning None",
+                exc_info=True,
+            )
             return None
+
+    @property
+    def clock_offset_seconds(self) -> float:
+        """Server–local clock offset in seconds (positive = container clock is slow).
+
+        Derived from the JWT ``iat`` claim on each successful token exchange.
+        Use ``time.time() + svc.clock_offset_seconds`` to get a clock-corrected
+        estimate of the server's current time.
+        """
+        return self._clock_offset_seconds
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def _needs_refresh(self) -> bool:
-        """True if there is no token or it expires within the buffer window."""
+        """True if there is no token or it expires within the buffer window.
+
+        Uses the clock-offset-corrected server_now so that a slow container
+        clock does not cause the service to hold onto an already-expired token.
+        """
         if not self._current.access_token:
             return True
         expires_at = self.current_expires_at
         if expires_at is None:
             return False  # No expiry known — assume still valid
-        return datetime.now(UTC) >= expires_at - timedelta(
-            seconds=_EXPIRY_BUFFER_SECONDS
-        )
+        server_now = datetime.now(UTC) + timedelta(seconds=self._clock_offset_seconds)
+        return server_now >= expires_at - timedelta(seconds=_EXPIRY_BUFFER_SECONDS)
+
+    def _calibrate_clock_offset(
+        self, token: str, t_before: float, t_after: float
+    ) -> None:
+        """Derive the server–local clock offset from the JWT iat claim (best-effort).
+
+        Compares the server-issued ``iat`` with the midpoint of the local
+        timestamps that bracket the HTTP call.  A positive offset means the
+        container clock is slow — the production failure mode on SDR after a
+        host sleep/wake cycle.
+
+        Opaque tokens (no three-part JWT structure) are silently skipped so
+        the existing offset is preserved.
+        """
+        try:
+            parts = token.split(".")
+            if len(parts) != 3:
+                return
+            padded = parts[1] + "=" * (-len(parts[1]) % 4)
+            claims: dict[str, object] = json.loads(base64.urlsafe_b64decode(padded))
+            iat = claims.get("iat")
+            if iat is not None:
+                local_midpoint = (t_before + t_after) / 2
+                self._clock_offset_seconds = float(iat) - local_midpoint  # type: ignore[arg-type]
+                if abs(self._clock_offset_seconds) > 1:
+                    logger.debug(
+                        "Server clock offset: %.1fs (container clock is %s)",
+                        abs(self._clock_offset_seconds),
+                        "slow" if self._clock_offset_seconds > 0 else "fast",
+                    )
+        except Exception:
+            logger.warning(
+                "Non-JWT or malformed token; clock calibration values unchanged",
+                exc_info=True,
+            )
 
     async def _exchange(self) -> OAuthClientCredential:
         """Perform a client_credentials HTTP token exchange.
@@ -163,6 +248,7 @@ class OAuthTokenService:
             self._base.token_url,
         )
 
+        t_before = time.time()
         try:
             async with httpx.AsyncClient(
                 timeout=30.0, verify=get_ssl_context()
@@ -177,8 +263,9 @@ class OAuthTokenService:
             ) from exc
         except httpx.HTTPError as exc:
             raise OAuthTokenError(
-                message=f"Token exchange HTTP error: {exc}", cause=exc
+                message="Token exchange HTTP error", cause=exc
             ) from exc
+        t_after = time.time()
 
         access_token: str = body.get("access_token", "")
         if not access_token:
@@ -189,11 +276,21 @@ class OAuthTokenService:
             )
 
         expires_in = body.get("expires_in")
-        expires_at = ""
-        if expires_in is not None:
+        exp_ts = _parse_jwt_exp(access_token)
+        if exp_ts is not None:
+            # Prefer the server-issued exp claim: it is set by the OAuth server
+            # using the server's own clock and is immune to container clock drift
+            # (e.g. after a VM sleep/wake cycle).
+            expires_at = datetime.fromtimestamp(exp_ts, UTC).isoformat()
+        elif expires_in is not None:
             expires_at = (
                 datetime.now(UTC) + timedelta(seconds=int(expires_in))
             ).isoformat()
+        else:
+            expires_at = ""
+
+        # Calibrate clock offset from JWT iat — best-effort, opaque tokens skipped.
+        self._calibrate_clock_offset(access_token, t_before, t_after)
 
         logger.debug("OAuth token acquired, expires_at=%s", expires_at or "unknown")
         return self._base.with_new_token(

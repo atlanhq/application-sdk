@@ -4,6 +4,50 @@ The SDK uses `obstore` for all object storage operations, bypassing the Dapr sid
 
 ---
 
+## Two-Store Architecture
+
+The SDK maintains two distinct object-store references, each serving a different
+purpose:
+
+| Dapr component | SDK reference | Owner | Purpose |
+|----------------|--------------|-------|---------|
+| `objectstore` | `infra.storage` | Customer / deployment | Task-to-task `FileReference` durability within a run |
+| `atlan-objectstore` | `infra.upstream_storage` | Atlan | Final artifact hand-off to Atlan system apps (publish, QI, lineage) |
+
+**Task-to-task transfers** use `infra.storage`. The activity interceptor
+automatically uploads every `FileReference` returned from a `@task` to this
+store, keeping all intermediate data inside the customer's deployment perimeter.
+`objectstore` can be any backend the customer controls (S3, Azure Blob, GCS,
+local disk) — Atlan's infrastructure never reads from it.
+
+**App-to-app hand-off** uses `infra.upstream_storage`. When a connector's
+extract activity produces artifacts that Atlan's publish or lineage apps must
+consume, the connector calls `App.upload()` explicitly. In SDR deployments
+`upstream_storage` points to `atlan-objectstore` (Atlan's S3-compatible
+blobstorage proxy); in local dev it is `None` and `App.upload()` falls back to
+the deployment store.
+
+```
+Connector run (customer's cluster)
+  @task extract  ──► FileReference ──► objectstore (infra.storage, customer-owned)
+  @task transform ──► FileReference ──► objectstore
+  run()          ──► App.upload()  ──► atlan-objectstore (infra.upstream_storage, Atlan-owned)
+                                         │
+                                         ▼
+                                  Atlan publish app reads → Atlas
+```
+
+**The key rule:** rely on the interceptor for intra-run durability; call
+`App.upload()` explicitly for any data that must cross into Atlan's
+infrastructure. Relying on the interceptor alone for the app-to-app
+hand-off produces a silent failure — all DAG nodes succeed but the publish
+app finds nothing to publish.
+
+See [ADR-0014](../adr/0014-two-store-storage-architecture.md) for the full
+rationale, fallback behaviour, and consequences.
+
+---
+
 ## Basic Operations
 
 ```python
@@ -144,3 +188,122 @@ Both are called automatically by the default `on_complete()` implementation. Do 
 ## Backend Selection
 
 The object-store backend is configured via Dapr component YAML at deploy time (see `components/objectstore.yaml` in the repo). No code changes are needed to switch between S3, GCS, Azure Blob, or local filesystem. For local development, the default components target a local filesystem path.
+
+---
+
+## Supported Auth Modes
+
+`create_store_from_binding` translates the Dapr component `spec.metadata` fields into the correct obstore configuration. Supported modes per provider:
+
+### S3 (`bindings.aws.s3` / `bindings.s3`)
+
+| Mode | Required fields |
+|------|----------------|
+| Static access key | `accessKey` + `secretKey` (+ optional `sessionToken` for temporary/STS-derived base creds) |
+| AssumeRole via STS | `assumeRoleArn` (+ optional `sessionName`, `accessKey`/`secretKey`/`sessionToken` for base identity) |
+| Instance profile / IRSA / env vars | Omit all credential fields |
+
+`boto3` and `azure-identity` are core SDK dependencies — no extra install is required for these auth modes. The `[iam_auth]` and `[azure]` extras are backwards-compatibility shims kept so connector `pyproject.toml` files that listed them continue to install without error.
+
+### Azure Blob (`bindings.azure.blobstorage`)
+
+Priority order when multiple modes are present: account key > SAS token > certificate > service principal > workload identity > managed identity.
+
+| Mode | Required fields |
+|------|----------------|
+| Account key | `accountKey` |
+| SAS token | `sasToken` or `sasKey` |
+| Certificate-based service principal | `azureTenantId` + `azureClientId` + (`azureCertificateFile` or `azureCertificate`) |
+| Service principal (client secret) | `azureTenantId` + `azureClientId` + `azureClientSecret` |
+| AKS Workload Identity | `azureTenantId` + `azureClientId` (no secret; AAD webhook injects `AZURE_FEDERATED_TOKEN_FILE`) |
+| User-assigned managed identity | `azureClientId` only |
+| System-assigned MI / DefaultAzureCredential | Omit all credential fields |
+
+Use `azureEnvironment` to target sovereign clouds (`AzurePublicCloud`, `AzureChinaCloud`, `AzureUSGovernmentCloud`, `AzureGermanCloud`).
+
+### GCS (`bindings.gcp.bucket` / `bindings.gcs`)
+
+| Mode | Required fields |
+|------|----------------|
+| Inline service-account key | Any SA JSON field that includes `private_key` or `private_key_id` |
+| ADC / Workload Identity / metadata server | `bucket` + `project_id` only (no `private_key`) |
+
+---
+
+## Required Cloud Permissions
+
+The SDK uses a fixed set of object-level operations — no bucket creation, versioning, lifecycle, or presigned-URL generation. The tables below list the minimum permissions the access identity must hold on the target bucket or container.
+
+### S3
+
+Apply object-level actions to `arn:aws:s3:::BUCKET/*` and the list action to `arn:aws:s3:::BUCKET` in separate IAM statement entries.
+
+| IAM action | Operations covered |
+|---|---|
+| `s3:GetObject` | GetObject (full and byte-range), HeadObject |
+| `s3:PutObject` | PutObject, CreateMultipartUpload, UploadPart, CompleteMultipartUpload |
+| `s3:AbortMultipartUpload` | Abort in-flight multipart upload on error (required for streaming write error paths) |
+| `s3:DeleteObject` | DeleteObject and DeleteObjects (bulk batch — same IAM action) |
+| `s3:ListBucket` | ListObjectsV2 — bucket-level permission, not object-level |
+
+Minimal policy skeleton:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:AbortMultipartUpload",
+        "s3:DeleteObject"
+      ],
+      "Resource": "arn:aws:s3:::YOUR-BUCKET/*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::YOUR-BUCKET"
+    }
+  ]
+}
+```
+
+**AssumeRole**: when using `assumeRoleArn`, the caller identity additionally needs `sts:AssumeRole` on the target role ARN. The role itself holds the bucket policy above.
+
+### GCS
+
+| IAM permission | Operations covered |
+|---|---|
+| `storage.objects.get` | GetObject (full and byte-range), object metadata / HeadObject equivalent |
+| `storage.objects.create` | PutObject, resumable / streaming write |
+| `storage.objects.delete` | DeleteObject (GCS has no native bulk-delete API — `delete_prefix` issues parallel single-object deletes) |
+| `storage.objects.list` | ListObjects |
+
+No `storage.buckets.*` permissions are needed. The smallest predefined role that covers all four is **`roles/storage.objectAdmin`** scoped to the bucket. Alternatively, create a custom role with exactly these four permissions.
+
+### Azure Blob Storage / ADLS Gen2
+
+**RBAC** — assign at container or storage-account scope:
+
+| RBAC action | Operations covered |
+|---|---|
+| `Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read` | GetBlob, GetBlobProperties (HEAD), ListBlobs, byte-range GET |
+| `Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write` | PutBlob, PutBlock + PutBlockList (streaming / block write) |
+| `Microsoft.Storage/storageAccounts/blobServices/containers/blobs/delete` | DeleteBlob, BlobBatch delete (bulk — up to 256 keys per request) |
+
+The smallest predefined role covering all three is **`Storage Blob Data Contributor`**. `Storage Blob Data Owner` is a superset and is only needed if you additionally require POSIX ACL management on ADLS Gen2.
+
+**SAS token** — minimum permissions at container scope: `r` (read) + `w` (write) + `d` (delete) + `l` (list), i.e. a container-scoped SAS with **`rwdl`**.
+
+**ADLS Gen2 with POSIX ACLs**: if the storage account has hierarchical namespace enabled and you use ACL-based access control instead of RBAC, the principal needs Execute (`X`) on every parent directory and Read / Write / Delete on the objects in scope. RBAC (`Storage Blob Data Contributor`) is simpler and is recommended unless you have a specific ACL requirement.
+
+### What you do not need
+
+These are commonly over-provisioned by accident:
+
+- S3: any `s3:*Bucket*` action beyond `s3:ListBucket` (no lifecycle, versioning, ACL, tagging, or CORS operations)
+- GCS: any `storage.buckets.*` permission
+- Azure: `Microsoft.Storage/storageAccounts/blobServices/containers/write` (container creation)

@@ -667,13 +667,23 @@ async def test_multi_ep_http_routes_correctly(run_worker, multi_route_wf_client)
 
 
 @pytest.mark.integration
-async def test_multi_ep_missing_workflow_type_returns_400(multi_route_wf_client):
-    """G6.16: POST /start without workflow_type on a multi-EP app returns HTTP 400."""
+async def test_multi_ep_no_entrypoint_uses_auto_default(
+    run_worker, multi_route_wf_client
+):
+    """G6.16: POST /start without ?entrypoint= on a multi-EP app uses auto-default.
+
+    route-a precedes route-b alphabetically, so it is auto-marked default at
+    registration time. The request succeeds (200) without any ?entrypoint= param.
+    """
     client = multi_route_wf_client
 
-    resp = await client.post("/workflows/v1/start", json={"value": 1})
+    async with run_worker():
+        resp = await client.post("/workflows/v1/start", json={"value": 1})
 
-    assert resp.status_code == 400
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is True
+    assert body["data"]["workflow_id"]
 
 
 @pytest.mark.integration

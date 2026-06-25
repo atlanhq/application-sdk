@@ -12,6 +12,7 @@ from application_sdk.contracts.base import (
     HeartbeatDetails,
     Input,
     Output,
+    OutputStatus,
     PayloadSafetyError,
     Record,
     SerializableEnum,
@@ -45,6 +46,88 @@ class TestInputSubclassing:
         obj = MyOutput(result="done")
         assert obj.result == "done"
         assert obj.success is True
+
+
+class TestOutputStatus:
+    """Standard status field on Output, BLDX-1244."""
+
+    def test_default_is_success(self) -> None:
+        # Additive-only requirement: existing connectors that don't set
+        # `status` must get `SUCCESS`, so nothing breaks.
+        class MyOutput(Output):
+            result: str
+
+        obj = MyOutput(result="done")
+        assert obj.status is OutputStatus.SUCCESS
+        assert obj.status == "success"  # StrEnum equality with raw string
+
+    def test_all_three_values_round_trip(self) -> None:
+        # Vocabulary defined in BLDX-1244 — success / partial_success / failure.
+        for value in (
+            OutputStatus.SUCCESS,
+            OutputStatus.PARTIAL_SUCCESS,
+            OutputStatus.FAILURE,
+        ):
+
+            class MyOutput(Output):
+                result: str
+
+            obj = MyOutput(result="x", status=value)
+            assert obj.status is value
+
+    def test_string_value_is_accepted(self) -> None:
+        # Temporal serialisation hands us back the enum as a string. Pydantic
+        # must coerce that back to the enum on deserialization.
+        class MyOutput(Output):
+            result: str
+
+        obj = MyOutput(result="x", status="partial_success")  # type: ignore[arg-type]
+        assert obj.status is OutputStatus.PARTIAL_SUCCESS
+
+    def test_invalid_value_rejected(self) -> None:
+        class MyOutput(Output):
+            result: str
+
+        with pytest.raises(ValidationError):
+            MyOutput(result="x", status="degraded")  # type: ignore[arg-type]
+
+    def test_json_serialises_as_lowercase_string(self) -> None:
+        # Consumers (notifications, retries) need a stable string token.
+        class MyOutput(Output):
+            result: str
+
+        obj = MyOutput(result="x", status=OutputStatus.PARTIAL_SUCCESS)
+        dumped = obj.model_dump_json()
+        assert '"status":"partial_success"' in dumped
+
+    def test_subclass_can_override_default_value(self) -> None:
+        # Connectors with always-partial semantics (rare, but valid) can pin
+        # a different default at the subclass level — Pydantic supports
+        # overriding a field's default without changing its type.
+        class AlwaysPartialOutput(Output):
+            result: str
+            status: OutputStatus = OutputStatus.PARTIAL_SUCCESS
+
+        assert AlwaysPartialOutput(result="x").status is OutputStatus.PARTIAL_SUCCESS
+
+    def test_subclass_overrides_status_type_to_str(self) -> None:
+        # Backward-compat: an existing subclass (e.g. ExecuteColumnBatchOutput
+        # in templates/contracts/incremental_sql.py) declared
+        # ``status: str = ""`` before this base field existed and uses
+        # domain-specific values like ``"not_found"`` that aren't part of
+        # the new enum vocabulary. Adding the typed base field must not
+        # break those callers — Pydantic resolves field type in
+        # most-derived-wins order, so the subclass declaration shadows
+        # the base and free-form strings keep working.
+        class DomainSpecificOutput(Output):
+            status: str = ""
+
+        # Empty default still works
+        obj = DomainSpecificOutput()
+        assert obj.status == ""
+        # Non-enum string value still works
+        obj = DomainSpecificOutput(status="not_found")  # type: ignore[arg-type]
+        assert obj.status == "not_found"
 
     def test_input_safe_primitive_types(self) -> None:
         class SafeInput(Input):

@@ -48,7 +48,28 @@ class SnowflakeApp(App):
         ...
 ```
 
-Each `@entrypoint` method becomes its own Temporal workflow (`{app-name}:{entry-point-name}`). All entry points share the same `@task` methods, handler, and `AppContext`. Trigger a specific entry point via `POST /workflows/v1/start?entrypoint=<name>`. See [Entry Points](entry-points.md) for full detail.
+Each `@entrypoint` method becomes its own Temporal workflow (`{app-name}:{entry-point-name}`). All entry points share the same `@task` methods, handler, and `AppContext`. Trigger a specific entry point via `POST /workflows/v1/start?entrypoint=<name>`.
+
+`run()` and `@entrypoint` methods can also **coexist** in the same class — useful when migrating an existing `run()`-only app incrementally. `run()` is always the default entry point in that case.
+
+See [Entry Points — Default entrypoint resolution](entry-points.md#default-entrypoint-resolution) for the full resolution rules.
+
+### Dynamic manifest (compute_manifest)
+
+A static `manifest.json` is enough for most apps. A multi-entry-point app that must **compute** its manifest per submission (placeholder fill-in, SQL generation, full DAG rewrite) drops a `core.py` in its per-entry-point package exposing a `compute_manifest` hook:
+
+```python
+# app/asset_export_advanced/core.py
+async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+    # `manifest` is the static manifest (already token-substituted);
+    # `fe_inputs` is the decoded frontend form. Return the manifest to serve.
+    ...
+    return manifest
+```
+
+When the app defines it, `GET /workflows/v1/manifest?entrypoint=<name>&fe_inputs=<url-encoded-json>` hands the static manifest plus the decoded `fe_inputs` to the hook and serves its return value; apps without the hook get the static manifest unchanged. The hook must be **`async def`** and return a `dict` — a sync `def` is not discovered and the route serves the static manifest unchanged. If the hook does CPU/IO-bound work (SQL generation, full DAG rewrite) it owns offloading that off the event loop (e.g. `await asyncio.to_thread(...)`). Exceptions are logged internally and surface as a generic `500` (no internals leaked). See [Entry Points — Per-entry-point handler & core modules](entry-points.md#per-entry-point-handler--core-modules) for the module-naming convention.
+
+> **`fe_inputs` size limit.** Because `fe_inputs` rides in the GET query string, it is bounded by the request-line cap of whatever proxy fronts the app (nginx defaults to 8 KB; ALB ~16 KB). The SDK rejects a decoded `fe_inputs` larger than **8 KB** with `413 Payload Too Large` so oversize surfaces as a clear error rather than an opaque upstream truncation. A fully-populated form for the largest connector we ship is ~1.6 KB (≈5 KB for a heavy multi-select), so this is comfortable headroom; forms that genuinely need more should move to a POST body rather than grow the query string.
 
 ## Orchestration in run()
 
@@ -187,8 +208,10 @@ class MyConnector(App):
 
 ### Built-in Cleanup Tasks
 
-Two cleanup tasks are available on every `App`:
+Two cleanup tasks and two transfer tasks are available on every `App`:
 
+- `upload(UploadInput(...))` — pushes a local file or directory to object storage. Routes to the Atlan-owned `atlan-objectstore` (`infra.upstream_storage`) in SDR deployments; falls back to the customer-owned `objectstore` (`infra.storage`) in local dev. This is the explicit hand-off step that downstream Atlan system apps (publish, lineage, quality) consume. See [file-reference.md](file-reference.md) and [ADR-0014](../adr/0014-two-store-storage-architecture.md).
+- `download(DownloadInput(...))` — pulls a file or directory from object storage to a local path.
 - `cleanup_files()` — removes tracked `FileReference` local paths from task outputs, **then** convention-based temp directories (using `input.extra_paths` if provided, otherwise `ATLAN_CLEANUP_BASE_PATHS`, otherwise the default temp path).
 - `cleanup_storage()` — removes object store artifacts by tier:
   - `StorageTier.TRANSIENT` refs are always removed.
@@ -196,6 +219,65 @@ Two cleanup tasks are available on every `App`:
   - `StorageTier.RETAINED` refs under the run-scoped prefix are removed **only** when `input.include_prefix_cleanup=True` is set (opt-in); otherwise they are left untouched.
 
 Both are called automatically by the default `on_complete()` implementation. Do not call them directly from `run()` — the cleanup contract is tied to workflow completion, not mid-run state.
+
+### SDR: Object-Store Access Preflight
+
+When an app runs in **Self-Deployed Runtime (SDR) mode** (`ENABLE_ATLAN_UPLOAD=true`), the SDK
+verifies read + write access to every configured object store at boot time, before the Temporal
+worker accepts any connections. This catches misconfigurations that would otherwise cause every
+workflow run to fail deep inside the task graph.
+
+**When it runs:** `verify_object_store_access` is called once inside `_create_infrastructure`
+immediately after the stores are constructed. It is a no-op in all other run modes.
+
+**What it checks:**
+
+| Store | Binding name | Required |
+|---|---|---|
+| Deployment store | `objectstore` | Always |
+| Upstream Atlan store | `atlan-objectstore` | Always in SDR — hard-fail if absent |
+
+For each store a round-trip probe is executed: write a sentinel object → `HEAD` the object →
+delete it. Delete is best-effort — a delete failure is logged at WARNING but does not fail the
+probe. A missing upload permission, wrong credentials, or unreachable endpoint surfaces here
+rather than mid-run. Each probe is bounded by `ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS` (default: 30 s);
+a blackholed endpoint times out instead of stalling the boot indefinitely.
+
+**Failure mode:** any probe failure raises `ObjectStorePreflightError`, which propagates out of
+`_create_infrastructure` and is caught by `main()` before the process exits non-zero. The error
+message lists each failing store with a classified cause and a one-line remediation hint:
+
+```
+Object-store access check failed (1 store(s) with errors):
+  * deployment store (binding: 'objectstore'): write failed [permission denied]
+    Cause: 403 Forbidden ...
+    Hint:  The credentials are valid but lack the required read/write/delete
+           permissions on this bucket. Grant the IAM/ACL permissions needed
+           for get, put, and delete operations.
+```
+
+**Error classification:**
+
+| Classifier | Triggering signals | Meaning |
+|---|---|---|
+| `permission denied` | HTTP 403, `AccessDenied`, `Forbidden`, `not authorized` | Valid credentials, missing IAM/ACL permissions |
+| `invalid credentials` | HTTP 401, `InvalidAccessKeyId`, `SignatureDoesNotMatch`, `unauthenticated` | Wrong/expired access key or secret |
+| `connectivity / unknown` | Timeout, network error, bucket not found | Endpoint URL, bucket name, or network unreachable from this pod/host |
+
+**Timeout override:**
+
+```bash
+ATLAN_SDR_PREFLIGHT_TIMEOUT_SECS=60  # increase for slow networks
+```
+
+**Programmatic access:**
+
+```python
+from application_sdk.storage import verify_object_store_access, ObjectStorePreflightError
+```
+
+Both symbols are exported from `application_sdk.storage`. The function is normally called by
+the SDK boot path — connectors do not need to call it manually.
 
 ## Passthrough Modules
 

@@ -2,7 +2,8 @@ import functools
 import inspect
 import time
 import uuid
-from typing import TYPE_CHECKING, Any, Callable, TypeVar, cast
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
@@ -219,6 +220,7 @@ def observability(
 
                 return result
 
+            # conformance: ignore[E004] decorator wrapper; exception is logged with exc_info inside _record_error_observability then re-raised
             except Exception as e:
                 # Record error observability
                 _record_error_observability(
@@ -264,6 +266,7 @@ def observability(
 
                 return result
 
+            # conformance: ignore[E004] decorator wrapper; exception is logged with exc_info inside _record_error_observability then re-raised
             except Exception as e:
                 # Record error observability
                 _record_error_observability(

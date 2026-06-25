@@ -9,7 +9,6 @@ Most functions previously in this module have been moved to more logical homes:
 
 import json
 import os
-from typing import Union
 
 from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.observability.logger_adaptor import get_logger
@@ -20,7 +19,7 @@ logger = get_logger(__name__)
 
 
 async def download_file_from_upload_response(
-    response: Union[dict, str, FileUploadResponse],
+    response: dict | str | FileUploadResponse,
 ) -> str:
     """Download a file that was uploaded via the /file endpoint.
 
@@ -43,16 +42,26 @@ async def download_file_from_upload_response(
         try:
             response = json.loads(response)
         except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON string: {e}") from e
+            from application_sdk.common.errors import JsonParseError  # noqa: PLC0415
+
+            raise JsonParseError(cause=e) from e
 
     if isinstance(response, FileUploadResponse):
         key = response.key
     elif isinstance(response, dict):
         if "key" not in response:
-            raise ValueError("Response dict is missing required 'key' field")
+            from application_sdk.common.errors import (  # noqa: PLC0415
+                ResponseKeyMissingError,
+            )
+
+            raise ResponseKeyMissingError()
         key = response["key"]
     else:
-        raise ValueError(f"Unsupported response type: {type(response)}")
+        from application_sdk.common.errors import ResponseTypeError  # noqa: PLC0415
+
+        raise ResponseTypeError(
+            message=f"Unsupported response type: {type(response).__name__}"
+        )
 
     local_path = os.path.join(TEMPORARY_PATH, key)
 

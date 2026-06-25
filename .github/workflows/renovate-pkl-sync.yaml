@@ -1,0 +1,114 @@
+name: Sync Pkl contract artifacts for Renovate (Reusable)
+
+# Reusable merge gate for Renovate (and Dependabot) app-contract-toolkit PRs.
+#
+# When Renovate bumps the @<version> URI in contract/PklProject, the committed
+# artifacts go stale. This workflow re-syncs them so the PR is self-contained
+# and CI passes without a manual step. All logic lives in the tested driver
+# .github/scripts/renovate_pkl_sync.py (see that file's docstring); this
+# workflow only provides the toolchain and pushes the driver's commit.
+#
+#   1. contract/PklProject.deps.json — the Pkl lock. Always re-resolved.
+#   2. app/generated/** (+ atlan.yaml / app.yaml) — the generated artifacts.
+#      Regenerated via `pkl eval` by default (regenerate-contract: true), since
+#      a toolkit bump can change generated output and a lock-only sync would
+#      leave it stale. An app opts OUT with regenerate-contract: false (e.g.
+#      hand-maintained generated config, or a layout this can't drive). A
+#      failed eval degrades to a lock-only sync (never worse than re-resolve).
+#
+# Scope: standard repo-root layout (contract/PklProject, contract/app.pkl,
+# output at the repo root). Non-standard layouts (app/contract/, monorepo
+# apps/*/contract/) self-skip regeneration when contract/app.pkl is absent.
+#
+# Consumer repos call this from their own .github/workflows/renovate-pkl-sync.yaml:
+#
+#   on:
+#     push:
+#       branches: ['renovate/**']
+#       paths: ['contract/PklProject']
+#   permissions:
+#     contents: write
+#   jobs:
+#     sync:
+#       uses: atlanhq/application-sdk/.github/workflows/renovate-pkl-sync.yaml@main
+#       # artifact regeneration is ON by default; opt OUT with:
+#       # with:
+#       #   regenerate-contract: false
+#
+# The GITHUB_TOKEN in the called workflow inherits the caller's contents:write
+# permission, which is enough to commit and push to the renovate/** branch.
+
+on:
+  workflow_call:
+    inputs:
+      pkl-version:
+        description: Pkl toolchain version to use.
+        required: false
+        default: "0.27.2"
+        type: string
+      regenerate-contract:
+        description: >
+          Regenerate app/generated/** (+ atlan.yaml/app.yaml) via `pkl eval`,
+          not just the lock. Default true — a toolkit bump otherwise leaves the
+          generated artifacts stale. Set false to opt out (e.g. an app with
+          hand-maintained generated config, or a layout this can't drive).
+        required: false
+        default: true
+        type: boolean
+    secrets:
+      push_token:
+        description: >
+          PAT of an org member to use for the commit push. Required on public
+          repos — a GITHUB_TOKEN push from github-actions[bot] triggers
+          GitHub's outside-collaborator workflow re-approval gate. Falls back
+          to GITHUB_TOKEN when omitted (fine for private repos).
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  sync-pkl-deps:
+    name: Re-resolve and regenerate Pkl contract artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          token: ${{ secrets.push_token || secrets.GITHUB_TOKEN }}
+          ref: ${{ github.ref }}
+
+      # Provides `uvx ruff`, used by the driver to format generated Python.
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+      - name: Install pkl
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/pkl \
+            "https://github.com/apple/pkl/releases/download/${{ inputs.pkl-version }}/pkl-linux-amd64"
+          chmod +x /tmp/pkl
+          sudo mv /tmp/pkl /usr/local/bin/pkl
+
+      # Fetch the driver from the SDK default branch — a `uses:` reusable
+      # workflow does NOT bring its repo's files into the caller's checkout, so
+      # the consumer repo (checked out above) has no copy of this script. Same
+      # .sdk-scripts pattern as release-version-bump.yaml. The script is run
+      # from the consumer's working tree (CWD), so it acts on the consumer's
+      # contract/ and app/generated/; only .sdk-scripts holds SDK code, and it
+      # is never staged (the driver stages explicit paths only).
+      - name: Fetch sync driver
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: atlanhq/application-sdk
+          ref: main
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          path: .sdk-scripts
+
+      - name: Re-resolve and (optionally) regenerate
+        run: |
+          python3 .sdk-scripts/.github/scripts/renovate_pkl_sync.py \
+            --contract-dir contract \
+            --regenerate "${{ inputs.regenerate-contract }}"
+
+      - name: Push
+        run: git push

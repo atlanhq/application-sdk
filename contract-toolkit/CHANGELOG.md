@@ -3,8 +3,120 @@
 All notable changes to this project are documented here.
 
 Release notes are generated from [conventional commit](https://www.conventionalcommits.org/)
-messages. Every merge to `main` produces either a patch, minor, or major release —
-see the version-bump logic in `.github/workflows/release.yml`.
+messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
+updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
+
+## [0.16.0] - 2026-06-25
+
+### Features
+
+- add WidgetValidation property to TextInput and TextBoxInput (#2286) ([12b72d3](https://github.com/atlanhq/application-sdk/commit/12b72d3))
+
+### Bug fixes
+
+- close App.pkl parity gaps for CredentialInput placeholder, argoPackageNames, workflowTypeOverride (#2313) ([ffae058](https://github.com/atlanhq/application-sdk/commit/ffae058))
+
+## [0.15.0] - 2026-06-24
+
+### Features
+
+- add e2eCredentialMode + widen ConditionalInput Literal for agent e2e (#2299) ([51995b2](https://github.com/atlanhq/application-sdk/commit/51995b2))
+
+## [0.14.2] - 2026-06-22
+
+### Bug fixes
+
+- bake manifest app_name from contract name; drop runtime placeholder (#2271) ([b78ce51](https://github.com/atlanhq/application-sdk/commit/b78ce51))
+
+## [0.14.1] - 2026-06-18
+
+### Bug fixes
+
+- allow 10-day timeout cap (#2223) ([4b88b9b](https://github.com/atlanhq/application-sdk/commit/4b88b9b))
+
+## [0.14.0] - 2026-06-17
+
+### Features
+
+- emit marketplace metadata in atlan.yaml (#2187) ([982e2b9](https://github.com/atlanhq/application-sdk/commit/982e2b9))
+
+## [0.13.0] - 2026-06-16
+
+### Features
+
+- default selfDeployedRuntime to true (#2173) ([efaca08](https://github.com/atlanhq/application-sdk/commit/efaca08))
+- make `connectionEntity` argument optional in `publish` (#2159) ([a28a849](https://github.com/atlanhq/application-sdk/commit/a28a849))
+
+## [0.12.0] - 2026-06-11
+
+### Features
+
+- notification node fires on completion + rename notifyOnFailure → notifications (#2011) ([8c44d82](https://github.com/atlanhq/application-sdk/commit/8c44d82))
+
+### Bug fixes
+
+- normalize APITree filters in extraction inputs (#2024) ([cbc7777](https://github.com/atlanhq/application-sdk/commit/cbc7777))
+- bump default publish node timeout 24h→72h (#2072) ([90e23fe](https://github.com/atlanhq/application-sdk/commit/90e23fe))
+
+## [0.11.1] - 2026-06-08
+
+### Bug fixes
+
+- hide JDBC merge-target auth panes (#2014) ([c290a98](https://github.com/atlanhq/application-sdk/commit/c290a98))
+
+## [0.11.0] - 2026-06-05
+
+### Features
+
+- add experimental run-failure notification node (ARUN-619) (#1988) ([b64ef49](https://github.com/atlanhq/application-sdk/commit/b64ef49))
+- support credential file upload widgets (#1997) ([fec1937](https://github.com/atlanhq/application-sdk/commit/fec1937))
+- codegen _e2e_base.py, _e2e_credential.py, _e2e_substitutions.py (#1980) ([0e70b7b](https://github.com/atlanhq/application-sdk/commit/0e70b7b))
+
+### Bug fixes
+
+- preserve in-pipeline position for extraNodes publish override (#1993) ([f1eda93](https://github.com/atlanhq/application-sdk/commit/f1eda93))
+
+## [0.10.5] - 2026-06-03
+
+### Bug fixes
+
+- update QI contract (#1971) ([a6345f6](https://github.com/atlanhq/application-sdk/commit/a6345f6))
+- emit lint-clean generated input contracts (#1967) ([c1dcdde](https://github.com/atlanhq/application-sdk/commit/c1dcdde))
+
+## [0.10.4] - 2026-05-29
+
+### Bug fixes
+
+- corrects generated output for credentials (#1928) ([17da250](https://github.com/atlanhq/application-sdk/commit/17da250))
+
+## [0.10.3] - 2026-05-28
+
+### Bug fixes
+
+- support credential checkbox and auto-derive auth-type hidden (#1873) ([944c290](https://github.com/atlanhq/application-sdk/commit/944c290))
+
+## [0.10.2] - 2026-05-27
+
+### Bug fixes
+
+- add current_state_enabled + current_state_via_app_enabled to PublishNode and PublishStep (#1866) ([318af06](https://github.com/atlanhq/application-sdk/commit/318af06))
+
+## [0.10.1] - 2026-05-22
+
+### Bug fixes
+
+- default connection cache to true/false for PublishNode/LineagePublishNode (#1850) ([dd49f65](https://github.com/atlanhq/application-sdk/commit/dd49f65))
+- default splitDeployment and keda.enabled to true (#1837) ([772fa4c](https://github.com/atlanhq/application-sdk/commit/772fa4c))
+
+## [0.10.0] - 2026-05-21
+
+### Features
+
+- Consolidate to single `App.pkl` template; legacy modules (`NativeApp.pkl`, `NativeAppBundle.pkl`, `Renderers.pkl`) retained as frozen reference material ([#1814](https://github.com/atlanhq/application-sdk/pull/1814))
+
+### Bug fixes
+
+- Read `.default` uniformly in `getInputPyField` so optional fields with explicit defaults render correctly in generated `_input.py` ([#1803](https://github.com/atlanhq/application-sdk/pull/1803))
 
 ## [0.9.5] - 2026-05-07
 

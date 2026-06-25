@@ -351,6 +351,19 @@ class TestDownloadFile:
         await download_file("n.bin", dest, store)
         assert dest.read_bytes() == b"nested"
 
+    @pytest.mark.skipif(
+        os.name == "nt", reason="POSIX file-mode bits not meaningful on Windows"
+    )
+    async def test_download_file_is_owner_only(self, store, tmp_path) -> None:
+        """Downloaded artifacts must not be group/other-readable (umask-independent)."""
+        f = tmp_path / "src.bin"
+        f.write_bytes(b"secret")
+        await upload_file("perm.bin", f, store)
+
+        dest = tmp_path / "out.bin"
+        await download_file("perm.bin", dest, store)
+        assert dest.stat().st_mode & 0o077 == 0
+
 
 class TestPutJson:
     """Tests for the public put_json() helper."""
@@ -439,46 +452,44 @@ class TestTransferLogging:
     """
 
     async def test_upload_emits_success_log_with_metrics(
-        self, store, tmp_path, caplog
+        self, store, tmp_path, loguru_capture
     ) -> None:
         f = tmp_path / "p.bin"
         f.write_bytes(b"x" * (256 * 1024))
-        with caplog.at_level("INFO", logger="application_sdk.storage.ops"):
-            await upload_file("metrics/up.bin", f, store)
+        await upload_file("metrics/up.bin", f, store)
 
-        events = [r for r in caplog.records if "storage_op" in (r.__dict__)]
-        outcome_events = [r for r in events if r.__dict__.get("outcome") == "success"]
+        events = [r for r in loguru_capture if r["extra"].get("storage_op")]
+        outcome_events = [r for r in events if r["extra"].get("outcome") == "success"]
         assert outcome_events, (
             "expected at least one structured 'success' upload event; "
-            f"got events: {[r.message for r in events]}"
+            f"got events: {[r['message'] for r in events]}"
         )
         evt = outcome_events[-1]
-        assert evt.__dict__.get("storage_op") == "upload"
-        assert evt.__dict__.get("size_bytes") == 256 * 1024
-        assert evt.__dict__.get("elapsed_ms") is not None
-        assert evt.__dict__.get("store_path") == "metrics/up.bin"
+        assert evt["extra"].get("storage_op") == "upload"
+        assert evt["extra"].get("size_bytes") == 256 * 1024
+        assert evt["extra"].get("elapsed_ms") is not None
+        assert evt["extra"].get("store_path") == "metrics/up.bin"
 
     async def test_download_emits_failure_log_with_error_class(
-        self, store, tmp_path, caplog
+        self, store, tmp_path, loguru_capture
     ) -> None:
-        with caplog.at_level("WARNING", logger="application_sdk.storage.ops"):
-            with pytest.raises(StorageNotFoundError):
-                await download_file("no/such/key.bin", tmp_path / "out.bin", store)
+        with pytest.raises(StorageNotFoundError):
+            await download_file("no/such/key.bin", tmp_path / "out.bin", store)
 
-        events = [r for r in caplog.records if "storage_op" in (r.__dict__)]
-        failure_events = [r for r in events if r.__dict__.get("outcome") == "failure"]
+        events = [r for r in loguru_capture if r["extra"].get("storage_op")]
+        failure_events = [r for r in events if r["extra"].get("outcome") == "failure"]
         assert failure_events, (
             "expected at least one structured 'failure' download event; "
-            f"got events: {[r.message for r in events]}"
+            f"got events: {[r['message'] for r in events]}"
         )
         evt = failure_events[-1]
-        assert evt.__dict__.get("storage_op") == "download"
-        assert evt.__dict__.get("error_class") is not None
+        assert evt["extra"].get("storage_op") == "download"
+        assert evt["extra"].get("error_class") is not None
         # Not-found should be classified explicitly.
-        assert evt.__dict__.get("error_class") in {
+        assert evt["extra"].get("error_class") in {
             "StorageNotFoundError",
             "FileNotFoundError",
-        } or "NotFound" in evt.__dict__.get("error_class", "")
+        } or "NotFound" in evt["extra"].get("error_class", "")
 
 
 # ---------------------------------------------------------------------------
@@ -793,3 +804,242 @@ async def test_upload_file_does_not_delete_when_retain_local_copy_true(
         )
     assert isinstance(digest, str)
     assert f.exists()
+
+
+# ---------------------------------------------------------------------------
+# _safe_join_under — containment guard for prefix downloads (issue #1694)
+# ---------------------------------------------------------------------------
+
+
+class TestSafeJoinUnder:
+    def test_simple_key_resolves_inside_root(self, tmp_path) -> None:
+        from application_sdk.storage.ops import _safe_join_under
+
+        result = _safe_join_under(tmp_path, "sub/file.txt")
+        assert result == (tmp_path / "sub" / "file.txt").resolve()
+        assert result.is_relative_to(tmp_path.resolve())
+
+    def test_leading_slash_stripped(self, tmp_path) -> None:
+        from application_sdk.storage.ops import _safe_join_under
+
+        result = _safe_join_under(tmp_path, "/a/b.txt")
+        assert result == (tmp_path / "a" / "b.txt").resolve()
+
+    def test_parent_traversal_rejected(self, tmp_path) -> None:
+        from application_sdk.storage.ops import _safe_join_under
+
+        with pytest.raises(StorageError, match="Path traversal"):
+            _safe_join_under(tmp_path, "../escape.txt")
+
+    def test_mixed_traversal_rejected(self, tmp_path) -> None:
+        from application_sdk.storage.ops import _safe_join_under
+
+        with pytest.raises(StorageError, match="Path traversal"):
+            _safe_join_under(tmp_path, "safe/../../escape.txt")
+
+    def test_empty_rel_returns_root(self, tmp_path) -> None:
+        from application_sdk.storage.ops import _safe_join_under
+
+        result = _safe_join_under(tmp_path, "")
+        assert result == tmp_path.resolve()
+
+
+# ---------------------------------------------------------------------------
+# _resolve_put_attributes — identity-based infra-store matching
+# ---------------------------------------------------------------------------
+
+
+class TestResolvePutAttributes:
+    """_resolve_put_attributes returns the correct put attributes for every store variant.
+
+    Covers:
+    - BoundStore: returns embedded put_attributes directly (no infra lookup needed).
+    - store=None: returns infra.storage_put_attributes.
+    - store IS infra.storage: identity match, returns infra.storage_put_attributes.
+    - store IS infra.upstream_storage: returns infra.upstream_storage_put_attributes.
+    - unrelated store: returns None.
+    - no infra context: returns None.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear_infra(self):
+        from application_sdk.infrastructure.context import clear_infrastructure
+
+        clear_infrastructure()
+        yield
+        clear_infrastructure()
+
+    def _make_infra(
+        self, store, put_attrs, *, upstream_store=None, upstream_put_attrs=None
+    ):
+        from application_sdk.infrastructure.context import InfrastructureContext
+
+        return InfrastructureContext(
+            storage=store,
+            storage_put_attributes=put_attrs,
+            upstream_storage=upstream_store,
+            upstream_storage_put_attributes=upstream_put_attrs,
+        )
+
+    def test_none_store_returns_infra_put_attributes(self) -> None:
+        from application_sdk.infrastructure.context import set_infrastructure
+        from application_sdk.storage.factory import create_memory_store
+        from application_sdk.storage.ops import _resolve_put_attributes
+
+        store = create_memory_store()
+        put_attrs = {"Storage-Class": "STANDARD_IA"}
+        set_infrastructure(self._make_infra(store, put_attrs))
+        assert _resolve_put_attributes(None) == put_attrs
+
+    def test_explicit_infra_store_returns_put_attributes(self) -> None:
+        """Identity match: explicit store IS infra.storage → attributes returned."""
+        from application_sdk.infrastructure.context import set_infrastructure
+        from application_sdk.storage.factory import create_memory_store
+        from application_sdk.storage.ops import _resolve_put_attributes
+
+        store = create_memory_store()
+        put_attrs = {"Storage-Class": "STANDARD_IA"}
+        set_infrastructure(self._make_infra(store, put_attrs))
+        assert _resolve_put_attributes(store) == put_attrs
+
+    def test_upstream_store_returns_upstream_put_attributes(self) -> None:
+        """SDR mode: store IS infra.upstream_storage → upstream put_attributes returned."""
+        from application_sdk.infrastructure.context import set_infrastructure
+        from application_sdk.storage.factory import create_memory_store
+        from application_sdk.storage.ops import _resolve_put_attributes
+
+        deploy_store = create_memory_store()
+        upstream_store = create_memory_store()
+        upstream_put_attrs = {"Storage-Class": "INTELLIGENT_TIERING"}
+        set_infrastructure(
+            self._make_infra(
+                deploy_store,
+                {"Storage-Class": "STANDARD_IA"},
+                upstream_store=upstream_store,
+                upstream_put_attrs=upstream_put_attrs,
+            )
+        )
+        assert _resolve_put_attributes(upstream_store) == upstream_put_attrs
+
+    def test_bound_store_returns_embedded_put_attributes(self) -> None:
+        """BoundStore: put_attributes read from the wrapper, no infra context needed."""
+        from application_sdk.storage.factory import create_memory_store
+        from application_sdk.storage.ops import BoundStore, _resolve_put_attributes
+
+        raw = create_memory_store()
+        put_attrs = {"Storage-Class": "GLACIER"}
+        bound = BoundStore(raw, put_attrs)
+        assert _resolve_put_attributes(bound) == put_attrs
+
+    def test_bound_store_none_put_attributes(self) -> None:
+        """BoundStore with no put_attributes returns None."""
+        from application_sdk.storage.factory import create_memory_store
+        from application_sdk.storage.ops import BoundStore, _resolve_put_attributes
+
+        bound = BoundStore(create_memory_store(), None)
+        assert _resolve_put_attributes(bound) is None
+
+    def test_resolve_store_unwraps_bound_store(self) -> None:
+        """_resolve_store returns the inner ObjectStore when given a BoundStore."""
+        from application_sdk.storage.factory import create_memory_store
+        from application_sdk.storage.ops import BoundStore, _resolve_store
+
+        raw = create_memory_store()
+        bound = BoundStore(raw, {"Storage-Class": "GLACIER"})
+        assert _resolve_store(bound) is raw
+
+    def test_unrelated_store_returns_none(self) -> None:
+        """A different store (e.g. CloudStore, test store) must not get infra attrs."""
+        from application_sdk.infrastructure.context import set_infrastructure
+        from application_sdk.storage.factory import create_memory_store
+        from application_sdk.storage.ops import _resolve_put_attributes
+
+        infra_store = create_memory_store()
+        other_store = create_memory_store()
+        set_infrastructure(
+            self._make_infra(infra_store, {"Storage-Class": "STANDARD_IA"})
+        )
+        assert _resolve_put_attributes(other_store) is None
+
+    def test_no_infra_context_returns_none(self) -> None:
+        from application_sdk.storage.factory import create_memory_store
+        from application_sdk.storage.ops import _resolve_put_attributes
+
+        assert _resolve_put_attributes(None) is None
+        assert _resolve_put_attributes(create_memory_store()) is None
+
+
+# Azure container-not-found detection
+# ---------------------------------------------------------------------------
+
+
+class TestIsAzureContainerNotFound:
+    """_is_azure_container_not_found must recognise container-absent errors."""
+
+    def test_container_not_found_code(self) -> None:
+        from application_sdk.storage.ops import _is_azure_container_not_found
+
+        assert (
+            _is_azure_container_not_found(
+                RuntimeError(
+                    "AzureError: ContainerNotFound — "
+                    "The specified container does not exist."
+                )
+            )
+            is True
+        )
+
+    def test_prose_message(self) -> None:
+        from application_sdk.storage.ops import _is_azure_container_not_found
+
+        assert (
+            _is_azure_container_not_found(
+                RuntimeError("The specified container does not exist.")
+            )
+            is True
+        )
+
+    def test_unrelated_error_returns_false(self) -> None:
+        from application_sdk.storage.ops import _is_azure_container_not_found
+
+        assert _is_azure_container_not_found(RuntimeError("BlobNotFound")) is False
+        assert _is_azure_container_not_found(RuntimeError("permission denied")) is False
+        assert _is_azure_container_not_found(FileNotFoundError("key")) is False
+
+    async def test_put_raises_storage_config_error_on_container_not_found(
+        self, tmp_path
+    ) -> None:
+        """_put must re-raise as StorageConfigError for Azure container-absent."""
+        from application_sdk.storage.errors import StorageConfigError
+        from application_sdk.storage.factory import create_memory_store
+
+        azure_err = RuntimeError(
+            "AzureError: ContainerNotFound — " "The specified container does not exist."
+        )
+        store = create_memory_store()
+        with patch("obstore.put_async", AsyncMock(side_effect=azure_err)):
+            with pytest.raises(StorageConfigError, match="pre-create the container"):
+                await _put("key/data.json", b"{}", store=store)
+
+    async def test_upload_file_raises_storage_config_error_on_container_not_found(
+        self, tmp_path
+    ) -> None:
+        """upload_file must re-raise as StorageConfigError for Azure container-absent."""
+        from application_sdk.storage.errors import StorageConfigError
+        from application_sdk.storage.factory import create_memory_store
+        from application_sdk.storage.ops import upload_file
+
+        src = tmp_path / "data.json"
+        src.write_bytes(b"{}")
+        azure_err = RuntimeError(
+            "AzureError: ContainerNotFound — " "The specified container does not exist."
+        )
+        store = create_memory_store()
+        with (
+            patch(
+                "application_sdk.storage.ops.obstore.open_writer_async",
+                side_effect=azure_err,
+            ),
+            pytest.raises(StorageConfigError, match="pre-create the container"),
+        ):
+            await upload_file("key/data.json", src, store=store)

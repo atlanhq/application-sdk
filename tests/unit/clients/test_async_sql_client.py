@@ -5,6 +5,7 @@ import pytest
 
 from application_sdk.clients.models import DatabaseConfig
 from application_sdk.clients.sql import AsyncBaseSQLClient
+from application_sdk.clients.sql_errors import SqlPandasResultError
 
 
 @pytest.fixture
@@ -253,7 +254,8 @@ async def test_run_query_with_error(
     async_sql_client.use_server_side_cursor = True
 
     results: list[dict[str, str]] = []
-    with pytest.raises(Exception, match="Error executing query") as exc_info:
+    with pytest.raises(SqlPandasResultError) as exc_info:
         async for batch in async_sql_client.run_query(query):
             results.extend(batch)
-    assert "Simulated query failure" in str(exc_info.value.__cause__)
+    assert exc_info.value.message == "Error executing SQL query"
+    assert isinstance(exc_info.value.cause, Exception)

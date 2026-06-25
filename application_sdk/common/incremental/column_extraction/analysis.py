@@ -1,19 +1,14 @@
-"""Daft-based table state analysis for incremental column extraction.
+"""DuckDB-based table state analysis for incremental column extraction.
 
-This module uses Daft's lazy evaluation to efficiently analyze transformed
-table JSON files and identify which tables need column extraction based on
-their incremental state (CREATED, UPDATED, or BACKFILL).
+This module uses DuckDB to efficiently analyze transformed table JSON files
+and identify which tables need column extraction based on their incremental
+state (CREATED, UPDATED, or BACKFILL).
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Set, Tuple
-
-from application_sdk.common.exc_utils import rewrap
-
-if TYPE_CHECKING:
-    from daft import DataFrame
+from typing import Any
 
 from application_sdk.common.incremental.models import EntityType
 from application_sdk.observability.logger_adaptor import get_logger
@@ -21,7 +16,7 @@ from application_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 
 
-def get_transformed_dir(workflow_args: Dict[str, Any]) -> Path:
+def get_transformed_dir(workflow_args: dict[str, Any]) -> Path:
     """Return current run's transformed directory.
 
     Caller must ensure files are downloaded from S3 before calling this.
@@ -58,12 +53,12 @@ def get_transformed_dir(workflow_args: Dict[str, Any]) -> Path:
 
 def get_tables_needing_column_extraction(
     transformed_dir: Path,
-    backfill_qualified_names: Set[str] | None = None,
-) -> Tuple[DataFrame, int, int, int]:
-    """Get Daft DataFrame of tables needing column extraction.
+    backfill_qualified_names: set[str] | None = None,
+) -> tuple[list[dict[str, Any]], int, int, int]:
+    """Get tables needing column extraction using DuckDB.
 
-    All filtering and categorization is done within Daft's lazy evaluation.
-    Returns a DataFrame that can be iterated efficiently.
+    Reads transformed table JSON files and identifies which tables need
+    column extraction based on their incremental state (CREATED, UPDATED, or BACKFILL).
 
     Args:
         transformed_dir: Path to transformed directory with table JSON files.
@@ -71,16 +66,16 @@ def get_tables_needing_column_extraction(
 
     Returns:
         Tuple of:
-        - filtered_df: Daft DataFrame with table_id, is_changed, is_backfill columns
+        - rows: list of dicts with table_id, is_changed, is_backfill keys
         - changed_count: Number of tables created or updated
         - backfill_count: Number of backfill tables
         - no_change_count: Number of unchanged tables
     """
     try:
-        # lazy import: heavy optional dependency (installed via [sql] extra)
-        import daft  # noqa: PLC0415 — optional dep: daft
-        from daft.functions import (  # noqa: PLC0415 — optional dep: daft
-            format as daft_format,
+        from application_sdk.common.incremental.storage.duckdb_utils import (  # noqa: PLC0415 — optional dep: duckdb
+            DuckDBConnectionManager,
+            escape_sql_string,
+            json_scan,
         )
 
         backfill_qns = backfill_qualified_names or set()
@@ -91,88 +86,86 @@ def get_tables_needing_column_extraction(
                 f"Transformed table directory not found: {table_dir}"
             )
 
-        json_files = [str(f) for f in table_dir.glob("*.json")]
+        json_files = [f for f in table_dir.glob("*.json")]
         if not json_files:
             raise FileNotFoundError(f"No JSON files found in: {table_dir}")
 
-        # read_json does lazy loading
-        df = daft.read_json(json_files)
+        json_source = json_scan(json_files)
 
-        df = df.select(
-            daft.col("typeName"),
-            daft.col("attributes").get("databaseName").alias("database_name"),
-            daft.col("attributes").get("schemaName").alias("schema_name"),
-            daft.col("attributes").get("name").alias("table_name"),
-            daft.col("attributes").get("qualifiedName").alias("qualified_name"),
-            daft.col("customAttributes")
-            .get("incremental_state")
-            .alias("incremental_state"),
-        )
+        with DuckDBConnectionManager() as db:
+            conn = db.connection
 
-        # Build table_id column: catalog.schema.table
-        df = df.with_column(
-            "table_id",
-            daft_format("{}.{}.{}", "database_name", "schema_name", "table_name"),
-        )
+            # Base query: extract fields from the JSON source.
+            # attributes may come through as a STRUCT when inferred by DuckDB;
+            # to_json() normalises it to a JSON string before json_extract_string.
+            base_sql = f"""
+            SELECT
+                json_extract_string(to_json(attributes), '$.databaseName') AS database_name,
+                json_extract_string(to_json(attributes), '$.schemaName')   AS schema_name,
+                json_extract_string(to_json(attributes), '$.name')         AS table_name,
+                json_extract_string(to_json(attributes), '$.qualifiedName') AS qualified_name,
+                COALESCE(
+                    json_extract_string(to_json(customAttributes), '$.incremental_state'),
+                    'NO CHANGE'
+                ) AS incremental_state
+            FROM {json_source}
+            """
 
-        # Get state counts using Daft aggregation (tiny result - max 3 rows)
-        state_counts_df = df.groupby("incremental_state").agg(
-            daft.col("table_id").count().alias("cnt")
-        )
+            # State counts — tiny result, max 3 distinct states
+            state_counts = conn.execute(f"""
+            SELECT incremental_state, COUNT(*) AS cnt
+            FROM ({base_sql})
+            GROUP BY incremental_state
+            """).fetchall()
 
-        state_map: Dict[str, int] = {}
-        for row in state_counts_df.iter_rows():
-            state_map[row["incremental_state"]] = row["cnt"]
+            state_map: dict[str, int] = {row[0]: row[1] for row in state_counts}
+            created_count = state_map.get("CREATED", 0)
+            updated_count = state_map.get("UPDATED", 0)
+            no_change_count = state_map.get("NO CHANGE", 0)
+            total_count = sum(state_map.values())
 
-        created_count = state_map.get("CREATED", 0)
-        updated_count = state_map.get("UPDATED", 0)
-        no_change_count = state_map.get("NO CHANGE", 0)
-        total_count = sum(state_map.values())
-
-        logger.info(
-            "Analyzed %d table records from %d files (created=%d updated=%d no_change=%d)",
-            total_count,
-            len(json_files),
-            created_count,
-            updated_count,
-            no_change_count,
-        )
-
-        # Mark changed/backfill rows in Daft
-        changed_states = ["CREATED", "UPDATED"]
-        df = df.with_column(
-            "is_changed",
-            daft.col("incremental_state").is_in(changed_states),
-        )
-
-        if backfill_qns:
-            df = df.with_column(
-                "is_backfill",
-                (~daft.col("is_changed"))
-                & daft.col("qualified_name").is_in(list(backfill_qns)),
+            logger.info(
+                "Analyzed %d table records from %d files "
+                "(created=%d updated=%d no_change=%d)",
+                total_count,
+                len(json_files),
+                created_count,
+                updated_count,
+                no_change_count,
             )
-        else:
-            df = df.with_column("is_backfill", daft.lit(False))
 
-        # Filter to only tables needing extraction
-        filtered_df = df.where(daft.col("is_changed") | daft.col("is_backfill")).select(
-            "table_id", "qualified_name", "is_changed", "is_backfill"
-        )
+            # Build backfill filter expression, passing values via SQL literals
+            # (escape_sql_string guards against single-quote injection)
+            if backfill_qns:
+                backfill_values = ", ".join(
+                    f"('{escape_sql_string(qn)}')" for qn in backfill_qns
+                )
+                backfill_filter = f"qualified_name IN (SELECT qn FROM (VALUES {backfill_values}) t(qn))"
+            else:
+                backfill_filter = "FALSE"
 
-        # Compute extraction counts using Daft aggregation
-        counts_df = filtered_df.agg(
-            daft.col("is_changed")
-            .cast(daft.DataType.int64())
-            .sum()
-            .alias("changed_count"),
-            daft.col("is_backfill")
-            .cast(daft.DataType.int64())
-            .sum()
-            .alias("backfill_count"),
-        )
-        counts_row = list(counts_df.iter_rows())[0]
-        changed_count = int(counts_row["changed_count"] or 0)
-        backfill_count = int(counts_row["backfill_count"] or 0)
+            result_rows = conn.execute(f"""
+            SELECT
+                database_name || '.' || schema_name || '.' || table_name AS table_id,
+                incremental_state IN ('CREATED', 'UPDATED') AS is_changed,
+                (incremental_state NOT IN ('CREATED', 'UPDATED'))
+                    AND ({backfill_filter}) AS is_backfill
+            FROM ({base_sql})
+            WHERE incremental_state IN ('CREATED', 'UPDATED')
+               OR ({backfill_filter})
+            """).fetchall()
+
+        rows = [
+            {
+                "table_id": row[0],
+                "is_changed": bool(row[1]),
+                "is_backfill": bool(row[2]),
+            }
+            for row in result_rows
+        ]
+
+        changed_count = sum(1 for r in rows if r["is_changed"])
+        backfill_count = sum(1 for r in rows if r["is_backfill"])
 
         logger.info(
             "Tables needing column extraction: total=%d changed=%d backfill=%d",
@@ -181,10 +174,12 @@ def get_tables_needing_column_extraction(
             backfill_count,
         )
 
-        # Return only the columns needed for query generation
-        filtered_df = filtered_df.select("table_id", "is_changed", "is_backfill")
+        return rows, changed_count, backfill_count, no_change_count
 
-        return filtered_df, changed_count, backfill_count, no_change_count
-
+    # conformance: ignore[E004] re-raises immediately as typed ColumnExtractionAnalysisError; no swallow occurs
     except Exception as e:
-        raise rewrap(e, "Daft table analysis failed") from e
+        from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415
+            ColumnExtractionAnalysisError,
+        )
+
+        raise ColumnExtractionAnalysisError(cause=e) from e

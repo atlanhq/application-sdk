@@ -18,8 +18,45 @@ from application_sdk.errors import (
     CREDENTIAL_VALIDATION_ERROR,
     ErrorCode,
 )
-from application_sdk.errors.categories import Audience, FailureCategory
+from application_sdk.errors.base import sanitize_cause_repr
+from application_sdk.errors.categories import Audience
 from application_sdk.errors.leaves import AuthError, InvalidInputError, NotFoundError
+
+# ---------------------------------------------------------------------------
+# Routing / type-check errors (simple typed leaves — no custom __init__)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(kw_only=True)
+class CredentialResolvableTypeError(InvalidInputError):
+    """source is not a CredentialResolvable (missing extraction_method / agent_json / credential_guid)."""
+
+    code: ClassVar[str] = "INVALID_INPUT_CREDENTIAL_RESOLVABLE_TYPE"
+    message: str = "Expected a CredentialResolvable (with extraction_method, agent_json, credential_guid)"
+    field: str | None = "source"
+
+
+@dataclass(kw_only=True)
+class CredentialRoutingError(InvalidInputError):
+    """No routable credential source present in input."""
+
+    code: ClassVar[str] = "INVALID_INPUT_CREDENTIAL_ROUTING"
+    message: str = (
+        "No routable credential source: need extraction_method='agent' with a "
+        "non-empty agent_json, or extraction_method='direct' with a non-empty credential_guid"
+    )
+    field: str | None = "extraction_method"
+
+
+@dataclass(kw_only=True)
+class AtlanCredentialTypeError(InvalidInputError):
+    """Credential is not an AtlanApiToken or AtlanOAuthClient."""
+
+    code: ClassVar[str] = "INVALID_INPUT_ATLAN_CREDENTIAL_TYPE"
+    message: str = (
+        "Unsupported Atlan credential type; expected AtlanApiToken or AtlanOAuthClient"
+    )
+    field: str | None = "credential"
 
 
 @dataclass(kw_only=True)
@@ -32,7 +69,7 @@ class CredentialError(AuthError):
     credential_name: str | None = None
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CREDENTIAL_ERROR
-    code: ClassVar[str] = "CREDENTIAL"
+    code: ClassVar[str] = "AUTH_CREDENTIAL"
 
     # Intentional: dataclass fields define the wire-evidence schema; custom __init__ preserves positional-message compat.
     def __init__(
@@ -60,7 +97,10 @@ class CredentialError(AuthError):
         if self.credential_name:
             parts.append(f"credential={self.credential_name}")
         if self.cause:
-            parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
+            # Sanitized: cause messages can embed connection strings or
+            # secret values (e.g. SQLAlchemy URLs), and __str__ flows into
+            # HTTP error responses via `detail=str(e)`.
+            parts.append(f"caused_by={sanitize_cause_repr(self.cause)}")
         return " | ".join(parts)
 
 
@@ -73,8 +113,7 @@ class CredentialNotFoundError(NotFoundError, CredentialError):
     """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CREDENTIAL_NOT_FOUND
-    code: ClassVar[str] = "CREDENTIAL_NOT_FOUND"
-    category: ClassVar[FailureCategory] = FailureCategory.NOT_FOUND
+    code: ClassVar[str] = "NOT_FOUND_CREDENTIAL"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.USER
 
@@ -105,8 +144,7 @@ class CredentialParseError(InvalidInputError, CredentialError):
     """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CREDENTIAL_PARSE_ERROR
-    code: ClassVar[str] = "CREDENTIAL_PARSE"
-    category: ClassVar[FailureCategory] = FailureCategory.INVALID_INPUT
+    code: ClassVar[str] = "INVALID_INPUT_CREDENTIAL_PARSE"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.USER
 
@@ -135,7 +173,10 @@ class CredentialParseError(InvalidInputError, CredentialError):
         if self.credential_name:
             parts.append(f"credential={self.credential_name}")
         if self.cause:
-            parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
+            # Sanitized: cause messages can embed connection strings or
+            # secret values (e.g. SQLAlchemy URLs), and __str__ flows into
+            # HTTP error responses via `detail=str(e)`.
+            parts.append(f"caused_by={sanitize_cause_repr(self.cause)}")
         return " | ".join(parts)
 
 
@@ -148,8 +189,7 @@ class CredentialValidationError(InvalidInputError, CredentialError):
     """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = CREDENTIAL_VALIDATION_ERROR
-    code: ClassVar[str] = "CREDENTIAL_VALIDATION"
-    category: ClassVar[FailureCategory] = FailureCategory.INVALID_INPUT
+    code: ClassVar[str] = "INVALID_INPUT_CREDENTIAL_VALIDATION"
     default_retryable: ClassVar[bool] = False
     audience: ClassVar[Audience] = Audience.USER
 
@@ -178,5 +218,8 @@ class CredentialValidationError(InvalidInputError, CredentialError):
         if self.credential_name:
             parts.append(f"credential={self.credential_name}")
         if self.cause:
-            parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
+            # Sanitized: cause messages can embed connection strings or
+            # secret values (e.g. SQLAlchemy URLs), and __str__ flows into
+            # HTTP error responses via `detail=str(e)`.
+            parts.append(f"caused_by={sanitize_cause_repr(self.cause)}")
         return " | ".join(parts)

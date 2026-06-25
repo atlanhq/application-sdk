@@ -128,6 +128,7 @@ def create_activity_from_task(
             app_context._state_store = infra.state_store
             app_context._secret_store = infra.secret_store
             app_context._storage = infra.storage
+            app_context._upstream_storage = infra.upstream_storage
 
         app_instance._context = app_context
 
@@ -212,8 +213,8 @@ def create_activity_from_task(
         except asyncio.CancelledError as e:
             # In Python 3.8+, ``asyncio.CancelledError`` extends ``BaseException``,
             # so it bypasses the ``except Exception`` block below. We must catch
-            # it explicitly to attribute pod-termination cancels to a typed
-            # ``WorkerEvictedError`` and let other cancels propagate as today.
+            # it explicitly to attribute pod-termination cancels to
+            # ``ApplicationError(type=WORKER_EVICTED_TYPE)`` and let other cancels propagate as today.
             #
             # NOTE: converting ``CancelledError`` to a regular exception
             # technically violates asyncio's cancellation protocol — the
@@ -246,6 +247,7 @@ def create_activity_from_task(
                 ) from e
             raise
 
+        # conformance: ignore[E004] exception translator: both branches re-raise; nothing is swallowed
         except Exception as e:
             from application_sdk.errors.base import (  # noqa: PLC0415 — circular
                 AppError as _AppError,
@@ -269,10 +271,12 @@ def create_activity_from_task(
                 stop_event.set()
                 try:
                     await asyncio.wait_for(heartbeat_task, timeout=1.0)
+                # conformance: ignore[E004] cleanup path cancelling heartbeat task in finally; all exceptions handled by inner cancel+log
                 except (TimeoutError, Exception):
                     heartbeat_task.cancel()
                     try:
                         await heartbeat_task
+                    # conformance: ignore[E004] heartbeat cancel cleanup in finally; debug-logged with exc_info; swallow is intentional
                     except Exception:
                         logger.debug(
                             "Heartbeat task did not cancel cleanly", exc_info=True

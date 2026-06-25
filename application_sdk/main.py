@@ -33,11 +33,18 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 
+from application_sdk.common._env import env_int as _env_int
 from application_sdk.discovery import (
-    DiscoveryError,
     load_app_class,
     load_handler_class,
     validate_app_class,
+)
+from application_sdk.errors import AppError, InvalidInputError
+from application_sdk.main_errors import (
+    DaprNotDetectedError,
+    MissingAppModuleError,
+    MultiAppModuleError,
+    UnknownModeError,
 )
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -175,6 +182,12 @@ class AppConfig:
     """Maximum concurrent object-store uploads/downloads.
     Reads same env var as constants.MAX_CONCURRENT_STORAGE_TRANSFERS."""
 
+    workflow_max_timeout_hours: int | None = None
+    """Maximum workflow execution timeout in hours. When set, passed as
+    execution_timeout to Temporal on every /workflows/v1/start call.
+    Reads env var ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS. None means no SDK-level
+    ceiling (Temporal namespace default applies)."""
+
     def __post_init__(self) -> None:
         """Derive task_queue from app_module when not explicitly set."""
         if not self.task_queue and self.app_module:
@@ -208,18 +221,12 @@ class AppConfig:
 
         app_module_raw = args.app or _env("ATLAN_APP_MODULE")
         if not app_module_raw:
-            raise ValueError(
-                "App module is required. Use --app or set ATLAN_APP_MODULE."
-            )
+            raise MissingAppModuleError()
 
         app_module = app_module_raw.strip()
 
         if "," in app_module:
-            raise ValueError(
-                f"ATLAN_APP_MODULE contains a comma: {app_module!r}. "
-                "The multi-app pattern is not supported in v3. "
-                "Define multiple @entrypoint methods on a single App subclass instead."
-            )
+            raise MultiAppModuleError(app_module=app_module)
 
         service_name = (
             getattr(args, "service_name", None)
@@ -275,7 +282,17 @@ class AppConfig:
             else _env_int("ATLAN_HEALTH_PORT", 8081),
             service_name=service_name,
             # TLS
-            tls_enabled=_env_bool("ATLAN_TEMPORAL_TLS_ENABLED"),
+            # v2 compat: ATLAN_WORKFLOW_TLS_ENABLED is the legacy name; charts
+            # predating the v3 rename still set it. Fall back to the v2 name
+            # only when ATLAN_TEMPORAL_TLS_ENABLED is absent from the
+            # environment — an explicit ATLAN_TEMPORAL_TLS_ENABLED=false must
+            # still disable TLS even if a stale v2 value is left in place, so
+            # use a presence check rather than truthiness for the precedence.
+            tls_enabled=(
+                _env_bool("ATLAN_TEMPORAL_TLS_ENABLED")
+                if "ATLAN_TEMPORAL_TLS_ENABLED" in os.environ
+                else _env_bool("ATLAN_WORKFLOW_TLS_ENABLED")
+            ),
             tls_server_root_ca_cert_path=_env("ATLAN_TEMPORAL_TLS_CA_CERT_PATH"),
             tls_client_cert_path=_env("ATLAN_TEMPORAL_TLS_CLIENT_CERT_PATH"),
             tls_client_private_key_path=_env("ATLAN_TEMPORAL_TLS_CLIENT_KEY_PATH"),
@@ -303,6 +320,7 @@ class AppConfig:
             max_concurrent_storage_transfers=_env_int(
                 "ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS", 4
             ),
+            workflow_max_timeout_hours=_parse_workflow_max_timeout_hours(),
         )
 
 
@@ -372,11 +390,20 @@ async def _log_dapr_components(
     emits one INFO log line per component showing its type, version, and any
     non-sensitive metadata from the corresponding component YAML.
 
-    Warns about expected components (state store, secret store, object store,
-    event binding) that are not registered in the sidecar.
+    Then emits one outcome line per *expected* binding (state store, secret
+    store, deployment object store, event binding), classifying it against the
+    ``ATLAN_ENABLE_*`` env vars the chart derives from ``atlan.yaml``'s
+    ``deploy.dapr`` block:
 
-    This is best-effort: any failure is logged as a WARNING and never blocks
-    startup.
+    * registered + declared enabled / unset → INFO ("accepted")
+    * registered + declared disabled        → INFO ("drift")
+    * missing    + declared enabled         → WARNING ("declared but missing")
+    * missing    + declared disabled        → INFO ("disabled by config")
+    * missing    + declared unset           → INFO ("legacy/unknown intent")
+
+    Every binding always produces a log line so operators can see, with a
+    reason, how each one was handled. This is best-effort: any failure to
+    query Dapr metadata is logged as a WARNING and never blocks startup.
 
     Returns:
         Set of registered component names. Empty set if metadata query fails.
@@ -386,6 +413,7 @@ async def _log_dapr_components(
         EVENT_STORE_NAME,
         SECRET_STORE_NAME,
         STATE_STORE_NAME,
+        _read_enable_tri_state,
     )
 
     try:
@@ -424,18 +452,65 @@ async def _log_dapr_components(
                 comp.get("version", "unknown"),
             )
 
-    expected = {
-        STATE_STORE_NAME: "state_store",
-        SECRET_STORE_NAME: "secret_store",
-        DEPLOYMENT_OBJECT_STORE_NAME: "object_store",
-        EVENT_STORE_NAME: "event_binding",
-    }
-    for comp_name, role in expected.items():
-        if comp_name not in registered:
-            logger.warning(
-                "Expected Dapr component %s (role=%s) not registered in sidecar",
+    # Each expected binding is keyed off the ATLAN_ENABLE_* env var the chart
+    # derives from atlan.yaml's deploy.dapr block. Tuple shape:
+    # (component_name, role_label, enable_env_var, atlan_yaml_key)
+    expected: tuple[tuple[str, str, str, str], ...] = (
+        (STATE_STORE_NAME, "state_store", "ATLAN_ENABLE_STATESTORE", "statestore"),
+        (SECRET_STORE_NAME, "secret_store", "ATLAN_ENABLE_SECRETSTORE", "secretstore"),
+        (
+            DEPLOYMENT_OBJECT_STORE_NAME,
+            "object_store",
+            "ATLAN_ENABLE_OBJECTSTORE",
+            "objectstore",
+        ),
+        (EVENT_STORE_NAME, "event_binding", "ATLAN_ENABLE_EVENTSTORE", "eventstore"),
+    )
+    for comp_name, role, enable_var, yaml_key in expected:
+        raw, declared = _read_enable_tri_state(enable_var)
+        is_registered = comp_name in registered
+
+        if is_registered and declared is not False:
+            logger.info(
+                "Dapr binding %s (role=%s) accepted: registered in sidecar (%s=%s)",
                 comp_name,
                 role,
+                enable_var,
+                raw if raw is not None else "<unset>",
+            )
+        elif is_registered and declared is False:
+            logger.info(
+                "Dapr binding %s (role=%s) registered in sidecar despite %s=false — "
+                "possible drift between atlan.yaml deploy.dapr.%s and the deployed chart values",
+                comp_name,
+                role,
+                enable_var,
+                yaml_key,
+            )
+        elif not is_registered and declared is True:
+            logger.warning(
+                "Dapr binding %s (role=%s) declared enabled (%s=true) but not registered in sidecar — "
+                "runtime calls using this component will fail; check chart values and Dapr component templates",
+                comp_name,
+                role,
+                enable_var,
+            )
+        elif not is_registered and declared is False:
+            logger.info(
+                "Dapr binding %s (role=%s) disabled by config (%s=false); not registered in sidecar (expected)",
+                comp_name,
+                role,
+                enable_var,
+            )
+        else:  # not registered, declared is None
+            logger.info(
+                "Dapr binding %s (role=%s) not registered in sidecar and %s is unset — "
+                "the SDK cannot determine whether your app needs it; "
+                "set deploy.dapr.%s in atlan.yaml (true or false) to silence this",
+                comp_name,
+                role,
+                enable_var,
+                yaml_key,
             )
 
     return set(registered)
@@ -471,9 +546,11 @@ async def _create_infrastructure(
 
         from application_sdk.constants import (  # noqa: PLC0415 — cold path: lazy access to env-var-derived constants
             DEPLOYMENT_OBJECT_STORE_NAME,
+            ENABLE_ATLAN_UPLOAD,
             EVENT_STORE_NAME,
             SECRET_STORE_NAME,
             STATE_STORE_NAME,
+            UPSTREAM_OBJECT_STORE_NAME,
         )
         from application_sdk.infrastructure._dapr.client import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
             DaprBinding,
@@ -485,7 +562,10 @@ async def _create_infrastructure(
             wait_for_dapr_sidecar,
         )
         from application_sdk.storage import (  # noqa: PLC0415 — cold path: storage init only when binding YAML present
-            create_store_from_binding,
+            create_store_from_binding_with_put_attrs,
+        )
+        from application_sdk.storage.binding import (  # noqa: PLC0415 — cold path: private helper used only inside _create_infrastructure
+            _create_store_from_binding_optional_with_put_attrs,
         )
 
         await wait_for_dapr_sidecar()
@@ -493,13 +573,28 @@ async def _create_infrastructure(
         components_dir = Path(os.environ.get("DAPR_COMPONENTS_PATH", "./components"))
         registered_components = await _log_dapr_components(dapr_client, components_dir)
         logger.info("Dapr sidecar detected — using Dapr infrastructure")
+
+        upstream_storage, upstream_put_attrs = (
+            _create_store_from_binding_optional_with_put_attrs(
+                UPSTREAM_OBJECT_STORE_NAME,
+                components_dir=components_dir,
+                required=ENABLE_ATLAN_UPLOAD,
+            )
+        )
+
+        deployment_store, deployment_put_attrs = (
+            create_store_from_binding_with_put_attrs(
+                DEPLOYMENT_OBJECT_STORE_NAME,
+                components_dir=components_dir,
+            )
+        )
         return InfrastructureContext(
             state_store=DaprStateStore(dapr_client, store_name=STATE_STORE_NAME),
             secret_store=DaprSecretStore(dapr_client, store_name=SECRET_STORE_NAME),
-            storage=create_store_from_binding(
-                DEPLOYMENT_OBJECT_STORE_NAME,
-                components_dir=components_dir,
-            ),
+            storage=deployment_store,
+            storage_put_attributes=deployment_put_attrs,
+            upstream_storage=upstream_storage,
+            upstream_storage_put_attributes=upstream_put_attrs,
             event_binding=(
                 DaprBinding(dapr_client, EVENT_STORE_NAME)
                 if EVENT_STORE_NAME in registered_components
@@ -508,12 +603,7 @@ async def _create_infrastructure(
             _dapr_client=dapr_client,
         )
     else:
-        # No Dapr sidecar — require it for all modes
-        raise RuntimeError(
-            "Dapr sidecar not detected (DAPR_HTTP_PORT not set). "
-            "Run 'poe start-deps' to start local Dapr + Temporal, "
-            "or set DAPR_HTTP_PORT if running daprd manually."
-        )
+        raise DaprNotDetectedError()
 
 
 def _derive_service_name(app_module: str) -> str:
@@ -544,25 +634,17 @@ def _derive_task_queue(app_module: str) -> str:
     return f"{_derive_service_name(app_module)}-queue"
 
 
-def _env_int(key: str, default: int = 0) -> int:
-    """Read an int env var, returning ``default`` when unset, empty, or unparsable.
-
-    A malformed value like ``ATLAN_HANDLER_PORT="not-a-number"`` falls through
-    to the next key instead of crashing startup.
-    """
-    val = os.environ.get(key)
-    if not val:
-        return default
-    try:
-        return int(val)
-    except ValueError:
-        logger.warning(
-            "Ignoring non-integer env var %s=%r; falling back to default %d",
-            key,
-            val,
-            default,
-        )
-        return default
+def _parse_workflow_max_timeout_hours() -> int | None:
+    """Parse ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS, returning None for unset or non-positive values."""
+    hours = _env_int("ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS", 0)
+    if hours <= 0:
+        if hours < 0:
+            logger.warning(
+                "ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS=%d is non-positive; ignoring.",
+                hours,
+            )
+        return None
+    return hours
 
 
 def _build_dev_config(
@@ -674,8 +756,9 @@ def _install_excepthook() -> None:
         )
         try:
             asyncio.run(_flush_observability())
-        except Exception:  # noqa: S110
-            pass  # best-effort; never mask the original crash
+        # conformance: ignore[E002,E004] best-effort flush in unhandled-exception hook; must never mask the original crash
+        except Exception:  # noqa: S110 — best-effort flush; must never mask the original crash
+            pass
         _orig(exc_type, exc_value, exc_traceback)
 
     sys.excepthook = _hook
@@ -714,8 +797,9 @@ def _install_graceful_signal_handlers(
             # continues to work.
             try:
                 signal.signal(sig, lambda *_: mark_worker_shutting_down())
+            # conformance: ignore[E002,E014] no add_signal_handler / not main thread; WARNING already logged below
             except (ValueError, OSError):
-                pass  # not on the main thread or signal is reserved
+                pass
             logger.warning(
                 "loop.add_signal_handler() not supported on this platform "
                 "(signal=%s); graceful shutdown via signals is unavailable",
@@ -758,6 +842,11 @@ async def run_worker_mode(config: AppConfig) -> None:
     )
 
     infra = await _create_infrastructure()
+    from application_sdk.storage.preflight import (  # noqa: PLC0415 — cold path: SDR-gated; only runs when ENABLE_ATLAN_UPLOAD=true
+        verify_object_store_access,
+    )
+
+    await verify_object_store_access(infra)
     set_infrastructure(infra)
 
     app_class = load_app_class(config.app_module)
@@ -901,6 +990,11 @@ def run_handler_mode(config: AppConfig) -> None:
     )
 
     infra = asyncio.run(_create_infrastructure())
+    from application_sdk.storage.preflight import (  # noqa: PLC0415 — cold path: SDR-gated; only runs when ENABLE_ATLAN_UPLOAD=true
+        verify_object_store_access,
+    )
+
+    asyncio.run(verify_object_store_access(infra))
     set_infrastructure(infra)
 
     logger.info(
@@ -958,6 +1052,7 @@ def run_handler_mode(config: AppConfig) -> None:
         secret_store=infra.secret_store,
         storage=infra.storage,
         frontend_assets_path=config.frontend_assets_path,
+        workflow_max_timeout_hours=config.workflow_max_timeout_hours,
     )
 
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
@@ -1006,6 +1101,11 @@ async def run_combined_mode(config: AppConfig) -> None:
     _existing_infra = get_infrastructure()
     if _existing_infra is None:
         infra = await _create_infrastructure()
+        from application_sdk.storage.preflight import (  # noqa: PLC0415 — cold path: SDR-gated; only runs when ENABLE_ATLAN_UPLOAD=true
+            verify_object_store_access,
+        )
+
+        await verify_object_store_access(infra)
         set_infrastructure(infra)
     else:
         infra = _existing_infra
@@ -1119,6 +1219,7 @@ async def run_combined_mode(config: AppConfig) -> None:
         auth_scopes=config.auth_scopes,
         enable_temporal_core_metrics=config.enable_temporal_core_metrics,
         prometheus_bind_address=config.prometheus_bind_address,
+        workflow_max_timeout_hours=config.workflow_max_timeout_hours,
         secret_store=infra.secret_store,
         storage=infra.storage,
         frontend_assets_path=config.frontend_assets_path,
@@ -1189,23 +1290,33 @@ async def run_dev_combined(
     example_input: dict[str, Any] | None = None,
     host: str | None = None,
     port: int | None = None,
-    temporal_host: str | None = None,
+    temporal_host: str | None = None,  # deprecated — ignored, kept for back-compat
     temporal_namespace: str | None = None,
+    temporal_ui: bool = False,
+    temporal_ui_port: int = 8233,
     task_queue: str | None = None,
 ) -> None:
     """Run worker + handler in a single process for local development.
 
-    Dev-friendly wrapper around ``run_combined_mode()`` that accepts a
-    Python class and keyword arguments directly. Use it in ``run_dev.py``
-    scripts; production containers use ``run_combined_mode()`` via CLI flags.
+    Boots an **in-process workflow runtime** and uses **in-process backends**
+    for state, secrets, and object storage — no Temporal CLI, no Dapr
+    sidecar, no Redis required. The customer's only prerequisite is
+    Python + ``uv``.
 
-    All five connection-shaped kwargs (``host``, ``port``, ``temporal_host``,
-    ``temporal_namespace``, ``task_queue``) follow the same precedence as the
-    CLI path — ``explicit kwarg → env var → AppConfig default`` — because
-    they are resolved by :func:`_build_dev_config` which routes through
-    :meth:`AppConfig.from_args_and_env`. CI-stack overrides like
-    ``ATLAN_HANDLER_PORT`` or ``ATLAN_TASK_QUEUE`` work without any per-connector
-    ``os.environ.get(...)`` boilerplate at the call site.
+    Use this in ``run_dev.py`` scripts; production containers use
+    ``run_combined_mode()`` via CLI flags, which goes through Dapr.
+
+    All four connection-shaped kwargs (``host``, ``port``,
+    ``temporal_namespace``, ``task_queue``) follow the same precedence as
+    the CLI path — ``explicit kwarg → env var → AppConfig default`` —
+    because they are resolved by :func:`_build_dev_config` which routes
+    through :meth:`AppConfig.from_args_and_env`. CI-stack overrides like
+    ``ATLAN_HANDLER_PORT`` or ``ATLAN_TASK_QUEUE`` work without any
+    per-connector ``os.environ.get(...)`` boilerplate at the call site.
+
+    ``temporal_host`` is still accepted for backward compatibility but is
+    ignored — the SDK always boots its own in-process workflow runtime in
+    this mode. Passing it emits a :class:`DeprecationWarning`.
 
     Args:
         app_class: The App class to serve (must already be imported).
@@ -1223,11 +1334,12 @@ async def run_dev_combined(
             ``ATLAN_APP_HTTP_HOST`` → ``"127.0.0.1"``.
         port: Handler HTTP port. Default precedence: kwarg →
             ``ATLAN_HANDLER_PORT`` → ``ATLAN_APP_HTTP_PORT`` → ``8000``.
-        temporal_host: Temporal server address. Default precedence: kwarg →
-            ``ATLAN_TEMPORAL_HOST`` → ``"localhost:7233"``.
         temporal_namespace: Temporal namespace. Default precedence: kwarg →
             ``ATLAN_TEMPORAL_NAMESPACE`` → ``ATLAN_WORKFLOW_NAMESPACE`` →
             ``"default"``.
+        temporal_ui: Enable the embedded Temporal Web UI for local debugging.
+            Default ``False`` keeps the dev server headless.
+        temporal_ui_port: Temporal Web UI port. Defaults to ``8233``.
         task_queue: Task queue name. Default precedence: kwarg →
             ``ATLAN_TASK_QUEUE`` → ``"{app_name}-queue"``.
 
@@ -1238,24 +1350,83 @@ async def run_dev_combined(
 
         asyncio.run(run_dev_combined(
             MyApp,
-            credentials={
-                "host": "localhost", "port": "5432", "authType": "basic",
-                "username": "admin", "password": "secret",
-                "extra": {"database": "mydb"},
-            },
             example_input={
-                "connection": {"connection_name": "test", "connection_qualified_name": "default/app/1234"},
+                "connection": {"connection_name": "test"},
             },
         ))
     """
-    import json as _json  # noqa: PLC0415 — cold path: lazy load to keep import-time cost low
+    # Local dev is unconditional: boot an in-process Temporal *and* an
+    # embedded ``daprd`` so the entire infrastructure code path is the same
+    # one production uses. Both daemons are auto-downloaded and managed by
+    # the SDK — the customer's host stays clean.
+    from application_sdk.dev import embedded_dapr, embedded_runtime  # noqa: PLC0415
 
-    # Dev-friendly: ensure Dapr ports are set. poe start-deps launches Dapr
-    # on the default ports but in a background process, so the env vars aren't
-    # exported to the dev's shell. Default to standard Dapr ports so devs
-    # don't need to manually export them or add them to .env.
-    os.environ.setdefault("DAPR_HTTP_PORT", "3500")
-    os.environ.setdefault("DAPR_GRPC_PORT", "50001")
+    if temporal_host is not None:
+        import warnings  # noqa: PLC0415 — cold path: deprecation warning only
+
+        warnings.warn(
+            "`temporal_host` is deprecated and ignored: `run_dev_combined` now "
+            "always boots an in-process workflow runtime. To target an external "
+            "Temporal cluster, use `run_combined_mode(config)` directly.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
+    app_name = getattr(app_class, "_app_name", "") or app_class.__name__.lower()
+
+    # ``embedded_dapr`` sets ``DAPR_HTTP_PORT`` / ``DAPR_GRPC_PORT`` /
+    # ``DAPR_COMPONENTS_PATH`` itself, so the existing Dapr code path in
+    # ``_create_infrastructure`` and the observability sink see the right
+    # values from the moment daprd is spawning (avoiding races during the
+    # ~3s startup window).
+    # ``embedded_dapr`` first so ``DAPR_COMPONENTS_PATH`` is set before any
+    # observability flush cycle fires during the ~5s ``embedded_runtime``
+    # cold-start window. Otherwise the periodic flush would race with daprd
+    # startup and log spurious "objectstore upload failed" warnings.
+    async with (
+        embedded_dapr(app_id=app_name) as _dapr,
+        embedded_runtime(
+            namespace=temporal_namespace or "default",
+            temporal_ui=temporal_ui,
+            temporal_ui_port=temporal_ui_port,
+        ) as _rt,
+    ):
+        del _dapr  # env-side-effect is sufficient; the dataclass is just for tests
+        if _rt.ui_url:
+            print(f"\nTemporal UI running at {_rt.ui_url}")
+        await _run_dev_combined_inner(
+            app_class=app_class,
+            credential_stores=credential_stores,
+            credentials=credentials,
+            example_input=example_input,
+            host=host,
+            port=port,
+            temporal_host=_rt.host,
+            temporal_namespace=_rt.namespace,
+            task_queue=task_queue,
+        )
+
+
+async def _run_dev_combined_inner(
+    *,
+    app_class: type[App],
+    credential_stores: Mapping[str, SecretStore] | None,
+    credentials: dict[str, Any] | None,
+    example_input: dict[str, Any] | None,
+    host: str | None,
+    port: int | None,
+    temporal_host: str,
+    temporal_namespace: str,
+    task_queue: str | None,
+) -> None:
+    """Body of ``run_dev_combined`` — runs against fully-resolved connection details.
+
+    Accepts ``host`` / ``port`` / ``task_queue`` as ``None`` and lets
+    ``_build_dev_config`` apply the same defaults the CLI path uses (env
+    vars → AppConfig fields). ``temporal_host`` and ``temporal_namespace``
+    always arrive populated from the embedded runtime.
+    """
+    import json as _json  # noqa: PLC0415
 
     app_module = f"{app_class.__module__}:{app_class.__name__}"
 
@@ -1268,12 +1439,20 @@ async def run_dev_combined(
         task_queue=task_queue,
     )
 
-    # Create infrastructure early so run_combined_mode uses it directly.
+    # Build infrastructure via the standard Dapr path. ``run_dev_combined``
+    # has already started an embedded ``daprd`` (via ``embedded_dapr``) and
+    # exported ``DAPR_HTTP_PORT`` + ``DAPR_COMPONENTS_PATH``, so this goes
+    # through identical code as production / SDR / CI.
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
         set_infrastructure,
     )
 
     infra = await _create_infrastructure(credential_stores=credential_stores)
+    from application_sdk.storage.preflight import (  # noqa: PLC0415 — cold path: SDR-gated; only runs when ENABLE_ATLAN_UPLOAD=true
+        verify_object_store_access,
+    )
+
+    await verify_object_store_access(infra)
     set_infrastructure(infra)
 
     # Auto-provision credentials if provided (mimics Heracles writing to
@@ -1292,8 +1471,13 @@ async def run_dev_combined(
                         resp = await client.get(f"{base}/health", timeout=2)
                         if resp.status_code == 200:
                             break
-                    except Exception:  # noqa: S110
-                        pass
+                    # conformance: ignore[E004] startup readiness poll; /health transient errors expected and retried
+                    except Exception as exc:
+                        logger.debug(
+                            "Skipping /health poll iteration due to transient error: %s",
+                            exc,
+                            exc_info=True,
+                        )
                     await asyncio.sleep(1)
 
                 # Step 1: Provision credentials (mimics Heracles)
@@ -1384,9 +1568,7 @@ def run_main(config: AppConfig) -> None:
     elif config.mode == "combined":
         asyncio.run(run_combined_mode(config))
     else:
-        raise ValueError(
-            f"Unknown mode: {config.mode!r}. Must be 'worker', 'handler', or 'combined'."
-        )
+        raise UnknownModeError(received_mode=config.mode)
 
 
 def parse_args() -> argparse.Namespace:
@@ -1471,7 +1653,7 @@ def main() -> NoReturn:
 
     try:
         config = AppConfig.from_args_and_env(args)
-    except ValueError:
+    except (ValueError, AppError):
         logger.error("Configuration error", exc_info=True)
         sys.exit(1)
 
@@ -1484,16 +1666,33 @@ def main() -> NoReturn:
 
     try:
         run_main(config)
-    except DiscoveryError:
+    except InvalidInputError:
         logger.error("Discovery error", exc_info=True)
         sys.exit(1)
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
-    except Exception:
+    except Exception as exc:
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — cold path: lazy import avoids loading storage module on every boot
+            ObjectStorePreflightError,
+        )
+
+        if isinstance(exc, ObjectStorePreflightError):
+            logger.error(
+                "SDR object-store preflight failed — cannot start:\n%s",
+                exc,
+                exc_info=True,
+            )
+            try:
+                asyncio.run(_flush_observability())
+            # conformance: ignore[E002,E004] best-effort flush on fatal exit; fatal error already logged above
+            except Exception:  # noqa: S110 — best-effort flush on fatal exit; error already logged above
+                pass
+            sys.exit(1)
         logger.error("Fatal error", exc_info=True)
         try:
             asyncio.run(_flush_observability())
-        except Exception:  # noqa: S110
+        # conformance: ignore[E002,E004] best-effort flush on fatal exit; fatal error already logged above
+        except Exception:  # noqa: S110 — best-effort flush on fatal exit; error already logged above
             pass
         sys.exit(1)
 

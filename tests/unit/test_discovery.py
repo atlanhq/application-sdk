@@ -8,6 +8,12 @@ from dataclasses import dataclass
 
 import pytest
 
+from application_sdk._discovery_errors import (
+    DiscoveryAppRegistrationError,
+    DiscoveryModuleImportError,
+    DiscoveryPathFormatError,
+    DiscoveryTypeMismatchError,
+)
 from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.contracts.base import Input, Output
@@ -40,15 +46,15 @@ class TestParseModulePath:
         assert class_name == "Cls"
 
     def test_no_colon_raises(self) -> None:
-        with pytest.raises(DiscoveryError):
+        with pytest.raises(DiscoveryPathFormatError):
             _parse_module_path("pkgmod")
 
     def test_empty_module_name_raises(self) -> None:
-        with pytest.raises(DiscoveryError):
+        with pytest.raises(DiscoveryPathFormatError):
             _parse_module_path(":ClassName")
 
     def test_empty_class_name_raises(self) -> None:
-        with pytest.raises(DiscoveryError):
+        with pytest.raises(DiscoveryPathFormatError):
             _parse_module_path("pkg.mod:")
 
     def test_nested_module_path(self) -> None:
@@ -139,19 +145,19 @@ class TestLoadAppClass:
         sys.modules[mod_name] = mod
 
         try:
-            with pytest.raises(DiscoveryError):
+            with pytest.raises(DiscoveryTypeMismatchError):
                 load_app_class(f"{mod_name}:NotAnApp")
         finally:
             del sys.modules[mod_name]
 
     def test_module_not_found_raises(self) -> None:
-        with pytest.raises(DiscoveryError) as exc_info:
+        with pytest.raises(DiscoveryModuleImportError) as exc_info:
             load_app_class("nonexistent.module.xyz:SomeApp")
         assert exc_info.value.cause is not None
         assert isinstance(exc_info.value.cause, ImportError)
 
     def test_invalid_module_path_raises(self) -> None:
-        with pytest.raises(DiscoveryError):
+        with pytest.raises(DiscoveryPathFormatError):
             load_app_class("nocolon")
 
 
@@ -378,7 +384,7 @@ class TestValidateAppClass:
         class NotAnApp:
             pass
 
-        with pytest.raises(DiscoveryError):
+        with pytest.raises(DiscoveryAppRegistrationError):
             validate_app_class(NotAnApp)  # type: ignore[arg-type]
 
     def test_unregistered_app_raises(self) -> None:
@@ -391,5 +397,5 @@ class TestValidateAppClass:
         TaskRegistry.reset()
 
         # _app_name is still set on the class, but it's not in the registry
-        with pytest.raises(DiscoveryError):
+        with pytest.raises(DiscoveryAppRegistrationError):
             validate_app_class(SomeOtherApp)

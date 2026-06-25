@@ -17,7 +17,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 from application_sdk.contracts.base import SerializableEnum
@@ -52,6 +52,8 @@ class _DictLikeConfigBase(BaseModel):
                 return getattr(self, name)
         if self.model_extra and key in self.model_extra:
             return self.model_extra[key]
+        # conformance: ignore[E007] __getitem__ must raise KeyError per Mapping protocol; callers use get() for safe access
+        # conformance: ignore[E012] KeyError is required by the Mapping/__getitem__ protocol; tests/unit/handler/test_contracts.py:295 asserts KeyError
         raise KeyError(key)
 
     def get(self, key: str, default: Any = None) -> Any:
@@ -59,6 +61,7 @@ class _DictLikeConfigBase(BaseModel):
         try:
             return self[key]
         except KeyError:
+            # conformance: ignore[E007] KeyError is expected control-flow; logging every dict.get() miss would be noisy
             return default
 
     def __contains__(self, key: object) -> bool:
@@ -66,7 +69,9 @@ class _DictLikeConfigBase(BaseModel):
             return False
         try:
             self[key]
+        # conformance: ignore[E012] KeyError is required by the Mapping/__contains__ protocol; AppError would break stdlib interop
         except KeyError:
+            # conformance: ignore[E007] __contains__ returning False on KeyError is expected protocol behaviour; not an error condition
             return False
         return True
 
@@ -211,6 +216,26 @@ class AuthInput(BaseModel):
     connection_id: str = ""
     """Optional connection ID for context."""
 
+    entrypoint: str = ""
+    """Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative
+    when present. The orchestrator resolves it from the Global Marketplace app
+    catalog and sends it explicitly, so dispatch is an exact lookup with no
+    parsing of ``entrypoint_ref``. Empty for single-entrypoint apps and for
+    older orchestrators that send only ``entrypoint_ref`` (the transitional
+    suffix-match fallback)."""
+
+    entrypoint_ref: str = Field(
+        default="",
+        validation_alias=AliasChoices("entrypoint_ref", "connector"),
+        serialization_alias="connector",
+    )
+    """App-qualified entry-point reference (``{app_name}-{entrypoint.name}``).
+
+    Legacy connector wire value (bundle-prefixed), carried as the ``connector``
+    key. **Informational only** — per-entrypoint routing uses the exact
+    :attr:`entrypoint` field; this is no longer parsed for dispatch. Retained
+    for back-compat and for handlers that still read it."""
+
     timeout_seconds: int = 30
     """Maximum seconds to wait for auth response."""
 
@@ -263,6 +288,26 @@ class PreflightInput(BaseModel):
 
     credentials: list[HandlerCredential] = []
     """Credentials to use during preflight."""
+
+    entrypoint: str = ""
+    """Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative
+    when present. The orchestrator resolves it from the Global Marketplace app
+    catalog and sends it explicitly, so dispatch is an exact lookup with no
+    parsing of ``entrypoint_ref``. Empty for single-entrypoint apps and for
+    older orchestrators that send only ``entrypoint_ref`` (the transitional
+    suffix-match fallback)."""
+
+    entrypoint_ref: str = Field(
+        default="",
+        validation_alias=AliasChoices("entrypoint_ref", "connector"),
+        serialization_alias="connector",
+    )
+    """App-qualified entry-point reference (``{app_name}-{entrypoint.name}``).
+
+    Legacy connector wire value (bundle-prefixed), carried as the ``connector``
+    key. **Informational only** — per-entrypoint routing uses the exact
+    :attr:`entrypoint` field; this is no longer parsed for dispatch. Retained
+    for back-compat and for handlers that still read it."""
 
     connection_config: BaseConnectionConfig = Field(
         default_factory=BaseConnectionConfig
@@ -361,6 +406,42 @@ class MetadataInput(BaseModel):
 
     credentials: list[HandlerCredential] = []
     """Credentials to use for metadata discovery."""
+
+    entrypoint: str = ""
+    """Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative
+    when present. The orchestrator resolves it from the Global Marketplace app
+    catalog and sends it explicitly, so dispatch is an exact lookup with no
+    parsing of ``entrypoint_ref``. Empty for single-entrypoint apps and for
+    older orchestrators that send only ``entrypoint_ref`` (the transitional
+    suffix-match fallback)."""
+
+    entrypoint_ref: str = Field(
+        default="",
+        validation_alias=AliasChoices("entrypoint_ref", "connector"),
+        serialization_alias="connector",
+    )
+    """App-qualified entry-point reference (``{app_name}-{entrypoint.name}``).
+
+    Legacy connector wire value (bundle-prefixed), carried as the ``connector``
+    key. **Informational only** — per-entrypoint routing uses the exact
+    :attr:`entrypoint` field; this is no longer parsed for dispatch. Retained
+    for back-compat and for handlers that still read it."""
+
+    metadata_template_key: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "metadata_template_key", "metadataTemplateKey", "type"
+        ),
+    )
+    """Metadata source routing key for multi-source metadata widgets (e.g.
+    ``tags`` / ``connectors`` / ``typenames``).
+
+    Wire compatibility: the orchestrator sends this as ``metadataTemplateKey``
+    (with a ``type`` mirror added by its app client); both are accepted here via
+    the validation alias, so the routing key lands in its documented home rather
+    than being punned into :attr:`object_filter`. The metadata route still
+    mirrors it onto ``object_filter`` when that is empty, for handlers that read
+    the legacy field."""
 
     connection_config: BaseConnectionConfig = Field(
         default_factory=BaseConnectionConfig

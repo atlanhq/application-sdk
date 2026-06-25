@@ -610,6 +610,35 @@ class TestPrometheusMetrics:
                 call_kwargs = mock_provider.call_args[1]
                 assert len(call_kwargs["metric_readers"]) == 1
 
+    def test_otel_setup_failure_disables_metric_send_spam(self):
+        AtlanMetricsAdapter._reset_for_testing()
+        AtlanMetricsAdapter._flush_task_started = True
+        with (
+            mock.patch(
+                "application_sdk.observability.metrics_adaptor.ENABLE_OBSERVABILITY_STORE_SINK",
+                True,
+            ),
+            mock.patch(
+                "application_sdk.observability._objectstore_metric_reader.create_objectstore_metric_reader",
+                side_effect=RuntimeError("reader boom"),
+            ),
+            mock.patch(
+                "application_sdk.observability.metrics_adaptor.logging.error"
+            ) as mock_error,
+        ):
+            adapter = AtlanMetricsAdapter()
+            assert adapter._otel_metrics_enabled is False
+
+            adapter.record_metric(
+                name="setup_failure_metric",
+                value=1.0,
+                metric_type=MetricType.COUNTER,
+                labels={},
+            )
+
+        assert mock_error.call_count == 1
+        assert mock_error.call_args.args[0] == "Failed to setup OTel meter provider"
+
 
 # ---------------------------------------------------------------------------
 # METRIC_ENRICHMENT_KEYS — pin the inline label set. The minimum-viable inline

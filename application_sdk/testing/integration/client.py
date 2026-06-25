@@ -10,19 +10,23 @@ It wraps the existing APIServerClient and provides:
 """
 
 import json
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 from urllib.parse import urljoin
 
 import requests
 
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.testing.integration._errors import (
+    LocalVaultResponseInvariantError,
+    LocalVaultUnavailableError,
+)
 
 logger = get_logger(__name__)
 
 
 def _to_v3_credentials(
-    creds: Union[Dict[str, Any], List[Dict[str, str]]],
-) -> List[Dict[str, str]]:
+    creds: dict[str, Any] | list[dict[str, str]],
+) -> list[dict[str, str]]:
     """Convert a flat credential dict to v3 ``[{"key": k, "value": v}]`` format.
 
     If *creds* is already a list (v3 format), it is returned as-is.
@@ -39,7 +43,7 @@ def _to_v3_credentials(
     if isinstance(creds, list):
         return creds
 
-    pairs: List[Dict[str, str]] = []
+    pairs: list[dict[str, str]] = []
     # Shallow-copy to avoid mutating the caller's dict
     creds = dict(creds)
     extra = creds.pop("extra", None)
@@ -68,6 +72,33 @@ def _to_v3_credentials(
                 pairs.append({"key": f"extra.{k}", "value": str_v})
 
     return pairs
+
+
+def _from_v3_credentials(
+    creds: dict[str, Any] | list[dict[str, str]],
+) -> dict[str, Any]:
+    """Inverse of ``_to_v3_credentials`` — turn a v3 pair list into a flat dict.
+
+    ``extra.<subkey>`` pairs are re-nested under a single ``extra`` dict. Dict
+    inputs pass through unchanged so callers can stay format-agnostic.
+    """
+    if isinstance(creds, dict):
+        return creds
+
+    flat: dict[str, Any] = {}
+    extra: dict[str, Any] = {}
+    for pair in creds:
+        key = pair.get("key")
+        value = pair.get("value")
+        if not key:
+            continue
+        if key.startswith("extra."):
+            extra[key[len("extra.") :]] = value
+        else:
+            flat[key] = value
+    if extra:
+        flat["extra"] = extra
+    return flat
 
 
 class IntegrationTestClient:
@@ -115,9 +146,9 @@ class IntegrationTestClient:
     def call_api(
         self,
         api: str,
-        args: Dict[str, Any],
-        endpoint_override: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        args: dict[str, Any],
+        endpoint_override: str | None = None,
+    ) -> dict[str, Any]:
         """Call an API based on the API type.
 
         This is the main entry point for the test framework. It routes
@@ -132,7 +163,7 @@ class IntegrationTestClient:
             Dict[str, Any]: The API response as a dictionary.
 
         Raises:
-            ValueError: If the API type is not supported.
+            HttpClientInputError: If the API type is not supported.
             requests.RequestException: If the HTTP request fails.
         """
         api_lower = api.lower()
@@ -148,12 +179,19 @@ class IntegrationTestClient:
         elif api_lower == "config":
             return self._call_config(args)
         else:
-            raise ValueError(
-                f"Unsupported API type: '{api}'. "
-                f"Must be one of: auth, metadata, preflight, workflow, config"
+            from application_sdk.testing.integration._errors import (  # noqa: PLC0415
+                HttpClientInputError,
             )
 
-    def _call_auth(self, args: Dict[str, Any]) -> Dict[str, Any]:
+            raise HttpClientInputError(
+                message=(
+                    f"Unsupported API type: '{api}'. "
+                    f"Must be one of: auth, metadata, preflight, workflow, config"
+                ),
+                value_summary=api,
+            )
+
+    def _call_auth(self, args: dict[str, Any]) -> dict[str, Any]:
         """Call the authentication API.
 
         Sends v3-native credential format (list of key-value pairs).
@@ -169,7 +207,7 @@ class IntegrationTestClient:
         data = {"credentials": _to_v3_credentials(creds)}
         return self._post("/auth", data=data)
 
-    def _call_metadata(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _call_metadata(self, args: dict[str, Any]) -> dict[str, Any]:
         """Call the metadata API.
 
         Sends v3-native credential format and optional connection_config.
@@ -182,14 +220,14 @@ class IntegrationTestClient:
             Dict[str, Any]: The API response.
         """
         creds = args.get("credentials", {})
-        data: Dict[str, Any] = {"credentials": _to_v3_credentials(creds)}
+        data: dict[str, Any] = {"credentials": _to_v3_credentials(creds)}
         if "connection_config" in args:
             data["connection_config"] = args["connection_config"]
         if "object_filter" in args:
             data["object_filter"] = args["object_filter"]
         return self._post("/metadata", data=data)
 
-    def _call_preflight(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _call_preflight(self, args: dict[str, Any]) -> dict[str, Any]:
         """Call the preflight check API.
 
         Sends v3-native credential format and connection_config.
@@ -205,7 +243,7 @@ class IntegrationTestClient:
             Dict[str, Any]: The API response.
         """
         creds = args.get("credentials", {})
-        data: Dict[str, Any] = {
+        data: dict[str, Any] = {
             "credentials": _to_v3_credentials(creds),
             "connection_config": args.get(
                 "connection_config", args.get("metadata", {})
@@ -219,12 +257,19 @@ class IntegrationTestClient:
 
     def _call_workflow(
         self,
-        args: Dict[str, Any],
-        endpoint_override: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        args: dict[str, Any],
+        endpoint_override: str | None = None,
+    ) -> dict[str, Any]:
         """Call the workflow start API.
 
-        Converts flat credential dicts to v3 key-value format before sending.
+        Production /start strips inline credentials and resolves them via a
+        ``credential_guid`` provisioned out-of-band (by AE/Heracles). To match
+        that locally, we POST credentials to ``/dev/local-vault`` and forward
+        only the returned guid. When local-vault is not exposed — e.g. SDR
+        testcontainer runs where the workflow resolves credentials via
+        ``agent_json`` — we fall back to sending inline credentials so those
+        scenarios stay unaffected. Scenarios that already supply
+        ``credential_guid`` skip provisioning entirely.
 
         Args:
             args: The workflow arguments (credentials, metadata, connection).
@@ -234,13 +279,86 @@ class IntegrationTestClient:
             Dict[str, Any]: The API response.
         """
         endpoint = endpoint_override or self.workflow_endpoint
-        # Convert credentials inside args to v3 format if present
         data = dict(args)
-        if "credentials" in data and isinstance(data["credentials"], dict):
+
+        if "credential_guid" not in data and data.get("credentials"):
+            credential_guid = self._provision_credentials(data["credentials"])
+            if credential_guid is not None:
+                data["credential_guid"] = credential_guid
+                del data["credentials"]
+            elif isinstance(data["credentials"], dict):
+                data["credentials"] = _to_v3_credentials(data["credentials"])
+        elif "credentials" in data and isinstance(data["credentials"], dict):
             data["credentials"] = _to_v3_credentials(data["credentials"])
+
         return self._post(endpoint, data=data)
 
-    def _call_config(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _provision_credentials(
+        self,
+        credentials: dict[str, Any] | list[dict[str, str]],
+    ) -> str | None:
+        """Provision credentials via the dev local-vault and return the guid.
+
+        Mirrors the production AE/Heracles flow: sensitive fields land in the
+        local secret store, non-sensitive ones in object storage, and the
+        caller gets back a guid to pass to ``/start``.
+
+        When ``/dev/local-vault`` is gated off (HTTP 403 ``Dev-only endpoint``,
+        e.g. on SDR testcontainer or any non-LOCAL deployment), returns
+        ``None`` so the caller can fall back to inline credentials. Any other
+        failure raises.
+
+        Args:
+            credentials: Flat ``{key: value}`` dict or v3 ``[{key, value}]``
+                list. v3 lists are flattened back to a dict for the vault.
+
+        Returns:
+            The ``credential_guid`` issued by the vault, or ``None`` if the
+            endpoint is gated off in this deployment.
+
+        Raises:
+            DependencyUnavailableError / InternalError: If local-vault cannot be reached, or is reachable but
+                returns no guid.
+        """
+        flat = _from_v3_credentials(credentials)
+        response = self._post("/dev/local-vault", data=flat)
+
+        if response.get("_http_status") == 403:
+            logger.info(
+                "local-vault gated off (%s); falling back to inline credentials. "
+                "If your workflow expects a credential_guid, set one explicitly "
+                "on the scenario.",
+                response.get("detail") or response.get("error"),
+            )
+            return None
+
+        # Transport-failure shape from _post (ConnectionError / Timeout /
+        # RequestException): no _http_status, success=False, error is a dict.
+        # Surface the actual cause instead of the generic missing-guid raise.
+        if "_http_status" not in response and isinstance(response.get("error"), dict):
+            err = response["error"]
+            raise LocalVaultUnavailableError(
+                message=(
+                    f"Could not reach /dev/local-vault at {self.host}: "
+                    f"{err.get('message')}. Is the application server running?"
+                ),
+                target=self.host,
+            )
+
+        guid = (response.get("data") or {}).get("credential_guid") or response.get(
+            "credential_guid"
+        )
+        if not guid:
+            raise LocalVaultResponseInvariantError(
+                message=(
+                    "Local-vault did not return a credential_guid "
+                    f"(status={response.get('_http_status')})."
+                ),
+            )
+        logger.debug("Provisioned credentials via local-vault: guid=%s", guid)
+        return guid
+
+    def _call_config(self, args: dict[str, Any]) -> dict[str, Any]:
         """Call the config GET or POST API.
 
         Args:
@@ -270,7 +388,7 @@ class IntegrationTestClient:
                 "error": f"Invalid config_action: '{action}'. Must be 'get' or 'update'",
             }
 
-    def get_config(self, workflow_id: str) -> Dict[str, Any]:
+    def get_config(self, workflow_id: str) -> dict[str, Any]:
         """Get the configuration for a workflow.
 
         Args:
@@ -282,8 +400,8 @@ class IntegrationTestClient:
         return self._get(f"/config/{workflow_id}")
 
     def update_config(
-        self, workflow_id: str, payload: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, workflow_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
         """Update the configuration for a workflow.
 
         Args:
@@ -299,7 +417,7 @@ class IntegrationTestClient:
         self,
         workflow_id: str,
         run_id: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Get the status of a workflow execution.
 
         Args:
@@ -311,7 +429,7 @@ class IntegrationTestClient:
         """
         return self._get(f"/status/{workflow_id}/{run_id}")
 
-    def _get(self, endpoint: str) -> Dict[str, Any]:
+    def _get(self, endpoint: str) -> dict[str, Any]:
         """Make a GET request to the API.
 
         Args:
@@ -364,7 +482,7 @@ class IntegrationTestClient:
                 },
             }
 
-    def _post(self, endpoint: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    def _post(self, endpoint: str, data: dict[str, Any]) -> dict[str, Any]:
         """Make a POST request to the API.
 
         Args:
@@ -420,7 +538,7 @@ class IntegrationTestClient:
                 },
             }
 
-    def _handle_response(self, response: requests.Response) -> Dict[str, Any]:
+    def _handle_response(self, response: requests.Response) -> dict[str, Any]:
         """Handle the HTTP response and convert to dictionary.
 
         Args:
@@ -431,7 +549,7 @@ class IntegrationTestClient:
         """
         try:
             result = response.json()
-        except ValueError:
+        except ValueError:  # conformance: ignore[E009] non-JSON response; synthetic error result dict is the explicit fallback
             # Response is not JSON
             result = {
                 "success": False,

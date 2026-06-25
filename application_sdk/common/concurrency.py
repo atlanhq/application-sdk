@@ -1,6 +1,9 @@
 """Concurrency utilities — CPU detection and thread pool sizing."""
 
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 
 def get_actual_cpu_count() -> int:
@@ -16,6 +19,10 @@ def get_actual_cpu_count() -> int:
     try:
         return len(os.sched_getaffinity(0)) or 1  # type: ignore[attr-defined]
     except AttributeError:
+        logger.warning(
+            "sched_getaffinity unavailable on this platform; falling back to os.cpu_count()",
+            exc_info=True,
+        )
         return os.cpu_count() or 1
 
 

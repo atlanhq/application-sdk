@@ -257,6 +257,77 @@ results are not subsequently checked for exception instances.
 
 ---
 
+### P12 — Untyped builtin raise where a typed `AppError` code applies
+
+**Grep:** `raise\s+(ValueError|RuntimeError|Exception|TypeError|NotImplementedError|OSError|KeyError|LookupError)\b`
+**Severity:** HIGH (CRITICAL when inside an `@task`-decorated activity body or `@activity.defn`-decorated function)
+**What it is:** SDK code raises a bare Python builtin. The Automation Engine
+receives an opaque string — no `category`, no `code`, no `audience`, no
+`retryable`. Dashboards are blind; on-call routing is impossible. Direct
+expression of the BLDX-1261 audit scope.
+
+```python
+# BAD — unattributable on the wire
+raise ValueError("Engine is not initialized. Call load() first.")
+
+# GOOD — typed, attributable
+from application_sdk.errors import InternalError
+raise InternalError(
+    message="Engine is not initialized. Call load() first.",
+    component="sql_client",
+    invariant="load_before_use",
+)
+```
+
+**Acceptable?** Only inside dataclass `__post_init__` / stdlib validator methods
+where Python semantics require `TypeError` / `ValueError` for stdlib
+interoperability (e.g. Pydantic validators, `__init__` argument checks at the
+Python level). Must have a comment explaining why the builtin is required.
+
+**Fix:** FT-8. Use `typed-error-prescription.md` §4 (cookbook) or §3 (litmus
+tests) to select the leaf.
+
+---
+
+### P13 — Legacy `AtlanError` subclass raise (deprecated stack)
+
+**Grep:** `raise\s+(ClientError|ApiError|OrchestratorError|WorkflowError|IOError|CommonError|DocGenError|ActivityError|AtlanError)\b`
+**Severity:** HIGH (deprecated; scheduled for removal in v4.0 per
+`application_sdk/common/error_codes.py:51-63`)
+**What it is:** `AtlanError` and its subclasses emit a `DeprecationWarning` at
+construction time and reach AE as opaque strings. They produce no typed wire
+envelope.
+
+```python
+# BAD
+raise IOError("Object store download failed")
+
+# GOOD (standalone raise — no enclosing exception to chain)
+from application_sdk.errors import DependencyUnavailableError
+raise DependencyUnavailableError(
+    message="Object store download failed",
+    service="object_store",
+)
+
+# GOOD (inside except block — chain the cause)
+except SomeError as exc:
+    raise DependencyUnavailableError(
+        message="Object store download failed",
+        service="object_store",
+        cause=exc,
+    ) from exc
+```
+
+**Acceptable?** Never, except `IOError` hits — confirm the name refers to the `AtlanError`
+subclass (imported from `application_sdk.common.error_codes`) rather than the Python builtin
+alias for `OSError`.
+
+**Fix:** FT-9. If the raise site uses a legacy constant, look it up in the §5 migration table
+in `typed-error-prescription.md`. If there is no constant (bare `raise AtlanError(msg)`), use
+the §3 litmus tests to select a leaf directly.
+
+---
+
 ### P11 — `logging.Filter` Exceptions Propagate to Caller (CRASH)
 
 **Grep:** `class\s+\w+.*logging\.Filter` or `def filter\(self` inside a class that inherits `logging.Filter`
@@ -335,16 +406,51 @@ When a finding is acceptable, note the justification and skip it from the remedi
 
 Mechanical fixes per category. Apply exactly — don't over-engineer.
 
-### FT-1: Add logging to silent-swallow
+**Typed-error requirement.** Whenever a fix surfaces or re-raises an exception,
+the replacement **must** use a typed `AppError` subclass from
+`application_sdk.errors`. See
+[`typed-error-prescription.md`](typed-error-prescription.md) for the full
+catalogue (14 SDK leaves), litmus tests, SDK-context cookbook (§4), the
+exhaustive legacy `AtlanError` → `AppError` migration table (§5), and the
+mandatory `cause`/`from` rules (§6). **Never** propose raising bare
+`Exception` / `ValueError` / `RuntimeError`; **never** propose raising legacy
+`AtlanError` subclasses (`ClientError`, `IOError`, `CommonError`, etc.).
+Use the §8 surface-or-swallow decision tree to choose between FT-1a and FT-1b.
+
+### FT-1a: Add logging to silent-swallow (log-and-continue — best-effort paths)
+
+Use when the §8 decision tree confirms "best-effort / caller does not depend
+on success". Log at WARNING if the failure is unexpected; DEBUG if it is
+fully anticipated.
 
 ```python
 # Before
 except SomeError:
     pass
 
-# After
+# After (log-and-continue)
 except SomeError:
     logger.warning("<context: what was being attempted>", exc_info=True)
+```
+
+### FT-1b: Log and re-raise as typed `AppError` (surfacing paths)
+
+Use when the §8 decision tree says the caller depends on the operation or this
+is inside an activity body. Pick the leaf from `typed-error-prescription.md` §4.
+
+```python
+# Before
+except SomeError:
+    pass
+
+# After (log + typed re-raise)
+except SomeError as exc:
+    logger.warning("<context: what was being attempted>", exc_info=True)
+    raise <TypedLeaf>(
+        message="<context: what was being attempted>",
+        cause=exc,
+        # evidence fields from leaves.py
+    ) from exc
 ```
 
 ### FT-2: Add `exc_info=True` to existing log
@@ -359,17 +465,39 @@ except SomeError:
     logger.warning("Failed: <static description>", exc_info=True)
 ```
 
-### FT-3: Add logging before error-to-return-value
+### FT-3a: Add logging before error-to-return-value (log-and-continue — caller treats default as valid)
+
+Use when the caller genuinely treats the fallback return value as a valid
+outcome. Log at WARNING.
 
 ```python
 # Before
 except Exception:
     return {}
 
-# After
+# After (log-and-continue)
 except Exception:
     logger.warning("<context>", exc_info=True)
     return {}
+```
+
+### FT-3b: Convert error-to-return-value to typed re-raise (dominant fix)
+
+The default fix — use unless FT-3a's condition is clearly met. Convert the
+swallow into a typed raise so callers see a real failure rather than a silently
+wrong result.
+
+```python
+# Before
+except Exception:
+    return {}
+
+# After (typed re-raise — caller must handle or propagate)
+except Exception as exc:
+    raise <TypedLeaf>(
+        message="<context: what was being attempted>",
+        cause=exc,
+    ) from exc
 ```
 
 ### FT-4: Add exception inspection to `asyncio.gather` results
@@ -381,18 +509,39 @@ for _r in _results:
         logger.warning("Async task failed", exc_info=_r)
 ```
 
-### FT-5: Replace broad `contextlib.suppress(Exception)` with logged try/except
+### FT-5a: Replace broad `contextlib.suppress(Exception)` with logged try/except (best-effort)
+
+Use when §8 confirms best-effort / caller does not depend on success.
 
 ```python
 # Before
 with contextlib.suppress(Exception):
     do_thing()
 
-# After
+# After (log-and-continue)
 try:
     do_thing()
 except Exception:
     logger.warning("<context>", exc_info=True)
+```
+
+### FT-5b: Replace broad `contextlib.suppress(Exception)` with typed re-raise (surfacing)
+
+Use when the call is not genuinely best-effort.
+
+```python
+# Before
+with contextlib.suppress(Exception):
+    do_thing()
+
+# After (typed re-raise)
+try:
+    do_thing()
+except Exception as exc:
+    raise <TypedLeaf>(
+        message="<context: what failed>",
+        cause=exc,
+    ) from exc
 ```
 
 ### FT-6: Narrow overly-broad catch (manual — requires knowing the right exception types)
@@ -438,6 +587,78 @@ class EnvFilter(logging.Filter):
         return getattr(record, "environment", None) == "production"
 ```
 
+### FT-8: Convert untyped builtin raise to typed `AppError` (manual — leaf choice needs context)
+
+Look up the right leaf in `typed-error-prescription.md` §4 (SDK-context cookbook)
+or §3 (litmus tests). Preserve the original message verbatim.
+
+```python
+# Before
+raise ValueError("aws_role_arn is required")
+
+# After
+from application_sdk.errors import InvalidInputError
+raise InvalidInputError(
+    message="aws_role_arn is required",
+    field="aws_role_arn",
+)
+```
+
+```python
+# Before
+raise RuntimeError("Engine is not initialized. Call load() first.")
+
+# After
+from application_sdk.errors import InternalError
+raise InternalError(
+    message="Engine is not initialized. Call load() first.",
+    component="sql_client",
+    invariant="load_before_use",
+)
+```
+
+When wrapping an upstream exception, always use both `cause=exc` **and**
+`raise ... from exc` (see `typed-error-prescription.md` §6).
+
+### FT-9: Convert legacy `AtlanError` raise to typed `AppError` (manual — use migration table)
+
+Look up the legacy constant in `typed-error-prescription.md` §5. The table
+is exhaustive and covers every constant in
+`application_sdk/common/error_codes.py`.
+
+```python
+# Before
+raise ClientError("Engine not initialized. Call load() first.")
+
+# After
+from application_sdk.errors import InternalError
+raise InternalError(
+    message="Engine not initialized. Call load() first.",
+    component="sql_client",
+    invariant="load_before_use",
+)
+```
+
+```python
+# Before
+raise IOError("Object store download failed")
+
+# After (standalone — no enclosing exception)
+from application_sdk.errors import DependencyUnavailableError
+raise DependencyUnavailableError(
+    message="Object store download failed",
+    service="object_store",
+)
+
+# After (inside except block — chain the cause)
+except SomeError as exc:
+    raise DependencyUnavailableError(
+        message="Object store download failed",
+        service="object_store",
+        cause=exc,
+    ) from exc
+```
+
 ---
 
 ## Linting Rules to Enable
@@ -469,3 +690,77 @@ select = [
 
 Note: `TRY300` and `TRY302` can be noisy on existing codebases — introduce separately after
 fixing the higher-severity issues.
+
+To prevent regressions on P12 (untyped builtin raises inside `application_sdk/`),
+a CI-level AST check is more practical than a ruff rule (false-positive rate is high
+without a per-file allowlist). A grep-based approach can't correctly exclude raises
+inside `__post_init__` or validator bodies because those raises appear on a different
+line from the function definition. Use this AST-based check instead:
+
+```bash
+python - <<'PY'
+import ast, pathlib, sys
+
+BUILTIN_RAISES = {
+    "ValueError", "RuntimeError", "Exception", "TypeError",
+    "NotImplementedError", "OSError", "KeyError", "LookupError",
+}
+# Raises inside these methods / decorator names are acceptable stdlib-interop
+INTEROP_METHOD_NAMES = {"__post_init__", "__init__"}
+INTEROP_DECORATOR_NAMES = {"field_validator", "validator"}
+
+class Checker(ast.NodeVisitor):
+    def __init__(self, path: pathlib.Path):
+        self._path = path
+        self._interop_depth = 0
+        self.findings: list[str] = []
+
+    def _is_interop(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+        if node.name in INTEROP_METHOD_NAMES:
+            return True
+        for dec in node.decorator_list:
+            name = (dec.id if isinstance(dec, ast.Name)
+                    else dec.func.id if isinstance(dec, ast.Call) and isinstance(dec.func, ast.Name)
+                    else None)
+            if name in INTEROP_DECORATOR_NAMES:
+                return True
+        return False
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        in_interop = self._is_interop(node)
+        if in_interop:
+            self._interop_depth += 1
+        self.generic_visit(node)
+        if in_interop:
+            self._interop_depth -= 1
+
+    visit_AsyncFunctionDef = visit_FunctionDef  # type: ignore[assignment]
+
+    def visit_Raise(self, node: ast.Raise) -> None:
+        if self._interop_depth > 0 or node.exc is None:
+            return
+        exc = node.exc
+        name = (exc.id if isinstance(exc, ast.Name)
+                else exc.func.id if isinstance(exc, ast.Call) and isinstance(exc.func, ast.Name)
+                else None)
+        if name in BUILTIN_RAISES:
+            self.findings.append(f"{self._path}:{node.lineno}: raise {name}")
+
+findings: list[str] = []
+for path in pathlib.Path("application_sdk").rglob("*.py"):
+    try:
+        checker = Checker(path)
+        checker.visit(ast.parse(path.read_text(), filename=str(path)))
+        findings.extend(checker.findings)
+    except SyntaxError:
+        pass
+
+if findings:
+    print("\n".join(findings), file=sys.stderr)
+    sys.exit(1)
+PY
+```
+
+This is tracked under BLDX-1261; enforcement is out of scope for this skill.
+P13 (legacy `AtlanError`) will disappear once BLDX-1261 lands and can be
+enforced by deleting `application_sdk/common/error_codes.py` in v4.0.

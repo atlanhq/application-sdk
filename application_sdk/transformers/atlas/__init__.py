@@ -8,19 +8,39 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, Optional, Type
+import warnings
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
 
 from pyatlan.model.enums import AtlanConnectorType, EntityStatus
 
 if TYPE_CHECKING:
-    import daft
+    import pyarrow as pa
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.transformers import TransformerInterface
+from application_sdk.transformers.common.last_sync import (
+    LastSyncDetails,
+    resolve_last_sync_details,
+    set_last_sync_details_on_asset,
+)
 from application_sdk.transformers.common.utils import process_text
 
+warnings.warn(
+    "application_sdk.transformers.atlas is deprecated and will be removed in the next major version. "
+    "Use the connector-side typed-record → mapper-function pattern instead. "
+    "See docs/upgrade-guide-v3.md.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 logger = get_logger(__name__)
+
+# Module-level sentinel so the legacy-args fallback warning fires once per
+# process (not once per asset).  In production this surfaces a missing
+# Temporal interceptor or a non-Temporal entry path; in tests the legacy
+# fixtures fire it once, which keeps the test log readable.
+_LEGACY_LAST_SYNC_WARNED: bool = False
 
 
 class AtlasTransformer(TransformerInterface):
@@ -66,7 +86,7 @@ class AtlasTransformer(TransformerInterface):
         self.current_epoch = kwargs.get("current_epoch", "0")
         self.connector_name = connector_name
         self.tenant_id = tenant_id
-        self.entity_class_definitions: Dict[str, Type[Any]] = {
+        self.entity_class_definitions: dict[str, type[Any]] = {
             "DATABASE": Database,
             "SCHEMA": Schema,
             "TABLE": Table,
@@ -81,12 +101,12 @@ class AtlasTransformer(TransformerInterface):
     def transform_metadata(
         self,
         typename: str,
-        dataframe: "daft.DataFrame",
+        dataframe: pa.Table | list[dict[str, Any]],
         workflow_id: str,
         workflow_run_id: str,
-        entity_class_definitions: Dict[str, Type[Any]] | None = None,
-        **kwargs: Dict[str, Any],
-    ) -> "daft.DataFrame":
+        entity_class_definitions: dict[str, type[Any]] | None = None,
+        **kwargs: dict[str, Any],
+    ) -> list[dict[str, Any]]:
         self.entity_class_definitions = (
             entity_class_definitions or self.entity_class_definitions
         )
@@ -94,8 +114,11 @@ class AtlasTransformer(TransformerInterface):
         connection_qualified_name = kwargs.get("connection", {}).get(
             "connection_qualified_name", None
         )
+        rows: list[dict[str, Any]] = (
+            dataframe if isinstance(dataframe, list) else dataframe.to_pylist()
+        )
         transformed_metadata_list = []
-        for row in dataframe.iter_rows():
+        for row in rows:
             try:
                 transformed_metadata = self.transform_row(
                     typename,
@@ -121,19 +144,17 @@ class AtlasTransformer(TransformerInterface):
             except Exception:
                 logger.error("Error processing row: %s", typename, exc_info=True)
 
-        import daft  # noqa: PLC0415 — optional dep: daft
-
-        return daft.from_pylist(transformed_metadata_list)
+        return transformed_metadata_list
 
     def transform_row(
         self,
         typename: str,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         workflow_id: str,
         workflow_run_id: str,
-        entity_class_definitions: Dict[str, Type[Any]] | None = None,
+        entity_class_definitions: dict[str, type[Any]] | None = None,
         **kwargs: Any,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Transform metadata into an Atlas entity.
 
         This method transforms the provided metadata into an Atlas entity based on
@@ -175,9 +196,7 @@ class AtlasTransformer(TransformerInterface):
             try:
                 entity_attributes = creator.get_attributes(data)
                 # enrich the entity with workflow metadata
-                enriched_data = self._enrich_entity_with_metadata(
-                    workflow_id, workflow_run_id, data
-                )
+                enriched_data = self._enrich_entity_with_metadata(data)
 
                 entity_attributes["attributes"].update(enriched_data["attributes"])
                 entity_attributes["custom_attributes"].update(
@@ -190,6 +209,39 @@ class AtlasTransformer(TransformerInterface):
                     status=EntityStatus.ACTIVE,
                 )
 
+                # Stamp last-sync details on the typed pyatlan ``Asset``
+                # *before* serialisation — the dict round-trip path is
+                # intentionally not used so all transformations converge on
+                # the single Asset-based primitive (BLDX-1229).  The legacy
+                # ``workflow_id`` / ``workflow_run_id`` method args are
+                # passed only as fallbacks: the resolver reads execution +
+                # correlation context first (set by the Temporal
+                # interceptor in production), and the explicit args are
+                # used only when the context is empty (CLI tools, unit
+                # tests without Temporal).
+                resolved = resolve_last_sync_details()
+                if not resolved.workflow_name and not resolved.run:
+                    global _LEGACY_LAST_SYNC_WARNED
+                    if not _LEGACY_LAST_SYNC_WARNED:
+                        _LEGACY_LAST_SYNC_WARNED = True
+                        logger.warning(
+                            "AtlasTransformer falling back to legacy "
+                            "workflow_id / workflow_run_id args for last-sync "
+                            "enrichment because the SDK execution / correlation "
+                            "context is empty. In a Temporal worker this "
+                            "indicates the SDK's interceptors are not registered; "
+                            "assets will carry the child workflow's Temporal id "
+                            "instead of the AE workflow id (BLDX-1229)."
+                        )
+                set_last_sync_details_on_asset(
+                    entity,
+                    details=LastSyncDetails(
+                        run=resolved.run or workflow_run_id,
+                        workflow_name=resolved.workflow_name or workflow_id,
+                        run_at_ms=resolved.run_at_ms,
+                    ),
+                )
+
                 return entity.dict(by_alias=True, exclude_none=True, exclude_unset=True)
             except Exception:
                 logger.error("Error transforming entity: %s", typename, exc_info=True)
@@ -200,34 +252,23 @@ class AtlasTransformer(TransformerInterface):
 
     def _enrich_entity_with_metadata(
         self,
-        workflow_id: str,
-        workflow_run_id: str,
-        data: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """Enrich an entity with additional metadata.
+        data: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Enrich an entity with non-last-sync metadata from the source row.
 
-        This method adds workflow metadata and other attributes to the entity.
-
-        Args:
-            entity (Asset): The entity to enrich.
-            workflow_id (str): ID of the workflow.
-            workflow_run_id (str): ID of the workflow run.
-            data (Dict[str, Any]): Additional data for enrichment.
-
-        Returns:
-            Any: The enriched entity.
+        Returns the attributes that get merged into the pyatlan asset
+        construction kwargs.  Last-sync stamping is intentionally *not*
+        done here — it happens after entity construction via
+        :func:`set_last_sync_details_on_asset` on the typed Asset, so the
+        single Asset-based primitive is the only path that writes those
+        fields (BLDX-1229).
         """
 
-        attributes = {}
-        custom_attributes = {}
+        attributes: dict[str, Any] = {}
+        custom_attributes: dict[str, Any] = {}
 
         attributes["status"] = EntityStatus.ACTIVE
         attributes["tenant_id"] = self.tenant_id
-        attributes["last_sync_workflow_name"] = workflow_id
-        attributes["last_sync_run"] = workflow_run_id
-        attributes["last_sync_run_at"] = int(
-            datetime.now(timezone.utc).timestamp() * 1000
-        )
         attributes["connection_name"] = data.get("connection_name", "")
         attributes["connector_name"] = AtlanConnectorType.get_connector_name(
             data.get("connection_qualified_name", "")

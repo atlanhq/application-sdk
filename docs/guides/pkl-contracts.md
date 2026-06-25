@@ -62,7 +62,7 @@ amends "pkl:Project"
 
 dependencies {
   ["app-contract-toolkit"] {
-    uri = "package://pkg.pkl-lang.org/github.com/atlanhq/app-contract-toolkit/app-contract-toolkit@0.3.9"
+    uri = "package://atlanhq.github.io/application-sdk/contracts/app-contract-toolkit@<LATEST_VERSION>"
   }
 }
 ```
@@ -78,10 +78,10 @@ cd contract && pkl project resolve
 A minimal contract:
 
 ```pkl
-amends "package://pkg.pkl-lang.org/github.com/atlanhq/app-contract-toolkit/app-contract-toolkit@0.3.9#/App.pkl"
+amends "package://atlanhq.github.io/application-sdk/contracts/app-contract-toolkit@<LATEST_VERSION>#/App.pkl"
 
-import "package://pkg.pkl-lang.org/github.com/atlanhq/app-contract-toolkit/app-contract-toolkit@0.3.9#/Config.pkl"
-import "package://pkg.pkl-lang.org/github.com/atlanhq/app-contract-toolkit/app-contract-toolkit@0.3.9#/Credential.pkl"
+import "package://atlanhq.github.io/application-sdk/contracts/app-contract-toolkit@<LATEST_VERSION>#/Config.pkl"
+import "package://atlanhq.github.io/application-sdk/contracts/app-contract-toolkit@<LATEST_VERSION>#/Credential.pkl"
 
 name = "my-connector"
 displayName = "My Connector"

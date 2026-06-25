@@ -1,0 +1,27 @@
+/// Fixture: minimal app with both a normal publish step and a lineage-publish
+/// sub-step. Used to verify that each node receives the correct connection-cache
+/// defaults from the typed pipeline.
+amends "../../src/App.pkl"
+
+name = "lineage-publish-pipeline"
+displayName = "Lineage Publish Pipeline"
+icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
+hasCredentialConfig = false
+
+pipeline {
+  publish = new PublishStep {
+    lineagePublish = new LineagePublishStep {}
+  }
+}
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["connection"] = new ConnectionCreator {
+          placeholderText = "Connection Name"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,21 @@
+name: Sync PklProject.deps.json for Renovate
+
+# When the Renovate bot bumps @<version> in contract/PklProject on a
+# renovate/** branch, re-resolve the Pkl lock file so the PR is self-contained.
+# Delegates to the reusable workflow in application-sdk.
+
+on:
+  push:
+    branches:
+      - 'renovate/**'
+    paths:
+      - 'contract/PklProject'
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    uses: atlanhq/application-sdk/.github/workflows/renovate-pkl-sync.yaml@main
+    secrets:
+      push_token: ${{ secrets.ORG_PAT_GITHUB }}

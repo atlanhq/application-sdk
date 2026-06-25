@@ -1,0 +1,381 @@
+name: Integration Tests for Atlan Connector Apps
+
+description: |
+  Runs integration tests for an Atlan connector app (atlan-*-app repository).
+
+  Reusable across every connector built on atlan-application-sdk v3+. The
+  connector's workflow `uses:` this action; per-app variation is limited to:
+  - `app-name` input — the connector's ATLAN_APPLICATION_NAME (e.g., athena, postgres)
+  - The caller's job-level `env:` block — where TEST_<CONNECTOR>_* env vars
+    are wired from `secrets.*`. These are inherited by the action's steps.
+
+  The integration framework itself lives at
+  `application_sdk.testing.integration` (merged in PR #1233; forward-ported
+  to v3). Connectors pin a tagged SDK release (e.g., v3.7.0) and this action
+  just runs pytest against the installed package.
+
+  Steps:
+  - Sets up Python + uv via `setup-deps` (which also checks out the caller repo).
+  - Starts the connector app server (`python main.py`) and waits for health. On
+    SDK >= 3.13 this boots an embedded daprd + in-process Temporal itself
+    (`application_sdk.dev`), so no external runtime install is needed — that is
+    the default.
+  - Only on SDK < 3.13 (or when `force-external-runtime: true`): downloads the
+    `daprd` runtime binary (NOT the Dapr CLI) + Temporal CLI and starts daprd
+    directly alongside a Temporal dev server before the app server. The daprd
+    version follows the SDK's pinned `__dapr_version`. No Dapr CLI / `dapr init`
+    / `dapr run` is involved anywhere — daprd is invoked directly, the same way
+    the SDK container entrypoint and embedded local-dev runtime do.
+  - Runs `pytest tests/integration/` with pytest-xdist for in-process parallelism.
+  - Uploads junit XML + raw test output as artifacts.
+  - Cleans up the app server (and the external Dapr/Temporal when they were started).
+
+  pytest-xdist and pytest-rerunfailures are installed transiently via `uv run --with`
+  so the caller does not need to declare them as dependencies.
+
+  ## Connectors with native dependencies
+
+  Some connectors require OS-level native libs (ODBC drivers for MSSQL/Oracle,
+  SAP JCo for SAP ERP, Kafka native clients, etc.). Install them as a
+  PRE-STEP in the caller's workflow BEFORE invoking this action — they
+  survive the action's internal re-checkout because they're installed at
+  the system level, not in the repo tree. `uv sync` (inside this action's
+  `setup-deps` call) will then find the headers/libraries when compiling
+  Python wrappers like `pyodbc`.
+
+  Example — MSSQL with ODBC 18 + FreeTDS:
+
+  ```yaml
+  steps:
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+    - uses: ./.github/actions/mssql-native-deps   # connector-local action
+    - uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@v3.20.0
+      with:
+        app-name: mssql
+  ```
+
+  Where `./.github/actions/mssql-native-deps/action.yml` is a tiny ~15-line
+  composite action that does ONLY the apt-install steps (no Python, no Dapr,
+  no app server — this action handles those). The connector ships its own
+  native-deps action; this action handles all the connector-agnostic setup.
+
+outputs:
+  summary:
+    description: |
+      One-line pytest summary parsed from the test-output's final
+      `=== ... ===` line (e.g. "248 passed, 8 skipped in 159.91s").
+      Caller workflows can surface this in PR comments.
+    value: ${{ steps.tests.outputs.summary }}
+  exit_code:
+    description: pytest exit code from the test run.
+    value: ${{ steps.tests.outputs.exit_code }}
+
+inputs:
+  app-name:
+    required: true
+    description: |
+      The connector app name. Used as ATLAN_APPLICATION_NAME for the
+      running app server. Must match the connector's pyproject.toml
+      `tool.poe.tasks.start-app` ATLAN_APPLICATION_NAME (e.g., athena, postgres).
+  test-paths:
+    required: false
+    description: |
+      Optional space-separated pytest target paths. Default is empty,
+      which means pytest auto-discovers tests from the rootdir (honors
+      `[tool.pytest.ini_options].testpaths` in `pyproject.toml` if set).
+      Override only when you need to scope to a subset of test files
+      (e.g., `tests/integration/` for integration-only runs).
+      Coverage flags can be added via `pytest-args`; pytest-cov is
+      installed transiently.
+    default: ""
+  python-version:
+    required: false
+    description: Python version to use.
+    default: "3.11"
+  pytest-args:
+    required: false
+    description: |
+      Extra arguments passed to pytest after the integration-tests path.
+      Default parallelises tests across xdist workers and retries only
+      transient network/socket failures; override to dial worker count,
+      change distribution strategy, or adjust retry count/pattern.
+    default: "-n auto --dist=load --tb=short --reruns 2 --reruns-delay 5 --only-rerun \"ConnectError|ConnectionError|ClientConnectorError|TimeoutError|ReadTimeout\""
+  app-port:
+    required: false
+    description: HTTP port the connector app server listens on.
+    default: "8000"
+  health-check-timeout-seconds:
+    required: false
+    description: How long to wait for the app server to become healthy.
+    default: "60"
+  # MIGRATION: the Dapr CLI was removed entirely — this action now downloads the
+  # ``daprd`` runtime binary directly from ``dapr/dapr`` releases and invokes it
+  # directly (no ``dapr init`` / ``dapr run``). The earlier ``dapr-cli-version``
+  # input is long gone; GitHub Actions silently ignores unknown ``with:`` keys,
+  # so a caller still passing it won't error — it is simply not honoured.
+  dapr-version:
+    required: false
+    description: |
+      Version of the ``daprd`` runtime to download from ``dapr/dapr`` releases.
+      Leave empty (the default) to read the SDK's pinned ``__dapr_version``
+      from ``application_sdk/version.py`` — the single source of truth, bumped
+      by ``.github/workflows/check-dapr-version.yaml``. Set this only to force a
+      specific version (e.g. to reproduce an issue on an older daprd).
+
+      NOTE: this is the daprd *runtime* version (``dapr/dapr`` releases), which
+      is independent of the ``dapr/cli`` release cadence — the CLI is no longer
+      downloaded, so a runtime-only release (daprd published without a matching
+      CLI release) no longer breaks this action.
+    default: ""
+  force-external-runtime:
+    required: false
+    description: >
+      Force the external daprd + Temporal CLI install/start steps to run even when
+      the installed SDK reports embedded runtime support (SDK >= 3.13). Set this
+      only when the connector's main.py has NOT been migrated to the embedded
+      runtime path yet and still expects external daprd at localhost:3500 +
+      temporal at localhost:7233.
+
+      PREFER THE EMBEDDED RUNTIME (leave this unset / "false"). On SDK >= 3.13 the
+      app boots daprd + an in-process Temporal itself from `python main.py`, so CI
+      needs no external runtime at all — this is what the v3 reference connectors
+      (atlan-metabase-app, atlan-openapi-app, atlan-mysql-app) do. Migrating your
+      main.py to the embedded runtime and dropping this flag is the recommended
+      end state; see docs/guides/integration-testing.md. (Even when set, this no
+      longer uses the Dapr CLI — daprd is downloaded and run directly.)
+    default: "false"
+  application-sdk-ref:
+    required: false
+    description: |
+      Branch/SHA of atlanhq/application-sdk to pin before running tests.
+      Empty = use the lockfile version. Used by cross-repo dispatch from
+      application-sdk PRs to exercise the SDK branch under review.
+    default: ""
+  services-script:
+    required: false
+    description: |
+      Optional path (relative to the caller's checked-out repo root) of a
+      shell script that starts runtime source services and exports any needed
+      env vars via ``>> "$GITHUB_ENV"``.  The script runs AFTER setup-deps
+      (caller repo checked out, deps installed) and BEFORE the app server
+      starts, so services are ready when pytest begins.
+
+      Use this hook for services that cannot be managed from inside a pytest
+      fixture — e.g. externally-provisioned object stores, multi-container
+      stacks, or services whose Docker image is too slow to start inside a
+      fixture timeout.  For source systems that *can* run as Docker
+      containers, prefer the mysql/metabase pattern: a session-scoped
+      testcontainers fixture in tests/integration/conftest.py — it keeps CI
+      and local dev symmetric.
+
+      See atlan-openapi-app/.github/test/setup-services.sh for a reference
+      demonstration of the pattern.
+
+      ## Runtime-service hook vs native-build-dep pre-step
+
+      This hook covers *runtime services needed at test time* (post-install).
+      It is NOT the right place for OS-level build deps (ODBC drivers, SAP
+      JCo, etc.) that must be apt-installed *before* uv sync compiles native
+      Python extensions.  Those require a PRE-STEP in the caller's own
+      tests.yaml before invoking this action (see the "Connectors with native
+      dependencies" section above).
+
+      ## Cross-repo safety
+
+      This action checks out the caller's repo via setup-deps, so
+      services-script paths resolve against the caller's tree — identical to
+      how e2e-full-reusable.yaml forwards secrets-script and compose-overlay
+      to the sdr-e2e composite.  Never use ``uses: ./…`` references from
+      inside a reusable/composite workflow: they resolve against the
+      reusable's repo, not the caller's.
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Python, uv, and dependencies
+      uses: atlanhq/application-sdk/.github/actions/setup-deps@main
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Pin application-sdk to dispatched ref
+      if: inputs.application-sdk-ref != ''
+      shell: bash
+      env:
+        SDK_REF: ${{ inputs.application-sdk-ref }}
+      run: |
+        chmod +x "${{ github.action_path }}/repin-application-sdk.sh"
+        "${{ github.action_path }}/repin-application-sdk.sh"
+        uv sync --all-extras --all-groups
+
+    # SDK 3.13+ boots an embedded daprd + Temporal directly from
+    # `python main.py` (application_sdk/dev/_dapr.py + _embedded.py), each
+    # downloading its own runtime. On those versions the external daprd +
+    # Temporal CLI install/start steps below are redundant — worse, the embedded
+    # daprd roots its objectstore at ./local/objectstore while the external one
+    # roots at ./local/dapr/objectstore, so running both is a source of
+    # confusion. Detect the installed SDK version and skip the external infra
+    # when the embedded runtime is available. Pre-3.13 connectors still need it.
+    - name: Detect embedded runtime (SDK >= 3.13)
+      id: runtime
+      shell: bash
+      run: |
+        VER=$(uv run python -c "from importlib.metadata import version; print(version('atlan-application-sdk'))")
+        EMBEDDED=$(uv run python -c "import re; from importlib.metadata import version; m = re.match(r'(\d+)\.(\d+)', version('atlan-application-sdk')); print('true' if (int(m.group(1)), int(m.group(2))) >= (3, 13) else 'false')")
+        echo "embedded=${EMBEDDED}" >> "$GITHUB_OUTPUT"
+        echo "SDK ${VER} -> embedded runtime: ${EMBEDDED}"
+
+    - name: Install daprd runtime (no Dapr CLI)
+      if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
+      shell: bash
+      env:
+        DAPR_VERSION_INPUT: ${{ inputs.dapr-version }}
+      run: |
+        # Download the daprd RUNTIME binary directly from dapr/dapr releases —
+        # NOT the `dapr` CLI from dapr/cli. The CLI is intentionally not used:
+        # it adds a second release stream that can lag the runtime (a daprd-only
+        # release leaves `dapr/cli` without a matching tag → 404), and daprd is
+        # all we need (we invoke it directly, like the SDK's entrypoint.sh).
+        #
+        # Default to the SDK's pinned __dapr_version (single source of truth).
+        # This action ships inside application-sdk, so version.py sits three
+        # dirs up from the action dir. An explicit dapr-version input overrides.
+        DAPR_VERSION="${DAPR_VERSION_INPUT}"
+        if [ -z "$DAPR_VERSION" ]; then
+          DAPR_VERSION="$(grep '^__dapr_version' "${{ github.action_path }}/../../../application_sdk/version.py" | cut -d'"' -f2)"
+        fi
+        if [ -z "$DAPR_VERSION" ]; then
+          echo "::error::Could not resolve Dapr version (input empty and __dapr_version unreadable)"
+          exit 1
+        fi
+        echo "Installing daprd runtime v$DAPR_VERSION (no Dapr CLI)"
+        "${{ github.action_path }}/../../scripts/with-retry.sh" wget -q "https://github.com/dapr/dapr/releases/download/v${DAPR_VERSION}/daprd_linux_amd64.tar.gz" -O /tmp/daprd.tar.gz
+        tar -xzf /tmp/daprd.tar.gz -C /tmp
+        sudo mv /tmp/daprd /usr/local/bin/
+        sudo chmod +x /usr/local/bin/daprd
+        daprd --version
+
+    - name: Install Temporal CLI
+      if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
+      shell: bash
+      # Block scalar: a `run:` value that *starts* with a quote is parsed by YAML
+      # as a single quoted string, leaving the trailing args as an unexpected
+      # token (this exact line took the connector fleet down — invalid manifest).
+      run: |
+        "${{ github.action_path }}/../../scripts/with-retry.sh" bash -c "curl -sSf https://temporal.download/cli.sh | sh"
+
+    - name: Add Temporal to PATH
+      if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
+      shell: bash
+      # daprd is already on PATH (/usr/local/bin); only the Temporal CLI needs adding.
+      run: echo "$HOME/.temporalio/bin" >> "$GITHUB_PATH"
+
+    - name: Start daprd + Temporal
+      if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
+      shell: bash
+      env:
+        APP_PORT: ${{ inputs.app-port }}
+      run: |
+        # Start daprd directly (no `dapr run` wrapper). App-less sidecar on the
+        # default ports; the app server (next step) connects to it. We do NOT
+        # delegate to the caller's `poe start-deps` because that task lives in
+        # the *connector's* pyproject and runs `dapr run`, which needs the CLI.
+        # Record PIDs so cleanup kills exactly these processes (not every daprd
+        # on the box — matters on self-hosted runners).
+        daprd \
+          --app-id app \
+          --app-port "$APP_PORT" \
+          --dapr-http-port 3500 \
+          --dapr-grpc-port 50001 \
+          --resources-path components \
+          --log-level warn \
+          --placement-host-address '' \
+          --scheduler-host-address '' \
+          --max-body-size 1024Mi \
+          > daprd.log 2>&1 &
+        echo $! > daprd.pid
+        temporal server start-dev --db-filename /tmp/temporal.db > temporal.log 2>&1 &
+        echo $! > temporal.pid
+        # Export the sidecar ports so the (separate) app-server step runs in
+        # Dapr-backed mode — the SDK keys off DAPR_HTTP_PORT being set.
+        echo "DAPR_HTTP_PORT=3500" >> "$GITHUB_ENV"
+        echo "DAPR_GRPC_PORT=50001" >> "$GITHUB_ENV"
+        # Wait for daprd's HTTP API to answer (bounded, non-fatal). Poll
+        # /v1.0/metadata, not /v1.0/healthz — daprd holds healthz until all
+        # components init, which can outlast this bound.
+        for _ in $(seq 1 15); do
+          curl -sf http://localhost:3500/v1.0/metadata >/dev/null 2>&1 && break
+          sleep 1
+        done
+
+    - name: Start runtime services (services-script hook)
+      if: inputs.services-script != ''
+      shell: bash
+      env:
+        SERVICES_SCRIPT: ${{ inputs.services-script }}
+      run: bash "$SERVICES_SCRIPT"
+
+    - name: Start app server
+      shell: bash
+      env:
+        ATLAN_LOCAL_DEVELOPMENT: "true"
+        ATLAN_APPLICATION_NAME: ${{ inputs.app-name }}
+      run: |
+        uv run python main.py &
+        for i in $(seq 1 ${{ inputs.health-check-timeout-seconds }}); do
+          if curl -sf "http://localhost:${{ inputs.app-port }}/server/health" > /dev/null 2>&1; then
+            echo "App server ready after ${i}s"
+            break
+          fi
+          if [ "$i" -eq ${{ inputs.health-check-timeout-seconds }} ]; then
+            echo "::error::App server failed to start within ${{ inputs.health-check-timeout-seconds }}s"
+            exit 1
+          fi
+          sleep 1
+        done
+
+    - name: Run integration tests (parallel via pytest-xdist)
+      id: tests
+      shell: bash
+      env:
+        ATLAN_LOCAL_DEVELOPMENT: "true"
+        ATLAN_APPLICATION_NAME: ${{ inputs.app-name }}
+      # NOTE: TEST_<CONNECTOR>_* env vars are NOT declared here. They're
+      # provided by the caller's job-level env block (which has access to
+      # `secrets.*`) and inherited by this composite-action step.
+      run: |
+        mkdir -p results
+        set +e
+        # pytest-xdist, pytest-cov, and pytest-rerunfailures are installed
+        # transiently — callers do not need to declare them as dependencies.
+        uv run --with pytest-xdist --with pytest-cov --with pytest-rerunfailures pytest ${{ inputs.test-paths }} -v \
+          ${{ inputs.pytest-args }} \
+          --junit-xml=results/test-results.xml \
+          2>&1 | tee results/test-output.txt
+        TEST_EXIT_CODE=${PIPESTATUS[0]}
+        set -e
+        # Extract the pytest summary line for caller PR comments.
+        SUMMARY=$(grep -E "^=+ .* =+$" results/test-output.txt | tail -1 | sed -E 's/^=+ *//; s/ *=+$//')
+        echo "summary=${SUMMARY:-no summary parsed}" >> "$GITHUB_OUTPUT"
+        echo "exit_code=$TEST_EXIT_CODE" >> "$GITHUB_OUTPUT"
+        exit "$TEST_EXIT_CODE"
+
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      with:
+        name: integration-test-results
+        path: results/
+        retention-days: 14
+
+    - name: Cleanup
+      if: always()
+      shell: bash
+      run: |
+        kill $(lsof -t -i :${{ inputs.app-port }}) 2>/dev/null || true
+        # Kill exactly the daprd + Temporal we started (by recorded PID, not a
+        # broad pkill -f — avoids killing other jobs' processes on self-hosted
+        # runners). No `poe stop-deps`: that is a connector-side, CLI-era task.
+        for p in daprd.pid temporal.pid; do
+          [ -f "$p" ] && kill "$(cat "$p")" 2>/dev/null || true
+        done

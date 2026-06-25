@@ -13,7 +13,7 @@ focuses on:
 * ``_connect`` / ``_connect_via_sentinel`` / ``_connect_standalone`` for both
   sync and async clients (mocking the ``redis``/``redis.asyncio`` SDK).
 * ``close`` behaviour: idempotency, exception swallowing.
-* Lock operations against an unconnected client (early ``ClientError``).
+* Lock operations against an unconnected client (early error).
 * Symbol contracts at module load.
 
 All tests mock ``redis``/``redis.asyncio`` — no real I/O.
@@ -33,7 +33,16 @@ from application_sdk.clients.redis import (
     RedisClientAsync,
     _handle_redis_error,
 )
-from application_sdk.common.error_codes import ClientError
+from application_sdk.clients.redis_errors import RedisConfigError
+from application_sdk.clients.redis_errors import (
+    RedisConnectionError as AppRedisConnectionError,
+)
+from application_sdk.clients.redis_errors import (
+    RedisProtocolError as AppRedisProtocolError,
+)
+from application_sdk.clients.redis_errors import (
+    RedisTimeoutError as AppRedisTimeoutError,
+)
 
 # ---------------------------------------------------------------------------
 # Module-level symbol contract
@@ -113,12 +122,14 @@ class TestParseSentinelHosts:
     def test_invalid_port_raises(self):
         """Non-integer port must surface as a wrapped error, not silently pass."""
         client = _make_base_client("a.example:not-a-port")
-        with patch(
-            "application_sdk.clients.redis.REDIS_SENTINEL_HOSTS",
-            "a.example:not-a-port",
+        with (
+            patch(
+                "application_sdk.clients.redis.REDIS_SENTINEL_HOSTS",
+                "a.example:not-a-port",
+            ),
+            pytest.raises(RedisConfigError),
         ):
-            with pytest.raises(Exception):  # rewrap-wrapped ValueError
-                client._parse_sentinel_hosts()
+            client._parse_sentinel_hosts()
 
     def test_ipv6_host_with_port(self):
         """rsplit(':', 1) supports ``host:port`` even with colons in host."""
@@ -143,22 +154,22 @@ class TestProcessLockReleaseResult:
     def base(self):
         return _make_base_client()
 
-    def test_none_result_raises_client_error(self, base):
+    def test_none_result_raises_protocol_error(self, base):
         """``None`` is not an int — must raise (no silent success)."""
-        with pytest.raises(ClientError) as ei:
+        with pytest.raises(AppRedisProtocolError) as ei:
             base._process_lock_release_result(None, "resource-id")
-        assert "ATLAN-CLIENT-503-00" in str(ei.value)
+        assert ei.value.code == "DEPENDENCY_UNAVAILABLE_REDIS_PROTOCOL"
 
-    def test_string_result_raises_client_error(self, base):
+    def test_string_result_raises_protocol_error(self, base):
         """Unexpected string return must raise."""
-        with pytest.raises(ClientError):
+        with pytest.raises(AppRedisProtocolError):
             base._process_lock_release_result("OK", "resource-id")
 
     def test_zero_result_falls_through_to_unknown(self, base):
         """``0`` matches no defined branch — must raise, not silently lie."""
-        with pytest.raises(ClientError) as ei:
+        with pytest.raises(AppRedisProtocolError) as ei:
             base._process_lock_release_result(0, "resource-id")
-        assert "ATLAN-CLIENT-503-00" in str(ei.value)
+        assert ei.value.code == "DEPENDENCY_UNAVAILABLE_REDIS_PROTOCOL"
 
     def test_large_positive_is_success(self, base):
         ok, outcome = base._process_lock_release_result(2, "rid")
@@ -220,7 +231,7 @@ class TestSyncConnect:
         ):
             standalone_client._connect()
         redis_ctor.assert_called_once_with(
-            host="localhost", port=6379, password="secret"
+            host="localhost", port=6379, password="secret", socket_timeout=5
         )
         fake_redis.ping.assert_called_once()
         assert standalone_client.redis_client is fake_redis
@@ -247,20 +258,22 @@ class TestSyncConnect:
         ):
             sentinel_client._connect()
         sentinel_ctor.assert_called_once()
-        sentinel.master_for.assert_called_once_with("mymaster", password="secret")
+        sentinel.master_for.assert_called_once_with(
+            "mymaster", password="secret", socket_timeout=5
+        )
         master.ping.assert_called_once()
         assert sentinel_client.redis_client is master
 
-    def test_connect_ping_failure_wraps_to_client_error(self, standalone_client):
+    def test_connect_ping_failure_wraps_to_connection_error(self, standalone_client):
         fake_redis = MagicMock()
         fake_redis.ping.side_effect = RedisConnectionError("nope")
         with (
             patch("application_sdk.clients.redis.REDIS_SENTINEL_HOSTS", ""),
             patch("application_sdk.clients.redis.redis.Redis", return_value=fake_redis),
         ):
-            with pytest.raises(ClientError) as ei:
+            with pytest.raises(AppRedisConnectionError) as ei:
                 standalone_client._connect()
-        assert "ATLAN-CLIENT-503-00" in str(ei.value)
+        assert ei.value.code == "DEPENDENCY_UNAVAILABLE_REDIS"
 
     def test_connect_timeout_failure_maps_to_timeout_code(self, standalone_client):
         fake_redis = MagicMock()
@@ -269,9 +282,9 @@ class TestSyncConnect:
             patch("application_sdk.clients.redis.REDIS_SENTINEL_HOSTS", ""),
             patch("application_sdk.clients.redis.redis.Redis", return_value=fake_redis),
         ):
-            with pytest.raises(ClientError) as ei:
+            with pytest.raises(AppRedisTimeoutError) as ei:
                 standalone_client._connect()
-        assert "ATLAN-CLIENT-408-00" in str(ei.value)
+        assert ei.value.code == "TIMEOUT_REDIS"
 
     def test_connect_redis_protocol_error_maps_to_protocol_code(
         self, standalone_client
@@ -282,9 +295,31 @@ class TestSyncConnect:
             patch("application_sdk.clients.redis.REDIS_SENTINEL_HOSTS", ""),
             patch("application_sdk.clients.redis.redis.Redis", return_value=fake_redis),
         ):
-            with pytest.raises(ClientError) as ei:
+            with pytest.raises(AppRedisProtocolError) as ei:
                 standalone_client._connect()
-        assert "ATLAN-CLIENT-502-00" in str(ei.value)
+        assert ei.value.code == "DEPENDENCY_UNAVAILABLE_REDIS_PROTOCOL"
+
+    def test_socket_timeout_on_acquire_raises_redis_timeout_error(
+        self, standalone_client
+    ):
+        """A socket timeout during lock-acquire must surface as RedisTimeoutError.
+
+        Validates the finite socket_timeout wiring: a Redis hang raises
+        redis.exceptions.TimeoutError which _handle_redis_error maps to
+        AppRedisTimeoutError — the caller can handle it instead of blocking
+        indefinitely.
+        """
+        fake_redis = MagicMock()
+        fake_redis.ping.return_value = True
+        fake_redis.set.side_effect = RedisTimeoutError("socket timed out")
+        with (
+            patch("application_sdk.clients.redis.REDIS_SENTINEL_HOSTS", ""),
+            patch("application_sdk.clients.redis.redis.Redis", return_value=fake_redis),
+        ):
+            standalone_client._connect()
+        with pytest.raises(AppRedisTimeoutError) as ei:
+            standalone_client._acquire_lock("resource-id", "owner-id")
+        assert ei.value.code == "TIMEOUT_REDIS"
 
     def test_connect_standalone_ctor_failure_wrapped(self, standalone_client):
         with (
@@ -293,9 +328,9 @@ class TestSyncConnect:
                 "application_sdk.clients.redis.redis.Redis",
                 side_effect=RedisConnectionError("ctor failed"),
             ),
+            pytest.raises(AppRedisConnectionError),
         ):
-            with pytest.raises(ClientError):
-                standalone_client._connect()
+            standalone_client._connect()
 
     def test_connect_via_sentinel_ctor_failure_wrapped(self, sentinel_client):
         with (
@@ -307,9 +342,9 @@ class TestSyncConnect:
                 "application_sdk.clients.redis.redis.sentinel.Sentinel",
                 side_effect=RedisConnectionError("sentinel down"),
             ),
+            pytest.raises(AppRedisConnectionError),
         ):
-            with pytest.raises(ClientError):
-                sentinel_client._connect()
+            sentinel_client._connect()
 
 
 class TestSyncClose:
@@ -427,7 +462,7 @@ class TestAsyncConnect:
         ):
             await standalone_client._connect()
         redis_ctor.assert_called_once_with(
-            host="localhost", port=6379, password="secret"
+            host="localhost", port=6379, password="secret", socket_timeout=5
         )
         fake_redis.ping.assert_awaited_once()
         assert standalone_client.redis_client is fake_redis
@@ -449,11 +484,15 @@ class TestAsyncConnect:
             ),
         ):
             await sentinel_client._connect()
-        sentinel.master_for.assert_called_once_with("mymaster", password="secret")
+        sentinel.master_for.assert_called_once_with(
+            "mymaster", password="secret", socket_timeout=5
+        )
         master.ping.assert_awaited_once()
         assert sentinel_client.redis_client is master
 
-    async def test_connect_ping_failure_wraps_to_client_error(self, standalone_client):
+    async def test_connect_ping_failure_wraps_to_connection_error(
+        self, standalone_client
+    ):
         fake_redis = AsyncMock()
         fake_redis.ping.side_effect = RedisConnectionError("nope")
         with (
@@ -462,10 +501,29 @@ class TestAsyncConnect:
                 "application_sdk.clients.redis.async_redis.Redis",
                 return_value=fake_redis,
             ),
+            pytest.raises(AppRedisConnectionError) as ei,
         ):
-            with pytest.raises(ClientError) as ei:
-                await standalone_client._connect()
-        assert "ATLAN-CLIENT-503-00" in str(ei.value)
+            await standalone_client._connect()
+        assert ei.value.code == "DEPENDENCY_UNAVAILABLE_REDIS"
+
+    async def test_socket_timeout_on_acquire_raises_redis_timeout_error(
+        self, standalone_client
+    ):
+        """A socket timeout during async lock-acquire must surface as RedisTimeoutError."""
+        fake_redis = AsyncMock()
+        fake_redis.ping.return_value = True
+        fake_redis.set.side_effect = RedisTimeoutError("socket timed out")
+        with (
+            patch("application_sdk.clients.redis.REDIS_SENTINEL_HOSTS", ""),
+            patch(
+                "application_sdk.clients.redis.async_redis.Redis",
+                return_value=fake_redis,
+            ),
+        ):
+            await standalone_client._connect()
+        with pytest.raises(AppRedisTimeoutError) as ei:
+            await standalone_client._acquire_lock("resource-id", "owner-id")
+        assert ei.value.code == "TIMEOUT_REDIS"
 
 
 class TestAsyncClose:
@@ -533,7 +591,7 @@ class TestAsyncContextManagerCleanupOnError:
 class TestUnconnectedLockOperations:
     """Lock APIs must fail loudly (not crash with ``AttributeError``)."""
 
-    def test_sync_acquire_unconnected_raises_client_error(self):
+    def test_sync_acquire_unconnected_raises_connection_error(self):
         with (
             patch("application_sdk.clients.redis.IS_LOCKING_DISABLED", False),
             patch("application_sdk.clients.redis.REDIS_PASSWORD", "secret"),
@@ -541,11 +599,11 @@ class TestUnconnectedLockOperations:
             patch("application_sdk.clients.redis.REDIS_PORT", "6379"),
         ):
             client = RedisClient()
-        with pytest.raises(ClientError) as ei:
+        with pytest.raises(AppRedisConnectionError) as ei:
             client._acquire_lock("rid")
-        assert "ATLAN-CLIENT-503-00" in str(ei.value)
+        assert ei.value.code == "DEPENDENCY_UNAVAILABLE_REDIS"
 
-    def test_sync_release_unconnected_raises_client_error(self):
+    def test_sync_release_unconnected_raises_connection_error(self):
         with (
             patch("application_sdk.clients.redis.IS_LOCKING_DISABLED", False),
             patch("application_sdk.clients.redis.REDIS_PASSWORD", "secret"),
@@ -553,11 +611,11 @@ class TestUnconnectedLockOperations:
             patch("application_sdk.clients.redis.REDIS_PORT", "6379"),
         ):
             client = RedisClient()
-        with pytest.raises(ClientError) as ei:
+        with pytest.raises(AppRedisConnectionError) as ei:
             client._release_lock("rid")
-        assert "ATLAN-CLIENT-503-00" in str(ei.value)
+        assert ei.value.code == "DEPENDENCY_UNAVAILABLE_REDIS"
 
-    async def test_async_acquire_unconnected_raises_client_error(self):
+    async def test_async_acquire_unconnected_raises_connection_error(self):
         with (
             patch("application_sdk.clients.redis.IS_LOCKING_DISABLED", False),
             patch("application_sdk.clients.redis.REDIS_PASSWORD", "secret"),
@@ -565,10 +623,10 @@ class TestUnconnectedLockOperations:
             patch("application_sdk.clients.redis.REDIS_PORT", "6379"),
         ):
             client = RedisClientAsync()
-        with pytest.raises(ClientError):
+        with pytest.raises(AppRedisConnectionError):
             await client._acquire_lock("rid")
 
-    async def test_async_release_unconnected_raises_client_error(self):
+    async def test_async_release_unconnected_raises_connection_error(self):
         with (
             patch("application_sdk.clients.redis.IS_LOCKING_DISABLED", False),
             patch("application_sdk.clients.redis.REDIS_PASSWORD", "secret"),
@@ -576,7 +634,7 @@ class TestUnconnectedLockOperations:
             patch("application_sdk.clients.redis.REDIS_PORT", "6379"),
         ):
             client = RedisClientAsync()
-        with pytest.raises(ClientError):
+        with pytest.raises(AppRedisConnectionError):
             await client._release_lock("rid")
 
 
@@ -590,13 +648,13 @@ class TestHandleRedisErrorChaining:
 
     def test_chain_preserved_for_connection_error(self):
         original = RedisConnectionError("low-level")
-        with pytest.raises(ClientError) as ei:
+        with pytest.raises(AppRedisConnectionError) as ei:
             _handle_redis_error(original)
         assert ei.value.__cause__ is original
 
     def test_chain_preserved_for_generic_error(self):
         original = RuntimeError("weird")
-        with pytest.raises(ClientError) as ei:
+        with pytest.raises(AppRedisConnectionError) as ei:
             _handle_redis_error(original)
         assert ei.value.__cause__ is original
 

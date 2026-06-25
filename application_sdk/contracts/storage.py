@@ -17,8 +17,27 @@ class UploadInput(Input):
     ``local_path`` may point to a single file or a directory — the SDK
     detects which automatically.
 
+    The SDK applies a three-step upload strategy internally:
+
+    1. **Cross-store SHA-256 dedup** — if the deployment-store sidecar already
+       matches the upstream sidecar the upload is skipped with no bytes
+       transferred (idempotent retry support).
+    2. **Local upload** — if ``local_path`` exists on this pod, the file is
+       uploaded directly (no download cost).
+    3. **Deployment-store fallback** — if ``local_path`` is absent (cross-pod
+       SDR deployment or writer-deleted by ``use_consolidation=True``), the SDK
+       streams from the deployment store instead.  All existing call sites gain
+       this fallback for free with no API changes.
+
     Args:
         local_path: Local file or directory path to upload.
+        ref: Optional existing ``FileReference`` to upload from — its
+            ``storage_path`` is used as the deployment-store source key when
+            ``local_path`` is absent (cross-pod or writer-deleted scenarios in
+            SDR deployments).  Symmetric with ``DownloadInput.ref``.  Either
+            provide ``ref`` directly or let the SDK derive it automatically from
+            ``local_path`` — no call-site changes are required for existing
+            connectors to gain the cross-pod fallback.
         storage_path: Destination key (single file) or prefix (directory)
             in the store.  Auto-namespaced based on *tier* when ``None``.
         storage_subdir: Subdirectory name appended to the auto-generated run prefix.
@@ -32,13 +51,28 @@ class UploadInput(Input):
             ``artifacts/apps/`` prefix, not auto-cleaned).
         skip_if_exists: When ``True``, skip uploading files whose SHA-256
             hash already matches the stored value.  Defaults to ``False``.
+        raise_on_empty: When ``True``, raise ``StorageEmptyUploadError`` if the upload
+            completed with ``file_count == 0`` (i.e. ``local_path`` was an
+            empty directory). Defaults to ``False`` to preserve historical
+            silent-zero behavior that several incremental extractors rely
+            on (a quiet-day run that finds no new data legitimately
+            uploads zero files). Opt in (``True``) when zero files
+            indicates a bug — e.g. a non-incremental extract that wrote
+            nothing, or a directory the extract step was supposed to
+            populate. See BLDX-1255 for the incident history (Tableau /
+            Looker / Coalesce / dbt silent-failures) and the workaround
+            patterns in dbt / databricks / coalesce connectors. Will flip
+            to ``True`` default in v4.0 alongside ``BaseMetadataExtractor``
+            removal.
     """
 
     local_path: str = ""
+    ref: FileReference | None = None
     storage_path: str | None = None
     storage_subdir: str | None = None
     tier: StorageTier = StorageTier.RETAINED
     skip_if_exists: bool = False
+    raise_on_empty: bool = False
 
     @field_validator("storage_subdir")
     @classmethod
@@ -46,7 +80,7 @@ class UploadInput(Input):
         if v is not None:
             cleaned = v.strip("/")
             if not cleaned or ".." in PurePosixPath(cleaned).parts or "\x00" in v:
-                raise ValueError(
+                raise ValueError(  # stdlib-interop: pydantic field_validator requires ValueError
                     f"storage_subdir must not contain path traversal segments: {v!r}"
                 )
         return v

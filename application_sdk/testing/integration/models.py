@@ -7,7 +7,9 @@ in a declarative, data-driven manner.
 import os
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any
+
+from application_sdk.testing.integration._errors import HttpClientInputError
 
 
 class APIType(Enum):
@@ -33,19 +35,21 @@ class APIType(Enum):
             APIType: The corresponding enum value.
 
         Raises:
-            ValueError: If the value is not a valid API type.
+            InvalidInputError: If the value is not a valid API type.
         """
         try:
             return cls(value.lower())
         except ValueError:
             valid_values = [e.value for e in cls]
-            raise ValueError(
-                f"Invalid API type: '{value}'. Must be one of: {valid_values}"
+            raise HttpClientInputError(
+                message=f"Invalid API type: '{value}'. Must be one of: {valid_values}",
+                field="api_type",
+                value_summary=value,
             )
 
 
 # Import from assertions to avoid duplicate definition
-from application_sdk.testing.integration.assertions import Predicate  # noqa: E402
+from application_sdk.testing.integration.assertions import Predicate
 
 # Type alias for lazy evaluation wrapper (forward reference)
 LazyValue = Any  # Will be Lazy type from lazy.py
@@ -129,32 +133,33 @@ class Scenario:
 
     name: str
     api: str
-    assert_that: Dict[str, Predicate]
-    credentials: Optional[Dict[str, Any]] = None
-    metadata: Optional[Dict[str, Any]] = None
-    connection: Optional[Dict[str, Any]] = None
-    args: Optional[Union[Dict[str, Any], LazyValue]] = None
-    endpoint: Optional[str] = None
+    assert_that: dict[str, Predicate]
+    credentials: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
+    connection: dict[str, Any] | None = None
+    args: dict[str, Any] | LazyValue | None = None
+    endpoint: str | None = None
     description: str = ""
     skip: bool = False
     skip_reason: str = ""
-    expected_data: Optional[str] = None
-    extracted_output_base_path: Optional[str] = None
+    expected_data: str | None = None
+    extracted_output_base_path: str | None = None
     output_subdirectory: str = "transformed"
     strict_comparison: bool = True
     workflow_timeout: int = 300
     polling_interval: int = 10
-    ignored_fields: Optional[Set[str]] = None
-    config_action: Optional[str] = None
-    config_workflow_id: Optional[Any] = None
-    config_payload: Optional[Dict[str, Any]] = None
-    schema_base_path: Optional[str] = None
-    connection_config: Optional[Dict[str, Any]] = None
-    checks_to_run: Optional[List[str]] = None
+    ignored_fields: set[str] | None = None
+    config_action: str | None = None
+    config_workflow_id: Any | None = None
+    config_payload: dict[str, Any] | None = None
+    schema_base_path: str | None = None
+    connection_config: dict[str, Any] | None = None
+    checks_to_run: list[str] | None = None
     preflight_timeout: int = 60
 
     def __post_init__(self):
         """Validate the scenario after initialization."""
+        # stdlib-interop: dataclass __post_init__ validators use ValueError as the standard signal
         if not self.name:
             raise ValueError("Scenario name cannot be empty")
 
@@ -218,9 +223,9 @@ class ScenarioResult:
 
     scenario: Scenario
     success: bool
-    response: Optional[Dict[str, Any]] = None
-    assertion_results: Dict[str, Any] = field(default_factory=dict)
-    error: Optional[Exception] = None
+    response: dict[str, Any] | None = None
+    assertion_results: dict[str, Any] = field(default_factory=dict)
+    error: Exception | None = None
     duration_ms: float = 0.0
 
     def __str__(self) -> str:

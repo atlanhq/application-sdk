@@ -42,7 +42,7 @@ import logging
 import math
 import os
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
 import obstore
@@ -55,9 +55,10 @@ import orjson
 try:  # pragma: no cover — defensive import
     from obstore.exceptions import BaseError as _ObstoreBaseError
     from obstore.exceptions import NotFoundError as _ObstoreNotFoundError
-except ImportError:  # pragma: no cover
+except ImportError:  # conformance: ignore[E008,E009] optional dep obstore.exceptions; sentinel fallback for older versions  # pragma: no cover
     _ObstoreBaseError = None  # type: ignore[assignment,misc]
     _ObstoreNotFoundError = None  # type: ignore[assignment,misc]
+
 
 if TYPE_CHECKING:
     from typing import Any
@@ -66,9 +67,40 @@ if TYPE_CHECKING:
 
     JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
 
-# stdlib logger: cannot use get_logger here due to circular import
-# (observability -> storage -> batch -> ops -> observability)
-logger = logging.getLogger(__name__)
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
+
+
+class BoundStore:
+    """An :class:`~obstore.store.ObjectStore` paired with per-write put attributes.
+
+    Returned by :func:`~application_sdk.storage.binding.create_store_from_binding_with_put_attrs`
+    (and similar helpers) when the Dapr binding specifies a ``storageClass`` or other
+    per-write options.  Pass a ``BoundStore`` anywhere an ``ObjectStore`` is accepted:
+    :func:`upload_file`, :func:`_put`, and the SDK I/O helpers automatically extract
+    both the underlying store and its attributes without extra plumbing at the call site.
+    """
+
+    __slots__ = ("_put_attributes", "_store")
+
+    def __init__(
+        self,
+        store: ObjectStore,
+        put_attributes: dict[str, str] | None = None,
+    ) -> None:
+        self._store = store
+        self._put_attributes = put_attributes
+
+    @property
+    def store(self) -> ObjectStore:
+        """Underlying obstore instance."""
+        return self._store
+
+    @property
+    def put_attributes(self) -> dict[str, str] | None:
+        """Per-write put attributes (e.g. ``{"Storage-Class": "STANDARD_IA"}``)."""
+        return self._put_attributes
 
 
 def normalize_key(key: str) -> str:
@@ -107,13 +139,43 @@ def normalize_key(key: str) -> str:
             normalized = os.path.relpath(abs_path, abs_temp_path).replace(os.sep, "/")
         else:
             normalized = key.strip("/")
-    except ValueError:
+    except ValueError:  # conformance: ignore[E009] os.path.commonpath raises on mixed Windows drives; simple-strip fallback
         # os.path.commonpath raises on mixed Windows drives; fall back to simple strip.
         normalized = key.strip("/")
 
     normalized = normalized.replace("\\", "/").replace(os.sep, "/").strip("/")
     # os.path.relpath resolves the staging root itself to "."; treat as store root.
     return "" if normalized == "." else normalized
+
+
+def _safe_join_under(root: Path | str, rel: str) -> Path:
+    """Join *rel* under *root* and reject path-traversal escapes.
+
+    S3-style keys use POSIX separators, so *rel* is split with
+    :class:`~pathlib.PurePosixPath` before being joined to *root*. The
+    candidate path is then resolved and compared against the resolved
+    *root*; anything that escapes (``..`` segments, symlinks pointing
+    outside, etc.) is rejected before the caller writes to disk.
+
+    Args:
+        root: Local destination directory.
+        rel: Relative path derived from an object-store key.
+
+    Returns:
+        Resolved absolute :class:`~pathlib.Path` guaranteed to be inside
+        *root*.
+
+    Raises:
+        StorageError: If *rel* resolves outside *root*.
+    """
+    from application_sdk.storage.errors import StorageError  # noqa: PLC0415
+
+    resolved_root = Path(root).resolve()
+    parts = PurePosixPath(rel.lstrip("/")).parts
+    candidate = (resolved_root / Path(*parts)).resolve() if parts else resolved_root
+    if not candidate.is_relative_to(resolved_root):
+        raise StorageError(f"Path traversal detected in key: {rel!r}")
+    return candidate
 
 
 def _normalize_listing_prefix(prefix: str, normalize: bool) -> str:
@@ -130,25 +192,92 @@ def _normalize_listing_prefix(prefix: str, normalize: bool) -> str:
     return prefix
 
 
-def _resolve_store(store: ObjectStore | None) -> ObjectStore:
-    """Return *store* if provided, otherwise resolve from the infrastructure context.
+def _resolve_store(store: BoundStore | ObjectStore | None) -> ObjectStore:
+    """Return the underlying ObjectStore, resolving from infrastructure when None.
+
+    Accepts a :class:`BoundStore` (unwraps it), a raw ``ObjectStore``, or ``None``
+    (resolved from the infrastructure context).
 
     Raises:
         RuntimeError: If *store* is ``None`` and no infrastructure context is set.
     """
     if store is not None:
-        return store
+        return store.store if isinstance(store, BoundStore) else store
     from application_sdk.infrastructure.context import (  # noqa: PLC0415
         get_infrastructure,
     )
 
     infra = get_infrastructure()
     if infra is None or infra.storage is None:
-        raise RuntimeError(
-            "No ObjectStore provided and no infrastructure storage is configured. "
-            "Pass store= explicitly or call set_infrastructure() with a storage store."
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+            ObjectStoreNotProvidedError,
         )
+
+        raise ObjectStoreNotProvidedError()
     return infra.storage
+
+
+def _resolve_put_attributes(
+    store: BoundStore | ObjectStore | None,
+) -> dict[str, str] | None:
+    """Return binding-level put attributes for *store*, or ``None``.
+
+    Resolution order:
+    1. ``BoundStore`` — return its embedded ``put_attributes`` directly.
+    2. ``store is None`` — return ``infra.storage_put_attributes``.
+    3. ``store is infra.storage`` — same as (2); handles callers that hold an
+       explicit reference to the infra deployment store.
+    4. ``store is infra.upstream_storage`` — return
+       ``infra.upstream_storage_put_attributes``; covers SDR-mode App.upload.
+    5. Any other explicit store (CloudStore, test stores, etc.) — ``None``.
+
+    Uses identity (``is``) rather than equality because obstore stores are unhashable.
+    """
+    if isinstance(store, BoundStore):
+        return store.put_attributes
+    from application_sdk.infrastructure.context import (  # noqa: PLC0415
+        get_infrastructure,
+    )
+
+    infra = get_infrastructure()
+    if infra is None:
+        return None
+    if store is None or store is infra.storage:
+        return infra.storage_put_attributes
+    if infra.upstream_storage is not None and store is infra.upstream_storage:
+        return infra.upstream_storage_put_attributes
+    return None
+
+
+def _is_azure_container_not_found(exc: BaseException) -> bool:
+    """Return True when *exc* indicates an Azure container does not exist.
+
+    Azure Blob Storage returns HTTP 404 with error code ``ContainerNotFound``
+    when a write targets a container that has never been created.  This is
+    distinct from a missing *blob* (``BlobNotFound``) and needs a separate,
+    actionable error message so operators know to pre-create the container.
+
+    Class-based detection runs first (obstore >=0.9 ``GenericError``); the
+    substring fallback catches older obstore versions and future wording drift
+    is caught by the recorded-error regression tests.
+    """
+    if _ObstoreBaseError is not None and isinstance(exc, _ObstoreBaseError):
+        msg = str(exc).lower()
+        return (
+            "containernotfound" in msg
+            or "the specified container does not exist" in msg
+        )
+    msg = str(exc).lower()
+    return "containernotfound" in msg or "the specified container does not exist" in msg
+
+
+def _azure_container_not_found_message(key: str) -> str:
+    """Return the standard user-facing message for a missing Azure container."""
+    return (
+        "Azure container does not exist — v3 does not auto-create "
+        "containers (v2 Dapr did); pre-create the container before "
+        f"running (failed key: '{key}')"
+    )
 
 
 def _is_not_found(exc: BaseException) -> bool:
@@ -226,7 +355,9 @@ def _log_storage_event(
     if error_class is not None:
         extra["error_class"] = error_class
     msg = f"storage.{op} {outcome} path={store_path}"
-    logger.log(level, msg, extra=extra)  # lgtm[py/clear-text-logging-sensitive-data]
+    # Keys are bound into loguru record["extra"] and promoted to OTLP indexed
+    # attributes by _build_extra_dict in logger_adaptor (all are in _KNOWN_EXTRA_KEYS).
+    logger.log(level, msg, **extra)
 
 
 async def _list_items(
@@ -296,7 +427,7 @@ def _compute_part_size(file_size: int, chunk_size: int) -> int:
 async def upload_file(
     key: str,
     local_path: str | Path,
-    store: ObjectStore | None = None,
+    store: BoundStore | ObjectStore | None = None,
     *,
     chunk_size: int = 8 * 1024 * 1024,
     normalize: bool = True,
@@ -338,8 +469,13 @@ async def upload_file(
     Raises:
         StorageError: If the upload fails.
         RuntimeError: If *store* is ``None`` and no infrastructure store is set.
+
+    Note:
+        Zero-byte uploads are allowed but emit a warning — some S3-style backends
+        may not persist an empty object.  GCS and local stores handle them correctly.
     """
     resolved = _resolve_store(store)
+    put_attributes = _resolve_put_attributes(store)
     if normalize:
         key = normalize_key(key)
 
@@ -347,11 +483,19 @@ async def upload_file(
     file_size = path.stat().st_size
     effective_chunk = _compute_part_size(file_size, chunk_size)
 
+    if file_size == 0:
+        logger.warning(
+            "Uploading zero-byte file to key '%s' — "
+            "some S3-style backends silently drop empty objects; "
+            "verify the object exists after upload if your store requires it.",
+            key,
+        )
+
     h = hashlib.sha256() if compute_hash else None
     started = time.monotonic()
     try:
         async with obstore.open_writer_async(
-            resolved, key, buffer_size=effective_chunk
+            resolved, key, buffer_size=effective_chunk, attributes=put_attributes
         ) as writer:
             with path.open("rb") as fh:
                 while True:
@@ -361,7 +505,12 @@ async def upload_file(
                     if h is not None:
                         h.update(chunk)
                     await writer.write(chunk)
-    except Exception as exc:
+    # conformance: ignore[E004] upload error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
+    except BaseException as exc:
+        # BaseException is the umbrella for Exception and its siblings
+        # (CancelledError, KeyboardInterrupt, SystemExit). Catching it here
+        # ensures cancellation mid-writer-close is logged rather than silently
+        # discarding the buffer and leaving no object in the store.
         elapsed_ms = (time.monotonic() - started) * 1000.0
         _log_storage_event(
             logging.WARNING,
@@ -372,15 +521,24 @@ async def upload_file(
             size_bytes=file_size,
             error_class=_exc_class_name(exc),
         )
-        from application_sdk.storage.errors import StorageError  # noqa: PLC0415
+        if isinstance(exc, Exception):
+            from application_sdk.storage.errors import (  # noqa: PLC0415
+                StorageConfigError,
+                StorageError,
+            )
 
-        raise StorageError(
-            f"Failed to upload file to key '{key}'", key=key, cause=exc
-        ) from exc
+            if _is_azure_container_not_found(exc):
+                raise StorageConfigError(
+                    _azure_container_not_found_message(key)
+                ) from exc
+            raise StorageError(
+                f"Failed to upload file to key '{key}'", key=key, cause=exc
+            ) from exc
+        raise  # re-raise CancelledError / KeyboardInterrupt bare after logging
 
     elapsed_ms = (time.monotonic() - started) * 1000.0
     _log_storage_event(
-        logging.INFO,
+        logging.DEBUG,
         "upload",
         key,
         outcome="success",
@@ -409,7 +567,7 @@ async def upload_file(
 async def download_file(
     key: str,
     local_path: str | Path,
-    store: ObjectStore | None = None,
+    store: BoundStore | ObjectStore | None = None,
     *,
     compute_hash: bool = False,
     min_chunk_size: int = 10 * 1024 * 1024,
@@ -451,6 +609,7 @@ async def download_file(
 
     try:
         result = await obstore.get_async(resolved, key)
+    # conformance: ignore[E004] download error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
     except Exception as exc:
         elapsed_ms = (time.monotonic() - started) * 1000.0
         if _is_not_found(exc):
@@ -485,13 +644,19 @@ async def download_file(
 
     bytes_written = 0
     try:
-        with path.open("wb") as fh:
+        # 0o600 on creation: owner-only — downloaded artifacts can contain
+        # extracted customer metadata; don't rely on the process umask to keep
+        # them private. Mirrors the chunked pre-allocation path. (Mode applies
+        # only when the file is newly created; pre-existing perms are untouched.)
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as fh:
             async for chunk in result.stream(min_chunk_size=min_chunk_size):
                 raw = bytes(chunk)
                 fh.write(raw)
                 bytes_written += len(raw)
                 if h is not None:
                     h.update(raw)
+    # conformance: ignore[E004] file-write error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
     except Exception as exc:
         elapsed_ms = (time.monotonic() - started) * 1000.0
         _log_storage_event(
@@ -511,7 +676,7 @@ async def download_file(
 
     elapsed_ms = (time.monotonic() - started) * 1000.0
     _log_storage_event(
-        logging.INFO,
+        logging.DEBUG,
         "download",
         key,
         outcome="success",
@@ -523,7 +688,7 @@ async def download_file(
 
 async def get_file_size(
     key: str,
-    store: ObjectStore | None = None,
+    store: BoundStore | ObjectStore | None = None,
     *,
     normalize: bool = True,
 ) -> int | None:
@@ -552,6 +717,7 @@ async def get_file_size(
     try:
         meta = await obstore.head_async(resolved, key)
         return int(meta["size"])
+    # conformance: ignore[E004] not-found returns None as documented API contract; other exceptions re-raised via StorageError chain
     except Exception as exc:
         if _is_not_found(exc):
             return None
@@ -565,7 +731,7 @@ async def get_file_size(
 async def download_file_chunked(
     key: str,
     local_path: str | Path,
-    store: ObjectStore | None = None,
+    store: BoundStore | ObjectStore | None = None,
     *,
     chunk_size_bytes: int = 16 * 1024 * 1024,
     max_concurrent_chunks: int = 4,
@@ -615,6 +781,7 @@ async def download_file_chunked(
     try:
         meta = await obstore.head_async(resolved, key)
         file_size = int(meta["size"])
+    # conformance: ignore[E004] not-found and errors both re-raised via StorageError chain; no silent swallow
     except Exception as exc:
         if _is_not_found(exc):
             from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
@@ -638,9 +805,12 @@ async def download_file_chunked(
         )
 
     # Pre-allocate the file at the target size so lseek can address any offset.
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
+    # 0o600: owner-only — downloaded artifacts can contain extracted customer
+    # metadata; don't rely on the process umask to keep them private.
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
         os.ftruncate(fd, file_size)
+    # conformance: ignore[E004] cleanup-on-error guard; closes fd then re-raises immediately with no swallow
     except Exception:
         os.close(fd)
         raise
@@ -669,6 +839,7 @@ async def download_file_chunked(
         await asyncio.gather(
             *(_fetch_chunk(off) for off in range(0, file_size, chunk_size_bytes))
         )
+    # conformance: ignore[E004] chunked-download error handler; closes fd and cleans up file, then re-raises via StorageError chain
     except Exception as exc:
         os.close(fd)
         path.unlink(missing_ok=True)
@@ -702,7 +873,7 @@ async def download_file_chunked(
 
 async def _get_bytes(
     key: str,
-    store: ObjectStore | None = None,
+    store: BoundStore | ObjectStore | None = None,
     *,
     normalize: bool = True,
 ) -> bytes | None:
@@ -737,6 +908,7 @@ async def _get_bytes(
         # over Rust Bytes chunks and yields bytes objects, not ints.
         raw = result.bytes()
         return bytes(raw)
+    # conformance: ignore[E004] not-found returns None as documented API contract; other exceptions re-raised via StorageError chain
     except Exception as exc:
         if _is_not_found(exc):
             return None
@@ -748,7 +920,7 @@ async def _get_bytes(
 async def _put(
     key: str,
     data: bytes,
-    store: ObjectStore | None = None,
+    store: BoundStore | ObjectStore | None = None,
     *,
     normalize: bool = True,
 ) -> None:
@@ -773,20 +945,27 @@ async def _put(
         RuntimeError: If *store* is ``None`` and no infrastructure store is set.
     """
     resolved = _resolve_store(store)
+    put_attributes = _resolve_put_attributes(store)
     if normalize:
         key = normalize_key(key)
     try:
-        await obstore.put_async(resolved, key, data)
+        await obstore.put_async(resolved, key, data, attributes=put_attributes)
+    # conformance: ignore[E004] put error handler; all exceptions re-raised via StorageConfigError or StorageError chain
     except Exception as exc:
-        from application_sdk.storage.errors import StorageError  # noqa: PLC0415
+        from application_sdk.storage.errors import (  # noqa: PLC0415
+            StorageConfigError,
+            StorageError,
+        )
 
+        if _is_azure_container_not_found(exc):
+            raise StorageConfigError(_azure_container_not_found_message(key)) from exc
         raise StorageError(f"Failed to put key '{key}'", key=key, cause=exc) from exc
 
 
 async def put_json(
     key: str,
     obj: JsonValue,
-    store: ObjectStore | None = None,
+    store: BoundStore | ObjectStore | None = None,
     *,
     normalize: bool = True,
 ) -> None:
@@ -812,7 +991,7 @@ async def put_json(
 
 async def delete(
     key: str,
-    store: ObjectStore | None = None,
+    store: BoundStore | ObjectStore | None = None,
     *,
     normalize: bool = True,
 ) -> bool:
@@ -841,6 +1020,7 @@ async def delete(
     try:
         await obstore.delete_async(resolved, key)
         return True
+    # conformance: ignore[E004] not-found returns False as documented API contract; other exceptions re-raised via StorageError chain
     except Exception as exc:
         if _is_not_found(exc):
             return False
@@ -851,7 +1031,7 @@ async def delete(
 
 async def exists(
     key: str,
-    store: ObjectStore | None = None,
+    store: BoundStore | ObjectStore | None = None,
     *,
     normalize: bool = True,
 ) -> bool:
@@ -882,6 +1062,7 @@ async def exists(
     try:
         await obstore.head_async(resolved, key)
         return True
+    # conformance: ignore[E004] not-found returns False as documented API contract; other exceptions re-raised via StorageError chain
     except Exception as exc:
         if _is_not_found(exc):
             return False

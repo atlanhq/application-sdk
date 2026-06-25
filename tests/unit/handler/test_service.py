@@ -155,6 +155,25 @@ class _RoutingOutput(Output, allow_unbounded_fields=True):  # type: ignore[call-
     result: str = ""
 
 
+# Contracts for TestGetResultMultiEntrypointOutputType — must be at module
+# level because get_type_hints() resolves annotation strings against module
+# globals when 'from __future__ import annotations' is active.
+class _AlphaInput(Input, allow_unbounded_fields=True):  # type: ignore[call-arg]
+    pass
+
+
+class _AlphaOutput(Output, allow_unbounded_fields=True):  # type: ignore[call-arg]
+    alpha_field: str = ""
+
+
+class _BetaInput(Input, allow_unbounded_fields=True):  # type: ignore[call-arg]
+    pass
+
+
+class _BetaOutput(Output, allow_unbounded_fields=True):  # type: ignore[call-arg]
+    beta_field: str = ""
+
+
 # ---------------------------------------------------------------------------
 # Helper: create test client
 # ---------------------------------------------------------------------------
@@ -354,9 +373,12 @@ class TestPreflightEndpoint:
         )
         assert response.status_code == 200
         body = response.json()
-        assert body["success"] is True
+        # _TestHandler returns no checks, so envelope success is false
+        # (envelope success now means "preflight produced checks" — a handler
+        # that returns zero checks is treated as a preflight-system failure
+        # so the widget falls back to the top-level "Check failed" path).
+        assert body["success"] is False
         # v2 format: data is a dict of check results keyed by camelCase name.
-        # _TestHandler returns no checks, so data is empty.
         assert body["data"] == {}
         assert body["message"] == "ready"
 
@@ -422,6 +444,265 @@ class TestPreflightEndpoint:
         )
         assert response.status_code == 200
         assert received == [{}]
+
+    # ------------------------------------------------------------------
+    # Per-check v2-shape fields (DBBI-665 / WARE-1250 / finishes BLDX-901)
+    # ------------------------------------------------------------------
+    #
+    # The SageV2 widget at
+    # atlan-frontend/src/workflowsv2/components/dynamicForm2/widget/SageV2.vue:271-273
+    # renders ``checkResult.success ? successMessage : failureMessage`` with
+    # no fallback to ``message``. PR #1228 (BLDX-901) finished two of the
+    # three sub-mismatches but dropped this rename; these tests pin the
+    # finished shape so it does not regress again.
+
+    def test_preflight_check_emits_v2_success_fields(self) -> None:
+        """A passing check carries the message in successMessage; failureMessage is empty."""
+
+        class _OneCheck(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                from application_sdk.handler.contracts import PreflightCheck
+
+                return PreflightOutput(
+                    status=PreflightStatus.READY,
+                    checks=[
+                        PreflightCheck(
+                            name="apiVersion",
+                            passed=True,
+                            message="API version 3.17 is supported",
+                        )
+                    ],
+                )
+
+        client = _make_client(handler=_OneCheck())
+        body = client.post("/workflows/v1/check", json={"credentials": []}).json()
+        entry = body["data"]["apiVersion"]
+        assert entry["success"] is True
+        assert entry["message"] == "API version 3.17 is supported"
+        assert entry["successMessage"] == "API version 3.17 is supported"
+        assert entry["failureMessage"] == ""
+
+    def test_preflight_check_emits_v2_failure_fields(self) -> None:
+        """A failing check carries the message in failureMessage; successMessage is empty.
+
+        This is the DBBI-665 / IEEE case — without ``failureMessage`` the
+        SageV2 widget renders an empty "Hide details" panel even though the
+        handler set a real message on the check.
+        """
+
+        class _OneCheck(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                from application_sdk.handler.contracts import PreflightCheck
+
+                return PreflightOutput(
+                    status=PreflightStatus.NOT_READY,
+                    checks=[
+                        PreflightCheck(
+                            name="metadataAPI",
+                            passed=False,
+                            message="Metadata GraphQL API returned no sites",
+                        )
+                    ],
+                )
+
+        client = _make_client(handler=_OneCheck())
+        body = client.post("/workflows/v1/check", json={"credentials": []}).json()
+        entry = body["data"]["metadataAPI"]
+        assert entry["success"] is False
+        assert entry["message"] == "Metadata GraphQL API returned no sites"
+        assert entry["failureMessage"] == "Metadata GraphQL API returned no sites"
+        assert entry["successMessage"] == ""
+
+    def test_preflight_check_multiple_checks_v2_fields_per_check(self) -> None:
+        """Mixed pass/fail set — each check entry carries its own v2 fields."""
+
+        class _ThreeChecks(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                from application_sdk.handler.contracts import PreflightCheck
+
+                return PreflightOutput(
+                    status=PreflightStatus.PARTIAL,
+                    checks=[
+                        PreflightCheck(
+                            name="apiVersion",
+                            passed=True,
+                            message="API version 3.17 is supported",
+                        ),
+                        PreflightCheck(
+                            name="viewCapability",
+                            passed=True,
+                            message="Projects accessible — 5 project(s) found",
+                        ),
+                        PreflightCheck(
+                            name="metadataAPI",
+                            passed=False,
+                            message="Metadata GraphQL API returned 404",
+                        ),
+                    ],
+                )
+
+        client = _make_client(handler=_ThreeChecks())
+        data = client.post("/workflows/v1/check", json={"credentials": []}).json()[
+            "data"
+        ]
+
+        assert data["apiVersion"]["successMessage"].startswith("API version")
+        assert data["apiVersion"]["failureMessage"] == ""
+        assert data["viewCapability"]["successMessage"].startswith("Projects")
+        assert data["viewCapability"]["failureMessage"] == ""
+        assert data["metadataAPI"]["failureMessage"] == (
+            "Metadata GraphQL API returned 404"
+        )
+        assert data["metadataAPI"]["successMessage"] == ""
+        # ``message`` is preserved on every entry for any v3-shape consumer.
+        for name in ("apiVersion", "viewCapability", "metadataAPI"):
+            assert data[name]["message"]
+
+    def test_preflight_check_empty_message_yields_empty_v2_fields(self) -> None:
+        """A check with no message yields empty strings in all message fields."""
+
+        class _OneCheck(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                from application_sdk.handler.contracts import PreflightCheck
+
+                return PreflightOutput(
+                    status=PreflightStatus.NOT_READY,
+                    checks=[PreflightCheck(name="connectivity", passed=False)],
+                )
+
+        client = _make_client(handler=_OneCheck())
+        entry = client.post("/workflows/v1/check", json={"credentials": []}).json()[
+            "data"
+        ]["connectivity"]
+        assert entry["success"] is False
+        assert entry["message"] == ""
+        assert entry["successMessage"] == ""
+        assert entry["failureMessage"] == ""
+
+    # ------------------------------------------------------------------
+    # Envelope ``success`` reports preflight execution, not per-check pass
+    # (DBBI-665 root cause).
+    # ------------------------------------------------------------------
+    #
+    # The previous behaviour ``success = (status == READY)`` made every
+    # PARTIAL/NOT_READY response surface as a blank "Check failed" panel
+    # because SageV2.vue:249 short-circuits on ``!response.success`` and
+    # never iterates the per-check data. These tests pin the new contract:
+    # envelope success is true as long as preflight produced any checks.
+
+    def test_preflight_envelope_success_true_when_all_checks_pass(self) -> None:
+        """Status READY → envelope success true (regression guard)."""
+
+        class _OneCheck(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                from application_sdk.handler.contracts import PreflightCheck
+
+                return PreflightOutput(
+                    status=PreflightStatus.READY,
+                    checks=[
+                        PreflightCheck(name="apiVersion", passed=True, message="ok")
+                    ],
+                )
+
+        body = (
+            _make_client(handler=_OneCheck())
+            .post("/workflows/v1/check", json={"credentials": []})
+            .json()
+        )
+        assert body["success"] is True
+
+    def test_preflight_envelope_success_true_when_a_check_fails(self) -> None:
+        """Status NOT_READY → envelope success TRUE so SageV2 still renders per-check rows.
+
+        This is the DBBI-665 case: previously a failed check forced envelope
+        success=false, which made the widget skip the per-check loop entirely
+        and show a blank "Hide details" panel. Pinning envelope success=true
+        whenever checks ran lets the per-check rows render.
+        """
+
+        class _OneCheck(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                from application_sdk.handler.contracts import PreflightCheck
+
+                return PreflightOutput(
+                    status=PreflightStatus.NOT_READY,
+                    checks=[
+                        PreflightCheck(
+                            name="apiVersion",
+                            passed=False,
+                            message="Could not connect to Tableau",
+                        )
+                    ],
+                )
+
+        body = (
+            _make_client(handler=_OneCheck())
+            .post("/workflows/v1/check", json={"credentials": []})
+            .json()
+        )
+        assert body["success"] is True
+        # Per-check detail is still on the wire so the widget can render it.
+        assert body["data"]["apiVersion"]["success"] is False
+        assert body["data"]["apiVersion"]["failureMessage"] == (
+            "Could not connect to Tableau"
+        )
+
+    def test_preflight_envelope_success_true_on_partial_status(self) -> None:
+        """Status PARTIAL → envelope success TRUE.
+
+        Mixed pass/fail must surface to the UI; a single failing check
+        cannot collapse the entire response.
+        """
+
+        class _Mixed(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                from application_sdk.handler.contracts import PreflightCheck
+
+                return PreflightOutput(
+                    status=PreflightStatus.PARTIAL,
+                    checks=[
+                        PreflightCheck(name="apiVersion", passed=True, message="ok"),
+                        PreflightCheck(
+                            name="metadataAPI",
+                            passed=False,
+                            message="GraphQL 404",
+                        ),
+                    ],
+                )
+
+        body = (
+            _make_client(handler=_Mixed())
+            .post("/workflows/v1/check", json={"credentials": []})
+            .json()
+        )
+        assert body["success"] is True
+        assert body["data"]["apiVersion"]["success"] is True
+        assert body["data"]["metadataAPI"]["failureMessage"] == "GraphQL 404"
+
+    def test_preflight_envelope_success_false_when_no_checks_run(self) -> None:
+        """No checks emitted → envelope success FALSE — preflight-system failure.
+
+        A handler that returns zero checks signals that preflight itself
+        couldn't execute (e.g. the client failed to construct). The widget
+        falls back to the top-level "Check failed" branch — same UX as a
+        thrown exception, just without the 500.
+        """
+
+        class _ZeroChecks(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                return PreflightOutput(
+                    status=PreflightStatus.NOT_READY,
+                    checks=[],
+                    message="couldn't build client",
+                )
+
+        body = (
+            _make_client(handler=_ZeroChecks())
+            .post("/workflows/v1/check", json={"credentials": []})
+            .json()
+        )
+        assert body["success"] is False
+        assert body["data"] == {}
 
 
 class TestMetadataEndpoint:
@@ -528,6 +809,51 @@ class TestMetadataEndpoint:
         assert len(data[0]["children"]) == 2
         assert data[0]["children"][0]["value"] == "ws-1"
         assert data[0]["children"][1]["node_type"] == "workspace"
+
+    def test_metadata_template_key_forwarded_to_handler(self) -> None:
+        received: list[str] = []
+
+        class _MetadataTemplateCapture(_TestHandler):
+            async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+                received.append(input.metadata_template_key)
+                return ApiMetadataOutput(objects=[])
+
+        client = _make_client(handler=_MetadataTemplateCapture())
+        response = client.post(
+            "/workflows/v1/metadata",
+            json={
+                "credentials": {"host": "db.example.com"},
+                "metadata_template_key": "feedbacks",
+            },
+        )
+
+        assert response.status_code == 200
+        assert received == ["feedbacks"]
+
+    def test_metadata_wire_keys_populate_template_key(self) -> None:
+        # The orchestrator's wire keys (``metadataTemplateKey`` / ``type``)
+        # populate ``metadata_template_key`` via the field's validation alias —
+        # the routing key's documented home, not object_filter punning.
+        received: list[str] = []
+
+        class _MetadataTemplateCapture(_TestHandler):
+            async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
+                received.append(input.metadata_template_key)
+                return ApiMetadataOutput(objects=[])
+
+        client = _make_client(handler=_MetadataTemplateCapture())
+        for key in ("metadataTemplateKey", "type"):
+            response = client.post(
+                "/workflows/v1/metadata",
+                json={
+                    "credentials": {"host": "db.example.com"},
+                    key: "feedbacks",
+                },
+            )
+
+            assert response.status_code == 200
+
+        assert received == ["feedbacks", "feedbacks"]
 
     def test_metadata_handler_error_returns_500(self) -> None:
         client = _make_client(handler=_FailingHandler())
@@ -813,8 +1139,13 @@ class TestStartWorkflowRouting:
         finally:
             patcher.stop()
 
-    def test_multi_ep_missing_entrypoint_returns_400(self) -> None:
-        """Multi-entry-point app with no ?entrypoint= and no body selector returns 400."""
+    def test_multi_ep_no_entrypoint_dispatches_auto_default(self) -> None:
+        """Multi-entry-point app with no ?entrypoint= dispatches to the auto-default.
+
+        When multiple @entrypoints exist with no explicit default, the first
+        alphabetically (via dir()) is auto-marked default at registration.
+        Omitting ?entrypoint= therefore returns 200 and dispatches that ep.
+        """
         from application_sdk.app.base import App
         from application_sdk.app.entrypoint import entrypoint
 
@@ -830,12 +1161,371 @@ class TestStartWorkflowRouting:
         client, patcher = self._make_routed_client(_AnotherMultiEpApp)
         try:
             response = client.post("/workflows/v1/start", json={"name": "x"})
-            assert response.status_code == 400
-            detail = response.json().get("detail", "")
-            assert "step-a" not in detail
-            assert "step-b" not in detail
+            assert response.status_code == 200
         finally:
             patcher.stop()
+
+
+class TestStartWorkflowInvocability:
+    """Tests that every entry-point combination is reachable via /workflows/v1/start.
+
+    Covers:
+      - run()-only: no ?entrypoint= AND ?entrypoint=run
+      - @entrypoint-only (single): no ?entrypoint= AND ?entrypoint={name}
+      - @entrypoints (multiple): ?entrypoint= for each AND no ?entrypoint= uses auto-default
+      - mixed run() + @entrypoint: default (run, no ?entrypoint=), explicit by name
+      - mixed run() + @entrypoints (multiple): same rules
+    """
+
+    def setup_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def _make_routed_client(self, app_cls: type):  # type: ignore[return]
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        handler = _TestHandler()
+        svc = create_app_handler_service(
+            handler,
+            app_name="inv-test",
+            app_class=app_cls,
+            temporal_host="temporal:7233",
+        )
+        mock_client = MagicMock()
+        mock_handle = MagicMock()
+        mock_handle.id = "wf-1"
+        mock_handle.result_run_id = "run-1"
+        mock_client.start_workflow = AsyncMock(return_value=mock_handle)
+        patcher = patch(
+            "application_sdk.handler.service._get_temporal_client",
+            new=AsyncMock(return_value=mock_client),
+        )
+        patcher.start()
+        client = TestClient(svc, raise_server_exceptions=False)
+        return client, patcher, mock_client
+
+    def _started_workflow_name(self, mock_client: object) -> str:
+        from unittest.mock import MagicMock
+
+        assert isinstance(mock_client, MagicMock)
+        return mock_client.start_workflow.call_args[0][0]
+
+    # ── run()-only ────────────────────────────────────────────────────────
+
+    def test_run_only_no_param_is_200(self) -> None:
+        """run()-only app: omitting ?entrypoint= dispatches successfully."""
+        from application_sdk.app.base import App
+
+        class _RunOnlyInvApp(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher, mock_client = self._make_routed_client(_RunOnlyInvApp)
+        try:
+            resp = client.post("/workflows/v1/start", json={"name": "x"})
+            assert resp.status_code == 200
+            # Implicit run() uses bare app-name workflow type (no colon suffix)
+            assert ":" not in self._started_workflow_name(mock_client)
+        finally:
+            patcher.stop()
+
+    def test_run_only_explicit_run_param_is_200(self) -> None:
+        """run()-only app: ?entrypoint=run dispatches to the same implicit entry point."""
+        from application_sdk.app.base import App
+
+        class _RunOnlyExplicitApp(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher, mock_client = self._make_routed_client(_RunOnlyExplicitApp)
+        try:
+            resp = client.post("/workflows/v1/start?entrypoint=run", json={"name": "x"})
+            assert resp.status_code == 200
+            assert ":" not in self._started_workflow_name(mock_client)
+        finally:
+            patcher.stop()
+
+    # ── @entrypoint-only (single) ─────────────────────────────────────────
+
+    def test_single_ep_no_param_is_200(self) -> None:
+        """Single @entrypoint app: omitting ?entrypoint= dispatches via len==1 default."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _SingleEpInvApp(App):
+            @entrypoint
+            async def ingest(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher, mock_client = self._make_routed_client(_SingleEpInvApp)
+        try:
+            resp = client.post("/workflows/v1/start", json={"name": "x"})
+            assert resp.status_code == 200
+            assert self._started_workflow_name(mock_client).endswith(":ingest")
+        finally:
+            patcher.stop()
+
+    def test_single_ep_explicit_param_is_200(self) -> None:
+        """Single @entrypoint app: ?entrypoint={name} dispatches correctly."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _SingleEpExplicitApp(App):
+            @entrypoint
+            async def ingest(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher, mock_client = self._make_routed_client(_SingleEpExplicitApp)
+        try:
+            resp = client.post(
+                "/workflows/v1/start?entrypoint=ingest", json={"name": "x"}
+            )
+            assert resp.status_code == 200
+            assert self._started_workflow_name(mock_client).endswith(":ingest")
+        finally:
+            patcher.stop()
+
+    # ── @entrypoints (multiple) ───────────────────────────────────────────
+
+    def test_multi_ep_no_param_dispatches_auto_default(self) -> None:
+        """Multiple @entrypoints, none explicit default: ?entrypoint= omitted uses auto-default.
+
+        Auto-default is the first alphabetically: alpha-ep precedes beta-ep.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _MultiEpInvApp(App):
+            @entrypoint
+            async def alpha_ep(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def beta_ep(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher, mock_client = self._make_routed_client(_MultiEpInvApp)
+        try:
+            resp = client.post("/workflows/v1/start", json={"name": "x"})
+            assert resp.status_code == 200
+            assert self._started_workflow_name(mock_client).endswith(":alpha-ep")
+        finally:
+            patcher.stop()
+
+    def test_multi_ep_explicit_alpha_param_is_200(self) -> None:
+        """Multiple @entrypoints: ?entrypoint=alpha-ep dispatches to alpha-ep."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _MultiEpAlphaApp(App):
+            @entrypoint
+            async def alpha_ep(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def beta_ep(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher, mock_client = self._make_routed_client(_MultiEpAlphaApp)
+        try:
+            resp = client.post(
+                "/workflows/v1/start?entrypoint=alpha-ep", json={"name": "x"}
+            )
+            assert resp.status_code == 200
+            assert self._started_workflow_name(mock_client).endswith(":alpha-ep")
+        finally:
+            patcher.stop()
+
+    def test_multi_ep_explicit_beta_param_is_200(self) -> None:
+        """Multiple @entrypoints: ?entrypoint=beta-ep dispatches to beta-ep."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _MultiEpBetaApp(App):
+            @entrypoint
+            async def alpha_ep(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def beta_ep(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher, mock_client = self._make_routed_client(_MultiEpBetaApp)
+        try:
+            resp = client.post(
+                "/workflows/v1/start?entrypoint=beta-ep", json={"name": "x"}
+            )
+            assert resp.status_code == 200
+            assert self._started_workflow_name(mock_client).endswith(":beta-ep")
+        finally:
+            patcher.stop()
+
+    def test_multi_ep_explicit_default_no_param_dispatches_marked(self) -> None:
+        """Multiple @entrypoints with one explicit default: ?entrypoint= omitted uses marked."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _MultiEpMarkedApp(App):
+            @entrypoint
+            async def alpha_ep(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint(default=True)
+            async def beta_ep(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher, mock_client = self._make_routed_client(_MultiEpMarkedApp)
+        try:
+            resp = client.post("/workflows/v1/start", json={"name": "x"})
+            assert resp.status_code == 200
+            assert self._started_workflow_name(mock_client).endswith(":beta-ep")
+        finally:
+            patcher.stop()
+
+    # ── mixed run() + single @entrypoint ─────────────────────────────────
+
+    def test_mixed_single_no_param_dispatches_run(self) -> None:
+        """Mixed app: ?entrypoint= omitted dispatches to run() (permanent default)."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _MixedSingleInvApp(App):
+            @entrypoint
+            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher, mock_client = self._make_routed_client(_MixedSingleInvApp)
+        try:
+            resp = client.post("/workflows/v1/start", json={"name": "x"})
+            assert resp.status_code == 200
+            # run() is implicit → bare app-name, no colon
+            assert ":" not in self._started_workflow_name(mock_client)
+        finally:
+            patcher.stop()
+
+    def test_mixed_single_run_param_dispatches_run(self) -> None:
+        """Mixed app: ?entrypoint=run dispatches to run()."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _MixedRunParamApp(App):
+            @entrypoint
+            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher, mock_client = self._make_routed_client(_MixedRunParamApp)
+        try:
+            resp = client.post("/workflows/v1/start?entrypoint=run", json={"name": "x"})
+            assert resp.status_code == 200
+            assert ":" not in self._started_workflow_name(mock_client)
+        finally:
+            patcher.stop()
+
+    def test_mixed_single_explicit_ep_param_dispatches_ep(self) -> None:
+        """Mixed app: ?entrypoint={name} dispatches to the named @entrypoint."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _MixedEpParamApp(App):
+            @entrypoint
+            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher, mock_client = self._make_routed_client(_MixedEpParamApp)
+        try:
+            resp = client.post(
+                "/workflows/v1/start?entrypoint=extract", json={"name": "x"}
+            )
+            assert resp.status_code == 200
+            assert self._started_workflow_name(mock_client).endswith(":extract")
+        finally:
+            patcher.stop()
+
+    # ── mixed run() + multiple @entrypoints ──────────────────────────────
+
+    def test_mixed_multi_no_param_dispatches_run(self) -> None:
+        """Mixed app with multiple @entrypoints: run() remains default when omitted."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _MixedMultiInvApp(App):
+            @entrypoint
+            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def publish(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, patcher, mock_client = self._make_routed_client(_MixedMultiInvApp)
+        try:
+            resp = client.post("/workflows/v1/start", json={"name": "x"})
+            assert resp.status_code == 200
+            assert ":" not in self._started_workflow_name(mock_client)
+        finally:
+            patcher.stop()
+
+    def test_mixed_multi_explicit_ep_params_each_dispatch_correctly(self) -> None:
+        """Mixed app with multiple @entrypoints: each is reachable by name."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _MixedMultiEachApp(App):
+            @entrypoint
+            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def publish(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        for ep_name, ep_suffix in [
+            ("run", None),
+            ("extract", ":extract"),
+            ("publish", ":publish"),
+        ]:
+            client, patcher, mock_client = self._make_routed_client(_MixedMultiEachApp)
+            try:
+                resp = client.post(
+                    f"/workflows/v1/start?entrypoint={ep_name}", json={"name": "x"}
+                )
+                assert (
+                    resp.status_code == 200
+                ), f"?entrypoint={ep_name} returned {resp.status_code}"
+                wf_name = self._started_workflow_name(mock_client)
+                if ep_suffix is None:
+                    assert (
+                        ":" not in wf_name
+                    ), f"?entrypoint={ep_name}: expected bare name (no colon), got {wf_name!r}"
+                else:
+                    assert wf_name.endswith(
+                        ep_suffix
+                    ), f"?entrypoint={ep_name}: expected suffix {ep_suffix!r}, got {wf_name!r}"
+            finally:
+                patcher.stop()
 
 
 class TestWrapResponse:
@@ -923,6 +1613,239 @@ class TestConfigMapEndpoints:
             assert data["metadata"]["name"] == "my-config"
             parsed_config = json.loads(data["data"]["config"])
             assert parsed_config == {"key": "value"}
+            # Absent from the file -> absent from the response.
+            assert "defaultConnectorType" not in data["data"]
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_configmap_includes_default_connector_type_when_present(
+        self, tmp_path: Path
+    ) -> None:
+        from application_sdk.handler import service as svc_module
+
+        raw = {"defaultConnectorType": "jdbc", "config": {"key": "value"}}
+        (tmp_path / "my-config.json").write_text(json.dumps(raw))
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/configmap/my-config")
+            assert response.status_code == 200
+            data = response.json()["data"]
+            assert data["data"]["defaultConnectorType"] == "jdbc"
+            parsed_config = json.loads(data["data"]["config"])
+            assert parsed_config == {"key": "value"}
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_configmap_default_entrypoint_resolves_form_when_bare_id(
+        self, tmp_path: Path
+    ) -> None:
+        """Bare-id requests resolve to the default entrypoint's form configmap.
+
+        The marketplace UI builds configmap URLs from the app/marketplace id
+        (e.g. ``atlan-snowflake``) rather than the entrypoint form stem
+        (``snowflake-crawler``). When no file stem matches the request id
+        exactly, the handler resolves the app's default entrypoint (same
+        semantics as ``/workflows/v1/start`` and
+        ``/workflows/v1/input-contract``) and serves the form configmap
+        living under that entrypoint's generated dir.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _MultiEpApp(App):
+            @entrypoint
+            async def miner(self, input: _AlphaInput) -> _AlphaOutput:
+                return _AlphaOutput()
+
+            @entrypoint(default=True)
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        crawler_dir = tmp_path / "crawler"
+        crawler_dir.mkdir()
+        (crawler_dir / "manifest.json").write_text(json.dumps({"dag": {}}))
+        (crawler_dir / "snowflake-crawler.json").write_text(
+            json.dumps({"config": {"key": "from-crawler-form"}})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            # app_name= sets the task-queue name only; _resolve_app_entrypoint
+            # keys on _MultiEpApp._app_name (kebab of the class name).
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="snowflake", app_class=_MultiEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/configmap/atlan-snowflake")
+            assert response.status_code == 200
+            data = response.json()["data"]
+            # Echoed back as the request id, not the file stem — the bare
+            # marketplace id is what the caller asked for.
+            assert data["metadata"]["name"] == "atlan-snowflake"
+            parsed_config = json.loads(data["data"]["config"])
+            assert parsed_config["key"] == "from-crawler-form"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_configmap_exact_match_wins_over_default_fallback(
+        self, tmp_path: Path
+    ) -> None:
+        """Exact file-stem match preempts the default-entrypoint fallback."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _OneEpApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        # Both an exact stem AND a default-entrypoint form file exist.
+        (tmp_path / "snowflake.json").write_text(
+            json.dumps({"config": {"key": "exact"}})
+        )
+        crawler_dir = tmp_path / "crawler"
+        crawler_dir.mkdir()
+        (crawler_dir / "snowflake-crawler.json").write_text(
+            json.dumps({"config": {"key": "fallback"}})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            # app_name= sets the task-queue name only; _resolve_app_entrypoint
+            # keys on _OneEpApp._app_name (kebab of the class name).
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="snowflake", app_class=_OneEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/configmap/snowflake")
+            assert response.status_code == 200
+            parsed_config = json.loads(response.json()["data"]["data"]["config"])
+            assert parsed_config["key"] == "exact"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_configmap_default_fallback_skips_manifest_and_credentials(
+        self, tmp_path: Path
+    ) -> None:
+        """Default-entrypoint fallback skips manifest.json and atlan-connectors-*.json.
+
+        The entrypoint's generated dir contains the DAG manifest and (for
+        connectors) a credential template alongside the form configmap. The
+        fallback must serve the form, not the credential schema.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _OneEpApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        crawler_dir = tmp_path / "crawler"
+        crawler_dir.mkdir()
+        (crawler_dir / "manifest.json").write_text(json.dumps({"dag": {}}))
+        (crawler_dir / "atlan-connectors-snowflake.json").write_text(
+            json.dumps({"config": {"key": "credential-schema"}})
+        )
+        (crawler_dir / "snowflake-crawler.json").write_text(
+            json.dumps({"config": {"key": "form-config"}})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            # app_name= sets the task-queue name only; _resolve_app_entrypoint
+            # keys on _OneEpApp._app_name (kebab of the class name).
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="snowflake", app_class=_OneEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/configmap/atlan-snowflake")
+            assert response.status_code == 200
+            parsed_config = json.loads(response.json()["data"]["data"]["config"])
+            assert parsed_config["key"] == "form-config"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_configmap_default_fallback_returns_404_when_only_excluded_files(
+        self, tmp_path: Path
+    ) -> None:
+        """Default-entrypoint dir with only manifest + credential → 404.
+
+        Regression guard: when the entrypoint's generated dir exists but
+        every file in it is on the exclusion list (no form configmap), the
+        fallback finds no candidate and the handler returns 404 rather than
+        serving the credential template or the manifest.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _OneEpApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        crawler_dir = tmp_path / "crawler"
+        crawler_dir.mkdir()
+        (crawler_dir / "manifest.json").write_text(json.dumps({"dag": {}}))
+        (crawler_dir / "atlan-connectors-snowflake.json").write_text(
+            json.dumps({"config": {"key": "credential"}})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            # app_name= sets the task-queue name only; _resolve_app_entrypoint
+            # keys on _OneEpApp._app_name (kebab of the class name).
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="snowflake", app_class=_OneEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/configmap/atlan-snowflake")
+            assert response.status_code == 404
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_configmap_returns_404_when_fallback_ep_dir_missing(
+        self, tmp_path: Path
+    ) -> None:
+        """Default-entrypoint fallback → 404 when ep directory missing on disk.
+
+        The fallback resolves the app's default entrypoint, then looks for a
+        form configmap under ``CONTRACT_GENERATED_DIR/<ep.name>/``.  When that
+        directory does not exist, ``entrypoint_dir.is_dir()`` is False, no
+        candidate is found, and the handler returns 404.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _NoEpDirApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        # tmp_path exists but has no crawler/ subdirectory.
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            # app_name= sets the task-queue name only; _resolve_app_entrypoint
+            # keys on _NoEpDirApp._app_name (kebab of the class name).
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="snowflake", app_class=_NoEpDirApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/configmap/atlan-snowflake")
+            assert response.status_code == 404
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
@@ -1262,7 +2185,13 @@ class TestManifestEndpoint:
             svc_module.CONTRACT_GENERATED_DIR = original_dir
             svc_module.DEPLOYMENT_NAME = original_dep
 
-    def test_manifest_disk_substitutes_app_name(self, tmp_path: Path) -> None:
+    def test_manifest_disk_bakes_app_name_and_substitutes_deployment(
+        self, tmp_path: Path
+    ) -> None:
+        """app_name is baked into the manifest by the contract toolkit (from the
+        contract `name`) and served unchanged — the endpoint substitutes only the
+        per-deployment token. The baked value is what logs are tagged with, so the
+        Workflow Center's log filter matches it (HYP-1678)."""
         from application_sdk.handler import service as svc_module
 
         manifest_data = {
@@ -1271,7 +2200,7 @@ class TestManifestEndpoint:
                 "extract": {
                     "activity_name": "execute_workflow",
                     "activity_display_name": "Extract",
-                    "app_name": "{app_name}",
+                    "app_name": "baked-name",
                     "inputs": {
                         "workflow_type": "extraction",
                         "task_queue": "{deployment_name}-queue",
@@ -1290,7 +2219,9 @@ class TestManifestEndpoint:
             response = client.get("/workflows/v1/manifest")
             assert response.status_code == 200
             body = response.json()
-            assert body["dag"]["extract"]["app_name"] == "test-app"
+            # app_name passes through unchanged (baked, not substituted).
+            assert body["dag"]["extract"]["app_name"] == "baked-name"
+            # deployment token is still substituted.
             assert body["dag"]["extract"]["inputs"]["task_queue"] == "prod-deploy-queue"
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original_dir
@@ -1342,6 +2273,169 @@ class TestManifestEndpoint:
             client = _make_client()
             response = client.get("/workflows/v1/manifest")
             assert response.status_code == 404
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_manifest_default_entrypoint_fallback_when_no_root_manifest(
+        self, tmp_path: Path
+    ) -> None:
+        """No `?entrypoint=` + no root manifest → resolve default entrypoint.
+
+        Multi-entrypoint apps (postgres crawler+miner, snowflake crawler+miner)
+        don't have a root manifest.json — each entrypoint has its own under
+        ``<ep.name>/manifest.json``. When Heracles/AE calls
+        ``/workflows/v1/manifest`` without ``?entrypoint=`` for pre-flight app
+        validation, the SDK falls back to the default entrypoint's manifest
+        instead of 404-ing (same semantics as ``/start`` and ``/input-contract``).
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _MultiEpApp(App):
+            @entrypoint
+            async def miner(self, input: _AlphaInput) -> _AlphaOutput:
+                return _AlphaOutput()
+
+            @entrypoint(default=True)
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        crawler_dir = tmp_path / "crawler"
+        crawler_dir.mkdir()
+        (crawler_dir / "manifest.json").write_text(
+            json.dumps({"execution_mode": "automation-engine", "ep": "crawler"})
+        )
+        miner_dir = tmp_path / "miner"
+        miner_dir.mkdir()
+        (miner_dir / "manifest.json").write_text(
+            json.dumps({"execution_mode": "automation-engine", "ep": "miner"})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            # app_name= sets the task-queue name only; _resolve_app_entrypoint
+            # keys on _MultiEpApp._app_name (kebab of the class name).
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="postgres", app_class=_MultiEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/manifest")
+            assert response.status_code == 200
+            assert response.json()["ep"] == "crawler"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_manifest_root_file_wins_over_default_entrypoint_fallback(
+        self, tmp_path: Path
+    ) -> None:
+        """Root manifest.json preempts the default-entrypoint fallback."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _OneEpApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        (tmp_path / "manifest.json").write_text(
+            json.dumps({"execution_mode": "linear", "source": "root"})
+        )
+        crawler_dir = tmp_path / "crawler"
+        crawler_dir.mkdir()
+        (crawler_dir / "manifest.json").write_text(
+            json.dumps({"execution_mode": "automation-engine", "source": "ep"})
+        )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            # app_name= sets the task-queue name only; _resolve_app_entrypoint
+            # keys on _OneEpApp._app_name (kebab of the class name).
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="postgres", app_class=_OneEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/manifest")
+            assert response.status_code == 200
+            assert response.json()["source"] == "root"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_manifest_404_when_default_entrypoint_dir_has_no_manifest(
+        self, tmp_path: Path
+    ) -> None:
+        """Default-entrypoint resolves but its dir has no manifest.json → 404.
+
+        Regression guard: the fallback must not silently swallow a missing
+        entrypoint manifest. Returning 404 keeps the failure visible.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _OneEpApp(App):
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        # Entrypoint dir is empty (e.g. contract generation skipped manifest).
+        (tmp_path / "crawler").mkdir()
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            # app_name= sets the task-queue name only; _resolve_app_entrypoint
+            # keys on _OneEpApp._app_name (kebab of the class name).
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="postgres", app_class=_OneEpApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/manifest")
+            assert response.status_code == 404
+            assert response.json()["detail"] == "No manifest available"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_manifest_returns_404_when_fallback_ep_dir_missing(
+        self, tmp_path: Path
+    ) -> None:
+        """Default-entrypoint fallback → 404 when ep manifest missing on disk.
+
+        Multi-entrypoint apps place each manifest under ``<ep.name>/manifest.json``.
+        When the default ep's directory does not exist, ``_serve_entrypoint_manifest``
+        raises HTTPException(404), which is caught, and the fallback returns
+        ``"No manifest available"``.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _NoEpDirManifestApp(App):
+            @entrypoint(default=True)
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def miner(self, input: _AlphaInput) -> _AlphaOutput:
+                return _AlphaOutput()
+
+        # tmp_path exists but has no crawler/ or miner/ subdirectory and no
+        # root manifest.json — forces the fallback to reach the missing-ep-dir path.
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            # app_name= sets the task-queue name only; _resolve_app_entrypoint
+            # keys on _NoEpDirManifestApp._app_name (kebab of the class name).
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="postgres", app_class=_NoEpDirManifestApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/manifest")
+            assert response.status_code == 404
+            assert response.json()["detail"] == "No manifest available"
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
@@ -2861,7 +3955,10 @@ class TestGetResultEndpoint:
 
         try:
             svc = self._setup()
+            desc = MagicMock()
+            desc.workflow_type = "res-test"  # single implicit entrypoint
             mock_handle = MagicMock()
+            mock_handle.describe = AsyncMock(return_value=desc)
             mock_client = MagicMock()
             mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
             with (
@@ -2893,7 +3990,10 @@ class TestGetResultEndpoint:
 
         try:
             svc = self._setup()
+            desc = MagicMock()
+            desc.workflow_type = "res-test"
             mock_handle = MagicMock()
+            mock_handle.describe = AsyncMock(return_value=desc)
             mock_client = MagicMock()
             mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
             with (
@@ -2955,6 +4055,155 @@ class TestGetResultEndpoint:
         client = _make_client()
         response = client.get("/workflows/v1/status/wf-1/run-1")
         assert response.status_code == 503
+
+
+class TestGetResultMultiEntrypointOutputType:
+    """Regression: /result must resolve per-entrypoint output_type from
+    desc.workflow_type, not use the app's first-registered type or None.
+
+    Original bug: _output_type on the App class was set to the first entry
+    point's Output type (alphabetically via dir()), so any workflow that ran
+    a different entry point would be deserialised with the wrong schema.
+
+    The fix uses desc.workflow_type (e.g. "app-name:beta") to look up the
+    correct EntryPointMetadata and pass its output_type to _get_workflow_result.
+    """
+
+    def _setup(self):
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+        class _MultiEpApp(App):
+            name = "multi-ep-test"
+
+            @entrypoint
+            async def alpha(self, input: _AlphaInput) -> _AlphaOutput:
+                return _AlphaOutput()
+
+            @entrypoint
+            async def beta(self, input: _BetaInput) -> _BetaOutput:
+                return _BetaOutput()
+
+        return create_app_handler_service(
+            _TestHandler(),
+            app_name="multi-ep-test",
+            app_class=_MultiEpApp,
+            temporal_host="temporal:7233",
+        )
+
+    def _teardown(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    @pytest.mark.parametrize(
+        "ep_name,expected_output_type",
+        [
+            ("alpha", _AlphaOutput),
+            ("beta", _BetaOutput),
+        ],
+    )
+    def test_result_completed_resolves_per_entrypoint_output_type(
+        self, ep_name: str, expected_output_type: type
+    ) -> None:
+        """Polling path: output_type passed to _get_workflow_result must match
+        the entrypoint encoded in desc.workflow_type, not the app's
+        first-registered type (_AlphaOutput) and not None."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        try:
+            svc = self._setup()
+
+            desc = MagicMock()
+            desc.status.name = "COMPLETED"
+            desc.workflow_type = f"multi-ep-test:{ep_name}"
+
+            mock_handle = MagicMock()
+            mock_handle.describe = AsyncMock(return_value=desc)
+            mock_client = MagicMock()
+            mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+
+            captured: list[type | None] = []
+
+            async def _spy(client, *, workflow_id, output_type):
+                captured.append(output_type)
+                return {"result_field": "ok"}
+
+            with (
+                patch(
+                    "application_sdk.handler.service._get_temporal_client",
+                    new=AsyncMock(return_value=mock_client),
+                ),
+                patch(
+                    "application_sdk.handler.service._get_workflow_result",
+                    side_effect=_spy,
+                ),
+            ):
+                client = TestClient(svc)
+                response = client.get(f"/workflows/v1/result/wf-{ep_name}")
+
+            assert response.status_code == 200
+            assert len(captured) == 1
+            assert captured[0] is expected_output_type, (
+                f"For entrypoint {ep_name!r} expected output_type="
+                f"{expected_output_type.__name__!r}, got {captured[0]!r}. "
+                "The /result endpoint must resolve per-entrypoint output_type "
+                "from desc.workflow_type, not use the app-level first-registered "
+                "type or None."
+            )
+        finally:
+            self._teardown()
+
+    def test_result_wait_resolves_per_entrypoint_output_type(self) -> None:
+        """wait=True path: describe() must be called to obtain workflow_type
+        so the correct output_type can be resolved before waiting."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        try:
+            svc = self._setup()
+
+            desc = MagicMock()
+            desc.workflow_type = "multi-ep-test:beta"
+
+            mock_handle = MagicMock()
+            mock_handle.describe = AsyncMock(return_value=desc)
+            mock_client = MagicMock()
+            mock_client.get_workflow_handle = MagicMock(return_value=mock_handle)
+
+            captured: list[type | None] = []
+
+            async def _spy(client, *, workflow_id, output_type):
+                captured.append(output_type)
+                return {"result_field": "ok"}
+
+            with (
+                patch(
+                    "application_sdk.handler.service._get_temporal_client",
+                    new=AsyncMock(return_value=mock_client),
+                ),
+                patch(
+                    "application_sdk.handler.service._get_workflow_result",
+                    side_effect=_spy,
+                ),
+            ):
+                client = TestClient(svc)
+                response = client.get("/workflows/v1/result/wf-beta-wait?wait=true")
+
+            assert response.status_code == 200
+            assert len(captured) == 1
+            assert captured[0] is _BetaOutput, (
+                f"For wait=True + 'beta' entrypoint expected output_type=_BetaOutput, "
+                f"got {captured[0]!r}. "
+                "The wait=True path must call describe() and resolve output_type "
+                "from desc.workflow_type."
+            )
+        finally:
+            self._teardown()
 
 
 class TestStartWorkflowExtras:
@@ -3079,6 +4328,80 @@ class TestStartWorkflowExtras:
             assert body["success"] is True
             assert "workflow_id" in body["data"]
             assert "run_id" in body["data"]
+        finally:
+            patcher.stop()
+
+
+class TestStartWorkflowExecutionTimeout:
+    """Tests for execution_timeout wiring in /workflows/v1/start."""
+
+    def setup_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def _wire(self, app_cls, workflow_max_timeout_hours=None):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        svc = create_app_handler_service(
+            _TestHandler(),
+            app_name="timeout-test",
+            app_class=app_cls,
+            temporal_host="temporal:7233",
+            workflow_max_timeout_hours=workflow_max_timeout_hours,
+        )
+        mock_client = MagicMock()
+        mock_handle = MagicMock()
+        mock_handle.id = "wf-id"
+        mock_handle.result_run_id = "run-id"
+        mock_client.start_workflow = AsyncMock(return_value=mock_handle)
+        patcher = patch(
+            "application_sdk.handler.service._get_temporal_client",
+            new=AsyncMock(return_value=mock_client),
+        )
+        patcher.start()
+        return TestClient(svc, raise_server_exceptions=False), mock_client, patcher
+
+    def test_execution_timeout_set_when_configured(self) -> None:
+        """execution_timeout is passed to start_workflow when workflow_max_timeout_hours is set."""
+        from datetime import timedelta
+
+        from application_sdk.app.base import App
+
+        class _TApp(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, mock_client, patcher = self._wire(_TApp, workflow_max_timeout_hours=48)
+        try:
+            response = client.post("/workflows/v1/start", json={"name": "x"})
+            assert response.status_code == 200
+            kwargs = mock_client.start_workflow.call_args.kwargs
+            assert kwargs["execution_timeout"] == timedelta(hours=48)
+        finally:
+            patcher.stop()
+
+    def test_execution_timeout_none_when_not_configured(self) -> None:
+        """execution_timeout is None when workflow_max_timeout_hours is not set."""
+        from application_sdk.app.base import App
+
+        class _TApp2(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        client, mock_client, patcher = self._wire(_TApp2)
+        try:
+            response = client.post("/workflows/v1/start", json={"name": "x"})
+            assert response.status_code == 200
+            kwargs = mock_client.start_workflow.call_args.kwargs
+            assert kwargs["execution_timeout"] is None
         finally:
             patcher.stop()
 
@@ -3344,6 +4667,78 @@ class TestEventTriggerEndpoint:
         finally:
             self._teardown()
 
+    def test_event_execution_timeout_set_when_configured(self) -> None:
+        """execution_timeout is passed to start_workflow on the event route when configured."""
+        from datetime import timedelta
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.handler.contracts import EventTriggerConfig
+
+        try:
+            app_cls = self._make_event_app()
+            trigger = EventTriggerConfig(
+                event_id="t1", event_type="topic", event_name="ev"
+            )
+            app = create_app_handler_service(
+                _TestHandler(),
+                app_name="ev-test",
+                app_class=app_cls,
+                temporal_host="t:7233",
+                event_triggers=[trigger],
+                workflow_max_timeout_hours=48,
+            )
+            mock_client = MagicMock()
+            mock_handle = MagicMock()
+            mock_handle.id = "wf-id"
+            mock_handle.result_run_id = "run-id"
+            mock_client.start_workflow = AsyncMock(return_value=mock_handle)
+            with patch(
+                "application_sdk.handler.service._get_temporal_client",
+                new=AsyncMock(return_value=mock_client),
+            ):
+                client = TestClient(app)
+                response = client.post("/events/v1/event/t1", json={})
+            assert response.status_code == 200
+            kwargs = mock_client.start_workflow.call_args.kwargs
+            assert kwargs["execution_timeout"] == timedelta(hours=48)
+        finally:
+            self._teardown()
+
+    def test_event_execution_timeout_none_when_not_configured(self) -> None:
+        """execution_timeout is None on the event route when workflow_max_timeout_hours is unset."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.handler.contracts import EventTriggerConfig
+
+        try:
+            app_cls = self._make_event_app()
+            trigger = EventTriggerConfig(
+                event_id="t1", event_type="topic", event_name="ev"
+            )
+            app = create_app_handler_service(
+                _TestHandler(),
+                app_name="ev-test",
+                app_class=app_cls,
+                temporal_host="t:7233",
+                event_triggers=[trigger],
+            )
+            mock_client = MagicMock()
+            mock_handle = MagicMock()
+            mock_handle.id = "wf-id"
+            mock_handle.result_run_id = "run-id"
+            mock_client.start_workflow = AsyncMock(return_value=mock_handle)
+            with patch(
+                "application_sdk.handler.service._get_temporal_client",
+                new=AsyncMock(return_value=mock_client),
+            ):
+                client = TestClient(app)
+                response = client.post("/events/v1/event/t1", json={})
+            assert response.status_code == 200
+            kwargs = mock_client.start_workflow.call_args.kwargs
+            assert kwargs["execution_timeout"] is None
+        finally:
+            self._teardown()
+
 
 class TestFrontendHomeEndpoint:
     """Tests for GET / (frontend index.html)."""
@@ -3522,7 +4917,7 @@ class TestWorkflowClientConfig:
         class _Cls:
             pass
 
-        cfg = WorkflowClientConfig(host="t:7233", app_class=_Cls)  # type: ignore[arg-type]
+        cfg = WorkflowClientConfig(host="t:7233", app_class=_Cls, app_name="test-app")  # type: ignore[arg-type]
         assert cfg.is_configured() is True
 
 
@@ -3632,3 +5027,1142 @@ class TestConfigEndpointPersistence:
             response = client.get("/workflows/v1/config/round-trip")
         assert response.status_code == 200
         assert response.json()["data"] == {"hello": "world"}
+
+
+def _install_fake_app_module(
+    monkeypatch: pytest.MonkeyPatch, entrypoint: str, leaf: str, **attrs: object
+) -> None:
+    """Inject ``app.<segment>.<leaf>`` into ``sys.modules`` with ``attrs`` set.
+
+    Shared by the per-entrypoint ``core`` (compute_manifest) and ``handler``
+    (test_auth/...) test helpers — simulates the on-disk convention without
+    touching the filesystem.
+    """
+    import sys
+    import types
+
+    from application_sdk.app.entrypoint import entrypoint_module_segment
+
+    snake = entrypoint_module_segment(entrypoint)
+    # Ensure parent packages exist so ``import app.<snake>.<leaf>`` resolves.
+    for parent in ("app", f"app.{snake}"):
+        if parent not in sys.modules:
+            pkg = types.ModuleType(parent)
+            pkg.__path__ = []  # type: ignore[attr-defined]
+            monkeypatch.setitem(sys.modules, parent, pkg)
+    module = types.ModuleType(f"app.{snake}.{leaf}")
+    for name, value in attrs.items():
+        setattr(module, name, value)
+    monkeypatch.setitem(sys.modules, f"app.{snake}.{leaf}", module)
+
+
+class TestComputeManifestHook:
+    """Per-entrypoint dynamic manifest hook.
+
+    Apps that need to compute the manifest per submission (placeholder
+    fill-in, SQL gen, full DAG rewrite) drop a `core.py` at
+    ``app.<entrypoint_snake>.core`` exposing a
+    ``compute_manifest(manifest, fe_inputs) -> dict`` callable. The SDK's
+    /manifest handler discovers it via importlib and substitutes the
+    return value as the response body.
+
+    Tests inject a fake module into ``sys.modules`` to simulate the
+    convention without touching the filesystem.
+    """
+
+    @staticmethod
+    def _install_fake_core(
+        monkeypatch: pytest.MonkeyPatch, entrypoint: str, fn: object
+    ) -> None:
+        """Register ``app.<snake>.core`` with ``compute_manifest = fn``."""
+        _install_fake_app_module(monkeypatch, entrypoint, "core", compute_manifest=fn)
+
+    def test_optional_import_returns_none_when_target_absent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A genuinely-missing module (target or a parent) → None (fall-through)."""
+        import importlib
+
+        from application_sdk.handler import service as svc
+
+        def _missing(name):
+            raise ModuleNotFoundError(f"No module named {name!r}", name=name)
+
+        monkeypatch.setattr(importlib, "import_module", _missing)
+        assert svc._import_optional_app_module("app.foo.core") is None
+
+    def test_optional_import_reraises_transitive_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A module that exists but whose own import fails (missing dependency)
+        must surface, not be swallowed into a silent fall-through."""
+        import importlib
+
+        from application_sdk.handler import service as svc
+
+        def _broken(name):
+            # The target's code imports 'somedep', which isn't installed.
+            raise ModuleNotFoundError("No module named 'somedep'", name="somedep")
+
+        monkeypatch.setattr(importlib, "import_module", _broken)
+        with pytest.raises(ModuleNotFoundError):
+            svc._import_optional_app_module("app.foo.core")
+
+    def test_hook_invoked_when_module_exists(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """compute_manifest is called and its return becomes the body."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "hook-ep"
+        ep_dir.mkdir(parents=True)
+        (ep_dir / "manifest.json").write_text(
+            json.dumps({"dag": {"extract": {"static": True}}})
+        )
+
+        captured: dict[str, object] = {}
+
+        async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+            captured["manifest"] = manifest
+            captured["fe_inputs"] = fe_inputs
+            return {"dag": {"extract": {"computed": True, "echo": fe_inputs}}}
+
+        self._install_fake_core(monkeypatch, "hook-ep", compute_manifest)
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            payload = {"foo": "bar"}
+            response = client.get(
+                "/workflows/v1/manifest",
+                params={"entrypoint": "hook-ep", "fe_inputs": json.dumps(payload)},
+            )
+            assert response.status_code == 200
+            body = response.json()
+            assert body == {"dag": {"extract": {"computed": True, "echo": payload}}}
+            # The hook receives the static manifest unmodified and the decoded form.
+            assert captured["manifest"] == {"dag": {"extract": {"static": True}}}
+            assert captured["fe_inputs"] == payload
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_async_hook_is_awaited(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An ``async def compute_manifest`` is awaited directly (not run via
+        asyncio.to_thread, which would hand back an un-awaited coroutine)."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "hook-ep"
+        ep_dir.mkdir(parents=True)
+        (ep_dir / "manifest.json").write_text(json.dumps({"dag": {}}))
+
+        async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+            return {"dag": {"computed": "async", "echo": fe_inputs}}
+
+        self._install_fake_core(monkeypatch, "hook-ep", compute_manifest)
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            response = client.get(
+                "/workflows/v1/manifest",
+                params={"entrypoint": "hook-ep", "fe_inputs": json.dumps({"k": "v"})},
+            )
+            assert response.status_code == 200
+            assert response.json() == {"dag": {"computed": "async", "echo": {"k": "v"}}}
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_static_manifest_when_no_hook(self, tmp_path: Path) -> None:
+        """No app.<snake>.core module → static manifest returned unchanged."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "no-hook"
+        ep_dir.mkdir(parents=True)
+        manifest_data = {"dag": {"extract": {"static": True}}}
+        (ep_dir / "manifest.json").write_text(json.dumps(manifest_data))
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/manifest?entrypoint=no-hook")
+            assert response.status_code == 200
+            assert response.json() == manifest_data
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_non_callable_compute_manifest_ignored(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A `compute_manifest` attribute that isn't callable (e.g. an app that
+        writes `compute_manifest = SOME_DICT`) is ignored → static manifest."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "bad-hook"
+        ep_dir.mkdir(parents=True)
+        manifest_data = {"dag": {"static": True}}
+        (ep_dir / "manifest.json").write_text(json.dumps(manifest_data))
+
+        # Not callable — a plain dict assigned to the attribute name.
+        self._install_fake_core(monkeypatch, "bad-hook", {"not": "callable"})
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/manifest?entrypoint=bad-hook")
+            assert response.status_code == 200
+            assert response.json() == manifest_data
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_sync_compute_manifest_ignored(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The hook is async-only: a *sync* ``def compute_manifest`` is not
+        discovered and the route serves the static manifest unchanged (rather
+        than running it via asyncio.to_thread)."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "sync-hook"
+        ep_dir.mkdir(parents=True)
+        manifest_data = {"dag": {"static": True}}
+        (ep_dir / "manifest.json").write_text(json.dumps(manifest_data))
+
+        # Sync def — must be ignored under the async-only contract.
+        def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+            return {"dag": {"computed": "should-not-appear"}}
+
+        self._install_fake_core(monkeypatch, "sync-hook", compute_manifest)
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            response = _make_client().get("/workflows/v1/manifest?entrypoint=sync-hook")
+            assert response.status_code == 200
+            assert response.json() == manifest_data
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_fe_inputs_defaults_to_empty_dict(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When the FE doesn't send `fe_inputs`, the hook gets an empty dict."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "default-form"
+        ep_dir.mkdir(parents=True)
+        (ep_dir / "manifest.json").write_text(json.dumps({"k": "v"}))
+
+        captured: dict[str, object] = {}
+
+        async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+            captured["fe_inputs"] = fe_inputs
+            return manifest
+
+        self._install_fake_core(monkeypatch, "default-form", compute_manifest)
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/manifest?entrypoint=default-form")
+            assert response.status_code == 200
+            assert captured["fe_inputs"] == {}
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_invalid_fe_inputs_returns_400(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Malformed fe_inputs JSON → 400 (not 500)."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "bad-form"
+        ep_dir.mkdir(parents=True)
+        (ep_dir / "manifest.json").write_text("{}")
+
+        async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+            return manifest
+
+        self._install_fake_core(monkeypatch, "bad-form", compute_manifest)
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            response = client.get(
+                "/workflows/v1/manifest",
+                params={"entrypoint": "bad-form", "fe_inputs": "not-json{"},
+            )
+            assert response.status_code == 400
+            assert "fe_inputs is not valid JSON" in response.json()["detail"]
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_oversize_fe_inputs_returns_413(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """fe_inputs over the byte cap → 413 (clear error, not opaque
+        downstream truncation), and the hook is never invoked."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "big-form"
+        ep_dir.mkdir(parents=True)
+        (ep_dir / "manifest.json").write_text("{}")
+
+        async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+            raise AssertionError("hook must not run for oversize fe_inputs")
+
+        self._install_fake_core(monkeypatch, "big-form", compute_manifest)
+
+        # Valid JSON, but larger than the cap.
+        huge = json.dumps({"x": "a" * (svc_module._MAX_FE_INPUTS_BYTES + 100)})
+        assert len(huge.encode("utf-8")) > svc_module._MAX_FE_INPUTS_BYTES
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            response = client.get(
+                "/workflows/v1/manifest",
+                params={"entrypoint": "big-form", "fe_inputs": huge},
+            )
+            assert response.status_code == 413
+            assert "fe_inputs exceeds" in response.json()["detail"]
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def _run_hook(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        entrypoint: str,
+        hook: object,
+    ):
+        """Install ``hook`` as compute_manifest for ``entrypoint`` and GET the
+        manifest; returns the response."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / entrypoint
+        ep_dir.mkdir(parents=True)
+        (ep_dir / "manifest.json").write_text("{}")
+        self._install_fake_core(monkeypatch, entrypoint, hook)
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            return _make_client().get(
+                "/workflows/v1/manifest", params={"entrypoint": entrypoint}
+            )
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_hook_generic_exception_returns_generic_500(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A hook raising a generic exception → 500 with a generic body; the
+        exception text is NOT leaked to the client."""
+
+        async def boom(manifest: dict, fe_inputs: dict) -> dict:
+            raise RuntimeError("secret connection string leaked here")
+
+        response = self._run_hook(tmp_path, monkeypatch, "hook-boom", boom)
+        assert response.status_code == 500
+        assert response.json()["detail"] == "Internal server error"
+        assert "secret connection string" not in response.text
+
+    def test_hook_httpexception_passes_through(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A hook raising HTTPException → its status/detail pass through
+        (the ``except HTTPException: raise`` branch), not coerced to 500."""
+        from fastapi import HTTPException
+
+        async def conflict(manifest: dict, fe_inputs: dict) -> dict:
+            raise HTTPException(status_code=409, detail="entrypoint conflict")
+
+        response = self._run_hook(tmp_path, monkeypatch, "hook-conflict", conflict)
+        assert response.status_code == 409
+        assert response.json()["detail"] == "entrypoint conflict"
+
+    def test_hook_non_dict_return_returns_500(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A hook returning a non-dict (list/str/None) → 500 (isinstance guard)."""
+
+        async def returns_list(manifest: dict, fe_inputs: dict):
+            return [1, 2, 3]
+
+        response = self._run_hook(tmp_path, monkeypatch, "hook-list", returns_list)
+        assert response.status_code == 500
+        assert response.json()["detail"] == "Internal server error"
+
+    def test_fe_inputs_at_exact_cap_passes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Exactly ``_MAX_FE_INPUTS_BYTES`` is allowed — the cap is ``>``, not
+        ``>=`` (boundary guard against an off-by-one)."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "at-cap"
+        ep_dir.mkdir(parents=True)
+        (ep_dir / "manifest.json").write_text("{}")
+
+        async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+            return {"ok": True}
+
+        self._install_fake_core(monkeypatch, "at-cap", compute_manifest)
+
+        overhead = len(json.dumps({"x": ""}).encode("utf-8"))
+        at_cap = json.dumps({"x": "a" * (svc_module._MAX_FE_INPUTS_BYTES - overhead)})
+        assert len(at_cap.encode("utf-8")) == svc_module._MAX_FE_INPUTS_BYTES
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            response = _make_client().get(
+                "/workflows/v1/manifest",
+                params={"entrypoint": "at-cap", "fe_inputs": at_cap},
+            )
+            assert response.status_code == 200
+            assert response.json() == {"ok": True}
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_fe_inputs_one_byte_over_cap_returns_413(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One byte over the cap → 413 (the other half of the boundary)."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "over-cap"
+        ep_dir.mkdir(parents=True)
+        (ep_dir / "manifest.json").write_text("{}")
+
+        async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+            return {"ok": True}
+
+        self._install_fake_core(monkeypatch, "over-cap", compute_manifest)
+
+        overhead = len(json.dumps({"x": ""}).encode("utf-8"))
+        over = json.dumps({"x": "a" * (svc_module._MAX_FE_INPUTS_BYTES - overhead + 1)})
+        assert len(over.encode("utf-8")) == svc_module._MAX_FE_INPUTS_BYTES + 1
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            response = _make_client().get(
+                "/workflows/v1/manifest",
+                params={"entrypoint": "over-cap", "fe_inputs": over},
+            )
+            assert response.status_code == 413
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_legacy_alias_forwards_fe_inputs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Heracles' /manifest (no version) also routes through the hook."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "legacy-ep"
+        ep_dir.mkdir(parents=True)
+        (ep_dir / "manifest.json").write_text(json.dumps({"orig": True}))
+
+        async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+            return {**manifest, "fe": fe_inputs}
+
+        self._install_fake_core(monkeypatch, "legacy-ep", compute_manifest)
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            response = client.get(
+                "/manifest",
+                params={"entrypoint": "legacy-ep", "fe_inputs": json.dumps({"x": 1})},
+            )
+            assert response.status_code == 200
+            assert response.json() == {"orig": True, "fe": {"x": 1}}
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_kebab_entrypoint_resolves_to_snake_module(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Kebab `csa-hello-a` → import `app.csa_hello_a.core`."""
+        from application_sdk.handler import service as svc_module
+
+        contract_dir = tmp_path / "generated"
+        ep_dir = contract_dir / "csa-hello-a"  # kebab on disk
+        ep_dir.mkdir(parents=True)
+        (ep_dir / "manifest.json").write_text(json.dumps({"static": True}))
+
+        async def compute_manifest(manifest: dict, fe_inputs: dict) -> dict:
+            return {"computed": True}
+
+        # Module is registered under app.csa_hello_a (snake) — the hook does the translation.
+        self._install_fake_core(monkeypatch, "csa-hello-a", compute_manifest)
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = contract_dir
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/manifest?entrypoint=csa-hello-a")
+            assert response.status_code == 200
+            assert response.json() == {"computed": True}
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+
+class TestPerEntrypointHandlerHook:
+    """Per-entrypoint handler discovery for /workflows/v1/{auth,check,metadata}.
+
+    Multi-entrypoint apps drop ``app.<entrypoint_snake>.handler`` modules
+    that expose plain async ``test_auth``, ``preflight_check``,
+    ``fetch_metadata`` functions. The orchestrator sends the exact entry-point
+    name in the ``entrypoint`` field (resolved from the marketplace catalog);
+    the SDK dispatches to the per-entrypoint module **by exact name** when
+    present, falling through to the app-level ``Handler`` instance otherwise.
+
+    Tests inject fake modules into ``sys.modules`` to simulate the discovery
+    convention (no filesystem / contract-dir glob is involved on the explicit
+    path).
+    """
+
+    @staticmethod
+    def _install_fake_handler(
+        monkeypatch: pytest.MonkeyPatch, entrypoint: str, **fns: object
+    ) -> None:
+        """Register ``app.<snake>.handler`` exposing the given async fns."""
+        _install_fake_app_module(monkeypatch, entrypoint, "handler", **fns)
+
+    # ------------------------------------------------------------------
+    # /workflows/v1/auth
+    # ------------------------------------------------------------------
+
+    def test_auth_dispatches_to_entrypoint_module(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Explicit ``entrypoint`` routes to the per-entrypoint test_auth by exact
+        name — a direct lookup, no contract-dir glob or connector parsing."""
+        captured: dict[str, object] = {}
+
+        async def test_auth(input: AuthInput, ctx) -> AuthOutput:
+            captured["entrypoint"] = input.entrypoint
+            captured["app_name"] = ctx.app_name
+            return AuthOutput(status=AuthStatus.FAILED, message="entrypoint says no")
+
+        self._install_fake_handler(monkeypatch, "csa-hello-a", test_auth=test_auth)
+
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"entrypoint": "csa-hello-a", "credentials": []},
+        )
+        assert response.status_code == 401
+        body = response.json()
+        assert body["data"]["status"] == "failed"
+        assert body["data"]["message"] == "entrypoint says no"
+        assert captured["entrypoint"] == "csa-hello-a"
+        assert captured["app_name"] == "test-app"
+
+    def test_auth_falls_back_when_no_entrypoint_module(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A valid ``entrypoint`` with no ``app.<segment>.handler`` module → the
+        app-level Handler.test_auth runs (deterministic is/isn't fallback)."""
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"entrypoint": "sdk-fallback-noep-auth", "credentials": []},
+        )
+        assert response.status_code == 200
+        # _TestHandler returns SUCCESS with "auth ok"
+        assert response.json()["data"]["message"] == "auth ok"
+
+    def test_auth_sync_handler_fn_falls_back(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A *sync* ``def test_auth`` in the entrypoint module is rejected by
+        discovery (it would TypeError on ``await``) → app-level Handler runs."""
+
+        def test_auth(input: AuthInput, ctx) -> AuthOutput:  # not async — invalid
+            raise AssertionError("sync handler must not be dispatched")
+
+        self._install_fake_handler(monkeypatch, "csa-hello-a", test_auth=test_auth)
+
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"entrypoint": "csa-hello-a", "credentials": []},
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["message"] == "auth ok"
+
+    def test_auth_non_callable_handler_attr_falls_back(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A non-callable ``test_auth`` attribute (e.g. ``test_auth = "x"``) is
+        ignored by discovery → app-level Handler runs."""
+        self._install_fake_handler(monkeypatch, "csa-hello-a", test_auth="not-a-fn")
+
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"entrypoint": "csa-hello-a", "credentials": []},
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["message"] == "auth ok"
+
+    def test_auth_falls_back_when_entrypoint_empty(self) -> None:
+        """No ``entrypoint`` → app-level Handler.test_auth runs (single-entrypoint compat)."""
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"credentials": []},
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["message"] == "auth ok"
+
+    def test_auth_invalid_entrypoint_name_returns_400(self) -> None:
+        """A non-empty but malformed ``entrypoint`` (e.g. a path-traversal
+        attempt) is a client error → 400, consistent with the manifest and
+        input-contract routes — NOT a silent fall-back to the app-level
+        Handler / default entrypoint."""
+        client = _make_client()
+        for bad in ("../evil", "1leading-digit", "has space", "dot.sep"):
+            response = client.post(
+                "/workflows/v1/auth",
+                json={"entrypoint": bad, "credentials": []},
+            )
+            assert response.status_code == 400, f"expected 400 for {bad!r}"
+            assert response.json()["detail"] == "Invalid entrypoint name"
+
+    def test_check_invalid_entrypoint_name_returns_400(self) -> None:
+        """Malformed ``entrypoint`` on /check → 400 (consistency across routes)."""
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/check",
+            json={"entrypoint": "../evil", "credentials": []},
+        )
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Invalid entrypoint name"
+
+    def test_metadata_invalid_entrypoint_name_returns_400(self) -> None:
+        """Malformed ``entrypoint`` on /metadata → 400 (consistency across routes)."""
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/metadata",
+            json={"entrypoint": "../evil", "credentials": []},
+        )
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Invalid entrypoint name"
+
+    def test_auth_connector_is_not_used_for_routing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The legacy ``connector`` field no longer drives dispatch. A connector
+        naming a real entrypoint module is ignored when no ``entrypoint`` is sent
+        — routing is explicit-only (the per-entrypoint fn must not run)."""
+
+        async def test_auth(input: AuthInput, ctx) -> AuthOutput:
+            raise AssertionError("connector must not trigger per-entrypoint dispatch")
+
+        self._install_fake_handler(monkeypatch, "csa-hello-a", test_auth=test_auth)
+
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"connector": "test-bundle-csa-hello-a", "credentials": []},
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["message"] == "auth ok"
+
+    # ------------------------------------------------------------------
+    # /workflows/v1/check
+    # ------------------------------------------------------------------
+
+    def test_check_dispatches_to_entrypoint_module(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Per-entrypoint preflight_check is awaited; its checks render in response."""
+        from application_sdk.handler.contracts import PreflightCheck
+
+        async def preflight_check(input: PreflightInput, ctx) -> PreflightOutput:
+            assert input.entrypoint == "csa-hello-b"
+            assert ctx.app_name == "test-app"
+            return PreflightOutput(
+                status=PreflightStatus.NOT_READY,
+                checks=[
+                    PreflightCheck(
+                        name="recipientCheck",
+                        passed=False,
+                        message="recipient missing",
+                    )
+                ],
+            )
+
+        self._install_fake_handler(
+            monkeypatch, "csa-hello-b", preflight_check=preflight_check
+        )
+
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/check",
+            json={"entrypoint": "csa-hello-b", "credentials": []},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        # Envelope success reports that preflight ran (a check was produced), not
+        # that every check passed — per DBBI-665. The failing check surfaces in
+        # data.recipientCheck.
+        assert body["success"] is True
+        assert body["data"]["recipientCheck"] == {
+            "success": False,
+            "message": "recipient missing",
+            "successMessage": "",
+            "failureMessage": "recipient missing",
+        }
+
+    def test_check_falls_back_when_no_entrypoint_module(self) -> None:
+        """A valid ``entrypoint`` with no handler module → app-level
+        Handler.preflight_check runs."""
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/check",
+            json={"entrypoint": "sdk-fallback-noep-check", "credentials": []},
+        )
+        assert response.status_code == 200
+        # Fell back to the app-level Handler; the default test handler's preflight
+        # returns status=ready, message "ready".
+        assert response.json()["message"] == "ready"
+
+    # ------------------------------------------------------------------
+    # /workflows/v1/metadata
+    # ------------------------------------------------------------------
+
+    def test_metadata_dispatches_to_entrypoint_module(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Per-entrypoint fetch_metadata is awaited; its objects render in response."""
+
+        async def fetch_metadata(input: MetadataInput, ctx) -> SqlMetadataOutput:
+            assert input.entrypoint == "csa-hello-d"
+            return SqlMetadataOutput(
+                objects=[
+                    SqlMetadataObject(TABLE_CATALOG="cat", TABLE_SCHEMA="sch1"),
+                    SqlMetadataObject(TABLE_CATALOG="cat", TABLE_SCHEMA="sch2"),
+                ]
+            )
+
+        self._install_fake_handler(
+            monkeypatch, "csa-hello-d", fetch_metadata=fetch_metadata
+        )
+
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/metadata",
+            json={"entrypoint": "csa-hello-d", "credentials": []},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert len(body["data"]) == 2
+        assert body["data"][0] == {"TABLE_CATALOG": "cat", "TABLE_SCHEMA": "sch1"}
+
+    def test_metadata_falls_back_when_no_entrypoint_module(self) -> None:
+        """A valid ``entrypoint`` with no handler module → app-level
+        Handler.fetch_metadata runs."""
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/metadata",
+            json={"entrypoint": "sdk-fallback-noep-meta", "credentials": []},
+        )
+        assert response.status_code == 200
+        # _TestHandler returns empty SqlMetadataOutput
+        assert response.json()["data"] == []
+
+    def test_metadata_input_object_filter_from_metadata_template_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Heracles forwards the widget filter key as ``metadataTemplateKey`` (and
+        a ``type`` mirror) but the v3 SDK contract uses ``object_filter``. Verify
+        the bridge: per-entrypoint hooks read the widget key from
+        ``input.object_filter``."""
+        captured: dict[str, str] = {}
+
+        async def fetch_metadata(input: MetadataInput, ctx) -> ApiMetadataOutput:
+            captured["object_filter"] = input.object_filter
+            return ApiMetadataOutput(objects=[])
+
+        self._install_fake_handler(
+            monkeypatch, "csa-meta-bridge", fetch_metadata=fetch_metadata
+        )
+
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/metadata",
+            json={
+                "entrypoint": "csa-meta-bridge",
+                "credentials": [],
+                "metadataTemplateKey": "tags",
+            },
+        )
+        assert response.status_code == 200
+        assert captured["object_filter"] == "tags"
+
+    def test_metadata_input_object_filter_explicit_wins_over_template_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If the body sets ``object_filter`` explicitly, the bridge does not
+        overwrite it with ``metadataTemplateKey``."""
+        captured: dict[str, str] = {}
+
+        async def fetch_metadata(input: MetadataInput, ctx) -> ApiMetadataOutput:
+            captured["object_filter"] = input.object_filter
+            return ApiMetadataOutput(objects=[])
+
+        self._install_fake_handler(
+            monkeypatch, "csa-meta-bridge-2", fetch_metadata=fetch_metadata
+        )
+
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/metadata",
+            json={
+                "entrypoint": "csa-meta-bridge-2",
+                "credentials": [],
+                "object_filter": "public.*",
+                "metadataTemplateKey": "tags",
+            },
+        )
+        assert response.status_code == 200
+        assert captured["object_filter"] == "public.*"
+
+    # ------------------------------------------------------------------
+    # Errors
+    # ------------------------------------------------------------------
+
+    def test_entrypoint_fn_raising_surfaces_as_500(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Per-entrypoint fn raising an unexpected exception → 500 (same as Handler.<fn>)."""
+
+        async def test_auth(input: AuthInput, ctx) -> AuthOutput:
+            raise RuntimeError("entrypoint blew up")
+
+        self._install_fake_handler(monkeypatch, "csa-hello-a", test_auth=test_auth)
+
+        client = _make_client()
+        response = client.post(
+            "/workflows/v1/auth",
+            json={"entrypoint": "csa-hello-a", "credentials": []},
+        )
+        assert response.status_code == 500
+
+
+class TestInputContractEndpoint:
+    """Tests for GET /workflows/v1/input-contract."""
+
+    def setup_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def _client(self, app_cls: type) -> TestClient:
+        svc = create_app_handler_service(
+            _TestHandler(), app_name="ic-test", app_class=app_cls
+        )
+        return TestClient(svc, raise_server_exceptions=False)
+
+    def test_single_entrypoint_returns_model_json_schema(self) -> None:
+        """Single-entry-point app: no ?entrypoint= resolves the only one and
+        returns exactly AppInputContract.model_json_schema()."""
+        from application_sdk.app.base import App
+
+        class _SingleEpApp(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        resp = self._client(_SingleEpApp).get("/workflows/v1/input-contract")
+        assert resp.status_code == 200
+        assert resp.json() == _RoutingInput.model_json_schema()
+
+    def test_multi_entrypoint_selected_by_query_param(self) -> None:
+        """Multi-entry-point app: ?entrypoint=<name> returns that entry point's schema."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _MultiEpApp(App):
+            @entrypoint
+            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def load(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        resp = self._client(_MultiEpApp).get(
+            "/workflows/v1/input-contract?entrypoint=extract"
+        )
+        assert resp.status_code == 200
+        assert resp.json() == _RoutingInput.model_json_schema()
+
+    def test_multi_entrypoint_no_param_uses_auto_default(self) -> None:
+        """Multi-entry-point app without ?entrypoint= → 200 using auto-default (first alphabetically)."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _MultiEpApp2(App):
+            @entrypoint
+            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def load(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        # 'extract' precedes 'load' alphabetically → auto-marked default
+        resp = self._client(_MultiEpApp2).get("/workflows/v1/input-contract")
+        assert resp.status_code == 200
+        assert resp.json() == _RoutingInput.model_json_schema()
+
+    def test_unknown_entrypoint_returns_404(self) -> None:
+        from application_sdk.app.base import App
+
+        class _SingleEpApp2(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        resp = self._client(_SingleEpApp2).get(
+            "/workflows/v1/input-contract?entrypoint=nope"
+        )
+        assert resp.status_code == 404
+
+    def test_invalid_entrypoint_name_returns_400(self) -> None:
+        from application_sdk.app.base import App
+
+        class _SingleEpApp3(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        resp = self._client(_SingleEpApp3).get(
+            "/workflows/v1/input-contract?entrypoint=../etc"
+        )
+        assert resp.status_code == 400
+
+    @staticmethod
+    def _inject_generated_contract(ep_module: str, contract_cls: type):
+        """Register a fake app/generated/{ep}/_input.py:AppInputContract in
+        sys.modules so _published_input_contract can import it. Returns the list
+        of injected module paths for cleanup."""
+        import sys
+        import types
+
+        paths = ["app", "app.generated", f"app.generated.{ep_module}"]
+        for p in paths:
+            sys.modules.setdefault(p, types.ModuleType(p))
+        leaf = f"app.generated.{ep_module}._input"
+        mod = types.ModuleType(leaf)
+        mod.AppInputContract = contract_cls
+        sys.modules[leaf] = mod
+        return paths + [leaf]
+
+    def test_prefers_generated_app_input_contract(self) -> None:
+        """When app/generated/{ep}/_input.py:AppInputContract is importable, the
+        endpoint returns its (rich) schema, not the thin runtime input_type."""
+        import sys
+
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _GenContract(Input, allow_unbounded_fields=True):  # type: ignore[call-arg]
+            region: str = "region-us"
+
+        class _MultiEpGen(App):
+            @entrypoint
+            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def load(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        injected = self._inject_generated_contract("extract", _GenContract)
+        try:
+            resp = self._client(_MultiEpGen).get(
+                "/workflows/v1/input-contract?entrypoint=extract"
+            )
+            assert resp.status_code == 200
+            # rich generated contract, not the thin _RoutingInput
+            assert resp.json() == _GenContract.model_json_schema()
+            assert "region" in resp.json()["properties"]
+            # the entrypoint with no generated module still falls back
+            resp_load = self._client(_MultiEpGen).get(
+                "/workflows/v1/input-contract?entrypoint=load"
+            )
+            assert resp_load.json() == _RoutingInput.model_json_schema()
+        finally:
+            for p in injected:
+                sys.modules.pop(p, None)
+
+    def test_published_contract_falls_back_to_input_type(self) -> None:
+        """No generated module → _published_input_contract returns input_type."""
+        from application_sdk.app.entrypoint import EntryPointMetadata
+        from application_sdk.handler.service import _published_input_contract
+
+        ep = EntryPointMetadata(
+            name="no-generated-here",
+            input_type=_RoutingInput,
+            output_type=_RoutingOutput,
+            method_name="no_generated_here",
+        )
+        assert _published_input_contract(ep) is _RoutingInput
+
+
+class TestDefaultEntrypoint:
+    """Tests for default-entrypoint resolution (@entrypoint(default=True))."""
+
+    def setup_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        from application_sdk.app.registry import AppRegistry, TaskRegistry
+
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def test_resolver_rules(self) -> None:
+        from application_sdk.app.entrypoint import (
+            EntryPointMetadata,
+            _resolve_default_entrypoint,
+        )
+
+        def _ep(name: str, *, default: bool = False) -> EntryPointMetadata:
+            return EntryPointMetadata(
+                name=name,
+                input_type=_RoutingInput,
+                output_type=_RoutingOutput,
+                method_name=name,
+                default=default,
+            )
+
+        a, b = _ep("a"), _ep("b")
+        # single → that one
+        assert _resolve_default_entrypoint({"a": a}) is a
+        # multi, one default → the default
+        bd = _ep("b", default=True)
+        assert _resolve_default_entrypoint({"a": a, "b": bd}) is bd
+        # multi, no default → None
+        assert _resolve_default_entrypoint({"a": a, "b": b}) is None
+        # multi, ambiguous (>1 default) → None
+        ad = _ep("a", default=True)
+        assert _resolve_default_entrypoint({"a": ad, "b": bd}) is None
+        # empty → None
+        assert _resolve_default_entrypoint({}) is None
+
+    def test_multiple_defaults_raise_at_registration(self) -> None:
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import EntryPointContractError, entrypoint
+
+        with pytest.raises(EntryPointContractError, match="default entry point"):
+
+            class _BadApp(App):
+                @entrypoint(default=True)
+                async def extract(self, input: _AlphaInput) -> _AlphaOutput:
+                    return _AlphaOutput()
+
+                @entrypoint(default=True)
+                async def load(self, input: _BetaInput) -> _BetaOutput:
+                    return _BetaOutput()
+
+    def test_input_contract_resolves_marked_default(self) -> None:
+        """Multi-entry-point app: no ?entrypoint= resolves the default-marked one."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _DefaultEpApp(App):
+            @entrypoint
+            async def extract(self, input: _AlphaInput) -> _AlphaOutput:
+                return _AlphaOutput()
+
+            @entrypoint(default=True)
+            async def load(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        svc = create_app_handler_service(
+            _TestHandler(), app_name="default-ic", app_class=_DefaultEpApp
+        )
+        resp = TestClient(svc, raise_server_exceptions=False).get(
+            "/workflows/v1/input-contract"
+        )
+        assert resp.status_code == 200
+        # The default ('load') uses _RoutingInput — confirm that schema came back.
+        assert resp.json() == _RoutingInput.model_json_schema()
+
+    def test_start_resolves_marked_default_without_param(self) -> None:
+        """Multi-entry-point app: /start with no ?entrypoint= resolves the default."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _DefaultStartApp(App):
+            @entrypoint
+            async def extract(self, input: _AlphaInput) -> _AlphaOutput:
+                return _AlphaOutput()
+
+            @entrypoint(default=True)
+            async def load(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        svc = create_app_handler_service(
+            _TestHandler(),
+            app_name="default-start",
+            app_class=_DefaultStartApp,
+            temporal_host="temporal:7233",
+        )
+        mock_client = MagicMock()
+        mock_handle = MagicMock()
+        mock_handle.id = "wf-1"
+        mock_handle.result_run_id = "run-1"
+        mock_client.start_workflow = AsyncMock(return_value=mock_handle)
+        patcher = patch(
+            "application_sdk.handler.service._get_temporal_client",
+            new=AsyncMock(return_value=mock_client),
+        )
+        patcher.start()
+        try:
+            resp = TestClient(svc, raise_server_exceptions=False).post(
+                "/workflows/v1/start", json={"name": "x"}
+            )
+            assert resp.status_code == 200
+        finally:
+            patcher.stop()

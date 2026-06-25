@@ -1,0 +1,31 @@
+{
+  "id": "deploy",
+  "name": "Deploy Config Example",
+  "logo": "https://assets.atlan.com/assets/fullscreen-open.svg",
+  "config": {
+    "properties": {
+      "target": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "input",
+          "label": "Target",
+          "hidden": false,
+          "help": "What to process.",
+          "placeholder": "my-target",
+          "grid": 8
+        }
+      }
+    },
+    "steps": [
+      {
+        "title": "Configuration",
+        "description": "",
+        "id": "configuration",
+        "properties": [
+          "target"
+        ]
+      }
+    ]
+  }
+}

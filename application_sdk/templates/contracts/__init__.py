@@ -28,6 +28,7 @@ from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionOutput,
     ExtractionTaskInput,
+    ExtractionTaskOutput,
     FetchColumnsInput,
     FetchColumnsOutput,
     FetchDatabasesInput,
@@ -40,6 +41,7 @@ from application_sdk.templates.contracts.sql_metadata import (
     FetchTablesOutput,
     FetchViewsInput,
     FetchViewsOutput,
+    PrimeAuthOutput,
     TransformInput,
     TransformOutput,
 )
@@ -60,6 +62,7 @@ __all__ = [
     "ExtractionInput",
     "ExtractionOutput",
     "ExtractionTaskInput",
+    "ExtractionTaskOutput",
     "FetchColumnsInput",
     "FetchColumnsOutput",
     "FetchDatabasesInput",
@@ -72,6 +75,7 @@ __all__ = [
     "FetchTablesOutput",
     "FetchViewsInput",
     "FetchViewsOutput",
+    "PrimeAuthOutput",
     "TransformInput",
     "TransformOutput",
     # Incremental SQL

@@ -131,12 +131,17 @@ class MyConnector(App):
         fetch = await self.fetch_data(FetchInput(...))
         # FileReference passes through the contract automatically — no manual upload between tasks.
         transformed = await self.transform(TransformInput(data_file=fetch.data_file))
-        # Upload the final result at the end of run(), after all processing is complete.
+        # This explicit App.upload() call is required for any data Atlan system apps
+        # (publish, lineage, QI) must consume; the activity interceptor's auto-upload
+        # only writes to the customer-owned objectstore. See ADR-0014.
         up = await self.upload(UploadInput(local_path=transformed.output_path))
         return ExtractionOutput(output_file=up.ref, record_count=transformed.record_count)
 ```
 
 See [Storage](storage.md) for full `FileReference` and `StorageTier` documentation.
+`FileReference` handles task-to-task data passing; for hand-off to Atlan system apps,
+call `App.upload()` from `run()`. See [file-reference.md](file-reference.md) and
+[ADR-0014](../adr/0014-two-store-storage-architecture.md).
 
 ---
 

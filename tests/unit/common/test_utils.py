@@ -1,12 +1,10 @@
 import os
 import re
 from pathlib import Path
-from typing import Dict, List, Union
 from unittest.mock import mock_open, patch
 
 import pytest
 
-from application_sdk.common.error_codes import CommonError
 from application_sdk.common.sql_filters import (
     extract_database_names_from_regex_common,
     normalize_filters,
@@ -15,13 +13,14 @@ from application_sdk.common.sql_filters import (
     prepare_query,
     read_sql_files,
 )
+from application_sdk.common.sql_filters_errors import InvalidSqlFilterError
 
 
 class TestPrepareQuery:
     def test_successful_query_preparation(self) -> None:
         """Test successful query preparation with all parameters"""
         query = "SELECT * FROM {normalized_include_regex} WHERE {normalized_exclude_regex} {temp_table_regex_sql}"
-        workflow_args: Dict[str, Dict[str, Union[str, bool]]] = {
+        workflow_args: dict[str, dict[str, str | bool]] = {
             "metadata": {
                 "include-filter": '{"db1": ["schema1"]}',
                 "exclude-filter": '{"db2": ["schema2"]}',
@@ -42,7 +41,7 @@ class TestPrepareQuery:
     def test_query_preparation_without_filters(self) -> None:
         """Test query preparation without any filters"""
         query = "SELECT * FROM {normalized_include_regex}"
-        workflow_args: Dict[str, Dict[str, str]] = {"metadata": {}}
+        workflow_args: dict[str, dict[str, str]] = {"metadata": {}}
 
         result = prepare_query(query, workflow_args)
 
@@ -54,7 +53,7 @@ class TestPrepareQuery:
         query = (
             "SELECT * FROM {normalized_include_regex} WHERE {normalized_exclude_regex}"
         )
-        workflow_args: Dict[str, Dict[str, str]] = {
+        workflow_args: dict[str, dict[str, str]] = {
             "metadata": {
                 "include-filter": "",
                 "exclude-filter": "",
@@ -70,7 +69,7 @@ class TestPrepareQuery:
     def test_query_preparation_with_invalid_json(self) -> None:
         """Test query preparation with invalid JSON in filters"""
         query = "SELECT * FROM {normalized_include_regex}"
-        workflow_args: Dict[str, Dict[str, str]] = {
+        workflow_args: dict[str, dict[str, str]] = {
             "metadata": {
                 "include-filter": "invalid json",
             }
@@ -80,8 +79,8 @@ class TestPrepareQuery:
             result = prepare_query(query, workflow_args)
             mock_logger.error.assert_called_once_with(
                 "Error preparing query: error_code=%s error_message=%s",
-                CommonError.QUERY_PREPARATION_ERROR.code,
-                "Expecting value: line 1 column 1 (char 0)",
+                "INVALID_INPUT_SQL_FILTER_JSON",
+                "Invalid filter JSON",
                 exc_info=True,
             )
             assert result is None
@@ -89,7 +88,7 @@ class TestPrepareQuery:
     def test_query_preparation_with_missing_metadata(self) -> None:
         """Test query preparation with missing metadata"""
         query = "SELECT * FROM {normalized_include_regex}"
-        workflow_args: Dict[str, Dict[str, str]] = {}
+        workflow_args: dict[str, dict[str, str]] = {}
 
         result = prepare_query(query, workflow_args)
 
@@ -128,6 +127,18 @@ class TestPrepareFilters:
         assert "^db1\\..*$" == include_regex
         assert "^$" == exclude_regex
 
+    def test_prepare_filters_with_apitree_object_shape(self) -> None:
+        """APITree JSON strings normalize through the SQL helper path too."""
+        include_filter = '{"AwsDataCatalog": {"mswtest_2": {}, "mswtest_3": {}}}'
+        exclude_filter = "{}"
+
+        include_regex, exclude_regex = prepare_filters(include_filter, exclude_filter)
+
+        assert (
+            "^AwsDataCatalog\\.mswtest_2$|^AwsDataCatalog\\.mswtest_3$" == include_regex
+        )
+        assert "^$" == exclude_regex
+
     def test_prepare_filters_with_empty_include_and_filled_exclude(self) -> None:
         """Test prepare_filters with empty include filter but filled exclude filter"""
         include_filter = "{}"
@@ -142,7 +153,7 @@ class TestPrepareFilters:
 class TestNormalizeFilters:
     def test_normalize_filters_with_specific_schemas(self) -> None:
         """Test normalize_filters with specific schema list"""
-        filter_dict: Dict[str, Union[List[str], str]] = {
+        filter_dict: dict[str, list[str] | str] = {
             "db1": ["schema1", "schema2"],
             "db2": ["schema3"],
         }
@@ -154,26 +165,35 @@ class TestNormalizeFilters:
 
     def test_normalize_filters_with_wildcard(self) -> None:
         """Test normalize_filters with wildcard schema"""
-        filter_dict: Dict[str, Union[List[str], str]] = {"db1": "*"}
+        filter_dict: dict[str, list[str] | str] = {"db1": "*"}
         result = normalize_filters(filter_dict, True)
 
         assert result == ["^db1\\..*$"]
 
     def test_normalize_filters_with_empty_list(self) -> None:
         """Test normalize_filters with empty schema list"""
-        filter_dict: Dict[str, Union[List[str], str]] = {"db1": []}
+        filter_dict: dict[str, list[str] | str] = {"db1": []}
         result = normalize_filters(filter_dict, True)
 
         assert result == ["^db1\\..*$"]
 
     def test_normalize_filters_with_regex_patterns(self) -> None:
         """Test normalize_filters with anchored regex patterns in keys/values."""
-        filter_dict: Dict[str, Union[List[str], str]] = {"^db1$": ["^schema1$"]}
+        filter_dict: dict[str, list[str] | str] = {"^db1$": ["^schema1$"]}
         result = normalize_filters(filter_dict, True)
 
         # ``^``/``$`` are stripped from both the db key and each schema entry,
         # then re-anchored on the assembled segment.
         assert result == ["^db1\\.schema1$"]
+
+    def test_normalize_filters_with_apitree_object_shape(self) -> None:
+        filter_dict = {"AwsDataCatalog": {"mswtest_2": {}, "mswtest_3": {}}}
+        result = normalize_filters(filter_dict, True)
+
+        assert result == [
+            "^AwsDataCatalog\\.mswtest_2$",
+            "^AwsDataCatalog\\.mswtest_3$",
+        ]
 
     def test_normalize_filters_wildcard_and_empty_list_equivalent(self) -> None:
         """``"*"`` and an empty list both mean "every schema in this db"."""
@@ -909,7 +929,7 @@ def test_read_sql_files_with_multiple_files(tmp_path: Path):
     ):
         # Configure glob to return our mock files
         mock_glob.return_value = [
-            os.path.join("/mock/path", file_path) for file_path in mock_files.keys()
+            os.path.join("/mock/path", file_path) for file_path in mock_files
         ]
 
         # Configure file open to return different content for different files
@@ -981,7 +1001,7 @@ def test_read_sql_files_case_sensitivity():
         patch("os.path.dirname", return_value="/mock/path"),
     ):
         mock_glob.return_value = [
-            os.path.join("/mock/path", file_path) for file_path in mock_files.keys()
+            os.path.join("/mock/path", file_path) for file_path in mock_files
         ]
 
         mock_file = mock_file_open.return_value
@@ -1013,13 +1033,14 @@ class TestParseFilterInput:
         assert parse_filter_input('{"db1": ["s1", "s2"]}') == {"db1": ["s1", "s2"]}
 
     def test_invalid_json_strings(self) -> None:
-        """Test invalid JSON strings raise CommonError."""
+        """Test invalid JSON strings raise InvalidSqlFilterError."""
 
-        with pytest.raises(CommonError, match="Invalid filter JSON"):
+        with pytest.raises(InvalidSqlFilterError) as exc_info:
             parse_filter_input("invalid json")
+        assert exc_info.value.code == "INVALID_INPUT_SQL_FILTER_JSON"
 
-        with pytest.raises(CommonError, match="Invalid filter JSON"):
+        with pytest.raises(InvalidSqlFilterError):
             parse_filter_input('{"invalid": }')
 
-        with pytest.raises(CommonError, match="Invalid filter JSON"):
+        with pytest.raises(InvalidSqlFilterError):
             parse_filter_input("not json at all")

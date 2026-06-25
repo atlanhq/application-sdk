@@ -2,12 +2,17 @@ import logging
 import re
 import subprocess
 import sys
-from typing import List, Tuple
 
 import semver
 
+# Commits scoped to sub-packages that manage their own versioning are dropped
+# from the SDK bump walk. Path-only exclusion in git log doesn't cover mixed
+# PRs (a squash commit that touches both SDK files and sub-package files), so
+# we also filter by conventional-commit scope on the subject line.
+_SUBPKG_RE = re.compile(r"^[a-z]+\((contract-toolkit|conformance)\)!?:")
 
-def get_commits_since_last_tag() -> List[str]:
+
+def get_commits_since_last_tag() -> list[str]:
     """Get all commits since the last non release-candidate tag.
 
     Returns:
@@ -16,15 +21,22 @@ def get_commits_since_last_tag() -> List[str]:
     """
     try:
         # Get the last non release-candidate tag or initial commit if no tags exist
-        last_tag_cmd = "git describe --tags --abbrev=0 --exclude='*-rc*' 2>/dev/null || git rev-list --max-parents=0 HEAD"
+        last_tag_cmd = "git describe --tags --abbrev=0 --match='v[0-9]*' --exclude='*rc*' 2>/dev/null || git rev-list --max-parents=0 HEAD"
         last_tag = subprocess.check_output(last_tag_cmd, shell=True).decode().strip()
         logging.info(f"Last tag found: {last_tag}")
 
-        # Get all commits since that reference, including both subject and description
-        cmd = f"git log {last_tag}..HEAD --pretty=format:%s%n%b"
+        # Get all commits since that reference, excluding sub-packages that manage
+        # their own versioning and changelogs (contract-toolkit, conformance).
+        cmd = (
+            f"git log {last_tag}..HEAD --pretty=format:%s%n%b"
+            " -- . ':(exclude)contract-toolkit' ':(exclude)packages/conformance'"
+        )
         commits = subprocess.check_output(cmd, shell=True).decode().strip().split("\n")
         # Filter out empty lines that may appear between commits
         commits = [commit for commit in commits if commit.strip()]
+        # Drop sub-package scoped commits that slipped through the path filter
+        # (e.g. a mixed PR whose squash subject is feat(conformance): …).
+        commits = [c for c in commits if not _SUBPKG_RE.match(c.splitlines()[0])]
         logging.info(f"Found {len(commits)} commits since last tag: {last_tag}")
         return commits
 
@@ -33,7 +45,7 @@ def get_commits_since_last_tag() -> List[str]:
         raise e
 
 
-def parse_conventional_commits(commits: List[str]) -> Tuple[bool, bool, bool]:
+def parse_conventional_commits(commits: list[str]) -> tuple[bool, bool, bool]:
     """Parse conventional commit messages to determine version bump type.
 
     Args:
@@ -52,17 +64,17 @@ def parse_conventional_commits(commits: List[str]) -> Tuple[bool, bool, bool]:
 
     breaking_pattern = "!:"
     breaking_change = "BREAKING CHANGE:"
-    feature_pattern = "feat"
-    fix_pattern = "fix"
+    feature_pattern = r"^feat[(!:]"
+    fix_pattern = r"^fix[(!:]"
 
     for commit in commits:
-        if re.search(breaking_pattern, commit, re.MULTILINE | re.IGNORECASE):
+        if re.search(
+            breaking_pattern, commit, re.MULTILINE | re.IGNORECASE
+        ) or re.search(breaking_change, commit, re.MULTILINE | re.IGNORECASE):
             is_breaking = True
-        elif re.search(breaking_change, commit, re.MULTILINE | re.IGNORECASE):
-            is_breaking = True
-        elif re.search(feature_pattern, commit, re.IGNORECASE):
+        elif re.search(feature_pattern, commit, re.MULTILINE | re.IGNORECASE):
             is_feature = True
-        elif re.search(fix_pattern, commit, re.IGNORECASE):
+        elif re.search(fix_pattern, commit, re.MULTILINE | re.IGNORECASE):
             is_fix = True
 
     logging.info(
@@ -72,7 +84,7 @@ def parse_conventional_commits(commits: List[str]) -> Tuple[bool, bool, bool]:
 
 
 def calculate_version_bump(
-    current_version: str, commits: List[str], current_branch: str
+    current_version: str, commits: list[str], current_branch: str
 ) -> str:
     """Calculate the next version based on conventional commits, semver rules, and branch name.
 

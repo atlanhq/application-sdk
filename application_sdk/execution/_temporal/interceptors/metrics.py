@@ -24,6 +24,10 @@ from temporalio.worker import (
     WorkflowInterceptorClassInput,
 )
 
+from application_sdk.errors.categories import Audience, FailureCategory
+from application_sdk.execution._temporal.interceptors.log import _extract_failure_attrs
+from application_sdk.observability import resource_sampler
+
 _METER_NAME = "application_sdk.temporal"
 
 
@@ -56,6 +60,22 @@ def _workflow_duration():
     return _INSTRUMENTS["wf_dur"]
 
 
+def _workflow_failures_classified():
+    if "wf_fail_cls" not in _INSTRUMENTS:
+        _INSTRUMENTS["wf_fail_cls"] = _meter().create_counter(
+            "temporal.workflow.failures.classified",
+            unit="1",
+            description=(
+                "Workflow failures partitioned by failure.category and "
+                "failure.audience. Emitted for every failure across all "
+                "audiences (USER, PLATFORM, APP_OWNER); consumers filter at "
+                "query time — e.g. drop USER for actionable alerts, or keep "
+                "USER for customer-failure dashboards."
+            ),
+        )
+    return _INSTRUMENTS["wf_fail_cls"]
+
+
 def _activity_executions():
     if "act_exec" not in _INSTRUMENTS:
         _INSTRUMENTS["act_exec"] = _meter().create_counter(
@@ -86,6 +106,56 @@ def _activity_errors():
     return _INSTRUMENTS["act_err"]
 
 
+def _activity_cpu_seconds():
+    if "act_cpu" not in _INSTRUMENTS:
+        _INSTRUMENTS["act_cpu"] = _meter().create_histogram(
+            "temporal.activity.cpu_seconds",
+            unit="s",
+            description=(
+                "CPU time (user + system) consumed per activity execution. "
+                "Process-level delta between activity start and end — accurate "
+                "for workers running one activity at a time; over-attributes "
+                "per activity when activities run concurrently (sum is always correct)."
+            ),
+        )
+    return _INSTRUMENTS["act_cpu"]
+
+
+def _activity_mem_gib_seconds():
+    if "act_mem" not in _INSTRUMENTS:
+        _INSTRUMENTS["act_mem"] = _meter().create_histogram(
+            "temporal.activity.mem_gib_seconds",
+            unit="GiBy.s",
+            description=(
+                "Memory-time integral per activity execution: average RSS in GiB "
+                "multiplied by wall-clock duration in seconds. Same process-level "
+                "scope caveat as temporal.activity.cpu_seconds."
+            ),
+        )
+    return _INSTRUMENTS["act_mem"]
+
+
+def _classify_failure(exc: BaseException | None) -> dict[str, str]:
+    """Extract bounded {category, audience} labels for the classified counter.
+
+    Reuses :func:`_extract_failure_attrs` from the log interceptor so log and
+    metric paths agree on classification. When extraction yields no SDK-typed
+    failure (raw ``ValueError`` / 3rd-party exception), falls back to
+    ``INTERNAL`` / ``APP_OWNER`` per the SDK doctrine that unowned failures
+    default to the app team (see :class:`Audience` docstring).
+    """
+    attrs = _extract_failure_attrs(exc)
+    if attrs:
+        return {
+            "failure.category": attrs["failure.category"],
+            "failure.audience": attrs["failure.audience"],
+        }
+    return {
+        "failure.category": FailureCategory.INTERNAL.value,
+        "failure.audience": Audience.APP_OWNER.value,
+    }
+
+
 class _MetricsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
     async def execute_workflow(self, input: ExecuteWorkflowInput) -> Any:
         if workflow.unsafe.is_replaying():
@@ -97,17 +167,28 @@ class _MetricsWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         }
         start_ns = time.monotonic_ns()
         status = "OK"
+        exc_caught: BaseException | None = None
         try:
             return await self.next.execute_workflow(input)
-        except BaseException:
+        # conformance: ignore[E004] measurement wrapper; re-raises immediately after capturing exc for metric tagging
+        except BaseException as exc:
             status = "ERROR"
+            exc_caught = exc
             raise
         finally:
             duration_s = (time.monotonic_ns() - start_ns) / 1_000_000_000
             tagged = {**attrs, "otel.status_code": status}
+            # conformance: ignore[E004] best-effort observability; metric emission must never block or raise in a workflow finally block
             try:
                 _workflow_executions().add(1, tagged)
                 _workflow_duration().record(duration_s, tagged)
+                if status == "ERROR":
+                    classified = _classify_failure(exc_caught)
+                    _workflow_failures_classified().add(
+                        1,
+                        {**attrs, **classified},
+                    )
+            # conformance: ignore[E004] best-effort observability; metric emission must never block or raise in a workflow finally block
             except Exception:  # noqa: S110 — best-effort observability; never block the workflow on metric emission
                 pass
 
@@ -120,17 +201,21 @@ class _MetricsActivityInboundInterceptor(ActivityInboundInterceptor):
             "temporal.task_queue": info.task_queue or "",
         }
         start_ns = time.monotonic_ns()
+        start_sample = resource_sampler.sample()
         status = "OK"
         exception_class = ""
         try:
             return await self.next.execute_activity(input)
+        # conformance: ignore[E004] measurement wrapper; re-raises immediately after capturing exc class for metric tagging
         except BaseException as exc:
             status = "ERROR"
             exception_class = type(exc).__name__
             raise
         finally:
             duration_s = (time.monotonic_ns() - start_ns) / 1_000_000_000
+            end_sample = resource_sampler.sample()
             tagged = {**attrs, "otel.status_code": status}
+            # conformance: ignore[E004] best-effort observability; metric emission must never block or raise in an activity finally block
             try:
                 _activity_executions().add(1, tagged)
                 _activity_duration().record(duration_s, tagged)
@@ -142,6 +227,13 @@ class _MetricsActivityInboundInterceptor(ActivityInboundInterceptor):
                             "exception.type": exception_class or "Unknown",
                         },
                     )
+                if start_sample is not None and end_sample is not None:
+                    cpu_s, mem_gib_s = resource_sampler.compute_deltas(
+                        start_sample, end_sample, duration_s
+                    )
+                    _activity_cpu_seconds().record(cpu_s, tagged)
+                    _activity_mem_gib_seconds().record(mem_gib_s, tagged)
+            # conformance: ignore[E004] best-effort observability; metric emission must never block or raise in an activity finally block
             except Exception:  # noqa: S110 — best-effort observability; never block the activity on metric emission
                 pass
 
@@ -152,9 +244,15 @@ class MetricsInterceptor(Interceptor):
     Instruments:
       * ``temporal.workflow.executions`` (counter)
       * ``temporal.workflow.duration`` (histogram, seconds)
+      * ``temporal.workflow.failures.classified`` (counter, partitioned by
+        ``failure.category`` and ``failure.audience`` — consumers filter at
+        query time, e.g. drop ``failure_audience="USER"`` for actionable
+        alerts)
       * ``temporal.activity.executions`` (counter)
       * ``temporal.activity.duration`` (histogram, seconds)
       * ``temporal.activity.errors`` (counter, partitioned by ``exception.type``)
+      * ``temporal.activity.cpu_seconds`` (histogram) — CPU time consumed per activity
+      * ``temporal.activity.mem_gib_seconds`` (histogram) — memory-time integral per activity
 
     Independent of, and complementary to, Temporal's Rust-core metrics —
     those measure scheduling / cache / poll latencies; these measure business

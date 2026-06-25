@@ -53,11 +53,14 @@ import asyncio
 import os
 import warnings
 from abc import abstractmethod
-from typing import Any, ClassVar, List, Optional
+from typing import Any, ClassVar
 
 from application_sdk.app.task import task
-from application_sdk.common.exc_utils import rewrap
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.templates._template_errors import (
+    IncrementalSqlMetadataExtractorNotImplementedError,
+    SqlOutputPathMissingError,
+)
 from application_sdk.templates.contracts.incremental_sql import (
     ExecuteColumnBatchInput,
     ExecuteColumnBatchOutput,
@@ -133,8 +136,8 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             ``None`` means fall back to full SQL.
     """
 
-    incremental_table_sql: ClassVar[Optional[str]] = None
-    incremental_column_sql: ClassVar[Optional[str]] = None
+    incremental_table_sql: ClassVar[str | None] = None
+    incremental_column_sql: ClassVar[str | None] = None
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
@@ -165,8 +168,9 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         filters, paths). Use ``input.connection``, ``input.credential_ref``,
         ``input.exclude_filter``, and ``input.include_filter`` as appropriate.
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} must implement fetch_databases()."
+        raise IncrementalSqlMetadataExtractorNotImplementedError(
+            message=f"{type(self).__name__} must implement fetch_databases().",
+            operation="fetch_databases",
         )
 
     @task(timeout_seconds=1800)
@@ -176,8 +180,9 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         Override this method in your connector subclass to execute the
         schema-listing SQL and return the results.
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} must implement fetch_schemas()."
+        raise IncrementalSqlMetadataExtractorNotImplementedError(
+            message=f"{type(self).__name__} must implement fetch_schemas().",
+            operation="fetch_schemas",
         )
 
     @task(timeout_seconds=1800)
@@ -223,9 +228,12 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         mutation would bleed between concurrent executions. Always resolve SQL into
         a local variable.
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} must implement fetch_tables(). "
-            "See the docstring for the incremental SQL switching pattern."
+        raise IncrementalSqlMetadataExtractorNotImplementedError(
+            message=(
+                f"{type(self).__name__} must implement fetch_tables(). "
+                "See the docstring for the incremental SQL switching pattern."
+            ),
+            operation="fetch_tables",
         )
 
     @task(timeout_seconds=1800)
@@ -252,8 +260,9 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                     raw_path = os.path.join(input.output_path, "raw", input.typename)
                 # ... read from raw_path and write to transformed/ ...
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} must implement transform_data()."
+        raise IncrementalSqlMetadataExtractorNotImplementedError(
+            message=f"{type(self).__name__} must implement transform_data().",
+            operation="transform_data",
         )
 
     # ------------------------------------------------------------------
@@ -263,7 +272,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
     @abstractmethod
     def build_incremental_column_sql(
         self,
-        table_ids: List[str],
+        table_ids: list[str],
         ctx: IncrementalRunContext,
     ) -> str:
         """Build the SQL query string for extracting columns for a batch of tables.
@@ -285,8 +294,9 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         Returns:
             Fully rendered SQL query string ready for execution.
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} must implement build_incremental_column_sql()."
+        raise IncrementalSqlMetadataExtractorNotImplementedError(
+            message=f"{type(self).__name__} must implement build_incremental_column_sql().",
+            operation="build_incremental_column_sql",
         )
 
     # ------------------------------------------------------------------
@@ -296,7 +306,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
     def resolve_database_placeholders(
         self,
         sql: str,
-        input: FetchTablesIncrementalInput,  # noqa: A002
+        input: FetchTablesIncrementalInput,
     ) -> str:
         """Replace database-specific placeholders in SQL templates.
 
@@ -354,9 +364,12 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                 "columns will be extracted per-batch by execute_single_column_batch()"
             )
             return FetchColumnsOutput()
-        raise NotImplementedError(
-            f"{type(self).__name__} must implement fetch_columns() for full extraction. "
-            "See the docstring for the expected implementation pattern."
+        raise IncrementalSqlMetadataExtractorNotImplementedError(
+            message=(
+                f"{type(self).__name__} must implement fetch_columns() for full extraction. "
+                "See the docstring for the expected implementation pattern."
+            ),
+            operation="fetch_columns",
         )
 
     # ------------------------------------------------------------------
@@ -514,8 +527,8 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         backfill_count_for_log = len(backfill_qns) if backfill_qns else 0
         logger.info("Found %d tables needing backfill", backfill_count_for_log)
 
-        # Step 4: Get tables needing column extraction using Daft
-        filtered_df, changed_count, backfill_count, _no_change_count = (
+        # Step 4: Get tables needing column extraction using DuckDB
+        filtered_rows, changed_count, backfill_count, _no_change_count = (
             get_tables_needing_column_extraction(transformed_dir, backfill_qns)
         )
 
@@ -541,7 +554,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         total_tables_batched = 0
         current_batch: list[str] = []
 
-        for row in filtered_df.select("table_id").iter_rows():
+        for row in filtered_rows:
             current_batch.append(row["table_id"])
 
             if len(current_batch) >= batch_size:
@@ -606,7 +619,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         )
 
         if not input.output_path:
-            raise ValueError("output_path is required in ExecuteColumnBatchInput")
+            raise SqlOutputPathMissingError()
 
         # Reconstruct IncrementalRunContext from input fields for SQL building
         ctx = IncrementalRunContext(
@@ -674,7 +687,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
     async def execute_column_sql(
         self,
         sql: str,
-        input: ExecuteColumnBatchInput,  # noqa: A002
+        input: ExecuteColumnBatchInput,
         ctx: IncrementalRunContext,
     ) -> int:
         """Execute a column SQL query and return the record count.
@@ -682,7 +695,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         This is a helper for ``execute_single_column_batch``. Override in
         subclasses to hook into the query execution layer.
 
-        The default implementation raises ``NotImplementedError`` — subclasses
+        The default implementation raises ``UnimplementedError`` — subclasses
         that use a SQL client should override this.
 
         Args:
@@ -693,9 +706,12 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         Returns:
             Number of column records extracted.
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} must implement execute_column_sql() "
-            "to execute the SQL built by build_incremental_column_sql()."
+        raise IncrementalSqlMetadataExtractorNotImplementedError(
+            message=(
+                f"{type(self).__name__} must implement execute_column_sql() "
+                "to execute the SQL built by build_incremental_column_sql()."
+            ),
+            operation="execute_column_sql",
         )
 
     @task(timeout_seconds=3600)
@@ -772,8 +788,13 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                 incremental_diff_files=result.incremental_diff_files,
             )
 
+        # conformance: ignore[E004] top-level task handler; re-raises as typed IncrementalStateWriteError after wrapping cause
         except Exception as e:
-            raise rewrap(e, "Failed to write current-state") from e
+            from application_sdk.templates._template_errors import (  # noqa: PLC0415
+                IncrementalStateWriteError,
+            )
+
+            raise IncrementalStateWriteError(cause=e) from e
         finally:
             cleanup_previous_state(previous_state_dir)
 

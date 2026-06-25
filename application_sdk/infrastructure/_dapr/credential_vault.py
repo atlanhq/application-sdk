@@ -72,6 +72,7 @@ class DaprCredentialVault:
     ) -> None:
         # Deferred import: circular dependency with constants module
         from application_sdk.constants import (  # noqa: PLC0415 — cold path: only on credential resolution
+            DEPLOYMENT_OBJECT_STORE_NAME,
             SECRET_STORE_NAME,
             UPSTREAM_OBJECT_STORE_NAME,
         )
@@ -80,9 +81,33 @@ class DaprCredentialVault:
         )
 
         self._client = client
-        self._upstream = DaprBinding(
-            client, upstream_binding_name or UPSTREAM_OBJECT_STORE_NAME
-        )
+        if upstream_binding_name is not None:
+            credential_binding = upstream_binding_name
+        else:
+            # Mirror App.upload()/download(): use the upstream store when it is
+            # configured (component YAML present), fall back to the deployment
+            # store otherwise.  Heracles writes credential configs to whichever
+            # store the app is pointed at; in non-SDR / local / CI environments
+            # that is the deployment store.
+            import os  # noqa: PLC0415 — cold path
+            from pathlib import Path  # noqa: PLC0415 — cold path
+
+            from application_sdk.storage.binding import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+                is_binding_configured,
+            )
+
+            components_dir = Path(
+                os.environ.get("DAPR_COMPONENTS_PATH", "./components")
+            )
+            upstream_configured = is_binding_configured(
+                UPSTREAM_OBJECT_STORE_NAME, components_dir=components_dir
+            )
+            credential_binding = (
+                UPSTREAM_OBJECT_STORE_NAME
+                if upstream_configured
+                else DEPLOYMENT_OBJECT_STORE_NAME
+            )
+        self._upstream = DaprBinding(client, credential_binding)
         self._secret_store_name: str = secret_store_name or SECRET_STORE_NAME
 
     async def get_credentials(self, credential_guid: str) -> dict[str, Any]:
@@ -111,6 +136,11 @@ class DaprCredentialVault:
             try:
                 credential_source = _CredentialSource(credential_source_str)
             except ValueError:
+                logger.warning(
+                    "Unknown credentialSource=%r; defaulting to DIRECT",
+                    credential_source_str,
+                    exc_info=True,
+                )
                 credential_source = _CredentialSource.DIRECT
 
             secret_path = credential_config.get("secret-path")
@@ -148,6 +178,7 @@ class DaprCredentialVault:
 
         except CredentialVaultError:
             raise
+        # conformance: ignore[E004] outer re-raise wraps all failures into CredentialVaultError; no logging needed here
         except Exception as e:
             raise CredentialVaultError(
                 f"Failed to resolve credentials for {credential_guid}: {e}",
@@ -221,10 +252,6 @@ class DaprCredentialVault:
         Returns ``{}`` in local-environment deployments to avoid secret store
         dependency during development.
         """
-        # Deferred import: circular dependency
-        from application_sdk.common.exc_utils import (  # noqa: PLC0415 — circular: common.exc_utils imports observability
-            rewrap,
-        )
         from application_sdk.constants import (  # noqa: PLC0415 — cold path: only on credential resolution
             DEPLOYMENT_NAME,
             LOCAL_ENVIRONMENT,
@@ -237,8 +264,13 @@ class DaprCredentialVault:
         try:
             result = await self._client.get_secret(store_name=store, key=secret_key)
             return process_secret_data(result)
+        # conformance: ignore[E004] re-raises as typed SecretFetchError; caller logs or propagates the typed error
         except Exception as e:
-            raise rewrap(e, "Failed to fetch secret (component=%s)" % store) from e
+            from application_sdk.infrastructure._dapr._dapr_errors import (  # noqa: PLC0415
+                SecretFetchError,
+            )
+
+            raise SecretFetchError(component=store, cause=e) from e
 
     def _get_local_secret(self, secret_key: str) -> dict[str, Any]:
         """Read secret from the local secrets file for development.
@@ -258,6 +290,7 @@ class DaprCredentialVault:
             if not secret:
                 logger.debug("No local secret for key %s", secret_key)
             return secret
+        # conformance: ignore[E004] exc_info=True already present on the logger.debug call below
         except Exception:
             logger.debug(
                 "Failed to read local secret file for key %s",
@@ -284,7 +317,14 @@ class DaprCredentialVault:
                         if v is None or v == "":
                             continue
                         collected[k] = v
+            # conformance: ignore[E004] exc_info=True already present on the logger.debug call below
             except Exception as e:
+                logger.debug(
+                    "Secret resolution failed for '%s' (value=%s)",
+                    label,
+                    value,
+                    exc_info=True,
+                )
                 failed_lookups.append("  '%s' → '%s': %s" % (label, value, e))
 
         for field, value in credential_config.items():
@@ -322,8 +362,10 @@ def create_dapr_credential_vault(
 
     Args:
         client: Dapr client instance.
-        upstream_binding_name: Dapr binding component for the upstream S3 store.
-            Defaults to the ``UPSTREAM_OBJECT_STORE_NAME`` constant.
+        upstream_binding_name: Dapr binding component for the credential config store.
+            Defaults to ``UPSTREAM_OBJECT_STORE_NAME`` when its component YAML is
+            present (SDR / production), otherwise falls back to
+            ``DEPLOYMENT_OBJECT_STORE_NAME`` (local / CI / non-SDR).
         secret_store_name: Dapr secret store component name.
             Defaults to the ``SECRET_STORE_NAME`` constant.
 

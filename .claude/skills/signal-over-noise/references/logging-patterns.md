@@ -9,6 +9,37 @@ Framework-agnostic — patterns apply to stdlib logging, structlog, loguru, and 
 The skill's Phase 2 Step 2.1 discovers which framework the project uses before applying
 framework-dependent classifications.
 
+> **Detection is now delegated to the conformance suite.**
+> Run `uv run atlan-application-sdk-conformance detect --repo . --series L` for deterministic,
+> AST-based findings with SARIF output. This file retains its value for the fix-authoring pass
+> (Stage 2): fix templates (FT-Lx), severity rationale, and classification notes below.
+
+## Skill ↔ Suite ID crosswalk
+
+| Skill ID | Suite ID | Rule name |
+|---|---|---|
+| L1 | L001 | FStringInLogMessage |
+| L2 | L002 | InconsistentLoggerFactory |
+| L3 | L003 | ExtraKwargInNonStdlibCall |
+| L4 | L004 | MissingExcInfo |
+| L5 | L005 | PrintInProductionCode |
+| L6 | L006 | InfoInLoop |
+| L7 | L007 | CriticalCall |
+| L8 | L008 | UnguardedExpensiveDebug |
+| L9 | L009 | WarnThenRaise |
+| L10 | L010 | CredentialInLog |
+| L11 | L011 | StringConcatInLogMessage |
+| L13 | L012 | StdlibExtraReservedKeyCollision |
+| L14 | L013 | StdlibArbitraryKwargs |
+| L15 | L014 | StructlogEventKwargOverwrite |
+| L16 | L015 | DictConfigDisableExistingLoggers |
+| L17 | L016 | BasicConfigNoopAfterFirstCall |
+| L18 | L017 | LoggerExceptionUsage |
+| L24 | L018 | KwargsInApplicationLogCalls |
+| L19 | L019 | DiscardedBindResult |
+| L23 | L020 | DeprecatedLoggingWarn |
+| L12, L20, L21, L22 | — | not ported |
+
 ---
 
 ## Pattern Catalogue

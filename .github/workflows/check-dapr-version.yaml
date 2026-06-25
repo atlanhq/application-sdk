@@ -1,0 +1,236 @@
+name: Sync Dapr Version from Base Image
+
+# Drives the ``__dapr_version`` pin in ``application_sdk/version.py`` from the
+# daprd that actually ships in the SDK's published runtime base image — NOT from
+# Dapr's upstream GitHub releases.
+#
+# The previous version of this workflow ran on a weekly schedule and watched
+# dapr/dapr's ``releases/latest``. That upstream version could drift from the
+# daprd that actually ships inside the container (which is set by Chainguard
+# Custom Assembly on the ``app-framework-golden`` base the runtime image is
+# built FROM), so the pin and the runtime could disagree. This workflow flips
+# the source of truth: the daprd in the shipped runtime image now drives the
+# pin (BLDX-1467).
+#
+# Source of truth: ``registry.atlan.com/public/app-runtime-base:3`` — the SDK's
+# own runtime base image (built FROM the Chainguard golden base, so its daprd is
+# identical). It is a **public** repo, so we pull it anonymously — no Chainguard
+# or Harbor credentials needed. This is the same image the Hourly Security Scan
+# (``daily-security-scan.yml``) reads.
+#
+# Trigger: a new SDK version is released and the runtime image is rebuilt
+# (``release: published`` — the same event ``harbor-release.yaml`` rebuilds the
+# image on), plus manual dispatch. On each run it:
+#   1. Pulls the runtime base image and reads daprd's reported version (raw-logged).
+#   2. Compares it to the pinned ``__dapr_version``.
+#   3. Opens a PR bumping the pin when they differ.
+#
+# Caveat: ``:3`` is a mutable major tag, so the baked daprd can change between
+# SDK releases; the release-triggered sync lags until the next release. Use
+# ``workflow_dispatch`` to reconcile the pin on demand in the meantime.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-dapr-version
+  cancel-in-progress: false
+
+env:
+  # The SDK's own published runtime base image — built FROM the Chainguard
+  # golden base, so its daprd is identical. Public repo: pulled anonymously,
+  # no Chainguard/Harbor creds. ``:3`` is the current major tag, matching the
+  # Hourly Security Scan (daily-security-scan.yml).
+  TARGET_IMAGE: registry.atlan.com/public/app-runtime-base:3
+
+jobs:
+  sync:
+    name: Sync daprd pin from runtime base image
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Check out with the org PAT so the bump branch we push triggers CI on
+          # the opened PR (a push made with the default GITHUB_TOKEN would not).
+          token: ${{ secrets.ORG_PAT_GITHUB }}
+
+      - name: Read pinned daprd version
+        id: pinned
+        run: |
+          set -euo pipefail
+          ver=$(grep '^__dapr_version' application_sdk/version.py | cut -d'"' -f2)
+          if [[ -z "$ver" ]]; then
+            echo "::error::Failed to parse __dapr_version from application_sdk/version.py"
+            exit 1
+          fi
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Extract daprd version from runtime base image
+        id: baked
+        env:
+          IMAGE: ${{ env.TARGET_IMAGE }}
+        run: |
+          set -euo pipefail
+          # Public image — anonymous pull, no registry login needed (same as the
+          # Hourly Security Scan).
+          docker pull "$IMAGE"
+          # daprd lives at /usr/bin/daprd in the runtime base (inherited from the
+          # golden base; the SDK Dockerfile symlinks it). Override the entrypoint
+          # to invoke it directly.
+          raw=$(docker run --rm --entrypoint /usr/bin/daprd "$IMAGE" --version 2>&1 || true)
+          # Log the raw output unconditionally: this satisfies the "log it"
+          # requirement and reveals the true format if a future daprd build
+          # changes it.
+          echo "::group::daprd --version (raw)"
+          echo "$raw"
+          echo "::endgroup::"
+          # Tolerant parse: take the first semver in the output and strip any
+          # leading 'v' so it matches the bare x.y.z stored in __dapr_version.
+          # Don't anchor on a prefix label that may differ across daprd builds.
+          ver=$(printf '%s\n' "$raw" | grep -oE 'v?[0-9]+\.[0-9]+\.[0-9]+' | head -n1 | sed 's/^v//')
+          if [[ ! "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Could not extract a valid daprd version from the base image (see raw output above)"
+            exit 1
+          fi
+          echo "::notice::Base image daprd version: $ver"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Compare
+        id: compare
+        run: |
+          set -euo pipefail
+          pinned="${{ steps.pinned.outputs.version }}"
+          baked="${{ steps.baked.outputs.version }}"
+          echo "pinned=$pinned" >> "$GITHUB_OUTPUT"
+          echo "baked=$baked" >> "$GITHUB_OUTPUT"
+          if [[ "$pinned" == "$baked" ]]; then
+            echo "match=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::daprd pin is in sync with the base image ($pinned)"
+          else
+            echo "match=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::daprd pin $pinned differs from base image $baked"
+          fi
+
+      - name: Bump version.py
+        if: steps.compare.outputs.match == 'false'
+        run: |
+          set -euo pipefail
+          pinned="${{ steps.compare.outputs.pinned }}"
+          baked="${{ steps.compare.outputs.baked }}"
+          sed -i "s/^__dapr_version: str = \"${pinned}\"$/__dapr_version: str = \"${baked}\"/" \
+            application_sdk/version.py
+          # Confirm exactly one line changed; bail if sed missed.
+          new=$(grep '^__dapr_version' application_sdk/version.py | cut -d'"' -f2)
+          if [[ "$new" != "$baked" ]]; then
+            echo "::error::sed did not rewrite version.py as expected (got '$new', want '$baked')"
+            exit 1
+          fi
+
+      - name: Open PR if drift detected
+        if: steps.compare.outputs.match == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+        run: |
+          set -euo pipefail
+          git config --global user.name 'atlan-ci'
+          git config --global user.email 'it@atlan.com'
+
+          baked="${{ steps.compare.outputs.baked }}"
+          pinned="${{ steps.compare.outputs.pinned }}"
+          image="${{ env.TARGET_IMAGE }}"
+          # PR always targets main. On a ``release: published`` event the trigger
+          # ref is the tag (e.g. refs/tags/v3.18.0), not a branch — so we cannot
+          # use github.ref_name as the base. The release tag is cut from main, so
+          # the checked-out HEAD already matches main's tip at release time.
+          base="main"
+          branch="chore/sync-daprd-${baked}"
+
+          # Branch is per-version so re-runs against the same baked version land
+          # back on the existing PR rather than churning a new one each trigger.
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            git fetch origin "$branch"
+            git checkout "$branch"
+            # Defensive re-apply: normally a no-op (the existing branch tip already
+            # has __dapr_version = ${baked}). Only does anything in the rare case
+            # where that branch's version.py drifted from ${baked} — e.g. a manual
+            # edit on the branch.
+            sed -i "s/^__dapr_version: str = \"${pinned}\"$/__dapr_version: str = \"${baked}\"/" \
+              application_sdk/version.py
+          else
+            git checkout -b "$branch"
+          fi
+
+          git add application_sdk/version.py
+          if git diff --cached --quiet; then
+            echo "::notice::No actual change to commit; PR may already be up to date."
+            # Nothing new to push, but still ensure auto-merge is enabled on any
+            # open PR for this branch — one opened by an earlier run (before
+            # auto-merge was wired up, or with it since cleared) would otherwise
+            # never get it, because the commit + create paths below are skipped.
+            existing=$(gh pr list \
+              --head "$branch" --base "$base" --state open \
+              --json number --jq '.[0].number')
+            if [[ -n "$existing" ]]; then
+              gh pr merge "$existing" --repo "${{ github.repository }}" --auto --squash || \
+                echo "::warning::Could not enable auto-merge on PR #${existing}; merge it manually."
+            fi
+            exit 0
+          fi
+
+          git commit -m "chore(deps): sync daprd pin to ${baked} from base image"
+          git push origin "$branch" --force-with-lease
+
+          existing=$(gh pr list \
+            --head "$branch" \
+            --base "$base" \
+            --state open \
+            --json number \
+            --jq '.[0].number')
+
+          if [[ -n "$existing" ]]; then
+            echo "::notice::PR #${existing} already open for ${branch}; commit pushed."
+            # Idempotent: (re-)enable auto-merge in case an earlier run opened the
+            # PR before this step existed, or the new push cleared a prior state.
+            gh pr merge "$existing" --repo "${{ github.repository }}" --auto --squash || \
+              echo "::warning::Could not enable auto-merge on PR #${existing}; merge it manually."
+            exit 0
+          fi
+
+          pr_url=$(gh pr create \
+            --base "$base" \
+            --title "chore(deps): sync daprd pin to ${baked}" \
+            --label "dependencies" \
+            --body "The daprd shipped in the runtime base image is now **${baked}**.
+
+          | | version |
+          |---|---|
+          | Current pin | \`${pinned}\` |
+          | Runtime image daprd | \`${baked}\` |
+          | Runtime image | \`${image}\` |
+
+          This PR syncs \`__dapr_version\` in [\`application_sdk/version.py\`](application_sdk/version.py) to match the daprd that actually ships in the container, so:
+
+          - The embedded local-dev daprd (via \`application_sdk.dev._dapr\`) downloads the same release the container runs.
+          - CI workflows that read \`__dapr_version\` boot the matching daprd.
+
+          The version was read from \`${image}\`'s \`daprd --version\` (public image, pulled anonymously).
+
+          Opened automatically by [\`.github/workflows/check-dapr-version.yaml\`](.github/workflows/check-dapr-version.yaml).")
+
+          # Hands-off merge: enable GitHub native auto-merge so the PR merges
+          # itself once required checks go green — no human click. atlan-ci (the
+          # ORG_PAT_GITHUB identity that opened this PR) is a bypass actor on the
+          # `main` ruleset, so it clears the required code-owner review without a
+          # separate approval. Scoped by construction: this only ever acts on the
+          # chore/sync-daprd-* PR just created here, never any other PR.
+          gh pr merge "$pr_url" --repo "${{ github.repository }}" --auto --squash || \
+            echo "::warning::Could not enable auto-merge on ${pr_url}; merge it manually."

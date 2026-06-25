@@ -24,7 +24,7 @@ Legacy constants (v3.x — deprecated, removed in v4.0)::
 from dataclasses import dataclass
 
 # ── New canonical hierarchy ──────────────────────────────────────────────────
-from application_sdk.errors.base import AppError
+from application_sdk.errors.base import AppError, redact_secrets, sanitize_cause_repr
 from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import (
     WORKER_EVICTED_TYPE,
@@ -42,7 +42,6 @@ from application_sdk.errors.leaves import (
     RateLimitedError,
     ResourceExhaustedError,
     UnimplementedError,
-    WorkerEvictedError,
 )
 from application_sdk.errors.wire import FailureDetails
 
@@ -82,6 +81,8 @@ STORAGE_NOT_FOUND = ErrorCode("STR", 1)
 STORAGE_PERMISSION = ErrorCode("STR", 2)
 STORAGE_CONFIG = ErrorCode("STR", 3)
 STORAGE_OPERATION = ErrorCode("STR", 4)
+STORAGE_EMPTY_UPLOAD = ErrorCode("STR", 5)
+STORAGE_PREFLIGHT = ErrorCode("STR", 6)
 
 # CTR - Contract errors
 CONTRACT_VALIDATION = ErrorCode("CTR", 1)
@@ -137,7 +138,6 @@ __all__ = [
     "RateLimitedError",
     "ResourceExhaustedError",
     "UnimplementedError",
-    "WorkerEvictedError",
     "WORKER_EVICTED_TYPE",
     # Legacy (deprecated — removed in v4.0)
     "ErrorCode",
@@ -151,6 +151,7 @@ __all__ = [
     "STORAGE_PERMISSION",
     "STORAGE_CONFIG",
     "STORAGE_OPERATION",
+    "STORAGE_EMPTY_UPLOAD",
     "CONTRACT_VALIDATION",
     "PAYLOAD_SAFETY",
     "HANDLER_ERROR",
@@ -171,4 +172,6 @@ __all__ = [
     "EVENT_PUBLISH",
     "EVENT_BUS",
     "SEGMENT_ERROR",
+    "redact_secrets",
+    "sanitize_cause_repr",
 ]

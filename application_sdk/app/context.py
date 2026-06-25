@@ -9,6 +9,10 @@ from uuid import uuid4
 from loguru import logger as _loguru_logger
 from temporalio import workflow as _workflow
 
+from application_sdk.app.base_errors import (
+    SecretStoreNotConfiguredError,
+    StateStoreNotConfiguredError,
+)
 from application_sdk.contracts.base import HeartbeatDetails
 from application_sdk.credentials.resolver import CredentialResolver
 from application_sdk.observability.context import get_execution_context
@@ -98,8 +102,9 @@ class _WorkflowSafeLogger:
             try:
                 message = message % args
                 args = ()
+            # conformance: ignore[E002] %-substitution mismatch; loguru handles {}-style — logging adapter, would recurse
             except (TypeError, ValueError):
-                pass  # {} style or mismatch — loguru will handle it
+                pass
 
         if _is_in_workflow():
             wf_logger = _workflow.logger
@@ -131,6 +136,7 @@ class _WorkflowSafeLogger:
                     v3_ctx = get_correlation_context()
                     if v3_ctx and v3_ctx.correlation_id:
                         kwargs = {**kwargs, "correlation_id": v3_ctx.correlation_id}
+                # conformance: ignore[E004] probe for optional correlation context; logged at debug with exc_info by structlog logger
                 except Exception:
                     self._get_structlog_logger().debug(
                         "Failed to resolve v3 correlation context for log enrichment",
@@ -209,6 +215,7 @@ class AppContext:
     _state_store: "StateStore | None" = field(default=None, repr=False)
     _secret_store: "SecretStore | None" = field(default=None, repr=False)
     _storage: "ObjectStore | None" = field(default=None, repr=False)
+    _upstream_storage: "ObjectStore | None" = field(default=None, repr=False)
     _logger: Any = field(default=None, repr=False)
     _cancelled: bool = field(default=False, repr=False)
 
@@ -260,10 +267,10 @@ class AppContext:
             value: State data to save.
 
         Raises:
-            RuntimeError: If no state store is configured.
+            StateStoreNotConfiguredError: If no state store is configured.
         """
         if self._state_store is None:
-            raise RuntimeError("No state store configured")
+            raise StateStoreNotConfiguredError()
         namespaced_key = f"{self.app_name}:{self.run_id}:{key}"
         await self._state_store.save(namespaced_key, value)
 
@@ -277,10 +284,10 @@ class AppContext:
             The saved state or None if not found.
 
         Raises:
-            RuntimeError: If no state store is configured.
+            StateStoreNotConfiguredError: If no state store is configured.
         """
         if self._state_store is None:
-            raise RuntimeError("No state store configured")
+            raise StateStoreNotConfiguredError()
         namespaced_key = f"{self.app_name}:{self.run_id}:{key}"
         return await self._state_store.load(namespaced_key)
 
@@ -294,10 +301,10 @@ class AppContext:
             The secret value.
 
         Raises:
-            RuntimeError: If no secret store is configured.
+            SecretStoreNotConfiguredError: If no secret store is configured.
         """
         if self._secret_store is None:
-            raise RuntimeError("No secret store configured")
+            raise SecretStoreNotConfiguredError()
         return await self._secret_store.get(name)
 
     async def get_secret_optional(self, name: str) -> str | None:
@@ -326,6 +333,17 @@ class AppContext:
         """
         return self._storage
 
+    @property
+    def upstream_storage(self) -> "ObjectStore | None":
+        """Upstream object store, or ``None`` if not configured.
+
+        Present only in SDR deployments where ``UPSTREAM_OBJECT_STORE_NAME`` is
+        bound to a separate Dapr component pointing at Atlan's bucket.  In
+        standard (non-SDR) deployments this is ``None`` and ``App.upload()``
+        falls back to ``storage`` (the deployment store).
+        """
+        return self._upstream_storage
+
     def log_debug(self, message: str, **kwargs: Any) -> None:
         """Log a debug message."""
         self.logger.debug(message, **kwargs)
@@ -348,12 +366,12 @@ class AppContext:
             A typed Credential instance.
 
         Raises:
-            RuntimeError: If no secret store is configured.
+            SecretStoreNotConfiguredError: If no secret store is configured.
             CredentialNotFoundError: If the credential cannot be found.
             CredentialParseError: If parsing fails.
         """
         if self._secret_store is None:
-            raise RuntimeError("No secret store configured")
+            raise SecretStoreNotConfiguredError()
         resolver = CredentialResolver(self._secret_store)
         return await resolver.resolve(ref)
 
@@ -367,10 +385,10 @@ class AppContext:
             The raw credential data as a dict.
 
         Raises:
-            RuntimeError: If no secret store is configured.
+            SecretStoreNotConfiguredError: If no secret store is configured.
         """
         if self._secret_store is None:
-            raise RuntimeError("No secret store configured")
+            raise SecretStoreNotConfiguredError()
         resolver = CredentialResolver(self._secret_store)
         return await resolver.resolve_raw(ref)
 

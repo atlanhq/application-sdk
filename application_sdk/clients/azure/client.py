@@ -42,7 +42,11 @@ from pydantic import BaseModel
 from application_sdk.clients._interface import ClientInterface
 from application_sdk.clients.azure import AZURE_MANAGEMENT_API_ENDPOINT
 from application_sdk.clients.azure.auth import AzureAuthProvider
-from application_sdk.common.error_codes import ClientError
+from application_sdk.clients.azure.azure_errors import (
+    AzureClientAuthError,
+    AzureInputValidationError,
+)
+from application_sdk.errors import AppError
 from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -129,14 +133,15 @@ class AzureClient(ClientInterface):
                 Must include tenant_id, client_id, and client_secret.
 
         Raises:
-            ClientError: If connection fails due to authentication or connection issues
+            AzureClientAuthError: If connection fails due to authentication or connection issues
+            AzureInputValidationError: If connection fails due to invalid input parameters
         """
         if credentials:
             self.credentials = credentials
 
         if self._executor is None:
-            raise ClientError(
-                f"{ClientError.CLIENT_AUTH_ERROR}: client has been closed; instantiate a new AzureClient"
+            raise AzureClientAuthError(
+                message="Azure client has been closed; instantiate a new AzureClient",
             )
 
         try:
@@ -182,23 +187,22 @@ class AzureClient(ClientInterface):
             logger.info("Azure client loaded successfully")
 
         except ClientAuthenticationError as e:
-            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {e!s}") from e
+            raise AzureClientAuthError(cause=e) from e
         except AzureError as e:
-            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {e!s}") from e
+            raise AzureClientAuthError(cause=e) from e
         except ValueError as e:
-            raise ClientError(
-                f"{ClientError.INPUT_VALIDATION_ERROR}: Invalid parameters - {e!s}"
+            raise AzureInputValidationError(
+                message="Invalid parameters", cause=e
             ) from e
         except TypeError as e:
-            raise ClientError(
-                f"{ClientError.INPUT_VALIDATION_ERROR}: Invalid parameter types - {e!s}"
+            raise AzureInputValidationError(
+                message="Invalid parameter types", cause=e
             ) from e
-        except ClientError:
+        except AppError:
             raise
+        # conformance: ignore[E004] catch-all re-raises as typed AzureClientAuthError; no logging needed since caller receives the typed error
         except Exception as e:
-            raise ClientError(
-                f"{ClientError.CLIENT_AUTH_ERROR}: Unexpected error - {e!s}"
-            ) from e
+            raise AzureClientAuthError(message="Unexpected error", cause=e) from e
 
     async def close(self) -> None:
         """Close Azure connections and clean up resources."""
@@ -275,7 +279,7 @@ class AzureClient(ClientInterface):
                     error=error,
                 )
             except Exception as e:
-                logger.debug(
+                logger.warning(
                     "Service health check failed for %s",
                     service_name,
                     exc_info=True,
@@ -296,11 +300,11 @@ class AzureClient(ClientInterface):
         Test the Azure connection by attempting to get a token.
 
         Raises:
-            ClientAuthenticationError: If connection test fails.
+            AzureClientAuthError: If connection test fails.
         """
         if not self.credential:
-            raise ClientError(
-                f"{ClientError.AUTH_CREDENTIALS_ERROR}: No credential available for connection test"
+            raise AzureClientAuthError(
+                message="No credential available for connection test",
             )
 
         try:
@@ -309,17 +313,16 @@ class AzureClient(ClientInterface):
                 self.credential.get_token, AZURE_MANAGEMENT_API_ENDPOINT
             )
         except ClientAuthenticationError as e:
-            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {e!s}") from e
+            raise AzureClientAuthError(cause=e) from e
         except AzureError as e:
-            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {e!s}") from e
+            raise AzureClientAuthError(cause=e) from e
         except ValueError as e:
-            raise ClientError(
-                f"{ClientError.INPUT_VALIDATION_ERROR}: Invalid parameters - {e!s}"
-            ) from e
+            raise AzureInputValidationError(cause=e) from e
+        except AppError:
+            raise
+        # conformance: ignore[E004] catch-all re-raises as typed AzureClientAuthError; no logging needed since caller receives the typed error
         except Exception as e:
-            raise ClientError(
-                f"{ClientError.CLIENT_AUTH_ERROR}: Unexpected error - {e!s}"
-            ) from e
+            raise AzureClientAuthError(message="Unexpected error", cause=e) from e
 
     def __enter__(self):
         """Context manager entry."""

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Allowlist gate: check Trivy + Snyk scan results against base-allowlist.json.
+"""Allowlist gate: check Trivy scan results against base-allowlist.json.
 
 Usage:
-    python3 check_allowlist.py --trivy-results <path> [--snyk-results <path>] [--write-comment]
+    python3 check_allowlist.py --trivy-results <path> [--write-comment]
 
 Environment:
     FAIL_ON_FINDINGS  "true" (default) to exit 1 on blockers; "false" for warning only.
@@ -19,9 +19,6 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--trivy-results", required=True, help="Path to Trivy JSON output"
-    )
-    parser.add_argument(
-        "--snyk-results", required=False, default=None, help="Path to Snyk JSON output"
     )
     parser.add_argument(
         "--write-comment",
@@ -78,55 +75,8 @@ def main() -> None:
         print(f"Error: Trivy results have invalid JSON: {e}")
         sys.exit(1)
 
-    # Parse Snyk results
-    snyk_count = 0
-    if args.snyk_results:
-        try:
-            with open(args.snyk_results) as f:
-                snyk = json.load(f)
-            if not snyk.get("error"):
-                for vuln in snyk.get("vulnerabilities", []):
-                    vid = vuln.get("id")
-                    if vid and vid not in all_vulns:
-                        cves = vuln.get("identifiers", {}).get("CVE", [])
-                        if not any(c in all_vulns for c in cves):
-                            all_vulns[vid] = {
-                                "id": vid,
-                                "severity": vuln.get("severity", "").upper(),
-                                "package": vuln.get("packageName")
-                                or vuln.get("name", ""),
-                                "installed": vuln.get("version", ""),
-                                "fixed": ", ".join(vuln.get("fixedIn", []))
-                                if vuln.get("fixedIn")
-                                else "",
-                                "source": "snyk",
-                            }
-                            snyk_count += 1
-                for app in snyk.get("applications", []):
-                    for vuln in app.get("vulnerabilities", []):
-                        vid = vuln.get("id")
-                        if vid and vid not in all_vulns:
-                            all_vulns[vid] = {
-                                "id": vid,
-                                "severity": vuln.get("severity", "").upper(),
-                                "package": vuln.get("packageName")
-                                or vuln.get("name", ""),
-                                "installed": vuln.get("version", ""),
-                                "fixed": ", ".join(vuln.get("fixedIn", []))
-                                if vuln.get("fixedIn")
-                                else "",
-                                "source": "snyk",
-                            }
-                            snyk_count += 1
-        except FileNotFoundError:
-            print("Warning: Snyk results not found — skipping Snyk findings")
-        except json.JSONDecodeError as e:
-            print(f"Warning: Snyk results have invalid JSON: {e}")
-
     unique = list(all_vulns.values())
     scanner_summary = f"Trivy: {trivy_count}"
-    if snyk_count:
-        scanner_summary += f" + Snyk: {snyk_count}"
 
     if allowlist is None:
         summary = (

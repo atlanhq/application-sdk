@@ -1,13 +1,7 @@
 FROM cgr.dev/atlan.com/app-framework-golden:3.13
 
-# Dapr version argument
-ARG DAPR_RUNTIME_PACKAGE=dapr-daprd-1.17
-
-# Switch to root for installation
+# Switch to root for setup
 USER root
-
-# Install Dapr runtime from Chainguard APK
-RUN apk add --no-cache ${DAPR_RUNTIME_PACKAGE}
 
 # Create appuser (standardized user for all apps)
 RUN addgroup -g 1000 appuser && adduser -D -u 1000 -G appuser appuser
@@ -53,5 +47,7 @@ ENV UV_NO_CACHE=1 \
 # Copy entrypoint script for graceful shutdown handling
 COPY --chown=appuser:appuser entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
+
+COPY --chown=appuser:appuser CHANGELOG.md /opt/atlan/application-sdk/CHANGELOG.md
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

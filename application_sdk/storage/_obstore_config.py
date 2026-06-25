@@ -42,17 +42,20 @@ without changing the outcome (see BLDX-1155 review thread).
 
 from __future__ import annotations
 
-import logging
+import contextlib
 import os
-from typing import TYPE_CHECKING, Any
+import threading
+import urllib.request
+from typing import TYPE_CHECKING
+from urllib.parse import urlsplit, urlunsplit
 
 if TYPE_CHECKING:
     # obstore TypedDicts — not importable at runtime.
-    from obstore.store import ClientConfig, RetryConfig
+    from obstore.store import ClientConfig, ObjectStore, RetryConfig
 
-# Stdlib logger to avoid the storage → observability → storage circular
-# import that bites the rest of this package.
-logger = logging.getLogger(__name__)
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
 
 _DEFAULT_TIMEOUT = "90s"
 _DEFAULT_CONNECT_TIMEOUT = "30s"
@@ -73,7 +76,20 @@ def _default_user_agent() -> str:
 
         return f"atlan-application-sdk/{__version__}"
     except Exception:  # pragma: no cover — defensive
+        logger.warning(
+            "Failed to derive User-Agent from version; using fallback", exc_info=True
+        )
         return "atlan-application-sdk"
+
+
+def _obstore_proxy_url() -> str | None:
+    """Return the proxy URL from HTTPS_PROXY/HTTP_PROXY, or None.
+
+    obstore doesn't read proxy env vars itself, so we pass ``proxy_url``
+    explicitly. NO_PROXY isn't honored — the binding has no per-host excludes.
+    """
+    proxies = urllib.request.getproxies()
+    return proxies.get("https") or proxies.get("http") or None
 
 
 def obstore_client_options() -> ClientConfig:
@@ -101,6 +117,9 @@ def obstore_client_options() -> ClientConfig:
     pool_max = os.getenv("ATLAN_OBSTORE_POOL_MAX_IDLE_PER_HOST")
     if pool_max:
         opts["pool_max_idle_per_host"] = pool_max
+    proxy_url = _obstore_proxy_url()
+    if proxy_url:
+        opts["proxy_url"] = proxy_url
     return opts
 
 
@@ -124,6 +143,7 @@ def obstore_retry_config() -> RetryConfig | None:
             logger.warning(
                 "Invalid ATLAN_OBSTORE_RETRY_MAX_RETRIES=%r — using obstore default",
                 raw_max,
+                exc_info=True,
             )
 
     raw_timeout = os.getenv("ATLAN_OBSTORE_RETRY_TIMEOUT_SECONDS")
@@ -134,9 +154,157 @@ def obstore_retry_config() -> RetryConfig | None:
             logger.warning(
                 "Invalid ATLAN_OBSTORE_RETRY_TIMEOUT_SECONDS=%r — using obstore default",
                 raw_timeout,
+                exc_info=True,
             )
 
     return cfg or None
+
+
+def make_s3_store(
+    bucket: str,
+    config: dict[str, str] | None = None,
+    *,
+    label: str = "s3",
+    client_options: ClientConfig | None = None,
+    credential_provider: object = None,
+) -> ObjectStore:
+    """Create an S3Store with SDK-default client/retry config.
+
+    Both ``binding.py`` and ``cloud.py`` delegate store construction here so
+    timeouts, retry budgets, and log output stay consistent across all S3 paths.
+    Pass *client_options* to override the SDK defaults (e.g., for insecureSSL).
+    """
+    from obstore.store import S3Store  # noqa: PLC0415
+
+    opts = client_options if client_options is not None else obstore_client_options()
+    retry = obstore_retry_config()
+    log_obstore_config(label, client_options=opts, retry_config=retry)
+    kw: dict[str, object] = dict(
+        bucket=bucket, config=config, client_options=opts, retry_config=retry
+    )
+    if credential_provider is not None:
+        kw["credential_provider"] = credential_provider
+    return S3Store(**kw)  # type: ignore[arg-type]
+
+
+# obstore-rs reads ``AZURE_*`` from the environment at AzureStore construction
+# *unconditionally*, and its credential precedence (account key > SAS > client secret >
+# workload identity) lets a value injected into the host environment outrank the
+# credential the caller passed in ``config``. On an Azure-hosted node the pod carries
+# its own identity in ``AZURE_STORAGE_ACCESS_KEY`` and in ``AZURE_FEDERATED_TOKEN_FILE``
+# + ``AZURE_CLIENT_ID``; either silently overrides an explicit caller credential and
+# signs requests as the wrong principal (403 AuthenticationFailed / 401 AADSTS70025).
+# So when the caller supplies a standalone credential in ``config`` we construct the
+# store with all ``AZURE_*`` stripped from the environment, leaving obstore to resolve
+# from our ``config`` alone. Callers that pass no credential (managed / workload
+# identity) are left untouched so the ambient identity still applies.
+#
+# TODO: retire this env-mutation workaround once obstore-rs honours explicit ``config``
+# credentials with higher precedence than ambient ``AZURE_*`` env vars.  File an issue
+# at https://github.com/developmentseed/obstore/issues and replace the placeholder
+# below with the specific issue URL — the workaround must not be deleted until that
+# gate is closed.
+# Upstream issue: <not yet filed>
+_AZURE_CREDENTIAL_CONFIG_KEYS = (
+    "azure_storage_account_key",
+    "azure_storage_client_secret",
+    "azure_storage_sas_key",
+    "azure_storage_token",
+)
+
+# os.environ is process-global, so serialize make_azure_store callers: an isolated build
+# (env temporarily stripped) must never overlap a concurrent build that relies on the
+# ambient AZURE_* env.  Note: this lock only protects callers of make_azure_store — other
+# in-process readers (azure-identity, OpenTelemetry exporters, subprocesses spawned during
+# the window, sidecar SDKs) can still observe the stripped env during the brief window.
+_azure_store_build_lock = threading.Lock()
+
+
+def _azure_config_has_explicit_credential(config: dict[str, str] | None) -> bool:
+    """True if *config* carries a standalone Azure credential (account key / client
+    secret / SAS / bearer token) — i.e. the caller wants that credential used, not the
+    host's ambient identity."""
+    return bool(config) and any(config.get(k) for k in _AZURE_CREDENTIAL_CONFIG_KEYS)
+
+
+@contextlib.contextmanager
+def _suppress_ambient_azure_env(active: bool):
+    """Temporarily drop all ambient ``AZURE_*`` env vars when *active*.
+
+    Scoped to the synchronous AzureStore constructor (where obstore reads the
+    environment). Serialized by ``_azure_store_build_lock`` so an isolated build can't
+    strip the environment out from under a concurrent non-isolated build.
+    """
+    with _azure_store_build_lock:
+        if not active:
+            yield
+            return
+        saved = {
+            k: os.environ.pop(k) for k in list(os.environ) if k.startswith("AZURE_")
+        }
+        if saved:
+            logger.debug(
+                "make_azure_store: suppressed %d ambient AZURE_* env var(s)", len(saved)
+            )
+        try:
+            yield
+        finally:
+            os.environ.update(saved)
+
+
+def make_azure_store(
+    container: str,
+    config: dict[str, str] | None = None,
+    *,
+    label: str = "azure",
+    client_options: ClientConfig | None = None,
+    credential_provider: object = None,
+) -> ObjectStore:
+    """Create an AzureStore with SDK-default client/retry config.
+
+    See :func:`make_s3_store` for rationale. When *config* carries an explicit
+    credential *or* a ``credential_provider`` is supplied, the ambient ``AZURE_*``
+    environment is suppressed for the construction so the host's own identity can't
+    override it (see ``_suppress_ambient_azure_env``).  The cert-auth path in
+    ``binding.py`` uses ``credential_provider`` instead of placing a key in ``config``,
+    so both cases must activate env stripping.
+    """
+    from obstore.store import AzureStore  # noqa: PLC0415
+
+    opts = client_options if client_options is not None else obstore_client_options()
+    retry = obstore_retry_config()
+    log_obstore_config(label, client_options=opts, retry_config=retry)
+    kw: dict[str, object] = dict(
+        container_name=container, config=config, client_options=opts, retry_config=retry
+    )
+    if credential_provider is not None:
+        kw["credential_provider"] = credential_provider
+    isolate = (
+        _azure_config_has_explicit_credential(config) or credential_provider is not None
+    )
+    with _suppress_ambient_azure_env(isolate):
+        return AzureStore(**kw)  # type: ignore[arg-type]
+
+
+def make_gcs_store(
+    bucket: str,
+    config: dict[str, str] | None = None,
+    *,
+    label: str = "gcs",
+    client_options: ClientConfig | None = None,
+) -> ObjectStore:
+    """Create a GCSStore with SDK-default client/retry config.
+
+    See :func:`make_s3_store` for rationale.
+    """
+    from obstore.store import GCSStore  # noqa: PLC0415
+
+    opts = client_options if client_options is not None else obstore_client_options()
+    retry = obstore_retry_config()
+    log_obstore_config(label, client_options=opts, retry_config=retry)
+    return GCSStore(
+        bucket=bucket, config=config, client_options=opts, retry_config=retry
+    )  # type: ignore[arg-type]
 
 
 def log_obstore_config(
@@ -152,15 +320,29 @@ def log_obstore_config(
     layer at obstore's default 10×3 min retry budget. Surfacing what's
     configured up front prevents that confusion next time.
     """
-    extra: dict[str, Any] = {
-        "obstore_provider": provider,
-        "obstore_client_options": dict(client_options) if client_options else {},
-        "obstore_retry_config": dict(retry_config) if retry_config else {},
-    }
     logger.info(
         "obstore configured for %s: client=%s retry=%s",
         provider,
-        extra["obstore_client_options"],
-        extra["obstore_retry_config"] or "default(max_retries=10, retry_timeout=3m)",
-        extra=extra,
+        _redact_proxy_userinfo(client_options) if client_options else {},
+        dict(retry_config)
+        if retry_config
+        else "default(max_retries=10, retry_timeout=3m)",
     )
+
+
+def _redact_proxy_userinfo(client_options: ClientConfig) -> dict:
+    """Return a copy of *client_options* with any proxy_url credentials masked.
+
+    The real config keeps the userinfo (obstore needs it); only the log copy is
+    redacted so a `user:pass@` proxy never lands in logs.
+    """
+    opts = dict(client_options)
+    proxy = opts.get("proxy_url")
+    if not isinstance(proxy, str):
+        return opts
+    p = urlsplit(proxy)
+    if p.username or p.password:
+        host = p.hostname or ""
+        netloc = f"***@{host}:{p.port}" if p.port else f"***@{host}"
+        opts["proxy_url"] = urlunsplit((p.scheme, netloc, p.path, p.query, p.fragment))
+    return opts

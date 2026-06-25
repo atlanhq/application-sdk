@@ -6,7 +6,7 @@ binding is configured.
 """
 
 from datetime import UTC, datetime, timedelta
-from typing import Any, Optional, Type
+from typing import TYPE_CHECKING, Any
 
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
@@ -19,7 +19,6 @@ from temporalio.worker import (
     WorkflowInterceptorClassInput,
 )
 
-from application_sdk.common.exc_utils import rewrap
 from application_sdk.contracts.events import (
     ApplicationEventNames,
     Event,
@@ -40,7 +39,7 @@ _event_token_service: "OAuthTokenService | None" = None
 
 async def _get_event_token_service() -> "OAuthTokenService | None":
     """Return the singleton OAuthTokenService for event auth, or None if unconfigured."""
-    global _event_token_service  # noqa: PLW0603
+    global _event_token_service
 
     from application_sdk.constants import (  # noqa: PLC0415 — cold path: AUTH_ENABLED guard
         AUTH_ENABLED,
@@ -84,7 +83,6 @@ async def _get_event_token_service() -> "OAuthTokenService | None":
 
 # Type alias for the annotation above (resolved at import time by TYPE_CHECKING
 # would be circular; plain string forward-reference is fine here).
-from typing import TYPE_CHECKING  # noqa: E402
 
 if TYPE_CHECKING:
     from application_sdk.credentials.oauth import OAuthTokenService
@@ -125,6 +123,7 @@ def _enrich_event_metadata(event: Event) -> Event:
             event.metadata.workflow_type = workflow_info.workflow_type
             event.metadata.workflow_id = workflow_info.workflow_id
             event.metadata.workflow_run_id = workflow_info.run_id
+    # conformance: ignore[E004] probe to detect workflow context; exception is expected when called outside a workflow
     except Exception:
         logger.debug("Not in workflow context, cannot enrich event metadata")
 
@@ -138,6 +137,7 @@ def _enrich_event_metadata(event: Event) -> Event:
             event.metadata.workflow_id = activity_info.workflow_id
             event.metadata.workflow_run_id = activity_info.workflow_run_id
             event.metadata.workflow_state = WorkflowStates.RUNNING.value
+    # conformance: ignore[E004] probe to detect activity context; exception is expected when called outside an activity
     except Exception:
         logger.debug("Not in activity context, cannot enrich event metadata")
 
@@ -227,6 +227,7 @@ def _send_lifecycle_event_to_segment(event: Event) -> None:
         )
 
         metrics.segment_client.send_metric(metric_record)
+    # conformance: ignore[E004] best-effort side-channel; exc_info already captured in the debug log below
     except Exception:
         logger.debug("Failed to send lifecycle event to Segment", exc_info=True)
 
@@ -289,8 +290,13 @@ async def publish_event(event_data: dict) -> None:
         event = Event(**event_data)
         await _publish_event_via_binding(event)
         logger.info("Published event: %s", event_data.get("event_name", ""))
+    # conformance: ignore[E004] re-raises as typed EventPublishError; exception is propagated to caller
     except Exception as e:
-        raise rewrap(e, "Failed to publish event") from e
+        from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
+            EventPublishError,
+        )
+
+        raise EventPublishError(cause=e) from e
 
 
 class EventActivityInboundInterceptor(ActivityInboundInterceptor):
@@ -388,6 +394,7 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             workflow_state = (
                 WorkflowStates.COMPLETED.value
             )  # Update to completed on success
+        # conformance: ignore[E004] captures failure state then re-raises; exception propagates to Temporal runtime
         except Exception:
             workflow_state = WorkflowStates.FAILED.value  # Keep as failed
             raise
@@ -438,7 +445,7 @@ class EventInterceptor(Interceptor):
 
     def workflow_interceptor_class(
         self, input: WorkflowInterceptorClassInput
-    ) -> Optional[Type[WorkflowInboundInterceptor]]:
+    ) -> type[WorkflowInboundInterceptor] | None:
         """Get the workflow interceptor class.
 
         Args:

@@ -6,9 +6,10 @@ read by the activity wrapper to recognise that an in-flight
 terminating, not because workflow code requested cancellation.
 
 The activity wrapper consults ``is_worker_shutting_down()`` inside its
-exception handler and, if true, raises ``WorkerEvictedError`` so the SDK's
-per-activity eviction loop can re-dispatch the activity on a fresh worker
-without burning the application-error retry budget.
+exception handler and, if true, raises
+``ApplicationError(type=WORKER_EVICTED_TYPE, non_retryable=True)`` so the
+SDK's per-activity eviction loop can re-dispatch the activity on a fresh
+worker without burning the application-error retry budget.
 
 Single-process state: a worker pod runs one Python process, so a module-level
 flag is the right scope. Backed by ``threading.Event`` because:

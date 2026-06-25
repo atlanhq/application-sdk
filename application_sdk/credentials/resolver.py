@@ -43,8 +43,8 @@ class CredentialResolver:
 
     def __init__(
         self,
-        secret_store: "SecretStore",
-        registry: "CredentialTypeRegistry | None" = None,
+        secret_store: SecretStore,
+        registry: CredentialTypeRegistry | None = None,
     ) -> None:
         self._secret_store = secret_store
         if registry is None:
@@ -56,7 +56,7 @@ class CredentialResolver:
         else:
             self._registry = registry
 
-    async def resolve(self, ref: "CredentialRef") -> "Credential":
+    async def resolve(self, ref: CredentialRef) -> Credential:
         """Resolve a CredentialRef to a typed Credential.
 
         Args:
@@ -75,7 +75,7 @@ class CredentialResolver:
             return await self._resolve_legacy(ref)
         return await self._resolve_new(ref)
 
-    async def resolve_raw(self, ref: "CredentialRef") -> dict[str, Any]:
+    async def resolve_raw(self, ref: CredentialRef) -> dict[str, Any]:
         """Resolve a CredentialRef to a raw dict.
 
         This bridge method lets legacy clients that expect ``dict[str, Any]``
@@ -98,12 +98,12 @@ class CredentialResolver:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    async def _resolve_new(self, ref: "CredentialRef") -> "Credential":
+    async def _resolve_new(self, ref: CredentialRef) -> Credential:
         data = await self._fetch_raw_json(ref)
         type_name = data.get("type", ref.credential_type)
         return self._registry.parse(type_name, data)
 
-    async def _resolve_agent(self, ref: "CredentialRef") -> "Credential":
+    async def _resolve_agent(self, ref: CredentialRef) -> Credential:
         """Resolve an agent-shape ref to a typed Credential.
 
         Falls back to the ``auth_type`` field on the agent spec
@@ -130,7 +130,7 @@ class CredentialResolver:
         parser_input = data.get(type_name, data)
         return self._registry.parse(type_name, parser_input)
 
-    async def _resolve_agent_raw(self, ref: "CredentialRef") -> dict[str, Any]:
+    async def _resolve_agent_raw(self, ref: CredentialRef) -> dict[str, Any]:
         """Resolve an agent-shape ref to a flat dict with ``extra`` nested."""
         from application_sdk.credentials.agent import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
             resolve_agent_credential,
@@ -139,7 +139,7 @@ class CredentialResolver:
         assert ref.agent_spec is not None  # guaranteed by caller
         return await resolve_agent_credential(ref.agent_spec, self._secret_store)
 
-    async def _fetch_raw_json(self, ref: "CredentialRef") -> dict[str, Any]:
+    async def _fetch_raw_json(self, ref: CredentialRef) -> dict[str, Any]:
         from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
             CredentialNotFoundError,
             CredentialParseError,
@@ -152,6 +152,7 @@ class CredentialResolver:
             raw = await self._secret_store.get(ref.name)
         except SecretNotFoundError as exc:
             raise CredentialNotFoundError(ref.name) from exc
+        # conformance: ignore[E004] re-raise only; wraps any unexpected fetch error into typed CredentialError and re-raises
         except Exception as exc:
             from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
                 CredentialError,
@@ -174,7 +175,7 @@ class CredentialResolver:
 
         return data
 
-    async def _resolve_legacy(self, ref: "CredentialRef") -> "Credential":
+    async def _resolve_legacy(self, ref: CredentialRef) -> Credential:
         data = await self._resolve_by_guid(ref)
         if ref.credential_type == "unknown":
             from application_sdk.credentials.types import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
@@ -184,7 +185,7 @@ class CredentialResolver:
             return RawCredential(data=data)
         return self._registry.parse(ref.credential_type, data)
 
-    async def _resolve_by_guid(self, ref: "CredentialRef") -> dict[str, Any]:
+    async def _resolve_by_guid(self, ref: CredentialRef) -> dict[str, Any]:
         """Resolve credentials by GUID via DaprCredentialVault.
 
         Fetches the non-secret credential config from the upstream object store
@@ -206,6 +207,7 @@ class CredentialResolver:
             return result
         except CredentialNotFoundError:
             raise
+        # conformance: ignore[E004] re-raise only; wraps any unexpected vault error into typed CredentialNotFoundError and re-raises
         except Exception as exc:
             raise CredentialNotFoundError(ref.credential_guid) from exc
         finally:

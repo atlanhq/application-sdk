@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from application_sdk.contracts.types import FileReference, MaxItems
+from application_sdk.contracts.types import FileReference, MaxItems, StorageTier
 
 # =============================================================================
 # MaxItems
@@ -77,12 +77,16 @@ class TestFileReference:
         f.write_text("col1,col2\n1,2\n")
         ref = FileReference.from_local(f)
         assert ref.local_path == str(f)
+        assert ref.file_count == 1
+        assert ref.is_durable is False
 
     def test_from_local_string_path(self, tmp_path: Path) -> None:
         f = tmp_path / "results.parquet"
         f.write_bytes(b"PAR1fake")
         ref = FileReference.from_local(str(f))
         assert ref.local_path == str(f)
+        assert ref.file_count == 1
+        assert ref.is_durable is False
 
     def test_equality(self) -> None:
         ref1 = FileReference(local_path="/tmp/a.json", file_count=1)
@@ -155,3 +159,89 @@ class TestFileReference:
         # Does not stat the path eagerly for non-existent inputs.
         ref = FileReference.from_local("/does/not/exist")
         assert ref.file_count == 1
+
+    def test_from_local_oserror_falls_back_to_one(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """OSError from safe_list_directory uses file_count=1 fallback."""
+        import application_sdk.contracts.types as types_module
+
+        monkeypatch.setattr(
+            types_module,
+            "safe_list_directory",
+            lambda _: (_ for _ in ()).throw(OSError("sandbox")),
+        )
+        ref = FileReference.from_local(tmp_path)
+        assert ref.file_count == 1
+
+    # ---- rglob listing race ---------------------------------------------
+
+    def test_from_local_finds_files_when_rglob_returns_empty(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Mock ``Path.rglob`` to return empty (cpython#146646 silent-
+        swallow); ``file_count`` must still reflect the real tree."""
+        d = tmp_path / "tree"
+        d.mkdir()
+        (d / "a.txt").write_text("a")
+        (d / "b.txt").write_text("b")
+        sub = d / "sub"
+        sub.mkdir()
+        (sub / "c.txt").write_text("c")
+
+        # Inject the listing transient.
+        # Regression guard: a future revert to Path.rglob would re-trigger this mock.
+        monkeypatch.setattr(Path, "rglob", lambda self, pat: iter([]))
+
+        ref = FileReference.from_local(d)
+
+        # On main: file_count == 0 (the bug). After fix: 3.
+        assert ref.file_count == 3
+
+
+# =============================================================================
+# UploadInput / DownloadInput — ref field symmetry
+# =============================================================================
+
+
+class TestUploadDownloadRefSymmetry:
+    """UploadInput.ref must be symmetric with DownloadInput.ref (both optional)."""
+
+    def test_upload_input_ref_defaults_to_none(self) -> None:
+        from application_sdk.contracts.storage import UploadInput
+
+        assert UploadInput().ref is None
+
+    def test_upload_input_ref_accepts_file_reference(self) -> None:
+        from application_sdk.contracts.storage import UploadInput
+
+        ref = FileReference(local_path="/tmp/x.jsonl", storage_path="artifacts/x.jsonl")
+        assert UploadInput(ref=ref).ref == ref
+
+    def test_download_input_ref_defaults_to_none(self) -> None:
+        from application_sdk.contracts.storage import DownloadInput
+
+        assert DownloadInput().ref is None
+
+    def test_upload_and_download_ref_fields_are_symmetric(self) -> None:
+        from application_sdk.contracts.storage import DownloadInput, UploadInput
+
+        ref = FileReference(local_path="/tmp/x.jsonl", storage_path="artifacts/x.jsonl")
+        assert UploadInput(ref=ref).ref == DownloadInput(ref=ref).ref
+
+
+# =============================================================================
+# StorageTier
+# =============================================================================
+
+
+class TestStorageTier:
+    def test_string_values_are_lowercase(self) -> None:
+        assert StorageTier.TRANSIENT.value == "transient"
+        assert StorageTier.RETAINED.value == "retained"
+        assert StorageTier.PERSISTENT.value == "persistent"
+
+    def test_reconstruct_from_value(self) -> None:
+        assert StorageTier("transient") is StorageTier.TRANSIENT
+        assert StorageTier("retained") is StorageTier.RETAINED
+        assert StorageTier("persistent") is StorageTier.PERSISTENT

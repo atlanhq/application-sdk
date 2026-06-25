@@ -36,6 +36,10 @@ from prometheus_client.exposition import default_handler
 from prometheus_client.parser import text_string_to_metric_families
 
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.pushgateway_errors import (
+    PushGatewayJobRequiredError,
+    PushGatewayUrlRequiredError,
+)
 
 #: Regex extracting ``push_time_seconds{labels} value`` lines from a
 #: Pushgateway ``/metrics`` response. The Pushgateway emits one such series
@@ -74,8 +78,13 @@ class TemporalCoreCollector:
             if resp.status_code != 200:
                 return
             yield from text_string_to_metric_families(resp.text)
+        # conformance: ignore[E004] best-effort scrape; exc_info already present; transient hiccup must not poison the push
         except Exception:
-            # Silent — a transient Temporal core hiccup must not poison the push.
+            # Best-effort — a transient Temporal core hiccup must not poison the push.
+            logger.debug(
+                "Temporal-core metric scrape failed; skipping this cycle",
+                exc_info=True,
+            )
             return
 
 
@@ -102,6 +111,7 @@ def _log_push_failure(error: HTTPError, request_body: bytes) -> None:
         resp = ""
         try:
             resp = error.read().decode("utf-8", errors="replace")[:2000]
+        # conformance: ignore[E004] diagnostic-only inner read; failure to decode response body must not replace the outer HTTPError
         except Exception:  # noqa: S110 — diagnostic-only
             pass
         msg = (
@@ -154,9 +164,9 @@ class PushGatewayClient:
         task_queue: str = "",
     ) -> None:
         if not url:
-            raise ValueError("PushGatewayClient requires a non-empty url")
+            raise PushGatewayUrlRequiredError()
         if not job:
-            raise ValueError("PushGatewayClient requires a non-empty job")
+            raise PushGatewayJobRequiredError()
         self._url = url
         self._job = job
         self._grouping_key = grouping_key or _default_grouping_key(task_queue)
@@ -187,13 +197,11 @@ class PushGatewayClient:
         self._stopped.clear()
         self._task = asyncio.create_task(self._run(), name="pushgateway-pusher")
         logger.info(
-            "Pushgateway pusher started",
-            extra={
-                "url": self._url,
-                "job": self._job,
-                "interval_s": self._interval_s,
-                "grouping_key": self._grouping_key,
-            },
+            "Pushgateway pusher started: url=%s job=%s interval_s=%s grouping_key=%s",
+            self._url,
+            self._job,
+            self._interval_s,
+            self._grouping_key,
         )
 
     async def push_now(self) -> None:
@@ -205,6 +213,7 @@ class PushGatewayClient:
             self._task.cancel()
             try:
                 await self._task
+            # conformance: ignore[E004] shutdown cleanup; task cancellation swallows all exceptions by design
             except (asyncio.CancelledError, Exception):  # noqa: S110 — task cancellation is the goal; surface nothing on shutdown
                 pass
             self._task = None
@@ -250,7 +259,7 @@ class PushGatewayClient:
                     await asyncio.wait_for(
                         self._stopped.wait(), timeout=self._interval_s
                     )
-                except TimeoutError:
+                except TimeoutError:  # conformance: ignore[E002,E014] wait_for timeout = push interval elapsed; loop continues
                     pass
                 if self._stopped.is_set():
                     return
@@ -338,6 +347,7 @@ class PushGatewayClient:
         for match in _PUSH_TIME_LINE.finditer(text):
             try:
                 last_push = float(match.group("ts"))
+            # conformance: ignore[E014] malformed timestamp line; skip to next match
             except ValueError:
                 continue
             labels = dict(_LABEL_PAIR.findall(match.group("labels")))
@@ -366,12 +376,10 @@ class PushGatewayClient:
                 )
                 deleted += 1
                 logger.info(
-                    "Swept stale Pushgateway group",
-                    extra={
-                        "instance": labels.get("instance", "?"),
-                        "stale_for_seconds": round(age, 1),
-                        "job": self._job,
-                    },
+                    "Swept stale Pushgateway group: job=%s instance=%s stale_for_seconds=%.1f",
+                    self._job,
+                    labels.get("instance", "?"),
+                    round(age, 1),
                 )
             except Exception:
                 # Guard 4: per-group soft-fail.
@@ -382,15 +390,13 @@ class PushGatewayClient:
                 )
 
         logger.info(
-            "Pushgateway startup sweep complete",
-            extra={
-                "deleted": deleted,
-                "skipped_self": skipped_self,
-                "skipped_live": skipped_live,
-                "skipped_other_job": skipped_other_job,
-                "job": self._job,
-                "staleness_threshold_seconds": self._sweep_staleness_seconds,
-            },
+            "Pushgateway startup sweep complete: job=%s deleted=%d skipped_self=%d skipped_live=%d skipped_other_job=%d staleness_threshold_seconds=%s",
+            self._job,
+            deleted,
+            skipped_self,
+            skipped_live,
+            skipped_other_job,
+            self._sweep_staleness_seconds,
         )
 
 

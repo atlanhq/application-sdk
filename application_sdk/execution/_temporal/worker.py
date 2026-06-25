@@ -13,7 +13,6 @@ from datetime import timedelta
 from typing import TYPE_CHECKING
 
 from temporalio.client import Client
-from temporalio.common import VersioningBehavior
 from temporalio.worker import Interceptor as TemporalInterceptor
 from temporalio.worker import Worker, WorkerDeploymentConfig, WorkerDeploymentVersion
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
@@ -113,7 +112,10 @@ class AppWorker:
                 )
             )
         except ValueError:
-            pass
+            logger.debug(
+                "TemporalCoreCollector already registered; skipping",
+                exc_info=True,
+            )
 
         self._pusher = PushGatewayClient(
             url=PROMETHEUS_PUSHGATEWAY_URL,
@@ -186,6 +188,7 @@ async def _emit_worker_start_event(
     workflow_count: int,
     activity_count: int,
     max_concurrent_activities: int,
+    max_concurrent_workflow_tasks: int | None = None,
     host: str = "",
     namespace: str = "",
     build_id: str = "",
@@ -196,9 +199,12 @@ async def _emit_worker_start_event(
         APP_SDK_VERSION,
         APP_TYPE,
         APPLICATION_VERSION,
+        DEPLOYMENT_OBJECT_STORE_NAME,
         PUBLISHED_AT,
         RELEASE_CHANNEL,
         RELEASE_ID,
+        SECRET_STORE_NAME,
+        UPSTREAM_OBJECT_STORE_NAME,
     )
     from application_sdk.contracts.events import (  # noqa: PLC0415 — circular: contracts.events imports execution.errors
         ApplicationEventNames,
@@ -209,12 +215,19 @@ async def _emit_worker_start_event(
     from application_sdk.execution._temporal.interceptors.events import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
         _publish_event_via_binding,
     )
+    from application_sdk.infrastructure._dapr.http import (  # noqa: PLC0415 — circular: infrastructure imports execution transitively
+        get_dapr_component_types,
+    )
     from application_sdk.infrastructure.bindings import (  # noqa: PLC0415 — circular: infrastructure imports execution transitively
         BindingError,
     )
 
     deployment_name = os.environ.get("ATLAN_DEPLOYMENT_NAME", app_name)
     host_part, _, port_part = host.partition(":")
+
+    # Discover which Dapr binding types back the object/secret stores. Best-effort
+    # and deploy-path-agnostic: read from the live sidecar rather than env.
+    component_types = await get_dapr_component_types()
 
     event_data = WorkerStartEventData(
         application_name=app_name,
@@ -225,6 +238,7 @@ async def _emit_worker_start_event(
         port=port_part,
         connection_string=host,
         max_concurrent_activities=max_concurrent_activities,
+        max_concurrent_workflow_tasks=max_concurrent_workflow_tasks,
         workflow_count=workflow_count,
         activity_count=activity_count,
         build_id=build_id or None,
@@ -235,6 +249,11 @@ async def _emit_worker_start_event(
         sdk_version=APP_SDK_VERSION,
         app_type=APP_TYPE,
         published_at=PUBLISHED_AT,
+        objectstore_binding_type=component_types.get(DEPLOYMENT_OBJECT_STORE_NAME, ""),
+        upstream_objectstore_binding_type=component_types.get(
+            UPSTREAM_OBJECT_STORE_NAME, ""
+        ),
+        secretstore_binding_type=component_types.get(SECRET_STORE_NAME, ""),
     )
     event = Event(
         event_type=EventTypes.APPLICATION_EVENT.value,
@@ -262,6 +281,7 @@ def create_worker(
     passthrough_modules: set[str] | None = None,
     service_name: str | None = None,
     max_concurrent_activities: int | None = None,
+    max_concurrent_workflow_tasks: int | None = None,
     graceful_shutdown_timeout_seconds: int | None = None,
     interceptors: list[TemporalInterceptor] | None = None,
     enable_pushgateway: bool = False,
@@ -290,6 +310,15 @@ def create_worker(
         passthrough_modules: Additional modules to pass through the sandbox.
         service_name: Service name for observability (traces/metrics).
         max_concurrent_activities: Maximum number of concurrent activity executions.
+        max_concurrent_workflow_tasks: Maximum number of in-flight workflow task
+            pollers, which bounds the number of workflow sandboxes the worker
+            spins up concurrently. Leave ``None`` to use Temporal's default. Pin
+            this when many workflows fire simultaneously (e.g. cron bursts) and
+            the worker has limited activity capacity — excess sandboxes sitting
+            idle past the deadlock-detection timeout trip TMPRL1101 and bloat
+            resident memory. A common AE-derived heuristic is to pin it to the
+            same value as ``max_concurrent_activities`` so the active sandbox
+            count stays bounded by what the worker can actually drain.
         graceful_shutdown_timeout_seconds: Seconds to allow in-flight activities to
             complete after SIGTERM before cancelling them.
         interceptors: Additional Temporal interceptors to register. Log /
@@ -360,10 +389,15 @@ def create_worker(
         type(i).__name__ for i in (interceptors or []) if isinstance(i, _builtin_types)
     ]
     if _duplicates:
-        raise ValueError(
-            f"create_worker(interceptors=...) contains {_duplicates}, but the SDK "
-            "now adds LogInterceptor / MetricsInterceptor / TraceInterceptor "
-            "automatically. Remove them from your `interceptors` list."
+        from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
+            WorkerInterceptorDuplicateError,
+        )
+
+        raise WorkerInterceptorDuplicateError(
+            message=f"Duplicate interceptor types: {_duplicates}. The SDK adds "
+            "LogInterceptor / MetricsInterceptor / TraceInterceptor automatically. "
+            "Remove them from your `interceptors` list.",
+            field="interceptors",
         )
 
     all_interceptors: list[TemporalInterceptor] = [
@@ -428,6 +462,9 @@ def create_worker(
     # Worker Deployment versioning — set by TWD controller via Kubernetes Downward API.
     # ATLAN_APP_BUILD_ID alone: legacy build-ID mode (build ID doubles as deployment name).
     # ATLAN_APP_BUILD_ID + ATLAN_APP_DEPLOYMENT_NAME: full Worker Deployment versioning.
+    # default_versioning_behavior defaults to PINNED; an app may opt into
+    # AUTO_UPGRADE via TEMPORAL_DEFAULT_VERSIONING_BEHAVIOR in its own deployment.
+    versioning_behavior = load_execution_settings().default_versioning_behavior
     deployment_config: WorkerDeploymentConfig | None = None
     if APP_BUILD_ID and APP_DEPLOYMENT_NAME:
         deployment_config = WorkerDeploymentConfig(
@@ -436,12 +473,13 @@ def create_worker(
                 build_id=APP_BUILD_ID,
             ),
             use_worker_versioning=True,
-            default_versioning_behavior=VersioningBehavior.PINNED,
+            default_versioning_behavior=versioning_behavior,
         )
         logger.info(
-            "Worker Deployment versioning enabled: deployment=%s build_id=%s",
+            "Worker Deployment versioning enabled: deployment=%s build_id=%s behavior=%s",
             APP_DEPLOYMENT_NAME,
             APP_BUILD_ID,
+            versioning_behavior.name,
         )
     elif APP_BUILD_ID:
         deployment_config = WorkerDeploymentConfig(
@@ -450,9 +488,13 @@ def create_worker(
                 build_id=APP_BUILD_ID,
             ),
             use_worker_versioning=True,
-            default_versioning_behavior=VersioningBehavior.PINNED,
+            default_versioning_behavior=versioning_behavior,
         )
-        logger.info("Worker versioning enabled: build_id=%s", APP_BUILD_ID)
+        logger.info(
+            "Worker versioning enabled: build_id=%s behavior=%s",
+            APP_BUILD_ID,
+            versioning_behavior.name,
+        )
 
     worker_kwargs: dict = dict(
         task_queue=task_queue,
@@ -466,6 +508,10 @@ def create_worker(
         max_heartbeat_throttle_interval=timedelta(seconds=10),
         graceful_shutdown_timeout=timedelta(seconds=graceful_shutdown_timeout_seconds),
     )
+    # Only forward max_concurrent_workflow_tasks when explicitly set; passing
+    # None would override Temporal's default with None and crash the worker.
+    if max_concurrent_workflow_tasks is not None:
+        worker_kwargs["max_concurrent_workflow_tasks"] = max_concurrent_workflow_tasks
     if deployment_config is not None:
         worker_kwargs["deployment_config"] = deployment_config
 
@@ -486,6 +532,7 @@ def create_worker(
             "workflow_count": len(app_workflows),
             "activity_count": len(task_activities),
             "max_concurrent_activities": max_concurrent_activities,
+            "max_concurrent_workflow_tasks": max_concurrent_workflow_tasks,
             "host": host,
             "namespace": namespace,
             "build_id": APP_BUILD_ID,

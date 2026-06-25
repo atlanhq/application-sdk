@@ -8,10 +8,10 @@ from datetime import datetime, timedelta
 from time import time
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
 
-import orjson
-
 if TYPE_CHECKING:
-    from obstore.store import ObjectStore
+    from application_sdk.storage.ops import BoundStore
+
+import orjson
 
 from application_sdk.constants import (
     APPLICATION_NAME,
@@ -24,8 +24,6 @@ from application_sdk.constants import (
     TRACES_FILE_NAME,
     UPSTREAM_OBJECT_STORE_NAME,
 )
-from application_sdk.storage import delete, upload_file
-from application_sdk.storage.binding import create_store_from_binding
 
 # --- Path configuration ---
 # Structure: observability/<mode>/<signal>/year=.../hour=.../file.json.gz
@@ -72,21 +70,43 @@ class AtlanObservability(Generic[T], ABC):
 
     _last_cleanup_key = "last_cleanup_time"
     _instances: ClassVar[list[Any]] = []
-    _deployment_store: ClassVar["ObjectStore | None"] = None
-    _upstream_store: ClassVar["ObjectStore | None"] = None
+    _deployment_store: ClassVar["BoundStore | None"] = None
+    _upstream_store: ClassVar["BoundStore | None"] = None
 
     @classmethod
-    def _get_deployment_store(cls):
+    def _components_dir(cls) -> str:
+        # Honour ``DAPR_COMPONENTS_PATH`` so the embedded-Dapr local-dev path
+        # finds the auto-generated component YAMLs in the temp dir.
+        return os.environ.get("DAPR_COMPONENTS_PATH", "./components")
+
+    @classmethod
+    def _get_deployment_store(cls) -> "BoundStore":
         if cls._deployment_store is None:
-            cls._deployment_store = create_store_from_binding(
-                DEPLOYMENT_OBJECT_STORE_NAME
+            from application_sdk.storage.binding import (  # noqa: PLC0415
+                create_store_from_binding_with_put_attrs,
             )
+            from application_sdk.storage.ops import BoundStore  # noqa: PLC0415
+
+            store, put_attrs = create_store_from_binding_with_put_attrs(
+                DEPLOYMENT_OBJECT_STORE_NAME,
+                components_dir=cls._components_dir(),
+            )
+            cls._deployment_store = BoundStore(store, put_attrs)
         return cls._deployment_store
 
     @classmethod
-    def _get_upstream_store(cls):
+    def _get_upstream_store(cls) -> "BoundStore":
         if cls._upstream_store is None:
-            cls._upstream_store = create_store_from_binding(UPSTREAM_OBJECT_STORE_NAME)
+            from application_sdk.storage.binding import (  # noqa: PLC0415 — deferred to break the observability→storage circular import
+                create_store_from_binding_with_put_attrs,
+            )
+            from application_sdk.storage.ops import BoundStore  # noqa: PLC0415
+
+            store, put_attrs = create_store_from_binding_with_put_attrs(
+                UPSTREAM_OBJECT_STORE_NAME,
+                components_dir=cls._components_dir(),
+            )
+            cls._upstream_store = BoundStore(store, put_attrs)
         return cls._upstream_store
 
     def __init__(
@@ -268,6 +288,8 @@ class AtlanObservability(Generic[T], ABC):
         """
         if not ENABLE_OBSERVABILITY_STORE_SINK or not records:
             return
+        from application_sdk.storage import upload_file  # noqa: PLC0415
+
         # File I/O is restricted inside Temporal's workflow sandbox — skip the
         # store sink there; records are still exported via OTLP/console.
         try:
@@ -277,7 +299,7 @@ class AtlanObservability(Generic[T], ABC):
 
             if _wf_unsafe.in_sandbox():
                 return
-        except ImportError:
+        except ImportError:  # conformance: ignore[E002,E008] Temporal sandbox check unavailable outside a worker; normal flush
             pass
         try:
             # Group records by partition using record's own timestamp
@@ -416,6 +438,8 @@ class AtlanObservability(Generic[T], ABC):
         - Syncs changes with object store
         """
         try:
+            from application_sdk.storage import delete  # noqa: PLC0415
+
             # Use local subdir (same as _get_partition_path)
             signal_type = self._get_signal_type()
             local_subdir = LOCAL_OBS_SUBDIR_MAP.get(signal_type, f"{_OBS_MODE}/other")

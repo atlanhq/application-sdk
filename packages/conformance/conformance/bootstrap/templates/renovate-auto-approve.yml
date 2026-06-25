@@ -1,0 +1,39 @@
+# Automatically post an atlan-ci code-owner approval on Renovate
+# dependency-only PRs once all required CI checks are green on the current HEAD.
+#
+# All approval logic lives in the reusable renovate-auto-approve-reusable.yml
+# in atlanhq/application-sdk. This caller is responsible only for:
+#   - Wiring the trigger (workflow_run on this repo's required-check workflows)
+#   - Filtering out failed/cancelled upstream runs before spending a runner
+#   - Forwarding event context as inputs to the reusable
+
+name: Renovate — auto-approve dependency-only PRs
+
+on:
+  workflow_run:
+    workflows: [Tests, Conformance, Pre-commit Checks, Vulnerability Scan]
+    types: [completed]
+    branches: ['renovate/**']
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number to evaluate (for manual testing / re-approval)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  auto-approve:
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || github.event.workflow_run.conclusion == 'success'
+    uses: atlanhq/application-sdk/.github/workflows/renovate-auto-approve-reusable.yml@main
+    with:
+      event_name: ${{ github.event_name }}
+      head_sha: ${{ github.event.workflow_run.head_sha }}
+      pr_number: ${{ inputs.pr_number }}
+    secrets:
+      org_pat: ${{ secrets.ORG_PAT_GITHUB }}

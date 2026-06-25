@@ -2,6 +2,16 @@
 
 This reference covers the detailed implementation of the Activities class for incremental extraction.
 
+> **SQL injection note (BLDX-518).** Any value substituted into a SQL
+> template via `str.replace` / f-string must pass through
+> `application_sdk.common.sql_filters.validate_filter_no_sql_injection`
+> first, and the template must wrap the substitution in single quotes
+> (e.g. `WHERE last_modified > '{marker_timestamp}'`). The SDK contracts
+> apply this guard automatically for `marker_timestamp`,
+> `include_filter`, `exclude_filter`, and `temp_table_regex`; if your
+> connector introduces a new substitution placeholder, validate the
+> value yourself before the `replace`.
+
 ## Class Structure
 
 ```python
@@ -190,7 +200,7 @@ The following methods are **concrete in the SDK** and should NOT be overridden:
 | `update_incremental_marker()` | Generic marker S3 persistence |
 | `read_current_state()` | Generic current-state S3 download |
 | `write_current_state()` | Generic ancestral merge + S3 upload |
-| `prepare_column_extraction_queries()` | Generic Daft analysis + batching |
+| `prepare_column_extraction_queries()` | Generic DuckDB analysis + batching |
 | `execute_single_column_batch()` | Generic batch download + delegation |
 
 ## ClickHouse-Specific: Filter Transformation
@@ -235,7 +245,7 @@ def get_activities(activities):
         activities.prepare_column_extraction_queries,
         activities.execute_single_column_batch,
         activities.write_current_state,
-        activities.upload_to_atlan,
+        activities.upload_to_atlan,  # v2-native activity; v3 equivalent: self.upload(UploadInput(...))
         activities.update_incremental_marker,
         activities.save_workflow_state,
     ]

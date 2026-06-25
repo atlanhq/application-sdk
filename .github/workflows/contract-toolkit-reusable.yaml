@@ -1,0 +1,211 @@
+name: Contract Toolkit Validation (reusable)
+
+# Reusable workflow: contract-toolkit validation (generated-output freshness,
+# PKL tests/invariants, generated-Python lint + SDK-import, changelog guard,
+# docs reminder).
+#
+# Invoked only by sdk-gate.yaml, which gates the *whole call* on
+# "toolkit area changed OR force-all".  This replaces the old
+# contract-toolkit-validate.yml top-level `paths:` trigger: a path-filtered
+# workflow simply does not run when its paths are untouched, so any job inside
+# it that branch protection marks "required" sits pending forever.  Folding the
+# jobs into a reusable behind the always-concluding gate fixes that.
+#
+# The changelog-guard / docs-check jobs use pull_request context
+# (base/head sha, head_ref) and are guarded on `github.event_name ==
+# 'pull_request'`, so they self-skip on merge_group and tag-push entries where
+# that context is absent.  Reusable workflows see the *caller's* event context,
+# so these guards keep working unchanged.
+
+on:
+  workflow_call: {}
+
+permissions:
+  contents: read
+
+env:
+  PKL_VERSION: "0.27.2"
+
+jobs:
+  generated-output:
+    name: Verify generated output
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+      - name: Install PKL
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/pkl "https://github.com/apple/pkl/releases/download/${PKL_VERSION}/pkl-linux-amd64"
+          chmod +x /tmp/pkl
+          sudo mv /tmp/pkl /usr/local/bin/pkl
+
+      - name: Regenerate all examples
+        run: contract-toolkit/scripts/regenerate-all.sh
+
+      - name: Check for stale generated output
+        run: |
+          set -euo pipefail
+          stale=0
+
+          if ! git diff --exit-code -- contract-toolkit/examples/; then
+            stale=1
+          fi
+
+          untracked="$(git ls-files --others --exclude-standard contract-toolkit/examples/)"
+          if [ -n "$untracked" ]; then
+            echo ""
+            echo "Untracked generated files:"
+            echo "$untracked"
+            stale=1
+          fi
+
+          if [ "$stale" -ne 0 ]; then
+            echo ""
+            echo "Generated contract-toolkit examples are stale."
+            echo "Run contract-toolkit/scripts/regenerate-all.sh and commit the result."
+            exit 1
+          fi
+
+          echo "Generated output is up to date."
+
+  pkl-tests:
+    name: PKL tests and invariants
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install PKL
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/pkl "https://github.com/apple/pkl/releases/download/${PKL_VERSION}/pkl-linux-amd64"
+          chmod +x /tmp/pkl
+          sudo mv /tmp/pkl /usr/local/bin/pkl
+
+      - name: Check generated output invariants
+        run: contract-toolkit/scripts/check-invariants.sh
+
+      - name: Run PKL tests
+        run: |
+          cd contract-toolkit
+          pkl test tests/*.pkl
+
+  generated-python:
+    name: Generated Python lint and SDK imports
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14"
+
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+      - name: Check generated Python formatting
+        run: |
+          find contract-toolkit/examples -name "_input.py" -print0 \
+            | xargs -0 uvx ruff format --isolated --check
+
+      - name: Check generated Python lint
+        run: |
+          find contract-toolkit/examples -name "_input.py" -print0 \
+            | xargs -0 uvx ruff check --isolated --per-file-ignores="contract-toolkit/examples/**/generated/*:F401"
+
+      - name: Test generated input imports against local SDK
+        run: uv run --extra workflows python contract-toolkit/scripts/test-sdk-import.py
+
+  changelog-guard:
+    name: Toolkit changelog guard
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'pull_request' &&
+      !startsWith(github.head_ref, 'release/contract-toolkit-v') &&
+      !startsWith(github.head_ref, 'bump-version-contract-toolkit')
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Fail if toolkit changelog is hand-edited
+        run: |
+          set -euo pipefail
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+
+          if git diff --name-only --diff-filter=MD "$base" "$head" \
+            | grep -q '^contract-toolkit/CHANGELOG.md$'; then
+            echo "contract-toolkit/CHANGELOG.md is regenerated by the contract toolkit release workflow."
+            echo "Do not hand-edit it in normal feature PRs."
+            exit 1
+          fi
+
+          echo "contract-toolkit/CHANGELOG.md untouched or freshly added."
+
+  docs-check:
+    name: Toolkit docs update check
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'pull_request' &&
+      !startsWith(github.head_ref, 'release/contract-toolkit-v') &&
+      !startsWith(github.head_ref, 'bump-version-contract-toolkit')
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Check docs coverage for toolkit source changes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+
+          if ! git diff --name-only "$base" "$head" | grep -q '^contract-toolkit/src/'; then
+            echo "No contract-toolkit/src changes; docs check not applicable."
+            exit 0
+          fi
+
+          missing=""
+          for doc in \
+            contract-toolkit/README.md \
+            contract-toolkit/docs/reference.md
+          do
+            if ! git diff --name-only "$base" "$head" | grep -q "^${doc}$"; then
+              missing="${missing}
+          - \`${doc}\`"
+            fi
+          done
+
+          if [ -z "$missing" ]; then
+            echo "Toolkit docs were updated."
+            exit 0
+          fi
+
+          body="$(cat <<EOF
+          **Docs reminder:** \`contract-toolkit/src/\` changed, but these docs were not updated:
+          $missing
+
+          Per toolkit convention, public PKL changes should update:
+          - \`contract-toolkit/README.md\`
+          - \`contract-toolkit/docs/reference.md\`
+
+          Ignore this reminder only when the source change is internal and has no author-facing impact.
+          EOF
+          )"
+
+          existing="$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" \
+            --jq '[.[] | select(.user.login == "github-actions[bot]") | select(.body | contains("Docs reminder:"))] | length')"
+
+          if [ "$existing" -eq 0 ]; then
+            gh pr comment "$PR_NUMBER" --body "$body"
+          else
+            echo "Docs reminder already posted."
+          fi

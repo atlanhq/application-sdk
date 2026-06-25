@@ -105,7 +105,7 @@ Dapr component names are read at module-import time (not at runtime) because the
 | `STATE_STORE_NAME` | `statestore` | Dapr state store component name. |
 | `SECRET_STORE_NAME` | `secretstore` | Dapr secret store component name. |
 | `DEPLOYMENT_OBJECT_STORE_NAME` | `objectstore` | Dapr object store for workflow outputs and artifacts. |
-| `UPSTREAM_OBJECT_STORE_NAME` | `objectstore` | Dapr object store for uploading data to the Atlan platform. |
+| `UPSTREAM_OBJECT_STORE_NAME` | `atlan-objectstore` | Dapr object store for uploading data to the Atlan platform (SDR deployments only). If the named component is absent, `upstream_storage` is `None` and `App.upload()`/`App.download()` fall back to the deployment store. See [ADR-0014](adr/0014-two-store-storage-architecture.md). |
 | `EVENT_STORE_NAME` | `eventstore` | Dapr pub/sub component name. |
 | `DEPLOYMENT_SECRET_STORE_NAME` | `deployment-secret-store` | Dapr secret store holding deployment-scoped secrets (auth credentials, etc.). |
 | `DAPR_MAX_GRPC_MESSAGE_LENGTH` | `104857600` (100 MB) | Maximum gRPC message size in bytes for Dapr client calls. Increase for apps that move large payloads through Dapr state or bindings. |
@@ -150,6 +150,7 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 |----------|---------|-------------|
 | `ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS` | `4` | Maximum concurrent object-store uploads/downloads. |
 | `ENABLE_ATLAN_UPLOAD` | `false` | Enable uploading processed artifacts to the Atlan platform object store. |
+| `ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE` | `best_effort` | Controls dual-write behaviour when both stores are configured (SDR only). `best_effort` (default): artifact is written to the deployment (customer) store and the upstream (Atlan) store; a deployment-write failure logs a `WARNING` and the run continues. `required`: same dual-write, but a deployment-write failure causes the run to fail after the upstream write completes (a copy is guaranteed somewhere). `disabled`: upstream-only write (pre-BLDX-1464 behaviour). |
 | `SSL_CERT_DIR` | _(empty)_ | Directory of custom CA certificates (`.pem`, `.crt`, `.cer`, `.ca-bundle`). Used by `httpx` and `aiohttp` clients when set. |
 
 ---

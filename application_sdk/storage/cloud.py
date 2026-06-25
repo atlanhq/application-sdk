@@ -48,14 +48,21 @@ from pathlib import Path
 from typing import Any
 
 import obstore as obs
-from obstore.store import AzureStore, GCSStore, ObjectStore, S3Store
+from obstore.store import ObjectStore
 
 from application_sdk.storage.errors import (
     StorageConfigError,
     StorageError,
     StorageNotFoundError,
 )
-from application_sdk.storage.ops import _list_items, download_file, upload_file
+from application_sdk.storage.ops import (
+    _azure_container_not_found_message,
+    _compute_part_size,
+    _is_azure_container_not_found,
+    _list_items,
+    _safe_join_under,
+    download_file,
+)
 
 # Lazy import: direct get_logger() at module load would create a circular
 # dependency (observability -> storage -> cloud -> observability).
@@ -80,9 +87,16 @@ class CloudStore:
     Create via the :meth:`from_credentials` factory method.
     """
 
-    def __init__(self, store: ObjectStore, *, provider: str = "unknown") -> None:
+    def __init__(
+        self,
+        store: ObjectStore,
+        *,
+        provider: str = "unknown",
+        put_attributes: dict[str, str] | None = None,
+    ) -> None:
         self._store = store
         self._provider = provider
+        self._put_attributes: dict[str, str] | None = put_attributes
 
     @property
     def provider(self) -> str:
@@ -136,11 +150,11 @@ class CloudStore:
         )
 
         if auth_type == "s3":
-            store = _create_s3_store(credentials, extra)
+            store, put_attrs = _create_s3_store(credentials, extra)
         elif auth_type == "gcs":
-            store = _create_gcs_store(credentials, extra)
+            store, put_attrs = _create_gcs_store(credentials, extra)
         elif auth_type == "adls":
-            store = _create_azure_store(credentials, extra)
+            store, put_attrs = _create_azure_store(credentials, extra)
         else:
             raise StorageConfigError(
                 f"Cannot determine cloud provider from credentials. "
@@ -148,7 +162,7 @@ class CloudStore:
             )
 
         _log().debug("Created CloudStore provider=%s", auth_type)
-        return cls(store, provider=auth_type)
+        return cls(store, provider=auth_type, put_attributes=put_attrs)
 
     # ------------------------------------------------------------------
     # Read operations
@@ -171,6 +185,7 @@ class CloudStore:
             return bytes(await result.bytes_async())
         except FileNotFoundError as exc:
             raise StorageNotFoundError(f"Key not found: {key}", key=key) from exc
+        # conformance: ignore[E004] re-raise only; discriminates NotFoundError by name then wraps in StorageError/StorageNotFoundError
         except Exception as exc:
             # obstore backends raise different exception types for not-found:
             # - LocalStore: FileNotFoundError (caught above)
@@ -249,7 +264,6 @@ class CloudStore:
                 + (f" (filter: {suffix_filter})" if suffix_filter else "")
             )
 
-        resolved_output = output.resolve()
         sem = asyncio.Semaphore(max_concurrency)
 
         async def _dl(obj_key: str) -> Path:
@@ -259,10 +273,8 @@ class CloudStore:
                     if list_prefix and obj_key.startswith(list_prefix)
                     else Path(obj_key).name
                 )
-                local_path = (output / rel).resolve()
-                # Prevent path traversal from malicious remote keys
-                if not local_path.is_relative_to(resolved_output):
-                    raise StorageError(f"Path traversal detected in key: {obj_key!r}")
+                # Reject keys whose resolved path escapes output (e.g. via ".." segments).
+                local_path = _safe_join_under(output, rel)
                 await download_file(
                     obj_key, local_path, store=self._store, normalize=False
                 )
@@ -285,6 +297,7 @@ class CloudStore:
                 for path, _ in items
                 if not lfilter or any(path.lower().endswith(s) for s in lfilter)
             )
+        # conformance: ignore[E004] re-raise only; wraps obstore listing failure into StorageError
         except Exception as exc:
             raise StorageError(
                 f"Failed to list keys with prefix: {list_prefix!r}", cause=exc
@@ -332,17 +345,24 @@ class CloudStore:
         path = Path(local_path)
         try:
             size = path.stat().st_size
-            await upload_file(
-                key,
-                path,
-                store=self._store,
-                normalize=False,
-                retain_local_copy=True,
-                compute_hash=False,
-            )
+            chunk = _compute_part_size(size, 8 * 1024 * 1024)
+            async with obs.open_writer_async(
+                self._store, key, buffer_size=chunk, attributes=self._put_attributes
+            ) as writer:
+                with path.open("rb") as fh:
+                    while True:
+                        buf = fh.read(chunk)
+                        if not buf:
+                            break
+                        await writer.write(buf)
         except StorageError:
             raise
+        # conformance: ignore[E004] re-raise only; checks azure container-not-found then wraps in StorageConfigError/StorageError
         except Exception as exc:
+            if _is_azure_container_not_found(exc):
+                raise StorageConfigError(
+                    _azure_container_not_found_message(key)
+                ) from exc
             raise StorageError(f"Failed to upload key: {key}", cause=exc) from exc
         _log().info("Uploaded key=%s bytes=%d", key, size)
         return size
@@ -358,7 +378,8 @@ class CloudStore:
             Number of bytes uploaded.
         """
         try:
-            await obs.put_async(self._store, key, data)
+            await obs.put_async(self._store, key, data, attributes=self._put_attributes)
+        # conformance: ignore[E004] re-raise only; wraps obstore put failure into StorageError
         except Exception as exc:
             raise StorageError(f"Failed to upload key: {key}", cause=exc) from exc
         return len(data)
@@ -422,19 +443,16 @@ def _infer_auth_type(extra: dict[str, Any]) -> str:
     return ""
 
 
-def _create_s3_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectStore:
+def _create_s3_store(
+    creds: dict[str, Any], extra: dict[str, Any]
+) -> tuple[ObjectStore, dict[str, str] | None]:
     """Create an S3 store from credentials.
 
-    BLDX-1155: customer-facing buckets traverse the public internet — exactly
-    the path most likely to time out on large extracts.  Plumb the SDK
-    defaults for ``client_options`` + ``retry_config`` so every CloudStore
-    inherits the same 30-minute request budget as the in-tenant Dapr store.
+    Returns *(store, put_attributes)* where *put_attributes* is
+    ``{"Storage-Class": value}`` when ``extra["storageClass"]`` is set,
+    or ``None`` otherwise.
     """
-    from application_sdk.storage._obstore_config import (  # noqa: PLC0415
-        log_obstore_config,
-        obstore_client_options,
-        obstore_retry_config,
-    )
+    from application_sdk.storage._obstore_config import make_s3_store  # noqa: PLC0415
 
     bucket = extra.get("s3_bucket", "")
     if not bucket:
@@ -447,39 +465,70 @@ def _create_s3_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectStor
 
     access_key = creds.get("username") or ""
     secret_key = creds.get("password") or ""
-    if access_key and secret_key:
+
+    credential_provider = None
+    role_arn = extra.get("aws_role_arn", "")
+    if role_arn:
+        # Cross-account / IRSA assume-role. obstore has no static role_arn
+        # config key (setting one is a silent no-op that leaves the store on
+        # the ambient identity), so wire an STS credential provider — the same
+        # path binding.py uses. Base creds are optional: when omitted, the STS
+        # call uses the pod's ambient chain (IRSA / instance profile) as the
+        # caller identity. Partial base creds (only one of access/secret) are
+        # dropped so we don't hand obstore a half-configured session.
+        from application_sdk.storage._credential_providers import (  # noqa: PLC0415
+            make_s3_assume_role_provider,
+        )
+
+        base_access_key = access_key or None
+        base_secret_key = secret_key or None
+        if bool(base_access_key) != bool(base_secret_key):
+            _log().warning(
+                "S3 assume-role: both username and password are required as base "
+                "credentials; only one was set — dropping both and falling back to "
+                "the ambient credential chain as the STS caller identity."
+            )
+            base_access_key = None
+            base_secret_key = None
+        credential_provider = make_s3_assume_role_provider(
+            role_arn=role_arn,
+            # Distinct from binding.py's "atlan-application-sdk" default so the
+            # two S3 auth paths are distinguishable in CloudTrail AssumeRole logs
+            # (and preserves CloudStore's historical session name).
+            session_name=extra.get("aws_role_session_name") or "cloud-store-session",
+            region=region or None,
+            base_access_key=base_access_key,
+            base_secret_key=base_secret_key,
+            base_session_token=(creds.get("token") or None)
+            if base_access_key
+            else None,
+        )
+        _log().debug("S3 cross-account assume-role auth configured")
+    elif access_key and secret_key:
         config["aws_access_key_id"] = access_key
         config["aws_secret_access_key"] = secret_key
 
-    role_arn = extra.get("aws_role_arn", "")
-    if role_arn:
-        config["aws_role_arn"] = role_arn
-        config["aws_role_session_name"] = "cloud-store-session"
-        _log().debug("S3 role-based auth configured")
-
-    client_options = obstore_client_options()
-    retry_config = obstore_retry_config()
-    log_obstore_config(
-        "cloud-s3", client_options=client_options, retry_config=retry_config
+    storage_class = (extra.get("storageClass") or "").strip()
+    put_attrs: dict[str, str] | None = (
+        {"Storage-Class": storage_class} if storage_class else None
     )
-    return S3Store(
-        bucket=bucket,
-        config=config,
-        client_options=client_options,
-        retry_config=retry_config,
+
+    return (
+        make_s3_store(
+            bucket,
+            config or None,
+            label="cloud-s3",
+            credential_provider=credential_provider,
+        ),
+        put_attrs,
     )
 
 
-def _create_gcs_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectStore:
-    """Create a GCS store from credentials.
-
-    BLDX-1155: see :func:`_create_s3_store`; same plumbing applies.
-    """
-    from application_sdk.storage._obstore_config import (  # noqa: PLC0415
-        log_obstore_config,
-        obstore_client_options,
-        obstore_retry_config,
-    )
+def _create_gcs_store(
+    creds: dict[str, Any], extra: dict[str, Any]
+) -> tuple[ObjectStore, dict[str, str] | None]:
+    """Create a GCS store from credentials."""
+    from application_sdk.storage._obstore_config import make_gcs_store  # noqa: PLC0415
 
     bucket = extra.get("gcs_bucket", "")
     if not bucket:
@@ -490,28 +539,22 @@ def _create_gcs_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectSto
     if sa_json:
         gcs_config["google_service_account_key"] = sa_json
 
-    client_options = obstore_client_options()
-    retry_config = obstore_retry_config()
-    log_obstore_config(
-        "cloud-gcs", client_options=client_options, retry_config=retry_config
-    )
-    return GCSStore(
-        bucket=bucket,
-        config=gcs_config if gcs_config else None,
-        client_options=client_options,
-        retry_config=retry_config,
+    storage_class = (extra.get("storageClass") or "").strip()
+    put_attrs: dict[str, str] | None = (
+        {"X-Goog-Storage-Class": storage_class} if storage_class else None
     )
 
+    return make_gcs_store(
+        bucket, gcs_config if gcs_config else None, label="cloud-gcs"
+    ), put_attrs
 
-def _create_azure_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectStore:
-    """Create an Azure (ADLS) store from credentials.
 
-    BLDX-1155: see :func:`_create_s3_store`; same plumbing applies.
-    """
+def _create_azure_store(
+    creds: dict[str, Any], extra: dict[str, Any]
+) -> tuple[ObjectStore, dict[str, str] | None]:
+    """Create an Azure (ADLS) store from credentials."""
     from application_sdk.storage._obstore_config import (  # noqa: PLC0415
-        log_obstore_config,
-        obstore_client_options,
-        obstore_retry_config,
+        make_azure_store,
     )
 
     storage_account = extra.get("storage_account_name", "")
@@ -539,14 +582,9 @@ def _create_azure_store(creds: dict[str, Any], extra: dict[str, Any]) -> ObjectS
         if access_key:
             az_config["azure_storage_client_secret"] = access_key
 
-    client_options = obstore_client_options()
-    retry_config = obstore_retry_config()
-    log_obstore_config(
-        "cloud-azure", client_options=client_options, retry_config=retry_config
+    storage_class = (extra.get("storageClass") or "").strip()
+    put_attrs: dict[str, str] | None = (
+        {"x-ms-access-tier": storage_class} if storage_class else None
     )
-    return AzureStore(
-        container_name=container,
-        config=az_config,
-        client_options=client_options,
-        retry_config=retry_config,
-    )
+
+    return make_azure_store(container, az_config, label="cloud-azure"), put_attrs

@@ -18,15 +18,15 @@ inputs:
 runs:
   using: 'composite'
   steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       with:
         fetch-depth: 0
 
     - name: Set up Python 3.11
       id: setup-python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
       with:
-        python-version: "3.11"
+        python-version: "3.14"
 
     - name: Install interrogate
       shell: bash
@@ -64,7 +64,7 @@ runs:
         echo "</details>" >> docstring-cov.md
 
     - name: Comment Docstring Coverage on PR
-      uses: mshick/add-pr-comment@v2
+      uses: mshick/add-pr-comment@ec328af66588ab8f77cdeb2c264f14aba45bbf59 # v3
       with:
         message-id: "docstring-coverage"
         message-path: docstring-cov.md

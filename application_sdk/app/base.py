@@ -13,25 +13,31 @@ from abc import ABC
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timedelta
-from typing import Any, ClassVar, Never, TypeVar, cast, get_type_hints
+from typing import Any, ClassVar, Literal, Never, TypeVar, cast, get_type_hints
 from uuid import UUID
 
 import obstore as obs
 from temporalio import activity, workflow
 from temporalio.exceptions import FailureError
 
+from application_sdk.app._ep_registration import (
+    _apply_app_registration,
+    _build_entry_points,
+    _collect_implicit_ep,
+    _register_tasks,
+    _scan_entrypoints,
+)
+from application_sdk.app.base_errors import (
+    AbstractRunNotImplementedError,
+    ObjectStoreNotConfiguredError,
+)
 from application_sdk.app.context import (
     AppContext,
     TaskExecutionContext,
     _is_atlan_logger,
 )
-from application_sdk.app.entrypoint import (
-    EntryPointContractError,
-    EntryPointMetadata,
-    get_entrypoint_metadata,
-    is_entrypoint,
-)
-from application_sdk.app.registry import AppMetadata, AppRegistry, TaskRegistry
+from application_sdk.app.entrypoint import EntryPointMetadata
+from application_sdk.app.registry import AppMetadata
 from application_sdk.app.task import get_task_metadata, is_task, task
 from application_sdk.contracts.base import HeartbeatDetails, Input, Output
 from application_sdk.contracts.cleanup import (
@@ -55,6 +61,7 @@ from application_sdk.errors import (
 )
 from application_sdk.errors.base import AppError as _NewAppError
 from application_sdk.errors.leaves import InternalError as _InternalError
+from application_sdk.errors.leaves import InvalidInputError as _InvalidInputError
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.observability import AtlanObservability
 
@@ -62,7 +69,7 @@ _task_logger = get_logger(__name__)
 
 try:
     _FRAMEWORK_VERSION = importlib.metadata.version("application-sdk")
-except importlib.metadata.PackageNotFoundError:
+except importlib.metadata.PackageNotFoundError:  # conformance: ignore[E009] package not installed (e.g. editable dev install); "unknown" sentinel is benign
     _FRAMEWORK_VERSION = "unknown"
 
 
@@ -202,7 +209,7 @@ class AppContextError(_InternalError):
     """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_CONTEXT_ERROR
-    code: ClassVar[str] = "APP_CONTEXT"
+    code: ClassVar[str] = "INTERNAL_APP_CONTEXT"
 
     def __init__(self, message: str, *, error_code: ErrorCode | None = None) -> None:
         _InternalError.__init__(self, message=message)
@@ -299,6 +306,7 @@ def _get_execution_id_from_task() -> str:
     """
     try:
         wid = activity.info().workflow_id
+    # conformance: ignore[E004] probe for Temporal activity context; broad catch is intentional, exception re-raised as typed AppContextError
     except Exception as e:
         raise AppContextError("Cannot access app state outside of task context") from e
     if not wid:
@@ -397,7 +405,7 @@ class PersistentStateAccessor:
             value: State data to save.
 
         Raises:
-            RuntimeError: If no state store is configured.
+            StateStoreNotConfiguredError: If no state store is configured.
         """
         await self._app.context.save_state(key, value)
 
@@ -411,7 +419,7 @@ class PersistentStateAccessor:
             The saved state or None if not found.
 
         Raises:
-            RuntimeError: If no state store is configured.
+            StateStoreNotConfiguredError: If no state store is configured.
         """
         return await self._app.context.load_state(key)
 
@@ -492,12 +500,13 @@ class App(ABC):
 
         This is called when a class inherits from App. It:
         1. Derives the app name from the class name if not specified
-        2. Scans for @entrypoint methods (Path 1) or infers from run() (Path 2)
-        3. Registers the app with the AppRegistry
+        2. Collects explicit @entrypoint methods and/or the implicit run() entry point
+        3. Delegates building/validation to _build_entry_points
+        4. Registers with the AppRegistry via _apply_app_registration
 
         Skip registration if:
         - The class was already registered
-        - The class has other abstract methods (besides run)
+        - The class has other unimplemented abstract methods (besides run)
         - No valid entry points or run() with proper types found
         """
         super().__init_subclass__(**kwargs)
@@ -508,134 +517,30 @@ class App(ABC):
 
         app_name = cls.name or _pascal_to_kebab(cls.__name__)
 
-        # Path 1: explicit @entrypoint methods
-        entry_points = _scan_entrypoints(cls)
-        if entry_points:
-            # Only register concrete classes (no unimplemented abstract methods besides run)
-            abstract_methods = {
-                m
-                for m in dir(cls)
-                if getattr(getattr(cls, m, None), "__isabstractmethod__", False)
-            }
-            if abstract_methods - {"run"}:
-                return  # Genuine abstract class with other abstract methods
-
-            # Every entry point must follow the single-dataclass contract:
-            # one Input subclass parameter, one Output subclass return type.
-            # Unlike the implicit run() path (which silently skips template base
-            # classes), explicit @entrypoint decoration is always intentional —
-            # raise loudly so the developer sees the problem immediately.
-            # deferred import: circular dependency (entrypoint imports App)
-            for ep in entry_points.values():
-                if not (
-                    isinstance(ep.input_type, type) and issubclass(ep.input_type, Input)
-                ):
-                    raise EntryPointContractError(
-                        f"Entry point '{ep.name}' on {cls.__name__}: "
-                        f"input type {ep.input_type!r} must be a subclass of Input."
-                    )
-                if not (
-                    isinstance(ep.output_type, type)
-                    and issubclass(ep.output_type, Output)
-                ):
-                    raise EntryPointContractError(
-                        f"Entry point '{ep.name}' on {cls.__name__}: "
-                        f"output type {ep.output_type!r} must be a subclass of Output."
-                    )
-
-            first_ep = next(iter(entry_points.values()))
-            _apply_app_registration(
-                cls=cls,
-                name=app_name,
-                version=cls.version,
-                description=cls.description,
-                tags=cls.tags,
-                passthrough_modules=cls.passthrough_modules,
-                input_type=first_ep.input_type,
-                output_type=first_ep.output_type,
-                entry_points=entry_points,
-            )
+        # Skip classes with unimplemented abstract methods other than run() —
+        # those are intermediate abstract bases, not concrete apps.
+        abstract_methods = {
+            m
+            for m in dir(cls)
+            if getattr(getattr(cls, m, None), "__isabstractmethod__", False)
+        }
+        if abstract_methods - {"run"}:
             return
 
-        # Path 2: implicit run() — backward compat
-        if inspect.isabstract(cls):
+        explicit_eps = _scan_entrypoints(cls)
+        implicit_ep = _collect_implicit_ep(cls, App.run)
+
+        entry_points = _build_entry_points(cls, implicit_ep, explicit_eps)
+        if not entry_points:
             return
 
-        # Register classes that have a concrete run() available — either:
-        #   - Explicitly defined in the class's own __dict__, OR
-        #   - Inherited from an intermediate parent (not the App.run stub).
-        # Skip classes where cls.run resolves to the App.run stub: those are
-        # intermediate abstract bases or classes that only define @entrypoint.
-        if "run" not in cls.__dict__:
-            if cls.run is App.run:
-                return
-            run_method = cls.run  # concrete implementation from intermediate parent
-        else:
-            run_method = cls.__dict__["run"]
-
-        if getattr(run_method, "__isabstractmethod__", False):
-            return
-
-        # deferred import: circular dependency (entrypoint imports App)
-        try:
-            hints = get_type_hints(cls.run)
-        except Exception:
-            # Annotations are present but cannot be resolved (e.g. renamed
-            # forward refs, missing imports). Keep the registry tolerant —
-            # don't raise — but make the failure visible so the App doesn't
-            # silently disappear from the registry.
-            _task_logger.warning(
-                "Skipping run() annotation validation for %s: get_type_hints "
-                "failed to resolve annotations (likely an unresolved forward "
-                "reference or missing import). Skipping registration of run() "
-                "type validation; the App will still be registered.",
-                cls.__name__,
-                exc_info=True,
-            )
-            return
-
-        input_type = hints.get("input")
-        output_type = hints.get("return")
-
-        if input_type is None or output_type is None:
-            raise EntryPointContractError(
-                f"run() on {cls.__name__} must have type annotations: "
-                f"async def run(self, input: <Input subclass>) -> <Output subclass>"
-            )
-
-        if not (isinstance(input_type, type) and issubclass(input_type, Input)):
-            raise EntryPointContractError(
-                f"run() on {cls.__name__}: input type {input_type!r} must be "
-                f"a subclass of Input."
-            )
-        if not (isinstance(output_type, type) and issubclass(output_type, Output)):
-            raise EntryPointContractError(
-                f"run() on {cls.__name__}: output type {output_type!r} must be "
-                f"a subclass of Output."
-            )
-
-        # Using the base Input/Output directly is an error — concrete apps must
-        # define their own narrowed dataclass types.
-        if input_type is Input:
-            raise EntryPointContractError(
-                f"run() on {cls.__name__}: input type must be a concrete subclass "
-                f"of Input, not Input itself. Define a dedicated dataclass."
-            )
-        if output_type is Output:
-            raise EntryPointContractError(
-                f"run() on {cls.__name__}: output type must be a concrete subclass "
-                f"of Output, not Output itself. Define a dedicated dataclass."
-            )
-
-        # deferred import: circular dependency (entrypoint imports App)
-        implicit_ep = EntryPointMetadata(
-            name="run",
-            input_type=input_type,
-            output_type=output_type,
-            method_name="run",
-            implicit=True,
+        # App-level _input_type/_output_type come from the default entry point
+        # (or the first registered for single-entry-point apps where
+        # _resolve_default_entrypoint uses the len==1 path).
+        default_ep = next(
+            (ep for ep in entry_points.values() if ep.default),
+            next(iter(entry_points.values())),
         )
-
         _apply_app_registration(
             cls=cls,
             name=app_name,
@@ -643,9 +548,9 @@ class App(ABC):
             description=cls.description,
             tags=cls.tags,
             passthrough_modules=cls.passthrough_modules,
-            input_type=input_type,
-            output_type=output_type,
-            entry_points={"run": implicit_ep},
+            input_type=default_ep.input_type,
+            output_type=default_ep.output_type,
+            entry_points=entry_points,
         )
 
     @property
@@ -897,9 +802,7 @@ class App(ABC):
         Returns:
             The typed output dataclass.
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} must implement run() or define @entrypoint methods."
-        )
+        raise AbstractRunNotImplementedError(app_class=type(self).__name__)
 
     def continue_with(self, input: Input) -> Never:
         """Restart this App with new input, preserving correlation context.
@@ -952,6 +855,21 @@ class App(ABC):
         is never re-executed on workflow replay even if the worker is replaced
         mid-run (e.g. a KEDA scale-down event).
 
+        **Store routing (SDR vs non-SDR):** this method targets the upstream
+        object store when one is configured (``UPSTREAM_OBJECT_STORE_NAME``
+        points to a distinct Dapr component), and falls back to the deployment
+        store otherwise.  In standard (non-SDR) deployments only the deployment
+        binding is present, so ``upstream_storage`` is ``None`` and routing
+        falls back to the deployment store.  In SDR deployments the upstream
+        store is Atlan's bucket — the correct destination for extracted
+        artifacts handed off to the publish app.
+
+        This routing applies to ``App.upload()`` and ``App.download()``.  The
+        automatic file-reference materialisation that transfers ``FileReference``
+        objects between ``@task`` methods always uses the deployment store; use
+        that mechanism (not ``App.upload()`` / ``App.download()``) for
+        intermediate task-to-task data.
+
         For direct use inside an existing ``@task``, import and call
         :func:`application_sdk.storage.transfer.upload` directly.
 
@@ -964,42 +882,127 @@ class App(ABC):
             containing both ``local_path`` and ``storage_path``, plus ``file_count``
             indicating the number of files uploaded.
 
-        Example — upload a single file produced by an extraction task::
+        Example — SDR extract app handing off artifacts to the publish app::
 
-            async def run(self, input: PipelineInput) -> PipelineOutput:
-                extract = await self.extract_data(ExtractInput(source=input.source))
-                up = await self.upload(UploadInput(local_path=extract.output_file))
-                # up.ref is durable — safe to pass to a task on a different worker
-                await self.load_data(LoadInput(ref=up.ref))
+            async def run(self, input: ExtractInput) -> ExtractOutput:
+                result = await self.extract_data(ExtractInput(source=input.source))
+                up = await self.upload(UploadInput(local_path=result.output_file))
+                # Return the ref so the publish app can consume it as input
+                return ExtractOutput(artifacts_ref=up.ref)
 
         Example — upload an entire output directory::
 
             up = await self.upload(UploadInput(local_path="/tmp/output/"))
             # up.ref.file_count == number of files in the directory
         """
+
+        from application_sdk.constants import (  # noqa: PLC0415 — import here to avoid module-level circular import (same pattern as normalize_key)
+            DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED,
+            DEPLOYMENT_ARTIFACT_DUAL_WRITE_REQUIRED,
+        )
+        from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: app.base is imported by execution which imports storage
+            normalize_key,
+        )
         from application_sdk.storage.transfer import (  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
             upload as _upload,
         )
 
-        store = self.context.storage
-        if store is None:
-            raise RuntimeError(
-                "No object store configured. "
-                "Ensure the deployment has a storage binding or APP_STORAGE_ROOT set."
-            )
+        deployment = self.context.storage
+        upstream = self.context.upstream_storage
+
+        # Build the ordered list of (store, label, fatal) upload targets.
+        # See ADR-0014 §"BLDX-1464 dual-write" for the full routing decision.
+        if (
+            DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED
+            and upstream is not None
+            and deployment is not None
+            and upstream is not deployment
+        ):
+            targets = [
+                (deployment, "deployment", DEPLOYMENT_ARTIFACT_DUAL_WRITE_REQUIRED),
+                (upstream, "upstream", True),
+            ]
+        else:
+            single = upstream or deployment
+            if single is None:
+                raise ObjectStoreNotConfiguredError()
+            targets = [
+                (single, "upstream" if single is upstream else "deployment", True)
+            ]
+
         run_prefix = f"artifacts/apps/{self._app_name}/workflows/{self.context.run_id}"
         app_prefix = input.tier.upload_prefix(
             run_prefix=run_prefix, app_name=self._app_name
         )
-        return await _upload(
-            input.local_path,
-            input.storage_path,
-            storage_subdir=input.storage_subdir,
-            skip_if_exists=input.skip_if_exists,
-            store=store,
-            _app_prefix=app_prefix,
-            _tier=input.tier,
+
+        # Derive the FileReference for cross-store dedup / deployment-store fallback.
+        # normalize_key strips TEMPORARY_PATH → canonical deployment-store key.
+        # Guard: "" means local_path resolved to the store root — skip source_ref.
+        _store_key = normalize_key(input.local_path) if input.local_path else ""
+        source_ref = input.ref or (
+            FileReference(local_path=input.local_path, storage_path=_store_key)
+            if _store_key
+            else None
         )
+
+        # Fan-out: iterate targets in order. Fatal failures are deferred until all
+        # remaining targets complete so the upstream write always runs and a copy
+        # lands somewhere. If both writes fail the deployment error is chained as
+        # __cause__ of the upstream error so neither traceback is lost.
+        result: UploadOutput | None = None
+        deferred_required_error: Exception | None = None
+        for target_store, label, fatal in targets:
+            # When writing to the deployment store, it is already the source for the
+            # cross-store fallback — passing it as _source_store would add a redundant
+            # SHA-256 sidecar lookup against itself. Skip it in that case.
+            source_store = None if target_store is deployment else self.context.storage
+            try:
+                out = await _upload(
+                    input.local_path,
+                    input.storage_path,
+                    storage_subdir=input.storage_subdir,
+                    skip_if_exists=input.skip_if_exists,
+                    raise_on_empty=input.raise_on_empty,
+                    store=target_store,
+                    _source_ref=source_ref,
+                    _source_store=source_store,
+                    _app_prefix=app_prefix,
+                    _tier=input.tier,
+                )
+            except Exception as exc:
+                if fatal:
+                    _task_logger.error(
+                        "Object-store upload to %s store failed for prefix %s; "
+                        "will fail run after remaining targets complete",
+                        label,
+                        app_prefix,
+                        exc_info=True,
+                    )
+                    if deferred_required_error is not None:
+                        # Both writes failed: chain the earlier error as __cause__ so
+                        # neither traceback is lost when the exception is surfaced.
+                        exc.__cause__ = deferred_required_error
+                    deferred_required_error = exc
+                else:
+                    _task_logger.warning(
+                        "Object-store upload to %s store failed for prefix %s "
+                        "(non-fatal); continuing to next target",
+                        label,
+                        app_prefix,
+                        exc_info=True,
+                    )
+                continue
+            result = out  # last successful write is authoritative (upstream in SDR)
+
+        if deferred_required_error is not None:
+            raise deferred_required_error
+        if result is None:
+            # Unreachable under current target-construction logic (the single-target
+            # branch is always fatal=True), but guards against future changes.
+            raise RuntimeError(
+                "App.upload fan-out captured no result — this is a programming error"
+            )
+        return result
 
     @task(timeout_seconds=600, retry_max_attempts=3)
     async def download(
@@ -1013,6 +1016,13 @@ class App(ABC):
         If ``input.ref`` is provided and ``input.storage_path`` is empty, the
         ref's ``storage_path`` is used as the source.
 
+        **Store routing (SDR vs non-SDR):** mirrors ``App.upload()`` — reads
+        from the upstream store when one is configured, falling back to the
+        deployment store otherwise.  In standard (non-SDR) deployments only
+        the deployment binding is present, so ``upstream_storage`` is ``None``
+        and routing falls back to the deployment store.  In SDR deployments
+        the publish app uses this to pull artifacts written by the extract app.
+
         For direct use inside an existing ``@task``, import and call
         :func:`application_sdk.storage.transfer.download` directly.
 
@@ -1024,14 +1034,12 @@ class App(ABC):
             ``DownloadOutput`` with a fully materialised ``FileReference``
             containing both ``storage_path`` and ``local_path``.
 
-        Example — download a file reference from a previous upload::
+        Example — SDR publish app consuming artifacts from the extract app::
 
-            async def run(self, input: InferInput) -> InferOutput:
-                dl = await self.download(
-                    DownloadInput(storage_path=input.model_ref.storage_path)
-                )
-                result = await self.run_inference(
-                    InferenceInput(model_path=dl.ref.local_path, data=input.data)
+            async def run(self, input: PublishInput) -> PublishOutput:
+                dl = await self.download(DownloadInput(ref=input.artifacts_ref))
+                return await self.publish_data(
+                    PublishInput(local_path=dl.ref.local_path)
                 )
 
         Example — re-materialise an existing FileReference::
@@ -1042,13 +1050,9 @@ class App(ABC):
             download as _download,
         )
 
-        store = self.context.storage
+        store = self.context.upstream_storage or self.context.storage
         if store is None:
-            raise RuntimeError(
-                "No object store configured. "
-                "Ensure the deployment has a storage binding or APP_STORAGE_ROOT set."
-            )
-
+            raise ObjectStoreNotConfiguredError()
         # Resolve storage_path: explicit field takes precedence over ref.storage_path
         storage_path = input.storage_path
         if not storage_path and input.ref is not None:
@@ -1283,6 +1287,7 @@ class App(ABC):
             async def _local_cleanup() -> None:
                 try:
                     await self.cleanup_files(CleanupInput())
+                # conformance: ignore[E004] logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
                 except Exception:
                     _safe_log(
                         "warning",
@@ -1293,6 +1298,7 @@ class App(ABC):
             async def _storage_cleanup() -> None:
                 try:
                     await self.cleanup_storage(StorageCleanupInput())
+                # conformance: ignore[E004] logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
                 except Exception:
                     _safe_log(
                         "warning",
@@ -1304,123 +1310,236 @@ class App(ABC):
 
         try:
             await AtlanObservability.flush_all()
+        # conformance: ignore[E004] logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
         except Exception:
             _safe_log("warning", "flush_all() failed during on_complete", exc_info=True)
 
 
 # =============================================================================
-# Registration helpers
+# Registration helpers — see application_sdk/app/_ep_registration.py
 # =============================================================================
-
-
-def _register_tasks(cls: type, app_name: str) -> None:
-    """Register all @task decorated methods for an App class.
-
-    Args:
-        cls: The App class.
-        app_name: The app's registered name.
-    """
-    task_registry = TaskRegistry.get_instance()
-
-    # Scan the class for @task decorated methods
-    for attr_name in dir(cls):
-        if attr_name.startswith("_"):
-            continue
-
-        attr = getattr(cls, attr_name, None)
-        if attr is None:
-            continue
-
-        if is_task(attr):
-            task_meta = get_task_metadata(attr)
-            if task_meta:
-                # Create a copy with the app name set
-                task_meta_copy = replace(task_meta, app_name=app_name)
-                # Register the task
-                task_registry.register(app_name, task_meta_copy)
-
-
-def _scan_entrypoints(cls: type) -> "dict[str, EntryPointMetadata]":
-    """Scan a class for @entrypoint-decorated methods.
-
-    Args:
-        cls: The App class to scan.
-
-    Returns:
-        Dict mapping entry point name to EntryPointMetadata.
-    """
-    # deferred import: circular dependency (entrypoint imports App)
-    entry_points: dict[str, EntryPointMetadata] = {}
-    for attr_name in dir(cls):
-        if attr_name.startswith("_"):
-            continue
-        attr = getattr(cls, attr_name, None)
-        if attr is None:
-            continue
-        if is_entrypoint(attr):
-            ep_meta = get_entrypoint_metadata(attr)
-            if ep_meta is not None:
-                entry_points[ep_meta.name] = ep_meta
-    return entry_points
-
-
-def _apply_app_registration(
-    cls: "type[App]",
-    name: str,
-    version: str,
-    description: str,
-    tags: dict[str, str] | None,
-    passthrough_modules: set[str] | None,
-    input_type: type[Input],
-    output_type: type[Output],
-    entry_points: "dict[str, EntryPointMetadata] | None" = None,
-) -> None:
-    """Register an App class with the AppRegistry.
-
-    Args:
-        cls: The App class to register.
-        name: App name.
-        version: Semantic version string.
-        description: Human-readable description.
-        tags: Optional tags for categorization.
-        passthrough_modules: Modules to pass through sandbox.
-        input_type: Input dataclass type.
-        output_type: Output dataclass type.
-        entry_points: Entry point metadata keyed by entry point name.
-    """
-    # Mark as registered to prevent duplicate registration
-    cls._app_registered = True
-
-    # Set class attributes
-    cls._app_name = name
-    cls._app_version = version
-    cls._input_type = input_type
-    cls._output_type = output_type
-
-    # Register with the global app registry
-    registry = AppRegistry.get_instance()
-    metadata = registry.register(
-        name=name,
-        version=version,
-        app_cls=cls,
-        input_type=input_type,
-        output_type=output_type,
-        description=description,
-        tags=tags,
-        passthrough_modules=passthrough_modules,
-        entry_points=entry_points or {},
-        allow_override=True,
-    )
-    cls._app_metadata = metadata
-
-    # Register all @task decorated methods
-    _register_tasks(cls, name)
+# _register_tasks, _collect_implicit_ep, _scan_entrypoints,
+# _build_entry_points, _apply_app_registration are imported at the top of this
+# module from _ep_registration and re-exported via __all__ for backward compat.
 
 
 # Cache generated workflow classes keyed by (app_cls, entry_point_name) so
 # generate_workflow_class() is idempotent across repeated calls (e.g. tests
 # or worker re-creation) and never registers the same Temporal workflow twice.
 _workflow_class_cache: dict[tuple[type, str], type] = {}
+
+
+def _validate_interaction_signature(
+    fn: Callable[..., Any],
+    kind: Literal["signal", "query", "update"],
+    fn_name: str,
+) -> None:
+    """Validate that a @signal / @query / @update method satisfies the interaction contract.
+
+    Rules enforced at class-definition time:
+    - ``@signal``: no params besides ``self`` (pure trigger, no payload).
+    - ``@query``: no params besides ``self``; return type must be a subclass of Output.
+    - ``@update``: exactly one param besides ``self`` that is a subclass of Input;
+      return type must be a subclass of Output.
+
+    Dynamic interactions (``name is None``) are skipped — callers must check before
+    calling this function.
+
+    Args:
+        fn: The original (undecorated) interaction function.
+        kind: One of ``"signal"``, ``"query"``, or ``"update"``.
+        fn_name: Human-readable name used in error messages.
+
+    Raises:
+        _InvalidInputError: If the signature does not satisfy the contract.
+    """
+    sig = inspect.signature(fn)
+    params = [p for p in sig.parameters.values() if p.name != "self"]
+
+    try:
+        hints: dict[str, Any] = get_type_hints(fn)
+    # conformance: ignore[E004,E009] get_type_hints probe; broad catch intentional — falls back to __annotations__ when forward refs are unresolvable
+    except Exception:
+        hints = getattr(fn, "__annotations__", {})
+
+    if kind == "signal":
+        if params:
+            raise _InvalidInputError(
+                message=(
+                    f"@signal '{fn_name}' must have no parameters besides self "
+                    f"(signals are pure triggers — they carry no payload). "
+                    f"Got {len(params)} extra parameter(s): "
+                    f"{[p.name for p in params]}. "
+                    f"To carry data into a running workflow, use @update instead."
+                )
+            )
+
+    elif kind == "query":
+        if params:
+            raise _InvalidInputError(
+                message=(
+                    f"@query '{fn_name}' must have no parameters besides self. "
+                    f"Got {len(params)} extra parameter(s): "
+                    f"{[p.name for p in params]}. "
+                    f"Queries are read-only probes; pass context via instance fields set "
+                    f"by an earlier @update if needed."
+                )
+            )
+        return_type = hints.get("return")
+        if not (
+            return_type is not None
+            and isinstance(return_type, type)
+            and issubclass(return_type, Output)
+        ):
+            raise _InvalidInputError(
+                message=(
+                    f"@query '{fn_name}' return type must be a subclass of Output, "
+                    f"got {return_type!r}. "
+                    f"Define a dataclass that extends Output and annotate the return type."
+                )
+            )
+
+    else:  # kind == "update"
+        if len(params) != 1:
+            raise _InvalidInputError(
+                message=(
+                    f"@update '{fn_name}' must have exactly one parameter besides self "
+                    f"(a subclass of Input), got {len(params)}. "
+                    f"Wrap multiple values in a single Input dataclass."
+                )
+            )
+        param = params[0]
+        input_type = hints.get(param.name)
+        if not (
+            input_type is not None
+            and isinstance(input_type, type)
+            and issubclass(input_type, Input)
+        ):
+            raise _InvalidInputError(
+                message=(
+                    f"@update '{fn_name}' parameter '{param.name}' must be a subclass "
+                    f"of Input, got {input_type!r}. "
+                    f"Define a dataclass that extends Input and use it as the parameter type."
+                )
+            )
+        return_type = hints.get("return")
+        if not (
+            return_type is not None
+            and isinstance(return_type, type)
+            and issubclass(return_type, Output)
+        ):
+            raise _InvalidInputError(
+                message=(
+                    f"@update '{fn_name}' return type must be a subclass of Output, "
+                    f"got {return_type!r}. "
+                    f"Define a dataclass that extends Output and annotate the return type."
+                )
+            )
+
+
+def _collect_interaction_relays(
+    app_cls: "type[App]", cls_name: str
+) -> dict[str, Callable[..., Any]]:
+    """Scan the App class for @signal / @query / @update runtime interactions and
+    synthesize per-interaction relay methods bound to the generated wf_cls.
+
+    Each relay extracts the per-run App instance from ``wf_self._app_instance`` and
+    delegates the call. The synthesized relay carries Temporal's discovery metadata
+    (rebound to point at the relay), so @workflow.defn(wf_cls) registers the
+    interaction against the generated class — which is what Temporal requires.
+
+    Returns a mapping of method name -> relay callable, ready to be placed on wf_cls.
+    """
+    relays: dict[str, Callable[..., Any]] = {}
+
+    def _build_relay(method_name: str, is_coroutine: bool) -> Callable[..., Any]:
+        """Construct a wf_cls-level method that delegates to self._app_instance."""
+        if is_coroutine:
+
+            async def _async_relay(wf_self: Any, *args: Any, **kwargs: Any) -> Any:
+                bound = getattr(wf_self._app_instance, method_name)
+                return await bound(*args, **kwargs)
+
+            _async_relay.__name__ = method_name
+            _async_relay.__qualname__ = f"{cls_name}.{method_name}"
+            _async_relay.__module__ = app_cls.__module__
+            return _async_relay
+
+        def _sync_relay(wf_self: Any, *args: Any, **kwargs: Any) -> Any:
+            bound = getattr(wf_self._app_instance, method_name)
+            return bound(*args, **kwargs)
+
+        _sync_relay.__name__ = method_name
+        _sync_relay.__qualname__ = f"{cls_name}.{method_name}"
+        _sync_relay.__module__ = app_cls.__module__
+        return _sync_relay
+
+    def _build_validator_relay(
+        orig_validator: Callable[..., Any],
+    ) -> Callable[..., Any]:
+        def vrelay(wf_self: Any, *args: Any, **kwargs: Any) -> Any:
+            return orig_validator(wf_self._app_instance, *args, **kwargs)
+
+        return vrelay
+
+    for member_name, member in inspect.getmembers(app_cls):
+        if member_name == "run":
+            # The entry method is handled separately; never relay it as an interaction.
+            continue
+
+        signal_defn = getattr(member, "__temporal_signal_definition", None)
+        query_defn = getattr(member, "__temporal_query_definition", None)
+        update_defn = getattr(member, "_defn", None)
+
+        # @workflow.update returns a callable with both `_defn` and `validator`
+        # (Temporal's runtime_checkable UpdateMethodMultiParam Protocol). The
+        # `validator` attribute distinguishes it from arbitrary objects that
+        # might happen to carry a `_defn` field.
+        is_update = update_defn is not None and hasattr(member, "validator")
+
+        if not (signal_defn or query_defn or is_update):
+            continue
+
+        # Contract enforcement — skip dynamic interactions (name is None).
+        if signal_defn is not None and signal_defn.name is not None:
+            _validate_interaction_signature(signal_defn.fn, "signal", member_name)
+        elif query_defn is not None and query_defn.name is not None:
+            _validate_interaction_signature(query_defn.fn, "query", member_name)
+        elif is_update and update_defn is not None and update_defn.name is not None:
+            _validate_interaction_signature(update_defn.fn, "update", member_name)
+
+        relay = _build_relay(member_name, inspect.iscoroutinefunction(member))
+
+        if signal_defn is not None:
+            # Rebind the definition's fn to the relay so Temporal's _bind_method
+            # passes wf_self (not an App instance) as the first arg.
+            relay.__temporal_signal_definition = replace(  # type: ignore[attr-defined]
+                signal_defn, fn=relay
+            )
+        elif query_defn is not None:
+            relay.__temporal_query_definition = replace(  # type: ignore[attr-defined]
+                query_defn, fn=relay
+            )
+        else:
+            # update_defn is _UpdateDefinition (asserted above by `is_update`).
+            assert update_defn is not None
+            new_validator: Callable[..., Any] | None = None
+            if update_defn.validator is not None:
+                new_validator = _build_validator_relay(update_defn.validator)
+
+            relay._defn = replace(  # type: ignore[attr-defined]
+                update_defn, fn=relay, validator=new_validator
+            )
+            # Temporal's @workflow.update decorator also sets a `.validator`
+            # attribute on the decorated fn (partial(_update_validator, defn)).
+            # We don't need it for runtime dispatch — Temporal reads the
+            # validator off the definition — but provide one so the relay
+            # structurally matches UpdateMethodMultiParam.
+            relay.validator = lambda fn: fn  # type: ignore[attr-defined]
+
+        relays[member_name] = relay
+
+    return relays
 
 
 def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> type:
@@ -1464,6 +1583,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
 
             _corr_ctx = get_correlation_context()
             correlation_id = _corr_ctx.correlation_id if _corr_ctx else run_id
+        # conformance: ignore[E004] logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
         except Exception:
             _safe_log(
                 "warning",
@@ -1479,7 +1599,18 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
             correlation_id=correlation_id,
             started_at=start_time,
         )
-        app_instance = app_cls()
+        # The wf_cls.__init__ constructs the App instance up-front so that any
+        # @signal / @query / @update runtime interactions
+        # (which may fire as early as immediately after workflow start, before
+        # _run's first await) can delegate to the same instance _run uses.
+        # Fall back to constructing one here when ``self`` is a stand-in (e.g.
+        # MagicMock from unit tests) where ``__init__`` didn't run.
+        existing = getattr(self, "_app_instance", None)
+        if isinstance(existing, app_cls):
+            app_instance = existing
+        else:
+            app_instance = app_cls()
+            self._app_instance = app_instance
         app_instance._context = context
 
         context_data = {"run_id": run_id, "correlation_id": context.correlation_id}
@@ -1507,6 +1638,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
                         correlation_id=context.correlation_id,
                         input=input_summary,
                     )
+        # conformance: ignore[E004] logged via _safe_log with exc_info=True; checker does not recognise _safe_log as a logger attribute call
         except Exception:
             _safe_log("warning", "Failed to log input summary", exc_info=True)
 
@@ -1515,6 +1647,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
             result = await entry_method(input_data)
             return cast("Output", result)
 
+        # conformance: ignore[E004] top-level entrypoint handler; logged via _safe_log with exc_info=True and re-raised as typed ApplicationError
         except Exception as e:
             _safe_log(
                 "error",
@@ -1562,6 +1695,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
         finally:
             try:
                 await app_instance.on_complete()
+            # conformance: ignore[E004] finally-block cleanup handler; logged via _safe_log with exc_info=True; must not re-raise from finally
             except Exception:
                 _safe_log(
                     "warning",
@@ -1601,7 +1735,28 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
 
     decorated_run = workflow.run(_run)
 
-    wf_cls = type(cls_name, (), {"run": decorated_run})
+    # Collect any @signal / @query / @update runtime interactions declared on
+    # the App subclass. Each is rewritten into a relay whose Temporal-discovery
+    # metadata points at the relay (so the wf_cls is what's registered, not the
+    # App class) and whose body delegates to ``self._app_instance.<method>``
+    # — sharing state with _run.
+    interaction_relays = _collect_interaction_relays(app_cls, cls_name)
+
+    def _wf_init(self: Any) -> None:
+        # Construct the per-run App instance eagerly so interactions that fire
+        # before _run's first await still hit a live instance. _run later
+        # finishes context setup (correlation id, _wrap_instance_tasks, etc.)
+        # on this same instance.
+        self._app_instance = app_cls()
+
+    _wf_init.__name__ = "__init__"
+    _wf_init.__qualname__ = f"{cls_name}.__init__"
+    _wf_init.__module__ = app_cls.__module__
+
+    wf_methods: dict[str, Any] = {"run": decorated_run, "__init__": _wf_init}
+    wf_methods.update(interaction_relays)
+
+    wf_cls = type(cls_name, (), wf_methods)
     wf_cls.__module__ = app_cls.__module__
     wf_cls.__qualname__ = cls_name
 

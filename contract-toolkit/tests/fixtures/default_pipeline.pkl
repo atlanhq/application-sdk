@@ -1,0 +1,26 @@
+/// Fixture: app with no pipeline declaration at all.
+///
+/// Exercises the fully-defaulted pipeline path:
+///   pipeline (default) → publish (default PublishStep) → connectionCacheEnabled (default true)
+/// Used to verify that an app author who never touches the pipeline block still
+/// gets connection_cache_enabled=true on the generated publish node.
+amends "../../src/App.pkl"
+
+name = "default-pipeline"
+displayName = "Default Pipeline"
+icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
+hasCredentialConfig = false
+
+// No pipeline block — exercises all defaults.
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["connection"] = new ConnectionCreator {
+          placeholderText = "Connection Name"
+        }
+      }
+    }
+  }
+}

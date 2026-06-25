@@ -69,6 +69,30 @@ class MyConnector(App):
 
 There is no `@auto_heartbeater` decorator in v3. Heartbeating is declarative.
 
+### Process-wide timeout defaults via env vars
+
+When no explicit value is passed to `@task`, the framework reads two env vars at
+process startup:
+
+| Env var | Default | Controls |
+|---|---|---|
+| `ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS` | `600` (10 min) | `timeout_seconds` — Temporal kills the activity after this many seconds |
+| `ATLAN_HEARTBEAT_TIMEOUT_SECONDS` | `60` | `heartbeat_timeout_seconds` — Temporal restarts the activity if no heartbeat is received within this window |
+
+Set these in `atlan.yaml` (or your deployment env) to apply a fleet-wide default
+without touching every `@task` decorator:
+
+```yaml
+# atlan.yaml
+env:
+  - name: ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS
+    value: "1800"   # 30 min default for all tasks in this app
+  - name: ATLAN_HEARTBEAT_TIMEOUT_SECONDS
+    value: "120"    # 2 min heartbeat window
+```
+
+Explicit `@task(timeout_seconds=...)` values always take precedence over the env vars.
+
 ## Manual Heartbeats with Progress
 
 For tasks that should resume from where they left off after a retry, send typed heartbeat details:
@@ -143,6 +167,11 @@ class MyConnector(App):
         fetch_out = await self.fetch(input)
         return await self.process(ProcessInput(results=fetch_out.results))
 ```
+
+`FileReference` handles task-to-task data passing within a run (automatic via the activity
+interceptor). For hand-off to Atlan system apps (publish, lineage, quality), call
+`App.upload()` explicitly from `run()` — see [storage.md](storage.md) and
+[file-reference.md](file-reference.md) for the two-store routing details.
 
 ## Auto-Discovery
 

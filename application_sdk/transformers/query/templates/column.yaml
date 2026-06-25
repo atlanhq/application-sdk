@@ -17,10 +17,10 @@ columns:
           WHEN remarks IS NOT NULL THEN REGEXP_REPLACE(
             REGEXP_REPLACE(
               REGEXP_REPLACE(
-                REGEXP_REPLACE(SUBSTRING(COALESCE(remarks, ''), 1, 100000), '<[^>]+>', ''),
-              '\s+', ' '),
-            '^ ', ''),
-            ' $', '')
+                REGEXP_REPLACE(SUBSTRING(COALESCE(remarks, ''), 1, 100000), '<[^>]+>', '', 'g'),
+              '\s+', ' ', 'g'),
+            '^ ', '', 'g'),
+            ' $', '', 'g')
           ELSE NULL
         END
       source_columns: [remarks]

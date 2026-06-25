@@ -1,37 +1,30 @@
 """Integration tests for AsyncDaprClient against a real Dapr sidecar.
 
 These tests validate that the HTTP API endpoints are called correctly
-and response parsing works end-to-end. They require a running Dapr
-sidecar (started via `poe start-dapr` or equivalent).
-
-When no Dapr sidecar is available (DAPR_HTTP_PORT not set), tests are
-skipped automatically.
+and response parsing works end-to-end. The Dapr sidecar is provisioned
+in-process by the ``embedded_dapr_sidecar`` fixture (see ``conftest.py``),
+so no external ``daprd`` needs to be started.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import uuid
 
-import httpx
 import pytest
 
 from application_sdk.infrastructure._dapr.http import AsyncDaprClient, BindingResult
 
-# Skip all tests if no Dapr sidecar is running
-pytestmark = [
-    pytest.mark.integration,
-    pytest.mark.skipif(
-        not os.environ.get("DAPR_HTTP_PORT"),
-        reason="Dapr sidecar not available (DAPR_HTTP_PORT not set)",
-    ),
-]
+pytestmark = [pytest.mark.integration]
 
 
 @pytest.fixture
-async def client():
-    """Create an AsyncDaprClient connected to the local sidecar."""
+async def client(embedded_dapr_sidecar):
+    """Create an AsyncDaprClient connected to the embedded sidecar.
+
+    ``embedded_dapr_sidecar`` sets ``DAPR_HTTP_PORT`` in the environment, so
+    the no-arg :class:`AsyncDaprClient` discovers the right port.
+    """
     c = AsyncDaprClient()
     yield c
     await c.close()
@@ -128,16 +121,13 @@ class TestBindingIntegration:
 
     async def test_invoke_binding_returns_binding_result(self, client):
         """Invoke a binding and verify the response type."""
-        try:
-            result = await client.invoke_binding(
-                "objectstore",
-                "list",
-                metadata={"prefix": "test/"},
-            )
-            assert isinstance(result, BindingResult)
-            assert isinstance(result.metadata, dict)
-        except httpx.ConnectError:
-            pytest.skip("No objectstore binding available")
+        result = await client.invoke_binding(
+            "objectstore",
+            "list",
+            metadata={"prefix": "test/"},
+        )
+        assert isinstance(result, BindingResult)
+        assert isinstance(result.metadata, dict)
 
 
 # ------------------------------------------------------------------
@@ -180,26 +170,20 @@ class TestPubSubIntegration:
 
     async def test_publish_event(self, client):
         """Publish an event to a topic."""
-        try:
-            await client.publish_event(
-                "pubsub",
-                "integ-test-topic",
-                json.dumps({"test": True, "id": uuid.uuid4().hex}),
-            )
-        except httpx.ConnectError:
-            pytest.skip("No pubsub component available")
+        await client.publish_event(
+            "pubsub",
+            "integ-test-topic",
+            json.dumps({"test": True, "id": uuid.uuid4().hex}),
+        )
 
     async def test_publish_event_with_metadata(self, client):
         """Publish with custom metadata headers."""
-        try:
-            await client.publish_event(
-                "pubsub",
-                "integ-test-topic",
-                json.dumps({"test": True}),
-                metadata={"rawPayload": "true"},
-            )
-        except httpx.ConnectError:
-            pytest.skip("No pubsub component available")
+        await client.publish_event(
+            "pubsub",
+            "integ-test-topic",
+            json.dumps({"test": True}),
+            metadata={"rawPayload": "true"},
+        )
 
 
 # ------------------------------------------------------------------

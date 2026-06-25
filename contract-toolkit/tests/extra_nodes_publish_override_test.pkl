@@ -1,0 +1,52 @@
+// Tests that an app overriding the typed publish node via `extraNodes["publish"]`
+// keeps the override at the same position the typed publish node would have
+// occupied (between `lineage-app` and `lineage-publish`), and that the
+// override's args are emitted intact.
+//
+// Background: `extraNodes` was implemented as an append-at-end mechanism.
+// When the same key as a typed pipeline node ("publish") was used to inject
+// extra args (e.g. `delete_percentage_circuit_breaker`), the override ended
+// up after `lineage-publish` in the JSON. AE doesn't care about JSON key
+// order, but it produced a noisy diff that made override PRs hard to review.
+
+amends "pkl:test"
+
+import "pkl:json"
+import "fixtures/extra_nodes_publish_override.pkl" as overrideApp
+
+local manifest = new json.Parser { useMapping = true }.parse(
+  overrideApp.output.files["app/generated/manifest.json"].text
+)
+local dag = manifest["dag"]
+local nodeIds: List<String> = dag.keys.toList()
+local publishArgs = dag["publish"]["inputs"]["args"]
+
+facts {
+  ["DAG contains both publish and lineage-publish nodes"] {
+    dag["publish"] != null
+    dag["lineage-publish"] != null
+  }
+
+  ["publish node is emitted before lineage-publish"] {
+    nodeIds.indexOf("publish") < nodeIds.indexOf("lineage-publish")
+  }
+
+  ["publish override carries the additive arg from extraNodes"] {
+    publishArgs["delete_percentage_circuit_breaker"] == 90.0
+  }
+
+  ["publish override preserves the standard publish args"] {
+    publishArgs["connection_cache_enabled"] == true
+    publishArgs["connection_cache_via_app_enabled"] == true
+    publishArgs["current_state_enabled"] == true
+    publishArgs["current_state_via_app_enabled"] == true
+    publishArgs["connection_qualified_name"] != null
+    publishArgs["transformed_data_prefix"] != null
+    publishArgs["publish_state_prefix"] != null
+    publishArgs["current_state_prefix"] != null
+  }
+
+  ["publish override is emitted exactly once in the DAG"] {
+    nodeIds.filter((id) -> id == "publish").length == 1
+  }
+}

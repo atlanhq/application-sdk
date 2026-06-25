@@ -4,8 +4,12 @@ Filters accept dict (structured from AE), JSON string, raw regex string,
 list, and None. SQL injection is guarded by rejecting single quotes.
 """
 
-import pytest
+from typing import Annotated
 
+import pytest
+from pydantic import Field
+
+from application_sdk.contracts.types import MaxItems
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionTaskInput,
@@ -58,22 +62,168 @@ class TestFilterCoercion:
         assert result.exclude_filter == ""
 
 
+class TestAPITreeFilterCoercion:
+    """APITree include/exclude filters decode before app workflow code starts."""
+
+    def test_apitree_exclude_filter_normalized_to_filter_map(self):
+        payload = {
+            "exclude_filter": {
+                "AwsDataCatalog": {
+                    "mswtest_2": {},
+                    "mswtest_3": {},
+                    "redshift_sample_testing": {},
+                }
+            }
+        }
+        result = ExtractionInput.model_validate(payload)
+        assert result.exclude_filter == {
+            "AwsDataCatalog": [
+                "mswtest_2",
+                "mswtest_3",
+                "redshift_sample_testing",
+            ]
+        }
+
+    def test_apitree_include_filter_lifted_from_ae_metadata(self):
+        payload = {
+            "metadata": {
+                "include-filter": {
+                    "AwsDataCatalog": {
+                        "mswtest_2": {},
+                    }
+                }
+            }
+        }
+        result = ExtractionInput.model_validate(payload)
+        assert result.include_filter == {"AwsDataCatalog": ["mswtest_2"]}
+
+    def test_apitree_filter_works_for_generated_contract_subclasses(self):
+        class AppInputContract(ExtractionInput):
+            pass
+
+        payload = {
+            "include_filter": {
+                "AwsDataCatalog": {
+                    "mswtest_2": {},
+                }
+            }
+        }
+        result = AppInputContract.model_validate(payload)
+        assert result.include_filter == {"AwsDataCatalog": ["mswtest_2"]}
+
+    def test_apitree_filter_works_for_task_inputs(self):
+        payload = {
+            "exclude_filter": {
+                "AwsDataCatalog": {
+                    "mswtest_2": {},
+                }
+            }
+        }
+        result = ExtractionTaskInput.model_validate(payload)
+        assert result.exclude_filter == {"AwsDataCatalog": ["mswtest_2"]}
+
+    def test_deeper_apitree_filter_truncated_to_catalog_schema_level(self):
+        payload = {
+            "include_filter": {
+                "AwsDataCatalog": {
+                    "mswtest_2": {
+                        "nested_schema": {},
+                    },
+                }
+            }
+        }
+        result = ExtractionInput.model_validate(payload)
+        assert result.include_filter == {"AwsDataCatalog": ["mswtest_2"]}
+
+    def test_overridden_filter_fields_keep_app_specific_tree_shape(self):
+        class AppSpecificInput(ExtractionInput, allow_unbounded_fields=True):
+            include_filter: Annotated[dict[str, object], MaxItems(1000)] = Field(  # type: ignore[assignment]
+                default_factory=dict
+            )
+            exclude_filter: Annotated[dict[str, object], MaxItems(1000)] = Field(  # type: ignore[assignment]
+                default_factory=dict
+            )
+
+        payload = {
+            "include_filter": {
+                "warehouse_1": {
+                    "project_1": {
+                        "dataset_1": {},
+                    },
+                }
+            },
+            "exclude_filter": {
+                "warehouse_2": {},
+            },
+        }
+        result = AppSpecificInput.model_validate(payload)
+        assert result.include_filter == {
+            "warehouse_1": {
+                "project_1": {
+                    "dataset_1": {},
+                },
+            }
+        }
+        assert result.exclude_filter == {"warehouse_2": {}}
+
+
 class TestFilterSQLInjectionGuard:
-    """Single quotes blocked in filter values."""
+    """SQL-unsafe sequences blocked in filter values (BLDX-518 deny-list)."""
 
     def test_single_quote_in_string_rejected(self):
         payload = {"include_filter": "prefix'injection"}
-        with pytest.raises(ValueError, match="Single quotes not allowed"):
+        with pytest.raises(ValueError, match=r"SQL-unsafe sequence"):
             ExtractionInput.model_validate(payload)
 
     def test_single_quote_in_dict_key_rejected(self):
         payload = {"include_filter": {"db'; DROP TABLE--": ["^public$"]}}
-        with pytest.raises(ValueError, match="Single quotes not allowed"):
+        with pytest.raises(ValueError, match=r"SQL-unsafe sequence"):
             ExtractionInput.model_validate(payload)
 
     def test_single_quote_in_dict_value_rejected(self):
         payload = {"include_filter": {"^db$": ["schema'; DROP TABLE--"]}}
-        with pytest.raises(ValueError, match="Single quotes not allowed"):
+        with pytest.raises(ValueError, match=r"SQL-unsafe sequence"):
+            ExtractionInput.model_validate(payload)
+
+    def test_single_quote_in_nested_apitree_value_rejected(self):
+        payload = {"include_filter": {"AwsDataCatalog": {"db'; DROP TABLE--": {}}}}
+        with pytest.raises(ValueError, match=r"SQL-unsafe sequence"):
+            ExtractionInput.model_validate(payload)
+
+    def test_single_quote_in_deeper_apitree_descendant_rejected(self):
+        payload = {
+            "include_filter": {
+                "AwsDataCatalog": {
+                    "mswtest_2": {
+                        "schema'; DROP TABLE--": {},
+                    }
+                }
+            }
+        }
+        with pytest.raises(ValueError, match=r"SQL-unsafe sequence"):
+            ExtractionInput.model_validate(payload)
+
+    def test_semicolon_rejected(self):
+        # Statement separator — would let an attacker stack a second
+        # statement after the filter substitution.
+        payload = {"include_filter": "name; DROP TABLE users"}
+        with pytest.raises(ValueError, match=r"SQL-unsafe sequence ';'"):
+            ExtractionInput.model_validate(payload)
+
+    def test_line_comment_rejected(self):
+        # SQL line comment eats the rest of the line.
+        payload = {"include_filter": "name-- comment"}
+        with pytest.raises(ValueError, match=r"SQL-unsafe sequence '--'"):
+            ExtractionInput.model_validate(payload)
+
+    def test_block_comment_open_rejected(self):
+        payload = {"include_filter": "name/* injected */"}
+        with pytest.raises(ValueError, match=r"SQL-unsafe sequence '/\*'"):
+            ExtractionInput.model_validate(payload)
+
+    def test_null_byte_rejected(self):
+        payload = {"include_filter": "name\x00trailing"}
+        with pytest.raises(ValueError, match=r"SQL-unsafe sequence"):
             ExtractionInput.model_validate(payload)
 
     def test_clean_string_passes(self):
@@ -85,6 +235,57 @@ class TestFilterSQLInjectionGuard:
             {"include_filter": {"^prod$": ["^analytics$"]}}
         )
         assert result.include_filter == {"^prod$": ["^analytics$"]}
+
+    def test_regex_metachars_still_allowed(self):
+        # The deny-list must not over-block legitimate regex syntax —
+        # ``^``, ``$``, ``.``, ``*``, ``+``, ``?``, ``|``, ``()``, ``[]``,
+        # ``\``, ``{}``, and single ``-`` all stay legal.
+        payload = {"include_filter": r"^(prod|stage)_db\.[a-z]+(\.bak)?$"}
+        result = ExtractionInput.model_validate(payload)
+        assert result.include_filter == r"^(prod|stage)_db\.[a-z]+(\.bak)?$"
+
+
+class TestTempTableRegexInjectionGuard:
+    """temp_table_regex Pydantic validator blocks SQL injection (BLDX-518).
+
+    Single-char forbidden sequences ('  " ; \\x00) are caught by
+    Field(pattern=SAFE_FILTER_PATTERN) — Pydantic raises a
+    string_pattern_mismatch error.  Multi-char sequences (-- /* */) are
+    not matched by the regex and are caught by the @field_validator that
+    calls validate_filter_no_sql_injection, which raises a ValueError
+    with "SQL-unsafe sequence" in the message.
+    """
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "evil--comment",
+            "evil/* block",
+            "evil */",
+        ],
+    )
+    def test_multichar_sequence_rejected(self, value: str) -> None:
+        with pytest.raises(ValueError, match=r"SQL-unsafe sequence"):
+            ExtractionInput.model_validate({"temp_table_regex": value})
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "evil; DROP TABLE x",
+            "evil'injection",
+        ],
+    )
+    def test_singlechar_sequence_rejected(self, value: str) -> None:
+        with pytest.raises(ValueError):
+            ExtractionInput.model_validate({"temp_table_regex": value})
+
+    def test_clean_regex_passes(self) -> None:
+        result = ExtractionInput.model_validate({"temp_table_regex": "^temp_.*$"})
+        assert result.temp_table_regex == "^temp_.*$"
+
+    def test_task_input_multichar_rejected(self) -> None:
+        with pytest.raises(ValueError, match=r"SQL-unsafe sequence"):
+            ExtractionTaskInput.model_validate({"temp_table_regex": "evil--"})
 
 
 class TestExtractionTaskInputFilters:
@@ -129,4 +330,74 @@ class TestRealAEPayload:
         }
         result = ExtractionInput.model_validate(payload)
         assert isinstance(result.include_filter, str)
+
+
+class TestLegacyQuotedCsvNormalisation:
+    """Pre-v3 SaaS-agent quoted-CSV shape is auto-translated (HYP-1560).
+
+    Migrated workflow specs carry filter values like ``'"A","B"'`` that
+    the old agent parsed as a list of prefixes. The v3 contract takes
+    a single regex string and the BLDX-518 deny-list rejects the
+    quote/comma characters that shape requires — so without this
+    translation, every migrated tenant on the v3.13 SDK fails at
+    workflow-input decoding.
+    """
+
+    def test_temp_table_regex_legacy_csv_is_translated(self):
+        # Canonical migrated value: two prefixes the old agent OR'd
+        # together as separate LIKE patterns. Translate to a v3
+        # alternation regex so the connector's regex engine actually
+        # matches against table names.
+        payload = {"temp_table_regex": '"PREFIX_A.","PREFIX_B."'}
+        result = ExtractionInput.model_validate(payload)
+        assert result.temp_table_regex == "PREFIX_A.|PREFIX_B."
+
+    def test_temp_table_regex_v3_value_passes_through(self):
+        # A value that's already a valid v3 regex must not be mangled
+        # by the normaliser.
+        payload = {"temp_table_regex": "PREFIX_A.|PREFIX_B."}
+        result = ExtractionInput.model_validate(payload)
+        assert result.temp_table_regex == "PREFIX_A.|PREFIX_B."
+
+    def test_temp_table_regex_legacy_with_forbidden_item_still_rejected(self):
+        # Defence in depth: if a legacy item smuggles a forbidden
+        # sequence (e.g. ``--``), the normaliser's post-unwrap check
+        # raises — the bypass route cannot launder injection through
+        # the legacy shape.
+        payload = {"temp_table_regex": '"prefix","name--bad"'}
+        with pytest.raises(ValueError, match=r"SQL-unsafe sequence"):
+            ExtractionInput.model_validate(payload)
+
+    def test_include_filter_legacy_csv_is_translated(self):
+        # Same translation for the FilterMap | str fields when the
+        # string side of the union carries a legacy value.
+        payload = {"include_filter": '"prod","stage"'}
+        result = ExtractionInput.model_validate(payload)
+        assert result.include_filter == "prod|stage"
+
+    def test_exclude_filter_legacy_csv_is_translated(self):
+        payload = {"exclude_filter": '"temp_a","temp_b"'}
+        result = ExtractionInput.model_validate(payload)
+        assert result.exclude_filter == "temp_a|temp_b"
+
+    def test_json_string_filter_is_not_mangled(self):
+        # JSON-shaped strings start with ``{`` and never match the
+        # legacy detector, so they pass through unchanged for the
+        # downstream parser.
+        payload = {"include_filter": '{"^prod$": ["^analytics$"]}'}
+        result = ExtractionInput.model_validate(payload)
+        assert result.include_filter == '{"^prod$": ["^analytics$"]}'
+
+    def test_extraction_task_input_temp_table_regex_translated(self):
+        # The translation has to fire on ExtractionTaskInput too —
+        # per-task inputs are reconstructed from the workflow spec
+        # and re-validate the same fields.
+        payload = {"temp_table_regex": '"PREFIX_A.","PREFIX_B."'}
+        result = ExtractionTaskInput.model_validate(payload)
+        assert result.temp_table_regex == "PREFIX_A.|PREFIX_B."
+
+    def test_extraction_task_input_filter_translated(self):
+        payload = {"exclude_filter": '"temp_a","temp_b"'}
+        result = ExtractionTaskInput.model_validate(payload)
+        assert result.exclude_filter == "temp_a|temp_b"
         assert isinstance(result.exclude_filter, str)

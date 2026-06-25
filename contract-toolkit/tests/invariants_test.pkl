@@ -1,0 +1,79 @@
+/// Unit tests for App.pkl compile-time invariants.
+///
+/// Positive cases only — PKL's test framework has no "expect throw" primitive.
+/// The negative case (hasCredentialConfig=true without connector → error) is
+/// covered by check 5 in scripts/check-invariants.sh, which runs `pkl eval`
+/// against a deliberately bad contract and asserts the error message text.
+amends "pkl:test"
+
+import "../src/App.pkl" as App
+import "../src/Connectors.pkl"
+
+/// App with hasCredentialConfig=true and a connector set — should not throw.
+local validCredApp = (App) {
+  name = "cred-test"
+  displayName = "Cred Test"
+  connector = Connectors.SNOWFLAKE
+  icon = "https://example.com/icon.svg"
+
+  credentialAuthOptions {
+    ["basic"] = new App.AuthOption {
+      label = "Basic"
+      fields {
+        new App.FieldSpec { name = "username"; displayName = "Username" }
+        new App.FieldSpec { name = "password"; sensitive = true; displayName = "Password" }
+      }
+    }
+  }
+
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Credential"] {
+        inputs {
+          ["credential-guid"] = new App.CredentialInput {
+            credType = "atlan-connectors-cred-test"
+          }
+        }
+      }
+    }
+  }
+}
+
+/// App with hasCredentialConfig=false and no connector — should not throw.
+local noCredApp = (App) {
+  name = "no-cred-test"
+  displayName = "No Cred Test"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+
+  pipeline {
+    publish = null
+  }
+
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Config"] {
+        inputs {
+          ["target"] = new App.TextInput {
+            title = "Target"
+          }
+        }
+      }
+    }
+  }
+}
+
+facts {
+  ["connector invariant: valid app with hasCredentialConfig=true and connector set produces output"] {
+    validCredApp.output.files.keys.toList().any((k) -> k.contains("atlan-connectors-cred-test"))
+  }
+
+  ["connector invariant: app with hasCredentialConfig=false and no connector produces output"] {
+    noCredApp.output.files.keys.toList().any((k) -> k.contains("atlan.yaml"))
+  }
+
+  ["connector invariant: connector value appears in credential configmap"] {
+    validCredApp.output.files["app/generated/atlan-connectors-cred-test.json"].text
+      .contains("\"snowflake\"")
+  }
+}

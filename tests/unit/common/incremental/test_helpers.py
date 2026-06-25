@@ -25,6 +25,11 @@ from application_sdk.common.incremental.helpers import (
     normalize_marker_timestamp,
     prepone_marker_timestamp,
 )
+from application_sdk.common.incremental.incremental_errors import (
+    ConnectionQualifiedNameEmptyError,
+    ConnectionQualifiedNameFormatError,
+    ConnectionQualifiedNameMissingError,
+)
 
 # ---------------------------------------------------------------------------
 # extract_epoch_id_from_qualified_name
@@ -56,18 +61,18 @@ class TestExtractEpochId:
         assert result == "abc-def"
 
     def test_empty_string_raises(self):
-        """Empty string raises ValueError."""
-        with pytest.raises(ValueError, match="cannot be empty"):
+        """Empty string raises ConnectionQualifiedNameEmptyError."""
+        with pytest.raises(ConnectionQualifiedNameEmptyError):
             extract_epoch_id_from_qualified_name("")
 
     def test_too_few_segments_raises(self):
-        """Fewer than 3 segments raises ValueError."""
-        with pytest.raises(ValueError, match="Expected format"):
+        """Fewer than 3 segments raises ConnectionQualifiedNameFormatError."""
+        with pytest.raises(ConnectionQualifiedNameFormatError):
             extract_epoch_id_from_qualified_name("only/two")
 
     def test_single_segment_raises(self):
-        """Single segment raises ValueError."""
-        with pytest.raises(ValueError, match="Expected format"):
+        """Single segment raises ConnectionQualifiedNameFormatError."""
+        with pytest.raises(ConnectionQualifiedNameFormatError):
             extract_epoch_id_from_qualified_name("just-one")
 
 
@@ -92,8 +97,8 @@ class TestGetPersistentS3Prefix:
         assert "999" in result
 
     def test_missing_qualified_name_raises(self):
-        """Raises ValueError when connection_qualified_name is empty."""
-        with pytest.raises(ValueError):
+        """Raises ConnectionQualifiedNameMissingError when connection_qualified_name is empty."""
+        with pytest.raises(ConnectionQualifiedNameMissingError):
             get_persistent_s3_prefix("")
 
 
@@ -307,26 +312,25 @@ class TestDownloadS3PrefixWithStructure:
             nonlocal max_concurrent, current_concurrent
             async with lock:
                 current_concurrent += 1
-                if current_concurrent > max_concurrent:
-                    max_concurrent = current_concurrent
+                max_concurrent = max(max_concurrent, current_concurrent)
             await asyncio.sleep(0.01)
             async with lock:
                 current_concurrent -= 1
 
         file_list = [f"prefix/file{i}.json" for i in range(50)]
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            with (
-                patch(
-                    "application_sdk.common.incremental.helpers.list_keys",
-                    AsyncMock(return_value=file_list),
-                ),
-                patch(
-                    "application_sdk.common.incremental.helpers.download_file",
-                    side_effect=_tracking_download,
-                ),
-            ):
-                await download_s3_prefix_with_structure("prefix/", Path(temp_dir))
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch(
+                "application_sdk.common.incremental.helpers.list_keys",
+                AsyncMock(return_value=file_list),
+            ),
+            patch(
+                "application_sdk.common.incremental.helpers.download_file",
+                side_effect=_tracking_download,
+            ),
+        ):
+            await download_s3_prefix_with_structure("prefix/", Path(temp_dir))
 
         assert max_concurrent <= 4
 

@@ -29,6 +29,7 @@ from application_sdk.storage.ops import (
     _list_items,
     _normalize_listing_prefix,
     _resolve_store,
+    _safe_join_under,
     download_file,
     normalize_key,
     upload_file,
@@ -37,10 +38,12 @@ from application_sdk.storage.ops import (
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
 
+    from application_sdk.storage.ops import BoundStore
+
 
 async def list_keys(
     prefix: str = "",
-    store: ObjectStore | None = None,
+    store: BoundStore | ObjectStore | None = None,
     *,
     suffix: str = "",
     normalize: bool = True,
@@ -94,6 +97,7 @@ async def list_keys(
         return sorted(
             path for path, _ in items if not lsuffix or path.lower().endswith(lsuffix)
         )
+    # conformance: ignore[E004] always re-raises as StorageError; no logging needed at this layer
     except Exception as exc:
         from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
             StorageError,
@@ -145,6 +149,7 @@ async def delete_prefix(
     # separately below via a best-effort delete of the bare root key.
     try:
         items = await _list_items(resolved, prefix or None, include_markers=True)
+    # conformance: ignore[E004] always re-raises as StorageError; no logging needed at this layer
     except Exception as exc:
         from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
             StorageError,
@@ -168,6 +173,7 @@ async def delete_prefix(
         try:
             await obstore.head_async(resolved, root_marker)
             paths.append(root_marker)
+        # conformance: ignore[E004] probe for directory marker existence; not-found is expected and swallowed intentionally
         except Exception as exc:
             if not _is_not_found(exc):
                 from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
@@ -184,6 +190,7 @@ async def delete_prefix(
 
     try:
         await obstore.delete_async(resolved, paths)
+    # conformance: ignore[E004] always re-raises as StorageError; no logging needed at this layer
     except Exception as exc:
         from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
             StorageError,
@@ -230,8 +237,8 @@ async def download_prefix(
 
     keys = await list_keys(prefix, store, suffix=suffix, normalize=normalize)
     local = Path(local_dir)
-    # S3 keys use forward slashes; convert to OS-native path for local filesystem
-    destinations = [str(local / Path(*PurePosixPath(key).parts)) for key in keys]
+    # Reject keys whose resolved path escapes local_dir (e.g. via ".." segments).
+    destinations = [str(_safe_join_under(local, key)) for key in keys]
 
     sem = asyncio.Semaphore(max_concurrency)
 
@@ -339,5 +346,6 @@ async def upload_file_from_bytes(
     finally:
         try:
             os.unlink(tmp_path)
+        # conformance: ignore[E002] best-effort temp-file cleanup; not fatal
         except OSError:
             pass

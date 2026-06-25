@@ -1,3 +1,135 @@
 # Code Review
 
-- Use `docs/standards/review-checklist.md` as the review checklist for security, performance, stability, and testing risks.
+PRs to `main` are reviewed by an AI agent triggered with `@sdk-review`.
+The reviewer runs on Atlan's mothership Rover Direct backend; all
+SDK-specific behavior lives in `.mothership/pr-review/`.
+
+| Trigger | Reviewer | Backend | Workflow file |
+|---|---|---|---|
+| `@sdk-review` | SDK reviewer (mothership) | Mothership Rover Direct API, with orchestration in `.mothership/pr-review/` | `.github/workflows/sdk-review.yml` |
+
+The reviewer sets the `sdk-review` commit status, posts a summary
+comment marked `<!-- SDK_REVIEW -->`, and manages the
+`sdk-review-approved` / `sdk-review-needs-human` /
+`sdk-review-needs-rebase` labels.
+
+## Trigger surface
+
+Comment on any PR:
+
+| What you type | What happens |
+|---|---|
+| `@sdk-review` | Standard review via the mothership Rover backend. The orchestration picks the right mode based on PR state and prior review history. |
+| `@sdk-review <free-form text>` | Same, but the trailing text is forwarded as `COMMENTER_INTENT`. The agent interprets it and decides what to do — auto-fix, dispute a finding, stop, override, focus on a specific area, etc. |
+
+Examples:
+
+- `@sdk-review please also fix the lint warnings` — review and
+  auto-fix any PATCH-scope findings.
+- `@sdk-review focus on the new metric reader code` — standard
+  review, but the agent weights that area extra.
+- `@sdk-review stop` — cancel an in-flight review.
+- `@sdk-review override: rule does not apply to internal helper` —
+  admin force-pass (the orchestration verifies the commenter is a repo
+  admin before honouring this).
+- `@sdk-review challenge: ARCH-001 — this is intentional because …`
+  — re-evaluate a specific finding with the author's reasoning.
+
+There is no command enumeration in the workflow YAML. All intent
+inference happens in `.mothership/pr-review/ORCHESTRATION.md`
+(§Intent Inference) so it can be tuned without editing CI.
+
+Only repo OWNER, MEMBER, or COLLABORATOR can trigger. External fork
+contributors cannot.
+
+## What It Checks
+
+### Guardrails (Block Merge)
+
+| ID | Name | Trigger |
+|----|------|---------|
+| G1 | Security Blockers | Any Critical security finding |
+| G2 | Contract Safety | Field removed/renamed/retyped on Input/Output (breaks Temporal replay) |
+| G3 | Determinism | Non-deterministic ops in `run()`/`@entrypoint` |
+| G4 | Test Coverage | New public API without tests |
+| G5 | Secret Safety | Hardcoded secrets or credentials in logs |
+| G6 | Breaking API | Public export removed without deprecation shim |
+| G7 | CI Must Pass | All required CI checks must be green |
+| G8 | Branch Mergeable | No unresolvable conflicts |
+
+### Review Dimensions
+
+- **Architecture** — 11 ADR compliance, dependency direction, contract evolution
+- **Security** — secrets, injection, deserialization, multi-tenant isolation
+- **Code Quality** — imports, logging, naming, sizing, error handling
+- **Test Quality** — coverage gaps, patterns, isolation, edge cases
+- **Developer Experience** — API ergonomics, error messages, migration paths
+- **Structural** — symptoms vs causes, file health, design coherence
+
+### Cross-Model Review
+
+The review uses two model families to eliminate bias:
+
+- **Claude Opus 4.6** reviews the code (3 domain agents in parallel)
+- **GPT-5.3-codex** challenges every finding (adversarial)
+- Findings where the models disagree are dropped (model bias)
+- Guardrail violations are always kept regardless of model agreement
+
+## Auto-Fix Loop
+
+When the human's intent text asks the agent to fix (e.g.
+`@sdk-review apply fixes`):
+
+1. Review the PR
+2. Apply PATCH-scope findings (exact code changes from the review)
+3. Push the fix commit
+4. Re-review with the new diff
+5. Repeat until clean or max 3 iterations
+
+The whole loop runs inside the same Cloudflare sandbox via Rover
+Direct's `session_id` resume — no re-dispatch from CI. MIGRATE,
+REFACTOR, and DESIGN_CHANGE scope findings are left for humans.
+
+## Disputing a Finding
+
+Comment `@sdk-review challenge: <your explanation>` (or any
+equivalent phrasing — the orchestration parses intent, not exact
+commands). The next review run re-evaluates the cited findings
+against your context:
+
+- If your reasoning is valid: finding is dropped
+- If partially valid: severity is downgraded
+- If not valid: finding stays with explanation
+
+## Override (Admin Only)
+
+`@sdk-review override: <reason>` — sets the `sdk-review`
+status check to success. Only repo admins can do this; the
+orchestration verifies via
+`gh api repos/<repo>/collaborators/<commenter>/permission` before
+honouring the override. Logged for audit trail.
+
+## Required configuration
+
+The `sdk-review` and `sdk-evolution-cron` workflows (both mothership
+flows) need these repo-level secrets and variables.
+
+| Kind | Name | Purpose |
+|---|---|---|
+| Secret | `HARNESS_TOKEN` | Bearer token for mothership's `/api/sandbox/execute` (must be a valid entry in mothership's `SANDBOX_API_KEYS` map). |
+| Secret | `GLOBALPROTECT_USERNAME` | VPN auth — `mothership.atlan.dev` is on the private network. |
+| Secret | `GLOBALPROTECT_PASSWORD` | VPN auth. |
+| Variable | `GLOBALPROTECT_PORTAL_URL` | VPN portal URL. |
+| Variable | `MOTHERSHIP_URL` | e.g. `https://mothership.atlan.dev`. |
+
+`GITHUB_TOKEN` inside the sandbox is auto-injected by mothership from
+its GitHub App installation — do not try to override it via `env_vars`.
+
+## Reference
+
+- Orchestration: `.mothership/pr-review/ORCHESTRATION.md`
+- Reviewer identity: `.mothership/pr-review/CLAUDE.md`
+- Severity rubric: `.mothership/pr-review/severity-rubric.yaml`
+- Reference rules: `.mothership/pr-review/references/`
+- Mothership Rover Direct API: `docs/reference/rover-direct-api.md` in
+  `atlanhq/mothership`.

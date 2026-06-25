@@ -1,8 +1,19 @@
+import warnings
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, Type
+from typing import TYPE_CHECKING, Any
+
+from application_sdk.transformers.errors import TransformerNotImplementedError
 
 if TYPE_CHECKING:
-    import daft
+    import pyarrow as pa
+
+warnings.warn(
+    "application_sdk.transformers is deprecated and will be removed in the next major version. "
+    "Use the connector-side typed-record → mapper-function pattern instead. "
+    "See docs/upgrade-guide-v3.md.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 
 class TransformerInterface(ABC):
@@ -20,12 +31,12 @@ class TransformerInterface(ABC):
     def transform_metadata(
         self,
         typename: str,
-        dataframe: "daft.DataFrame",
+        dataframe: "pa.Table | list[dict[str, Any]]",
         workflow_id: str,
         workflow_run_id: str,
-        entity_class_definitions: Dict[str, Type[Any]] | None = None,
+        entity_class_definitions: dict[str, type[Any]] | None = None,
         **kwargs: Any,
-    ) -> "daft.DataFrame":
+    ) -> "pa.Table | list[dict[str, Any]] | None":
         """Transform metadata from one format to another.
 
         This method should convert the input metadata into a different format
@@ -49,4 +60,5 @@ class TransformerInterface(ABC):
         Raises:
             NotImplementedError: If the subclass does not implement this method.
         """
-        raise NotImplementedError
+
+        raise TransformerNotImplementedError()

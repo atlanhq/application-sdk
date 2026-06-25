@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -160,6 +160,25 @@ class TestDownloadPrefix:
     async def test_empty_prefix_returns_no_files(self, store, tmp_path) -> None:
         dests = await download_prefix("nothing/", tmp_path, store, normalize=False)
         assert dests == []
+
+    async def test_path_traversal_in_key_rejected(self, store, tmp_path) -> None:
+        """A listed key containing ``..`` must not write outside *local_dir*.
+
+        obstore rejects ``..`` keys on put, so we plant a hostile listing via
+        a patched ``list_keys`` and assert the containment guard fires before
+        any local write happens (issue #1694).
+        """
+        dest = tmp_path / "dest"
+        canary = tmp_path / "canary.txt"
+        with (
+            patch(
+                "application_sdk.storage.batch.list_keys",
+                new=AsyncMock(return_value=["safe/../../canary.txt"]),
+            ),
+            pytest.raises(StorageError, match="Path traversal"),
+        ):
+            await download_prefix("p/", dest, store, normalize=False)
+        assert not canary.exists()
 
 
 # ---------------------------------------------------------------------------

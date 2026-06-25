@@ -257,3 +257,104 @@ def test_invalid_yaml_rejected(tmp_path, monkeypatch):
     (tmp_path / "atlan.yaml").write_text("name: x\n  bad: : indent\n  - unclosed")
     with pytest.raises(AtlanYamlError):
         parse_atlan_yaml.parse()
+
+
+# ── deploy.env_overrides validation ─────────────────────────────────────────
+#
+# GM interprets ``env_overrides`` keys in two tiers: ``beta`` / ``staging``
+# are channel-tier, anything else is a tenant-name match against
+# ``horizon_tenants.name``. The SDK validator can only enforce the shape of
+# the block (mapping of non-empty-string → mapping); it can't enforce the
+# allowlist of channel names because non-channel keys are valid tenant
+# entries. A typo'd ``staing`` is treated as a tenant name here and falls
+# through to the channel tier at runtime in GM.
+
+
+def _with_overrides(overrides):
+    return {
+        "name": "x",
+        "app_id": "1",
+        "deploy": {
+            "env": {"OTEL_ENVIRONMENT": "production"},
+            "env_overrides": overrides,
+        },
+    }
+
+
+def test_env_overrides_with_valid_channels_accepted(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write(
+        tmp_path,
+        _with_overrides({"beta": {"OTEL_ENVIRONMENT": "beta"}, "staging": {"X": "y"}}),
+    )
+    out = parse_atlan_yaml.parse()
+    assert "env_overrides" in out["deploy_config"]
+
+
+def test_env_overrides_with_tenant_name_accepted(tmp_path, monkeypatch):
+    # Tenant names are valid keys — checked by tenant_name match at GM
+    # runtime, not at SDK validation time.
+    monkeypatch.chdir(tmp_path)
+    _write(
+        tmp_path,
+        _with_overrides(
+            {
+                "beta": {"OTEL_ENVIRONMENT": "beta"},
+                "tenant-xyz": {"OTEL_ENVIRONMENT": "xyz-only"},
+            }
+        ),
+    )
+    out = parse_atlan_yaml.parse()
+    assert "env_overrides" in out["deploy_config"]
+    assert "tenant-xyz" in out["deploy_config"]
+
+
+def test_env_overrides_unknown_key_accepted_as_tenant_name(tmp_path, monkeypatch):
+    # A typo'd 'staing' is now treated as a tenant name and accepted by
+    # SDK validation. It will silently no-op at GM runtime since no live
+    # tenant matches it. Trade-off vs the previous strict allowlist: lost
+    # typo detection, gained tenant-name support.
+    monkeypatch.chdir(tmp_path)
+    _write(tmp_path, _with_overrides({"staing": {"OTEL_ENVIRONMENT": "staging"}}))
+    out = parse_atlan_yaml.parse()
+    assert "env_overrides" in out["deploy_config"]
+
+
+def test_env_overrides_not_a_mapping_rejected(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write(tmp_path, _with_overrides(["beta", "staging"]))
+    with pytest.raises(AtlanYamlError, match="env_overrides must be a mapping"):
+        parse_atlan_yaml.parse()
+
+
+def test_env_overrides_channel_value_not_a_mapping_rejected(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write(tmp_path, _with_overrides({"beta": "not-a-mapping"}))
+    with pytest.raises(AtlanYamlError, match="env_overrides.beta must be a mapping"):
+        parse_atlan_yaml.parse()
+
+
+def test_env_overrides_tenant_value_not_a_mapping_rejected(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write(tmp_path, _with_overrides({"tenant-xyz": ["not", "a", "mapping"]}))
+    with pytest.raises(
+        AtlanYamlError, match="env_overrides.tenant-xyz must be a mapping"
+    ):
+        parse_atlan_yaml.parse()
+
+
+def test_env_overrides_absent_is_fine(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write(
+        tmp_path,
+        {"name": "x", "app_id": "1", "deploy": {"env": {"X": "y"}}},
+    )
+    out = parse_atlan_yaml.parse()
+    assert "env_overrides" not in out["deploy_config"]
+
+
+def test_env_overrides_with_no_deploy_block_is_fine(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write(tmp_path, {"name": "x", "app_id": "1"})
+    out = parse_atlan_yaml.parse()
+    assert out["deploy_config"] == ""

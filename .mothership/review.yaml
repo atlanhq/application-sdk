@@ -1,0 +1,28 @@
+review_guidelines: |
+  This is the Atlan application-sdk v3 Python library.
+  Built on Temporal workflows + Dapr infrastructure abstractions.
+
+  Critical rules:
+  - BLOCKING: Non-deterministic operation in run()/@entrypoint
+  - BLOCKING: Contract field removal/rename/retype on Input/Output
+  - BLOCKING: Hardcoded secrets or credentials in logs
+  - CRITICAL: New public API without tests
+  - CRITICAL: Breaking API change without deprecation shim
+
+  Architecture:
+  - Dependency direction: app/ -> execution/ -> infrastructure/
+  - No direct temporalio/dapr imports outside private modules
+  - All I/O in @task methods, never in run()
+  - Use self.run_in_thread() for blocking operations in @task
+  - CredentialRef in contracts, CredentialResolver in @task only
+
+  Ignore:
+  - Don't flag import ordering (isort with custom config)
+  - Don't flag missing docstrings on private methods (prefixed with _)
+  - Don't flag @pytest.mark.asyncio (asyncio_mode="auto" is correct)
+
+ignore_patterns:
+  - "*.md"
+  - "docs/**"
+  - "*.lock"
+  - "**/__pycache__/**"

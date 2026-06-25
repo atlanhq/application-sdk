@@ -121,7 +121,7 @@ If editing `contract/PklProject` manually, use the SDK-hosted package URL:
 ```pkl
 dependencies {
   ["app-contract-toolkit"] {
-    uri = "package://atlanhq.github.io/application-sdk/app-contract-toolkit/app-contract-toolkit@<VERSION>"
+    uri = "package://atlanhq.github.io/application-sdk/contracts/app-contract-toolkit@<VERSION>"
   }
 }
 ```
@@ -179,6 +179,12 @@ Rules for stable contracts:
   system names unless they are the stable public contract.
 
 ## Authoring Rules
+
+> **FileReference and App.upload():** If your contract carries a `FileReference` that must
+> reach a downstream Atlan system app (publish, lineage, quality), the connector must call
+> `App.upload()` explicitly from `run()` — the task-to-task activity interceptor only writes
+> to the customer-owned `objectstore`. See
+> [ADR-0014](../../docs/adr/0014-two-store-storage-architecture.md).
 
 Prefer typed toolkit APIs over raw JSON:
 

@@ -1,0 +1,211 @@
+{
+  "symbols": [
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "application_sdk.app.AppError is deprecated; use application_sdk.errors.AppError \u2014 will be removed in v4.0",
+      "migration_target": true,
+      "module": "application_sdk.app.base",
+      "removal_version": "4.0",
+      "symbol": "AppError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "EntryPointContractError is deprecated; use application_sdk.errors.InvalidInputError \u2014 will be removed in v4.0",
+      "migration_target": true,
+      "module": "application_sdk.app.entrypoint",
+      "removal_version": "4.0",
+      "symbol": "EntryPointContractError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "AppAlreadyRegisteredError is deprecated; use application_sdk.errors.InvalidInputError \u2014 will be removed in v4.0",
+      "migration_target": true,
+      "module": "application_sdk.app.registry",
+      "removal_version": "4.0",
+      "symbol": "AppAlreadyRegisteredError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "AppNotFoundError is deprecated; use application_sdk.errors.InvalidInputError \u2014 will be removed in v4.0",
+      "migration_target": true,
+      "module": "application_sdk.app.registry",
+      "removal_version": "4.0",
+      "symbol": "AppNotFoundError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "TaskNotFoundError is deprecated; use application_sdk.errors.InvalidInputError \u2014 will be removed in v4.0",
+      "migration_target": true,
+      "module": "application_sdk.app.registry",
+      "removal_version": "4.0",
+      "symbol": "TaskNotFoundError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "TaskContractError is deprecated; use application_sdk.errors.InvalidInputError \u2014 will be removed in v4.0",
+      "migration_target": true,
+      "module": "application_sdk.app.task",
+      "removal_version": "4.0",
+      "symbol": "TaskContractError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": " (AtlanError subclass) is deprecated; use application_sdk.errors.AppError \u2014 will be removed in v4.0",
+      "migration_target": true,
+      "module": "application_sdk.common.error_codes",
+      "removal_version": "4.0",
+      "symbol": "AtlanError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "ContractValidationError is deprecated; use application_sdk.errors.InvalidInputError \u2014 will be removed in v4.0",
+      "migration_target": true,
+      "module": "application_sdk.contracts.base",
+      "removal_version": "4.0",
+      "symbol": "ContractValidationError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "DiscoveryError is deprecated; use application_sdk.errors.InvalidInputError \u2014 will be removed in v4.0",
+      "migration_target": true,
+      "module": "application_sdk.discovery",
+      "removal_version": "4.0",
+      "symbol": "DiscoveryError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "HandlerError is deprecated; use a typed application_sdk.errors.AppError subclass \u2014 will be removed in v4.0",
+      "migration_target": true,
+      "module": "application_sdk.handler.base",
+      "removal_version": "4.0",
+      "symbol": "HandlerError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "BindingError is deprecated; use application_sdk.errors.DependencyUnavailableError \u2014 will be removed in v4.0",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure.bindings",
+      "removal_version": "4.0",
+      "symbol": "BindingError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "CredentialVaultError is deprecated; use application_sdk.errors.DependencyUnavailableError \u2014 will be removed in v4.0",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure.credential_vault",
+      "removal_version": "4.0",
+      "symbol": "CredentialVaultError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "PubSubError is deprecated; use application_sdk.errors.DependencyUnavailableError \u2014 will be removed in v4.0",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure.pubsub",
+      "removal_version": "4.0",
+      "symbol": "PubSubError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "StateStoreError is deprecated; use application_sdk.errors.DependencyUnavailableError \u2014 will be removed in v4.0",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure.state",
+      "removal_version": "4.0",
+      "symbol": "StateStoreError"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "JsonFileReader is deprecated and will be removed in v4.0. Migrate now: declare the upstream artifact as a FileReference field on your task's typed Input \u2014 the SDK's activity interceptor auto-materialises it to a local path before the task runs (with sha256 sidecar verification + parallel transfers), then read it directly with orjson / json. See docs/agents/coding-standards.md.",
+      "migration_target": true,
+      "module": "application_sdk.storage.formats.json",
+      "removal_version": "4.0",
+      "symbol": "JsonFileReader"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "JsonFileWriter is deprecated and will be removed in v4.0. Migrate now: use application_sdk.storage.rolling.RollingFileWriter (time-based rollover, heartbeat-friendly) or write JSON locally (orjson.dumps + open(path, 'wb')) and return a FileReference for the output directory \u2014 the Temporal activity interceptor persists it with SHA-256 sidecars and parallel transfers, no caller-side upload code needed. See the 'Replacing ParquetFileWriter / JsonFileWriter' section in docs/agents/coding-standards.md.",
+      "migration_target": true,
+      "module": "application_sdk.storage.formats.json",
+      "removal_version": "4.0",
+      "symbol": "JsonFileWriter"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "ParquetFileReader is deprecated and will be removed in v4.0. Migrate now: declare the upstream artifact as a FileReference field on your task's typed Input \u2014 the SDK's activity interceptor auto-materialises it to a local path before the task runs (with sha256 sidecar verification + parallel transfers), then read it directly with pandas.read_parquet. See docs/agents/coding-standards.md.",
+      "migration_target": true,
+      "module": "application_sdk.storage.formats.parquet",
+      "removal_version": "4.0",
+      "symbol": "ParquetFileReader"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "ParquetFileWriter is deprecated and will be removed in v4.0. Migrate now: use application_sdk.storage.rolling.RollingFileWriter (time-based rollover, heartbeat-friendly) or write parquet locally and return a FileReference for the output directory \u2014 the Temporal activity interceptor persists it with SHA-256 sidecars and parallel transfers, no caller-side upload code needed. See the 'Replacing ParquetFileWriter / JsonFileWriter' section in docs/agents/coding-standards.md.",
+      "migration_target": true,
+      "module": "application_sdk.storage.formats.parquet",
+      "removal_version": "4.0",
+      "symbol": "ParquetFileWriter"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": " subclasses BaseMetadataExtractor which is deprecated. Use application_sdk.templates.SqlApp instead. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.base_metadata_extractor",
+      "removal_version": "4.0.0",
+      "symbol": "BaseMetadataExtractor"
+    },
+    {
+      "kind": "method",
+      "marker_via": "decorator",
+      "message": "upload_to_atlan is deprecated and will be removed in the next major SDK release. Migrate to App.upload(UploadInput(local_path=..., tier=StorageTier.RETAINED)). See docs/concepts/file-reference.md for migration guidance.",
+      "migration_target": true,
+      "module": "application_sdk.templates.base_metadata_extractor",
+      "removal_version": null,
+      "symbol": "upload_to_atlan"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": " subclasses IncrementalSqlMetadataExtractor which is deprecated. Use application_sdk.templates.SqlApp with a custom run() for incremental orchestration. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.incremental_sql_metadata_extractor",
+      "removal_version": "4.0.0",
+      "symbol": "IncrementalSqlMetadataExtractor"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": " subclasses SqlMetadataExtractor which is deprecated. Use application_sdk.templates.SqlApp instead. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_metadata_extractor",
+      "removal_version": "4.0.0",
+      "symbol": "SqlMetadataExtractor"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": " subclasses SqlQueryExtractor which is deprecated. Use application_sdk.templates.SqlApp instead. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.templates.sql_query_extractor",
+      "removal_version": "4.0.0",
+      "symbol": "SqlQueryExtractor"
+    }
+  ]
+}

@@ -5,7 +5,7 @@
 ## Quick Reference
 
 - **Image base**: `cgr.dev/chainguard-private/python` -> golden images -> SDK -> apps
-- **Dapr runtime**: Installed via Chainguard APK (0 CVEs), configured in Dockerfile
+- **Dapr runtime**: baked into the `app-framework-golden` base image via Chainguard Custom Assembly (0 CVEs). The container's daprd version is owned by the Custom Assembly config — the Dockerfile no longer installs it. (The `__dapr_version` pin in `application_sdk/version.py` governs only the local-dev auto-download, a separate path.)
 - **Registries**: Harbor (`registry.atlan.com`) for production, GHCR for CI
 
 ## Build & Scan Commands
@@ -21,6 +21,4 @@ grype application-sdk:local
 # Scan dependencies
 trivy fs uv.lock
 grype dir:.
-# Snyk (optional, requires a requirements.txt export first — the repo has no checked-in requirements.txt):
-# uv export --frozen --no-hashes --no-header -o requirements.txt && snyk test --file=requirements.txt
 ```

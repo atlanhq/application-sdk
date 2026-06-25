@@ -9,7 +9,6 @@ description: |
   - Running pytest for all test files in the tests/ directory
   - Generating code coverage reports in XML and HTML formats
   - Enforcing a minimum coverage threshold of 60%
-  - Publishing coverage reports to S3 for easy access
   - Adding coverage report comments to pull requests
 
 inputs:
@@ -28,8 +27,6 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - uses: actions/checkout@v4
-
     - uses: "./.github/actions/setup-deps"
       with:
         python-version: ${{ inputs.python-version }}
@@ -53,37 +50,24 @@ runs:
           # pyatlan pydantic-v1 compat (upstream fix: atlan-python PR #893)
           PYTEST_IGNORE="--ignore=tests/unit/tools --ignore=tests/unit/clients/test_atlan_client.py --ignore=tests/unit/credentials/test_atlan_client.py"
         fi
-        $UV_RUN coverage run -m pytest --import-mode=importlib --capture=no --log-cli-level=INFO tests/ $PYTEST_IGNORE -v --full-trace --hypothesis-show-statistics
+        # pytest-socket: on Linux/macOS the event loop uses os.pipe()/AF_UNIX for its
+        # self-pipe, so --allow-unix-socket is sufficient. On Windows, ProactorEventLoop
+        # uses AF_INET socket pairs internally; --disable-socket would break asyncio
+        # entirely there, so we skip the guard on Windows. Linux CI still enforces it.
+        if [ "${RUNNER_OS}" != "Windows" ]; then
+          SOCKET_FLAGS="--disable-socket --allow-unix-socket"
+        else
+          SOCKET_FLAGS=""  # intentionally empty — see comment above
+        fi
+        $UV_RUN coverage run -m pytest --import-mode=importlib --capture=no --log-cli-level=INFO tests/ $PYTEST_IGNORE -v --full-trace --hypothesis-show-statistics ${SOCKET_FLAGS}
         $UV_RUN coverage xml
         $UV_RUN coverage html
         $UV_RUN coverage report --fail-under=${{ inputs.fail-under }}
 
     - name: Comment Coverage Report on PR
-      uses: orgoro/coverage@v3.2
+      uses: orgoro/coverage@ca0c362dc1a4f100447309405e6dfea47e251495 # v3.3.1
       continue-on-error: true
       with:
         coverageFile: coverage.xml
         token: ${{ inputs.github-token }}
 
-    - name: Setup AWS Credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      continue-on-error: true
-      id: aws-creds
-      with:
-        aws-region: ap-south-1
-        # Only usable in atlanhq repositories
-        role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess
-
-    - name: Upload Coverage Report to Kryptonite Bucket
-      if: steps.aws-creds.outcome == 'success'
-      shell: bash
-      run: |
-        aws s3 sync ./htmlcov s3://kryptonite-store/coverage/application-sdk/pr/${{ github.event.number }} --delete
-
-    - name: Comment Coverage Report URL on PR
-      uses: mshick/add-pr-comment@v2
-      if: ${{ github.event_name == 'pull_request' }}
-      with:
-        message-id: "coverage"
-        message: |
-          🛠 Full Test Coverage Report: https://k.atlan.dev/coverage/application-sdk/pr/${{ github.event.number }}

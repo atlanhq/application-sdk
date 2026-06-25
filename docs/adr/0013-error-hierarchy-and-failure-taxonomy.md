@@ -119,6 +119,16 @@ locus varies: a source network timeout is USER-fixable; an internal Temporal
 deadline is PLATFORM-routed. Subclasses override `audience` when the locus is
 known.
 
+The constant `WORKER_EVICTED_TYPE = "WorkerEvicted"` is the Temporal wire type
+string used for worker-pod-termination failures. When `asyncio.CancelledError`
+arrives inside an activity while the process-wide worker-shutdown flag is set
+(SIGTERM from KEDA, VPA, spot reclaim, or rolling deploy), the SDK's activity
+wrapper raises `ApplicationError(type=WORKER_EVICTED_TYPE, non_retryable=True)`.
+Workflow code recognises the failure by reading the `type` string across the
+Temporal boundary (Temporal serialises only the type string, not the Python
+exception class); the SDK's per-activity eviction loop then re-dispatches the
+activity without burning the application-error retry budget.
+
 `InternalError.classification_pending` is a triage flag. Caught-but-
 unclassified failures surface as `InternalError(classification_pending=True)`,
 creating an auditable backlog rather than hiding among real bugs.
@@ -152,7 +162,7 @@ suggested_action  str | None      imperative hint (voice shifts with audience)
 evidence        dict[str, Any]    per-leaf structured context
 app_name        str | None        correlation
 run_id          str | None        correlation
-cause_repr      str | None        repr(cause) — never the live exception
+cause_repr      str | None        sanitised str of cause: "{ExcType}: {str(exc)}" — URL userinfo and secret query params redacted; cause message capped at 500 chars (total field may be slightly longer due to type-name prefix); never the live exception
 ```
 
 `cause_repr` is a string. The live exception never crosses the wire: no
@@ -387,6 +397,9 @@ Key files:
 - `application_sdk/credentials/errors.py` — domain umbrellas (dataclasses)
 - `application_sdk/storage/errors.py` — domain umbrellas (dataclasses)
 - `application_sdk/infrastructure/secrets.py` — domain umbrellas (dataclasses)
+- `application_sdk/execution/errors.py` — `ApplicationError` alias over
+  `temporalio.exceptions.ApplicationError`; abstracts the execution-backend
+  dependency for app code
 - `tests/unit/errors/test_back_compat.py` — legacy invariants
 - `tests/unit/errors/test_categorical.py` — categorical leaf invariants
 - `tests/unit/errors/test_domain_evidence.py` — domain evidence invariants

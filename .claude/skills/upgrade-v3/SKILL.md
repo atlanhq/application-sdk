@@ -883,6 +883,13 @@ If you find yourself reaching for threads in a hot loop, reconsider — fully-as
 
 ### `self.upload()` + `FileReference` — never hand-roll uploads
 
+**Two-store architecture.** The SDK has two distinct object stores:
+
+- **`objectstore`** (Dapr component, customer-owned) — the **deployment store** (`infra.storage`). The `FileReference` activity interceptor auto-uploads task outputs here. Task-to-task only.
+- **`atlan-objectstore`** (Dapr component, Atlan-owned) — the **upstream store** (`infra.upstream_storage`). Only present in SDR deployments. This is where Atlan system apps (publish, lineage, quality) look for artifacts. `App.upload()` routes here automatically when the component is bound; falls back to `objectstore` in local dev.
+
+**Silent-failure rule.** If a connector returns a `FileReference` from a `@task` but never calls `App.upload()` from `run()`, the DAG completes successfully but the publish app finds nothing in Atlan's bucket. The Temporal UI shows no error. Always call `App.upload()` from `run()` as the final publish step.
+
 Each fetch task writes to a local file and returns a typed `FileReference` on its output. For example, in a SQL connector:
 
 ```python
@@ -895,13 +902,23 @@ async def fetch_tables(self, input: FetchTablesInput) -> FetchTablesOutput:
     )
 ```
 
-The task names, input/output contracts, and write helper differ per connector type; the `FileReference` shape is the same for all. Downstream tasks accept `FileReference` on their typed input and read via `input.tables_file.local_path`. As the final app step prior to handing off to the Publish (or other) system app, explicitly call `self.upload()` on the final output:
+The task names, input/output contracts, and write helper differ per connector type; the `FileReference` shape is the same for all. Downstream tasks accept `FileReference` on their typed input and read via `input.tables_file.local_path`. As the final app step prior to handing off to the Publish (or other) system app, explicitly call `self.upload()` from `run()`:
 
 ```python
-await self.upload(UploadInput(local_path=output_file_path, storage_path=storage_path))
+await self.upload(UploadInput(local_path=output_file_path))  # RETAINED is the default tier
 ```
 
-Note that this is NOT necessary inside each task — task-to-task uploading/downloading of files within the same app is handled _automatically_ purely by virtue of a `FileReference` being included in the Output of a task (automatically uploaded, if not already in the object store) or the Input of a task (automatically downloaded, if not already present in the worker).
+**StorageTier choices** for `UploadInput`:
+
+| Tier | Key pattern (App.upload) | Cleanup |
+|------|--------------------------|---------|
+| `StorageTier.TRANSIENT` | `file_refs/{filename}` | Auto-deleted after run |
+| `StorageTier.RETAINED` | `artifacts/apps/{app}/workflows/{run_id}/{filename}` | Kept; default for published artifacts |
+| `StorageTier.PERSISTENT` | `persistent-artifacts/apps/{app}/{filename}` | Never deleted; use for long-term state |
+
+Note: the `{uuid}` key format (e.g. `file_refs/{uuid}`) is used by the automatic FileReference interceptor when persisting `@task` outputs — `App.upload()` uses `{filename}` directly.
+
+Note that `App.upload()` is NOT necessary inside each `@task` — task-to-task uploading/downloading of files within the same app is handled _automatically_ purely by virtue of a `FileReference` being included in the Output of a task (automatically uploaded to `objectstore`, if not already there) or the Input of a task (automatically downloaded, if not already present on the worker).
 
 **Selective materialization with `Lazy()`:** If a task declares a `FileReference` input field it doesn't always need (e.g. a heavy artifact only read under certain conditions), mark it `Lazy` to skip the automatic pre-download:
 
@@ -921,7 +938,7 @@ Call `await fetch(ref)` from `application_sdk.storage.reference` inside the task
 Reasons every connector must use this shape:
 
 - `self.upload()` is an SDK `@task` with a dedicated retry policy and activity-level recording. A worker swap mid-run will not re-upload; a hand-rolled `obstore.put` will.
-- The "shared `output_path` directory" + `upload_to_atlan()` scan-the-directory pattern from v2 is gone. Each task owns its file.
+- The "shared `output_path` directory" + `upload_to_atlan()` (v2 deprecated) scan-the-directory pattern is gone. Each task owns its file.
 - AE downstream nodes (`qi`, `lineage-app`, `publish`) JSONPath against `FileReference` outputs, not directory prefixes.
 
 **Forbidden:** `obstore.*` calls in app code, custom `JsonFileWriter` / `ParquetFileWriter` instantiation, calling `application_sdk.execution._temporal.activity_utils.get_object_store_prefix` (or anything else from a `_`-prefixed SDK module).
@@ -1384,14 +1401,13 @@ output_prefix = str(Path(tempfile.gettempdir()))
 ```
 The interim-apps framework handles S3 mapping in production.
 
-### auto_heartbeat_seconds triggers Dapr health check
+### Heartbeat - keep the defaults
 
-The auto-heartbeater creates a `DaprClient` which blocks on Dapr health check (60s timeout). For tasks that don't need fine-grained heartbeating, omit `auto_heartbeat_seconds`:
-```python
-@task(timeout_seconds=3600)  # no auto_heartbeat_seconds
-async def my_long_task(self, input: MyInput) -> MyOutput:
-    ...
-```
+The `@task` defaults (`heartbeat_timeout_seconds=60`, `auto_heartbeat_seconds=10`) are correct. Don't disable `auto_heartbeat_seconds` to "work around" missed beats - auto-heartbeat runs as a coroutine on the same event loop as your task body, so anything that blocks the loop blocks the beats. Fix it with async-native libraries (preferred), `self.run_in_thread(...)` (if async-native is impossible), or `await asyncio.sleep(0)` chunking. If you see `Event loop blocked for X seconds during task ...` in worker logs, that's this failure mode.
+
+For long tasks, raise `timeout_seconds` (the overall activity budget), not `heartbeat_timeout_seconds` (the failure-detection knob - a higher value just delays retry on a dead worker). SQL templates set `timeout_seconds=1800, heartbeat_timeout_seconds=120, auto_heartbeat_seconds=30` (`application_sdk/templates/sql_app.py:508`) for long extracts - precedent if your work matches.
+
+For resume-on-retry, call `self.heartbeat(HeartbeatDetails(records_done=N))` at checkpoints - auto-heartbeat is keepalive only.
 
 ### Template base classes auto-register but do not leak workflows
 
