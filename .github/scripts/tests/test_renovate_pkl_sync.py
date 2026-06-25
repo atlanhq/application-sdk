@@ -242,6 +242,42 @@ def test_no_changes_makes_no_commit(repo, monkeypatch):
     assert _commit_count(repo) == before  # no new commit
 
 
+def test_format_generated_covers_all_py_not_just_input(tmp_path, monkeypatch):
+    """`_format_generated` must ruff-format every generated *.py, not only
+    _input.py. The contract emits _e2e_*.py too; if those are left unformatted
+    the consumer's pre-commit reformats them on the renovate PR and fails CI
+    (the bug this guards against). `uvx` is stubbed in the other tests as a
+    no-op, so without this assertion the _input.py-only regression is invisible.
+    """
+    gen = tmp_path / "app" / "generated"
+    nested = gen / "crawler"  # bundle layout: rglob must recurse
+    nested.mkdir(parents=True)
+    (gen / "_input.py").write_text("import os\n")
+    (gen / "_e2e_base.py").write_text("import os\n")
+    (gen / "_e2e_credential.py").write_text("import os\n")
+    (gen / "__init__.py").write_text("")
+    (nested / "_e2e_substitutions.py").write_text("import os\n")
+
+    formatted: list[str] = []
+
+    def spy_run(cmd, *, check=False):
+        if cmd[:2] == ["uvx", "ruff"] and cmd[2] == "format":
+            formatted.extend(cmd[3:])
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(mod, "run", spy_run)
+    mod._format_generated(tmp_path)
+
+    formatted_names = {Path(p).name for p in formatted}
+    assert formatted_names == {
+        "_input.py",
+        "_e2e_base.py",
+        "_e2e_credential.py",
+        "__init__.py",
+        "_e2e_substitutions.py",
+    }
+
+
 def test_resolve_failure_is_fatal(repo, monkeypatch):
     def fake_run(cmd, *, check=False):
         if cmd[0] == "pkl" and cmd[1:3] == ["project", "resolve"]:
