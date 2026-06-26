@@ -38,8 +38,8 @@ from typing import Any, TypeVar
 
 from temporalio import activity
 
+from application_sdk.app.registry import AppRegistry
 from application_sdk.constants import TEMPORARY_PATH, WORKFLOW_OUTPUT_PATH_TEMPLATE
-from application_sdk.contracts.base import _resolve_app_name
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -139,7 +139,7 @@ def build_output_path() -> str:
     read the workflow ID from.
     """
     return WORKFLOW_OUTPUT_PATH_TEMPLATE.format(
-        application_name=_resolve_app_name(),
+        application_name=AppRegistry.resolve_running_app_name(),
         workflow_id=get_workflow_id(),
         run_id=get_workflow_run_id(),
     )

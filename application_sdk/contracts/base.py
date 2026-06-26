@@ -783,29 +783,6 @@ def validate_payload_safety(cls: type, *, skip_fields: set[str] | None = None) -
             raise PayloadSafetyError(cls.__name__, field_name, field_type, reason)
 
 
-def _resolve_app_name() -> str:
-    """Return the running app's registered name, falling back to APPLICATION_NAME.
-
-    AppRegistry is preferred: it is derived from the App class definition and can
-    never be silently wrong. APPLICATION_NAME (env var ATLAN_APPLICATION_NAME)
-    defaults to ``"default"`` when unset, which would cause every app to write
-    to ``artifacts/apps/default/...`` with no error.
-    """
-    try:
-        from application_sdk.app.registry import (  # noqa: PLC0415 — deferred to avoid circular import (registry imports from this module)
-            AppRegistry,
-        )
-
-        apps = AppRegistry.get_instance().list_apps()
-        if len(apps) == 1:
-            return apps[0]
-    except Exception:  # noqa: BLE001,S110 — registry may not be initialised in all runtime contexts; APPLICATION_NAME fallback is intentional
-        pass
-    from application_sdk.constants import APPLICATION_NAME  # noqa: PLC0415
-
-    return APPLICATION_NAME
-
-
 class PublishInputMixin(BaseModel):
     """Mixin for apps whose workflow output feeds the Publish App.
 
@@ -878,12 +855,15 @@ class PublishInputMixin(BaseModel):
                     workflow as _wf,
                 )
 
+                from application_sdk.app.registry import (  # noqa: PLC0415 — deferred to avoid circular import (registry imports from this module)
+                    AppRegistry,
+                )
                 from application_sdk.constants import (  # noqa: PLC0415 — co-located with temporalio import in same try block
                     WORKFLOW_OUTPUT_PATH_TEMPLATE,
                 )
 
                 self.output_path = WORKFLOW_OUTPUT_PATH_TEMPLATE.format(
-                    application_name=_resolve_app_name(),
+                    application_name=AppRegistry.resolve_running_app_name(),
                     workflow_id=_wf.info().workflow_id,
                     run_id=_wf.info().run_id,
                 )

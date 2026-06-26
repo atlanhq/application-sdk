@@ -692,69 +692,57 @@ class TestUnknownKeyWarning:
 
 
 # =============================================================================
-# _resolve_app_name / PublishInputMixin
+# AppRegistry.resolve_running_app_name / PublishInputMixin
 # =============================================================================
 
 
-class TestResolveAppName:
-    """_resolve_app_name prefers AppRegistry over APPLICATION_NAME env var."""
+class TestResolveRunningAppName:
+    """AppRegistry.resolve_running_app_name prefers explicit name > registry > APPLICATION_NAME."""
+
+    def test_prefer_returned_immediately(self) -> None:
+        from application_sdk.app.registry import AppRegistry
+
+        result = AppRegistry.resolve_running_app_name(prefer="explicit-name")
+        assert result == "explicit-name"
 
     def test_returns_registry_name_when_single_app_registered(self) -> None:
-        from application_sdk.contracts.base import _resolve_app_name
+        from application_sdk.app.registry import AppRegistry
 
-        with (
-            patch(
-                "application_sdk.contracts.base._resolve_app_name",
-                wraps=_resolve_app_name,
-            ),
-            patch("application_sdk.app.registry.AppRegistry.get_instance") as mock_inst,
-        ):
+        with patch(
+            "application_sdk.app.registry.AppRegistry.get_instance"
+        ) as mock_inst:
             mock_inst.return_value.list_apps.return_value = ["my-connector"]
-            result = _resolve_app_name()
+            result = AppRegistry.resolve_running_app_name()
 
         assert result == "my-connector"
 
     def test_falls_back_to_application_name_when_registry_empty(self) -> None:
-        from application_sdk.contracts.base import _resolve_app_name
+        from application_sdk.app.registry import AppRegistry
 
         with patch(
             "application_sdk.app.registry.AppRegistry.get_instance"
         ) as mock_inst:
             mock_inst.return_value.list_apps.return_value = []
             with patch("application_sdk.constants.APPLICATION_NAME", "env-app"):
-                result = _resolve_app_name()
+                result = AppRegistry.resolve_running_app_name()
 
         assert result == "env-app"
 
     def test_falls_back_when_multiple_apps_registered(self) -> None:
-        from application_sdk.contracts.base import _resolve_app_name
+        from application_sdk.app.registry import AppRegistry
 
         with patch(
             "application_sdk.app.registry.AppRegistry.get_instance"
         ) as mock_inst:
             mock_inst.return_value.list_apps.return_value = ["app-a", "app-b"]
             with patch("application_sdk.constants.APPLICATION_NAME", "env-app"):
-                result = _resolve_app_name()
+                result = AppRegistry.resolve_running_app_name()
 
         assert result == "env-app"
 
-    def test_falls_back_when_registry_raises(self) -> None:
-        from application_sdk.contracts.base import _resolve_app_name
-
-        with (
-            patch(
-                "application_sdk.app.registry.AppRegistry.get_instance",
-                side_effect=RuntimeError("registry broken"),
-            ),
-            patch("application_sdk.constants.APPLICATION_NAME", "env-fallback"),
-        ):
-            result = _resolve_app_name()
-
-        assert result == "env-fallback"
-
 
 class TestPublishInputMixinDerivation:
-    """PublishInputMixin auto-derives output_path using _resolve_app_name."""
+    """PublishInputMixin auto-derives output_path using AppRegistry.resolve_running_app_name."""
 
     def test_derive_uses_registry_name_not_env_var(self) -> None:
         """Registry name wins over APPLICATION_NAME when auto-deriving output_path."""
