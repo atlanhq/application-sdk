@@ -34,6 +34,14 @@ class TransformerInterface(ABC):
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
+        # The SDK's own concrete transformers (AtlasTransformer,
+        # QueryBasedTransformer) subclass this ABC; warning on *their* definition
+        # would fire at SDK import with no consumer code to point at, on top of
+        # each class's targeted __init__ warning. Skip those — a consumer
+        # subclass (module outside application_sdk.transformers) still warns here,
+        # and B001 catches the import statically via the manifest regardless.
+        if cls.__module__.startswith("application_sdk.transformers"):
+            return
         warnings.warn(
             "TransformerInterface is deprecated; use the connector-side asset-mapper "
             "pattern (typed records → map_<entity>() → pyatlan_v9 Asset) instead — "
