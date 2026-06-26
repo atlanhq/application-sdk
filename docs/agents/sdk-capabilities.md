@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.20.0
-source-sha:    00cff3c6032563db0d02bd9ffe9293070b183426
-source-date:   2026-06-25T21:28:13+05:30
+source-sha:    215a954ca8d68ae3803bfc564d17a25e3cd7e59b
+source-date:   2026-06-26T21:47:10+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2646,7 +2646,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `checks: list[PreflightCheck]` `= []` — Individual check results. A check's :attr:`PreflightCheck.blocking` flag
   - `message: str` `= ''` — Human-readable summary.
   - `total_duration_ms: float` `= 0.0` — Total time for all checks in milliseconds.
-  - `should_block: bool` — Whether the injected preflight gate must abort the run before
+  - `should_block: bool` — Whether the gate must abort the run (a blocking check failed).
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `SqlMetadataObject`

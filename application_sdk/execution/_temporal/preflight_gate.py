@@ -2,8 +2,9 @@
 
 A CORE SDK extraction-lifecycle activity — deliberately separate from SDR.
 Every generated workflow's ``_run`` dispatches ``{app}:preflight`` as its first
-step (see :func:`application_sdk.app.base._run_preflight_gate`); on a canonical
-``failed`` verdict the run aborts before extraction.
+step (see :func:`application_sdk.app.base._run_preflight_gate`); when the
+verdict's ``should_block`` is set (a failed blocking check) the run aborts
+before extraction.
 
 This is NOT an SDR feature: SDR exposes the handler operations as durable
 Temporal *workflows* for remote control-plane calls, whereas the gate is an

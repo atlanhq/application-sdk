@@ -1548,7 +1548,8 @@ async def _run_preflight_gate(
     """Run the SDK-owned pre-extraction preflight gate (HYP-1883).
 
     Dispatches the connector's preflight handler as a mandatory first activity
-    and aborts before extraction on a canonical ``failed`` verdict. Called at
+    and aborts before extraction when the verdict's ``should_block`` is set (a
+    failed blocking check). Called at
     the head of every generated workflow's ``_run``.
 
     Guards:
@@ -1586,7 +1587,7 @@ async def _run_preflight_gate(
     # but observes instead of aborting. Scheduled/automated runs leave this
     # False and stay hard-gated. FailureError covers a handler that *raises*
     # its own typed preflight error (e.g. the teradata style) — observe
-    # suppresses that the same way it suppresses a returned ``failed`` verdict.
+    # suppresses that the same way it suppresses a should_block verdict.
     override = bool(getattr(input_data, "preflight_override", False))
 
     metadata = getattr(input_data, "metadata", None)

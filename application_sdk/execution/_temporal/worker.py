@@ -350,7 +350,7 @@ def create_worker(
     )
     from application_sdk.handler.base import DefaultHandler  # noqa: PLC0415
 
-    # When the app ships no Handler, DefaultHandler's no-op (canonical success)
+    # When the app ships no Handler, DefaultHandler's no-op (no checks → never blocks)
     # keeps the gate present but non-blocking.
     gate_handler = handler if handler is not None else DefaultHandler()
 

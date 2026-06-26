@@ -435,8 +435,7 @@ class PreflightOutput(BaseModel):
 
     @property
     def should_block(self) -> bool:
-        """Whether the injected preflight gate must abort the run before
-        extraction.
+        """Whether the gate must abort the run (a blocking check failed).
 
         ``True`` iff a check with ``blocking=True`` failed. Advisory failures
         (``blocking=False``) never block, and a handler with no blocking checks
