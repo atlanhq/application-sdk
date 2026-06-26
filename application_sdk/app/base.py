@@ -1584,13 +1584,6 @@ async def _run_preflight_gate(
     if not isinstance(input_data, CredentialResolvable):
         return
 
-    # Per-run "run anyway" override (HYP-1883): the gate still runs and logs,
-    # but observes instead of aborting. Scheduled/automated runs leave this
-    # False and stay hard-gated. FailureError covers a handler that *raises*
-    # its own typed preflight error (e.g. the teradata style) — observe
-    # suppresses that the same way it suppresses a should_block verdict.
-    override = bool(getattr(input_data, "preflight_override", False))
-
     metadata = getattr(input_data, "metadata", None)
     gate_input = PreflightGateInput(
         extraction_method=getattr(input_data, "extraction_method", "") or "",
@@ -1601,38 +1594,19 @@ async def _run_preflight_gate(
         **({"metadata": metadata} if metadata is not None else {}),
     )
 
-    try:
-        result = await workflow.execute_activity(
-            preflight_gate_activity_name(app_name),
-            gate_input,
-            result_type=PreflightOutput,
-            schedule_to_close_timeout=_GATE_SCHEDULE_TO_CLOSE,
-            start_to_close_timeout=_GATE_START_TO_CLOSE,
-            retry_policy=_GATE_RETRY,
-        )
-    except FailureError:
-        # Handler raised its own preflight error. asyncio.CancelledError is a
-        # BaseException, so workflow cancellation is never swallowed here.
-        if override:
-            _safe_log(
-                "warning",
-                "Preflight gate errored; proceeding (preflight_override set)",
-                entrypoint=entrypoint,
-                exc_info=True,
-            )
-            return
-        raise
+    # A handler that raises its own typed preflight error surfaces as a
+    # FailureError and propagates straight through to fail the run — the gate's
+    # verdict path below only handles handlers that return a should_block result.
+    result = await workflow.execute_activity(
+        preflight_gate_activity_name(app_name),
+        gate_input,
+        result_type=PreflightOutput,
+        schedule_to_close_timeout=_GATE_SCHEDULE_TO_CLOSE,
+        start_to_close_timeout=_GATE_START_TO_CLOSE,
+        retry_policy=_GATE_RETRY,
+    )
 
     if not result.should_block:
-        return
-
-    if override:
-        _safe_log(
-            "warning",
-            "Preflight failed; proceeding (preflight_override set)",
-            entrypoint=entrypoint,
-            preflight_message=result.message,
-        )
         return
 
     from application_sdk.execution.errors import (  # noqa: PLC0415 — circular: execution/__init__ imports app.base

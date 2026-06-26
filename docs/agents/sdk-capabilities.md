@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.20.0
-source-sha:    215a954ca8d68ae3803bfc564d17a25e3cd7e59b
-source-date:   2026-06-26T21:47:10+05:30
+sdk-version:   3.20.1
+source-sha:    fd43e4b87098fa6c9d17b37209b6274db0cf2a5a
+source-date:   2026-06-26T22:18:12+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2715,7 +2715,6 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `credential_ref: CredentialRef | None` — Typed credential reference — preferred over credential_guid for new apps.
   - `extraction_method: str` `= ''` — ``"agent"`` or ``"direct"``. Empty defaults to direct.
   - `agent_json: AgentCredentialSpec | None` — Typed agent credential spec. Non-None when extraction_method is agent.
-  - `preflight_override: bool` `= False` — Run-anyway override for the injected preflight gate (HYP-1883).
   - `output_prefix: str` `= ''` — Object store prefix for all output artifacts.
   - `output_path: str` `= ''` — Local or object store path for output files.
   - `exclude_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)` — Filter for excluding schemas/tables.

@@ -132,16 +132,6 @@ class ExtractionInput(Input):
     the spec's model validator normalises all three forms.
     """
 
-    preflight_override: bool = False
-    """Run-anyway override for the injected preflight gate (HYP-1883).
-
-    When ``True``, the gate still runs and logs its verdict but does NOT abort
-    the run on a ``failed`` verdict or a handler error — it observes and lets
-    extraction proceed. Set by the UI's "Run anyway" action (threaded through
-    by the orchestrator); unset for scheduled/automated runs so those stay
-    hard-gated.
-    """
-
     @model_validator(mode="before")
     @classmethod
     def _normalize_ae_payload(cls, data: Any) -> Any:
