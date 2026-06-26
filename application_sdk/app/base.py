@@ -1613,7 +1613,9 @@ async def _run_preflight_gate(
     # the reason (e.g. "Auth failed: ..."); fold them in so an automated run's
     # Temporal failure shows it without a worker-log dive. Only blocking-and-
     # failed checks contribute, so the reason matches why it blocked (advisory
-    # failures don't block and shouldn't appear).
+    # failures don't block and shouldn't appear). Not length-capped: no other
+    # preflight message path caps, and Temporal's payload limit is far above any
+    # realistic concatenation of per-check messages.
     reasons = "; ".join(
         check.message
         for check in result.checks

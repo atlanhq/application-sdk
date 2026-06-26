@@ -138,6 +138,47 @@ class TestRunPreflightGate:
                 await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
         assert "aborting before extraction" in excinfo.value.message
 
+    async def test_abort_reason_joins_multiple_blocking_failures(self) -> None:
+        # Multiple blocking failures are joined with "; " — pin the separator so
+        # a switch to newline/comma output is caught.
+        verdict = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(
+                    name="auth", passed=False, blocking=True, message="auth down"
+                ),
+                PreflightCheck(
+                    name="net", passed=False, blocking=True, message="host unreachable"
+                ),
+            ],
+        )
+        exec_mock, exec_patch = _exec(verdict)
+        with _patched(True), exec_patch:
+            with pytest.raises(ApplicationError) as excinfo:
+                await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        assert "auth down" in excinfo.value.message
+        assert "host unreachable" in excinfo.value.message
+        assert "; " in excinfo.value.message
+
+    async def test_explicit_output_message_wins_over_per_check_join(self) -> None:
+        # Precedence: an explicit PreflightOutput.message takes priority over the
+        # folded per-check reasons (result.message or reasons or generic).
+        verdict = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            message="Summary: 3 of 5 checks failed",
+            checks=[
+                PreflightCheck(
+                    name="auth", passed=False, blocking=True, message="auth down"
+                ),
+            ],
+        )
+        exec_mock, exec_patch = _exec(verdict)
+        with _patched(True), exec_patch:
+            with pytest.raises(ApplicationError) as excinfo:
+                await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        assert excinfo.value.message == "Summary: 3 of 5 checks failed"
+        assert "auth down" not in excinfo.value.message
+
     async def test_proceeds_on_success(self) -> None:
         exec_mock, exec_patch = _exec(_proceeding())
         with _patched(True), exec_patch:

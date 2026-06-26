@@ -56,12 +56,6 @@
     },
     {
       "contract": "ExtractionInput",
-      "field": "preflight_override",
-      "status": "active",
-      "type": "bool"
-    },
-    {
-      "contract": "ExtractionInput",
       "field": "source_tag_prefix",
       "status": "active",
       "type": "str"
