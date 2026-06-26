@@ -90,6 +90,25 @@ lines around `finding.line` in `finding.file` before proposing a fix.
   `"judgment"` (the decode/kwargs call requires reading the call site), so the
   edit is also routed to residue for human confirmation.
 
+- **O002 LegacyAssetSerialization** (asset-mapper, BLDX-1492) — an asset is
+  serialized with the pydantic `.dict()` method in a module that imports pyatlan
+  asset models.  The asset-mapper transform task writes assets with the v9
+  serialization API — `out_f.write(asset.to_nested_bytes() + b"\n")` — which emits
+  the nested-entity wire shape the platform ingests; `.dict()` produces a flat
+  dict that still needs hand-conversion.  Draft the switch to
+  `asset.to_nested_bytes()` (note it returns `bytes`, so the sink must be a
+  bytes/JSONL writer).  If the flagged `.dict()` is on a **non-asset** pydantic
+  model, propose an inline `# conformance: ignore[O002] <reason>` instead.
+
+- **O003 UntypedAssetMapperReturn** (asset-mapper, BLDX-1492) — a function builds
+  a pyatlan asset and returns it but declares no return annotation.  Draft the
+  smallest mechanical fix: add `-> <Asset>` naming the asset class the function
+  constructs (e.g. a function building and returning a `Table` becomes
+  `def map_table(...) -> Table:`).  If the function legitimately returns a union
+  or `Optional`, annotate accordingly.  Classification is `"judgment"` only
+  because the author may intend a wider return type; the edit is otherwise
+  mechanical.
+
 **Suppress outcome (strict mode only, WARNING-tier findings)**:
 
 When `mode == "strict"` and the site legitimately needs stdlib `json` (e.g.

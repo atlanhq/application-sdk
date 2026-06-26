@@ -12,6 +12,10 @@ Currently implemented:
 
 * ``O001`` OrjsonOverStdlibJson — ``json.dumps`` / ``json.loads`` call sites
   where ``json`` resolves to the stdlib module; prefer ``orjson``.
+* ``O002`` LegacyAssetSerialization — ``.dict()`` in a module importing pyatlan
+  asset models; prefer the v9 ``asset.to_nested_bytes()`` API.
+* ``O003`` UntypedAssetMapperReturn — a function that builds a pyatlan asset and
+  returns it but has no return annotation.
 
 Inline suppression
 ------------------
@@ -47,6 +51,7 @@ from conformance.suite.checks._ast_common import (
 )
 from conformance.suite.schema.findings import Finding
 
+from ._asset_mapper import check_o002, check_o003
 from ._stdlib_json import OrjsonOverStdlibJsonChecker, _collect_json_bindings
 
 SERIES = "O"
@@ -77,7 +82,11 @@ def scan_text(text: str, file: str) -> list[Finding]:
         json_func_names=func_names,
     )
     checker.visit(tree)
-    return checker._findings
+    return (
+        checker._findings
+        + check_o002(tree, file, directives)
+        + check_o003(tree, file, directives)
+    )
 
 
 def scan_path(path: Path, root: Path) -> list[Finding]:

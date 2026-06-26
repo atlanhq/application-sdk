@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**19 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019) (all AST-based)
+**20 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019) (all AST-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -42,6 +42,7 @@ reassigned.
 | [P017](#p017) | `ManualWorkerBootstrap` | `warn` | `app` | `entrypoint-conformance` | — | 0.6.0 |
 | [P018](#p018) | `ManualServerBootstrap` | `warn` | `app` | `entrypoint-conformance` | — | 0.6.0 |
 | [P019](#p019) | `RawHttpToAtlan` | `warn` | `both` | `client-seam` | — | 0.7.0 |
+| [P020](#p020) | `LegacyPyatlanAssetImport` | `warn` | `app` | `asset-mapper` | — | 0.6.0 |
 
 ---
 
@@ -633,5 +634,37 @@ marker and stays silent.
 
 Land as `WARN`: a justified inline `# conformance: ignore[P019] <reason>` records any
 unavoidable exception and stays visible in SARIF.
+
+---
+
+## P020 — `LegacyPyatlanAssetImport` {#p020}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `asset-mapper` · **Autofixable:** — · **Since:** 0.6.0
+
+> Imports/constructs pyatlan.model.assets (non-v9) — use pyatlan_v9.model.assets
+
+**Rationale:** The SDK mandates the optimized pyatlan_v9 asset surface for new connectors ('New
+connectors must use pyatlan_v9', docs/guides/sql-application-guide.md): the legacy
+pyatlan.model.assets classes are the memory-heavy DataFrame/transformer-era
+serialization path, retained only for connectors still on the built-in AtlasTransformer
+(which B001 already steers off). pyatlan_v9 ships inside the existing pyatlan>=9
+dependency, so the switch adds nothing to resolve. WARN because the v9 asset models
+differ in attributes and serialization (to_nested_bytes vs .dict()), so each site needs
+human judgement — never a blind name swap.
+
+Flags app code that imports asset model classes from the legacy `pyatlan.model.assets`
+package, or constructs them via the qualified `pyatlan.model.assets.X(...)` form.  New
+connectors must build assets from `pyatlan_v9.model.assets` — the optimized v9 surface
+the asset-mapper pattern is built on (BLDX-1492; see
+`docs/guides/sql-application-guide.md` and `docs/upgrade-guide-v3.md`).
+
+Scope is deliberately narrow — only `pyatlan.model.assets` is matched, never the rest of
+`pyatlan`: enums and helpers that legitimately have no v9 equivalent (e.g. `from
+pyatlan.model.enums import AtlanConnectorType`) are out of scope.
+
+NOT autofixable: the v9 models are not a drop-in rename — attribute names and the
+serialization API differ (use `asset.to_nested_bytes()` rather than `.dict()`), so each
+construction site needs review. Suppress with `# conformance: ignore[P020] <reason>`
+when a connector is intentionally pinned to the legacy `AtlasTransformer` surface.
 
 ---

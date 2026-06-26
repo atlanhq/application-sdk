@@ -56,4 +56,77 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o001",
     ),
+    RuleDefinition(
+        id="O002",
+        scope=RuleScope.APP,
+        name="LegacyAssetSerialization",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="asset-mapper",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.6.0",
+        rationale=(
+            "The asset-mapper pattern serialises pyatlan assets to JSONL with the v9 "
+            "API — asset.to_nested_bytes() — which emits the nested-entity wire shape "
+            "the platform expects. Serialising an asset with the pydantic .dict() "
+            "method produces a flat dict that still needs hand-conversion and drifts "
+            "from the SDK's recommended pipeline (BLDX-1492; docs/upgrade-guide-v3.md). "
+            "WARN/recommendation because .dict() is name-anchored — it can also belong "
+            "to a non-asset pydantic model — so the call needs a human glance."
+        ),
+        short_description=(
+            "Asset serialised with .dict() — prefer the v9 asset.to_nested_bytes() API"
+        ),
+        full_description=(
+            "Flags a ``.dict()`` method call in a module that imports pyatlan asset\n"
+            "models.  The asset-mapper pattern writes assets with the v9 serialisation\n"
+            "API — ``asset.to_nested_bytes()`` — not the pydantic ``.dict()`` form\n"
+            "(``docs/upgrade-guide-v3.md`` explicitly says 'use the v9 serialisation\n"
+            "API instead of .dict()').\n"
+            "\n"
+            "Coverage limits (biased to low false-positives at WARN): only ``.dict()``\n"
+            "is matched (not ``.json()``, which is overwhelmingly ``response.json()``\n"
+            "on HTTP clients), and only in files that import asset models.  A\n"
+            "``.dict()`` on a *non-asset* pydantic model in such a file is a known\n"
+            "false-positive — suppress with ``# conformance: ignore[O002] <reason>``.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o002",
+    ),
+    RuleDefinition(
+        id="O003",
+        scope=RuleScope.APP,
+        name="UntypedAssetMapperReturn",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="asset-mapper",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.6.0",
+        rationale=(
+            "The asset-mapper pattern's value is end-to-end typing: a mapper function "
+            "constructs a pyatlan asset and returns it, so the return annotation "
+            "documents which asset it produces and lets pyright check the call site. "
+            "A mapper that builds an asset but declares no return type loses that "
+            "guarantee (BLDX-1492; reference app atlan-openapi-app). WARN/recommendation "
+            "because adding the annotation is a safe, mechanical nudge."
+        ),
+        short_description=(
+            "Function builds a pyatlan asset but has no return annotation — annotate "
+            "it with the asset type"
+        ),
+        full_description=(
+            "Flags a function that constructs a pyatlan asset (instantiates a class\n"
+            "imported from ``pyatlan_v9.model.assets`` / ``pyatlan.model.assets``) and\n"
+            "returns a value, but carries no ``-> <Asset>`` return annotation.  The\n"
+            "asset-mapper pattern is typed end-to-end — each ``map_<entity>`` function\n"
+            "declares the pyatlan asset it produces (see ``atlan-openapi-app``).\n"
+            "\n"
+            "Keyed on actual asset construction (not just a ``map_`` name), so plain\n"
+            "helpers are not flagged.  Suppress with\n"
+            "``# conformance: ignore[O003] <reason>`` when an untyped return is\n"
+            "intentional.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o003",
+    ),
 )

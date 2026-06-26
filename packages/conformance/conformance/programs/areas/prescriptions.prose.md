@@ -312,3 +312,32 @@ around `finding.line` before drafting any proposal — the proposal is a
   `# conformance: ignore[P019] <reason>` instead, where the justification names
   the missing surface.  Either way the proposal is recorded for the developer to
   apply or reject; this area never mutates the working tree.
+
+**Asset-mapper rule (P020)** — suggest-only, scope=app, WARN-tier;
+`classification` is always `"judgment"`.  Read the construction sites around
+`finding.line` before drafting — the proposal is a suggestion, never auto-applied.
+
+- **P020 LegacyPyatlanAssetImport** — app code imports asset models from the
+  legacy `pyatlan.model.assets` package instead of `pyatlan_v9.model.assets`
+  (the optimized v9 surface the asset-mapper pattern is built on, BLDX-1492).
+  `pyatlan_v9` ships inside the existing `pyatlan>=9` dependency — no dependency
+  change is needed.  Draft a proposal in two parts, and **never** a blind
+  `pyatlan` → `pyatlan_v9` string swap:
+
+  1. **Rewrite the import** — `from pyatlan.model.assets import Table, Column` →
+     `from pyatlan_v9.model.assets import Table, Column`.
+
+  2. **Adapt every construction site** — the v9 models are not a drop-in rename:
+     attribute names and the serialization API differ.  In particular, switch
+     asset serialization from the pydantic `asset.dict()` form to the v9
+     `asset.to_nested_bytes()` API used by the transform task (this also clears
+     any O002 finding).  Read each `Table(...)`/`Column(...)` call and confirm
+     the kwargs exist on the v9 model; note any that don't in residue rather than
+     dropping them.
+
+  Shape the result after the reference asset-mapper apps (`atlan-openapi-app`,
+  the migrated `atlan-metabase-app`); full guidance in `docs/upgrade-guide-v3.md`.
+  **Intentional legacy pin:** if the connector is deliberately still on the
+  built-in `AtlasTransformer` (which depends on `pyatlan`), propose an inline
+  `# conformance: ignore[P020] <reason>` naming that constraint instead — the
+  B001 deprecation nudge will steer the larger migration.

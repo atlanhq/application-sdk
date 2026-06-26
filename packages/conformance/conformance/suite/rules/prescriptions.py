@@ -278,4 +278,50 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p015",
     ),
+    RuleDefinition(
+        id="P020",
+        scope=RuleScope.APP,
+        name="LegacyPyatlanAssetImport",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="asset-mapper",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.6.0",
+        rationale=(
+            "The SDK mandates the optimized pyatlan_v9 asset surface for new connectors "
+            "('New connectors must use pyatlan_v9', docs/guides/sql-application-guide.md): "
+            "the legacy pyatlan.model.assets classes are the memory-heavy "
+            "DataFrame/transformer-era serialization path, retained only for connectors "
+            "still on the built-in AtlasTransformer (which B001 already steers off). "
+            "pyatlan_v9 ships inside the existing pyatlan>=9 dependency, so the switch "
+            "adds nothing to resolve. WARN because the v9 asset models differ in "
+            "attributes and serialization (to_nested_bytes vs .dict()), so each site "
+            "needs human judgement — never a blind name swap."
+        ),
+        short_description=(
+            "Imports/constructs pyatlan.model.assets (non-v9) — use "
+            "pyatlan_v9.model.assets"
+        ),
+        full_description=(
+            "Flags app code that imports asset model classes from the legacy\n"
+            "``pyatlan.model.assets`` package, or constructs them via the qualified\n"
+            "``pyatlan.model.assets.X(...)`` form.  New connectors must build assets\n"
+            "from ``pyatlan_v9.model.assets`` — the optimized v9 surface the\n"
+            "asset-mapper pattern is built on (BLDX-1492; see\n"
+            "``docs/guides/sql-application-guide.md`` and ``docs/upgrade-guide-v3.md``).\n"
+            "\n"
+            "Scope is deliberately narrow — only ``pyatlan.model.assets`` is matched,\n"
+            "never the rest of ``pyatlan``: enums and helpers that legitimately have\n"
+            "no v9 equivalent (e.g. ``from pyatlan.model.enums import\n"
+            "AtlanConnectorType``) are out of scope.\n"
+            "\n"
+            "NOT autofixable: the v9 models are not a drop-in rename — attribute\n"
+            "names and the serialization API differ (use ``asset.to_nested_bytes()``\n"
+            "rather than ``.dict()``), so each construction site needs review.\n"
+            "Suppress with ``# conformance: ignore[P020] <reason>`` when a connector\n"
+            "is intentionally pinned to the legacy ``AtlasTransformer`` surface.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p020",
+    ),
 )

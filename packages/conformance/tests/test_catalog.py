@@ -135,6 +135,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # workers or servers (BLDX-1411).
     # I001–I005: Dockerfile conformance (SDK builds the base image, not consuming it).
     # B001: consuming a deprecated SDK symbol (BLDX-1418).
+    # P020/O002/O003: asset-mapper usage — connectors build assets with pyatlan_v9,
+    # serialize with to_nested_bytes, and type their mapper returns (BLDX-1492); the
+    # SDK is the framework, not a connector.
     assert app_scoped == {
         "B001",
         "C002",
@@ -158,6 +161,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P016",
         "P017",
         "P018",
+        "P020",
+        "O002",
+        "O003",
         "I001",
         "I002",
         "I003",
@@ -271,8 +277,10 @@ def test_catalog_p_series_present() -> None:
     P016 is the entry-point contract/code alignment rule (BLDX-1425);
     P017–P018 are the entrypoint-conformance rules (BLDX-1411);
     P019 is the client-seam rule — raw HTTP to Atlan instead of pyatlan
-    (BLDX-1430).  A stray or renumbered P-id would slip past a subset check while
-    breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
+    (BLDX-1430).  P020 is the asset-mapper rule — build assets from pyatlan_v9,
+    not the legacy pyatlan.model.assets (BLDX-1492).  A stray or renumbered P-id
+    would slip past a subset check while breaking fleet-wide
+    ``# conformance: ignore[Pxxx]`` suppressions.
     """
     rules = load_catalog()
     p_ids = {r.id for r in rules if r.id.startswith("P")}
@@ -296,6 +304,7 @@ def test_catalog_p_series_present() -> None:
         "P017",
         "P018",
         "P019",
+        "P020",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
@@ -307,7 +316,7 @@ def test_catalog_o_series_present() -> None:
     """The O-series optimisation rules are all present."""
     rules = load_catalog()
     o_ids = {r.id for r in rules if r.id.startswith("O")}
-    expected = {"O001"}
+    expected = {"O001", "O002", "O003"}
     missing = expected - o_ids
     assert not missing, f"Missing O-series rules: {missing}"
 
