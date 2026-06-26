@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import orjson
 import pytest
 
-from application_sdk.testing.integration import Scenario
+from application_sdk.testing.integration import BaseIntegrationTest, Scenario
 from application_sdk.testing.sdr import BaseSDRIntegrationTest
 
 
-def _write_manifest(tmp_path, extract_args: Dict[str, Any]) -> str:
+def _write_manifest(tmp_path, extract_args: dict[str, Any]) -> str:
     """Write a minimal AE manifest.json whose extract node carries ``extract_args``."""
     manifest = {
         "execution_mode": "automation-engine",
@@ -31,7 +31,7 @@ def _write_manifest(tmp_path, extract_args: Dict[str, Any]) -> str:
 
 
 # Extract args shaped like a real manifest, WITH the agent_json slot (post-#177).
-_ARGS_WITH_AGENT_JSON: Dict[str, Any] = {
+_ARGS_WITH_AGENT_JSON: dict[str, Any] = {
     "connection": "{{connection}}",
     "credential_guid": "{{credential-guid}}",
     "extraction_method": "{{extraction-method}}",
@@ -42,7 +42,7 @@ _ARGS_WITH_AGENT_JSON: Dict[str, Any] = {
 }
 
 # Same, but MISSING the agent_json slot — the atlan-mssql-app#177 bug.
-_ARGS_MISSING_AGENT_JSON: Dict[str, Any] = {
+_ARGS_MISSING_AGENT_JSON: dict[str, Any] = {
     "connection": "{{connection}}",
     "credential_guid": "{{credential-guid}}",
     "extraction_method": "{{extraction-method}}",
@@ -67,7 +67,7 @@ def auth_scenario() -> Scenario:
 
 
 class _Suite(BaseSDRIntegrationTest):
-    agent_spec_template: Dict[str, Any] = {
+    agent_spec_template: dict[str, Any] = {
         "agent-name": "test-agent",
         "secret-path": "test-credentials",
         "auth-type": "basic",
@@ -234,6 +234,68 @@ def test_manifest_warns_on_unmatched_metadata_key_and_uncovered_placeholder(
     assert "{{target}}" in warned  # the uncovered non-filter slot
 
 
+def test_manifest_metadata_collision_with_universal_slot_warns(tmp_path) -> None:
+    """A scenario metadata key colliding with a reserved universal SDR slot (e.g.
+    ``connection``) is ignored — the universal value wins — and the silent drop is
+    WARNED rather than masked."""
+
+    class _Suite(BaseSDRIntegrationTest):
+        manifest_path = _write_manifest(
+            tmp_path,
+            {"connection": "{{connection}}", "agent_json": "{{agent-json}}"},
+        )
+        agent_spec_template = {"agent-name": "a", "secret-path": "p"}
+        default_connection = {
+            "typeName": "Connection",
+            "attributes": {"qualifiedName": "default/x/1"},
+        }
+        scenarios = []
+
+    sc = Scenario(
+        name="wf",
+        api="workflow",
+        assert_that={"success": lambda v: True},
+        workflow_timeout=300,
+        metadata={"connection": "SHOULD-BE-IGNORED"},
+    )
+    with patch("application_sdk.testing.sdr.base.logger") as mock_logger:
+        args = _Suite()._build_scenario_args(sc)
+
+    # The universal value wins; the colliding metadata is NOT substituted.
+    assert args["connection"] == _Suite.default_connection
+    warned = " ".join(str(c.args) for c in mock_logger.warning.call_args_list)
+    assert "collides with a reserved universal SDR slot" in warned
+
+
+def test_manifest_without_agent_spec_warns_and_falls_back_to_direct(tmp_path) -> None:
+    """manifest_path set + empty agent_spec_template → extraction-method falls back
+    to 'direct' (no agent spec injected) — warned, not silent."""
+
+    class _Suite(BaseSDRIntegrationTest):
+        manifest_path = _write_manifest(
+            tmp_path,
+            {
+                "extraction_method": "{{extraction-method}}",
+                "agent_json": "{{agent-json}}",
+            },
+        )
+        agent_spec_template = {}  # empty → degrades to direct
+        scenarios = []
+
+    sc = Scenario(
+        name="wf",
+        api="workflow",
+        assert_that={"success": lambda v: True},
+        workflow_timeout=300,
+    )
+    with patch("application_sdk.testing.sdr.base.logger") as mock_logger:
+        args = _Suite()._build_scenario_args(sc)
+
+    assert args["extraction_method"] == "direct"
+    warned = " ".join(str(c.args) for c in mock_logger.warning.call_args_list)
+    assert "falls back to 'direct'" in warned
+
+
 def test_manifest_missing_agent_json_slot_is_not_injected(
     tmp_path, workflow_scenario: Scenario
 ) -> None:
@@ -264,6 +326,29 @@ def test_manifest_missing_file_raises(workflow_scenario: Scenario) -> None:
         _MissingManifestSuite()._build_scenario_args(workflow_scenario)
 
 
+def test_manifest_without_extract_args_raises(
+    tmp_path, workflow_scenario: Scenario
+) -> None:
+    """A manifest whose extract node has no ``args`` object raises ValueError
+    (rather than silently deriving an empty input). Pins the second raise branch
+    of ``_manifest_extract_inputs`` (the first, FileNotFoundError, is covered above).
+    """
+    manifest = {
+        "execution_mode": "automation-engine",
+        "dag": {"extract": {"inputs": {"workflow_type": "X"}}},  # no `args`
+    }
+    path = tmp_path / "manifest.json"
+    path.write_bytes(orjson.dumps(manifest))
+
+    class _NoArgsManifestSuite(BaseSDRIntegrationTest):
+        manifest_path = str(path)
+        agent_spec_template = {"agent-name": "a"}
+        scenarios = []
+
+    with pytest.raises(ValueError, match="dag.extract.inputs.args"):
+        _NoArgsManifestSuite()._build_scenario_args(workflow_scenario)
+
+
 def test_execute_scenario_polls_workflow_completion(
     workflow_scenario: Scenario,
 ) -> None:
@@ -272,7 +357,7 @@ def test_execute_scenario_polls_workflow_completion(
 
     with (
         patch.object(
-            BaseSDRIntegrationTest.__bases__[0],
+            BaseIntegrationTest,
             "_execute_scenario",
             return_value=MagicMock(success=True, response=fake_response),
         ),
@@ -286,7 +371,7 @@ def test_execute_scenario_skips_polling_for_auth(auth_scenario: Scenario) -> Non
     suite = _Suite()
     with (
         patch.object(
-            BaseSDRIntegrationTest.__bases__[0],
+            BaseIntegrationTest,
             "_execute_scenario",
             return_value=MagicMock(success=True, response={"data": {}}),
         ),
@@ -310,7 +395,7 @@ def test_execute_scenario_skips_polling_when_expected_data_set(tmp_path) -> None
     suite = _Suite()
     with (
         patch.object(
-            BaseSDRIntegrationTest.__bases__[0],
+            BaseIntegrationTest,
             "_execute_scenario",
             return_value=MagicMock(success=True, response={"data": {}}),
         ),

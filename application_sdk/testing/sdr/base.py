@@ -189,6 +189,15 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
         """
         extract_args = self._manifest_extract_inputs()
         method = "agent" if self.agent_spec_template else "direct"
+        # A manifest-driven suite with no agent_spec_template silently degrades to
+        # direct mode (no agent spec injected) — warn so the misconfig isn't silent.
+        if not self.agent_spec_template:
+            logger.warning(
+                "SDR manifest %s: manifest_path is set but agent_spec_template is "
+                "empty — extraction-method falls back to 'direct' and no agent spec "
+                "is injected. Set agent_spec_template for an SDR/agent-mode run.",
+                self.manifest_path,
+            )
         metadata = base_args.get("metadata") or {}
         # Universal SDR slots — present in every SDR-capable connector's extract args.
         subs: dict[str, Any] = {
@@ -201,9 +210,21 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
         }
         # Connector-specific placeholders are NOT enumerated here — each scenario
         # supplies them via metadata (keyed by placeholder name). A metadata key
-        # never overrides a universal slot above.
+        # never overrides a universal slot above — and a collision with one is
+        # dropped (setdefault is a no-op against the pre-seeded value), so warn
+        # rather than silently ignore it (mirrors the hyphen-vs-underscore warning).
         for key, value in metadata.items():
-            subs.setdefault("{{" + key + "}}", value)
+            placeholder = "{{" + key + "}}"
+            if placeholder in subs:
+                logger.warning(
+                    "SDR manifest %s: scenario metadata key %r collides with a "
+                    "reserved universal SDR slot — ignored (the universal value is "
+                    "used). Rename it if it was meant to be connector-specific.",
+                    self.manifest_path,
+                    key,
+                )
+                continue
+            subs[placeholder] = value
 
         placeholders = _collect_placeholders(extract_args)
         # A metadata key that matches no placeholder (e.g. hyphen-vs-underscore:
