@@ -13,6 +13,7 @@ import yaml
 from application_sdk.storage.binding import (
     _AZURE_AUTHORITY_HOSTS,
     GCS_SERVICE_ACCOUNT_FIELDS,
+    _adc_is_external_account,
     _coerce_bool,
     _create_store_from_binding_optional_with_put_attrs,
     _endpoint_is_aws,
@@ -2084,3 +2085,51 @@ class TestS3CompatibilityKnobs:
             "objectstore", components_dir=components_dir
         )
         assert put_attrs is None
+
+
+class TestAdcIsExternalAccount:
+    """`_adc_is_external_account` — the WIF carve-out probe (reads a local ADC
+    file only, never networks). Must stay total: a malformed creds file must
+    return False, never crash boot in `_create_infrastructure`."""
+
+    def test_no_env_returns_false(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            assert _adc_is_external_account() is False
+
+    def test_external_account_returns_true(self, tmp_path: Path) -> None:
+        cred = tmp_path / "wif.json"
+        cred.write_text(orjson.dumps({"type": "external_account"}).decode())
+        with patch.dict(
+            os.environ, {"GOOGLE_APPLICATION_CREDENTIALS": str(cred)}, clear=True
+        ):
+            assert _adc_is_external_account() is True
+
+    def test_service_account_key_returns_false(self, tmp_path: Path) -> None:
+        cred = tmp_path / "sa.json"
+        cred.write_text(orjson.dumps({"type": "service_account"}).decode())
+        with patch.dict(
+            os.environ, {"GOOGLE_APPLICATION_CREDENTIALS": str(cred)}, clear=True
+        ):
+            assert _adc_is_external_account() is False
+
+    def test_missing_file_returns_false(self, tmp_path: Path) -> None:
+        with patch.dict(
+            os.environ,
+            {"GOOGLE_APPLICATION_CREDENTIALS": str(tmp_path / "absent.json")},
+            clear=True,
+        ):
+            assert _adc_is_external_account() is False
+
+    @pytest.mark.parametrize("payload", ["[]", "null", "42", '"external_account"'])
+    def test_non_dict_json_returns_false_not_attributeerror(
+        self, tmp_path: Path, payload: str
+    ) -> None:
+        # Regression guard: a creds file that parses to a non-dict must fall
+        # through to False (let obstore surface the error) rather than raising
+        # AttributeError on `.get("type")` and crashing boot.
+        cred = tmp_path / "bad.json"
+        cred.write_text(payload)
+        with patch.dict(
+            os.environ, {"GOOGLE_APPLICATION_CREDENTIALS": str(cred)}, clear=True
+        ):
+            assert _adc_is_external_account() is False

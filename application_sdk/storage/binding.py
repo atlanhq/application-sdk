@@ -562,7 +562,11 @@ def _adc_is_external_account() -> bool:
         import json  # noqa: PLC0415
 
         with open(path) as fh:
-            return json.load(fh).get("type") == "external_account"
+            data = json.load(fh)
+        # A creds file that parses to a non-dict (``[]``, ``null``, a scalar) is
+        # malformed — treat it as "not external_account" and let obstore's own
+        # decoder surface the error, rather than crashing boot with AttributeError.
+        return isinstance(data, dict) and data.get("type") == "external_account"
     except (OSError, ValueError):
         return False
 

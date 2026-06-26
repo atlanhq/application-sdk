@@ -251,9 +251,9 @@ addopts = "-m 'not integration and not e2e and not s3_integration and not azure_
 markers = [
     "integration: tests requiring local Temporal server",
     "e2e: tests requiring a live K8s cluster",
-    "s3_integration: tests requiring real AWS S3 credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_BUCKET)",
-    "azure_integration: tests requiring real Azure Blob Storage credentials (AZURE_STORAGE_ACCOUNT, AZURE_STORAGE_KEY)",
-    "gcs_integration: tests requiring real GCS credentials (GCS_BUCKET, GCS_PROJECT_ID, GOOGLE_APPLICATION_CREDENTIALS)",
+    "s3_integration: tests requiring keyless AWS access (S3_BUCKET + ambient AWS credentials, e.g. OIDC role)",
+    "azure_integration: tests requiring keyless Azure Workload Identity Federation (AZURE_STORAGE_ACCOUNT, AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_FEDERATED_TOKEN_FILE)",
+    "gcs_integration: tests requiring keyless GCS access (GCS_BUCKET, GCS_PROJECT_ID + ambient ADC, e.g. Workload Identity Federation)",
     "storage_emulator: hermetic object-store tests against local emulators (MinIO/Azurite/storage-testbench); run in CI with emulator sidecars",
 ]
 

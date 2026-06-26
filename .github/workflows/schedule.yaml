@@ -64,10 +64,18 @@ jobs:
           service_account: ${{ vars.GCP_INTEG_SA }}
       - name: Azure — write the federated token file for obstore WI auth
         run: |
-          curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+          set -euo pipefail
+          # Mint into a throwaway file and only publish it on success, so a failed
+          # mint/parse can't leave a zero-byte token that yields an opaque AAD
+          # error downstream instead of a clear "OIDC mint failed". --fail-with-body
+          # makes curl exit non-zero on a non-2xx (still printing the body to debug).
+          tmp="$(mktemp)"
+          curl --fail-with-body -sS \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" \
             | python3 -c 'import sys,json;sys.stdout.write(json.load(sys.stdin)["value"])' \
-            > "${RUNNER_TEMP}/azure-federated-token"
+            > "$tmp"
+          mv "$tmp" "${RUNNER_TEMP}/azure-federated-token"
       - name: Run storage integration tests (keyless)
         env:
           S3_BUCKET: ${{ vars.S3_INTEG_BUCKET }}
