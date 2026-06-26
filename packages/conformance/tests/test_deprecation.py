@@ -208,7 +208,33 @@ def test_b001_real_manifest_flags_legacy_transformers() -> None:
     # two imports + one subclass
     assert [f.rule_id for f in findings] == ["B001", "B001", "B001"]
     # the asset-mapper migration target rides along for the remediation loop
-    assert any("asset-mapper" in f.message for f in findings)
+    assert all("asset-mapper" in f.message for f in findings)
+    assert all("v4.0" in f.message for f in findings)
+
+
+def test_b001_real_manifest_flags_transformer_interface_import() -> None:
+    """The ABC itself is flagged — an app subclassing it directly is the target."""
+    manifest = load_manifest()
+    src = "from application_sdk.transformers import TransformerInterface\n"
+    tree, directives = _tree_and_directives(src)
+    ids = [f.rule_id for f in scan_consumer(tree, "app/x.py", manifest, directives)]
+    assert ids == ["B001"]
+
+
+def test_b001_real_manifest_transformer_suppressible() -> None:
+    """A justified inline suppression silences the transformer finding (and is
+    still emitted to SARIF in its own category by the runner)."""
+    manifest = load_manifest()
+    src = (
+        "from application_sdk.transformers.atlas import AtlasTransformer  "
+        "# conformance: ignore[B001] legacy compat shim\n"
+    )
+    tree, directives = _tree_and_directives(src)
+    findings = scan_consumer(tree, "app/x.py", manifest, directives)
+    # The finding is still emitted (audit trail) but marked suppressed, so the
+    # runner counts it in its own SUPPRESSED category, not as a live WARNING.
+    assert len(findings) == 1
+    assert findings[0].suppressed is True
 
 
 # ── B002 MalformedDeprecationNotice (sdk scope) ─────────────────────────────────
