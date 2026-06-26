@@ -30,6 +30,7 @@ from application_sdk.contracts.base import PublishInputMixin
 from application_sdk.contracts.storage import UploadInput
 from application_sdk.contracts.types import StorageTier
 from application_sdk.execution import get_object_store_prefix
+from application_sdk.storage.batch import list_keys
 from application_sdk.storage.factory import create_local_store
 
 _APP = "egress-contract-test"
@@ -109,4 +110,48 @@ async def test_app_upload_egress_lands_under_publish_run_prefix(tmp_path) -> Non
         f"RETAINED egress {landed!r} is not under the publish run prefix "
         f"{_run_prefix()!r} — the SDR upload↔publish path contract is broken "
         f"(workflow_id likely dropped; see #2364)."
+    )
+
+
+async def test_transformed_upload_is_discoverable_by_publish_read(tmp_path) -> None:
+    """Data-level round-trip: a transformed file uploaded at the canonical egress
+    key is actually DISCOVERED by publish's read — ``list`` under
+    ``transformed_data_prefix`` returns it.
+
+    Stronger than string equality: it also catches an off-by-one prefix or
+    list-semantics mismatch where the path strings look aligned but the read glob
+    still comes up empty (the "extract OK, publish ingests 0" symptom). The real
+    platform publish (Atlas ingesting → assets in the tenant) lives downstream of
+    the SDK and is covered by the connector/LM e2e, not here.
+    """
+    store = create_local_store(tmp_path / "objectstore")
+    app = _EgressApp()
+    app._context = AppContext(
+        app_name=_APP,
+        app_version="1",
+        run_id=_RID,
+        workflow_id=_WID,
+        _storage=store,
+    )
+
+    # Upload a transformed entity file at the canonical key the SqlApp pins
+    # (``<run_prefix>/transformed/<entity>/entities.json``).
+    transformed_key = f"{_run_prefix()}/transformed/table/entities.json"
+    src = tmp_path / "entities.json"
+    src.write_text('{"typeName": "Table", "attributes": {"name": "t"}}')
+    await app.upload(
+        UploadInput(
+            local_path=str(src),
+            storage_path=transformed_key,
+            tier=StorageTier.RETAINED,
+        )
+    )
+
+    # Publish discovers transformed data by listing under transformed_data_prefix.
+    read_prefix = PublishInputMixin(output_path=_output_path()).transformed_data_prefix
+    found = await list_keys(read_prefix, store=store)
+    assert any("transformed/table/entities.json" in key for key in found), (
+        f"transformed data uploaded at {transformed_key!r} is NOT discoverable "
+        f"under publish's read prefix {read_prefix!r} (found={found}) — the SDR "
+        f"upload↔publish path contract is broken."
     )
