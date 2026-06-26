@@ -279,7 +279,7 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p015",
     ),
     RuleDefinition(
-        id="P020",
+        id="P025",
         scope=RuleScope.APP,
         name="LegacyPyatlanAssetImport",
         tier=EnforcementTier.WARN,
@@ -319,9 +319,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "NOT autofixable: the v9 models are not a drop-in rename — attribute\n"
             "names and the serialization API differ (use ``asset.to_nested_bytes()``\n"
             "rather than ``.dict()``), so each construction site needs review.\n"
-            "Suppress with ``# conformance: ignore[P020] <reason>`` when a connector\n"
+            "Suppress with ``# conformance: ignore[P025] <reason>`` when a connector\n"
             "is intentionally pinned to the legacy ``AtlasTransformer`` surface.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p020",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p025",
     ),
 )

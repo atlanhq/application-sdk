@@ -1,4 +1,4 @@
-"""P020 LegacyPyatlanAssetImport — flag non-v9 ``pyatlan.model.assets`` imports.
+"""P025 LegacyPyatlanAssetImport — flag non-v9 ``pyatlan.model.assets`` imports.
 
 New connectors must build assets from ``pyatlan_v9.model.assets`` (the optimized
 v9 surface the asset-mapper pattern is built on, BLDX-1492).  The legacy
@@ -39,12 +39,12 @@ def _is_legacy_assets_module(module: str | None) -> bool:
     )
 
 
-def check_p020(
+def check_p025(
     tree: ast.AST,
     filename: str,
     directives: dict[int, _IgnoreDirective],
 ) -> list[Finding]:
-    """Emit P020 for any import of legacy ``pyatlan.model.assets``."""
+    """Emit P025 for any import of legacy ``pyatlan.model.assets``."""
     findings: list[Finding] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
@@ -57,7 +57,7 @@ def check_p020(
                 findings.append(
                     make_finding(
                         filename=filename,
-                        rule_id="P020",
+                        rule_id="P025",
                         node=node,
                         message=_MESSAGE,
                         directives=directives,
@@ -70,7 +70,7 @@ def check_p020(
                     findings.append(
                         make_finding(
                             filename=filename,
-                            rule_id="P020",
+                            rule_id="P025",
                             node=node,
                             message=_MESSAGE,
                             directives=directives,

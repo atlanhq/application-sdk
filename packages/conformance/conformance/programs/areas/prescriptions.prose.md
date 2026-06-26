@@ -73,6 +73,17 @@ of which pyatlan surface to use — or whether to suppress when no equivalent ex
 auto-applies.  (This rule is backed by a separate `suite.checks.client_seam` check
 — see its module docs.)
 
+The determinism / async-correctness rules (P020–P024) are also P-series
+and suggest-only.  P020 (non-deterministic primitive in workflow context) has a
+concrete mechanical proposal for time/uuid/sleep — swap to the SDK seam — but its
+randomness case has no seam target, and P021 (workflow I/O) / P023 (blocking call
+in an async def) describe structural moves into a `@task` that no local edit can
+safely perform; P022 (un-awaited coroutine) proposes adding `await`, and P024
+(sync pyatlan client) proposes the async client via the SDK seam — both
+semantically load-bearing.  All five draft a proposal for human review and never
+auto-apply.  (These rules are backed by a separate `suite.checks.determinism`
+check — see its module docs.)
+
 ### Requires
 
 - `scope` — repository root path.
@@ -313,11 +324,62 @@ around `finding.line` before drafting any proposal — the proposal is a
   the missing surface.  Either way the proposal is recorded for the developer to
   apply or reject; this area never mutates the working tree.
 
-**Asset-mapper rule (P020)** — suggest-only, scope=app, WARN-tier;
+**Determinism / async-correctness rules (P020–P024)** — all suggest-only,
+scope=both, WARN-tier; `classification` is always `"judgment"`.  Read the enclosing
+method around `finding.line` first, and confirm it is workflow context (`run` /
+`@entrypoint` / `@signal` / `@query` / `@update`) versus a `@task` activity before
+drafting.
+
+- **P020 NonDeterministicPrimitiveInWorkflow** — a wall-clock/uuid/sleep/random
+  call runs in a workflow-context method.  Draft, by category:
+  - **time** (`datetime.now`/`utcnow`/`today`, `time.time`/`monotonic`/…) → replace
+    with `self.now()` (or `from application_sdk.app import now`).
+  - **uuid** (`uuid.uuid1`/`uuid.uuid4`) → replace with `self.uuid()` (or
+    `from application_sdk.app import uuid4`).
+  - **sleep** (`time.sleep`/`asyncio.sleep`) → replace with `await sleep(...)`
+    from `application_sdk.app`.
+  - **randomness** (`random.*`/`secrets.*`/`os.urandom`) → **route to residue, do
+    not fabricate a swap**: the SDK exposes no deterministic-random seam.  Note
+    that the randomness must move into a `@task`, or that the SDK should expose a
+    deterministic-random primitive (raise a seam request).
+  Verify the receiver before proposing — `self.now()` / `now()` are already the
+  sanctioned forms and must never be rewritten.
+
+- **P021 SideEffectIoInWorkflow** — file/network/env/process I/O runs in a
+  workflow-context method.  The fix is structural: extract the I/O into a `@task`
+  activity and have the workflow `await` it.  No local edit can perform this
+  safely (it changes the workflow/activity topology) — draft the refactored shape
+  (which call becomes a task, what the task returns) and route to residue.
+
+- **P022 UnawaitedCoroutine** — a bare `self.<async-method>(...)` statement drops a
+  coroutine.  Propose adding `await` (or wrapping in `asyncio.create_task`/`gather`
+  if concurrency is intended).  State which intent you assumed: a missing `await`
+  is the common case, but if the surrounding code suggests fire-and-forget, say so
+  and propose `create_task` instead.  The change is load-bearing, so route to
+  residue for human confirmation.
+
+- **P023 BlockingCallInAsyncDef** — an event-loop re-entry bridge (`asyncio.run`/
+  `run_until_complete`) or a blocking sync call (`requests.*`, `time.sleep`) runs
+  inside an `async def`.  Draft: for a bridge, `await` the coroutine directly
+  instead of re-entering a loop; for blocking I/O, `await` an async equivalent or
+  offload it via `App.run_in_thread()` inside a `@task`.  Both are restructures —
+  route to residue with the proposed shape.
+
+- **P024 SyncAtlanClientInApp** — app code constructs pyatlan's sync `AtlanClient`
+  (or a factory like `AtlanClient.from_token(...)`).  Draft a swap to the async
+  client through the SDK seam: inside an `App` that mixes in `AtlanClientMixin`,
+  `client = await self.get_or_create_async_atlan_client(credential)`; ad-hoc /
+  outside an App, `client = create_async_atlan_client(cred)`
+  (`from application_sdk.credentials import create_async_atlan_client`).  The
+  downstream calls on the client then become `await`-ed, so this is a restructure
+  — route to residue with the proposed shape; do not mechanically rename the
+  class.  Leave `AsyncAtlanClient` usage untouched.
+
+**Asset-mapper rule (P025)** — suggest-only, scope=app, WARN-tier;
 `classification` is always `"judgment"`.  Read the construction sites around
 `finding.line` before drafting — the proposal is a suggestion, never auto-applied.
 
-- **P020 LegacyPyatlanAssetImport** — app code imports asset models from the
+- **P025 LegacyPyatlanAssetImport** — app code imports asset models from the
   legacy `pyatlan.model.assets` package instead of `pyatlan_v9.model.assets`
   (the optimized v9 surface the asset-mapper pattern is built on, BLDX-1492).
   `pyatlan_v9` ships inside the existing `pyatlan>=9` dependency — no dependency
@@ -339,5 +401,5 @@ around `finding.line` before drafting any proposal — the proposal is a
   the migrated `atlan-metabase-app`); full guidance in `docs/upgrade-guide-v3.md`.
   **Intentional legacy pin:** if the connector is deliberately still on the
   built-in `AtlasTransformer` (which depends on `pyatlan`), propose an inline
-  `# conformance: ignore[P020] <reason>` naming that constraint instead — the
+  `# conformance: ignore[P025] <reason>` naming that constraint instead — the
   B001 deprecation nudge will steer the larger migration.

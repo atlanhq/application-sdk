@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**20 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019) (all AST-based)
+**25 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019) (all AST-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -42,7 +42,12 @@ reassigned.
 | [P017](#p017) | `ManualWorkerBootstrap` | `warn` | `app` | `entrypoint-conformance` | — | 0.6.0 |
 | [P018](#p018) | `ManualServerBootstrap` | `warn` | `app` | `entrypoint-conformance` | — | 0.6.0 |
 | [P019](#p019) | `RawHttpToAtlan` | `warn` | `both` | `client-seam` | — | 0.7.0 |
-| [P020](#p020) | `LegacyPyatlanAssetImport` | `warn` | `app` | `asset-mapper` | — | 0.6.0 |
+| [P020](#p020) | `NonDeterministicPrimitiveInWorkflow` | `warn` | `both` | `determinism` | — | 0.8.0 |
+| [P021](#p021) | `SideEffectIoInWorkflow` | `warn` | `both` | `determinism` | — | 0.8.0 |
+| [P022](#p022) | `UnawaitedCoroutine` | `warn` | `both` | `async-correctness` | — | 0.8.0 |
+| [P023](#p023) | `BlockingCallInAsyncDef` | `warn` | `both` | `async-correctness` | — | 0.8.0 |
+| [P024](#p024) | `SyncAtlanClientInApp` | `warn` | `both` | `async-correctness` | — | 0.8.0 |
+| [P025](#p025) | `LegacyPyatlanAssetImport` | `warn` | `app` | `asset-mapper` | — | 0.6.0 |
 
 ---
 
@@ -637,7 +642,145 @@ unavoidable exception and stays visible in SARIF.
 
 ---
 
-## P020 — `LegacyPyatlanAssetImport` {#p020}
+## P020 — `NonDeterministicPrimitiveInWorkflow` {#p020}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `determinism` · **Autofixable:** — · **Since:** 0.8.0
+
+> Non-deterministic time/uuid/sleep/random call in workflow-context code
+
+**Rationale:** Temporal workflow code is re-executed on replay, so it must be deterministic: the same
+inputs must always produce the same sequence of commands. Reading the wall clock
+(datetime.now/time.time), generating a UUID (uuid.uuid4), sleeping on the wall clock
+(time.sleep/asyncio.sleep), or drawing randomness produces a different value on replay
+and corrupts the workflow history. The SDK exposes deterministic equivalents through its
+seam — self.now()/now, self.uuid()/uuid4, sleep — that record their result in history so
+replay is faithful.
+
+Inside an `App` subclass's workflow-context method (`run`, an `@entrypoint` method, or a
+`@signal` / `@query` / `@update` handler) a call reads wall-clock time, generates a
+UUID, sleeps, or draws randomness.  Workflow code is replayed deterministically, so use
+the SDK seam instead: `self.now()` or `from application_sdk.app import now`;
+`self.uuid()` or `from application_sdk.app import uuid4`; `from application_sdk.app
+import sleep`.  `@task` activity bodies are exempt — they run once and may do any of
+this.
+
+Randomness (`random` / `secrets` / `os.urandom`) is also flagged: it is a real
+determinism bug, but the SDK exposes no deterministic-random primitive, so the fix is to
+move it into a `@task` or raise a seam request with the SDK team rather than a
+mechanical swap.
+
+Matching is receiver-anchored: only a `.now()` whose receiver is `datetime` is flagged,
+so the sanctioned `self.now()` is untouched. Land as `WARN`; record an unavoidable
+exception with `# conformance: ignore[P020] <reason>`.
+
+---
+
+## P021 — `SideEffectIoInWorkflow` {#p021}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `determinism` · **Autofixable:** — · **Since:** 0.8.0
+
+> File / network / env / process I/O in workflow-context code
+
+**Rationale:** Workflow code is replayed, so any interaction with the outside world — opening a file,
+making a network call, reading the environment, spawning a thread or process — runs
+again on every replay and produces non-deterministic, un-recorded results that break
+replay correctness. Side effects belong in a @task activity, which runs exactly once and
+whose result is durably recorded in workflow history.
+
+Inside an `App` subclass's workflow-context method a call performs side-effecting I/O —
+`open`, `requests`/`httpx`/`urllib`, `socket`, `subprocess`,
+`threading`/`multiprocessing`, `os.getenv` / `os.environ[...]`.  Move it into a `@task`
+method: workflow code must be deterministic, and activities are where I/O and external
+state belong.
+
+The detected surface is a curated high-signal subset, not an exhaustive list of every
+I/O API.  Remediation is structural (extract a `@task`), so findings route to residue
+rather than an autofix.  Land as `WARN`; suppress a reviewed exception with `#
+conformance: ignore[P021] <reason>`.
+
+---
+
+## P022 — `UnawaitedCoroutine` {#p022}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.8.0
+
+> A same-class async method is called without await (dropped coroutine)
+
+**Rationale:** SDK app methods (run, @task, @entrypoint, interaction handlers) are async and return a
+coroutine. Calling one like a sync function — 'self.fetch(x)' as a bare statement
+instead of 'await self.fetch(x)' — constructs the coroutine and immediately discards it,
+so the work never runs and the bug is silent (no error, no result). This is the most
+common way apps misuse the SDK's async surface.
+
+A bare expression statement calls a same-class `async def` method via `self.<name>(...)`
+without `await` and without wrapping it in `asyncio.create_task` / `asyncio.gather`.
+The call returns a coroutine that is never scheduled, so the work silently does nothing.
+Add `await` (or schedule it explicitly if concurrency is intended).
+
+Scope is intentionally narrow — a bare `self.<async-method>()` statement inside an
+`async def` — so the target is provably a coroutine and the finding is
+false-positive-free.  Land as `WARN`; suppress with `# conformance: ignore[P022]
+<reason>`.
+
+---
+
+## P023 — `BlockingCallInAsyncDef` {#p023}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.8.0
+
+> Event-loop re-entry bridge or blocking sync call inside an async def
+
+**Rationale:** Inside an async function the event loop must never be blocked or re-entered. Calling
+asyncio.run()/loop.run_until_complete() from within a running loop raises or deadlocks;
+calling a synchronous blocking library (requests, time.sleep) stalls the loop and every
+other coroutine on it. The correct pattern is to await an async equivalent, or offload
+blocking work via App.run_in_thread() inside a @task — not to bridge async with a sync
+workaround.
+
+Inside an `async def`, code either re-enters the event loop (`asyncio.run(...)` or
+`*.run_until_complete(...)`, including `loop.run_until_complete` /
+`asyncio.get_event_loop()....`) or makes a blocking synchronous call (`requests.*`,
+`urllib.request.*`, `time.sleep`).  Await the coroutine directly, or offload genuinely
+blocking work with `App.run_in_thread()` inside a `@task`.
+
+Blocking sync I/O is reported only **outside** workflow context — inside workflow
+methods the same calls are owned by P020 (sleep) and P021 (network), so they are not
+double-counted.  Remediation is a restructure, so findings route to residue.  Land as
+`WARN`; suppress with `# conformance: ignore[P023] <reason>`.
+
+---
+
+## P024 — `SyncAtlanClientInApp` {#p024}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.8.0
+
+> Synchronous pyatlan AtlanClient used instead of the async client
+
+**Rationale:** pyatlan (atlan-python) ships both a synchronous AtlanClient and an asynchronous
+AsyncAtlanClient. App code runs in an async execution path (Temporal activities, the
+FastAPI server), so the sync client blocks the event loop on every Atlan call and stalls
+every other coroutine on it. The async client must be used instead — ideally through the
+SDK seam (create_async_atlan_client /
+AtlanClientMixin.get_or_create_async_atlan_client), which returns a configured,
+observability-stamped AsyncAtlanClient. This complements P019 (use pyatlan, not raw
+HTTP) by requiring the async variant of that client.
+
+App code constructs or invokes pyatlan's synchronous `AtlanClient` (or the vendored
+`pyatlan_v9` equivalent) — its constructor or a factory like
+`AtlanClient.from_token(...)`.  Because the app's execution path is async, the sync
+client blocks the event loop.  Use `AsyncAtlanClient` (`pyatlan.client.aio`) —
+preferably via the SDK seam: `await self.get_or_create_async_atlan_client(cred)` on an
+`App` that mixes in `AtlanClientMixin`, or `create_async_atlan_client(cred)` from
+`application_sdk.credentials`.
+
+Matching is receiver-anchored: `AsyncAtlanClient` and the SDK seam helpers are not
+flagged, only the sync `AtlanClient` under a pyatlan root.  Closing it makes downstream
+calls `await`-ed, so remediation is a restructure routed to residue.  Land as `WARN`;
+suppress with `# conformance: ignore[P024] <reason>`.
+
+---
+
+## P025 — `LegacyPyatlanAssetImport` {#p025}
 
 **Tier:** `warn` · **Scope:** `app` · **Category:** `asset-mapper` · **Autofixable:** — · **Since:** 0.6.0
 
@@ -664,7 +807,7 @@ pyatlan.model.enums import AtlanConnectorType`) are out of scope.
 
 NOT autofixable: the v9 models are not a drop-in rename — attribute names and the
 serialization API differ (use `asset.to_nested_bytes()` rather than `.dict()`), so each
-construction site needs review. Suppress with `# conformance: ignore[P020] <reason>`
+construction site needs review. Suppress with `# conformance: ignore[P025] <reason>`
 when a connector is intentionally pinned to the legacy `AtlasTransformer` surface.
 
 ---

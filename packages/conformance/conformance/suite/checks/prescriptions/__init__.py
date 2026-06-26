@@ -51,7 +51,7 @@ Currently implemented:
   ``list[str]``, or the bounded ``Annotated[dict[…], MaxItems(N)]`` form).
   Bounded containers pass payload-safety validation (P001) but are stringly-typed.
   Per-file (like P011/P012).
-* ``P020`` LegacyPyatlanAssetImport — app code importing the legacy
+* ``P025`` LegacyPyatlanAssetImport — app code importing the legacy
   ``pyatlan.model.assets`` package (rather than ``pyatlan_v9.model.assets``).
   Import-anchored, per-file (like P011/P012).
 
@@ -95,7 +95,7 @@ from ._error_code_prefix import (
 )
 from ._file_reference import check_p010
 from ._framework_transfer import check_p008
-from ._pyatlan_v9 import check_p020
+from ._pyatlan_v9 import check_p025
 from ._store_construction import check_p009
 from ._typed_boundaries import check_p013_p014
 from ._unbounded_fields import UnboundedContractFieldsChecker
@@ -137,7 +137,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
     findings_p011 = check_p011(tree, file, directives)
     findings_p012 = check_p012(tree, file, directives)
     findings_p015 = check_p015(tree, file, directives)
-    findings_p020 = check_p020(tree, file, directives)
+    findings_p025 = check_p025(tree, file, directives)
 
     return (
         p001._findings
@@ -148,7 +148,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
         + findings_p011
         + findings_p012
         + findings_p015
-        + findings_p020
+        + findings_p025
     )
 
 
@@ -241,7 +241,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         findings.extend(check_p011(tree, rel_str, directives))
         findings.extend(check_p012(tree, rel_str, directives))
         findings.extend(check_p015(tree, rel_str, directives))
-        findings.extend(check_p020(tree, rel_str, directives))
+        findings.extend(check_p025(tree, rel_str, directives))
 
         # Class registry for P003 and P013/P014 — de-alias base names so aliased
         # imports of leaf/base classes don't hide the real ancestry.

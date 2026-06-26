@@ -1,6 +1,6 @@
-"""Tests for the asset-mapper usage rules (P020, O002, O003 — BLDX-1492).
+"""Tests for the asset-mapper usage rules (P025, O002, O003 — BLDX-1492).
 
-P020 lives in the prescriptions check package; O002/O003 in the optimizations
+P025 lives in the prescriptions check package; O002/O003 in the optimizations
 package.  Each is exercised through its package ``scan_text`` so the real wiring
 (import collection, suppression handling) is covered, not just the bare detector.
 """
@@ -19,36 +19,36 @@ def _o_ids(src: str) -> list[str]:
     return [f.rule_id for f in o_scan(src, "app/x.py") if not f.suppressed]
 
 
-# ── P020 LegacyPyatlanAssetImport ───────────────────────────────────────────────
+# ── P025 LegacyPyatlanAssetImport ───────────────────────────────────────────────
 
 
-def test_p020_fires_on_from_import() -> None:
-    assert "P020" in _p_ids("from pyatlan.model.assets import Table\n")
+def test_p025_fires_on_from_import() -> None:
+    assert "P025" in _p_ids("from pyatlan.model.assets import Table\n")
 
 
-def test_p020_fires_on_module_import() -> None:
-    assert "P020" in _p_ids("import pyatlan.model.assets\n")
+def test_p025_fires_on_module_import() -> None:
+    assert "P025" in _p_ids("import pyatlan.model.assets\n")
 
 
-def test_p020_fires_on_submodule_from_import() -> None:
-    assert "P020" in _p_ids("from pyatlan.model import assets\n")
+def test_p025_fires_on_submodule_from_import() -> None:
+    assert "P025" in _p_ids("from pyatlan.model import assets\n")
 
 
-def test_p020_silent_on_v9_import() -> None:
-    assert "P020" not in _p_ids("from pyatlan_v9.model.assets import Table\n")
+def test_p025_silent_on_v9_import() -> None:
+    assert "P025" not in _p_ids("from pyatlan_v9.model.assets import Table\n")
 
 
-def test_p020_silent_on_non_asset_pyatlan_import() -> None:
+def test_p025_silent_on_non_asset_pyatlan_import() -> None:
     # The narrow scope: enums (no v9 equivalent) must not be flagged.
-    assert "P020" not in _p_ids("from pyatlan.model.enums import AtlanConnectorType\n")
+    assert "P025" not in _p_ids("from pyatlan.model.enums import AtlanConnectorType\n")
 
 
-def test_p020_suppressed_inline() -> None:
+def test_p025_suppressed_inline() -> None:
     src = (
         "from pyatlan.model.assets import Table  "
-        "# conformance: ignore[P020] legacy AtlasTransformer connector\n"
+        "# conformance: ignore[P025] legacy AtlasTransformer connector\n"
     )
-    findings = [f for f in p_scan(src, "app/x.py") if f.rule_id == "P020"]
+    findings = [f for f in p_scan(src, "app/x.py") if f.rule_id == "P025"]
     assert len(findings) == 1
     assert findings[0].suppressed is True
 
