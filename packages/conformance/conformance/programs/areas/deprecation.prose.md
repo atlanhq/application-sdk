@@ -85,6 +85,51 @@ human audit):
   - `class X(BaseMetadataExtractor)` → migrate to `application_sdk.templates.SqlApp`
     per the notice; this is a structural change — draft it and let the test gate
     decide.
+  - **Legacy transformer → asset-mapper** (BLDX-1399): a finding naming
+    `TransformerInterface`, `AtlasTransformer`, or `QueryBasedTransformer`
+    (import / subclass / call of `transform_metadata` / `transform_row`) means the
+    app still runs the half-YAML/half-code transformer path (YAML query templates +
+    DuckDB + memory-heavy DataFrames). Migrate it to the v3-native **asset-mapper**
+    pattern — pure Python functions that map typed records directly to `pyatlan_v9`
+    Asset instances, eliminating the Daft/YAML dependency. This is a structural
+    rewrite (always `"judgment"`); draft it and let the test gate decide. Shape it
+    after the reference apps `atlan-openapi-app` and the migrated
+    `atlan-metabase-app`:
+      - **File layout** — `app/api_types.py` holds the typed intermediate records
+        (`@dataclass` or `msgspec.Struct`); `app/asset_mapper.py` holds pure
+        `map_<entity>(record, connection_qn, ...) -> <pyatlan_v9 Asset>` functions
+        (no I/O, deterministic); the `transform` task lives in the connector/app
+        module.
+      - **Mapper function** — construct the asset from the typed record, set
+        attributes, stamp sync metadata, and `return` the asset:
+        ```python
+        from pyatlan_v9.model.assets import Table
+
+        def map_table(record: TableRecord, connection_qn: str, workflow_id: str) -> Table:
+            asset = Table(
+                qualified_name=f"{connection_qn}/{record.database}/{record.schema}/{record.name}",
+                name=record.name,
+                connector_name="my-connector",
+                connection_qualified_name=connection_qn,
+            )
+            asset.status = "ACTIVE"
+            asset.last_sync_run = workflow_id
+            return asset
+        ```
+      - **Transform task** — read typed records from the input JSONL, map each, and
+        write `asset.to_nested_bytes()` to a typed file output passed downstream as a
+        `FileReference` (no shared `output_path` scan, no `upload_to_atlan()`):
+        ```python
+        @task(timeout_seconds=1800)
+        async def transform(self, input: TransformInput) -> TransformOutput:
+            for record in read_jsonl(input.raw_file, RecordType):
+                asset = map_entity(record, connection_qn, workflow_id)
+                out_f.write(asset.to_nested_bytes() + b"\n")
+            return TransformOutput(output_file=FileReference(local_path=str(output_file)))
+        ```
+      - Drop the YAML query templates, the `TransformerInterface` subclass, and any
+        Daft DataFrame use that existed only to feed the transformer. Full guidance:
+        `docs/upgrade-guide-v3.md` (Step 2 / asset-mapper section).
   Because the migration is non-trivial, `classification` is always `"judgment"`.
   The orthogonal test gate is what makes applying it safe: if the migration
   breaks behaviour, the gate reverts and routes to residue.
