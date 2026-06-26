@@ -24,8 +24,8 @@ reassigned.
 | ID | Name | Tier | Scope | Category | Autofixable | Since |
 |---|---|---|---|---|---|---|
 | [O001](#o001) | `OrjsonOverStdlibJson` | `warn` | `both` | `canonical-dependency` | — | 0.3.0 |
-| [O002](#o002) | `LegacyAssetSerialization` | `warn` | `app` | `asset-mapper` | — | 0.6.0 |
-| [O003](#o003) | `UntypedAssetMapperReturn` | `warn` | `app` | `asset-mapper` | — | 0.6.0 |
+| [O002](#o002) | `LegacyAssetSerialization` | `warn` | `app` | `asset-mapper` | — | 0.8.0 |
+| [O003](#o003) | `UntypedAssetMapperReturn` | `warn` | `app` | `asset-mapper` | — | 0.8.0 |
 
 ---
 
@@ -60,7 +60,7 @@ rejects some inputs stdlib accepts.  A blind `json.`→`orjson.` swap silently c
 
 ## O002 — `LegacyAssetSerialization` {#o002}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `asset-mapper` · **Autofixable:** — · **Since:** 0.6.0
+**Tier:** `warn` · **Scope:** `app` · **Category:** `asset-mapper` · **Autofixable:** — · **Since:** 0.8.0
 
 > Asset serialised with .dict() — prefer the v9 asset.to_nested_bytes() API
 
@@ -85,7 +85,7 @@ a known false-positive — suppress with `# conformance: ignore[O002] <reason>`.
 
 ## O003 — `UntypedAssetMapperReturn` {#o003}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `asset-mapper` · **Autofixable:** — · **Since:** 0.6.0
+**Tier:** `warn` · **Scope:** `app` · **Category:** `asset-mapper` · **Autofixable:** — · **Since:** 0.8.0
 
 > Function builds a pyatlan asset but has no return annotation — annotate it with the asset type
 

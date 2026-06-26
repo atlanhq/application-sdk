@@ -287,7 +287,7 @@ RULES: tuple[RuleDefinition, ...] = (
         category="asset-mapper",
         autofixable=False,
         orthogonal_gate="tests",
-        since="0.6.0",
+        since="0.8.0",
         rationale=(
             "The SDK mandates the optimized pyatlan_v9 asset surface for new connectors "
             "('New connectors must use pyatlan_v9', docs/guides/sql-application-guide.md): "
@@ -300,15 +300,18 @@ RULES: tuple[RuleDefinition, ...] = (
             "needs human judgement — never a blind name swap."
         ),
         short_description=(
-            "Imports/constructs pyatlan.model.assets (non-v9) — use "
-            "pyatlan_v9.model.assets"
+            "Imports pyatlan.model.assets (non-v9) — use pyatlan_v9.model.assets"
         ),
         full_description=(
             "Flags app code that imports asset model classes from the legacy\n"
-            "``pyatlan.model.assets`` package, or constructs them via the qualified\n"
-            "``pyatlan.model.assets.X(...)`` form.  New connectors must build assets\n"
-            "from ``pyatlan_v9.model.assets`` — the optimized v9 surface the\n"
-            "asset-mapper pattern is built on (BLDX-1492; see\n"
+            "``pyatlan.model.assets`` package, in any of the three import forms:\n"
+            "``from pyatlan.model.assets import X``, ``import pyatlan.model.assets``,\n"
+            "or ``from pyatlan.model import assets``.  Detection is import-anchored\n"
+            "(an asset class is only imported in order to construct it), so the rare\n"
+            "fully-qualified ``pyatlan.model.assets.X(...)`` form with no matching\n"
+            "import is out of scope.  New connectors must build assets from\n"
+            "``pyatlan_v9.model.assets`` — the optimized v9 surface the asset-mapper\n"
+            "pattern is built on (BLDX-1492; see\n"
             "``docs/guides/sql-application-guide.md`` and ``docs/upgrade-guide-v3.md``).\n"
             "\n"
             "Scope is deliberately narrow — only ``pyatlan.model.assets`` is matched,\n"

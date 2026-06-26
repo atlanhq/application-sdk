@@ -65,7 +65,7 @@ RULES: tuple[RuleDefinition, ...] = (
         category="asset-mapper",
         autofixable=False,
         orthogonal_gate="tests",
-        since="0.6.0",
+        since="0.8.0",
         rationale=(
             "The asset-mapper pattern serialises pyatlan assets to JSONL with the v9 "
             "API — asset.to_nested_bytes() — which emits the nested-entity wire shape "
@@ -102,7 +102,7 @@ RULES: tuple[RuleDefinition, ...] = (
         category="asset-mapper",
         autofixable=False,
         orthogonal_gate="tests",
-        since="0.6.0",
+        since="0.8.0",
         rationale=(
             "The asset-mapper pattern's value is end-to-end typing: a mapper function "
             "constructs a pyatlan asset and returns it, so the return annotation "

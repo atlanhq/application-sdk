@@ -128,6 +128,21 @@ def test_o003_silent_when_function_returns_nothing() -> None:
     assert "O003" not in _o_ids(src)
 
 
+def test_o003_silent_when_only_nested_closure_returns() -> None:
+    # The outer function builds an asset but returns nothing; only a nested
+    # closure returns a value. Scope-aware walking must not mis-attribute the
+    # inner return to the outer function.
+    src = (
+        "from pyatlan_v9.model.assets import Table\n\n\n"
+        "def register(record, qn):\n"
+        "    asset = Table(name=record.name, qualified_name=qn)\n"
+        "    def _key():\n"
+        "        return asset.qualified_name\n"
+        "    _registry.append((_key, asset))\n"
+    )
+    assert "O003" not in _o_ids(src)
+
+
 def test_o003_suppressed_inline() -> None:
     src = (
         "from pyatlan_v9.model.assets import Table\n\n\n"

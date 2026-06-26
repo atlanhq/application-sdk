@@ -47,7 +47,7 @@ reassigned.
 | [P022](#p022) | `UnawaitedCoroutine` | `warn` | `both` | `async-correctness` | — | 0.8.0 |
 | [P023](#p023) | `BlockingCallInAsyncDef` | `warn` | `both` | `async-correctness` | — | 0.8.0 |
 | [P024](#p024) | `SyncAtlanClientInApp` | `warn` | `both` | `async-correctness` | — | 0.8.0 |
-| [P025](#p025) | `LegacyPyatlanAssetImport` | `warn` | `app` | `asset-mapper` | — | 0.6.0 |
+| [P025](#p025) | `LegacyPyatlanAssetImport` | `warn` | `app` | `asset-mapper` | — | 0.8.0 |
 
 ---
 
@@ -782,9 +782,9 @@ suppress with `# conformance: ignore[P024] <reason>`.
 
 ## P025 — `LegacyPyatlanAssetImport` {#p025}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `asset-mapper` · **Autofixable:** — · **Since:** 0.6.0
+**Tier:** `warn` · **Scope:** `app` · **Category:** `asset-mapper` · **Autofixable:** — · **Since:** 0.8.0
 
-> Imports/constructs pyatlan.model.assets (non-v9) — use pyatlan_v9.model.assets
+> Imports pyatlan.model.assets (non-v9) — use pyatlan_v9.model.assets
 
 **Rationale:** The SDK mandates the optimized pyatlan_v9 asset surface for new connectors ('New
 connectors must use pyatlan_v9', docs/guides/sql-application-guide.md): the legacy
@@ -796,9 +796,12 @@ differ in attributes and serialization (to_nested_bytes vs .dict()), so each sit
 human judgement — never a blind name swap.
 
 Flags app code that imports asset model classes from the legacy `pyatlan.model.assets`
-package, or constructs them via the qualified `pyatlan.model.assets.X(...)` form.  New
-connectors must build assets from `pyatlan_v9.model.assets` — the optimized v9 surface
-the asset-mapper pattern is built on (BLDX-1492; see
+package, in any of the three import forms: `from pyatlan.model.assets import X`, `import
+pyatlan.model.assets`, or `from pyatlan.model import assets`.  Detection is
+import-anchored (an asset class is only imported in order to construct it), so the rare
+fully-qualified `pyatlan.model.assets.X(...)` form with no matching import is out of
+scope.  New connectors must build assets from `pyatlan_v9.model.assets` — the optimized
+v9 surface the asset-mapper pattern is built on (BLDX-1492; see
 `docs/guides/sql-application-guide.md` and `docs/upgrade-guide-v3.md`).
 
 Scope is deliberately narrow — only `pyatlan.model.assets` is matched, never the rest of

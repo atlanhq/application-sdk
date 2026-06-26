@@ -86,13 +86,33 @@ def check_o002(
     return findings
 
 
+def _iter_own_scope(func: ast.FunctionDef | ast.AsyncFunctionDef):
+    """Yield descendants that execute in *func*'s own scope.
+
+    Unlike :func:`ast.walk`, this does **not** descend into nested ``def`` /
+    ``async def`` / ``lambda`` bodies, so a ``return`` or asset construction that
+    belongs to an inner closure is not mis-attributed to the outer function.
+    """
+    nested = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+    stack = [n for n in func.body if not isinstance(n, nested)]
+    while stack:
+        node = stack.pop()
+        yield node
+        for child in ast.iter_child_nodes(node):
+            if not isinstance(child, nested):
+                stack.append(child)
+
+
 def _constructs_asset_and_returns(
     func: ast.FunctionDef | ast.AsyncFunctionDef, asset_names: frozenset[str]
 ) -> bool:
-    """True if *func* instantiates an imported asset class and returns a value."""
+    """True if *func* instantiates an imported asset class and returns a value.
+
+    Only the function's own scope counts — nested closures are excluded.
+    """
     constructs = False
     returns_value = False
-    for sub in ast.walk(func):
+    for sub in _iter_own_scope(func):
         if (
             isinstance(sub, ast.Call)
             and isinstance(sub.func, ast.Name)
