@@ -5,8 +5,8 @@ importing pyatlan asset models, so they never fire on non-connector code:
 
 * **O002** — a ``.dict()`` call in such a module; the v3 pipeline serialises
   assets with ``asset.to_nested_bytes()``, not the pydantic ``.dict()`` form.
-* **O003** — a function that constructs a pyatlan asset and returns a value but
-  declares no return annotation; the asset-mapper pattern is typed end-to-end.
+* **O003** — a function that constructs a pyatlan asset and returns *that asset*
+  but declares no return annotation; the asset-mapper pattern is typed end-to-end.
 """
 
 from __future__ import annotations
@@ -103,25 +103,47 @@ def _iter_own_scope(func: ast.FunctionDef | ast.AsyncFunctionDef):
                 stack.append(child)
 
 
-def _constructs_asset_and_returns(
+def _is_asset_call(node: ast.expr | None, asset_names: frozenset[str]) -> bool:
+    """True if *node* is a call to an imported asset class, e.g. ``Table(...)``."""
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in asset_names
+    )
+
+
+def _returns_constructed_asset(
     func: ast.FunctionDef | ast.AsyncFunctionDef, asset_names: frozenset[str]
 ) -> bool:
-    """True if *func* instantiates an imported asset class and returns a value.
+    """True if *func* returns an asset it constructs.
 
-    Only the function's own scope counts — nested closures are excluded.
+    Catches the two common mapper shapes — ``return Table(...)`` and
+    ``asset = Table(...); ...; return asset`` — and **only** those: a function
+    that builds an asset as a side effect and returns something else (e.g.
+    ``return record.id``) is not flagged, so the rule's ``-> <Asset>`` advice
+    always matches the function's actual return.  Scoped to *func*'s own body
+    (nested closures excluded).
     """
-    constructs = False
-    returns_value = False
+    # Pass 1 — local names bound to an asset constructor call.
+    asset_bound: set[str] = set()
     for sub in _iter_own_scope(func):
-        if (
-            isinstance(sub, ast.Call)
-            and isinstance(sub.func, ast.Name)
-            and sub.func.id in asset_names
-        ):
-            constructs = True
-        elif isinstance(sub, ast.Return) and sub.value is not None:
-            returns_value = True
-    return constructs and returns_value
+        if isinstance(sub, ast.Assign) and _is_asset_call(sub.value, asset_names):
+            for target in sub.targets:
+                if isinstance(target, ast.Name):
+                    asset_bound.add(target.id)
+        elif isinstance(sub, ast.AnnAssign) and _is_asset_call(sub.value, asset_names):
+            if isinstance(sub.target, ast.Name):
+                asset_bound.add(sub.target.id)
+
+    # Pass 2 — a return of the asset itself (direct construction or bound name).
+    for sub in _iter_own_scope(func):
+        if isinstance(sub, ast.Return):
+            value = sub.value
+            if _is_asset_call(value, asset_names):
+                return True
+            if isinstance(value, ast.Name) and value.id in asset_bound:
+                return True
+    return False
 
 
 def check_o003(
@@ -136,7 +158,7 @@ def check_o003(
         if (
             isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
             and node.returns is None
-            and _constructs_asset_and_returns(node, asset_names)
+            and _returns_constructed_asset(node, asset_names)
         ):
             findings.append(
                 make_finding(

@@ -96,13 +96,15 @@ return type loses that guarantee (BLDX-1492; reference app atlan-openapi-app).
 WARN/recommendation because adding the annotation is a safe, mechanical nudge.
 
 Flags a function that constructs a pyatlan asset (instantiates a class imported from
-`pyatlan_v9.model.assets` / `pyatlan.model.assets`) and returns a value, but carries no
-`-> <Asset>` return annotation.  The asset-mapper pattern is typed end-to-end — each
-`map_<entity>` function declares the pyatlan asset it produces (see
+`pyatlan_v9.model.assets` / `pyatlan.model.assets`) and **returns that asset**, but
+carries no `-> <Asset>` return annotation. The asset-mapper pattern is typed end-to-end
+— each `map_<entity>` function declares the pyatlan asset it produces (see
 `atlan-openapi-app`).
 
-Keyed on actual asset construction (not just a `map_` name), so plain helpers are not
-flagged.  Suppress with `# conformance: ignore[O003] <reason>` when an untyped return is
-intentional.
+Keyed on actually returning the constructed asset (`return Table(...)` or `asset =
+Table(...); ... return asset`), not just a `map_` name — so a helper that builds an
+asset as a side effect and returns something else (e.g. `return record.id`) is not
+flagged, and the suggested annotation always matches the real return.  Suppress with `#
+conformance: ignore[O003] <reason>` when an untyped return is intentional.
 
 ---

@@ -143,6 +143,28 @@ def test_o003_silent_when_only_nested_closure_returns() -> None:
     assert "O003" not in _o_ids(src)
 
 
+def test_o003_fires_on_direct_return_construction() -> None:
+    src = (
+        "from pyatlan_v9.model.assets import Table\n\n\n"
+        "def map_table(record, qn):\n"
+        "    return Table(name=record.name, qualified_name=qn)\n"
+    )
+    assert "O003" in _o_ids(src)
+
+
+def test_o003_silent_when_asset_built_as_side_effect() -> None:
+    # Builds an asset but returns something else — the -> Table advice would
+    # mislead here, so the rule must not fire.
+    src = (
+        "from pyatlan_v9.model.assets import Table\n\n\n"
+        "def register(record, qn):\n"
+        "    asset = Table(name=record.name, qualified_name=qn)\n"
+        "    _registry.append(asset)\n"
+        "    return record.id\n"
+    )
+    assert "O003" not in _o_ids(src)
+
+
 def test_o003_suppressed_inline() -> None:
     src = (
         "from pyatlan_v9.model.assets import Table\n\n\n"
