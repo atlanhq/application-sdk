@@ -21,7 +21,7 @@ from temporalio import activity
 
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import TaskMetadata
-from application_sdk.constants import TRACKED_FILE_REFS_KEY
+from application_sdk.constants import LOCAL_WORKFLOW_ID, TRACKED_FILE_REFS_KEY
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import FileReference
 from application_sdk.observability.logger_adaptor import get_logger
@@ -44,6 +44,9 @@ class TaskContext:
 
     run_id: str
     """Workflow run ID."""
+
+    workflow_id: str = LOCAL_WORKFLOW_ID
+    """Temporal workflow ID. Set by the workflow side so both sites read from one transport."""
 
     heartbeat_timeout_seconds: int | None = 60
     """Heartbeat timeout in seconds. Set to None to disable heartbeating."""
@@ -116,6 +119,7 @@ def create_activity_from_task(
             app_name=context.app_name,
             app_version=app_metadata.version,
             run_id=run_id,
+            workflow_id=context.workflow_id,
             correlation_id=correlation_id,
         )
 
@@ -206,7 +210,7 @@ def create_activity_from_task(
 
             all_refs = _find_file_refs(input_data) + _find_file_refs(result)
             if all_refs:
-                _track_file_refs(activity.info().workflow_id, *all_refs)
+                _track_file_refs(context.workflow_id, *all_refs)
 
             return cast("Output", result)
 
