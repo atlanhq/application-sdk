@@ -39,6 +39,7 @@ from application_sdk.app.context import (
 from application_sdk.app.entrypoint import EntryPointMetadata
 from application_sdk.app.registry import AppMetadata
 from application_sdk.app.task import get_task_metadata, is_task, task
+from application_sdk.constants import LOCAL_WORKFLOW_ID
 from application_sdk.contracts.base import HeartbeatDetails, Input, Output
 from application_sdk.contracts.cleanup import (
     CleanupInput,
@@ -1874,7 +1875,7 @@ def _create_task_activity_wrapper(
             app_name=app_name,
             task_name=task_name,
             run_id=context_data.get("run_id", ""),
-            workflow_id=context_data.get("workflow_id", ""),
+            workflow_id=context_data.get("workflow_id", LOCAL_WORKFLOW_ID),
             heartbeat_timeout_seconds=heartbeat_timeout_seconds,
             auto_heartbeat_seconds=auto_heartbeat_seconds,
         )
