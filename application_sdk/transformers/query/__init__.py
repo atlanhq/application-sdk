@@ -197,9 +197,10 @@ class QueryBasedTransformer(TransformerInterface):
         return sql_query, literal_columns or None
 
     def _build_struct(self, level: dict, prefix: str = "") -> None:  # type: ignore[return]
-        """Deprecated: struct building is now handled by get_grouped_dataframe_by_prefix.
+        """No-op shim — struct building moved to get_grouped_dataframe_by_prefix.
 
         Kept as a no-op so callers that were patching this in tests do not blow up.
+        (The enclosing class is itself deprecated; see the class notice.)
 
         Args:
             level (dict): The current level of the struct hierarchy
