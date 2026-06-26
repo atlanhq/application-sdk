@@ -200,6 +200,15 @@ class MyConnector(App):
 
 Use **%-style** message bodies (`"fetching page=%d", page_num`) rather than keyword arguments. See [Logging Standards](../standards/logging.md) and [ADR-0011](../adr/0011-logging-level-guidelines.md).
 
+### Replay suppression
+
+`self.logger` suppresses log output during Temporal workflow replay by default, matching the behaviour of Temporal's native `workflow.logger`. This prevents duplicate bare lines (missing `workflow_id`/`run_id`) that would otherwise appear in Grafana when a worker replays history after a sticky-cache eviction.
+
+If you need replay logs — for example when using `temporalio.worker.Replayer` locally to inspect workflow history — re-enable them in two ways:
+
+- **Per-instance** (in-code): `self.logger.log_during_replay = True`
+- **Globally** (env flag): `ENABLE_WORKFLOW_REPLAY_LOGS=true`
+
 ---
 
 ## Correlation IDs
@@ -242,3 +251,24 @@ ATLAN_LOG_FLUSH_INTERVAL_SECONDS=10
 ```
 
 See [Configuration](../configuration.md#logging) for all observability variables.
+
+---
+
+## Forwarding daprd Sidecar Logs
+
+The `daprd` sidecar's own logs go straight to the container's stdout/stderr and don't enter the SDK observability pipeline on their own.
+
+- **On atlan-infra** (`ENABLE_ATLAN_UPLOAD=false`) this is fine: a node-level filelog collector scrapes every container's stdout — daprd included — and ships it to the central log backend.
+- **In SDR mode** (`ENABLE_ATLAN_UPLOAD=true`, i.e. customer infra) there is **no** such node-level collector, so daprd's logs would be invisible to Atlan — only present in the customer's own pod logs.
+
+So in SDR mode the SDK **automatically** forwards daprd's logs through its own pipeline (the same path as the app's logs, so they land in the lakehouse `app_logs` table with `app_name` / `is_sdr` populated), while still echoing them to the container's own logs. No configuration is required — it is gated on `ENABLE_ATLAN_UPLOAD`. Under the hood the container entrypoint runs daprd under `application_sdk.observability.dapr_log_forwarder`, which streams each daprd log line into a `dapr.runtime` logger and forwards `SIGTERM` so graceful shutdown is unaffected.
+
+> **Note (`kubectl logs` format in SDR mode):** In SDR mode daprd's stdout/stderr is piped into the forwarder, so `kubectl logs` shows the SDK's re-emitted format (with level, `app_name`, timestamp) rather than daprd's raw `--log-as-json` lines. The content is the same; only the format differs.
+
+daprd is chatty, so control the volume at the source with its log level:
+
+```bash
+DAPR_LOG_LEVEL=warn   # forward warn + error (and above); raise to error to drop the rest
+```
+
+`DAPR_LOG_LEVEL` is a minimum-severity floor — `warn` captures both warnings **and** errors. It's the recommended knob for controlling daprd log volume reaching the lakehouse.

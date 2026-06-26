@@ -3,7 +3,9 @@
 This folder contains Dapr PaaS components for various services.
 
 ## Requirements
-- Install [Dapr CLI](https://docs.dapr.io/getting-started/install-dapr-cli/)
+- No Dapr CLI needed. The `daprd` runtime is fetched and pinned by the SDK
+  (`application_sdk.dev._dapr`) and invoked directly — `uv run poe start-dapr`
+  resolves and launches it for you.
 
 ## Local Development
 1. State store - Uses SQLite as the state store at `./local/dapr/statestore.db`
@@ -11,7 +13,8 @@ This folder contains Dapr PaaS components for various services.
 3. Secret store - Uses system environment variables
 
 ## Testing Dapr components only
-- Run the dapr sidecar manually `make dapr-sidecar`
+- Run the dapr sidecar manually with `uv run poe start-dapr` (launches `daprd`
+  directly against the YAMLs in this folder; no Dapr CLI involved)
 - Test the state store components - Uses SQLite as the state store
     - Save state
 ```bash

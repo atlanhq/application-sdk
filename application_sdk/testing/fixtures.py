@@ -15,6 +15,7 @@ import pytest
 
 from application_sdk.app.context import AppContext
 from application_sdk.app.registry import AppRegistry, TaskRegistry
+from application_sdk.constants import LOCAL_WORKFLOW_ID
 from application_sdk.testing.mocks import (
     MockBinding,
     MockCredentialStore,
@@ -70,6 +71,7 @@ def app_context(
     return AppContext(
         app_name="test-app",
         app_version="0.0.1",
+        workflow_id=LOCAL_WORKFLOW_ID,
         _state_store=mock_state_store,
         _secret_store=mock_secret_store,
     )

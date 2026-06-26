@@ -62,6 +62,7 @@ load_dotenv(dotenv_path=".env")
 
 # Static Constants
 LOCAL_ENVIRONMENT = "local"
+LOCAL_WORKFLOW_ID = "local-no-temporal"
 
 # Application Constants
 #: Name of the application, used for identification
@@ -416,6 +417,13 @@ OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
 )
 #: Whether to enable OpenTelemetry log export
 ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true"
+#: Whether to emit SDK logger output during Temporal workflow replay.
+#: Default is False, matching Temporal's native ``workflow.logger`` behaviour.
+#: Set to True to re-enable replay logs for debugging (e.g. when using the
+#: ``temporalio.worker.Replayer`` to inspect history locally).
+ENABLE_WORKFLOW_REPLAY_LOGS: bool = (
+    os.getenv("ENABLE_WORKFLOW_REPLAY_LOGS", "false").lower() == "true"
+)
 #: Whether to enable a secondary OpenTelemetry log exporter for workflow-log
 #: archival (e.g. S3 sink). When true, logs are emitted to both the primary
 #: OTEL_EXPORTER_OTLP_ENDPOINT and OTEL_WORKFLOW_LOGS_ENDPOINT.
@@ -511,7 +519,6 @@ ENABLE_OBSERVABILITY_STORE_SINK: bool = (
     ).lower()
     == "true"
 )
-
 # REMOVED: ATLAN_API_TOKEN_GUID, ATLAN_API_KEY, ATLAN_CLIENT_ID, ATLAN_CLIENT_SECRET — unused.
 # ATLAN_BASE_URL is still used by events interceptor (deferred import).
 ATLAN_BASE_URL = os.getenv("ATLAN_BASE_URL")

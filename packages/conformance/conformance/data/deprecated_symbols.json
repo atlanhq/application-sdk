@@ -147,7 +147,7 @@
     {
       "kind": "class",
       "marker_via": "warn",
-      "message": "ParquetFileReader is deprecated and will be removed in v4.0. Migrate now: declare the upstream artifact as a FileReference field on your task's typed Input \u2014 the SDK's activity interceptor auto-materialises it to a local path before the task runs (with sha256 sidecar verification + parallel transfers), then read it directly with pandas.read_parquet / daft.read_parquet. See docs/agents/coding-standards.md.",
+      "message": "ParquetFileReader is deprecated and will be removed in v4.0. Migrate now: declare the upstream artifact as a FileReference field on your task's typed Input \u2014 the SDK's activity interceptor auto-materialises it to a local path before the task runs (with sha256 sidecar verification + parallel transfers), then read it directly with pandas.read_parquet. See docs/agents/coding-standards.md.",
       "migration_target": true,
       "module": "application_sdk.storage.formats.parquet",
       "removal_version": "4.0",

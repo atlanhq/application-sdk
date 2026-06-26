@@ -527,8 +527,8 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         backfill_count_for_log = len(backfill_qns) if backfill_qns else 0
         logger.info("Found %d tables needing backfill", backfill_count_for_log)
 
-        # Step 4: Get tables needing column extraction using Daft
-        filtered_df, changed_count, backfill_count, _no_change_count = (
+        # Step 4: Get tables needing column extraction using DuckDB
+        filtered_rows, changed_count, backfill_count, _no_change_count = (
             get_tables_needing_column_extraction(transformed_dir, backfill_qns)
         )
 
@@ -554,7 +554,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         total_tables_batched = 0
         current_batch: list[str] = []
 
-        for row in filtered_df.select("table_id").iter_rows():
+        for row in filtered_rows:
             current_batch.append(row["table_id"])
 
             if len(current_batch) >= batch_size:
