@@ -83,10 +83,14 @@ def logger_adapter():
 
 def test_process_without_context():
     """Test process() method without any context."""
+    from application_sdk.constants import APPLICATION_NAME, DEPLOYMENT_NAME
+
     with create_logger_adapter() as logger_adapter:
         msg, kwargs = logger_adapter.process("Test message", {})
         assert "logger_name" in kwargs
         assert kwargs["logger_name"] == "test_logger"
+        assert kwargs["app_name"] == APPLICATION_NAME
+        assert kwargs["deployment_name"] == DEPLOYMENT_NAME
         assert msg == "Test message"
 
 
@@ -1961,6 +1965,16 @@ class TestInterceptHandlerStdlibBridge:
         bind_kwargs = self._emit()
 
         assert bind_kwargs["app_name"] == APPLICATION_NAME
+
+    def test_stdlib_emit_injects_deployment_name(self) -> None:
+        """Stdlib bridge must inject ``deployment_name`` so SDR / multi-deploy
+        logs are attributable to a specific deployment instance in central LH
+        (``app_name`` only identifies the component, not the deployment)."""
+        from application_sdk.constants import DEPLOYMENT_NAME
+
+        bind_kwargs = self._emit()
+
+        assert bind_kwargs["deployment_name"] == DEPLOYMENT_NAME
 
     def test_stdlib_emit_injects_workflow_context(self) -> None:
         """Stdlib log inside a Temporal workflow must carry workflow_id,
