@@ -300,6 +300,13 @@ uiConfig: Widgets.UIConfig?
 /// completion notification node.
 extraNodes: Mapping<String, DAGNode> = new Mapping {}
 
+/// Background-job schedules (DISTR-815). When non-empty, the toolkit renders a
+/// `triggers.schedules` block into `manifest.json` (AE ScheduleTrigger shape) so a
+/// reconciler (Local Marketplace) can create the workflow's Temporal schedule(s)
+/// straight from the manifest. Only scheduled (cron) entrypoints set this; leave
+/// empty for UI/event-triggered entrypoints.
+schedules: Listing<ScheduleSpec> = new Listing {}
+
 /// Top-level on/off for app notifications.
 ///
 /// When `true`, appends a run-level notification node (`NotificationNode`, key
@@ -2121,9 +2128,36 @@ local _publishTagPipelineEnabled: Boolean|String? =
 local _publishTagAttachmentsPrefix: String? =
   if (_publishTagPipelineEnabled != null) "$.extract.outputs.tag_attachments_prefix" else null
 
+/// One background-job schedule rendered into `manifest.json`'s
+/// `triggers.schedules` (AE ScheduleTrigger shape). `name` is the stable trigger
+/// id — never rename/reuse. `status` is "ACTIVE" or "PAUSED" (a disabled schedule
+/// ships as "PAUSED").
+class ScheduleSpec {
+  name: String
+  cronExpression: String
+  timezone: String = "UTC"
+  status: String = "ACTIVE"
+}
+
 local manifestData: Mapping<String, Any> = new Mapping {
   ["execution_mode"] = "automation-engine"
   ["dag"] = generateDAG()
+  // DISTR-815: emit triggers.schedules when the entrypoint declares schedules,
+  // so the cron lives in the manifest itself (not a separate file).
+  when (schedules.length > 0) {
+    ["triggers"] = new Mapping {
+      ["schedules"] = new Listing {
+        for (s in schedules) {
+          new Mapping {
+            ["name"] = s.name
+            ["cron_expression"] = s.cronExpression
+            ["timezone"] = s.timezone
+            ["status"] = s.status
+          }
+        }
+      }
+    }
+  }
 }
 
 local function generateDAG(): Mapping<String, Any> = new Mapping {
