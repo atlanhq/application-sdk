@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.20.1 (June 26, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.20.0...v3.20.1
+
+### Bug Fixes
+
+- remove delete from preflight probe; use fixed key (#2347) (by @cmgrote in [9128001](https://github.com/atlanhq/application-sdk/commit/9128001))
+- make %-style log args lazily evaluated (#2353) (by @cmgrote in [4fcc98b](https://github.com/atlanhq/application-sdk/commit/4fcc98b))
+- forward daprd sidecar logs into the SDK pipeline (#2345) (by @Lalit3716-atlan in [06ba53c](https://github.com/atlanhq/application-sdk/commit/06ba53c))
+- align App.upload() path with WORKFLOW_OUTPUT_PATH_TEMPLATE (#2364) (by @cmgrote in [3316da0](https://github.com/atlanhq/application-sdk/commit/3316da0))
+
+
 ## v3.20.0 (June 25, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.19.0...v3.20.0
