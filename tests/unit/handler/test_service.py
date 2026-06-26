@@ -381,8 +381,9 @@ class TestPreflightEndpoint:
         # v2 format: data is a dict of check results keyed by camelCase name.
         assert body["data"] == {}
         assert body["message"] == "ready"
-        assert body["preflight"]["status"] == "success"
+        assert body["preflight"]["status"] == "ready"
         assert body["preflight"]["app_status"] == "ready"
+        assert body["preflight"]["should_block"] is False
         assert body["preflight"]["checks"] == []
 
     def test_default_handler_reports_success_with_no_checks(self) -> None:
@@ -395,12 +396,13 @@ class TestPreflightEndpoint:
         assert response.status_code == 200
         body = response.json()
         # No checks emitted, so the SageV2 envelope is success=False (same as
-        # any zero-check handler); the canonical status stays non-blocking.
+        # any zero-check handler); with no blocking checks should_block is False.
         assert body["success"] is False
         assert body["data"] == {}
         assert body["message"] == "No preflight handler registered"
-        assert body["preflight"]["status"] == "success"
-        assert body["preflight"]["app_status"] == "success"
+        assert body["preflight"]["status"] == "ready"
+        assert body["preflight"]["app_status"] == "ready"
+        assert body["preflight"]["should_block"] is False
         assert body["preflight"]["checks"] == []
 
     def test_preflight_handler_error_returns_500(self) -> None:
@@ -624,22 +626,25 @@ class TestPreflightEndpoint:
         assert entry["message"] == "Metadata GraphQL API returned no sites"
         assert entry["failureMessage"] == "Metadata GraphQL API returned no sites"
         assert entry["successMessage"] == ""
-        assert body["preflight"]["status"] == "success"
+        assert body["preflight"]["status"] == "not_ready"
         assert body["preflight"]["app_status"] == "not_ready"
+        assert body["preflight"]["should_block"] is False
         assert "status" not in body["data"]
 
-    def test_preflight_canonical_failed_stays_outside_v2_data(self) -> None:
+    def test_preflight_blocking_failure_sets_should_block(self) -> None:
         class _OneCheck(_TestHandler):
             async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
                 from application_sdk.handler.contracts import PreflightCheck
 
-                return PreflightOutput.failed(
+                return PreflightOutput(
+                    status=PreflightStatus.NOT_READY,
                     message="Credentials are invalid",
                     checks=[
                         PreflightCheck(
                             name="loginCheck",
                             title="Validate credentials",
                             passed=False,
+                            blocking=True,
                             message="Credentials are invalid",
                         )
                     ],
@@ -651,9 +656,11 @@ class TestPreflightEndpoint:
         assert body["success"] is True
         assert list(body["data"]) == ["loginCheck"]
         assert body["data"]["loginCheck"]["success"] is False
-        assert body["preflight"]["status"] == "failed"
-        assert body["preflight"]["app_status"] == "failed"
+        assert body["preflight"]["should_block"] is True
+        assert body["preflight"]["status"] == "not_ready"
+        assert body["preflight"]["app_status"] == "not_ready"
         assert body["preflight"]["checks"][0]["title"] == "Validate credentials"
+        assert body["preflight"]["checks"][0]["blocking"] is True
         assert "status" not in body["data"]
         assert "checks" not in body["data"]
 
@@ -847,8 +854,9 @@ class TestPreflightEndpoint:
         )
         assert body["success"] is False
         assert body["data"] == {}
-        assert body["preflight"]["status"] == "success"
+        assert body["preflight"]["status"] == "not_ready"
         assert body["preflight"]["app_status"] == "not_ready"
+        assert body["preflight"]["should_block"] is False
 
 
 class TestMetadataEndpoint:

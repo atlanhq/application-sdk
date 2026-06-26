@@ -1499,7 +1499,7 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 
 - **Import:** `from application_sdk.handler import PreflightStatus`
 - **Signature:** `class PreflightStatus`
-- **Summary:** Overall result of a preflight check.
+- **Summary:** Advisory result of a preflight check — for display/diagnostics only.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `SqlMetadataObject`
@@ -2601,6 +2601,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `name: str` `= Field(..., min_length=1)` — Check name (e.g., 'connectivity', 'permissions').
   - `title: str` `= ''` — Optional display title for the check.
   - `passed: bool` `= False` — Whether the check passed.
+  - `blocking: bool` `= False` — Whether failing this check must stop the run before extraction.
   - `message: str` `= ''` — Details about the check result.
   - `duration_ms: float` `= 0.0` — How long the check took in milliseconds.
 - **Defined in:** `application_sdk/handler/contracts.py`
@@ -2641,10 +2642,11 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.handler.contracts import PreflightOutput`
 - **Summary:** Output from the preflight_check handler operation.
 - **Fields:**
-  - `status: PreflightStatus` — Overall preflight result.
-  - `checks: list[PreflightCheck]` `= []` — Individual check results.
+  - `status: PreflightStatus` — Advisory result for display (Sage UI / connector-pulse / AE event).
+  - `checks: list[PreflightCheck]` `= []` — Individual check results. A check's :attr:`PreflightCheck.blocking` flag
   - `message: str` `= ''` — Human-readable summary.
   - `total_duration_ms: float` `= 0.0` — Total time for all checks in milliseconds.
+  - `should_block: bool` — Whether the injected preflight gate must abort the run before
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `SqlMetadataObject`

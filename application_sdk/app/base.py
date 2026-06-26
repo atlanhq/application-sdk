@@ -1577,7 +1577,6 @@ async def _run_preflight_gate(
         from application_sdk.handler.contracts import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
             PreflightGateInput,
             PreflightOutput,
-            PreflightStatus,
         )
 
     if not isinstance(input_data, CredentialResolvable):
@@ -1622,7 +1621,7 @@ async def _run_preflight_gate(
             return
         raise
 
-    if result.canonical_status() is not PreflightStatus.FAILED:
+    if not result.should_block:
         return
 
     if override:

@@ -305,36 +305,18 @@ class AuthOutput(BaseModel):
 
 
 class PreflightStatus(SerializableEnum):
-    """Overall result of a preflight check.
+    """Advisory result of a preflight check — for display/diagnostics only.
 
-    ``SUCCESS`` / ``FAILED`` are the canonical statuses an app handler returns:
-    ``SUCCESS`` lets the run proceed (all checks green, or partially green but
-    still safe to extract — the handler's call), ``FAILED`` blocks the run
-    (an explicit hard config failure the app owner does not want to start).
-
-    ``READY`` / ``NOT_READY`` / ``PARTIAL`` are the legacy Sage/SageV2 statuses,
-    retained so existing handlers keep working. They are non-blocking: every one
-    folds to ``SUCCESS`` via :meth:`canonical`. An app opts into blocking only by
-    returning ``FAILED``.
+    Surfaced to the Sage UI, the connector-pulse dashboard, and the Automation
+    Engine event. It does **not** decide whether a run is blocked: that is the
+    gate's job, driven by per-check :attr:`PreflightCheck.blocking` and folded
+    into :attr:`PreflightOutput.should_block`. Keeping status purely advisory
+    avoids overloading one field with two concerns (display vs gate decision).
     """
 
     READY = "ready"
     NOT_READY = "not_ready"
     PARTIAL = "partial"
-    SUCCESS = "success"
-    FAILED = "failed"
-
-    def canonical(self) -> PreflightStatus:
-        """Map legacy ``READY``/``NOT_READY``/``PARTIAL`` to canonical ``SUCCESS``;
-        only ``FAILED`` blocks a run. Folding ``NOT_READY`` → ``SUCCESS`` is a
-        deliberate opt-out of blocking (back-compat), not an aggregate equivalence."""
-        if self in (
-            PreflightStatus.READY,
-            PreflightStatus.NOT_READY,
-            PreflightStatus.PARTIAL,
-        ):
-            return PreflightStatus.SUCCESS
-        return self
 
 
 class PreflightCheck(BaseModel):
@@ -348,6 +330,15 @@ class PreflightCheck(BaseModel):
 
     passed: bool = False
     """Whether the check passed."""
+
+    blocking: bool = False
+    """Whether failing this check must stop the run before extraction.
+
+    Advisory checks (e.g. server version, optional permissions) leave this
+    ``False`` — they surface in the UI but never block. A failed check with
+    ``blocking=True`` aborts the run via :attr:`PreflightOutput.should_block`.
+    Defaults to ``False`` so blocking is always an explicit, per-check opt-in.
+    """
 
     message: str = ""
     """Details about the check result."""
@@ -426,10 +417,15 @@ class PreflightOutput(BaseModel):
     """Output from the preflight_check handler operation."""
 
     status: PreflightStatus
-    """Overall preflight result."""
+    """Advisory result for display (Sage UI / connector-pulse / AE event).
+
+    This is **not** the gate decision — see :attr:`should_block`. Set it to
+    reflect what a human should see (e.g. ``READY`` on a clean pass,
+    ``NOT_READY`` when something is off)."""
 
     checks: list[PreflightCheck] = []
-    """Individual check results."""
+    """Individual check results. A check's :attr:`PreflightCheck.blocking` flag
+    decides whether failing it stops the run."""
 
     message: str = ""
     """Human-readable summary."""
@@ -437,45 +433,16 @@ class PreflightOutput(BaseModel):
     total_duration_ms: float = 0.0
     """Total time for all checks in milliseconds."""
 
-    def canonical_status(self) -> PreflightStatus:
-        """Return the runtime aggregate status for this output."""
-        return self.status.canonical()
+    @property
+    def should_block(self) -> bool:
+        """Whether the injected preflight gate must abort the run before
+        extraction.
 
-    @classmethod
-    def success(
-        cls,
-        *,
-        message: str = "",
-        checks: list[PreflightCheck] | None = None,
-        total_duration_ms: float = 0.0,
-    ) -> PreflightOutput:
-        """Build a non-blocking result (the run proceeds). Use for a clean pass
-        or a partial result the connector still considers safe to extract on;
-        per-check detail goes in ``checks``."""
-        return cls(
-            status=PreflightStatus.SUCCESS,
-            message=message,
-            checks=checks or [],
-            total_duration_ms=total_duration_ms,
-        )
-
-    @classmethod
-    def failed(
-        cls,
-        *,
-        message: str = "",
-        checks: list[PreflightCheck] | None = None,
-        total_duration_ms: float = 0.0,
-    ) -> PreflightOutput:
-        """Build a blocking result — the ONLY status that stops a run. Returning
-        this is an explicit opt-in to block; every other status (incl. legacy
-        ``not_ready``) proceeds. Use only for failures that must not start a run."""
-        return cls(
-            status=PreflightStatus.FAILED,
-            message=message,
-            checks=checks or [],
-            total_duration_ms=total_duration_ms,
-        )
+        ``True`` iff a check with ``blocking=True`` failed. Advisory failures
+        (``blocking=False``) never block, and a handler with no blocking checks
+        — the default — never blocks. Blocking is strictly opt-in: an app marks
+        the checks that gate extraction and the SDK derives the rest."""
+        return any(check.blocking and not check.passed for check in self.checks)
 
 
 class PreflightGateInput(BaseModel):

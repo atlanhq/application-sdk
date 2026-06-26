@@ -77,17 +77,11 @@ class TestPreflightStatus:
         assert PreflightStatus.READY == "ready"
         assert PreflightStatus.NOT_READY == "not_ready"
         assert PreflightStatus.PARTIAL == "partial"
-        assert PreflightStatus.SUCCESS == "success"
-        assert PreflightStatus.FAILED == "failed"
 
-    def test_legacy_statuses_normalize_to_runtime_success(self):
-        assert PreflightStatus.READY.canonical() == PreflightStatus.SUCCESS
-        assert PreflightStatus.NOT_READY.canonical() == PreflightStatus.SUCCESS
-        assert PreflightStatus.PARTIAL.canonical() == PreflightStatus.SUCCESS
-
-    def test_canonical_statuses_stay_canonical(self):
-        assert PreflightStatus.SUCCESS.canonical() == PreflightStatus.SUCCESS
-        assert PreflightStatus.FAILED.canonical() == PreflightStatus.FAILED
+    def test_advisory_only_no_gate_values(self):
+        # status is advisory; the gate decision is PreflightOutput.should_block,
+        # so there are no success/failed status values to overlap the legacy set.
+        assert {s.value for s in PreflightStatus} == {"ready", "not_ready", "partial"}
 
 
 class TestPreflightCheck:
@@ -96,6 +90,7 @@ class TestPreflightCheck:
         assert check.name == "connectivity"
         assert check.title == ""
         assert check.passed is False
+        assert check.blocking is False
         assert check.message == ""
         assert check.duration_ms == 0.0
 
@@ -104,10 +99,12 @@ class TestPreflightCheck:
             name="connectivity",
             title="Connectivity",
             passed=True,
+            blocking=True,
             duration_ms=50.0,
         )
         assert check.title == "Connectivity"
         assert check.passed is True
+        assert check.blocking is True
         assert check.duration_ms == 50.0
 
     def test_empty_name_rejected(self):
@@ -119,8 +116,8 @@ class TestPreflightOutput:
     def test_required_status(self):
         out = PreflightOutput(status=PreflightStatus.READY)
         assert out.status == PreflightStatus.READY
-        assert out.canonical_status() == PreflightStatus.SUCCESS
         assert out.checks == []
+        assert out.should_block is False
 
     def test_with_checks(self):
         checks = [
@@ -130,21 +127,30 @@ class TestPreflightOutput:
         out = PreflightOutput(status=PreflightStatus.PARTIAL, checks=checks)
         assert len(out.checks) == 2
 
-    def test_helper_constructors(self):
-        assert PreflightOutput.success().status == PreflightStatus.SUCCESS
-        assert PreflightOutput.failed().status == PreflightStatus.FAILED
+    def test_should_block_only_on_failed_blocking_check(self):
+        # advisory failure (blocking=False) does NOT block
+        advisory = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[PreflightCheck(name="version", passed=False, blocking=False)],
+        )
+        assert advisory.should_block is False
 
-    def test_helper_constructors_round_trip_all_kwargs(self):
-        checks = [PreflightCheck(name="auth", passed=False, message="bad creds")]
-        for factory, expected_status in (
-            (PreflightOutput.success, PreflightStatus.SUCCESS),
-            (PreflightOutput.failed, PreflightStatus.FAILED),
-        ):
-            out = factory(message="hello", checks=checks, total_duration_ms=12.5)
-            assert out.status == expected_status
-            assert out.message == "hello"
-            assert out.checks == checks
-            assert out.total_duration_ms == 12.5
+        # a failed blocking check blocks
+        blocked = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[PreflightCheck(name="auth", passed=False, blocking=True)],
+        )
+        assert blocked.should_block is True
+
+        # a passing blocking check does not block
+        ok = PreflightOutput(
+            status=PreflightStatus.READY,
+            checks=[PreflightCheck(name="auth", passed=True, blocking=True)],
+        )
+        assert ok.should_block is False
+
+    def test_no_checks_never_blocks(self):
+        assert PreflightOutput(status=PreflightStatus.NOT_READY).should_block is False
 
 
 class TestMetadataOutput:

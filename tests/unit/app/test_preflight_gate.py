@@ -13,7 +13,11 @@ import pytest
 
 from application_sdk.app.base import _run_preflight_gate
 from application_sdk.execution.errors import ApplicationError
-from application_sdk.handler.contracts import PreflightOutput, PreflightStatus
+from application_sdk.handler.contracts import (
+    PreflightCheck,
+    PreflightOutput,
+    PreflightStatus,
+)
 
 
 class _ResolvableInput:
@@ -42,8 +46,25 @@ class _NonResolvableInput:
     """Carries no credential routing — must skip the gate (e.g. openapi-app)."""
 
 
-def _output(status: PreflightStatus) -> PreflightOutput:
-    return PreflightOutput(status=status, checks=[])
+def _blocking() -> PreflightOutput:
+    """A failed blocking check → should_block is True."""
+    return PreflightOutput(
+        status=PreflightStatus.NOT_READY,
+        checks=[PreflightCheck(name="auth", passed=False, blocking=True)],
+    )
+
+
+def _proceeding() -> PreflightOutput:
+    """No blocking failure → should_block is False."""
+    return PreflightOutput(status=PreflightStatus.READY, checks=[])
+
+
+def _advisory_failure() -> PreflightOutput:
+    """A failed NON-blocking check → should_block is False (advisory only)."""
+    return PreflightOutput(
+        status=PreflightStatus.NOT_READY,
+        checks=[PreflightCheck(name="version", passed=False, blocking=False)],
+    )
 
 
 def _patched(value: bool):
@@ -68,8 +89,8 @@ class TestRunPreflightGate:
             await _run_preflight_gate(_NonResolvableInput(), "myapp", "crawl")
         exec_mock.assert_not_called()
 
-    async def test_aborts_on_canonical_failed(self) -> None:
-        exec_mock, exec_patch = _exec(_output(PreflightStatus.FAILED))
+    async def test_aborts_when_should_block(self) -> None:
+        exec_mock, exec_patch = _exec(_blocking())
         with _patched(True), exec_patch:
             with pytest.raises(ApplicationError) as excinfo:
                 await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
@@ -77,22 +98,22 @@ class TestRunPreflightGate:
         assert excinfo.value.type == "PreflightFailed"
 
     async def test_proceeds_on_success(self) -> None:
-        exec_mock, exec_patch = _exec(_output(PreflightStatus.SUCCESS))
+        exec_mock, exec_patch = _exec(_proceeding())
         with _patched(True), exec_patch:
             result = await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
         assert result is None
         exec_mock.assert_awaited_once()
 
-    async def test_legacy_not_ready_does_not_block(self) -> None:
-        # NOT_READY folds to canonical SUCCESS — back-compat must not abort.
-        exec_mock, exec_patch = _exec(_output(PreflightStatus.NOT_READY))
+    async def test_advisory_failure_does_not_block(self) -> None:
+        # A failed non-blocking check must not abort the run.
+        exec_mock, exec_patch = _exec(_advisory_failure())
         with _patched(True), exec_patch:
             result = await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
         assert result is None
 
     async def test_override_proceeds_on_failed_verdict(self) -> None:
         # "Run anyway": gate runs, logs, but does NOT abort on canonical failed.
-        exec_mock, exec_patch = _exec(_output(PreflightStatus.FAILED))
+        exec_mock, exec_patch = _exec(_blocking())
         with (
             _patched(True),
             exec_patch,
@@ -133,16 +154,16 @@ class TestRunPreflightGate:
 
     async def test_dispatches_activity_with_preflight_output_result_type(self) -> None:
         # Regression: execute_activity dispatched by name returns a raw dict
-        # unless result_type is set — and the workflow calls .canonical_status()
+        # unless result_type is set — and the workflow calls .should_block
         # on the result, which a dict doesn't have. Caught live on mysql canary.
-        exec_mock, exec_patch = _exec(_output(PreflightStatus.SUCCESS))
+        exec_mock, exec_patch = _exec(_proceeding())
         with _patched(True), exec_patch:
             await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
         _, kwargs = exec_mock.call_args
         assert kwargs.get("result_type") is PreflightOutput
 
     async def test_forwards_routing_fields_to_activity(self) -> None:
-        exec_mock, exec_patch = _exec(_output(PreflightStatus.SUCCESS))
+        exec_mock, exec_patch = _exec(_proceeding())
         with _patched(True), exec_patch:
             await _run_preflight_gate(
                 _ResolvableInput(guid="abc", method="agent"), "myapp", "asset-export"

@@ -93,11 +93,11 @@ def build_preflight_gate_activity(
         )
         with _bind_context(binding, credentials):
             result = await binding.handler.preflight_check(preflight_input)
-        # Verdict record for debuggability: the canonical status the gate keys
-        # on, plus the raw handler status when they differ (legacy folds).
+        # Verdict record for debuggability: the gate decision (should_block),
+        # the advisory status, and the check count.
         logger.info(
-            "Preflight gate verdict: %s (entrypoint=%s, handler_status=%s, checks=%d)",
-            result.canonical_status().value,
+            "Preflight gate verdict: %s (entrypoint=%s, status=%s, checks=%d)",
+            "block" if result.should_block else "proceed",
             input.entrypoint or "<implicit>",
             result.status.value,
             len(result.checks),

@@ -24,6 +24,7 @@ from application_sdk.handler.contracts import (
     MetadataOutput,
     PreflightInput,
     PreflightOutput,
+    PreflightStatus,
     SqlMetadataOutput,
 )
 
@@ -187,8 +188,12 @@ class DefaultHandler(Handler):
         )
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        """Returns a non-blocking no-op result when no handler is registered."""
-        return PreflightOutput.success(message="No preflight handler registered")
+        """Returns a non-blocking no-op result when no handler is registered.
+
+        No checks → no blocking checks → ``should_block`` is ``False``."""
+        return PreflightOutput(
+            status=PreflightStatus.READY, message="No preflight handler registered"
+        )
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
         """Always returns empty metadata."""

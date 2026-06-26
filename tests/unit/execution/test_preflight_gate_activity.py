@@ -63,10 +63,10 @@ class TestPreflightGateActivity:
     def test_gate_input_satisfies_credential_resolvable(self) -> None:
         assert isinstance(PreflightGateInput(), CredentialResolvable)
 
-    async def test_gate_with_default_handler_returns_canonical_success(self) -> None:
+    async def test_gate_with_default_handler_does_not_block(self) -> None:
         gate = _gate(DefaultHandler())
         result = await gate(PreflightGateInput())
-        assert result.canonical_status() is PreflightStatus.SUCCESS
+        assert result.should_block is False
 
     async def test_gate_resolves_guid_and_calls_handler_with_flattened_creds(
         self,
