@@ -689,3 +689,108 @@ class TestUnknownKeyWarning:
             MyInput.model_validate({"name": "ok", "b": 2})
 
         assert mock_logger.warning.call_count == 2
+
+
+# =============================================================================
+# _resolve_app_name / PublishInputMixin
+# =============================================================================
+
+
+class TestResolveAppName:
+    """_resolve_app_name prefers AppRegistry over APPLICATION_NAME env var."""
+
+    def test_returns_registry_name_when_single_app_registered(self) -> None:
+        from application_sdk.contracts.base import _resolve_app_name
+
+        with (
+            patch(
+                "application_sdk.contracts.base._resolve_app_name",
+                wraps=_resolve_app_name,
+            ),
+            patch("application_sdk.app.registry.AppRegistry.get_instance") as mock_inst,
+        ):
+            mock_inst.return_value.list_apps.return_value = ["my-connector"]
+            result = _resolve_app_name()
+
+        assert result == "my-connector"
+
+    def test_falls_back_to_application_name_when_registry_empty(self) -> None:
+        from application_sdk.contracts.base import _resolve_app_name
+
+        with patch(
+            "application_sdk.app.registry.AppRegistry.get_instance"
+        ) as mock_inst:
+            mock_inst.return_value.list_apps.return_value = []
+            with patch("application_sdk.constants.APPLICATION_NAME", "env-app"):
+                result = _resolve_app_name()
+
+        assert result == "env-app"
+
+    def test_falls_back_when_multiple_apps_registered(self) -> None:
+        from application_sdk.contracts.base import _resolve_app_name
+
+        with patch(
+            "application_sdk.app.registry.AppRegistry.get_instance"
+        ) as mock_inst:
+            mock_inst.return_value.list_apps.return_value = ["app-a", "app-b"]
+            with patch("application_sdk.constants.APPLICATION_NAME", "env-app"):
+                result = _resolve_app_name()
+
+        assert result == "env-app"
+
+    def test_falls_back_when_registry_raises(self) -> None:
+        from application_sdk.contracts.base import _resolve_app_name
+
+        with (
+            patch(
+                "application_sdk.app.registry.AppRegistry.get_instance",
+                side_effect=RuntimeError("registry broken"),
+            ),
+            patch("application_sdk.constants.APPLICATION_NAME", "env-fallback"),
+        ):
+            result = _resolve_app_name()
+
+        assert result == "env-fallback"
+
+
+class TestPublishInputMixinDerivation:
+    """PublishInputMixin auto-derives output_path using _resolve_app_name."""
+
+    def test_derive_uses_registry_name_not_env_var(self) -> None:
+        """Registry name wins over APPLICATION_NAME when auto-deriving output_path."""
+        from application_sdk.contracts.base import PublishInputMixin
+
+        mock_wf_info = patch(
+            "temporalio.workflow.info",
+            return_value=type(
+                "I", (), {"workflow_id": "wf-123", "run_id": "run-456"}
+            )(),
+        )
+        mock_registry = patch("application_sdk.app.registry.AppRegistry.get_instance")
+
+        with mock_wf_info, mock_registry as mr:
+            mr.return_value.list_apps.return_value = ["my-connector"]
+
+            class MyOutput(PublishInputMixin):
+                pass
+
+            obj = MyOutput()
+
+        assert "my-connector" in obj.output_path
+        assert "wf-123" in obj.output_path
+        assert "run-456" in obj.output_path
+        assert obj.transformed_data_prefix.endswith("/transformed")
+
+    def test_explicit_transformed_data_prefix_not_overridden(self) -> None:
+        """If transformed_data_prefix is already set, auto-derivation is skipped."""
+        from application_sdk.contracts.base import PublishInputMixin
+
+        class MyOutput(PublishInputMixin):
+            pass
+
+        obj = MyOutput(
+            output_path="artifacts/apps/x/workflows/wf/run",
+            transformed_data_prefix="artifacts/custom/path/transformed",
+        )
+
+        assert obj.transformed_data_prefix == "artifacts/custom/path/transformed"

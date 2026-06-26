@@ -847,7 +847,7 @@ class SqlApp(App):
             resolved_base = os.path.join(
                 TEMPORARY_PATH,
                 WORKFLOW_OUTPUT_PATH_TEMPLATE.format(
-                    application_name=APPLICATION_NAME or self._app_name or "app",
+                    application_name=self._app_name or APPLICATION_NAME or "app",
                     workflow_id=info.workflow_id,
                     run_id=info.run_id,
                 ),
