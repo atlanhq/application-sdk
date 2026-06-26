@@ -27,9 +27,9 @@ from application_sdk.transformers.common.last_sync import (
 from application_sdk.transformers.common.utils import process_text
 
 warnings.warn(
-    "application_sdk.transformers.atlas is deprecated and will be removed in the next major version. "
-    "Use the connector-side typed-record → mapper-function pattern instead. "
-    "See docs/upgrade-guide-v3.md.",
+    "application_sdk.transformers.atlas is deprecated; use the connector-side "
+    "asset-mapper pattern (typed records → map_<entity>() → pyatlan_v9 Asset) instead "
+    "— will be removed in v4.0. See docs/upgrade-guide-v3.md.",
     DeprecationWarning,
     stacklevel=2,
 )
@@ -61,6 +61,11 @@ class AtlasTransformer(TransformerInterface):
     Example:
         >>> transformer = AtlasTransformer("sql-connector", "tenant123")
         >>> result = transformer.transform_metadata("DATABASE", data, "workflow1", "run1")
+
+    .. deprecated:: 3.20.0
+        Use the connector-side asset-mapper pattern (typed records →
+        ``map_<entity>()`` → ``pyatlan_v9`` Asset) instead — will be removed in
+        v4.0. See ``docs/upgrade-guide-v3.md``.
     """
 
     def __init__(self, connector_name: str, tenant_id: str, **kwargs: Any):
@@ -73,6 +78,13 @@ class AtlasTransformer(TransformerInterface):
                 current_epoch (str): Current epoch timestamp.
                 connection_qualified_name (str): Qualified name for the connection.
         """
+        warnings.warn(
+            "AtlasTransformer is deprecated; use the connector-side asset-mapper "
+            "pattern (typed records → map_<entity>() → pyatlan_v9 Asset) instead — "
+            "will be removed in v4.0. See docs/upgrade-guide-v3.md.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         from application_sdk.transformers.atlas.sql import (  # noqa: PLC0415 — circular: transformers/atlas/__init__.py loads sibling sql submodule
             Column,
             Database,

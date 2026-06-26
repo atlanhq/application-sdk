@@ -189,6 +189,28 @@ def test_b001_real_manifest_flags_deprecated_discovery_error() -> None:
     assert ids == ["B001"]
 
 
+def test_b001_real_manifest_flags_legacy_transformers() -> None:
+    """BLDX-1399: the real manifest fires on the legacy transformer surface.
+
+    Importing / subclassing ``AtlasTransformer`` / ``QueryBasedTransformer`` /
+    ``TransformerInterface`` is the YAML/Daft transformer path we are steering
+    apps off; B001 must surface it with the asset-mapper migration guidance the
+    SDK's deprecation notice carries.
+    """
+    manifest = load_manifest()
+    src = (
+        "from application_sdk.transformers.atlas import AtlasTransformer\n"
+        "from application_sdk.transformers.query import QueryBasedTransformer\n\n\n"
+        "class MyTransformer(AtlasTransformer):\n    pass\n"
+    )
+    tree, directives = _tree_and_directives(src)
+    findings = scan_consumer(tree, "app/connector.py", manifest, directives)
+    # two imports + one subclass
+    assert [f.rule_id for f in findings] == ["B001", "B001", "B001"]
+    # the asset-mapper migration target rides along for the remediation loop
+    assert any("asset-mapper" in f.message for f in findings)
+
+
 # ── B002 MalformedDeprecationNotice (sdk scope) ─────────────────────────────────
 
 
