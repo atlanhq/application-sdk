@@ -1,8 +1,9 @@
 """Contract: the SDR transformed-data EGRESS path must equal the path PUBLISH reads.
 
-Recurring SDR incident (teradata/Highmark, redshift, mssql/Kaizen): a connector's
-extract+transform succeed and the transformed parquet IS uploaded to the Atlan
-bucket, but at a run prefix that DROPS the ``{workflow_id}`` segment — while publish
+Recurring SDR incident (observed across the teradata, redshift, and mssql
+connectors): a connector's extract+transform succeed and the transformed parquet
+IS uploaded to the Atlan bucket, but at a run prefix that DROPS the
+``{workflow_id}`` segment — while publish
 reads ``transformed_data_prefix = <output_path>/transformed`` derived from
 ``WORKFLOW_OUTPUT_PATH_TEMPLATE`` (which INCLUDES ``{workflow_id}``). The globs miss
 → "No entities in the transformed data" → 0 assets published, on an otherwise
