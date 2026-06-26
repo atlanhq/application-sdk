@@ -2,6 +2,25 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.8.0] - 2026-06-25
+
+### Features
+
+- P017/P018 entrypoint-conformance rules (BLDX-1411) (#2355) ([8342bc6](https://github.com/atlanhq/application-sdk/commit/8342bc6))
+- additive-only contract gate B005/B006 (BLDX-1425) (#2350) ([225c8ed](https://github.com/atlanhq/application-sdk/commit/225c8ed))
+
+### Bug fixes
+
+- ignore action SHA pins in C002 drift comparison (#2358) ([1224379](https://github.com/atlanhq/application-sdk/commit/1224379))
+- make %-style log args lazily evaluated (#2353) ([4fcc98b](https://github.com/atlanhq/application-sdk/commit/4fcc98b))
+
+### Other changes
+
+- chore(deps): lock file maintenance (#2363) ([4f8b0a1](https://github.com/atlanhq/application-sdk/commit/4f8b0a1))
+- chore(deps): lock file maintenance (#2360) ([fdf1e27](https://github.com/atlanhq/application-sdk/commit/fdf1e27))
+- chore(deps): lock file maintenance (#2342) ([6a2e7f3](https://github.com/atlanhq/application-sdk/commit/6a2e7f3))
+- chore(deps): lock file maintenance (#2340) ([e1b98d1](https://github.com/atlanhq/application-sdk/commit/e1b98d1))
+
 ## [0.7.0] - 2026-06-25
 
 ### Features
