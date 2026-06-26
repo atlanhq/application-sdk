@@ -62,6 +62,7 @@ load_dotenv(dotenv_path=".env")
 
 # Static Constants
 LOCAL_ENVIRONMENT = "local"
+LOCAL_WORKFLOW_ID = "local-no-temporal"
 
 # Application Constants
 #: Name of the application, used for identification

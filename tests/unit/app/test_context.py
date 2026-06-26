@@ -75,6 +75,14 @@ class TestAppMetadata:
 
 
 class TestAppContextIdentity:
+    def test_workflow_id_default_is_local_sentinel(self) -> None:
+        ctx = AppContext(app_name="a", app_version="1")
+        assert ctx.workflow_id == "local-no-temporal"
+
+    def test_workflow_id_empty_string_raises(self) -> None:
+        with pytest.raises(ValueError, match="workflow_id"):
+            AppContext(app_name="a", app_version="1", workflow_id="")
+
     def test_correlation_id_defaults_to_run_id(self) -> None:
         ctx = AppContext(app_name="a", app_version="1", run_id="run-42")
         assert ctx.correlation_id == "run-42"

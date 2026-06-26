@@ -263,15 +263,19 @@ def test_catalog_d_series_present() -> None:
 
 
 def test_catalog_p_series_present() -> None:
-    """The P-series prescription rules are exactly P001–P018.
+    """The P-series prescription rules are exactly P001–P024.
 
     Strict equality (not just not-missing): P004–P007 are the orchestration-seam
     rules (BLDX-1417); P008–P012 are the storage-seam rules (BLDX-1398);
     P013–P015 are the typed-contract-boundary rules (BLDX-1413);
     P016 is the entry-point contract/code alignment rule (BLDX-1425);
-    P017–P018 are the entrypoint-conformance rules (BLDX-1411).  A stray
-    or renumbered P-id would slip past a subset check while breaking fleet-wide
-    ``# conformance: ignore[Pxxx]`` suppressions.
+    P017–P018 are the entrypoint-conformance rules (BLDX-1411);
+    P019 is the client-seam rule — raw HTTP to Atlan instead of pyatlan
+    (BLDX-1430).  P020–P024 are the determinism / async-correctness rules:
+    non-deterministic primitives, side-effect I/O, un-awaited coroutines,
+    blocking calls in async defs, and pyatlan sync ``AtlanClient`` use.
+    A stray or renumbered P-id would slip past a subset check while
+    breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
     rules = load_catalog()
     p_ids = {r.id for r in rules if r.id.startswith("P")}
@@ -294,6 +298,12 @@ def test_catalog_p_series_present() -> None:
         "P016",
         "P017",
         "P018",
+        "P019",
+        "P020",
+        "P021",
+        "P022",
+        "P023",
+        "P024",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"

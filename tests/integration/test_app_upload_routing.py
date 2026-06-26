@@ -68,6 +68,7 @@ def _make_app(
     deployment_store,
     upstream_store=None,
     run_id: str = "run-routing-test",
+    workflow_id: str = "local-no-temporal",
 ) -> _UploadApp:
     """Build an _UploadApp with the given stores wired into its context."""
     app = _UploadApp()
@@ -75,6 +76,7 @@ def _make_app(
         app_name=app._app_name,
         app_version="1",
         run_id=run_id,
+        workflow_id=workflow_id,
         _storage=deployment_store,
         _upstream_storage=upstream_store,
     )
@@ -700,3 +702,37 @@ async def test_app_upload_dual_write_failure_required_raises_after_upstream(
         f"Upstream write did not complete before the required-mode exception. "
         f"upstream_keys={upstream_keys}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Regression: upload prefix uses real workflow_id, not "local-no-temporal"
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+async def test_upload_path_embeds_workflow_id_from_context(tmp_path):
+    """App.upload() run_prefix must embed context.workflow_id, not the sentinel.
+
+    Regression guard: workflow_id was never set on the activity-side AppContext,
+    so uploads landed under the 'local-no-temporal' sentinel in production.
+    The fix threads workflow_id through TaskContext so both construction sites
+    read from one transport (TaskContext.workflow_id).
+    """
+    store = create_local_store(tmp_path / "store")
+    src = tmp_path / "artifact.jsonl"
+    src.write_text('{"name": "test"}\n')
+
+    real_workflow_id = "wf-temporal-abc123"
+    app = _make_app(store, workflow_id=real_workflow_id, run_id="run-wfid")
+
+    result = await app.upload(
+        UploadInput(local_path=str(src), tier=StorageTier.RETAINED)
+    )
+
+    storage_path = result.ref.storage_path
+    assert storage_path is not None
+    assert real_workflow_id in storage_path, (
+        f"Expected workflow_id '{real_workflow_id}' in storage path '{storage_path}'. "
+        f"workflow_id must flow from TaskContext.workflow_id into app_context."
+    )
+    assert "local-no-temporal" not in storage_path
