@@ -64,6 +64,15 @@ and the orthogonal gate is non-protective for structural regressions not yet
 covered by tests.  All five draft a proposal for human review.  (These rules are
 backed by `suite.checks.prescriptions` alongside P001–P003.)
 
+The client-seam rule (P019, BLDX-1430) is also P-series and suggest-only: the fix
+replaces a hand-rolled raw-HTTP call to an Atlan service with the equivalent
+`pyatlan` call, which is a semantic rewrite (the right pyatlan method depends on
+the endpoint's meaning) that no mechanical import edit can perform, and the choice
+of which pyatlan surface to use — or whether to suppress when no equivalent exists
+— is the developer's call.  It drafts a proposal for human review and never
+auto-applies.  (This rule is backed by a separate `suite.checks.client_seam` check
+— see its module docs.)
+
 ### Requires
 
 - `scope` — repository root path.
@@ -267,3 +276,39 @@ around `finding.line` before drafting any proposal.
   propose renaming the field to clarify the semantics (e.g. `storage_uri`) and
   suppressing P012 with justification; state why the value is stable across
   workers.
+
+**Client-seam rule (P019)** — suggest-only, scope=both, WARN-tier;
+`classification` is always `"judgment"`.  Read the full function/class context
+around `finding.line` before drafting any proposal — the proposal is a
+**suggestion left to the developer's call**, never auto-applied.
+
+- **P019 RawHttpToAtlan** — a raw HTTP call (`httpx`/`requests`/`aiohttp`/`urllib`)
+  targets an Atlan service: its URL carries `/api/meta` (Atlas) or `/api/service`
+  (Heracles).  `pyatlan` is the supported client and a core dependency; the SDK
+  exposes it through `application_sdk.credentials`.  Draft a proposal in two parts:
+
+  1. **Obtain the client through the SDK seam** (never hand-roll one):
+     - inside an `App` subclass →
+       `client = await self.get_or_create_async_atlan_client(credential)`
+       (the `AtlanClientMixin`);
+     - ad-hoc / outside an App →
+       `client = create_async_atlan_client(cred)`
+       (`from application_sdk.credentials import create_async_atlan_client`).
+
+  2. **Replace the raw call with the matching pyatlan surface**, mapped by the
+     endpoint marker in the flagged URL:
+     - `…/api/meta/entity/…` (get an asset) →
+       `await client.asset.get_by_guid(...)` / `get_by_qualified_name(...)`;
+     - `…/api/meta/…` search / typedefs →
+       `client.asset.search(FluentSearch…)`, `client.typedef.get(...)`;
+     - `…/api/service/…` (workflows, packages, admin) →
+       the matching pyatlan surface (`client.workflow…`, admin/token clients).
+     If the offending call constructed a client object directly
+     (`httpx.AsyncClient(base_url="…atlan…")`), the proposal is to delete it and
+     obtain the pyatlan client from the seam in step 1.
+
+  **No pyatlan equivalent — route to residue, do not fabricate a call:** if the
+  endpoint has no pyatlan method (raise it with the SDK team), propose an inline
+  `# conformance: ignore[P019] <reason>` instead, where the justification names
+  the missing surface.  Either way the proposal is recorded for the developer to
+  apply or reject; this area never mutates the working tree.

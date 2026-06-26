@@ -27,6 +27,7 @@ import conformance.suite.checks.logging as logging_checks
 from conformance.suite.checks import (
     actions_pinning,
     bootstrap_drift,
+    client_seam,
     dependency_conformance,
     deprecation,
     dockerfile_conformance,
@@ -71,6 +72,11 @@ _CHECKS: list[CheckRegistration] = [
         series=bootstrap_drift.SERIES,
         discover=bootstrap_drift.discover,
         scan_path=bootstrap_drift.scan_path,
+    ),
+    CheckRegistration(
+        series=client_seam.SERIES,
+        discover=client_seam.discover,
+        scan_path=client_seam.scan_path,
     ),
     CheckRegistration(
         series=error_handling.SERIES,
