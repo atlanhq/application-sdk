@@ -48,7 +48,14 @@ def _blocking() -> PreflightOutput:
     """A failed blocking check → should_block is True."""
     return PreflightOutput(
         status=PreflightStatus.NOT_READY,
-        checks=[PreflightCheck(name="auth", passed=False, blocking=True)],
+        checks=[
+            PreflightCheck(
+                name="auth",
+                passed=False,
+                blocking=True,
+                message="Auth failed: bad creds",
+            )
+        ],
     )
 
 
@@ -94,6 +101,42 @@ class TestRunPreflightGate:
                 await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
         assert excinfo.value.non_retryable is True
         assert excinfo.value.type == "PreflightFailed"
+        # The failed blocking check's reason is surfaced on the abort, not the
+        # generic fallback — so an automated run's failure says why.
+        assert "Auth failed: bad creds" in excinfo.value.message
+
+    async def test_abort_reason_excludes_advisory_messages(self) -> None:
+        # Only blocking-and-failed checks contribute to the surfaced reason;
+        # a failed advisory check must not leak into the abort message.
+        verdict = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(
+                    name="auth", passed=False, blocking=True, message="auth blocked"
+                ),
+                PreflightCheck(
+                    name="version", passed=False, blocking=False, message="old version"
+                ),
+            ],
+        )
+        exec_mock, exec_patch = _exec(verdict)
+        with _patched(True), exec_patch:
+            with pytest.raises(ApplicationError) as excinfo:
+                await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        assert "auth blocked" in excinfo.value.message
+        assert "old version" not in excinfo.value.message
+
+    async def test_abort_reason_falls_back_when_no_check_message(self) -> None:
+        # A blocking failure with no message still aborts with the generic reason.
+        verdict = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[PreflightCheck(name="auth", passed=False, blocking=True)],
+        )
+        exec_mock, exec_patch = _exec(verdict)
+        with _patched(True), exec_patch:
+            with pytest.raises(ApplicationError) as excinfo:
+                await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        assert "aborting before extraction" in excinfo.value.message
 
     async def test_proceeds_on_success(self) -> None:
         exec_mock, exec_patch = _exec(_proceeding())

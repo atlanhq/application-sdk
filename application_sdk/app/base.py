@@ -1543,6 +1543,9 @@ def _collect_interaction_relays(
     return relays
 
 
+_PREFLIGHT_REASON_MAX_LEN = 500
+
+
 async def _run_preflight_gate(
     input_data: Input, app_name: str, entrypoint: str
 ) -> None:
@@ -1609,12 +1612,28 @@ async def _run_preflight_gate(
     if not result.should_block:
         return
 
+    # Surface *why* the gate blocked. The failed blocking checks already carry
+    # the reason (e.g. "Auth failed: ..."); fold them in so an automated run's
+    # Temporal failure shows it without a worker-log dive. Only blocking-and-
+    # failed checks contribute, so the reason matches why it blocked (advisory
+    # failures don't block and shouldn't appear). Capped so a verbose driver
+    # error can't bloat the non-retryable failure payload.
+    reasons = "; ".join(
+        check.message
+        for check in result.checks
+        if check.blocking and not check.passed and check.message
+    )
+    if len(reasons) > _PREFLIGHT_REASON_MAX_LEN:
+        reasons = reasons[:_PREFLIGHT_REASON_MAX_LEN].rstrip() + "..."
+
     from application_sdk.execution.errors import (  # noqa: PLC0415 — circular: execution/__init__ imports app.base
         ApplicationError,
     )
 
     raise ApplicationError(
-        result.message or "Preflight check failed; aborting before extraction",
+        result.message
+        or reasons
+        or "Preflight check failed; aborting before extraction",
         type="PreflightFailed",
         non_retryable=True,
     )
