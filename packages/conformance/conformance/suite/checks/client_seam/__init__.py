@@ -41,7 +41,7 @@ from conformance.suite.checks._ast_common import (
 )
 from conformance.suite.schema.findings import Finding
 
-from ._raw_http_to_atlan import check_p017
+from ._raw_http_to_atlan import check_p019
 
 SERIES = "P"
 
@@ -55,7 +55,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
     except SyntaxError:
         return []
     directives = _parse_directives(text)
-    return check_p017(tree, file, directives)
+    return check_p019(tree, file, directives)
 
 
 def scan_path(path: Path, root: Path) -> list[Finding]:

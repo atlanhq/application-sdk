@@ -14,6 +14,15 @@ what keeps it low-FP: legitimate non-Atlan HTTP (Dapr ``/v1.0``, Segment,
 Prometheus, Temporal metrics, third-party connector APIs, proxy detection,
 ``urllib.parse`` helpers) carries no such marker.  Constructing pyatlan's own
 ``AtlanClient`` / ``AsyncAtlanClient`` is *not* flagged — that is blessed reuse.
+
+Known limitation (intentional at WARN tier): the attribute-method branch
+(``<obj>.get/.post/.request(...)``) fires on *any* receiver once a raw-HTTP
+module is imported somewhere in the file — it does not prove the receiver is an
+HTTP client (provenance is only checked on the client-constructor branch).  The
+static ``/api/meta`` / ``/api/service`` marker requirement is what keeps
+real-world false positives narrow, so this is acceptable for a WARN.  A future
+tightening pass could resolve the receiver to a known HTTP client/session before
+flagging; the seam for that lives in :func:`_url_arg`.
 """
 
 from __future__ import annotations
@@ -118,7 +127,7 @@ def _collect_http_imports(
         if isinstance(node, ast.Import):
             for alias in node.names:
                 name = alias.name
-                if name in _HTTP_MODULES or name in {"httpx", "requests", "aiohttp"}:
+                if name in _HTTP_MODULES:
                     # ``import httpx`` binds ``httpx``; ``import urllib.request``
                     # binds top-level ``urllib`` unless aliased.
                     bound = alias.asname or name.split(".")[0]
@@ -193,7 +202,7 @@ def _ref_is_http_module(value: ast.expr, module_aliases: set[str]) -> bool:
     return False
 
 
-def check_p017(
+def check_p019(
     tree: ast.AST,
     filename: str,
     directives: dict[int, _IgnoreDirective],
