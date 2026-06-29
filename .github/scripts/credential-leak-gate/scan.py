@@ -156,6 +156,13 @@ TEST_PATH = re.compile(
     re.IGNORECASE,
 )
 
+# GitHub Actions file-redirect sinks: `>> "$GITHUB_ENV"` / `>> $GITHUB_OUTPUT`
+# etc. write to process-scoped masked files, not to stdout/logs — not a leak.
+# Used in the shell-echo forward-look (next ≤10 lines) to detect block-redirect
+# patterns like `{ echo "VAR=$SECRET"; } >> "$GITHUB_ENV"` where the redirect
+# is on the closing-brace line, not the echo line itself.
+_GITHUB_REDIRECT = re.compile(r">>\s*\"?\$GITHUB_(ENV|OUTPUT|STATE|PATH)\"?")
+
 # Masking/redaction helpers — if present in the line, the value is already
 # protected before it reaches the sink (FP classes #4 / #5).
 REDACT = re.compile(
@@ -429,8 +436,14 @@ def scan(root: str) -> dict:
                     # --password-stdin`) feeds the value to stdin, not a
                     # log/console sink — the *recommended* way to pass a secret.
                     # Skip when the echo/printf is piped on, or `--*-stdin` used.
+                    #
+                    # Also skip GitHub Actions block-redirect: the closing `}`
+                    # carries `>> "$GITHUB_ENV"` (a masked file sink), not the
+                    # echo line itself — look forward ≤10 lines to catch it.
                     if pattern_id == "shell-echo" and (
-                        "-stdin" in code or re.search(r"(?<!\|)\|(?!\|)", code)
+                        "-stdin" in code
+                        or re.search(r"(?<!\|)\|(?!\|)", code)
+                        or _GITHUB_REDIRECT.search("".join(lines[lineno : lineno + 10]))
                     ):
                         break
                 var_norm = _norm(var)
