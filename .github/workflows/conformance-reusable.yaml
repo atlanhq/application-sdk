@@ -300,6 +300,13 @@ jobs:
         if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && inputs.conformance-ref == '' && matrix.needs_env != 'true'
         env:
           EXCLUDE_PATHS: ${{ matrix.exclude_paths }}
+          # B005/B006 (contract-compat) resolve the committed contract ledger
+          # from this path. Pointing it at the caller's ledger-path lets consumer
+          # apps check against their own repo-root contract_schema.lock.json (and
+          # the SDK against its package-data ledger) instead of the package
+          # default — without it, an app's entrypoint-contract fields always read
+          # as "not recorded" and B006 can never pass.
+          ATLAN_CONTRACT_LEDGER_PATH: ${{ inputs.ledger-path }}
         run: |
           args=(--repo . --series ${{ matrix.series }} --output "${{ matrix.slug }}.sarif")
           if [[ -n "$EXCLUDE_PATHS" ]]; then
@@ -311,6 +318,13 @@ jobs:
         if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && inputs.conformance-ref != '' && matrix.needs_env != 'true'
         env:
           EXCLUDE_PATHS: ${{ matrix.exclude_paths }}
+          # B005/B006 (contract-compat) resolve the committed contract ledger
+          # from this path. Pointing it at the caller's ledger-path lets consumer
+          # apps check against their own repo-root contract_schema.lock.json (and
+          # the SDK against its package-data ledger) instead of the package
+          # default — without it, an app's entrypoint-contract fields always read
+          # as "not recorded" and B006 can never pass.
+          ATLAN_CONTRACT_LEDGER_PATH: ${{ inputs.ledger-path }}
         run: |
           args=(--repo . --series ${{ matrix.series }} --output "${{ matrix.slug }}.sarif")
           if [[ -n "$EXCLUDE_PATHS" ]]; then
@@ -329,6 +343,13 @@ jobs:
         if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && inputs.conformance-ref == '' && matrix.needs_env == 'true'
         env:
           EXCLUDE_PATHS: ${{ matrix.exclude_paths }}
+          # B005/B006 (contract-compat) resolve the committed contract ledger
+          # from this path. Pointing it at the caller's ledger-path lets consumer
+          # apps check against their own repo-root contract_schema.lock.json (and
+          # the SDK against its package-data ledger) instead of the package
+          # default — without it, an app's entrypoint-contract fields always read
+          # as "not recorded" and B006 can never pass.
+          ATLAN_CONTRACT_LEDGER_PATH: ${{ inputs.ledger-path }}
         run: |
           args=(--repo . --series ${{ matrix.series }} --output "${{ matrix.slug }}.sarif")
           if [[ -n "$EXCLUDE_PATHS" ]]; then
@@ -346,6 +367,13 @@ jobs:
         if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && inputs.conformance-ref != '' && matrix.needs_env == 'true'
         env:
           EXCLUDE_PATHS: ${{ matrix.exclude_paths }}
+          # B005/B006 (contract-compat) resolve the committed contract ledger
+          # from this path. Pointing it at the caller's ledger-path lets consumer
+          # apps check against their own repo-root contract_schema.lock.json (and
+          # the SDK against its package-data ledger) instead of the package
+          # default — without it, an app's entrypoint-contract fields always read
+          # as "not recorded" and B006 can never pass.
+          ATLAN_CONTRACT_LEDGER_PATH: ${{ inputs.ledger-path }}
         run: |
           args=(--repo . --series ${{ matrix.series }} --output "${{ matrix.slug }}.sarif")
           if [[ -n "$EXCLUDE_PATHS" ]]; then
