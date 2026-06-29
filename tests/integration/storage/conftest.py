@@ -6,28 +6,34 @@ Local-filesystem tests (``integration`` marker):
 
     uv run pytest tests/integration/storage -m integration -v
 
-Cloud-binding integration tests run against real cloud services and require
-credentials passed via environment variables. All markers are deselected by
-default via ``pyproject.toml``'s ``addopts``.
+Cloud-binding integration tests run against real cloud services using KEYLESS
+auth (GitHub OIDC in CI — no static secrets). The binding carries no embedded
+credentials; the SDK uses the ambient/federated credential the runtime provides
+(the production SDR / customer-infra path). Embedded-credential resolution
+(static keys, account keys, SA-key JSON) is covered hermetically by the
+``test_emulator_*`` tests. All markers are deselected by default via
+``pyproject.toml``'s ``addopts``.
 
-S3 tests (``s3_integration`` marker):
-    export AWS_ACCESS_KEY_ID=<key>
-    export AWS_SECRET_ACCESS_KEY=<secret>
-    export AWS_DEFAULT_REGION=<region>     # default: us-east-1
+S3 tests (``s3_integration`` marker) — ambient AWS credential chain:
+    # ambient AWS creds (OIDC role in CI; locally an env-detectable signal —
+    # exported keys, AWS_PROFILE, or a web-identity token file. A pure IMDS /
+    # SSO-cached-only chain is NOT detected and the tests skip silently) +
     export S3_BUCKET=<existing-bucket>
+    export AWS_DEFAULT_REGION=<region>     # default: us-east-1
     uv run pytest tests/integration/storage/test_binding_s3.py -m s3_integration -v
 
-Azure tests (``azure_integration`` marker):
+Azure tests (``azure_integration`` marker) — Workload Identity Federation:
     export AZURE_STORAGE_ACCOUNT=<account-name>
-    export AZURE_STORAGE_KEY=<account-key>
     export AZURE_STORAGE_CONTAINER=<existing-container>   # default: integ-test
+    export AZURE_CLIENT_ID=<workload-identity-app-id>
+    export AZURE_TENANT_ID=<tenant-id>
+    export AZURE_FEDERATED_TOKEN_FILE=<path-to-oidc-token-file>
     uv run pytest tests/integration/storage/test_binding_azure.py -m azure_integration -v
 
-GCS tests (``gcs_integration`` marker):
+GCS tests (``gcs_integration`` marker) — Application Default Credentials:
     export GCS_BUCKET=<existing-bucket>
     export GCS_PROJECT_ID=<project-id>
-    # For SA key test, also set:
-    export GOOGLE_APPLICATION_CREDENTIALS=<path-to-sa-key.json>
+    export GOOGLE_APPLICATION_CREDENTIALS=<ADC / WIF credential file>
     uv run pytest tests/integration/storage/test_binding_gcs.py -m gcs_integration -v
 """
 
@@ -68,39 +74,61 @@ def staging(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Real AWS S3 connection settings (env-var driven)
+# Real AWS S3 connection settings (env-var driven) — KEYLESS
 #
-# AWS_ACCESS_KEY_ID      — access key (required)
-# AWS_SECRET_ACCESS_KEY  — secret key (required)
-# AWS_DEFAULT_REGION     — region (default: us-east-1)
-# S3_BUCKET              — bucket that already exists (required)
+# S3_BUCKET           — bucket that already exists (required)
+# AWS_DEFAULT_REGION  — region (default: us-east-1)
+# Credentials are ambient (no key in the binding): the CI OIDC role exports the
+# chain; locally, an env-detectable signal (see _AWS_AMBIENT_ENV) must be set.
 # ---------------------------------------------------------------------------
 
-S3_ACCESS_KEY = os.environ.get("AWS_ACCESS_KEY_ID", "")
-S3_SECRET_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY", "")
 S3_REGION = os.environ.get(
     "AWS_DEFAULT_REGION", os.environ.get("AWS_REGION", "us-east-1")
 )
 S3_BUCKET = os.environ.get("S3_BUCKET", "")
 
+# Env-detectable ambient AWS credential signals. The gate skips when none of
+# these is set. NOTE: a pure IMDS (EC2/EKS node-role) or SSO-cached chain leaves
+# no env var, so it is NOT detected here — export creds or set AWS_PROFILE
+# locally. We can't probe the chain at collection time without networking.
+_AWS_AMBIENT_ENV = (
+    "AWS_ACCESS_KEY_ID",  # static / OIDC-exported keys
+    "AWS_PROFILE",  # named profile (SSO / shared config)
+    "AWS_WEB_IDENTITY_TOKEN_FILE",  # IRSA / OIDC web-identity
+    "AWS_ROLE_ARN",
+    "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",  # ECS task role
+    "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+)
+S3_HAS_AMBIENT_CREDS = any(os.environ.get(v) for v in _AWS_AMBIENT_ENV)
+
 # ---------------------------------------------------------------------------
-# Real Azure Blob Storage connection settings (env-var driven)
+# Real Azure Blob Storage connection settings (env-var driven) — KEYLESS
 #
-# AZURE_STORAGE_ACCOUNT  — storage account name (required)
-# AZURE_STORAGE_KEY      — account key (required for accountKey auth tests)
-# AZURE_STORAGE_CONTAINER — container that already exists; default "integ-test"
+# Workload Identity Federation only (the storage account has shared-key access
+# disabled). No account key; obstore exchanges the federated token file using
+# the SP client/tenant id.
+#
+# AZURE_STORAGE_ACCOUNT    — storage account name (required)
+# AZURE_CLIENT_ID          — workload-identity app id (required)
+# AZURE_TENANT_ID          — tenant id (required)
+# AZURE_FEDERATED_TOKEN_FILE — path to the OIDC token file (required)
+# AZURE_STORAGE_CONTAINER  — container that already exists; default "integ-test"
 # ---------------------------------------------------------------------------
 
 AZURE_ACCOUNT = os.environ.get("AZURE_STORAGE_ACCOUNT", "")
-AZURE_KEY = os.environ.get("AZURE_STORAGE_KEY", "")
 AZURE_CONTAINER = os.environ.get("AZURE_STORAGE_CONTAINER", "integ-test")
+AZURE_CLIENT_ID = os.environ.get("AZURE_CLIENT_ID", "")
+AZURE_TENANT_ID = os.environ.get("AZURE_TENANT_ID", "")
+AZURE_FEDERATED_TOKEN_FILE = os.environ.get("AZURE_FEDERATED_TOKEN_FILE", "")
 
 # ---------------------------------------------------------------------------
-# Real GCS connection settings (env-var driven)
+# Real GCS connection settings (env-var driven) — KEYLESS
 #
 # GCS_BUCKET                     — bucket that already exists (required)
 # GCS_PROJECT_ID                 — GCP project ID (required)
-# GOOGLE_APPLICATION_CREDENTIALS — path to SA key JSON (for SA key test)
+# GOOGLE_APPLICATION_CREDENTIALS — path to the ambient ADC file (Workload
+#                                  Identity Federation in CI); obstore / the
+#                                  WIF carve-out resolve creds from it
 # ---------------------------------------------------------------------------
 
 GCS_BUCKET = os.environ.get("GCS_BUCKET", "")
@@ -115,44 +143,77 @@ GOOGLE_APPLICATION_CREDENTIALS = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"
 
 @pytest.fixture(autouse=True)
 def require_s3(request):
-    """Skip tests marked ``s3_integration`` when AWS credentials are absent."""
+    """Skip ``s3_integration`` tests unless keyless AWS creds are present.
+
+    Keyless: the CI OIDC step (configure-aws-credentials) exports the ambient
+    chain (AWS_ACCESS_KEY_ID/SECRET/SESSION_TOKEN); tests omit creds from the
+    binding so obstore uses that chain. We gate on S3_BUCKET + an ambient key.
+    """
     if not request.node.get_closest_marker("s3_integration"):
         return
     missing = []
-    if not S3_ACCESS_KEY:
-        missing.append("AWS_ACCESS_KEY_ID")
-    if not S3_SECRET_KEY:
-        missing.append("AWS_SECRET_ACCESS_KEY")
     if not S3_BUCKET:
         missing.append("S3_BUCKET")
+    if not S3_HAS_AMBIENT_CREDS:  # ambient chain from the OIDC role / local creds
+        missing.append(
+            "ambient AWS credentials "
+            "(AWS_ACCESS_KEY_ID / AWS_PROFILE / AWS_WEB_IDENTITY_TOKEN_FILE / …)"
+        )
     if missing:
         pytest.skip(
-            f"Real AWS credentials required. Missing: {', '.join(missing)}. "
-            "Also set AWS_DEFAULT_REGION and S3_BUCKET."
+            f"Real AWS access required. Missing: {', '.join(missing)}. "
+            "In CI these come from the keyless OIDC role; locally set "
+            "S3_BUCKET + an env-detectable AWS credential signal (exported keys "
+            "or AWS_PROFILE) and AWS_DEFAULT_REGION."
         )
 
 
 @pytest.fixture(autouse=True)
 def require_azure(request):
-    """Skip tests marked ``azure_integration`` when Azure credentials are absent."""
+    """Skip ``azure_integration`` tests unless keyless Azure WI creds are present.
+
+    Keyless: the storage account has shared-key access disabled, so auth is
+    Workload Identity Federation — the SP client/tenant id plus a federated
+    token file (the GitHub OIDC token) that obstore exchanges for an AAD token.
+    """
     if not request.node.get_closest_marker("azure_integration"):
         return
-    if not AZURE_ACCOUNT or not AZURE_KEY:
+    missing = []
+    if not AZURE_ACCOUNT:
+        missing.append("AZURE_STORAGE_ACCOUNT")
+    if not AZURE_CLIENT_ID:
+        missing.append("AZURE_CLIENT_ID")
+    if not AZURE_TENANT_ID:
+        missing.append("AZURE_TENANT_ID")
+    if not AZURE_FEDERATED_TOKEN_FILE or not os.path.exists(AZURE_FEDERATED_TOKEN_FILE):
+        missing.append("AZURE_FEDERATED_TOKEN_FILE (existing)")
+    if missing:
         pytest.skip(
-            "Real Azure credentials required. Set AZURE_STORAGE_ACCOUNT and AZURE_STORAGE_KEY. "
-            "Optionally set AZURE_STORAGE_CONTAINER (default: integ-test)."
+            f"Real Azure (Workload Identity) access required. Missing: {', '.join(missing)}. "
+            "In CI these come from the keyless OIDC federated SP."
         )
 
 
 @pytest.fixture(autouse=True)
 def require_gcs(request):
-    """Skip tests marked ``gcs_integration`` when GCS credentials are absent."""
+    """Skip ``gcs_integration`` tests unless keyless GCS (ADC) access is present.
+
+    Keyless: the CI WIF step (google-github-actions/auth) sets ADC via
+    GOOGLE_APPLICATION_CREDENTIALS; tests omit creds so obstore uses ADC.
+    """
     if not request.node.get_closest_marker("gcs_integration"):
         return
-    if not GCS_BUCKET or not GCS_PROJECT_ID:
+    missing = []
+    if not GCS_BUCKET:
+        missing.append("GCS_BUCKET")
+    if not GCS_PROJECT_ID:
+        missing.append("GCS_PROJECT_ID")
+    if not GOOGLE_APPLICATION_CREDENTIALS:  # ADC file from the WIF step
+        missing.append("GOOGLE_APPLICATION_CREDENTIALS (ADC)")
+    if missing:
         pytest.skip(
-            "Real GCS credentials required. Set GCS_BUCKET and GCS_PROJECT_ID. "
-            "Also set GOOGLE_APPLICATION_CREDENTIALS for service-account-key tests."
+            f"Real GCS access required. Missing: {', '.join(missing)}. "
+            "In CI these come from the keyless WIF auth step."
         )
 
 

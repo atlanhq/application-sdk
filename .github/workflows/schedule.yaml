@@ -29,3 +29,65 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: "./.github/actions/trivy"
+
+  # Nightly real-cloud storage integration tests against main (no PR context →
+  # no label gate). Same suites as the label-gated job in pull_request.yaml;
+  # conftest skips any cloud whose creds aren't set, so this stays green until
+  # all nine secrets are registered.
+  storage-integration:
+    name: Storage Integration Tests — nightly (S3 / Azure / GCS)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Keyless: GitHub OIDC for all three clouds (no static secrets). Overrides the
+    # workflow-level permissions to grant id-token for the OIDC exchange.
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: "./.github/actions/setup-deps"
+      - name: AWS — assume the integration role (OIDC)
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          role-to-assume: ${{ vars.AWS_INTEG_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_INTEG_REGION }}
+      - name: Azure — login (OIDC federated, no secret)
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        with:
+          client-id: ${{ vars.AZURE_INTEG_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_INTEG_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_INTEG_SUBSCRIPTION_ID }}
+      - name: GCS — Workload Identity Federation (sets ADC)
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_INTEG_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_INTEG_SA }}
+      - name: Azure — write the federated token file for obstore WI auth
+        run: |
+          set -euo pipefail
+          # Mint into a throwaway file and only publish it on success, so a failed
+          # mint/parse can't leave a zero-byte token that yields an opaque AAD
+          # error downstream instead of a clear "OIDC mint failed". --fail-with-body
+          # makes curl exit non-zero on a non-2xx (still printing the body to debug).
+          tmp="$(mktemp)"
+          curl --fail-with-body -sS \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" \
+            | python3 -c 'import sys,json;sys.stdout.write(json.load(sys.stdin)["value"])' \
+            > "$tmp"
+          mv "$tmp" "${RUNNER_TEMP}/azure-federated-token"
+      - name: Run storage integration tests (keyless)
+        env:
+          S3_BUCKET: ${{ vars.S3_INTEG_BUCKET }}
+          AWS_DEFAULT_REGION: ${{ vars.AWS_INTEG_REGION }}
+          AZURE_STORAGE_ACCOUNT: ${{ vars.AZURE_INTEG_STORAGE_ACCOUNT }}
+          AZURE_STORAGE_CONTAINER: ${{ vars.AZURE_INTEG_CONTAINER }}
+          AZURE_CLIENT_ID: ${{ vars.AZURE_INTEG_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_INTEG_TENANT_ID }}
+          AZURE_FEDERATED_TOKEN_FILE: ${{ runner.temp }}/azure-federated-token
+          GCS_BUCKET: ${{ vars.GCS_INTEG_BUCKET }}
+          GCS_PROJECT_ID: ${{ vars.GCS_INTEG_PROJECT_ID }}
+        run: |
+          uv run pytest tests/integration/storage/ \
+            -m "s3_integration or azure_integration or gcs_integration" \
+            -v --timeout=60
