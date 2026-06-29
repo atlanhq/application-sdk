@@ -12,6 +12,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 from loguru import logger
 
+from application_sdk.constants import APPLICATION_NAME, DEPLOYMENT_NAME
 from application_sdk.observability.context import (
     ExecutionContext,
     set_execution_context,
@@ -83,8 +84,6 @@ def logger_adapter():
 
 def test_process_without_context():
     """Test process() method without any context."""
-    from application_sdk.constants import APPLICATION_NAME, DEPLOYMENT_NAME
-
     with create_logger_adapter() as logger_adapter:
         msg, kwargs = logger_adapter.process("Test message", {})
         assert "logger_name" in kwargs
@@ -1960,8 +1959,6 @@ class TestInterceptHandlerStdlibBridge:
         logs (httpx, boto3, …) are attributable in OTLP — this is the
         :issue:`BLDX-1297` regression: 17.6M log rows landed in central LH
         with ``app_name=None`` because the bridge skipped enrichment."""
-        from application_sdk.constants import APPLICATION_NAME
-
         bind_kwargs = self._emit()
 
         assert bind_kwargs["app_name"] == APPLICATION_NAME
@@ -1970,8 +1967,6 @@ class TestInterceptHandlerStdlibBridge:
         """Stdlib bridge must inject ``deployment_name`` so SDR / multi-deploy
         logs are attributable to a specific deployment instance in central LH
         (``app_name`` only identifies the component, not the deployment)."""
-        from application_sdk.constants import DEPLOYMENT_NAME
-
         bind_kwargs = self._emit()
 
         assert bind_kwargs["deployment_name"] == DEPLOYMENT_NAME
