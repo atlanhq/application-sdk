@@ -16,6 +16,8 @@ Currently implemented:
   asset models; prefer the v9 ``asset.to_nested_bytes()`` API.
 * ``O003`` UntypedAssetMapperReturn — a function that builds a pyatlan asset and
   returns it but has no return annotation.
+* ``O004`` LegacyPyatlanAssetImport — app code importing the legacy
+  ``pyatlan.model.assets`` package (rather than ``pyatlan_v9.model.assets``).
 
 Inline suppression
 ------------------
@@ -52,6 +54,7 @@ from conformance.suite.checks._ast_common import (
 from conformance.suite.schema.findings import Finding
 
 from ._asset_mapper import check_o002, check_o003
+from ._pyatlan_v9 import check_o004
 from ._stdlib_json import OrjsonOverStdlibJsonChecker, _collect_json_bindings
 
 SERIES = "O"
@@ -86,6 +89,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
         checker._findings
         + check_o002(tree, file, directives)
         + check_o003(tree, file, directives)
+        + check_o004(tree, file, directives)
     )
 
 

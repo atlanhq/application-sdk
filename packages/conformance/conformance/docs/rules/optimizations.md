@@ -5,7 +5,7 @@
 
 # Optimisation / Recommendation Rules (O-series)
 
-**3 rules** · Checker: `suite.checks.optimizations` (AST-based)
+**4 rules** · Checker: `suite.checks.optimizations` (AST-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -26,6 +26,7 @@ reassigned.
 | [O001](#o001) | `OrjsonOverStdlibJson` | `warn` | `both` | `canonical-dependency` | — | 0.3.0 |
 | [O002](#o002) | `LegacyAssetSerialization` | `warn` | `app` | `asset-mapper` | — | 0.8.0 |
 | [O003](#o003) | `UntypedAssetMapperReturn` | `warn` | `app` | `asset-mapper` | — | 0.8.0 |
+| [O004](#o004) | `LegacyPyatlanAssetImport` | `warn` | `app` | `asset-mapper` | — | 0.8.0 |
 
 ---
 
@@ -106,5 +107,39 @@ Table(...); ... return asset`), not just a `map_` name — so a helper that buil
 asset as a side effect and returns something else (e.g. `return record.id`) is not
 flagged, and the suggested annotation always matches the real return.  Suppress with `#
 conformance: ignore[O003] <reason>` when an untyped return is intentional.
+
+---
+
+## O004 — `LegacyPyatlanAssetImport` {#o004}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `asset-mapper` · **Autofixable:** — · **Since:** 0.8.0
+
+> Imports pyatlan.model.assets (non-v9) — prefer pyatlan_v9.model.assets
+
+**Rationale:** pyatlan_v9 is the SDK's go-forward asset surface for the asset-mapper pattern; the
+legacy pyatlan.model.assets classes are the memory-heavy DataFrame/transformer-era
+serialization path, kept only for connectors still on the built-in AtlasTransformer
+(which B001 steers off). pyatlan_v9 ships inside the existing pyatlan>=9 dependency, so
+the switch adds nothing to resolve. A below-the-bar recommendation (O-series, WARN): the
+v9 models differ in attributes and serialization (to_nested_bytes vs .dict()), so each
+site needs human judgement — never a blind name swap.
+
+Flags app code that imports asset model classes from the legacy `pyatlan.model.assets`
+package, in any of the three import forms: `from pyatlan.model.assets import X`, `import
+pyatlan.model.assets`, or `from pyatlan.model import assets`.  Detection is
+import-anchored (an asset class is only imported in order to construct it), so the rare
+fully-qualified `pyatlan.model.assets.X(...)` form with no matching import is out of
+scope.  New connectors should build assets from `pyatlan_v9.model.assets` — the
+optimized v9 surface the asset-mapper pattern is built on (BLDX-1492; see
+`docs/guides/sql-application-guide.md` and `docs/upgrade-guide-v3.md`).
+
+Scope is deliberately narrow — only `pyatlan.model.assets` is matched, never the rest of
+`pyatlan`: enums and helpers that legitimately have no v9 equivalent (e.g. `from
+pyatlan.model.enums import AtlanConnectorType`) are out of scope.
+
+NOT autofixable: the v9 models are not a drop-in rename — attribute names and the
+serialization API differ (use `asset.to_nested_bytes()` rather than `.dict()`), so each
+construction site needs review. Suppress with `# conformance: ignore[O004] <reason>`
+when a connector is intentionally pinned to the legacy `AtlasTransformer` surface.
 
 ---

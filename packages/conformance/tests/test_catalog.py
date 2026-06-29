@@ -135,7 +135,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # workers or servers (BLDX-1411).
     # I001–I005: Dockerfile conformance (SDK builds the base image, not consuming it).
     # B001: consuming a deprecated SDK symbol (BLDX-1418).
-    # P025/O002/O003: asset-mapper usage — connectors build assets with pyatlan_v9,
+    # O002/O003/O004: asset-mapper usage — connectors build assets with pyatlan_v9,
     # serialize with to_nested_bytes, and type their mapper returns (BLDX-1492); the
     # SDK is the framework, not a connector.
     assert app_scoped == {
@@ -161,9 +161,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P016",
         "P017",
         "P018",
-        "P025",
         "O002",
         "O003",
+        "O004",
         "I001",
         "I002",
         "I003",
@@ -280,8 +280,7 @@ def test_catalog_p_series_present() -> None:
     (BLDX-1430).  P020–P024 are the determinism / async-correctness rules:
     non-deterministic primitives, side-effect I/O, un-awaited coroutines,
     blocking calls in async defs, and pyatlan sync ``AtlanClient`` use.
-    P025 is the asset-mapper rule — build assets from pyatlan_v9, not the legacy
-    pyatlan.model.assets (BLDX-1492).  A stray or renumbered P-id would slip past
+    A stray or renumbered P-id would slip past
     a subset check while breaking fleet-wide ``# conformance: ignore[Pxxx]``
     suppressions.
     """
@@ -312,7 +311,6 @@ def test_catalog_p_series_present() -> None:
         "P022",
         "P023",
         "P024",
-        "P025",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
@@ -324,7 +322,7 @@ def test_catalog_o_series_present() -> None:
     """The O-series optimisation rules are all present."""
     rules = load_catalog()
     o_ids = {r.id for r in rules if r.id.startswith("O")}
-    expected = {"O001", "O002", "O003"}
+    expected = {"O001", "O002", "O003", "O004"}
     missing = expected - o_ids
     assert not missing, f"Missing O-series rules: {missing}"
 

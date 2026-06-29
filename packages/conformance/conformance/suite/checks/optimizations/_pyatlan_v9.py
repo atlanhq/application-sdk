@@ -1,6 +1,6 @@
-"""P025 LegacyPyatlanAssetImport — flag non-v9 ``pyatlan.model.assets`` imports.
+"""O004 LegacyPyatlanAssetImport — flag non-v9 ``pyatlan.model.assets`` imports.
 
-New connectors must build assets from ``pyatlan_v9.model.assets`` (the optimized
+New connectors should build assets from ``pyatlan_v9.model.assets`` (the optimized
 v9 surface the asset-mapper pattern is built on, BLDX-1492).  The legacy
 ``pyatlan.model.assets`` classes are the transformer-era serialization path,
 retained only for connectors still on the built-in ``AtlasTransformer``.
@@ -25,10 +25,10 @@ from conformance.suite.schema.findings import Finding
 
 _ASSETS_MODULE = "pyatlan.model.assets"
 _MESSAGE = (
-    "Imports legacy 'pyatlan.model.assets' — build assets from "
-    "'pyatlan_v9.model.assets' instead (the optimized v9 surface the asset-mapper "
-    "pattern uses; ships inside the existing pyatlan>=9 dependency). Not a drop-in "
-    "rename: v9 attribute names and serialization (asset.to_nested_bytes()) differ."
+    "Imports legacy 'pyatlan.model.assets' — prefer 'pyatlan_v9.model.assets' "
+    "(the optimized v9 surface the asset-mapper pattern uses; ships inside the "
+    "existing pyatlan>=9 dependency). Not a drop-in rename: v9 attribute names and "
+    "serialization (asset.to_nested_bytes()) differ."
 )
 
 
@@ -39,12 +39,12 @@ def _is_legacy_assets_module(module: str | None) -> bool:
     )
 
 
-def check_p025(
+def check_o004(
     tree: ast.AST,
     filename: str,
     directives: dict[int, _IgnoreDirective],
 ) -> list[Finding]:
-    """Emit P025 for any import of legacy ``pyatlan.model.assets``."""
+    """Emit O004 for any import of legacy ``pyatlan.model.assets``."""
     findings: list[Finding] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
@@ -57,7 +57,7 @@ def check_p025(
                 findings.append(
                     make_finding(
                         filename=filename,
-                        rule_id="P025",
+                        rule_id="O004",
                         node=node,
                         message=_MESSAGE,
                         directives=directives,
@@ -70,7 +70,7 @@ def check_p025(
                     findings.append(
                         make_finding(
                             filename=filename,
-                            rule_id="P025",
+                            rule_id="O004",
                             node=node,
                             message=_MESSAGE,
                             directives=directives,
