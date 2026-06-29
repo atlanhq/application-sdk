@@ -133,6 +133,8 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # methods and no contract to drift from (BLDX-1425).
     # P017/P018: apps must boot through the SDK launcher, not hand-roll
     # workers or servers (BLDX-1411).
+    # P025: app-name alignment — only apps have an atlan.yaml and .env.example;
+    # the SDK has neither, so this check is meaningless there (BLDX-1491).
     # I001–I005: Dockerfile conformance (SDK builds the base image, not consuming it).
     # B001: consuming a deprecated SDK symbol (BLDX-1418).
     # O002/O003/O004: asset-mapper usage — connectors build assets with pyatlan_v9,
@@ -161,6 +163,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P016",
         "P017",
         "P018",
+        "P025",
         "O002",
         "O003",
         "O004",
@@ -269,20 +272,27 @@ def test_catalog_d_series_present() -> None:
 
 
 def test_catalog_p_series_present() -> None:
-    """The P-series prescription rules are exactly P001–P024.
+    """The P-series prescription rules are exactly P001–P025.
 
-    Strict equality (not just not-missing): P004–P007 are the orchestration-seam
-    rules (BLDX-1417); P008–P012 are the storage-seam rules (BLDX-1398);
-    P013–P015 are the typed-contract-boundary rules (BLDX-1413);
-    P016 is the entry-point contract/code alignment rule (BLDX-1425);
-    P017–P018 are the entrypoint-conformance rules (BLDX-1411);
-    P019 is the client-seam rule — raw HTTP to Atlan instead of pyatlan
-    (BLDX-1430).  P020–P024 are the determinism / async-correctness rules:
-    non-deterministic primitives, side-effect I/O, un-awaited coroutines,
-    blocking calls in async defs, and pyatlan sync ``AtlanClient`` use.
-    A stray or renumbered P-id would slip past
-    a subset check while breaking fleet-wide ``# conformance: ignore[Pxxx]``
-    suppressions.
+        Strict equality (not just not-missing): P004–P007 are the orchestration-seam
+        rules (BLDX-1417); P008–P012 are the storage-seam rules (BLDX-1398);
+        P013–P015 are the typed-contract-boundary rules (BLDX-1413);
+        P016 is the entry-point contract/code alignment rule (BLDX-1425);
+        P017–P018 are the entrypoint-conformance rules (BLDX-1411);
+        P019 is the client-seam rule — raw HTTP to Atlan instead of pyatlan
+        (BLDX-1430).  P020–P024 are the determinism / async-correctness rules:
+        non-deterministic primitives, side-effect I/O, un-awaited coroutines,
+        blocking calls in async defs, and pyatlan sync ``AtlanClient`` use.
+    <<<<<<< HEAD
+        A stray or renumbered P-id would slip past
+        a subset check while breaking fleet-wide ``# conformance: ignore[Pxxx]``
+        suppressions.
+    =======
+        P025 is the app-name alignment rule — code name, atlan.yaml name:, and
+        .env.example ATLAN_APPLICATION_NAME must agree (BLDX-1491).
+        A stray or renumbered P-id would slip past a subset check while
+        breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
+    >>>>>>> origin/main
     """
     rules = load_catalog()
     p_ids = {r.id for r in rules if r.id.startswith("P")}
@@ -311,6 +321,7 @@ def test_catalog_p_series_present() -> None:
         "P022",
         "P023",
         "P024",
+        "P025",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"

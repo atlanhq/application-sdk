@@ -519,14 +519,16 @@ class BaseE2ETest:
         return dag
 
     def _apply_mustache_subs(self, obj: Any, subs: dict) -> Any:
-        """Recursively replace exact-match ``{{...}}`` strings."""
-        if isinstance(obj, dict):
-            return {k: self._apply_mustache_subs(v, subs) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [self._apply_mustache_subs(x, subs) for x in obj]
-        if isinstance(obj, str) and obj in subs:
-            return subs[obj]
-        return obj
+        """Recursively replace exact-match ``{{...}}`` strings.
+
+        Delegates to the shared walker (``application_sdk.testing._mustache``) so
+        the e2e and SDR harnesses share one implementation and cannot drift.
+        """
+        from application_sdk.testing._mustache import (  # noqa: PLC0415
+            apply_mustache_subs,
+        )
+
+        return apply_mustache_subs(obj, subs)
 
     # ------------------------------------------------------------------
     # The actual flow

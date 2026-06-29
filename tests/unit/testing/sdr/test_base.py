@@ -2,13 +2,53 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 from unittest.mock import MagicMock, patch
 
+import orjson
 import pytest
 
-from application_sdk.testing.integration import Scenario
+from application_sdk.testing.integration import BaseIntegrationTest, Scenario
 from application_sdk.testing.sdr import BaseSDRIntegrationTest
+
+
+def _write_manifest(tmp_path, extract_args: dict[str, Any]) -> str:
+    """Write a minimal AE manifest.json whose extract node carries ``extract_args``."""
+    manifest = {
+        "execution_mode": "automation-engine",
+        "dag": {
+            "extract": {
+                "inputs": {
+                    "workflow_type": "MSSQLMetadataExtractionWorkflow",
+                    "args": extract_args,
+                }
+            }
+        },
+    }
+    path = tmp_path / "manifest.json"
+    path.write_bytes(orjson.dumps(manifest))
+    return str(path)
+
+
+# Extract args shaped like a real manifest, WITH the agent_json slot (post-#177).
+_ARGS_WITH_AGENT_JSON: dict[str, Any] = {
+    "connection": "{{connection}}",
+    "credential_guid": "{{credential-guid}}",
+    "extraction_method": "{{extraction-method}}",
+    "agent_json": "{{agent-json}}",
+    "include_filter": "{{include-filter}}",
+    "exclude_filter": "{{exclude-filter}}",
+    "preflight_check": "{{preflight-check}}",
+}
+
+# Same, but MISSING the agent_json slot — the atlan-mssql-app#177 bug.
+_ARGS_MISSING_AGENT_JSON: dict[str, Any] = {
+    "connection": "{{connection}}",
+    "credential_guid": "{{credential-guid}}",
+    "extraction_method": "{{extraction-method}}",
+    "include_filter": "{{include-filter}}",
+    "exclude_filter": "{{exclude-filter}}",
+}
 
 
 @pytest.fixture
@@ -27,7 +67,7 @@ def auth_scenario() -> Scenario:
 
 
 class _Suite(BaseSDRIntegrationTest):
-    agent_spec_template: Dict[str, Any] = {
+    agent_spec_template: dict[str, Any] = {
         "agent-name": "test-agent",
         "secret-path": "test-credentials",
         "auth-type": "basic",
@@ -74,6 +114,241 @@ def test_empty_agent_spec_disables_routing(workflow_scenario: Scenario) -> None:
     assert "extraction_method" not in args
 
 
+def test_manifest_driven_args_built_from_extract_node(
+    tmp_path, workflow_scenario: Scenario
+) -> None:
+    """With manifest_path set, workflow input is derived from the manifest's
+    extract args (substituted), not hand-written."""
+
+    class _ManifestSuite(BaseSDRIntegrationTest):
+        manifest_path = _write_manifest(tmp_path, dict(_ARGS_WITH_AGENT_JSON))
+        agent_spec_template = {
+            "agent-name": "mssql-ci-agent",
+            "secret-path": "mssql-credentials",
+            "auth-type": "basic",
+        }
+        default_connection = {
+            "typeName": "Connection",
+            "attributes": {"qualifiedName": "default/mssql/1700000000"},
+        }
+        scenarios = []
+
+    args = _ManifestSuite()._build_scenario_args(workflow_scenario)
+    # Manifest declared the slot → agent_json is substituted in.
+    assert args["agent_json"] == _ManifestSuite.agent_spec_template
+    assert args["extraction_method"] == "agent"
+    assert args["connection"] == _ManifestSuite.default_connection
+    assert args["preflight_check"] is True
+    # The manifest's sibling inputs.workflow_type (the AE workflow-type slug) must
+    # NOT leak into the start body — it's not an SDK entrypoint name and the start
+    # handler would 400 on it. Entrypoint stays class-controlled (unset here).
+    assert "workflow_type" not in args
+
+
+def test_manifest_workflow_type_is_class_controlled_not_from_manifest(
+    tmp_path, workflow_scenario: Scenario
+) -> None:
+    """Only self.workflow_type (an SDK entrypoint name) sets the start-body
+    workflow_type; the manifest's AE slug is never used."""
+
+    class _EntrypointSuite(BaseSDRIntegrationTest):
+        manifest_path = _write_manifest(tmp_path, dict(_ARGS_WITH_AGENT_JSON))
+        agent_spec_template = {"agent-name": "a", "secret-path": "p"}
+        workflow_type = "ecc"  # an SDK entrypoint name, not the AE slug
+        scenarios = []
+
+    args = _EntrypointSuite()._build_scenario_args(workflow_scenario)
+    assert args["workflow_type"] == "ecc"
+
+
+def test_manifest_filters_come_from_per_scenario_metadata(tmp_path) -> None:
+    """Connector-specific filters are supplied per-scenario via metadata (the base
+    does NOT enumerate them); a placeholder no scenario covers defaults to "" —
+    never a literal {{...}}."""
+
+    class _FilterSuite(BaseSDRIntegrationTest):
+        manifest_path = _write_manifest(tmp_path, dict(_ARGS_WITH_AGENT_JSON))
+        agent_spec_template = {"agent-name": "a", "secret-path": "p"}
+        scenarios = []
+
+    with_meta = Scenario(
+        name="wf",
+        api="workflow",
+        assert_that={"success": lambda v: True},
+        workflow_timeout=300,
+        metadata={"include-filter": '{"^db$":[]}', "exclude-filter": "{}"},
+    )
+    args = _FilterSuite()._build_scenario_args(with_meta)
+    assert args["include_filter"] == '{"^db$":[]}'  # from scenario metadata
+    assert args["exclude_filter"] == "{}"
+
+    # No metadata for the filter → defaults to "" (extract-everything), and the
+    # placeholder is not left as a literal "{{include-filter}}".
+    without_meta = Scenario(
+        name="wf2",
+        api="workflow",
+        assert_that={"success": lambda v: True},
+        workflow_timeout=300,
+    )
+    args2 = _FilterSuite()._build_scenario_args(without_meta)
+    assert args2["include_filter"] == ""
+    assert args2["exclude_filter"] == ""
+
+
+def test_manifest_warns_on_unmatched_metadata_key_and_uncovered_placeholder(
+    tmp_path,
+) -> None:
+    """A metadata key matching no placeholder (hyphen vs underscore) and a
+    placeholder no value covers are both defaulted to "" but WARNED — so a
+    missing required input / misspelt metadata key is never silently masked."""
+    extract_args = {
+        "agent_json": "{{agent-json}}",
+        "connection": "{{connection}}",
+        "include_filter": "{{include_filter}}",  # underscore — won't match hyphen metadata
+        "target": "{{target}}",  # non-filter slot, no value anywhere
+    }
+
+    class _Suite(BaseSDRIntegrationTest):
+        manifest_path = _write_manifest(tmp_path, extract_args)
+        agent_spec_template = {"agent-name": "a", "secret-path": "p"}
+        scenarios = []
+
+    sc = Scenario(
+        name="wf",
+        api="workflow",
+        assert_that={"success": lambda v: True},
+        workflow_timeout=300,
+        metadata={
+            "include-filter": '{"^db$":[]}'
+        },  # hyphen — mismatches {{include_filter}}
+    )
+    with patch("application_sdk.testing.sdr.base.logger") as mock_logger:
+        args = _Suite()._build_scenario_args(sc)
+
+    # Unresolved placeholders defaulted to "" — no literal {{...}} leaks through.
+    assert args["include_filter"] == ""
+    assert args["target"] == ""
+    # ...but both problems were warned, not silently masked.
+    warned = " ".join(str(c.args) for c in mock_logger.warning.call_args_list)
+    assert "matches no" in warned  # the hyphen-vs-underscore metadata mismatch
+    assert "{{target}}" in warned  # the uncovered non-filter slot
+
+
+def test_manifest_metadata_collision_with_universal_slot_warns(tmp_path) -> None:
+    """A scenario metadata key colliding with a reserved universal SDR slot (e.g.
+    ``connection``) is ignored — the universal value wins — and the silent drop is
+    WARNED rather than masked."""
+
+    class _Suite(BaseSDRIntegrationTest):
+        manifest_path = _write_manifest(
+            tmp_path,
+            {"connection": "{{connection}}", "agent_json": "{{agent-json}}"},
+        )
+        agent_spec_template = {"agent-name": "a", "secret-path": "p"}
+        default_connection = {
+            "typeName": "Connection",
+            "attributes": {"qualifiedName": "default/x/1"},
+        }
+        scenarios = []
+
+    sc = Scenario(
+        name="wf",
+        api="workflow",
+        assert_that={"success": lambda v: True},
+        workflow_timeout=300,
+        metadata={"connection": "SHOULD-BE-IGNORED"},
+    )
+    with patch("application_sdk.testing.sdr.base.logger") as mock_logger:
+        args = _Suite()._build_scenario_args(sc)
+
+    # The universal value wins; the colliding metadata is NOT substituted.
+    assert args["connection"] == _Suite.default_connection
+    warned = " ".join(str(c.args) for c in mock_logger.warning.call_args_list)
+    assert "collides with a reserved universal SDR slot" in warned
+
+
+def test_manifest_without_agent_spec_warns_and_falls_back_to_direct(tmp_path) -> None:
+    """manifest_path set + empty agent_spec_template → extraction-method falls back
+    to 'direct' (no agent spec injected) — warned, not silent."""
+
+    class _Suite(BaseSDRIntegrationTest):
+        manifest_path = _write_manifest(
+            tmp_path,
+            {
+                "extraction_method": "{{extraction-method}}",
+                "agent_json": "{{agent-json}}",
+            },
+        )
+        agent_spec_template = {}  # empty → degrades to direct
+        scenarios = []
+
+    sc = Scenario(
+        name="wf",
+        api="workflow",
+        assert_that={"success": lambda v: True},
+        workflow_timeout=300,
+    )
+    with patch("application_sdk.testing.sdr.base.logger") as mock_logger:
+        args = _Suite()._build_scenario_args(sc)
+
+    assert args["extraction_method"] == "direct"
+    warned = " ".join(str(c.args) for c in mock_logger.warning.call_args_list)
+    assert "falls back to 'direct'" in warned
+
+
+def test_manifest_missing_agent_json_slot_is_not_injected(
+    tmp_path, workflow_scenario: Scenario
+) -> None:
+    """The whole point (atlan-mssql-app#177): a manifest with no agent_json slot
+    must produce a workflow input WITHOUT agent_json — so the agent run fails and
+    the e2e surfaces the gap — unlike the legacy path that injected it regardless."""
+
+    class _BadManifestSuite(BaseSDRIntegrationTest):
+        manifest_path = _write_manifest(tmp_path, dict(_ARGS_MISSING_AGENT_JSON))
+        agent_spec_template = {"agent-name": "a", "secret-path": "p"}
+        scenarios = []
+
+    args = _BadManifestSuite()._build_scenario_args(workflow_scenario)
+    assert (
+        "agent_json" not in args
+    ), "manifest had no agent_json slot — the derived input must not contain it"
+    # Slots the manifest DID declare are still substituted.
+    assert args["extraction_method"] == "agent"
+
+
+def test_manifest_missing_file_raises(workflow_scenario: Scenario) -> None:
+    class _MissingManifestSuite(BaseSDRIntegrationTest):
+        manifest_path = "/nonexistent/manifest.json"
+        agent_spec_template = {"agent-name": "a"}
+        scenarios = []
+
+    with pytest.raises(FileNotFoundError, match="SDR manifest not found"):
+        _MissingManifestSuite()._build_scenario_args(workflow_scenario)
+
+
+def test_manifest_without_extract_args_raises(
+    tmp_path, workflow_scenario: Scenario
+) -> None:
+    """A manifest whose extract node has no ``args`` object raises ValueError
+    (rather than silently deriving an empty input). Pins the second raise branch
+    of ``_manifest_extract_inputs`` (the first, FileNotFoundError, is covered above).
+    """
+    manifest = {
+        "execution_mode": "automation-engine",
+        "dag": {"extract": {"inputs": {"workflow_type": "X"}}},  # no `args`
+    }
+    path = tmp_path / "manifest.json"
+    path.write_bytes(orjson.dumps(manifest))
+
+    class _NoArgsManifestSuite(BaseSDRIntegrationTest):
+        manifest_path = str(path)
+        agent_spec_template = {"agent-name": "a"}
+        scenarios = []
+
+    with pytest.raises(ValueError, match="dag.extract.inputs.args"):
+        _NoArgsManifestSuite()._build_scenario_args(workflow_scenario)
+
+
 def test_execute_scenario_polls_workflow_completion(
     workflow_scenario: Scenario,
 ) -> None:
@@ -82,7 +357,7 @@ def test_execute_scenario_polls_workflow_completion(
 
     with (
         patch.object(
-            BaseSDRIntegrationTest.__bases__[0],
+            BaseIntegrationTest,
             "_execute_scenario",
             return_value=MagicMock(success=True, response=fake_response),
         ),
@@ -96,7 +371,7 @@ def test_execute_scenario_skips_polling_for_auth(auth_scenario: Scenario) -> Non
     suite = _Suite()
     with (
         patch.object(
-            BaseSDRIntegrationTest.__bases__[0],
+            BaseIntegrationTest,
             "_execute_scenario",
             return_value=MagicMock(success=True, response={"data": {}}),
         ),
@@ -120,7 +395,7 @@ def test_execute_scenario_skips_polling_when_expected_data_set(tmp_path) -> None
     suite = _Suite()
     with (
         patch.object(
-            BaseSDRIntegrationTest.__bases__[0],
+            BaseIntegrationTest,
             "_execute_scenario",
             return_value=MagicMock(success=True, response={"data": {}}),
         ),
