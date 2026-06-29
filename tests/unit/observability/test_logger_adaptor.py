@@ -484,6 +484,131 @@ class TestFlushRecordsSinglePass:
                     await adapter._flush_records([])
         mock_upload.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_out_of_order_records_writes_second_file_for_same_hour(
+        self, tmp_path
+    ):
+        """Out-of-order records (A, B, A) produce a second file for hour A.
+
+        The docstring promises that a rare cross-thread reorder causes a second
+        uniquely-named ``.json.gz`` for the reappearing partition.  Sequence the
+        records as [hour10, hour11, hour10] and assert three distinct upload calls
+        with two calls targeting hour10 and one targeting hour11, all with distinct
+        local file paths.
+        """
+        ts_h10a = datetime(2025, 6, 15, 10, 30, 0).timestamp()
+        ts_h11 = datetime(2025, 6, 15, 11, 10, 0).timestamp()
+        ts_h10b = datetime(2025, 6, 15, 10, 55, 0).timestamp()
+        records = [
+            self._make_record(ts_h10a, "h10-first"),
+            self._make_record(ts_h11, "h11"),
+            self._make_record(ts_h10b, "h10-second"),
+        ]
+        uploaded: list[tuple[str, str]] = []
+
+        async def _fake_upload(local_path: str, remote_key: str) -> None:
+            uploaded.append((local_path, remote_key))
+
+        with create_logger_adapter() as adapter:
+            adapter.data_dir = str(tmp_path)
+            with (
+                mock.patch.object(
+                    adapter, "_upload_and_delete", side_effect=_fake_upload
+                ),
+                mock.patch(
+                    "application_sdk.observability.observability.ENABLE_OBSERVABILITY_STORE_SINK",
+                    True,
+                ),
+            ):
+                await adapter._flush_records(records)
+
+        assert len(uploaded) == 3, f"Expected 3 uploads, got {len(uploaded)}"
+        remote_keys = [u[1] for u in uploaded]
+        local_paths = [u[0] for u in uploaded]
+        # Two uploads for hour10, one for hour11
+        assert sum(1 for k in remote_keys if "hour=10" in k) == 2, remote_keys
+        assert sum(1 for k in remote_keys if "hour=11" in k) == 1, remote_keys
+        # All three local paths must be distinct (lexi-sortable unique names)
+        assert len(set(local_paths)) == 3, local_paths
+
+
+class TestLogSinkFanOut:
+    """Tests for _log_sink fan-out to both object-store and OTLP targets."""
+
+    @pytest.mark.asyncio
+    async def test_log_sink_calls_both_targets_when_both_active(self):
+        """_log_sink builds the record dict once and fans to add_record + _send_to_otel.
+
+        When both the object-store sink and OTLP are enabled, each should receive
+        exactly one call — and _make_log_record_dict is only invoked once (not twice
+        as would happen with two independent sinks).
+        """
+        test_message = mock.MagicMock()
+        level_mock = mock.MagicMock()
+        level_mock.name = "INFO"
+        test_message.record = {
+            "time": datetime.now(),
+            "level": level_mock,
+            "extra": {"logger_name": "test"},
+            "message": "fan-out test",
+            "file": mock.MagicMock(path="test.py"),
+            "line": 1,
+            "function": "fn",
+        }
+
+        with create_logger_adapter() as adapter:
+            # Simulate OTLP being configured by setting logger_provider.
+            adapter.logger_provider = mock.MagicMock()
+
+            with (
+                mock.patch.object(adapter, "add_record") as mock_add_record,
+                mock.patch.object(adapter, "_send_to_otel") as mock_send_otel,
+                mock.patch(
+                    "application_sdk.observability.logger_adaptor.ENABLE_OBSERVABILITY_STORE_SINK",
+                    True,
+                ),
+            ):
+                await adapter._log_sink(test_message)
+
+        mock_add_record.assert_called_once()
+        mock_send_otel.assert_called_once()
+        # Both targets receive the same dict object (built once).
+        store_arg = mock_add_record.call_args[0][0]
+        otel_arg = mock_send_otel.call_args[0][0]
+        assert store_arg is otel_arg
+
+    @pytest.mark.asyncio
+    async def test_log_sink_store_only_when_otlp_not_configured(self):
+        """_log_sink skips _send_to_otel when logger_provider is None."""
+        test_message = mock.MagicMock()
+        level_mock = mock.MagicMock()
+        level_mock.name = "INFO"
+        test_message.record = {
+            "time": datetime.now(),
+            "level": level_mock,
+            "extra": {"logger_name": "test"},
+            "message": "store only",
+            "file": mock.MagicMock(path="test.py"),
+            "line": 1,
+            "function": "fn",
+        }
+
+        with create_logger_adapter() as adapter:
+            adapter.logger_provider = None  # no OTLP
+
+            with (
+                mock.patch.object(adapter, "add_record") as mock_add_record,
+                mock.patch.object(adapter, "_send_to_otel") as mock_send_otel,
+                mock.patch(
+                    "application_sdk.observability.logger_adaptor.ENABLE_OBSERVABILITY_STORE_SINK",
+                    True,
+                ),
+            ):
+                await adapter._log_sink(test_message)
+
+        mock_add_record.assert_called_once()
+        mock_send_otel.assert_not_called()
+
 
 class TestCorrelationContext:
     """Tests for correlation context in logging."""

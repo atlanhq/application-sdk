@@ -4,6 +4,7 @@ import logging
 import os
 import threading
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from time import time
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
@@ -47,6 +48,22 @@ OBSERVABILITY_S3_PREFIX_MAP = {
 
 
 T = TypeVar("T")
+
+
+@dataclass
+class _PartitionWriter:
+    """State for the single open gzip partition file inside ``_flush_records``.
+
+    Invariant: an instance is live (file open, local file on disk) from the moment
+    it is created until ``_upload_and_delete`` completes or the outer ``finally``
+    block of ``_flush_records`` cleans it up.  The local ``current_writer`` variable
+    being ``None`` is the signal that no partition file is currently open.
+    """
+
+    partition_path: str
+    local_path: str
+    remote_key: str
+    file: gzip.GzipFile
 
 
 class AtlanObservability(Generic[T], ABC):
@@ -369,11 +386,13 @@ class AtlanObservability(Generic[T], ABC):
         except ImportError:  # conformance: ignore[E002,E008] Temporal sandbox check unavailable outside a worker; normal flush
             pass
 
-        # Active partition state — only one gzip file is open at a time.
-        current_partition_path: str | None = None
-        current_file: gzip.GzipFile | None = None
-        current_local_path: str | None = None
-        current_remote_key: str | None = None
+        # ``current_writer`` is non-None iff a gzip partition file is currently open.
+        # The _PartitionWriter dataclass bundles all four related state fields so they
+        # are always updated atomically — preventing the bug where an upload failure
+        # left current_partition_path pointing at the closed partition while
+        # current_file was None, causing the next same-partition record to call
+        # write() on None.
+        current_writer: _PartitionWriter | None = None
 
         try:
             for record in records:
@@ -381,17 +400,26 @@ class AtlanObservability(Generic[T], ABC):
                     record_time = datetime.fromtimestamp(record["timestamp"])
                     partition_path = self._get_partition_path(record_time)
 
-                    if partition_path != current_partition_path:
+                    if (
+                        current_writer is None
+                        or partition_path != current_writer.partition_path
+                    ):
                         # Finalize the current partition before switching.
-                        if current_file is not None:
-                            current_file.close()
-                            current_file = None
-                            # _upload_and_delete unlinks local_path in its finally
-                            await self._upload_and_delete(
-                                current_local_path,  # type: ignore[arg-type]
-                                current_remote_key,  # type: ignore[arg-type]
-                            )
-                            current_local_path = None
+                        if current_writer is not None:
+                            try:
+                                current_writer.file.close()
+                                # _upload_and_delete unlinks the local file in its own finally.
+                                await self._upload_and_delete(
+                                    current_writer.local_path,
+                                    current_writer.remote_key,
+                                )
+                            finally:
+                                # Reset atomically on both success and failure.  On failure,
+                                # _upload_and_delete's own finally already removed the local
+                                # file, so there is no disk leak.  Resetting here ensures the
+                                # next same-partition record opens a fresh file rather than
+                                # writing to a None handle.
+                                current_writer = None
 
                         # Open a fresh gzip file for the new partition.
                         os.makedirs(partition_path, exist_ok=True)
@@ -403,27 +431,29 @@ class AtlanObservability(Generic[T], ABC):
                         filename = (
                             f"{ts_ns}_{DEPLOYMENT_NAME}_{APPLICATION_NAME}.json.gz"
                         )
-                        current_local_path = os.path.join(partition_path, filename)
-                        current_remote_key = self._build_remote_key(
-                            record_time, filename
+                        local_path = os.path.join(partition_path, filename)
+                        current_writer = _PartitionWriter(
+                            partition_path=partition_path,
+                            local_path=local_path,
+                            remote_key=self._build_remote_key(record_time, filename),
+                            file=gzip.open(local_path, "wb"),
                         )
-                        current_file = gzip.open(current_local_path, "wb")
-                        current_partition_path = partition_path
 
-                    current_file.write(orjson.dumps(record) + b"\n")  # type: ignore[union-attr]
+                    current_writer.file.write(orjson.dumps(record) + b"\n")
 
                 except Exception:
                     logging.error("Error writing observability record", exc_info=True)
 
             # Finalize the last open partition.
-            if current_file is not None:
-                current_file.close()
-                current_file = None
-                await self._upload_and_delete(
-                    current_local_path,  # type: ignore[arg-type]
-                    current_remote_key,  # type: ignore[arg-type]
-                )
-                current_local_path = None
+            if current_writer is not None:
+                try:
+                    current_writer.file.close()
+                    await self._upload_and_delete(
+                        current_writer.local_path,
+                        current_writer.remote_key,
+                    )
+                finally:
+                    current_writer = None
 
             # Clean up old records if enabled
             if self._cleanup_enabled:
@@ -433,15 +463,15 @@ class AtlanObservability(Generic[T], ABC):
             logging.error("Error flushing records batch", exc_info=True)
 
         finally:
-            # Defensive: if an unexpected exception left a file handle open, close it
-            # and remove any orphaned local file to prevent descriptor/disk leaks.
-            if current_file is not None:
+            # Defensive: if an unexpected exception left the writer open, close its
+            # file handle and remove any orphaned local file to prevent leaks.
+            if current_writer is not None:
                 try:
-                    current_file.close()
+                    current_writer.file.close()
                 except Exception:
                     logging.warning("Error closing orphaned gzip file", exc_info=True)
-            if current_local_path and os.path.exists(current_local_path):
-                os.unlink(current_local_path)
+                if os.path.exists(current_writer.local_path):
+                    os.unlink(current_writer.local_path)
 
     async def _check_and_cleanup(self):
         """Check if cleanup is needed and perform it if necessary.

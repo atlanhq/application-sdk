@@ -591,6 +591,9 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         self.logger_name = logger_name
         # Bind the logger name when creating the logger instance
         self.logger = logger
+        # Declared here so _log_sink can use ``is not None`` instead of hasattr —
+        # more explicit and survives a partial-init in the OTLP try/except below.
+        self.logger_provider: LoggerProvider | None = None
         # Suppress workflow-body logs during Temporal replay by default,
         # matching the behaviour of Temporal's native ``workflow.logger``
         # (``log_during_replay=False``).  Set to True on this instance — or
@@ -737,7 +740,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         # and fans it out to all active targets.  When both the object-store sink and
         # OTLP are enabled, this halves the per-record dict-build CPU compared to
         # registering two independent sinks.
-        _has_otlp = hasattr(self, "logger_provider")
+        _has_otlp = self.logger_provider is not None
         if ENABLE_OBSERVABILITY_STORE_SINK or _has_otlp:
             self.logger.add(self._log_sink, level=SEVERITY_MAPPING[LOG_LEVEL])
             # Start the periodic flush task only when the object-store sink is active.
@@ -1149,6 +1152,8 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         - Emits the log record
         """
         try:
+            if self.logger_provider is None:
+                return
             otel_record = self._create_log_record(record)
             otel_logger = self.logger_provider.get_logger(SERVICE_NAME)
             otel_logger.emit(otel_record)
@@ -1215,7 +1220,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             log_record = _make_log_record_dict(message)
             if ENABLE_OBSERVABILITY_STORE_SINK:
                 self.add_record(log_record)
-            if hasattr(self, "logger_provider"):
+            if self.logger_provider is not None:
                 self._send_to_otel(log_record)
         except Exception:
             logging.error("Error in log sink", exc_info=True)

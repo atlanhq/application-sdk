@@ -26,9 +26,10 @@ no-op there and the child is exec'd directly.
 
 Design constraints:
 
-* **Run under an event loop.** The SDK's store sink (``parquet_sink``) is an
-  async loguru sink: records only get buffered for upload while an event loop is
-  running in the emitting thread. So the read/emit loop runs inside
+* **Run under an event loop.** The SDK's store sink (``_log_sink``, registered
+  by :class:`~application_sdk.observability.logger_adaptor.AtlanLoggerAdapter`)
+  is an async loguru sink: records only get buffered for upload while an event
+  loop is running in the emitting thread. So the read/emit loop runs inside
   ``asyncio.run`` and drains the sink (``logger.complete()`` + ``flush_all()``)
   before exit — otherwise lines reach stdout but never the lakehouse.
 * **Never take daprd down.** Forwarding is best-effort: any failure to parse or
