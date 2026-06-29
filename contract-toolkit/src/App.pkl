@@ -3113,13 +3113,13 @@ local function renderEntrypoint(e: Entrypoint): Mapping<String, Any> = new Mappi
   when (e.id != null) { ["id"] = e.id }
   ["name"] = e.name
   ["display_name"] = e.displayName
-  when (e.description != null) { ["description"] = e.description }
+  when (e.description != null || shortDescription != "") { ["description"] = e.description ?? shortDescription }
   when (e.iconUrl != null || iconUrl != null) { ["icon_url"] = e.iconUrl ?? iconUrl }
   ["type"] = e.type
   when (e.source != null) { ["source"] = e.source }
   when (e.sourceCategory != null) { ["source_category"] = e.sourceCategory }
   when (!e.categories.isEmpty) { ["categories"] = e.categories }
-  when (e.docsUrl != null) { ["docs_url"] = e.docsUrl }
+  when (e.docsUrl != null || docsUrl != "") { ["docs_url"] = e.docsUrl ?? docsUrl }
   ...e.metadata
 }
 
