@@ -159,6 +159,69 @@ def _resolve_class_name(
     return _pascal_to_kebab(class_def.name), False, class_def
 
 
+def _has_body_name_attr(class_def: ast.ClassDef) -> bool:
+    """Return True when the class body has an explicit ``name = <value>`` attr.
+
+    Annotation-only declarations (``name: ClassVar[str]`` with no value) return
+    False — they carry no runtime assignment, so MRO continues to the base class.
+    """
+    for stmt in class_def.body:
+        if isinstance(stmt, ast.Assign):
+            for t in stmt.targets:
+                if isinstance(t, ast.Name) and t.id == "name":
+                    return True
+        elif isinstance(stmt, ast.AnnAssign):
+            if (
+                isinstance(stmt.target, ast.Name)
+                and stmt.target.id == "name"
+                and stmt.value is not None
+            ):
+                return True
+    return False
+
+
+def _body_name_for_ancestor_walk(
+    class_def: ast.ClassDef,
+) -> tuple[str | None, bool] | None:
+    """Probe *class_def*'s body for a ``name`` attr for BFS ancestor resolution.
+
+    The return value controls how :func:`_resolve_ancestor_name` should proceed:
+
+    ``(literal, False)``
+        Non-empty string literal — stop BFS, the leaf inherits this name.
+    ``(None, False)``
+        Empty-string literal — stop BFS; runtime treats ``""`` as falsy and
+        falls back to ``kebab(leaf)``, shadowing any grandparent literal.
+    ``(None, True)``
+        Non-literal (variable, f-string, …) — stop BFS, leaf is unverifiable.
+    ``None``
+        No ``name`` attr with a value in this class's body — continue BFS.
+    """
+    for stmt in class_def.body:
+        target_name: str | None = None
+        value_node: ast.expr | None = None
+        if isinstance(stmt, ast.Assign):
+            for t in stmt.targets:
+                if isinstance(t, ast.Name) and t.id == "name":
+                    target_name = "name"
+                    value_node = stmt.value
+                    break
+        elif isinstance(stmt, ast.AnnAssign):
+            if isinstance(stmt.target, ast.Name) and stmt.target.id == "name":
+                target_name = "name"
+                value_node = stmt.value  # None for annotation-only declarations
+        if target_name is None:
+            continue
+        if value_node is None:
+            continue  # annotation-only — no effective assignment, continue BFS
+        if isinstance(value_node, ast.Constant) and isinstance(value_node.value, str):
+            if value_node.value:
+                return value_node.value, False  # non-empty literal
+            return None, False  # empty literal — stop BFS, caller uses kebab(leaf)
+        return None, True  # non-literal — unverifiable
+    return None  # no name attr with a value
+
+
 def _resolve_ancestor_name(
     base_names: list[str],
     name_to_raw: dict[str, "_RawClassDef"],
@@ -174,11 +237,14 @@ def _resolve_ancestor_name(
     Returns
     -------
     ``(literal_name, False)``
-        A non-empty string literal was found on an ancestor.
+        A non-empty string literal was found on an ancestor — the leaf inherits it.
     ``(None, True)``
-        A non-literal (or empty-literal that breaks the chain) was found first.
+        A non-literal (variable, f-string, …) was found first — leaf is unverifiable.
     ``None``
-        No scanned ancestor has a body-level ``name`` attr — use kebab fallback.
+        No scanned ancestor has an effective body-level ``name`` attr.  Includes
+        the empty-literal-terminator case: an ancestor with ``name = ""`` shadows
+        any grandparent literal, and the runtime falls back to ``kebab(leaf)``,
+        so the caller should do the same.
     """
     seen: set[str] = set()
     queue = list(base_names)
@@ -190,11 +256,15 @@ def _resolve_ancestor_name(
         ancestor = name_to_raw.get(base_name)
         if ancestor is None:
             continue
-        resolved_name, is_unresolvable, name_node = _resolve_class_name(ancestor.node)
-        if name_node is not ancestor.node:
-            # Ancestor has a body-level name attr (literal or non-literal)
-            return resolved_name, is_unresolvable
-        # No effective body-level name in this ancestor — continue BFS upward
+        probe = _body_name_for_ancestor_walk(ancestor.node)
+        if probe is not None:
+            name, is_unresolvable = probe
+            if name is None and not is_unresolvable:
+                # Empty-literal terminator: runtime falls back to kebab(leaf).
+                # Return None so the caller keeps the leaf's own kebab derivation.
+                return None
+            return probe
+        # No name attr in this ancestor — continue BFS upward
         queue.extend(ancestor.base_names)
     return None
 
@@ -354,14 +424,18 @@ def resolve_leaf_classes(raw: list[_RawClassDef]) -> CodeAppNameScan:
     for r in leaf_records:
         resolved_name, is_unresolvable, name_node = _resolve_class_name(r.node)
 
-        # When the leaf has no body-level ``name`` (name_node is the ClassDef
-        # itself — i.e. the kebab fallback path), walk scanned app-family
-        # ancestors for the nearest body-level name.  This mirrors how
-        # ``cls.name`` resolves via MRO at runtime: an intermediate base that
-        # declares ``name = "foo"`` propagates to all subclasses that don't
-        # override it, so the static check must do the same to avoid emitting
-        # false-positive drift findings.
-        if name_node is r.node:
+        # When the leaf has no explicit body-level ``name`` attr, walk scanned
+        # app-family ancestors for the nearest declared name.  This mirrors
+        # ``cls.name or _pascal_to_kebab(cls.__name__)`` via MRO at runtime.
+        #
+        # We use ``_has_body_name_attr`` rather than checking whether
+        # ``name_node is r.node`` because the latter cannot distinguish
+        # "no name attr" from "name = ''" — both fall back to kebab in
+        # ``_resolve_class_name`` and produce the same anchor.  An explicit
+        # ``name = ""`` IS a body attr (it shadows any ancestor's value, then
+        # the runtime falls back to kebab(leaf)), so the ancestor walk must NOT
+        # be triggered for it.
+        if not _has_body_name_attr(r.node):
             ancestor_result = _resolve_ancestor_name(
                 r.base_names, name_to_raw, app_family_names
             )

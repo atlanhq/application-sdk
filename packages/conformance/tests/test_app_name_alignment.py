@@ -911,3 +911,55 @@ def test_p025_quoted_env_single_quotes_noop(tmp_path: Path) -> None:
     assert (
         _p025(findings) == []
     ), "Single-quoted env value should be stripped before comparison"
+
+
+def test_p025_empty_name_intermediate_shadows_grandparent(tmp_path: Path) -> None:
+    """Intermediate ``name = ""`` terminates the ancestor BFS; grandparent ignored.
+
+    Chain: GrandparentApp(App) with name="foo" → IntermediateBase with name=""
+    → LeafClass with no name attr.
+
+    Runtime MRO:
+      LeafClass.name   → IntermediateBase.name = ""
+      "" or kebab(LeafClass) → "leaf-class"
+
+    The empty-literal on IntermediateBase shadows GrandparentApp's "foo" and
+    the runtime falls back to kebab(leaf).  Without this fix the BFS would walk
+    past the empty-literal intermediate and find "foo", producing a
+    false-positive drift finding against a contract that says "leaf-class".
+    """
+    py = {
+        "app/connector.py": dedent("""\
+            from application_sdk.app import App
+            class GrandparentApp(App):
+                name = "foo"
+            class IntermediateBase(GrandparentApp):
+                name = ""
+            class LeafClass(IntermediateBase):
+                pass
+        """)
+    }
+    # Effective name = kebab("LeafClass") = "leaf-class"; contract matches → no findings
+    findings = _run(
+        tmp_path,
+        py,
+        atlan_yaml="name: leaf-class\n",
+        env_example="ATLAN_APPLICATION_NAME=leaf-class\n",
+    )
+    assert _p025(findings) == [], (
+        "Empty-literal intermediate should terminate BFS; 'foo' from grandparent "
+        "must not be inherited by the leaf"
+    )
+
+    # Contract says "foo" (the grandparent value) → 1 finding (code=leaf-class)
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp2:
+        findings_drift = _run(
+            Path(tmp2),
+            py,
+            atlan_yaml="name: foo\n",
+        )
+        p025 = _p025(findings_drift)
+        assert len(p025) == 1, f"expected 1 finding, got {len(p025)}"
+        assert "leaf-class" in p025[0].message
