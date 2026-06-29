@@ -161,7 +161,9 @@ TEST_PATH = re.compile(
 # the closing `}` line, not the echo line, so same-line checks miss it.
 # Two regexes let the forward-scan stop at the first `}` line without a fixed
 # line-count cap: if `}` carries the redirect → safe; bare `}` → stop, real sink.
-_GITHUB_BLOCK_CLOSE = re.compile(r"^\s*\}\s*>>\s*\"?\$GITHUB_(ENV|OUTPUT|STATE|PATH)\"?")
+_GITHUB_BLOCK_CLOSE = re.compile(
+    r"^\s*\}\s*>>\s*\"?\$GITHUB_(ENV|OUTPUT|STATE|PATH)\"?"
+)
 _BLOCK_CLOSE = re.compile(r"^\s*\}")
 
 # Masking/redaction helpers — if present in the line, the value is already
@@ -440,16 +442,20 @@ def scan(root: str) -> dict:
                     #
                     # Also skip GitHub Actions block-redirect: the closing `}`
                     # carries `>> "$GITHUB_ENV"` (a masked file sink), not the
-                    # echo line itself. Scan forward to the first `}` line:
-                    # if it redirects to a GitHub masked file → false positive;
-                    # bare `}` with no redirect → real sink, keep the finding.
+                    # echo line itself. Scan forward to the first `}` within
+                    # 12 lines: if it redirects to a GitHub masked file →
+                    # false positive; bare `}` with no redirect → real sink.
+                    # Cap at 12 prevents cross-step/job suppression — a real
+                    # `{ echo; } >> $GITHUB_ENV` block is always compact.
                     if pattern_id == "shell-echo" and (
                         "-stdin" in code
                         or re.search(r"(?<!\|)\|(?!\|)", code)
                         or next(
-                            (_GITHUB_BLOCK_CLOSE.search(ln) is not None
-                             for ln in lines[lineno:]
-                             if _BLOCK_CLOSE.search(ln)),
+                            (
+                                _GITHUB_BLOCK_CLOSE.search(ln) is not None
+                                for ln in lines[lineno : lineno + 12]
+                                if _BLOCK_CLOSE.search(ln)
+                            ),
                             False,
                         )
                     ):
