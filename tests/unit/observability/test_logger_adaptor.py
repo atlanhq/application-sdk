@@ -12,6 +12,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 from loguru import logger
 
+from application_sdk.constants import APPLICATION_NAME, DEPLOYMENT_NAME
 from application_sdk.observability.context import (
     ExecutionContext,
     set_execution_context,
@@ -88,6 +89,17 @@ def test_process_without_context():
         assert "logger_name" in kwargs
         assert kwargs["logger_name"] == "test_logger"
         assert msg == "Test message"
+
+
+def test_process_injects_app_name_and_deployment_name():
+    """AtlanLoggerAdapter.process must stamp app_name + deployment_name on
+    every record (the SDK-adapter counterpart of the stdlib-bridge injection
+    tests), so records are attributable to a component AND a deployment in
+    central LH."""
+    with create_logger_adapter() as logger_adapter:
+        _, kwargs = logger_adapter.process("Test message", {})
+        assert kwargs["app_name"] == APPLICATION_NAME
+        assert kwargs["deployment_name"] == DEPLOYMENT_NAME
 
 
 @given(st.text(min_size=1))
@@ -1956,11 +1968,17 @@ class TestInterceptHandlerStdlibBridge:
         logs (httpx, boto3, …) are attributable in OTLP — this is the
         :issue:`BLDX-1297` regression: 17.6M log rows landed in central LH
         with ``app_name=None`` because the bridge skipped enrichment."""
-        from application_sdk.constants import APPLICATION_NAME
-
         bind_kwargs = self._emit()
 
         assert bind_kwargs["app_name"] == APPLICATION_NAME
+
+    def test_stdlib_emit_injects_deployment_name(self) -> None:
+        """Stdlib bridge must inject ``deployment_name`` so SDR / multi-deploy
+        logs are attributable to a specific deployment instance in central LH
+        (``app_name`` only identifies the component, not the deployment)."""
+        bind_kwargs = self._emit()
+
+        assert bind_kwargs["deployment_name"] == DEPLOYMENT_NAME
 
     def test_stdlib_emit_injects_workflow_context(self) -> None:
         """Stdlib log inside a Temporal workflow must carry workflow_id,
