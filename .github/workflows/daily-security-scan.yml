@@ -158,41 +158,12 @@ jobs:
           GH_REF: ${{ github.ref_name }}
         run: python3 .github/scripts/dispatch_vuln_triage.py
 
-  # ── Reconcile the allowlist + tickets against what the scanner still sees.
-  #    Runs every scan (even with no new findings) so resolved CVEs are retired
-  #    automatically: by default a CVE is retired on the first scan that no longer
-  #    reports it (DEBOUNCE_SCANS=1; raise it to debounce transient drops) — see
-  #    reconcile_allowlist.py. Checks out as atlan-ci so the removal PR it opens
-  #    is auto-merged by vuln-auto-merge.yml.
-  reconcile:
-    name: Reconcile allowlist + tickets
-    needs: scan-and-ticket
-    if: always()
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      actions: read # download this run's scan artifact
-    steps:
-      - name: Checkout (as atlan-ci so the removal PR auto-merges)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          token: ${{ secrets.ORG_PAT_GITHUB }}
-
-      - name: Download this run's scan results
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: security-scan-raw-results
-
-      - name: Reconcile resolved CVEs (acts on first clean scan)
-        env:
-          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
-          REPO: ${{ github.repository }}
-          SCAN_WORKFLOW: daily-security-scan.yml
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
-          LINEAR_TEAM_ID: ${{ vars.LINEAR_SECURITY_SCAN_TEAM_ID }}
-        run: |
-          export RUN_DATE=$(date -u +%Y-%m-%d)
-          git config user.name "atlan-ci"
-          git config user.email "atlan-ci@users.noreply.github.com"
-          python3 .github/scripts/reconcile_allowlist.py
+  # NOTE: reconciliation (allowlist-entry removal + Linear ticket close/update)
+  # is intentionally NOT a job here. It runs on `release: released` (not
+  # `published` — that fires for `-rc` prereleases too) in
+  # vuln-reconcile-on-release.yml — an allowlist entry must persist until the
+  # fix is *released*, because downstream connector build gates check out
+  # .security/base-allowlist.json from SDK `main` while their images still carry
+  # the CVE from the last released SDK. Removing an entry the moment this hourly
+  # scan of `main` goes clean (fix merged, not yet released) would strip their
+  # coverage and break check_allowlist.py. See vuln-reconcile-on-release.yml.
