@@ -208,6 +208,23 @@ runs:
         "${{ github.action_path }}/repin-application-sdk.sh"
         uv sync --all-extras --all-groups
 
+    # Regenerate app/generated/** (manifest.json, configmaps, typed _input.py)
+    # from contract/app.pkl BEFORE the app server starts, so the manifest the
+    # app server and integration tests read reflects current contract + toolkit
+    # source rather than a possibly-stale committed file (BLDX-1493). On
+    # cross-repo dispatch (application-sdk-ref set) the @app-contract-toolkit
+    # dependency is overridden to the SDK PR's contract-toolkit/src so toolkit
+    # changes are exercised against the real connector. Otherwise it regenerates
+    # from the app's pinned toolkit and warns (never fails) on a stale committed
+    # app/generated/. Self-skips when there is no contract/app.pkl. uv is
+    # already installed (setup-deps), so generated Python is ruff-formatted for
+    # a clean drift comparison.
+    - name: Regenerate contract artifacts (manifest.json) before tests
+      uses: atlanhq/application-sdk/.github/actions/regenerate-contract@main
+      with:
+        application-sdk-ref: ${{ inputs.application-sdk-ref }}
+        check-drift: "true"
+
     # SDK 3.13+ boots an embedded daprd + Temporal directly from
     # `python main.py` (application_sdk/dev/_dapr.py + _embedded.py), each
     # downloading its own runtime. On those versions the external daprd +

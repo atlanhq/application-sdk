@@ -125,6 +125,20 @@ Mechanism: `codex-/return-dispatch@v3` in `e2e-apps/action.yaml` fires `workflow
 
 The SDR composite renders one PR-comment body, writes it to `results/pr-comment-body.md`, and uploads it as part of the test artifact. Both posting sides (connector PR + cross-repo SDK PR) read this same file and post it as a sticky-update comment, swapping the marker line so updates don't collide.
 
+## Contract regeneration before tests
+
+Tests read `app/generated/manifest.json` (the Automation Engine DAG) — the host-side test harness (`BaseSDRIntegrationTest` / full-DAG payload) and the worker container, which COPYs `app/generated/` at build time and reads `manifest.json` at runtime (`CONTRACT_GENERATED_DIR`). To keep that manifest honest, the shared [`regenerate-contract`](../../.github/actions/regenerate-contract/action.yaml) composite regenerates `app/generated/**` from `contract/app.pkl` **before** tests run (driver: [`.github/scripts/regenerate_contract.py`](../../.github/scripts/regenerate_contract.py)). It self-skips when there is no `contract/app.pkl`.
+
+| Where it runs | Mode | Drift gate |
+|---|---|---|
+| `connector-integration-tests` (always-on `tests` job) | App-level (or SDK-level on dispatch) | **Warn-only** — annotates a stale committed `app/generated/`, never fails |
+| `sdr-e2e` — once **before** the image build, once **after** `setup-deps` re-checkout | Same | Off (the integration job owns the gate) |
+
+- **App-level** (default): regenerate from the app's pinned `@app-contract-toolkit` version, so a `contract/app.pkl` change is exercised even if the committed manifest was not regenerated.
+- **SDK-level** (cross-repo dispatch, `application-sdk-ref` set): the `@app-contract-toolkit` dependency is overridden to the SDK PR's `contract-toolkit/src`, so a toolkit change in the SDK PR is exercised against the *real* connector contract end-to-end. Drift is expected here, so the gate is skipped and a `pkl eval` failure is fatal.
+
+The e2e path regenerates twice because `setup-deps`' inner `actions/checkout` (after the image build) restores the committed tree — mirroring the existing double-repin pattern, so the manifest baked into the image and the one the host pytest reads agree.
+
 ## Workspace-wipe defences (local-action mode)
 
 When the SDR composite is invoked via local path (`./.application-sdk/.github/actions/sdr-e2e`) during cross-repo dispatch, `setup-deps`' inner `actions/checkout` wipes the entire workspace — including `${{ github.action_path }}` itself. The composite:

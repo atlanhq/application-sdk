@@ -207,6 +207,22 @@ runs:
         fi
         uv lock
 
+    # Regenerate app/generated/** from contract/app.pkl BEFORE the image build
+    # COPYs the tree (BLDX-1493). The connector image bakes app/generated/ at
+    # build time and the worker reads manifest.json at runtime
+    # (CONTRACT_GENERATED_DIR), so regenerating after the build would diverge
+    # the baked manifest from the freshly-generated one. On cross-repo dispatch
+    # (application-sdk-ref set) the @app-contract-toolkit dependency is
+    # overridden to the SDK PR's contract-toolkit/src so toolkit changes are
+    # exercised end-to-end. check-drift=false: uv (hence ruff) isn't installed
+    # until setup-deps below, and the drift gate lives in the always-run
+    # integration job; here we only need fresh artifacts baked into the image.
+    - name: Regenerate contract artifacts (manifest.json) before image build
+      uses: atlanhq/application-sdk/.github/actions/regenerate-contract@main
+      with:
+        application-sdk-ref: ${{ inputs.application-sdk-ref }}
+        check-drift: "false"
+
     # Buildx is required for the GHA cache backend below. Set up once
     # per run, before the image build that uses `cache-from/cache-to`.
     - name: Set up Docker Buildx
@@ -313,6 +329,19 @@ runs:
         "$SDR_E2E_ROOT/repin-application-sdk.sh"
         uv lock
         uv sync --all-extras --all-groups
+
+    # setup-deps' actions/checkout above wiped the pre-build regeneration along
+    # with the rest of the workspace, restoring the committed app/generated/.
+    # Regenerate again so the HOST pytest runtime (BaseSDRIntegrationTest /
+    # full-DAG payload read manifest.json) and the regenerated app.yaml consumed
+    # by the config-resolution steps below agree with the manifest baked into
+    # the image (BLDX-1493). Mirrors the double-repin pattern directly above.
+    # check-drift=false — the drift gate lives in the always-run integration job.
+    - name: Regenerate contract artifacts (manifest.json) after re-checkout
+      uses: atlanhq/application-sdk/.github/actions/regenerate-contract@main
+      with:
+        application-sdk-ref: ${{ inputs.application-sdk-ref }}
+        check-drift: "false"
 
     - name: Download atlan-configurator
       shell: bash
