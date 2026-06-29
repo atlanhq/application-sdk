@@ -1185,8 +1185,16 @@ class CloudProvider extends UIElement {
 }
 
 /// Widget that renders a secure agent configuration panel.
+///
+/// `includeInManifest` is fixed to `true` and cannot be overridden. The
+/// `agent_json` manifest slot is structurally required for SDR credential
+/// routing: Heracles substitutes the create-time agent spec into it at run
+/// start, and a missing slot silently drops the credential, causing a
+/// `CredentialRoutingError`. Allowing an app to opt out via
+/// `includeInManifest = false` would reintroduce that failure class.
 class AgentSelector extends UIElement {
   fixed type = "object"
+  fixed includeInManifest: Boolean = true
   required: Boolean? = false
 
   hidden agentConfigEntries: Listing<Any>?
