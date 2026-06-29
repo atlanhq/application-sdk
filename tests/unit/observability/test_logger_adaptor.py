@@ -88,9 +88,18 @@ def test_process_without_context():
         msg, kwargs = logger_adapter.process("Test message", {})
         assert "logger_name" in kwargs
         assert kwargs["logger_name"] == "test_logger"
+        assert msg == "Test message"
+
+
+def test_process_injects_app_name_and_deployment_name():
+    """AtlanLoggerAdapter.process must stamp app_name + deployment_name on
+    every record (the SDK-adapter counterpart of the stdlib-bridge injection
+    tests), so records are attributable to a component AND a deployment in
+    central LH."""
+    with create_logger_adapter() as logger_adapter:
+        _, kwargs = logger_adapter.process("Test message", {})
         assert kwargs["app_name"] == APPLICATION_NAME
         assert kwargs["deployment_name"] == DEPLOYMENT_NAME
-        assert msg == "Test message"
 
 
 @given(st.text(min_size=1))
