@@ -92,6 +92,31 @@ if ! echo "$ERR_MSG" | grep -q "connector must be set when hasCredentialConfig =
 fi
 
 # --------------------------------------------------------------------------
+# 6. AgentSelector.includeInManifest must not accept false (Boolean(this)
+#    constraint). Setting it to false must raise a type constraint violation
+#    at eval time — not be silently ignored — because a missing agent_json
+#    slot in the manifest breaks SDR credential routing (atlan-mssql-app#177).
+# --------------------------------------------------------------------------
+echo ":: Checking AgentSelector.includeInManifest=false raises a constraint violation..."
+BAD_CONTRACT="$(mktemp "$REPO_ROOT/test-agent-incl-XXXXXX.pkl")"
+cat > "$BAD_CONTRACT" << 'PKLEOF'
+import "src/Widgets.pkl"
+local widget: Widgets.AgentSelector = new Widgets.AgentSelector {
+  includeInManifest = false
+}
+output {
+  text = widget.includeInManifest.toString()
+}
+PKLEOF
+ERR_MSG="$(pkl eval "$BAD_CONTRACT" 2>&1 || true)"
+rm -f "$BAD_CONTRACT"
+if ! echo "$ERR_MSG" | grep -q "Type constraint"; then
+  echo "FAIL: AgentSelector.includeInManifest=false should raise a type constraint violation"
+  echo "  Got: $ERR_MSG"
+  fail=1
+fi
+
+# --------------------------------------------------------------------------
 # Done
 # --------------------------------------------------------------------------
 if [ "$fail" -ne 0 ]; then
