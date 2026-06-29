@@ -683,26 +683,10 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             colorize=colorize,
         )
 
-        # Add sink for store logging only if store sink is enabled
-        if ENABLE_OBSERVABILITY_STORE_SINK:
-            self.logger.add(self.parquet_sink, level=SEVERITY_MAPPING[LOG_LEVEL])
-            # Start flush task only if Dapr sink is enabled
-            if not AtlanLoggerAdapter._flush_task_started:
-                try:
-                    try:
-                        loop = asyncio.get_running_loop()
-                        AtlanLoggerAdapter._flush_task = loop.create_task(
-                            self._periodic_flush()
-                        )
-                    except RuntimeError:
-                        self._spawn_flush_thread()
-                    AtlanLoggerAdapter._flush_task_started = True
-                except Exception:
-                    logging.error("Failed to start flush task", exc_info=True)
-
         # OTLP log export — primary exporter to OTEL_EXPORTER_OTLP_ENDPOINT,
         # plus an optional secondary exporter to OTEL_WORKFLOW_LOGS_ENDPOINT
         # for archival pipelines (e.g. an OTel collector that writes to S3).
+        # Set up the provider first so _log_sink can see logger_provider below.
         try:
             otlp_processors = []
 
@@ -746,10 +730,32 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                 for processor in otlp_processors:
                     self.logger_provider.add_log_record_processor(processor)
 
-                self.logger.add(self.otlp_sink, level=SEVERITY_MAPPING[LOG_LEVEL])
-
         except Exception:
             logging.error("Failed to setup OTLP logging", exc_info=True)
+
+        # Register a single unified loguru sink that builds the log-record dict once
+        # and fans it out to all active targets.  When both the object-store sink and
+        # OTLP are enabled, this halves the per-record dict-build CPU compared to
+        # registering two independent sinks.
+        _has_otlp = hasattr(self, "logger_provider")
+        if ENABLE_OBSERVABILITY_STORE_SINK or _has_otlp:
+            self.logger.add(self._log_sink, level=SEVERITY_MAPPING[LOG_LEVEL])
+            # Start the periodic flush task only when the object-store sink is active.
+            if (
+                ENABLE_OBSERVABILITY_STORE_SINK
+                and not AtlanLoggerAdapter._flush_task_started
+            ):
+                try:
+                    try:
+                        loop = asyncio.get_running_loop()
+                        AtlanLoggerAdapter._flush_task = loop.create_task(
+                            self._periodic_flush()
+                        )
+                    except RuntimeError:
+                        self._spawn_flush_thread()
+                    AtlanLoggerAdapter._flush_task_started = True
+                except Exception:
+                    logging.error("Failed to start flush task", exc_info=True)
 
         # Mark initialization complete only after all sinks are successfully added
         AtlanLoggerAdapter._initialized = True
@@ -1194,15 +1200,40 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         processed_msg, processed_kwargs = self.process(msg, local_kwargs)
         self.logger.bind(**processed_kwargs).log("TRACING", processed_msg, *args)
 
-    async def parquet_sink(self, message: Any):
-        """Process log message and store in parquet format.
+    async def _log_sink(self, message: Any) -> None:
+        """Unified loguru sink: build the log-record dict once and fan out to active targets.
+
+        Replaces separate ``objectstore_sink`` and ``otlp_sink`` loguru sink
+        registrations.  When both the object-store sink and an OTLP exporter are
+        configured, the record dict is built a single time — halving the per-record
+        ``_make_log_record_dict`` CPU on that common path.
 
         Args:
-            message (Any): Log message to process and store
+            message: Loguru message object passed by the loguru dispatcher.
+        """
+        try:
+            log_record = _make_log_record_dict(message)
+            if ENABLE_OBSERVABILITY_STORE_SINK:
+                self.add_record(log_record)
+            if hasattr(self, "logger_provider"):
+                self._send_to_otel(log_record)
+        except Exception:
+            logging.error("Error in log sink", exc_info=True)
 
-        This method:
-        - Builds a log record dict from the message
-        - Adds the record to the buffer for parquet storage
+    async def objectstore_sink(self, message: Any) -> None:
+        """Buffer a log message for object-store upload.
+
+        Builds a log-record dict from *message* and appends it to the in-memory
+        buffer for periodic flush to gzip-compressed NDJSON files in the object
+        store.
+
+        .. note::
+            This method is not registered as a loguru sink directly — the unified
+            :meth:`_log_sink` handles dispatch.  It is kept as a public method so
+            tests can call it in isolation without triggering OTLP side-effects.
+
+        Args:
+            message: Loguru message object (must have a ``.record`` dict attribute).
         """
         try:
             log_record = _make_log_record_dict(message)
@@ -1210,15 +1241,19 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         except Exception:
             logging.error("Error buffering log", exc_info=True)
 
-    def otlp_sink(self, message: Any):
-        """Process log message and emit to OTLP.
+    def otlp_sink(self, message: Any) -> None:
+        """Emit a log message to the configured OTLP exporter.
+
+        Builds a log-record dict from *message* and forwards it to the
+        OpenTelemetry logger provider.
+
+        .. note::
+            This method is not registered as a loguru sink directly — the unified
+            :meth:`_log_sink` handles dispatch.  It is kept as a public method so
+            tests can exercise the OTLP path in isolation.
 
         Args:
-            message (Any): Log message to process and emit
-
-        This method:
-        - Builds a log record dict from the message
-        - Sends the record to OpenTelemetry
+            message: Loguru message object (must have a ``.record`` dict attribute).
         """
         try:
             log_record = _make_log_record_dict(message)
