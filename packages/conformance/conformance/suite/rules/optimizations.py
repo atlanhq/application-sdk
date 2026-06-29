@@ -56,4 +56,128 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o001",
     ),
+    RuleDefinition(
+        id="O002",
+        scope=RuleScope.APP,
+        name="LegacyAssetSerialization",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="asset-mapper",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.8.0",
+        rationale=(
+            "The asset-mapper pattern serialises pyatlan assets to JSONL with the v9 "
+            "API — asset.to_nested_bytes() — which emits the nested-entity wire shape "
+            "the platform expects. Serialising an asset with the pydantic .dict() "
+            "method produces a flat dict that still needs hand-conversion and drifts "
+            "from the SDK's recommended pipeline (BLDX-1492; docs/upgrade-guide-v3.md). "
+            "WARN/recommendation because .dict() is name-anchored — it can also belong "
+            "to a non-asset pydantic model — so the call needs a human glance."
+        ),
+        short_description=(
+            "Asset serialised with .dict() — prefer the v9 asset.to_nested_bytes() API"
+        ),
+        full_description=(
+            "Flags a ``.dict()`` method call in a module that imports pyatlan asset\n"
+            "models.  The asset-mapper pattern writes assets with the v9 serialisation\n"
+            "API — ``asset.to_nested_bytes()`` — not the pydantic ``.dict()`` form\n"
+            "(``docs/upgrade-guide-v3.md`` explicitly says 'use the v9 serialisation\n"
+            "API instead of .dict()').\n"
+            "\n"
+            "Coverage limits (biased to low false-positives at WARN): only ``.dict()``\n"
+            "is matched (not ``.json()``, which is overwhelmingly ``response.json()``\n"
+            "on HTTP clients), and only in files that import asset models.  A\n"
+            "``.dict()`` on a *non-asset* pydantic model in such a file is a known\n"
+            "false-positive — suppress with ``# conformance: ignore[O002] <reason>``.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o002",
+    ),
+    RuleDefinition(
+        id="O003",
+        scope=RuleScope.APP,
+        name="UntypedAssetMapperReturn",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="asset-mapper",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.8.0",
+        rationale=(
+            "The asset-mapper pattern's value is end-to-end typing: a mapper function "
+            "constructs a pyatlan asset and returns it, so the return annotation "
+            "documents which asset it produces and lets pyright check the call site. "
+            "A mapper that builds an asset but declares no return type loses that "
+            "guarantee (BLDX-1492; reference app atlan-openapi-app). WARN/recommendation "
+            "because adding the annotation is a safe, mechanical nudge."
+        ),
+        short_description=(
+            "Function builds a pyatlan asset but has no return annotation — annotate "
+            "it with the asset type"
+        ),
+        full_description=(
+            "Flags a function that constructs a pyatlan asset (instantiates a class\n"
+            "imported from ``pyatlan_v9.model.assets`` / ``pyatlan.model.assets``) and\n"
+            "**returns that asset**, but carries no ``-> <Asset>`` return annotation.\n"
+            "The asset-mapper pattern is typed end-to-end — each ``map_<entity>``\n"
+            "function declares the pyatlan asset it produces (see ``atlan-openapi-app``).\n"
+            "\n"
+            "Keyed on actually returning the constructed asset (``return Table(...)`` or\n"
+            "``asset = Table(...); ... return asset``), not just a ``map_`` name — so a\n"
+            "helper that builds an asset as a side effect and returns something else\n"
+            "(e.g. ``return record.id``) is not flagged, and the suggested annotation\n"
+            "always matches the real return.  Suppress with\n"
+            "``# conformance: ignore[O003] <reason>`` when an untyped return is\n"
+            "intentional.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o003",
+    ),
+    RuleDefinition(
+        id="O004",
+        scope=RuleScope.APP,
+        name="LegacyPyatlanAssetImport",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="asset-mapper",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.8.0",
+        rationale=(
+            "pyatlan_v9 is the SDK's go-forward asset surface for the asset-mapper "
+            "pattern; the legacy pyatlan.model.assets classes are the memory-heavy "
+            "DataFrame/transformer-era serialization path, kept only for connectors "
+            "still on the built-in AtlasTransformer (which B001 steers off). pyatlan_v9 "
+            "ships inside the existing pyatlan>=9 dependency, so the switch adds nothing "
+            "to resolve. A below-the-bar recommendation (O-series, WARN): the v9 models "
+            "differ in attributes and serialization (to_nested_bytes vs .dict()), so "
+            "each site needs human judgement — never a blind name swap."
+        ),
+        short_description=(
+            "Imports pyatlan.model.assets (non-v9) — prefer pyatlan_v9.model.assets"
+        ),
+        full_description=(
+            "Flags app code that imports asset model classes from the legacy\n"
+            "``pyatlan.model.assets`` package, in any of the three import forms:\n"
+            "``from pyatlan.model.assets import X``, ``import pyatlan.model.assets``,\n"
+            "or ``from pyatlan.model import assets``.  Detection is import-anchored\n"
+            "(an asset class is only imported in order to construct it), so the rare\n"
+            "fully-qualified ``pyatlan.model.assets.X(...)`` form with no matching\n"
+            "import is out of scope.  New connectors should build assets from\n"
+            "``pyatlan_v9.model.assets`` — the optimized v9 surface the asset-mapper\n"
+            "pattern is built on (BLDX-1492; see\n"
+            "``docs/guides/sql-application-guide.md`` and ``docs/upgrade-guide-v3.md``).\n"
+            "\n"
+            "Scope is deliberately narrow — only ``pyatlan.model.assets`` is matched,\n"
+            "never the rest of ``pyatlan``: enums and helpers that legitimately have\n"
+            "no v9 equivalent (e.g. ``from pyatlan.model.enums import\n"
+            "AtlanConnectorType``) are out of scope.\n"
+            "\n"
+            "NOT autofixable: the v9 models are not a drop-in rename — attribute\n"
+            "names and the serialization API differ (use ``asset.to_nested_bytes()``\n"
+            "rather than ``.dict()``), so each construction site needs review.\n"
+            "Suppress with ``# conformance: ignore[O004] <reason>`` when a connector\n"
+            "is intentionally pinned to the legacy ``AtlasTransformer`` surface.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o004",
+    ),
 )
