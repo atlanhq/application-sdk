@@ -122,7 +122,9 @@ _SERIES_META: list[SeriesMeta] = [
             "conformance/suite/rules/storage.py, "
             "conformance/suite/rules/entrypoint_alignment.py, "
             "conformance/suite/rules/entrypoint.py, "
-            "conformance/suite/rules/client_seam.py"
+            "conformance/suite/rules/client_seam.py, "
+            "conformance/suite/rules/determinism.py, "
+            "conformance/suite/rules/app_name_alignment.py"
         ),
         output_filename="prescriptions.md",
         checker=(
@@ -130,8 +132,10 @@ _SERIES_META: list[SeriesMeta] = [
             "`suite.checks.orchestration` (P004–P007, scans test files too), "
             "`suite.checks.entrypoint_alignment` (P016), "
             "`suite.checks.entrypoint` (P017–P018, scans test files too), "
-            "`suite.checks.client_seam` (P019) "
-            "(all AST-based)"
+            "`suite.checks.client_seam` (P019), "
+            "`suite.checks.determinism` (P020–P024), "
+            "`suite.checks.app_name_alignment` (P025) "
+            "(all AST-based / cross-artifact)"
         ),
         suppression_example="# conformance: ignore[P001] intentional: generic cleanup payload",
         stability_note=_ID_STABILITY_NOTE,
