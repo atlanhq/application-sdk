@@ -305,11 +305,13 @@ Set `entrypoints` to serve multiple marketplace tiles from one deployment. Per-e
 |---|---|---|---|
 | `name` | String | required | SDK entrypoint key and generated subfolder (`crawler`, `miner`). |
 | `displayName` | String | `name.capitalize()` | Card display name. |
-| `description` | String? | null | Card description. |
-| `icon` | String? | null | Card icon. |
+| `description` | String? | null | Card description. Falls back to the app-level `shortDescription` when null. |
+| `iconUrl` | String? | null | Card icon URL. Falls back to the app-level `iconUrl` when null. |
 | `type` | String | `"connector"` | Card type. |
 | `source` | String? | null | Source slug. |
 | `sourceCategory` | String? | null | Source category. |
+| `categories` | Listing\<String\> | `[]` | Marketplace category tags for this entrypoint. |
+| `docsUrl` | String? | null | Documentation URL. Falls back to the app-level `docsUrl` when null. |
 | `contract` | Typed? | null | The entrypoint's `App.pkl` contract whose `output.files` are emitted. |
 
 Bundle output layout:
