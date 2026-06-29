@@ -304,13 +304,6 @@ def test_process_with_complex_types(logger_adapter: AtlanLoggerAdapter, mock_log
         logger_adapter.logger = original_logger
 
 
-@pytest.fixture
-def mock_parquet_file(tmp_path):
-    """Create a temporary parquet file for testing."""
-    parquet_path = tmp_path / "logs.parquet"
-    return parquet_path
-
-
 @pytest.fixture(autouse=True)
 def clear_log_buffer(logger_adapter):
     """Clear the log buffer before each test."""
@@ -320,12 +313,9 @@ def clear_log_buffer(logger_adapter):
 
 
 @pytest.mark.asyncio
-async def test_parquet_sink_buffering(mock_parquet_file):
-    """Test that parquet_sink properly buffers logs."""
+async def test_objectstore_sink_buffering():
+    """Test that objectstore_sink properly buffers logs."""
     with create_logger_adapter() as logger_adapter:
-        # Set the parquet file path directly on the instance
-        logger_adapter.parquet_path = str(mock_parquet_file)
-
         # Create a test message
         test_message = mock.MagicMock()
         level_mock = mock.MagicMock()
@@ -341,8 +331,8 @@ async def test_parquet_sink_buffering(mock_parquet_file):
             "function": "test_function",
         }
 
-        # Call parquet_sink
-        await logger_adapter.parquet_sink(test_message)
+        # Call objectstore_sink
+        await logger_adapter.objectstore_sink(test_message)
 
         # Verify log was added to buffer
         assert len(logger_adapter._buffer) == 1
@@ -353,12 +343,9 @@ async def test_parquet_sink_buffering(mock_parquet_file):
 
 
 @pytest.mark.asyncio
-async def test_parquet_sink_error_handling(mock_parquet_file):
-    """Test that parquet_sink handles errors gracefully."""
+async def test_objectstore_sink_error_handling():
+    """Test that objectstore_sink handles errors gracefully."""
     with create_logger_adapter() as logger_adapter:
-        # Set the parquet file path directly on the instance
-        logger_adapter.parquet_path = str(mock_parquet_file)
-
         # Create a test message with invalid data
         test_message = mock.MagicMock()
         test_message.record = {
@@ -371,11 +358,305 @@ async def test_parquet_sink_error_handling(mock_parquet_file):
             "function": "test_function",
         }
 
-        # Call parquet_sink - should not raise exception
-        await logger_adapter.parquet_sink(test_message)
+        # Call objectstore_sink - should not raise exception
+        await logger_adapter.objectstore_sink(test_message)
 
-        # Verify buffer is empty (error was handled
+        # Verify buffer is empty (error was handled)
         assert len(logger_adapter._buffer) == 0
+
+
+class TestFlushRecordsSinglePass:
+    """Direct coverage for AtlanObservability._flush_records single-pass writer.
+
+    The single-pass writer opens one gzip file per active hour-partition and
+    uploads it when the partition changes (or at end of batch).  These tests
+    assert the file count, remote key structure, and NDJSON content without
+    touching real object stores.
+    """
+
+    @staticmethod
+    def _make_record(ts: float, message: str = "test") -> dict:
+        return {
+            "timestamp": ts,
+            "level": "INFO",
+            "logger_name": "test",
+            "message": message,
+            "file": "test.py",
+            "line": 1,
+            "function": "test_fn",
+            "extra": {},
+        }
+
+    @pytest.mark.asyncio
+    async def test_single_partition_writes_one_file(self, tmp_path):
+        """Records within the same hour produce exactly one upload call.
+
+        Verifies that the written file is valid gzip-compressed NDJSON and that
+        all records appear in the order they were passed.
+        """
+        import gzip as _gzip
+
+        import orjson as _orjson
+
+        base_ts = datetime(2025, 6, 15, 10, 30, 0).timestamp()
+        records = [self._make_record(base_ts + i, f"msg-{i}") for i in range(3)]
+        uploaded: list[tuple[str, str]] = []
+
+        async def _fake_upload(local_path: str, remote_key: str) -> None:
+            # Record args but skip unlink so the test can read the file.
+            uploaded.append((local_path, remote_key))
+
+        with create_logger_adapter() as adapter:
+            adapter.data_dir = str(tmp_path)
+            with (
+                mock.patch.object(
+                    adapter, "_upload_and_delete", side_effect=_fake_upload
+                ),
+                mock.patch(
+                    "application_sdk.observability.observability.ENABLE_OBSERVABILITY_STORE_SINK",
+                    True,
+                ),
+            ):
+                await adapter._flush_records(records)
+
+        assert len(uploaded) == 1, f"Expected 1 upload, got {len(uploaded)}"
+        local_path, remote_key = uploaded[0]
+        assert "year=2025" in remote_key
+        assert "month=06" in remote_key
+        assert "day=15" in remote_key
+        assert "hour=10" in remote_key
+        assert local_path.endswith(".json.gz")
+
+        with _gzip.open(local_path, "rb") as fh:
+            lines = fh.read().splitlines()
+        assert len(lines) == 3
+        messages = [_orjson.loads(ln)["message"] for ln in lines]
+        assert messages == ["msg-0", "msg-1", "msg-2"]
+
+    @pytest.mark.asyncio
+    async def test_multi_partition_writes_separate_files(self, tmp_path):
+        """Records spanning two different hours produce two separate upload calls.
+
+        Asserts that the remote keys correctly map to the hour derived from each
+        record's timestamp — not the hour of the flush call.
+        """
+        ts_h10 = datetime(2025, 6, 15, 10, 59, 0).timestamp()
+        ts_h11 = datetime(2025, 6, 15, 11, 1, 0).timestamp()
+        records = [
+            self._make_record(ts_h10, "hour10"),
+            self._make_record(ts_h11, "hour11"),
+        ]
+        uploaded: list[tuple[str, str]] = []
+
+        async def _fake_upload(local_path: str, remote_key: str) -> None:
+            uploaded.append((local_path, remote_key))
+
+        with create_logger_adapter() as adapter:
+            adapter.data_dir = str(tmp_path)
+            with (
+                mock.patch.object(
+                    adapter, "_upload_and_delete", side_effect=_fake_upload
+                ),
+                mock.patch(
+                    "application_sdk.observability.observability.ENABLE_OBSERVABILITY_STORE_SINK",
+                    True,
+                ),
+            ):
+                await adapter._flush_records(records)
+
+        assert len(uploaded) == 2, f"Expected 2 uploads, got {len(uploaded)}"
+        remote_keys = [u[1] for u in uploaded]
+        assert any("hour=10" in k for k in remote_keys), remote_keys
+        assert any("hour=11" in k for k in remote_keys), remote_keys
+        # Each partition produces a distinct local file
+        local_paths = [u[0] for u in uploaded]
+        assert local_paths[0] != local_paths[1]
+
+    @pytest.mark.asyncio
+    async def test_empty_records_is_noop(self):
+        """An empty record list never reaches the gzip/upload path."""
+        with create_logger_adapter() as adapter:
+            with mock.patch.object(adapter, "_upload_and_delete") as mock_upload:
+                with mock.patch(
+                    "application_sdk.observability.observability.ENABLE_OBSERVABILITY_STORE_SINK",
+                    True,
+                ):
+                    await adapter._flush_records([])
+        mock_upload.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_partition_switch_after_upload_failure_continues(self, tmp_path):
+        """Upload failure on partition switch does not drop the triggering record.
+
+        The _PartitionWriter swap-before-upload pattern ensures current_writer=None
+        before the upload attempt.  If the upload raises, the exception is caught
+        locally so the triggering record still reaches the fresh-writer-open path
+        below, and subsequent partitions are processed normally.
+        """
+        ts_h10 = datetime(2025, 6, 15, 10, 30, 0).timestamp()
+        ts_h11 = datetime(2025, 6, 15, 11, 10, 0).timestamp()
+        ts_h10b = datetime(2025, 6, 15, 10, 55, 0).timestamp()
+        records = [
+            self._make_record(ts_h10, "h10-first"),
+            self._make_record(ts_h11, "h11"),  # triggers switch; first upload raises
+            self._make_record(ts_h10b, "h10-second"),  # triggers second switch
+        ]
+        call_args: list[tuple[str, str]] = []
+
+        async def _upload_raises_first(local_path: str, remote_key: str) -> None:
+            call_args.append((local_path, remote_key))
+            if len(call_args) == 1:
+                raise OSError("simulated upstream upload failure")
+
+        with create_logger_adapter() as adapter:
+            adapter.data_dir = str(tmp_path)
+            with (
+                mock.patch.object(
+                    adapter, "_upload_and_delete", side_effect=_upload_raises_first
+                ),
+                mock.patch(
+                    "application_sdk.observability.observability.ENABLE_OBSERVABILITY_STORE_SINK",
+                    True,
+                ),
+            ):
+                # Must not propagate despite the first upload failing.
+                await adapter._flush_records(records)
+
+        # Three upload attempts: h10 (fails), h11 (succeeds), trailing h10 (succeeds).
+        assert len(call_args) == 3, f"Expected 3 upload attempts, got {len(call_args)}"
+        remote_keys = [a[1] for a in call_args]
+        assert "hour=10" in remote_keys[0], "first attempt should be for hour10"
+        assert "hour=11" in remote_keys[1], "second attempt should be for hour11"
+        assert "hour=10" in remote_keys[2], "third attempt should be trailing hour10"
+        # The trailing hour10 record reached a new file (different local path from the first h10).
+        assert (
+            call_args[0][0] != call_args[2][0]
+        ), "trailing hour10 record must be in a new file, not the failed-upload file"
+
+    @pytest.mark.asyncio
+    async def test_out_of_order_records_writes_second_file_for_same_hour(
+        self, tmp_path
+    ):
+        """Out-of-order records (A, B, A) produce a second file for hour A.
+
+        The docstring promises that a rare cross-thread reorder causes a second
+        uniquely-named ``.json.gz`` for the reappearing partition.  Sequence the
+        records as [hour10, hour11, hour10] and assert three distinct upload calls
+        with two calls targeting hour10 and one targeting hour11, all with distinct
+        local file paths.
+        """
+        ts_h10a = datetime(2025, 6, 15, 10, 30, 0).timestamp()
+        ts_h11 = datetime(2025, 6, 15, 11, 10, 0).timestamp()
+        ts_h10b = datetime(2025, 6, 15, 10, 55, 0).timestamp()
+        records = [
+            self._make_record(ts_h10a, "h10-first"),
+            self._make_record(ts_h11, "h11"),
+            self._make_record(ts_h10b, "h10-second"),
+        ]
+        uploaded: list[tuple[str, str]] = []
+
+        async def _fake_upload(local_path: str, remote_key: str) -> None:
+            uploaded.append((local_path, remote_key))
+
+        with create_logger_adapter() as adapter:
+            adapter.data_dir = str(tmp_path)
+            with (
+                mock.patch.object(
+                    adapter, "_upload_and_delete", side_effect=_fake_upload
+                ),
+                mock.patch(
+                    "application_sdk.observability.observability.ENABLE_OBSERVABILITY_STORE_SINK",
+                    True,
+                ),
+            ):
+                await adapter._flush_records(records)
+
+        assert len(uploaded) == 3, f"Expected 3 uploads, got {len(uploaded)}"
+        remote_keys = [u[1] for u in uploaded]
+        local_paths = [u[0] for u in uploaded]
+        # Two uploads for hour10, one for hour11
+        assert sum(1 for k in remote_keys if "hour=10" in k) == 2, remote_keys
+        assert sum(1 for k in remote_keys if "hour=11" in k) == 1, remote_keys
+        # All three local paths must be distinct (lexi-sortable unique names)
+        assert len(set(local_paths)) == 3, local_paths
+
+
+class TestLogSinkFanOut:
+    """Tests for _log_sink fan-out to both object-store and OTLP targets."""
+
+    @pytest.mark.asyncio
+    async def test_log_sink_calls_both_targets_when_both_active(self):
+        """_log_sink builds the record dict once and fans to add_record + _send_to_otel.
+
+        When both the object-store sink and OTLP are enabled, each should receive
+        exactly one call — and _make_log_record_dict is only invoked once (not twice
+        as would happen with two independent sinks).
+        """
+        test_message = mock.MagicMock()
+        level_mock = mock.MagicMock()
+        level_mock.name = "INFO"
+        test_message.record = {
+            "time": datetime.now(),
+            "level": level_mock,
+            "extra": {"logger_name": "test"},
+            "message": "fan-out test",
+            "file": mock.MagicMock(path="test.py"),
+            "line": 1,
+            "function": "fn",
+        }
+
+        with create_logger_adapter() as adapter:
+            # Simulate OTLP being configured by setting logger_provider.
+            adapter.logger_provider = mock.MagicMock()
+
+            with (
+                mock.patch.object(adapter, "add_record") as mock_add_record,
+                mock.patch.object(adapter, "_send_to_otel") as mock_send_otel,
+                mock.patch(
+                    "application_sdk.observability.logger_adaptor.ENABLE_OBSERVABILITY_STORE_SINK",
+                    True,
+                ),
+            ):
+                await adapter._log_sink(test_message)
+
+        mock_add_record.assert_called_once()
+        mock_send_otel.assert_called_once()
+        # Both targets receive the same dict object (built once).
+        store_arg = mock_add_record.call_args[0][0]
+        otel_arg = mock_send_otel.call_args[0][0]
+        assert store_arg is otel_arg
+
+    @pytest.mark.asyncio
+    async def test_log_sink_store_only_when_otlp_not_configured(self):
+        """_log_sink skips _send_to_otel when logger_provider is None."""
+        test_message = mock.MagicMock()
+        level_mock = mock.MagicMock()
+        level_mock.name = "INFO"
+        test_message.record = {
+            "time": datetime.now(),
+            "level": level_mock,
+            "extra": {"logger_name": "test"},
+            "message": "store only",
+            "file": mock.MagicMock(path="test.py"),
+            "line": 1,
+            "function": "fn",
+        }
+
+        with create_logger_adapter() as adapter:
+            adapter.logger_provider = None  # no OTLP
+
+            with (
+                mock.patch.object(adapter, "add_record") as mock_add_record,
+                mock.patch.object(adapter, "_send_to_otel") as mock_send_otel,
+                mock.patch(
+                    "application_sdk.observability.logger_adaptor.ENABLE_OBSERVABILITY_STORE_SINK",
+                    True,
+                ),
+            ):
+                await adapter._log_sink(test_message)
+
+        mock_add_record.assert_called_once()
+        mock_send_otel.assert_not_called()
 
 
 class TestCorrelationContext:
