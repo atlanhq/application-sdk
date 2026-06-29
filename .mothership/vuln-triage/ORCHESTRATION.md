@@ -242,7 +242,7 @@ git checkout main && git checkout -b fix/bump-<pkg>-<version>-<cve-id> origin/ma
 5. Link both PRs (allowlist + bump) on the ticket. When the bump merges and the
    SDK cuts a release that no longer ships the CVE, the release-gated
    reconciliation auto-removes the allowlist entry + closes the ticket — no human
-   action needed. (Reconciliation runs on `release: published`, not on the hourly
+   action needed. (Reconciliation runs on `release: released`, not on the hourly
    scan, so the entry persists for downstream consumers until the fix is shipped.)
 
 ### 4b. Case 2 — our dep, no fix, upstream alive
@@ -276,7 +276,7 @@ Print: `[Stage 4/6 complete] <allow> allowlist PRs, <bump> bump PRs, <draft> hum
    outcome (bump PR link / allowlist-only / awaiting base-image rebuild / killed).
    Include `**Run:** [logs + cost](${GHA_RUN_URL})`.
 2. Leave the ticket open. **Never set "Done"** — reconciliation
-   (`reconcile_allowlist.py`, run on `release: published`) closes it once a new
+   (`reconcile_allowlist.py`, run on `release: released`) closes it once a new
    SDK release no longer ships any CVE on it.
 3. Security audit: confirm no secrets/tokens leaked into any PR body or ticket.
 

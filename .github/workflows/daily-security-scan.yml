@@ -159,7 +159,8 @@ jobs:
         run: python3 .github/scripts/dispatch_vuln_triage.py
 
   # NOTE: reconciliation (allowlist-entry removal + Linear ticket close/update)
-  # is intentionally NOT a job here. It runs on `release: published` in
+  # is intentionally NOT a job here. It runs on `release: released` (not
+  # `published` — that fires for `-rc` prereleases too) in
   # vuln-reconcile-on-release.yml — an allowlist entry must persist until the
   # fix is *released*, because downstream connector build gates check out
   # .security/base-allowlist.json from SDK `main` while their images still carry

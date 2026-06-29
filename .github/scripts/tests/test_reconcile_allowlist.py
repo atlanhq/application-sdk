@@ -187,7 +187,7 @@ def test_resolution_phrase():
 
 # ---------------------------------------------------------------------------
 # scan_files_present + main() fail-safe — never reconcile against a phantom
-# empty scan. On `release: published` the scan artifact is downloaded from a
+# empty scan. On `release: released` the scan artifact is downloaded from a
 # prior run; if that download is absent/failed, reconciling would treat every
 # allowlisted CVE as "gone" and delete the whole allowlist. main() must bail.
 # ---------------------------------------------------------------------------

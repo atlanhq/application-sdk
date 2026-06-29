@@ -150,7 +150,7 @@ curl -s "$PROXY_BASE/proxy/linear" \
 ```
 
 Leave the ticket open — do not set "Done". Reconciliation
-(`reconcile_allowlist.py`, run on `release: published` — not the hourly scan)
+(`reconcile_allowlist.py`, run on `release: released` — not the hourly scan)
 closes it once a new SDK release no longer ships its CVEs.
 
 ## Prohibited

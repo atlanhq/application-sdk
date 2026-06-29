@@ -35,7 +35,7 @@ exactly. Do not skip stages. Print `[Stage N/6 complete]` after each stage.
 State lives in Linear: the ticket passed as `TICKET` is your work item; open
 issues with the `vulnerabilities` label are how the scan dedups, so never
 close or duplicate them yourself. Reconciliation (`reconcile_allowlist.py`, run
-on `release: published` — not the hourly scan) closes a ticket once a new SDK
+on `release: released` — not the hourly scan) closes a ticket once a new SDK
 release no longer ships its CVEs — not you.
 
 ## SDK v3 Context (for dependency reasoning)

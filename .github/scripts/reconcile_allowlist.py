@@ -5,12 +5,17 @@ Closing the loop on the zero-human-touch CVE flow: once a CVE stops showing up
 in the scan (its bump merged & shipped, or the base image was rebuilt), its
 allowlist entry and Linear ticket should be retired automatically.
 
-Invoked on a published SDK *release* (vuln-reconcile-on-release.yml), NOT on the
-hourly scan. The allowlist is shared across connector repos whose build gates
-read it from SDK `main` while their images still carry the CVE from the last
-released SDK — so an entry must persist until the fix is released, not merely
-merged. The hourly scan still detects/tickets/allowlists; only this retirement
-step is release-gated.
+Invoked on a stable SDK *release* (`release: released` —
+vuln-reconcile-on-release.yml), NOT on the hourly scan. The allowlist is shared
+across connector repos whose build gates read it from SDK `main` while their
+images still carry the CVE from the last released SDK — so an entry must persist
+until the fix is released, not merely merged. The hourly scan still
+detects/tickets/allowlists; only this retirement step is release-gated.
+
+The scan history it walks (current + debounce window) is pinned to ``main`` via
+``SCAN_BRANCH`` so an hourly-scan ``workflow_dispatch`` from a feature branch can
+never become the source of truth for what `main` ships (and thus what to retire
+from the shared allowlist).
 
 **Resolution & debounce.** By default a CVE is treated as *resolved* as soon as
 it is absent from the latest scan (`DEBOUNCE_SCANS` = 1). Raise `DEBOUNCE_SCANS`
@@ -43,6 +48,8 @@ Optional:
     LINEAR_VULN_LABEL_NAME  default 'vulnerabilities'
     DEBOUNCE_SCANS          default 1 — act on the first clean scan (this scan +
                             N-1 prior successful scans); raise to debounce churn
+    SCAN_BRANCH             default 'main' — branch whose scan runs feed the
+                            debounce window (excludes feature-branch dispatches)
 """
 
 from __future__ import annotations
@@ -174,10 +181,15 @@ def load_current_cves() -> set[str]:
 
 
 def load_prior_scan_cves(
-    repo: str, workflow: str, count: int, runner: Runner
+    repo: str, workflow: str, count: int, runner: Runner, branch: str = "main"
 ) -> list[set[str]]:
     """Download the ``count`` most recent prior successful scan artifacts and
-    return their CVE sets. Best-effort: runs without the artifact are skipped."""
+    return their CVE sets. Best-effort: runs without the artifact are skipped.
+
+    Pinned to ``branch`` (default ``main``): a scan ``workflow_dispatch`` from a
+    feature branch must never feed the debounce window — only runs of ``main``
+    reflect what is actually shipped. (Not ``--event schedule``, so a manual
+    dispatch on ``main`` for backfill still counts.)"""
     listing = runner(
         [
             "gh",
@@ -187,6 +199,8 @@ def load_prior_scan_cves(
             repo,
             "--workflow",
             workflow,
+            "--branch",
+            branch,
             "--status",
             "success",
             "--limit",
@@ -442,6 +456,7 @@ def main(runner: Runner = subprocess.run) -> int:
     repo = os.environ.get("REPO", "atlanhq/application-sdk")
     workflow = os.environ.get("SCAN_WORKFLOW", DEFAULT_WORKFLOW)
     run_date = os.environ.get("RUN_DATE", "")
+    branch = os.environ.get("SCAN_BRANCH", "main")
     debounce = int(os.environ.get("DEBOUNCE_SCANS", str(DEFAULT_DEBOUNCE)))
 
     if not scan_files_present():
@@ -454,7 +469,7 @@ def main(runner: Runner = subprocess.run) -> int:
         return 0
 
     current = load_current_cves()
-    priors = load_prior_scan_cves(repo, workflow, debounce - 1, runner)
+    priors = load_prior_scan_cves(repo, workflow, debounce - 1, runner, branch)
     scan_sets = [current, *priors]
     if len(scan_sets) < debounce:
         print(

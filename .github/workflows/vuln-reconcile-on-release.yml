@@ -64,13 +64,21 @@ jobs:
       # in the working dir for reconcile_allowlist.py (it reads trivy-*.json from
       # the CWD). Straight-line commands only; the resolution decision lives in
       # the tested reconcile_allowlist.py, not here.
+      #
+      # --branch main: the hourly scan also runs on workflow_dispatch (any
+      # branch), so without this filter a feature-branch dispatch could become
+      # the latest success and feed reconcile a scan of NON-released code,
+      # wiping legitimate allowlist entries for the whole connector fleet. Only
+      # runs of `main` reflect what is shipped. (Not --event schedule, so a
+      # manual dispatch on main for backfill still counts.)
       - name: Download latest hourly scan results
         env:
           GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
           REPO: ${{ github.repository }}
         run: |
           RUN_ID=$(gh run list -R "$REPO" --workflow daily-security-scan.yml \
-            --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+            --branch main --status success --limit 1 \
+            --json databaseId --jq '.[0].databaseId')
           echo "Reconciling against scan run $RUN_ID"
           gh run download "$RUN_ID" -R "$REPO" -n security-scan-raw-results
           # Loud assertion: gh run download flattens artifact contents into the
