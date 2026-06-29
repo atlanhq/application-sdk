@@ -788,7 +788,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
     def export_record(self, record: Any) -> None:
         """Export a log record to external systems.
 
-        OTLP export is handled exclusively by the otlp_sink; this path is a no-op.
+        OTLP export is handled by the unified _log_sink (which calls _send_to_otel); this path is a no-op.
         """
 
     def _create_log_record(self, record: dict) -> LogRecord:
