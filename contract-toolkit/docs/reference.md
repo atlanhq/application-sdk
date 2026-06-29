@@ -2735,33 +2735,42 @@ class AppInputContract(ExtractionInput):
 
 ### v0.17.0 — nested `deploy`/`pools` API; `deployOverrides` renamed to `overrides`
 
-**What changed:** The v0.16.x `deploy`, `deployOverrides`, and `emitDeploy` properties are
-**removed**. Deployment is now configured via a single nullable `deploy: DeployConfig? = null`
-property. `DeployConfig` holds the singleton deployment fields (`executionMode`,
-`splitDeployment`, `dapr`) and a nested `pools` map for per-pool scaling. The `deploy:` block
-in `atlan.yaml` is synthesised automatically — no flag required.
+**What changed:** The v0.16.x `deploy` and `deployOverrides` properties are **removed**.
+In v0.16.x, `deploy: DeployConfig` was always non-null and unconditionally emitted the
+`deploy:` block in `atlan.yaml`; `keda`, `resources`, `env`, and `envOverrides` were flat
+fields directly on `DeployConfig`. Deployment is now configured via a single nullable
+`deploy: DeployConfig? = null` — leaving it unset (the default) means no `deploy:` block
+is emitted and Heracles applies platform defaults. Per-pool scaling (`keda`, `resources`,
+`env`) now lives inside `deploy.pools`. The `deploy:` block is synthesised automatically
+from the first pool when `pools` is non-empty.
 
-`deployOverrides` (both the old app-level field and the old `Pool.deployOverrides`) is renamed
-to `overrides` at both levels.
+The app-level `deployOverrides` escape hatch is renamed to `overrides` and is available
+at both the `DeployConfig` level and the per-`Pool` level.
 
-**Who is affected:** apps that set `deploy { ... }`, `deployOverrides { ... }`, `emitDeploy`,
-or `pools { ... }` (the old top-level form) in their contract.
+**Who is affected:** apps that set `deploy { ... }` or `deployOverrides { ... }` in their
+contract.
 
 **Migration — keda/resources/env → `deploy.pools`:**
 
 ```pkl
-// Before (v0.16.x — flat top-level pools):
-pools {
-  ["default"] = new Pool {
-    keda { enabled = true; minReplicaCount = 1 }
+// Before (v0.16.x — keda/resources/env were flat fields on DeployConfig):
+deploy {
+  keda { enabled = true; minReplicaCount = 0 }
+  resources = new ResourceConfig {
+    requests { ["cpu"] = "500m"; ["memory"] = "1Gi" }
   }
+  env { ["LOG_LEVEL"] = "INFO" }
 }
 
-// After (v0.17.0+— nested under deploy):
+// After (v0.17.0+ — per-pool config nested under deploy):
 deploy = new DeployConfig {
   pools {
     ["default"] = new Pool {
-      keda { enabled = true; minReplicaCount = 1 }
+      keda { enabled = true; minReplicaCount = 0 }
+      resources = new ResourceConfig {
+        requests { ["cpu"] = "500m"; ["memory"] = "1Gi" }
+      }
+      env { ["LOG_LEVEL"] = "INFO" }
     }
   }
 }
@@ -2770,45 +2779,45 @@ deploy = new DeployConfig {
 The `deploy:` YAML block is synthesised from the first pool. Apps with no deployment
 configuration at all are unaffected.
 
-**Migration — Dapr (`deployOverrides` → `deploy.dapr`):**
+**Migration — Dapr:**
+
+`dapr` was already a typed field on `DeployConfig` in v0.16.x — the syntax is unchanged.
+The key difference is that `deploy` is now nullable: omit it entirely when no Dapr
+components are needed and Heracles will apply platform defaults. Set it only when you
+need to enable specific components.
 
 ```pkl
-// Before (v0.16.x):
-pools {
-  ["default"] = new Pool {
-    deployOverrides {
-      ["dapr"] = new Mapping { ["objectstore"] = true; ["secretstore"] = true }
-    }
-  }
+// Before (v0.16.x — deploy always non-null; dapr set inline):
+deploy {
+  dapr { objectstore = true; secretstore = true }
+  keda { enabled = true }
 }
 
-// After (v0.17.0+ — dapr is a typed first-class field on DeployConfig):
+// After (v0.17.0+ — dapr on DeployConfig, keda/resources/env moved to pools):
 deploy = new DeployConfig {
   dapr { objectstore = true; secretstore = true }
   pools {
-    ["default"] = new Pool { ... }
+    ["default"] = new Pool {
+      keda { enabled = true }
+    }
   }
 }
 ```
 
-**Migration — other `deployOverrides` keys → `overrides`:**
+**Migration — `deployOverrides` → `overrides`:**
 
 ```pkl
-// Before:
-pools {
-  ["default"] = new Pool {
-    deployOverrides {
-      ["verticalPodAutoscaler"] = new Mapping { ["enabled"] = true }
-    }
-  }
+// Before (v0.16.x — app-level deployOverrides escape hatch):
+deployOverrides {
+  ["verticalPodAutoscaler"] = new Mapping { ["enabled"] = true; ["updateMode"] = "Auto" }
 }
 
-// After:
+// After (v0.17.0+ — per-pool overrides on Pool, or deploy-level overrides on DeployConfig):
 deploy = new DeployConfig {
   pools {
     ["default"] = new Pool {
       overrides {
-        ["verticalPodAutoscaler"] = new Mapping { ["enabled"] = true }
+        ["verticalPodAutoscaler"] = new Mapping { ["enabled"] = true; ["updateMode"] = "Auto" }
       }
     }
   }
