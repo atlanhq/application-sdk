@@ -87,8 +87,8 @@ if hasattr(signal, "SIGUSR1"):
     signal.signal(signal.SIGUSR1, _debug_dump_handler)
 
 
-def _log_worker_memory_context() -> None:
-    """Log current RSS vs container memory limit at worker startup.
+def _log_process_memory_baseline() -> None:
+    """Log current RSS vs container memory limit at process startup.
 
     Gives a baseline so that — after an OOM kill — the log of the replacement
     pod shows the limit, and the log of the killed pod shows memory climbing
@@ -98,15 +98,18 @@ def _log_worker_memory_context() -> None:
     from application_sdk.observability import (  # noqa: PLC0415 — cold path: startup only
         resource_sampler as _rs,
     )
+    from application_sdk.observability.resource_sampler import (  # noqa: PLC0415
+        parse_pod_memory_limit,
+    )
 
-    limit_bytes = int(os.environ.get("K8S_POD_MEMORY_LIMIT", "0") or "0")
+    limit_bytes = parse_pod_memory_limit(os.environ.get("K8S_POD_MEMORY_LIMIT", ""))
     if limit_bytes <= 0:
         return
     sample = _rs.sample()
     if sample is None:
         return
     logger.info(
-        "Worker memory at start: %.2f GiB RSS / %.2f GiB limit (%.0f%% of limit)",
+        "Process memory at start: %.2f GiB RSS / %.2f GiB limit (%.0f%% of limit)",
         sample.rss_bytes / (1024**3),
         limit_bytes / (1024**3),
         100.0 * sample.rss_bytes / limit_bytes,
@@ -983,7 +986,7 @@ async def run_worker_mode(config: AppConfig) -> None:
     health_server.set_temporal_client(client)
 
     logger.info("Worker started: app=%s queue=%s", app_name, config.task_queue)
-    _log_worker_memory_context()
+    _log_process_memory_baseline()
     async with health_server, worker:
         await shutdown_event.wait()
 
@@ -1031,6 +1034,7 @@ def run_handler_mode(config: AppConfig) -> None:
         config.handler_host,
         config.handler_port,
     )
+    _log_process_memory_baseline()
 
     app_class = load_app_class(config.app_module)
     validate_app_class(app_class)
@@ -1291,7 +1295,7 @@ async def run_combined_mode(config: AppConfig) -> None:
         config.task_queue,
         config.handler_port,
     )
-    _log_worker_memory_context()
+    _log_process_memory_baseline()
     async with health_server, worker:
         await asyncio.gather(
             uvicorn_server.serve(),

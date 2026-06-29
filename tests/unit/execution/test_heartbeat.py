@@ -239,6 +239,60 @@ class TestAutoHeartbeatLoop:
 
         assert hb_calls  # heartbeat was sent
 
+    @pytest.mark.asyncio
+    async def test_memory_pressure_silent_when_env_unset(self, monkeypatch) -> None:
+        """No memory-pressure WARNING when K8S_POD_MEMORY_LIMIT is not set."""
+        from application_sdk.execution import heartbeat as hb_mod
+
+        monkeypatch.delenv("K8S_POD_MEMORY_LIMIT", raising=False)
+        stop = asyncio.Event()
+
+        def hb_fn():
+            stop.set()
+
+        with patch.object(hb_mod, "logger") as mock_logger:
+            await auto_heartbeat_loop(0.001, hb_fn, stop, task_name="t")
+
+        memory_warnings = [
+            c for c in mock_logger.warning.call_args_list if "Memory pressure" in str(c)
+        ]
+        assert not memory_warnings
+
+    @pytest.mark.asyncio
+    async def test_memory_pressure_warning_emitted_above_threshold(
+        self, monkeypatch
+    ) -> None:
+        """WARNING is emitted with correct percentage when RSS ≥ 80% of limit."""
+        from application_sdk.execution import heartbeat as hb_mod
+        from application_sdk.observability.resource_sampler import ResourceSample
+
+        limit = 4 * 1024**3  # 4 GiB in bytes
+        rss = int(limit * 0.85)  # 85%
+        monkeypatch.setenv("K8S_POD_MEMORY_LIMIT", str(limit))
+
+        stop = asyncio.Event()
+
+        def hb_fn():
+            stop.set()
+
+        with (
+            patch(
+                "application_sdk.execution.heartbeat._resource_sampler.sample",
+                return_value=ResourceSample(cpu_time_s=1.0, rss_bytes=rss),
+            ),
+            patch.object(hb_mod, "logger") as mock_logger,
+        ):
+            await auto_heartbeat_loop(0.001, hb_fn, stop, task_name="mem-task")
+
+        warning_calls = [
+            c for c in mock_logger.warning.call_args_list if "Memory pressure" in str(c)
+        ]
+        assert warning_calls, "Expected memory-pressure WARNING"
+        # args: (fmt, task_name, pct_float, rss_gib, limit_gib)
+        _fmt, task, pct, *_ = warning_calls[0].args
+        assert task == "mem-task"
+        assert abs(pct - 85.0) < 0.5
+
 
 # ---------------------------------------------------------------------------
 # run_in_thread — must NOT use real threads in tests

@@ -148,7 +148,7 @@ EXIT_CODE=$?
 
 echo "[entrypoint] App exited with code ${EXIT_CODE}"
 if [ "${EXIT_CODE}" -eq 137 ]; then
-    echo "[entrypoint] CRITICAL: exit code 137 = SIGKILL — almost certainly an OOM kill. Check: kubectl describe pod \${K8S_POD_NAME}; kubectl get events -n \${Namespace} --field-selector=reason=OOMKilling" >&2
+    echo "[entrypoint] CRITICAL: exit code 137 = SIGKILL — almost certainly an OOM kill. Check: kubectl describe pod ${K8S_POD_NAME:-<pod-name>}; kubectl get events -n ${K8S_POD_NAMESPACE:-<namespace>} --field-selector=reason=OOMKilling" >&2
 fi
 
 # Stop daprd after the app exits (normal path — signal handler covers SIGTERM path)
