@@ -137,6 +137,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # the SDK has neither, so this check is meaningless there (BLDX-1491).
     # I001–I005: Dockerfile conformance (SDK builds the base image, not consuming it).
     # B001: consuming a deprecated SDK symbol (BLDX-1418).
+    # O002/O003/O004: asset-mapper usage — connectors build assets with pyatlan_v9,
+    # serialize with to_nested_bytes, and type their mapper returns (BLDX-1492); the
+    # SDK is the framework, not a connector.
     assert app_scoped == {
         "B001",
         "C002",
@@ -161,6 +164,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P017",
         "P018",
         "P025",
+        "O002",
+        "O003",
+        "O004",
         "I001",
         "I002",
         "I003",
@@ -321,7 +327,7 @@ def test_catalog_o_series_present() -> None:
     """The O-series optimisation rules are all present."""
     rules = load_catalog()
     o_ids = {r.id for r in rules if r.id.startswith("O")}
-    expected = {"O001"}
+    expected = {"O001", "O002", "O003", "O004"}
     missing = expected - o_ids
     assert not missing, f"Missing O-series rules: {missing}"
 
