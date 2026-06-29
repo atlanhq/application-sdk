@@ -316,3 +316,84 @@ class TestRequestNetworkRetry:
         assert body == {"err": "boom"}
         assert mock_open.call_count == 1
         mock_sleep.assert_not_called()
+
+
+class TestRequiredNodesSubset:
+    """required_dag_nodes: assert/poll only a subset of the DAG (e.g. the
+    publish-path test cares about extract+publish, not qi/lineage)."""
+
+    @staticmethod
+    def _result(status: DAGRunStatus, node_states: dict) -> DAGRunResult:
+        return DAGRunResult(
+            run_id=_RUN_ID,
+            workflow_slug="slug",
+            status=status,
+            nodes=[
+                DAGNodeResult(
+                    name=name,
+                    status=st,
+                    started_at_ms=None,
+                    completed_at_ms=None,
+                    error_message=None,
+                )
+                for name, st in node_states.items()
+            ],
+        )
+
+    def test_succeeded_for_subset_ignores_running_others(self):
+        # extract+publish succeeded; qi/lineage still running → required subset OK.
+        r = self._result(
+            DAGRunStatus.RUNNING,
+            {
+                "extract": DAGNodeStatus.SUCCEEDED,
+                "publish": DAGNodeStatus.SUCCEEDED,
+                "qi": DAGNodeStatus.RUNNING,
+                "lineage-app": DAGNodeStatus.PENDING,
+            },
+        )
+        assert r.succeeded_for({"extract", "publish"}) is True
+        assert r.all_nodes_succeeded is False  # whole-DAG view still not done
+        assert r.terminal_for({"extract", "publish"}) is True
+        assert r.failed_for({"extract", "publish"}) == []
+
+    def test_subset_fails_when_required_node_failed(self):
+        r = self._result(
+            DAGRunStatus.RUNNING,
+            {"extract": DAGNodeStatus.SUCCEEDED, "publish": DAGNodeStatus.FAILED},
+        )
+        assert r.succeeded_for({"extract", "publish"}) is False
+        assert r.terminal_for({"extract", "publish"}) is True  # failed is terminal
+        assert [n.name for n in r.failed_for({"extract", "publish"})] == ["publish"]
+
+    def test_none_required_falls_back_to_whole_dag(self):
+        r = self._result(
+            DAGRunStatus.RUNNING,
+            {"extract": DAGNodeStatus.SUCCEEDED, "qi": DAGNodeStatus.RUNNING},
+        )
+        assert r.succeeded_for(None) is r.all_nodes_succeeded
+        assert r.terminal_for(None) is r.status.is_terminal
+
+    def test_poll_returns_once_required_nodes_terminal(self):
+        """Poll stops as soon as the required subset is terminal, even though the
+        top-level status is still Running (qi/lineage unfinished)."""
+        client = _make_client()
+        partial = self._result(
+            DAGRunStatus.RUNNING,
+            {
+                "extract": DAGNodeStatus.SUCCEEDED,
+                "publish": DAGNodeStatus.SUCCEEDED,
+                "qi": DAGNodeStatus.RUNNING,
+            },
+        )
+        with (
+            patch.object(client, "get_native_status", return_value=partial) as g,
+            patch("time.sleep"),
+        ):
+            out = client.poll_native_status(
+                _RUN_ID,
+                interval_seconds=1,
+                timeout_seconds=60,
+                required_nodes={"extract", "publish"},
+            )
+        assert out is partial
+        assert g.call_count == 1  # returned on the first poll, didn't wait for qi

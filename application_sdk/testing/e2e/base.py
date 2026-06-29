@@ -86,11 +86,16 @@ class FullDAGOutcome:
     asset_counts: dict[str, int] = field(default_factory=dict)
     total_assets: int = 0
     lineage_present: bool = False
+    # The node subset the test required (None = the whole DAG).
+    required_nodes: set[str] | None = None
 
     @property
     def succeeded(self) -> bool:
-        """True iff every DAG node succeeded *and* Atlas has the Connection."""
-        return self.ae_result.all_nodes_succeeded and self.connection_in_atlas
+        """True iff the required DAG nodes succeeded *and* Atlas has the Connection."""
+        return (
+            self.ae_result.succeeded_for(self.required_nodes)
+            and self.connection_in_atlas
+        )
 
 
 class BaseE2ETest:
@@ -155,6 +160,15 @@ class BaseE2ETest:
 
     ae_poll_interval_seconds: ClassVar[int] = 10
     ae_poll_timeout_seconds: ClassVar[int] = 600
+    # Consecutive native-status HTTP failures tolerated before giving up. The
+    # shared e2e tenant's AE occasionally returns 5xx bursts mid-run; raise this
+    # on flaky tenants so a transient burst doesn't fail an otherwise-healthy run.
+    ae_poll_max_transient_failures: ClassVar[int] = 5
+    # Subset of DAG nodes a test requires to succeed (None = the whole DAG). Set
+    # this when a test asserts only part of the DAG — e.g. a publish-path test
+    # needs extract+publish, not the qi/lineage chain on shared tenant workers.
+    # Polling then stops once these are terminal and the Atlas probe gates on them.
+    required_dag_nodes: ClassVar[set[str] | None] = None
     atlas_poll_interval_seconds: ClassVar[int] = 30
     atlas_poll_timeout_seconds: ClassVar[int] = 1500
     # Asset counts use a much shorter poll window: Elasticsearch is eventually
@@ -594,12 +608,14 @@ class BaseE2ETest:
             run_id,
             interval_seconds=self.ae_poll_interval_seconds,
             timeout_seconds=self.ae_poll_timeout_seconds,
+            max_transient_failures=self.ae_poll_max_transient_failures,
+            required_nodes=self.required_dag_nodes,
         )
 
         asset_counts: dict[str, int] = {}
         total_assets = 0
         lineage_present = False
-        if ae_result.all_nodes_succeeded:
+        if ae_result.succeeded_for(self.required_dag_nodes):
             connection_in_atlas = self.client.poll_atlas_for_connection(
                 self.connection_qualified_name,
                 interval_seconds=self.atlas_poll_interval_seconds,
@@ -677,6 +693,7 @@ class BaseE2ETest:
             asset_counts=asset_counts,
             total_assets=total_assets,
             lineage_present=lineage_present,
+            required_nodes=self.required_dag_nodes,
         )
 
     # ------------------------------------------------------------------
@@ -758,7 +775,7 @@ class BaseE2ETest:
         """
         outcome = self.run_full_dag()
         if not outcome.succeeded:
-            failed = outcome.ae_result.failed_nodes
+            failed = outcome.ae_result.failed_for(outcome.required_nodes)
             failures_msg = (
                 "\n".join(
                     f"  - {n.name}: status={n.status.value} error={n.error_message}"

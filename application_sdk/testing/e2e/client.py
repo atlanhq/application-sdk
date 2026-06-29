@@ -206,6 +206,36 @@ class DAGRunResult:
     def failed_nodes(self) -> list[DAGNodeResult]:
         return [n for n in self.nodes if not n.status.is_success]
 
+    # --- required-subset variants -------------------------------------
+    # Some tests assert only a SUBSET of the DAG (e.g. a publish-path test
+    # cares about extract+publish, not the qi/lineage chain that runs on
+    # shared tenant workers and can lag or wedge independently). When
+    # ``required`` is None these collapse to the all-nodes behaviour above.
+    def succeeded_for(self, required: set[str] | None) -> bool:
+        if required is None:
+            return self.all_nodes_succeeded
+        by_name = {n.name: n for n in self.nodes}
+        return bool(required) and all(
+            name in by_name and by_name[name].status.is_success for name in required
+        )
+
+    def terminal_for(self, required: set[str] | None) -> bool:
+        """True once every required node has reached a terminal status (so the
+        poll can stop without waiting for non-required nodes to finish)."""
+        if required is None:
+            return self.status.is_terminal
+        by_name = {n.name: n for n in self.nodes}
+        return bool(required) and all(
+            name in by_name and by_name[name].status.is_terminal for name in required
+        )
+
+    def failed_for(self, required: set[str] | None) -> list[DAGNodeResult]:
+        if required is None:
+            return self.failed_nodes
+        return [
+            n for n in self.nodes if n.name in required and not n.status.is_success
+        ]
+
 
 class AEWorkflowClient:
     """Thin wrapper over the three Atlan endpoints used by full-DAG tests.
@@ -591,8 +621,14 @@ class AEWorkflowClient:
         interval_seconds: int = 10,
         timeout_seconds: int = 600,
         max_transient_failures: int = 5,
+        required_nodes: set[str] | None = None,
     ) -> DAGRunResult:
-        """Poll until the run reaches a terminal top-level status.
+        """Poll until the run reaches a terminal status.
+
+        With ``required_nodes`` set, polling stops as soon as that subset of
+        nodes is terminal — the run needn't reach a terminal top-level status
+        (i.e. non-required nodes like qi/lineage may still be running). With it
+        None, waits for the whole DAG (the default).
 
         Logs a one-line summary per poll only when the status string
         changes (i.e. progress moments), to avoid spamming logs during
@@ -659,7 +695,7 @@ class AEWorkflowClient:
                 )
                 last_summary = summary
                 last_log_elapsed = elapsed
-            if result.status.is_terminal:
+            if result.terminal_for(required_nodes):
                 return result
             time.sleep(interval_seconds)
             elapsed += interval_seconds
