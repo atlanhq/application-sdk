@@ -99,6 +99,7 @@ async def execute_activity_with_eviction_retry(
                     "check pod exit code and cluster events for the affected worker",
                     eviction_attempts,
                     max_eviction_retries,
+                    exc_info=True,
                     extra={
                         "eviction_attempts": eviction_attempts,
                         "max_eviction_retries": max_eviction_retries,
