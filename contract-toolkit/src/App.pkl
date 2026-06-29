@@ -192,13 +192,12 @@ atlanYamlOverrides: Mapping<String, Any> = new Mapping {}
 /// Whether to emit `atlan.yaml` in the output.
 emitAtlanYaml: Boolean = true
 
-/// @Deprecated — use `marketplaceCard = false` on individual `Entrypoint`s instead.
+/// @Deprecated — use the `entrypoints` listing with `packageId` set on those that should
+/// render as marketplace cards, rather than toggling the entire block.
 /// Will be removed in the next minor version.
 ///
 /// When `true` (default), all entrypoints are emitted into the `entrypoints:` block
-/// of `atlan.yaml`. When `false`, the block is suppressed entirely. Superseded by
-/// `marketplaceCard`, which lets you express routable-but-not-card entrypoints
-/// declaratively rather than suppressing the whole block.
+/// of `atlan.yaml`. When `false`, the block is suppressed entirely.
 emitEntrypoints: Boolean = true
 
 /// Whether to emit `app.yaml` in the output.
@@ -1463,12 +1462,16 @@ open class Entrypoint {
 
   metadata: Mapping<String, Any> = new Mapping {}
 
-  /// Whether this entrypoint renders as a marketplace UI card.
-  /// All entrypoints are always routable via `?entrypoint=`; only
-  /// `marketplaceCard=true` entries surface as cards in the marketplace (LM/GM).
-  /// Set to `false` for entrypoints that are invoked downstream by DAG nodes
-  /// but should not appear as user-facing cards.
-  marketplaceCard: Boolean = true
+  /// Stable marketplace package ID for this entrypoint (e.g. `"@atlan/qlik-sense"`).
+  /// When set, emits `package_id:` and `marketplace_card: true` in `atlan.yaml`,
+  /// making this entrypoint a user-facing marketplace card.
+  /// Required for multi-entrypoint apps to preserve backward compat with legacy
+  /// Argo workflows that reference the app by its stable card ID; without it the
+  /// marketplace derives a card ID from the GMP name and entrypoint name, which
+  /// will not match old `app_id` values and breaks existing connection references.
+  /// Entrypoints without a `packageId` are always routable via `?entrypoint=` but
+  /// do not appear as marketplace cards.
+  packageId: String?
 
   /// Optional imported contract for this entrypoint.
   /// When set and `emitGeneratedArtifacts` is true, all files from
@@ -3115,7 +3118,10 @@ local function renderEntrypoint(e: Entrypoint): Mapping<String, Any> = new Mappi
   when (e.sourceCategory != null) { ["source_category"] = e.sourceCategory }
   when (!e.categories.isEmpty) { ["categories"] = e.categories }
   when (e.docsUrl != null || docsUrl != "") { ["docs_url"] = e.docsUrl ?? docsUrl }
-  ["marketplace_card"] = e.marketplaceCard
+  when (e.packageId != null) {
+    ["package_id"] = e.packageId
+    ["marketplace_card"] = true
+  }
   ...e.metadata
 }
 

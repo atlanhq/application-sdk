@@ -97,7 +97,7 @@ The `examples/` directory contains executable contracts that teach stable toolki
 - [`examples/minimal/`](examples/minimal/) — smallest possible contract; uses all defaults. Start here.
 - [`examples/full/`](examples/full/) — every overridable feature: JDBC URL auth, all pipeline steps, diverse widgets, UIRules, extraNodes.
 - [`examples/bundle/`](examples/bundle/) — multi-entrypoint app (crawler + miner); shared credential configmap; per-entrypoint artifact subfolders.
-- [`examples/card-split/`](examples/card-split/) — two entrypoints where only one is a marketplace UI card (`marketplaceCard = false` on the route-only entrypoint).
+- [`examples/card-split/`](examples/card-split/) — two entrypoints where only one is a marketplace UI card (`packageId` on the card entrypoint; route-only entrypoint has none).
 - [`examples/deploy/`](examples/deploy/) — single-pool deployment: KEDA, resources, env, and per-pool `overrides` under `deploy.pools["default"]`.
 - [`examples/pools/`](examples/pools/) — `pools` map (preferred): named hot/cold worker pools with per-pool KEDA `cooldownPeriod` and resources.
 - [`examples/connection-ref/`](examples/connection-ref/) — `ConnectionRefInput` widget, `pipeline.publish = null`.
@@ -323,7 +323,9 @@ For the single-pool case, use the key `"default"`. See `examples/pools/` for a f
 
 Multi-entrypoint apps set `entrypoints` at the root `app.pkl` and keep per-entrypoint contracts as separate files that each `amend App.pkl`.
 
-All entrypoints are always routable via `?entrypoint=`. Set `marketplaceCard = false` on entrypoints that should be routable but not appear as a user-facing marketplace card (e.g. a lineage workflow invoked downstream by a DAG node rather than directly by a user).
+All entrypoints are always routable via `?entrypoint=`. Set `packageId` on entrypoints that should appear as user-facing marketplace cards; entrypoints without a `packageId` are routable but invisible in the marketplace (e.g. a lineage workflow invoked downstream by a DAG node rather than directly by a user).
+
+For multi-entrypoint apps, `packageId` also pins the stable card ID (e.g. `"@atlan/qlik-sense"`) so legacy Argo workflows that reference the app by their old `app_id` continue to resolve correctly, and existing connection references in the UI do not go blank after migration.
 
 ```pkl
 // app.pkl

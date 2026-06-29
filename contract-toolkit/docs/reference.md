@@ -372,7 +372,7 @@ Set `entrypoints` to serve multiple marketplace tiles from one deployment. Per-e
 | `sourceCategory` | String? | null | Source category. |
 | `categories` | Listing\<String\> | `[]` | Marketplace category tags for this entrypoint. |
 | `docsUrl` | String? | null | Documentation URL. Falls back to the app-level `docsUrl` when null. |
-| `marketplaceCard` | Boolean | `true` | Whether this entrypoint renders as a marketplace UI card. Set to `false` for entrypoints that are routable (`?entrypoint=`) but should not appear as user-facing cards (e.g. a lineage workflow invoked downstream by a DAG node). |
+| `packageId` | String? | null | Stable marketplace package ID (e.g. `"@atlan/qlik-sense"`). When set, emits `package_id:` and `marketplace_card: true` in `atlan.yaml`. Required for multi-entrypoint apps to preserve backward compat with legacy Argo workflows that reference the app by its stable card ID. Entrypoints without a `packageId` are routable but do not appear as marketplace cards. |
 | `contract` | Typed? | null | The entrypoint's `App.pkl` contract whose `output.files` are emitted. |
 
 Bundle output layout:

@@ -13,9 +13,9 @@ entrypoints:
   display_name: Extract
   icon_url: https://assets.atlan.com/assets/fullscreen-open.svg
   type: connector
+  package_id: '@atlan/card-split'
   marketplace_card: true
 - name: extract-lineage
   display_name: Extract Lineage
   icon_url: https://assets.atlan.com/assets/fullscreen-open.svg
   type: connector
-  marketplace_card: false

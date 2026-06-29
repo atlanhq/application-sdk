@@ -13,7 +13,6 @@ entrypoints:
   display_name: Pools Map Example
   icon_url: https://assets.atlan.com/assets/fullscreen-open.svg
   type: connector
-  marketplace_card: true
 deploy:
   execution_mode: native
   splitDeploymentEnabled: true

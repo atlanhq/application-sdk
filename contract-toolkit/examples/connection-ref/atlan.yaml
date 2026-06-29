@@ -13,4 +13,3 @@ entrypoints:
   display_name: ConnectionRef Example
   icon_url: https://assets.atlan.com/assets/trino.svg
   type: connector
-  marketplace_card: true
