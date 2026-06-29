@@ -237,6 +237,20 @@ facts {
     deployYaml.contains("keda:")
   }
 
+  ["Full example fallback emits app-level description and docs_url inside entrypoints[]"] {
+    // Indented (2-space) forms only appear inside the entrypoints block, not at top level.
+    fullAtlanYaml.contains("  description: Reference contract that exercises every App.pkl property.")
+    fullAtlanYaml.contains("  docs_url: https://docs.example.com/apps/full-featured")
+  }
+
+  ["Bundle example preserves clean entrypoints when no marketplace metadata is set"] {
+    local bundleYaml: String = bundleApp.output.files["atlan.yaml"].text
+    // Neither the bundle app nor its entrypoints set shortDescription / docsUrl,
+    // so description: and docs_url: must not appear in any per-entrypoint block.
+    !bundleYaml.split("entrypoints:").last.contains("description:")
+    !bundleYaml.split("entrypoints:").last.contains("docs_url:")
+  }
+
   ["ConnectionRef example uses public connector filters"] {
     connectionRefWorkflowJson.contains("\"widget\": \"connectionSelector\"")
     connectionRefWorkflowJson.contains("\"shouldIncludeConnectionInfo\": true")

@@ -109,7 +109,7 @@ The `examples/` directory contains executable contracts that teach stable toolki
 
 ### `atlan.yaml` (repo root)
 
-Marketplace deployment manifest. Contains app identity, the `entrypoints` list, and (when `deploy` is configured) a typed `deploy:` block — app-level `dapr` and `overrides` plus a `pools:` map carrying per-pool keda/resources/env/overrides. The top-level `deploy:` block is synthesised from the first pool for backward compatibility. Emitted with a DO-NOT-EDIT header — edit `contract/app.pkl` instead.
+Marketplace deployment manifest. Contains app identity, marketplace metadata (`short_description`, `long_description`, `docs_url`, `tags`), the `entrypoints` list, and (when `deploy` is configured) a typed `deploy:` block — app-level `dapr` and `overrides` plus a `pools:` map carrying per-pool keda/resources/env/overrides. The top-level `deploy:` block is synthesised from the first pool for backward compatibility. Emitted with a DO-NOT-EDIT header — edit `contract/app.pkl` instead.
 
 ### `app.yaml` (repo root)
 

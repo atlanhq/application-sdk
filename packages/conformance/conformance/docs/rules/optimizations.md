@@ -5,7 +5,7 @@
 
 # Optimisation / Recommendation Rules (O-series)
 
-**1 rule** · Checker: `suite.checks.optimizations` (AST-based)
+**4 rules** · Checker: `suite.checks.optimizations` (AST-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -24,6 +24,9 @@ reassigned.
 | ID | Name | Tier | Scope | Category | Autofixable | Since |
 |---|---|---|---|---|---|---|
 | [O001](#o001) | `OrjsonOverStdlibJson` | `warn` | `both` | `canonical-dependency` | — | 0.3.0 |
+| [O002](#o002) | `LegacyAssetSerialization` | `warn` | `app` | `asset-mapper` | — | 0.8.0 |
+| [O003](#o003) | `UntypedAssetMapperReturn` | `warn` | `app` | `asset-mapper` | — | 0.8.0 |
+| [O004](#o004) | `LegacyPyatlanAssetImport` | `warn` | `app` | `asset-mapper` | — | 0.8.0 |
 
 ---
 
@@ -53,5 +56,90 @@ NOT autofixable: `orjson` is not a drop-in replacement.  `orjson.dumps` returns 
 `option=orjson.OPT_INDENT_2 | orjson.OPT_SORT_KEYS` and the `default` positional), and
 rejects some inputs stdlib accepts.  A blind `json.`→`orjson.` swap silently changes
 `str`→`bytes` and breaks callers — each site needs human judgement.
+
+---
+
+## O002 — `LegacyAssetSerialization` {#o002}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `asset-mapper` · **Autofixable:** — · **Since:** 0.8.0
+
+> Asset serialised with .dict() — prefer the v9 asset.to_nested_bytes() API
+
+**Rationale:** The asset-mapper pattern serialises pyatlan assets to JSONL with the v9 API —
+asset.to_nested_bytes() — which emits the nested-entity wire shape the platform expects.
+Serialising an asset with the pydantic .dict() method produces a flat dict that still
+needs hand-conversion and drifts from the SDK's recommended pipeline (BLDX-1492;
+docs/upgrade-guide-v3.md). WARN/recommendation because .dict() is name-anchored — it can
+also belong to a non-asset pydantic model — so the call needs a human glance.
+
+Flags a `.dict()` method call in a module that imports pyatlan asset models.  The
+asset-mapper pattern writes assets with the v9 serialisation API —
+`asset.to_nested_bytes()` — not the pydantic `.dict()` form (`docs/upgrade-guide-v3.md`
+explicitly says 'use the v9 serialisation API instead of .dict()').
+
+Coverage limits (biased to low false-positives at WARN): only `.dict()` is matched (not
+`.json()`, which is overwhelmingly `response.json()` on HTTP clients), and only in files
+that import asset models.  A `.dict()` on a *non-asset* pydantic model in such a file is
+a known false-positive — suppress with `# conformance: ignore[O002] <reason>`.
+
+---
+
+## O003 — `UntypedAssetMapperReturn` {#o003}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `asset-mapper` · **Autofixable:** — · **Since:** 0.8.0
+
+> Function builds a pyatlan asset but has no return annotation — annotate it with the asset type
+
+**Rationale:** The asset-mapper pattern's value is end-to-end typing: a mapper function constructs a
+pyatlan asset and returns it, so the return annotation documents which asset it produces
+and lets pyright check the call site. A mapper that builds an asset but declares no
+return type loses that guarantee (BLDX-1492; reference app atlan-openapi-app).
+WARN/recommendation because adding the annotation is a safe, mechanical nudge.
+
+Flags a function that constructs a pyatlan asset (instantiates a class imported from
+`pyatlan_v9.model.assets` / `pyatlan.model.assets`) and **returns that asset**, but
+carries no `-> <Asset>` return annotation. The asset-mapper pattern is typed end-to-end
+— each `map_<entity>` function declares the pyatlan asset it produces (see
+`atlan-openapi-app`).
+
+Keyed on actually returning the constructed asset (`return Table(...)` or `asset =
+Table(...); ... return asset`), not just a `map_` name — so a helper that builds an
+asset as a side effect and returns something else (e.g. `return record.id`) is not
+flagged, and the suggested annotation always matches the real return.  Suppress with `#
+conformance: ignore[O003] <reason>` when an untyped return is intentional.
+
+---
+
+## O004 — `LegacyPyatlanAssetImport` {#o004}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `asset-mapper` · **Autofixable:** — · **Since:** 0.8.0
+
+> Imports pyatlan.model.assets (non-v9) — prefer pyatlan_v9.model.assets
+
+**Rationale:** pyatlan_v9 is the SDK's go-forward asset surface for the asset-mapper pattern; the
+legacy pyatlan.model.assets classes are the memory-heavy DataFrame/transformer-era
+serialization path, kept only for connectors still on the built-in AtlasTransformer
+(which B001 steers off). pyatlan_v9 ships inside the existing pyatlan>=9 dependency, so
+the switch adds nothing to resolve. A below-the-bar recommendation (O-series, WARN): the
+v9 models differ in attributes and serialization (to_nested_bytes vs .dict()), so each
+site needs human judgement — never a blind name swap.
+
+Flags app code that imports asset model classes from the legacy `pyatlan.model.assets`
+package, in any of the three import forms: `from pyatlan.model.assets import X`, `import
+pyatlan.model.assets`, or `from pyatlan.model import assets`.  Detection is
+import-anchored (an asset class is only imported in order to construct it), so the rare
+fully-qualified `pyatlan.model.assets.X(...)` form with no matching import is out of
+scope.  New connectors should build assets from `pyatlan_v9.model.assets` — the
+optimized v9 surface the asset-mapper pattern is built on (BLDX-1492; see
+`docs/guides/sql-application-guide.md` and `docs/upgrade-guide-v3.md`).
+
+Scope is deliberately narrow — only `pyatlan.model.assets` is matched, never the rest of
+`pyatlan`: enums and helpers that legitimately have no v9 equivalent (e.g. `from
+pyatlan.model.enums import AtlanConnectorType`) are out of scope.
+
+NOT autofixable: the v9 models are not a drop-in rename — attribute names and the
+serialization API differ (use `asset.to_nested_bytes()` rather than `.dict()`), so each
+construction site needs review. Suppress with `# conformance: ignore[O004] <reason>`
+when a connector is intentionally pinned to the legacy `AtlasTransformer` surface.
 
 ---
