@@ -747,3 +747,167 @@ def test_p025_classvar_annotation_form(tmp_path: Path) -> None:
         env_example="ATLAN_APPLICATION_NAME=mysql\n",
     )
     assert _p025(findings) == []
+
+
+# ---------------------------------------------------------------------------
+# _SDK_APP_BASE_NAMES parity gate
+# ---------------------------------------------------------------------------
+
+
+def test_sdk_base_names_matches_templates_all() -> None:
+    """_SDK_APP_BASE_NAMES must equal set(templates.__all__) | {"App"}.
+
+    This test is the deterministic gate that catches a new public template base
+    added to application_sdk.templates.__all__ without a matching entry in
+    _SDK_APP_BASE_NAMES.  Pure-AST derivation would require importing the SDK
+    at check time, which conformance deliberately avoids; the asserted equality
+    is the lower-blast-radius alternative.
+    """
+    from conformance.suite.checks.app_name_alignment._code_app_name import (
+        _SDK_APP_BASE_NAMES,
+    )
+
+    import application_sdk.templates as _templates
+
+    expected = set(_templates.__all__) | {"App"}
+    assert _SDK_APP_BASE_NAMES == frozenset(expected), (
+        f"_SDK_APP_BASE_NAMES is out of sync with application_sdk.templates.__all__.\n"
+        f"  In __all__ but not in _SDK_APP_BASE_NAMES: {expected - _SDK_APP_BASE_NAMES}\n"
+        f"  In _SDK_APP_BASE_NAMES but not in __all__: {_SDK_APP_BASE_NAMES - expected}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Empty-string name= falls back to kebab
+# ---------------------------------------------------------------------------
+
+
+def test_p025_empty_string_name_falls_back_to_kebab(tmp_path: Path) -> None:
+    """name = '' is treated as 'no name' and kebab-cased from the class name.
+
+    The SDK base class declares name: ClassVar[str] = '' (base.py:476), so a
+    subclass that re-asserts the default with name = '' must get the same
+    runtime behaviour: cls.name or _pascal_to_kebab(cls.__name__) → kebab.
+    Without this fix the static check would compare '' against atlan.yaml and
+    emit a confusing "App name '' (code) does not match ..." finding.
+    """
+    py = {
+        "app/connector.py": dedent("""\
+            from application_sdk.app import App
+            class MySQLApp(App):
+                name = ""
+        """)
+    }
+    # kebab of MySQLApp → my-sql-app; contract matches → no findings
+    findings = _run(
+        tmp_path,
+        py,
+        atlan_yaml="name: my-sql-app\n",
+        env_example="ATLAN_APPLICATION_NAME=my-sql-app\n",
+    )
+    assert _p025(findings) == []
+
+    # kebab → my-sql-app; contract says wrong-name → 1 finding naming my-sql-app
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp2:
+        findings_drift = _run(
+            Path(tmp2),
+            py,
+            atlan_yaml="name: wrong-name\n",
+        )
+        p025 = _p025(findings_drift)
+        assert len(p025) == 1, f"expected 1 finding, got {len(p025)}"
+        assert "my-sql-app" in p025[0].message
+
+
+# ---------------------------------------------------------------------------
+# Transitive ancestor name propagation (intermediate base declares name=)
+# ---------------------------------------------------------------------------
+
+
+def test_p025_transitive_intermediate_base_name_propagates(tmp_path: Path) -> None:
+    """When an intermediate base declares name = '...', the leaf inherits it.
+
+    Runtime: cls.name resolves via MRO — LeafClass.name → IntermediateBase.name
+    = 'mysql'.  The static check must walk scanned ancestors to match this, or
+    it would fall back to kebab(LeafClass) and emit a false-positive drift
+    finding.
+    """
+    py = {
+        "app/connector.py": dedent("""\
+            from application_sdk.app import App
+            class BaseConnector(App):
+                name = "mysql"
+            class MySQLConnector(BaseConnector):
+                pass
+        """)
+    }
+    # MySQLConnector inherits name="mysql" via MRO; contract matches → no findings
+    findings = _run(
+        tmp_path,
+        py,
+        atlan_yaml="name: mysql\n",
+        env_example="ATLAN_APPLICATION_NAME=mysql\n",
+    )
+    assert (
+        _p025(findings) == []
+    ), "Expected no findings: leaf inherits name='mysql' from intermediate base"
+
+    # Contract says wrong-name → 1 finding with the inherited "mysql" name
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp2:
+        findings_drift = _run(
+            Path(tmp2),
+            py,
+            atlan_yaml="name: wrong-name\n",
+        )
+        p025 = _p025(findings_drift)
+        assert len(p025) == 1
+        assert "mysql" in p025[0].message
+
+
+# ---------------------------------------------------------------------------
+# Quoted env var values (python-dotenv strips quotes at runtime)
+# ---------------------------------------------------------------------------
+
+
+def test_p025_quoted_env_double_quotes_noop(tmp_path: Path) -> None:
+    """ATLAN_APPLICATION_NAME="mssql" (double-quoted) must match code name 'mssql'."""
+    py = {
+        "app/extractor.py": dedent("""\
+            from application_sdk.templates import SqlMetadataExtractor
+            class MSSQLMetadataExtractor(SqlMetadataExtractor):
+                name = "mssql"
+        """)
+    }
+    findings = _run(
+        tmp_path,
+        py,
+        atlan_yaml="name: mssql\n",
+        env_example='ATLAN_APPLICATION_NAME="mssql"\n',
+    )
+    assert (
+        _p025(findings) == []
+    ), "Double-quoted env value should be stripped before comparison"
+
+
+def test_p025_quoted_env_single_quotes_noop(tmp_path: Path) -> None:
+    """ATLAN_APPLICATION_NAME='mssql' (single-quoted) must match code name 'mssql'."""
+    py = {
+        "app/extractor.py": dedent("""\
+            from application_sdk.templates import SqlMetadataExtractor
+            class MSSQLMetadataExtractor(SqlMetadataExtractor):
+                name = "mssql"
+        """)
+    }
+    findings = _run(
+        tmp_path,
+        py,
+        atlan_yaml="name: mssql\n",
+        env_example="ATLAN_APPLICATION_NAME='mssql'\n",
+    )
+    assert (
+        _p025(findings) == []
+    ), "Single-quoted env value should be stripped before comparison"

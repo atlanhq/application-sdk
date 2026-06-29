@@ -27,8 +27,6 @@ No-ops
 
 from __future__ import annotations
 
-import ast
-
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.schema.findings import Finding
 
@@ -40,29 +38,6 @@ _RULE_ID = "P025"
 
 def _empty_directives() -> dict[int, _IgnoreDirective]:
     return {}
-
-
-def _synthetic_node(line: int = 1) -> ast.AST:
-    """A dummy AST node at *line* for findings with no natural code anchor."""
-    node: ast.AST = ast.Constant(value=None)
-    node.lineno = line  # type: ignore[attr-defined]
-    node.col_offset = 0  # type: ignore[attr-defined]
-    return node
-
-
-def _best_anchor(code: CodeAppNameScan) -> tuple[str, ast.AST]:
-    """Return ``(filename, node)`` for a finding with no natural code anchor.
-
-    Falls back through: first resolved leaf → first unresolvable leaf →
-    synthetic node at app/connector.py:1.
-    """
-    if code.resolved:
-        info = code.resolved[0]
-        return info.filename, info.node
-    if code.unresolvable:
-        info = code.unresolvable[0]
-        return info.filename, info.node
-    return "app/connector.py", _synthetic_node()
 
 
 def check_p025(

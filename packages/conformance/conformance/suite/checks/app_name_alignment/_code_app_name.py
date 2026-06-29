@@ -145,13 +145,58 @@ def _resolve_class_name(
 
         if value_node is not None and isinstance(value_node, ast.Constant):
             if isinstance(value_node.value, str):
-                return value_node.value, False, stmt
+                if value_node.value:  # non-empty literal → use as-is
+                    return value_node.value, False, stmt
+                # Empty string: runtime treats "" as falsy and falls back to
+                # kebab(class.__name__) — mirror that here by breaking to the
+                # kebab derivation below rather than returning "".
+                break
         # Present but non-literal (or annotation-only with no value)
         if value_node is not None:
             return None, True, stmt
 
-    # No name attr → derive from class name
+    # No name attr (or empty-string literal) → derive from class name
     return _pascal_to_kebab(class_def.name), False, class_def
+
+
+def _resolve_ancestor_name(
+    base_names: list[str],
+    name_to_raw: dict[str, "_RawClassDef"],
+    app_family_names: set[str],
+) -> tuple[str | None, bool] | None:
+    """BFS through scanned app-family ancestors for the nearest body-level ``name``.
+
+    Used when a leaf class has no body-level ``name`` attr of its own, so the
+    runtime would resolve ``cls.name`` via MRO through the ancestor chain.  Only
+    classes in the scanned set (``app_family_names``) are visited; SDK-imported
+    bases are not in the scanned raw list and are therefore skipped.
+
+    Returns
+    -------
+    ``(literal_name, False)``
+        A non-empty string literal was found on an ancestor.
+    ``(None, True)``
+        A non-literal (or empty-literal that breaks the chain) was found first.
+    ``None``
+        No scanned ancestor has a body-level ``name`` attr — use kebab fallback.
+    """
+    seen: set[str] = set()
+    queue = list(base_names)
+    while queue:
+        base_name = queue.pop(0)
+        if base_name in seen or base_name not in app_family_names:
+            continue
+        seen.add(base_name)
+        ancestor = name_to_raw.get(base_name)
+        if ancestor is None:
+            continue
+        resolved_name, is_unresolvable, name_node = _resolve_class_name(ancestor.node)
+        if name_node is not ancestor.node:
+            # Ancestor has a body-level name attr (literal or non-literal)
+            return resolved_name, is_unresolvable
+        # No effective body-level name in this ancestor — continue BFS upward
+        queue.extend(ancestor.base_names)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -301,10 +346,28 @@ def resolve_leaf_classes(raw: list[_RawClassDef]) -> CodeAppNameScan:
         if r.node.name in app_family_names and r.node.name not in bases_used
     ]
 
+    # Build name→raw map for ancestor name lookup (used below)
+    name_to_raw: dict[str, _RawClassDef] = {r.node.name: r for r in raw}
+
     # Name resolution for leaves
     result = CodeAppNameScan()
     for r in leaf_records:
         resolved_name, is_unresolvable, name_node = _resolve_class_name(r.node)
+
+        # When the leaf has no body-level ``name`` (name_node is the ClassDef
+        # itself — i.e. the kebab fallback path), walk scanned app-family
+        # ancestors for the nearest body-level name.  This mirrors how
+        # ``cls.name`` resolves via MRO at runtime: an intermediate base that
+        # declares ``name = "foo"`` propagates to all subclasses that don't
+        # override it, so the static check must do the same to avoid emitting
+        # false-positive drift findings.
+        if name_node is r.node:
+            ancestor_result = _resolve_ancestor_name(
+                r.base_names, name_to_raw, app_family_names
+            )
+            if ancestor_result is not None:
+                resolved_name, is_unresolvable = ancestor_result
+
         info = AppClassInfo(
             class_name=r.node.name,
             resolved_name=resolved_name,

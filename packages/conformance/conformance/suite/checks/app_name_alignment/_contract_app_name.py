@@ -32,6 +32,19 @@ _ATLAN_YAML_NAME_RE = re.compile(r"^name:\s*(\S+)", re.MULTILINE)
 _ENV_APP_NAME_RE = re.compile(r"^ATLAN_APPLICATION_NAME\s*=\s*(\S+)", re.MULTILINE)
 
 
+def _strip_quotes(value: str) -> str:
+    """Strip a matching pair of ASCII single or double quotes from *value*.
+
+    python-dotenv and most .env loaders strip surrounding quotes at runtime, so
+    ``ATLAN_APPLICATION_NAME="mssql"`` resolves to ``mssql``.  The regex
+    captures ``\\S+`` greedily (quotes included), so we must normalise here to
+    avoid false-positive drift findings against unquoted code/contract names.
+    """
+    if len(value) >= 2 and value[0] in ('"', "'") and value[0] == value[-1]:
+        return value[1:-1]
+    return value
+
+
 @dataclass(frozen=True)
 class ContractAppNameScan:
     """App name values read from committed contract artifacts."""
@@ -67,7 +80,7 @@ def _read_atlan_yaml(root: Path) -> tuple[str | None, str | None]:
         return None, None
     m = _ATLAN_YAML_NAME_RE.search(text)
     if m:
-        return m.group(1), "atlan.yaml"
+        return _strip_quotes(m.group(1)), "atlan.yaml"
     return None, None
 
 
@@ -149,7 +162,7 @@ def _read_env_example(root: Path) -> tuple[str | None, int | None]:
     for lineno, line in enumerate(text.splitlines(), start=1):
         m = _ENV_APP_NAME_RE.match(line)
         if m:
-            return m.group(1), lineno
+            return _strip_quotes(m.group(1)), lineno
     return None, None
 
 
