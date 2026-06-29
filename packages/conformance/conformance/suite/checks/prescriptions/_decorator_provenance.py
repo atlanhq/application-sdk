@@ -1,10 +1,14 @@
-"""Shared decorator-provenance helpers for P008, P013, and P014.
+"""Shared decorator-provenance helpers for P008, P013, P014, and the determinism
+series (P020–P024).
 
 Both ``_framework_transfer`` (P008) and ``_typed_boundaries`` (P013/P014) need
 to gate on import provenance to distinguish the SDK's ``@task``/``@entrypoint``
 from third-party decorators with the same local name (e.g. ``@celery.task``,
-``@flask.entrypoint``).  This module centralises that logic so a single change
-propagates to every consumer.
+``@flask.entrypoint``).  The determinism checks (``suite.checks.determinism``,
+P020–P024) consume the same helpers — plus :func:`is_interaction_decorator` and
+the ``sdk``/``non_sdk_interaction_names`` provenance — to classify an ``App``
+subclass's workflow-context methods.  This module centralises that logic so a
+single change propagates to every consumer.
 
 Provenance model
 ----------------
@@ -58,6 +62,17 @@ class ImportProvenance:
     Tracks ``from application_sdk.app import entrypoint as ep`` → ``{"ep"}``.
     """
 
+    sdk_interaction_names: frozenset[str]
+    """Local names bound to ``signal`` / ``query`` / ``update`` from an SDK import.
+
+    Tracks ``from application_sdk.app import signal, query as q`` → ``{"signal", "q"}``.
+    Used by :func:`is_interaction_decorator` to recognise the SDK's workflow-context
+    runtime-interaction decorators (which run in the deterministic replay context).
+    """
+
+    non_sdk_interaction_names: frozenset[str]
+    """Local names bound to ``signal`` / ``query`` / ``update`` from a *non*-SDK import."""
+
     sdk_contract_names: frozenset[str]
     """Local names imported from ``application_sdk.contracts.*`` — valid by provenance."""
 
@@ -72,8 +87,12 @@ def collect_import_provenance(tree: ast.AST) -> ImportProvenance:
     non_sdk_mods: set[str] = set()
     sdk_task: set[str] = set()
     sdk_ep: set[str] = set()
+    sdk_interaction: set[str] = set()
+    non_sdk_interaction: set[str] = set()
     sdk_contracts: set[str] = set()
     sdk_contract_mod_aliases: set[str] = set()
+
+    _INTERACTION_NAMES = {"signal", "query", "update"}
 
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
@@ -88,12 +107,16 @@ def collect_import_provenance(tree: ast.AST) -> ImportProvenance:
                         sdk_task.add(local)
                     if alias.name == "entrypoint":
                         sdk_ep.add(local)
+                    if alias.name in _INTERACTION_NAMES:
+                        sdk_interaction.add(local)
             else:
                 for alias in node.names:
                     if alias.name == "task":
                         non_sdk_task.add(alias.asname or alias.name)
                     if alias.name == "entrypoint":
                         non_sdk_ep.add(alias.asname or alias.name)
+                    if alias.name in _INTERACTION_NAMES:
+                        non_sdk_interaction.add(alias.asname or alias.name)
             # SDK contract provenance from `from application_sdk.contracts import X`
             if is_sdk and any(
                 module == prefix or module.startswith(prefix + ".")
@@ -123,6 +146,8 @@ def collect_import_provenance(tree: ast.AST) -> ImportProvenance:
         non_sdk_module_names=frozenset(non_sdk_mods),
         sdk_task_names=frozenset(sdk_task),
         sdk_ep_names=frozenset(sdk_ep),
+        sdk_interaction_names=frozenset(sdk_interaction),
+        non_sdk_interaction_names=frozenset(non_sdk_interaction),
         sdk_contract_names=frozenset(sdk_contracts),
         sdk_contract_module_aliases=frozenset(sdk_contract_mod_aliases),
     )
@@ -166,6 +191,41 @@ def is_entrypoint_decorator(dec: ast.expr, prov: ImportProvenance) -> bool:
         return dec.id == "entrypoint" and dec.id not in prov.non_sdk_ep_names
     if isinstance(dec, ast.Attribute):
         return dec.attr == "entrypoint" and (
+            not isinstance(dec.value, ast.Name)
+            or dec.value.id not in prov.non_sdk_module_names
+        )
+    return False
+
+
+_INTERACTION_DECORATOR_NAMES = frozenset({"signal", "query", "update"})
+
+
+def is_interaction_decorator(dec: ast.expr, prov: ImportProvenance) -> bool:
+    """True if *dec* is an SDK ``@signal`` / ``@query`` / ``@update`` decorator.
+
+    These declare workflow-context runtime interactions on an ``App`` subclass —
+    they are relayed into the generated ``@workflow.defn`` class and therefore run
+    in the deterministic replay context.  Recognises the canonical
+    names, SDK aliases (``from application_sdk.app import query as q`` → ``@q``),
+    and ``@workflow.signal`` style attribute access, while excluding third-party
+    decorators that merely share a name (``@strawberry.field`` style is unaffected;
+    a non-SDK ``from foo import query`` is not flagged).
+    """
+    if isinstance(dec, ast.Call):
+        dec = dec.func
+    if isinstance(dec, ast.Name):
+        if dec.id in prov.sdk_interaction_names:
+            return True
+        # Bare name — assume SDK unless shadowed by a non-SDK import.
+        return (
+            dec.id in _INTERACTION_DECORATOR_NAMES
+            and dec.id not in prov.non_sdk_interaction_names
+        )
+    if isinstance(dec, ast.Attribute):
+        # e.g. @workflow.signal — attribute access through a module is the SDK/
+        # Temporal seam; a non-SDK module alias (import celery; @celery.update)
+        # is excluded.
+        return dec.attr in _INTERACTION_DECORATOR_NAMES and (
             not isinstance(dec.value, ast.Name)
             or dec.value.id not in prov.non_sdk_module_names
         )

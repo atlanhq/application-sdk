@@ -10,20 +10,22 @@ description: >
   source fixes are verified by re-detection; logic fixes are also verified by
   the orthogonal test gate.
 
-  Backed by the OpenProse program in remediation/programs/. Run with the
-  OpenProse skill to use the full Reactor-ready contract semantics; or invoke
-  the program directly via the instructions below.
+  Backed by the OpenProse program shipped in the
+  atlan-application-sdk-conformance package (resolve it with `programs-dir`). Run
+  with the OpenProse skill to use the full Reactor-ready contract semantics; or
+  invoke the program directly via the instructions below.
 
-argument-hint: "[--area error-handling|logging|ci] [--strict] [path]"
+argument-hint: "[--area error-handling|deprecation|dependency|prescriptions|optimizations|dockerfile|tests|logging|ci] [--strict] [path]"
 
 inputs:
   - name: area
     description: >
-      Comma-separated list of areas to remediate.  Defaults to all enabled
-      areas (error-handling; logging and ci are detected but not yet
-      remediable).  Example: --area error-handling
+      Comma-separated list of areas to remediate.  Defaults to every area the
+      top-level program enables (error-handling, deprecation, dependency,
+      prescriptions, optimizations, dockerfile, tests; logging and ci are
+      detected but route to residue).  Example: --area deprecation
     required: false
-    default: "error-handling,logging,ci"
+    default: "error-handling,deprecation,dependency,prescriptions,optimizations,dockerfile,tests,logging,ci"
   - name: strict
     description: >
       When present, also remediates WARNING-tier findings.  Each WARNING is
@@ -76,7 +78,8 @@ Runs an iterative, gated remediation loop over the conformance suite's findings:
    report; collect FAILING (and, with `--strict`, WARNING) findings.
 2. **Fix or suppress** — for each finding, propose an edit (fix or suppression
    directive) guided by the rule's `atlan/hint` and the area prescription in
-   `remediation/programs/areas/<area>.prose.md`.
+   `$PROGRAMS/areas/<area>.prose.md` (where `PROGRAMS=$(uv run
+   atlan-application-sdk-conformance programs-dir)`).
 3. **Re-check (narrowest gate)** — re-run the suite scoped to the touched file;
    confirm the finding's fingerprint is gone.
 4. **Orthogonal gate** — for source-logic fixes, run the test suite; if it
@@ -109,27 +112,47 @@ always scans the whole repo.  Findings outside the prefix are left untouched.
 WARNING is cleared by either a real fix or a justified inline suppression.  Every
 suppression is routed to the residue report for human audit.
 
-## Area status (phase 1)
+## Area status
+
+The live program (`conformance-remediation.prose.md`, resolved from the installed
+package via `programs-dir`) fans out to every area below; `remediate-finding`
+dispatches each finding to its area prescription.
 
 | Area | Series | Remediation | Notes |
 |---|---|---|---|
 | error-handling | E | ✅ Implemented | Mechanical (E005, E016) auto-fixed; judgment (E002, E013, others) modelled + routed to residue |
+| deprecation | B | ✅ Implemented | B001 guided fix (incl. legacy transformer → asset-mapper, BLDX-1399); B003/B004 detect-only → residue |
+| dependency | D | ✅ Implemented | Guided + mechanical fixes; judgment routed to residue |
+| prescriptions | P | ✅ Suggest-only | Findings modelled + routed to residue |
+| optimizations | O | ✅ Implemented | Below-the-bar recommendations |
+| dockerfile | I | ✅ Suggest-only | Findings modelled + routed to residue |
+| tests | T | ✅ Strict-only | WARNING-tier; strict mode |
 | logging | L | 🚧 Deferred | Detection runs; all findings → residue |
 | ci | C | 🚧 Deferred | Detection runs; all findings → residue |
 
-To add a new area prescription: author `remediation/programs/areas/<name>.prose.md`
-and add a dispatch branch to `remediation/programs/functions/remediate-finding.prose.md`.
+To add a new area prescription: author `<programs-dir>/areas/<name>.prose.md`
+and add a dispatch branch to `<programs-dir>/functions/remediate-finding.prose.md`.
 
 ## Execution instructions
 
+First resolve the live programs directory (the contracts ship inside the
+installed `atlan-application-sdk-conformance` package — the `remediation/programs/`
+tree in the repo root is the design doc only):
+
+```
+PROGRAMS=$(uv run atlan-application-sdk-conformance programs-dir)
+```
+
 ### Phase 1: Baseline
 
-Call `detect-violations` to run the suite and capture the before-state:
+Call `detect-violations` to run the suite and capture the before-state.  Use the
+full enabled series so every remediable area is covered (scope is auto-detected,
+so app-only series no-op on the SDK):
 
 ```
 let before = call detect-violations
   scope: .
-  series: E,L,C
+  series: E,L,C,P,O,D,B,I,T
   target: if strict then "failing+warning" else "failing"
   path_prefix: <path argument, if any>
 ```
@@ -142,22 +165,22 @@ invocation.
 
 ### Phase 2: Execute the remediation loop
 
-Read and execute the OpenProse contracts in `remediation/programs/`, starting
-with `conformance-remediation.prose.md`.  The contracts are self-contained
+Read and execute the OpenProse contracts in `$PROGRAMS`, starting with
+`conformance-remediation.prose.md`.  The contracts are self-contained
 English-plus-ProseScript — execute them directly as an agent (no separate
 OpenProse runtime required for the skill path).
 
 Execution order (from `conformance-remediation.prose.md`):
 
-1. Run the three area responsibilities in parallel:
-   - `areas/error-handling.prose.md` — E-series, fully prescribed
-   - `areas/logging.prose.md` — L-series, detection only → residue
-   - `areas/ci.prose.md` — C-series, detection only → residue
+1. Run every area responsibility in parallel (error-handling, deprecation,
+   dependency, prescriptions, optimizations, dockerfile, tests, logging, ci) —
+   the top-level contract fans out to all of them; do not hardcode a subset.
 
 2. Each area responsibility calls the `detect-fix-recheck` pattern
    (`patterns/detect-fix-recheck.prose.md`), which loops:
    - `functions/detect-violations.prose.md` — run `suite.runner`, parse SARIF
-   - `functions/remediate-finding.prose.md` — propose fix or suppress
+   - `functions/remediate-finding.prose.md` — propose fix or suppress (dispatches
+     on `finding.area`, e.g. `deprecation` → `areas/deprecation.prose.md`)
    - `functions/recheck-narrowest.prose.md` — deterministic re-check
    - `functions/orthogonal-gate.prose.md` — test suite (fix path only)
 
@@ -173,7 +196,7 @@ Call `detect-violations` again and copy the result to `after.sarif`:
 ```
 let after = call detect-violations
   scope: .
-  series: E,L,C
+  series: E,L,C,P,O,D,B,I,T
   target: if strict then "failing+warning" else "failing"
   path_prefix: <path argument, if any>
 ```

@@ -30,6 +30,7 @@ from conformance.suite.checks import (
     client_seam,
     dependency_conformance,
     deprecation,
+    determinism,
     dockerfile_conformance,
     entrypoint_alignment,
     error_handling,
@@ -110,6 +111,11 @@ _CHECKS: list[CheckRegistration] = [
         discover=orchestration.discover,
         scan_path=orchestration.scan_path,
         scan_all=orchestration.scan_all,
+    ),
+    CheckRegistration(
+        series=determinism.SERIES,
+        discover=determinism.discover,
+        scan_path=determinism.scan_path,
     ),
     CheckRegistration(
         series=entrypoint.SERIES,
