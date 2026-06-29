@@ -17,9 +17,12 @@ import time
 from collections.abc import Callable
 from typing import Any, Protocol, TypeVar
 
+from application_sdk.observability import resource_sampler as _resource_sampler
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+_MEMORY_WARN_THRESHOLD = 0.80
 
 # Dedicated executor for blocking operations dispatched via run_in_thread().
 #
@@ -136,6 +139,7 @@ async def auto_heartbeat_loop(
         task_name: Name of the task (for warning messages).
     """
     warning_threshold = interval_seconds * 0.5
+    _limit_bytes = int(os.environ.get("K8S_POD_MEMORY_LIMIT", "0") or "0")
 
     while not stop_event.is_set():
         loop_start = time.monotonic()
@@ -178,6 +182,23 @@ async def auto_heartbeat_loop(
                 task_name,
             )
             raise
+
+        if _limit_bytes > 0:
+            try:
+                _mem = _resource_sampler.sample()
+                if _mem is not None:
+                    _ratio = _mem.rss_bytes / _limit_bytes
+                    if _ratio >= _MEMORY_WARN_THRESHOLD:
+                        logger.warning(
+                            "Memory pressure on task '%s': %.0f%% of limit (%.2f GiB / %.2f GiB)"
+                            " — OOM kill imminent if this continues rising",
+                            task_name,
+                            _ratio * 100,
+                            _mem.rss_bytes / (1024**3),
+                            _limit_bytes / (1024**3),
+                        )
+            except Exception:  # noqa: S110 — best-effort; must never interrupt the heartbeat loop
+                pass
 
 
 async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:

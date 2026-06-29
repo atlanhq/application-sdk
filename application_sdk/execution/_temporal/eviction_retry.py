@@ -92,8 +92,13 @@ async def execute_activity_with_eviction_retry(
                 # eviction-retry path itself would crash on the first eviction
                 # if we did not nest under ``extra``. ``AtlanLoggerAdapter``
                 # also reads ``extra`` correctly, so this works in both modes.
-                workflow.logger.info(
-                    "activity re-dispatched after worker eviction",
+                workflow.logger.warning(
+                    "activity re-dispatched after worker eviction "
+                    "(attempt %d/%d) — likely causes: OOM kill (pod exit 137), "
+                    "KEDA scale-down, spot preemption, or rolling deploy; "
+                    "check pod exit code and cluster events for the affected worker",
+                    eviction_attempts,
+                    max_eviction_retries,
                     extra={
                         "eviction_attempts": eviction_attempts,
                         "max_eviction_retries": max_eviction_retries,

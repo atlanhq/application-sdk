@@ -86,6 +86,33 @@ def _debug_dump_handler(signum: int, frame: object) -> None:
 if hasattr(signal, "SIGUSR1"):
     signal.signal(signal.SIGUSR1, _debug_dump_handler)
 
+
+def _log_worker_memory_context() -> None:
+    """Log current RSS vs container memory limit at worker startup.
+
+    Gives a baseline so that — after an OOM kill — the log of the replacement
+    pod shows the limit, and the log of the killed pod shows memory climbing
+    toward it via the heartbeat-loop pressure warnings.  No-ops when
+    K8S_POD_MEMORY_LIMIT is unset (local dev / non-Kubernetes environments).
+    """
+    from application_sdk.observability import (  # noqa: PLC0415 — cold path: startup only
+        resource_sampler as _rs,
+    )
+
+    limit_bytes = int(os.environ.get("K8S_POD_MEMORY_LIMIT", "0") or "0")
+    if limit_bytes <= 0:
+        return
+    sample = _rs.sample()
+    if sample is None:
+        return
+    logger.info(
+        "Worker memory at start: %.2f GiB RSS / %.2f GiB limit (%.0f%% of limit)",
+        sample.rss_bytes / (1024**3),
+        limit_bytes / (1024**3),
+        100.0 * sample.rss_bytes / limit_bytes,
+    )
+
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
     from pathlib import Path
@@ -956,6 +983,7 @@ async def run_worker_mode(config: AppConfig) -> None:
     health_server.set_temporal_client(client)
 
     logger.info("Worker started: app=%s queue=%s", app_name, config.task_queue)
+    _log_worker_memory_context()
     async with health_server, worker:
         await shutdown_event.wait()
 
@@ -1263,6 +1291,7 @@ async def run_combined_mode(config: AppConfig) -> None:
         config.task_queue,
         config.handler_port,
     )
+    _log_worker_memory_context()
     async with health_server, worker:
         await asyncio.gather(
             uvicorn_server.serve(),
