@@ -255,6 +255,33 @@ class AppRegistry:
         """List all registered App names."""
         return list(self._apps.keys())
 
+    @classmethod
+    def resolve_running_app_name(cls, prefer: str = "") -> str:
+        """Return the best-available app name for path construction.
+
+        Resolution order:
+        1. ``prefer`` — caller-supplied name (e.g. ``self._app_name`` from an
+           ``App`` instance that already owns its registered identity).
+        2. Registry — when exactly one app is registered, its name is
+           unambiguous and more reliable than an env var.
+        3. ``APPLICATION_NAME`` env var (``ATLAN_APPLICATION_NAME``) — last
+           resort; defaults to ``"default"`` when unset.
+
+        Args:
+            prefer: Optional explicit name to return immediately if non-empty.
+
+        Returns:
+            The resolved app name, never empty.
+        """
+        if prefer:
+            return prefer
+        apps = cls.get_instance().list_apps()
+        if len(apps) == 1:
+            return apps[0]
+        from application_sdk.constants import APPLICATION_NAME  # noqa: PLC0415
+
+        return APPLICATION_NAME
+
     def list_all(self) -> list[AppMetadata]:
         """List all registered Apps (all versions)."""
         result: list[AppMetadata] = []

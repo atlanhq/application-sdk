@@ -1593,6 +1593,8 @@ class TestRunOutputPrefixes:
         assert "test-wf-123" in result.transformed_data_prefix
         assert "test-run-456" in result.transformed_data_prefix
         assert result.transformed_data_prefix.endswith("/transformed")
+        # _app_name must be preferred over APPLICATION_NAME env var (BLDX-1491)
+        assert "test-app" in result.transformed_data_prefix
 
     async def test_build_output_path_not_called_in_run(self):
         """build_output_path() (activity-only) must NOT be called from run()."""

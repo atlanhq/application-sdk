@@ -13,6 +13,7 @@ from application_sdk.app.base_errors import (
     SecretStoreNotConfiguredError,
     StateStoreNotConfiguredError,
 )
+from application_sdk.constants import LOCAL_WORKFLOW_ID
 from application_sdk.contracts.base import HeartbeatDetails
 from application_sdk.credentials.resolver import CredentialResolver
 from application_sdk.observability.context import get_execution_context
@@ -205,6 +206,7 @@ class AppContext:
     app_name: str
     app_version: str
     run_id: str = field(default_factory=lambda: str(uuid4()))
+    workflow_id: str = field(default=LOCAL_WORKFLOW_ID)
     correlation_id: str = field(default="")
     parent_run_id: str | None = None
     started_at: datetime = field(default_factory=_utc_now)
@@ -220,6 +222,11 @@ class AppContext:
     _cancelled: bool = field(default=False, repr=False)
 
     def __post_init__(self) -> None:
+        if not self.workflow_id:
+            raise ValueError(
+                "AppContext.workflow_id must not be empty; "
+                "pass the Temporal workflow ID or 'local-no-temporal' for tests/local runs"
+            )
         if not self.correlation_id:
             self.correlation_id = str(self.run_id)
 

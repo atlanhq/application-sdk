@@ -5,18 +5,22 @@ Closing the loop on the zero-human-touch CVE flow: once a CVE stops showing up
 in the scan (its bump merged & shipped, or the base image was rebuilt), its
 allowlist entry and Linear ticket should be retired automatically.
 
-**3-consecutive-clean-scan debounce.** A CVE is treated as *resolved* only if it
-is absent from the current scan AND the previous two hourly scans (three runs in
-agreement). CVEs vanish transiently — Trivy DB reclassification, a partial scan,
-or the `uv sync` native-lockfile step not materializing a wheel — so a single
-clean scan is not enough to yank a valid suppression.
+**Resolution & debounce.** By default a CVE is treated as *resolved* as soon as
+it is absent from the latest scan (`DEBOUNCE_SCANS` = 1). Raise `DEBOUNCE_SCANS`
+to require it to be absent from that many consecutive successful scans before
+acting — a debounce against transient drops (Trivy DB reclassification, a partial
+scan, or the `uv sync` native-lockfile step not materializing a wheel).
 
-For each resolved CVE:
-  * if it has an open allowlist entry → open an **allowlist removal PR** (touches
-    only `.security/base-allowlist.json`, label `vuln-auto-merge` → auto-merges
-    via vuln-auto-merge.yml as `atlan-ci`).
-  * a Linear ticket is closed only when ALL the CVEs it tracks are resolved;
-    otherwise its marker is rewritten to drop just the resolved CVE.
+Two INDEPENDENT actions run off the same scan history (don't couple them):
+  * **Allowlist removal PR** — for *allowlisted* CVEs gone for `debounce` scans:
+    open a removal PR (touches only `.security/base-allowlist.json`, label
+    `vuln-auto-merge` → auto-merges via vuln-auto-merge.yml as `atlan-ci`).
+  * **Ticket reconciliation** — for any open `vulnerabilities` ticket whose
+    tracked CVEs are gone for `debounce` scans, close it (or trim its marker if
+    only some are gone). This is keyed on the SCAN, NOT the allowlist — so
+    Medium/Low tickets (which are never allowlisted) and any CVE fixed before it
+    was ever allowlisted still get closed. Reconciliation runs even when the
+    allowlist is empty.
 
 Pure decision logic (the debounce + ticket plan) lives in tested functions;
 GitHub/Linear I/O is wired in main(), per docs/standards/ci.md.
@@ -30,7 +34,8 @@ Environment:
 
 Optional:
     LINEAR_VULN_LABEL_NAME  default 'vulnerabilities'
-    DEBOUNCE_SCANS          default 3 (this scan + N-1 prior)
+    DEBOUNCE_SCANS          default 1 — act on the first clean scan (this scan +
+                            N-1 prior successful scans); raise to debounce churn
 """
 
 from __future__ import annotations
@@ -52,6 +57,10 @@ Runner = Callable[..., subprocess.CompletedProcess]
 ALLOWLIST_PATH = ".security/base-allowlist.json"
 TRIVY_FILES = ["trivy-image-results.json", "trivy-fs-results.json"]
 DEFAULT_WORKFLOW = "daily-security-scan.yml"
+# Act on the first clean scan by default; both the allowlist removal PR and the
+# ticket close are gated on this same window. Raise via DEBOUNCE_SCANS to require
+# N consecutive clean scans (debounce against transient scanner drops).
+DEFAULT_DEBOUNCE = 1
 
 
 # ---------------------------------------------------------------------------
@@ -71,20 +80,22 @@ def cve_ids_from_trivy(data: dict) -> set[str]:
 
 
 def resolved_cves(
-    allowlisted: set[str],
+    candidates: set[str],
     scan_sets: list[set[str]],
     debounce: int,
 ) -> set[str]:
-    """Allowlisted CVEs absent from EVERY one of the last ``debounce`` scans.
+    """CVEs from ``candidates`` absent from EVERY one of the last ``debounce``
+    scans. Used for both the allowlist (candidates = allowlisted CVEs) and ticket
+    closing (candidates = CVEs tracked by open tickets).
 
     ``scan_sets`` is the CVE set per recent scan (current + priors). If we have
     fewer than ``debounce`` scans we cannot confirm the debounce, so nothing is
-    resolved (fail-safe — never yank a suppression on thin evidence).
+    resolved (fail-safe — never act on thin evidence).
     """
     if len(scan_sets) < debounce:
         return set()
     seen_in_any = set().union(*scan_sets) if scan_sets else set()
-    return {cve for cve in allowlisted if cve not in seen_in_any}
+    return {cve for cve in candidates if cve not in seen_in_any}
 
 
 def plan_ticket_updates(
@@ -111,6 +122,20 @@ def plan_ticket_updates(
         else:
             to_update.append({**t, "remaining_ids": sorted(remaining)})
     return to_close, to_update
+
+
+def resolve_tickets(
+    tickets: list[dict], scan_sets: list[set[str]], debounce: int
+) -> tuple[list[dict], list[dict]]:
+    """Decide which open tickets to close/update based purely on whether their
+    tracked CVEs are gone for ``debounce`` scans — INDEPENDENT of the allowlist,
+    so Medium/Low tickets (never allowlisted) and CVEs fixed before they were
+    ever allowlisted still get closed."""
+    all_tracked: set[str] = set()
+    for t in tickets:
+        all_tracked |= ssl.extract_vuln_ids_from_description(t.get("description"))
+    resolved = resolved_cves(all_tracked, scan_sets, debounce)
+    return plan_ticket_updates(tickets, resolved)
 
 
 # ---------------------------------------------------------------------------
@@ -196,8 +221,15 @@ def load_prior_scan_cves(
     return sets
 
 
+def _resolution_phrase(debounce: int) -> str:
+    """Honest rationale string for any DEBOUNCE_SCANS value."""
+    if debounce <= 1:
+        return "the latest clean scan"
+    return f"{debounce} consecutive clean scans"
+
+
 def open_removal_pr(
-    repo: str, removed: list[str], run_date: str, runner: Runner
+    repo: str, removed: list[str], run_date: str, debounce: int, runner: Runner
 ) -> None:
     """Drop resolved entries from the allowlist and open an auto-merge PR."""
     data = json.loads(Path(ALLOWLIST_PATH).read_text())
@@ -236,8 +268,8 @@ def open_removal_pr(
             "--label",
             "vuln-auto-merge",
             "--body",
-            "Resolved by 3 consecutive clean scans (scanner no longer reports "
-            "these CVEs):\n\n" + "\n".join(f"- `{c}`" for c in removed),
+            f"Resolved by {_resolution_phrase(debounce)} — the scanner no longer "
+            "reports these CVEs:\n\n" + "\n".join(f"- `{c}`" for c in removed),
         ],
         check=True,
     )
@@ -264,8 +296,8 @@ def resolve_done_state_id(team_id: str) -> str | None:
     return None
 
 
-def close_ticket(issue_id: str, state_id: str) -> None:
-    ssl.gql(
+def close_ticket(issue_id: str, state_id: str) -> bool:
+    data = ssl.gql(
         """
         mutation Close($id: String!, $stateId: String!) {
           issueUpdate(id: $id, input: { stateId: $stateId }) { success }
@@ -273,6 +305,42 @@ def close_ticket(issue_id: str, state_id: str) -> None:
         """,
         {"id": issue_id, "stateId": state_id},
     )
+    return bool((data.get("issueUpdate") or {}).get("success"))
+
+
+def comment_on_ticket(issue_id: str, body: str) -> None:
+    ssl.gql(
+        """
+        mutation Comment($input: CommentCreateInput!) {
+          commentCreate(input: $input) { success }
+        }
+        """,
+        {"input": {"issueId": issue_id, "body": body}},
+    )
+
+
+def _run_url() -> str:
+    """The reconcile workflow run URL, from GitHub-provided env (empty locally)."""
+    server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
+    repo = os.environ.get("GITHUB_REPOSITORY", "")
+    run_id = os.environ.get("GITHUB_RUN_ID", "")
+    return f"{server}/{repo}/actions/runs/{run_id}" if repo and run_id else ""
+
+
+def close_comment_body(cves: list[str], run_url: str) -> str:
+    """The explanatory comment posted on a ticket as it is auto-closed."""
+    plural = "y" if len(cves) == 1 else "ies"
+    cve_list = ", ".join(f"`{c}`" for c in sorted(cves))
+    lines = [
+        "**Auto-resolved by the hourly security scan.**",
+        "",
+        f"The scanner no longer reports the tracked vulnerabilit{plural} "
+        f"({cve_list}), so this ticket is being closed automatically. If the "
+        "finding resurfaces, the next scan files a fresh ticket.",
+    ]
+    if run_url:
+        lines += ["", f"Reconcile run: {run_url}"]
+    return "\n".join(lines)
 
 
 def rewrite_marker(issue_id: str, description: str, remaining_ids: list[str]) -> None:
@@ -300,7 +368,7 @@ def rewrite_marker(issue_id: str, description: str, remaining_ids: list[str]) ->
     )
 
 
-def reconcile_tickets(resolved: set[str]) -> None:
+def reconcile_tickets(scan_sets: list[set[str]], debounce: int) -> None:
     if not os.environ.get("LINEAR_API_KEY") or not os.environ.get("LINEAR_TEAM_ID"):
         print("LINEAR_API_KEY/TEAM_ID not set — skipping ticket reconciliation.")
         return
@@ -311,12 +379,28 @@ def reconcile_tickets(resolved: set[str]) -> None:
         print(f"label {label_name!r} not found — skipping ticket reconciliation.")
         return
     tickets = ssl.fetch_open_labelled_issues(label_id)
-    to_close, to_update = plan_ticket_updates(tickets, resolved)
+    to_close, to_update = resolve_tickets(tickets, scan_sets, debounce)
+    if not to_close and not to_update:
+        print("No open ticket has its tracked CVE(s) resolved — nothing to close.")
+        return
     done_state = resolve_done_state_id(team_id) if to_close else None
+    run_url = _run_url()
     for t in to_close:
-        if done_state:
-            close_ticket(t["id"], done_state)
-            print(f"Closed {t['identifier']} (all tracked CVEs resolved).")
+        if not done_state:
+            print(
+                f"Could not resolve a completed state — leaving {t['identifier']} open."
+            )
+            continue
+        # Close FIRST; only comment once the close succeeds. If the close fails we
+        # post nothing (no self-contradicting "closing" note), and if the comment
+        # later fails the ticket is already closed so the next run won't re-close
+        # or duplicate it.
+        if not close_ticket(t["id"], done_state):
+            print(f"Failed to close {t['identifier']} — will retry next run.")
+            continue
+        cves = sorted(ssl.extract_vuln_ids_from_description(t.get("description")))
+        comment_on_ticket(t["id"], close_comment_body(cves, run_url))
+        print(f"Closed {t['identifier']} (all tracked CVEs resolved).")
     for t in to_update:
         rewrite_marker(t["id"], t.get("description", ""), t["remaining_ids"])
         print(f"Updated {t['identifier']} marker (dropped resolved CVEs).")
@@ -339,29 +423,38 @@ def main(runner: Runner = subprocess.run) -> int:
     repo = os.environ.get("REPO", "atlanhq/application-sdk")
     workflow = os.environ.get("SCAN_WORKFLOW", DEFAULT_WORKFLOW)
     run_date = os.environ.get("RUN_DATE", "")
-    debounce = int(os.environ.get("DEBOUNCE_SCANS", "3"))
-
-    allowlisted = load_allowlisted_cves()
-    if not allowlisted:
-        print("Allowlist has no entries — nothing to reconcile.")
-        return 0
+    debounce = int(os.environ.get("DEBOUNCE_SCANS", str(DEFAULT_DEBOUNCE)))
 
     current = load_current_cves()
     priors = load_prior_scan_cves(repo, workflow, debounce - 1, runner)
     scan_sets = [current, *priors]
-
-    resolved = resolved_cves(allowlisted, scan_sets, debounce)
-    if not resolved:
+    if len(scan_sets) < debounce:
         print(
-            f"No allowlisted CVE absent across {debounce} consecutive scans "
-            f"(have {len(scan_sets)} scan set(s)). Nothing to remove."
+            f"Only {len(scan_sets)} scan(s) of history (<{debounce}) — "
+            "skipping reconciliation (fail-safe)."
         )
         return 0
 
-    removed = sorted(resolved)
-    print(f"Resolved (gone for {debounce} scans): {', '.join(removed)}")
-    open_removal_pr(repo, removed, run_date, runner)
-    reconcile_tickets(resolved)
+    # 1) Allowlist removal PR — scoped to *allowlisted* CVEs gone for `debounce`
+    #    scans. (No early return on an empty allowlist — tickets still reconcile.)
+    allowlisted = load_allowlisted_cves()
+    resolved_allowlisted = resolved_cves(allowlisted, scan_sets, debounce)
+    if resolved_allowlisted:
+        removed = sorted(resolved_allowlisted)
+        print(
+            f"Allowlist entries resolved (gone for {debounce} scans): {', '.join(removed)}"
+        )
+        open_removal_pr(repo, removed, run_date, debounce, runner)
+    else:
+        print(
+            f"No allowlisted CVE absent across {debounce} scans "
+            f"({len(allowlisted)} allowlist entr{'y' if len(allowlisted) == 1 else 'ies'}) "
+            "— no removal PR."
+        )
+
+    # 2) Ticket reconciliation — keyed on the SCAN, independent of the allowlist,
+    #    so Medium/Low and pre-allowlist tickets are closed too.
+    reconcile_tickets(scan_sets, debounce)
     return 0
 
 

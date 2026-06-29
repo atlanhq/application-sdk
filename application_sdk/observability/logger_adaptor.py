@@ -15,6 +15,7 @@ from opentelemetry.trace.span import TraceFlags
 
 from application_sdk.constants import (
     APPLICATION_NAME,
+    DEPLOYMENT_NAME,
     ENABLE_OBSERVABILITY_STORE_SINK,
     ENABLE_OTLP_LOGS,
     ENABLE_OTLP_WORKFLOW_LOGS,
@@ -100,6 +101,7 @@ _KNOWN_EXTRA_KEYS = frozenset(
         # ── Misc SDK ─────────────────────────────────────────────────────
         "log_type",
         "app_name",
+        "deployment_name",
         "trace_id",
         "span_id",
         "correlation_id",
@@ -389,6 +391,7 @@ class InterceptHandler(logging.Handler):
         # / ``setdefault`` preserves any field the caller explicitly set via
         # ``extra={"app_name": "X", ...}``.
         logger_extras.setdefault("app_name", APPLICATION_NAME)
+        logger_extras.setdefault("deployment_name", DEPLOYMENT_NAME)
         _apply_atlan_context(logger_extras, prefer_caller=True)
 
         logger.opt(depth=depth, exception=record.exc_info).bind(**logger_extras).log(
@@ -866,6 +869,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         """
         kwargs["logger_name"] = self.logger_name
         kwargs["app_name"] = APPLICATION_NAME
+        kwargs["deployment_name"] = DEPLOYMENT_NAME
         # Enrichment is shared with :class:`InterceptHandler` so stdlib-bridged
         # records carry the same Atlan context; see :func:`_apply_atlan_context`.
         # ``prefer_caller=False`` preserves the historic SDK-adapter behaviour

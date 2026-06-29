@@ -13,6 +13,7 @@
         "task_queue": "atlan-deploy-{deployment_name}",
         "args": {
           "credential": "{{credential}}",
+          "agent_json": "{{agent-json}}",
           "target": "{{target}}"
         }
       }

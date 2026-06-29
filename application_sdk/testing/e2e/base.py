@@ -251,6 +251,7 @@ class BaseE2ETest:
                     AtlanClient,
                 )
 
+                # conformance: ignore[P024] e2e harness admin-role lookup runs outside the async execution path; sync pyatlan is intentional
                 _pc = AtlanClient(base_url=tenant_url, api_key=api_token)
                 _guid = _pc.role_cache.get_id_for_name("$admin")
                 if _guid:
@@ -309,6 +310,7 @@ class BaseE2ETest:
             if not tenant_url or not api_token:
                 return
 
+            # conformance: ignore[P024] e2e harness asset lookup runs outside the async execution path; sync pyatlan is intentional
             client = AtlanClient(base_url=tenant_url, api_key=api_token)
 
             # Collect GUIDs for all descendant assets.
@@ -517,14 +519,16 @@ class BaseE2ETest:
         return dag
 
     def _apply_mustache_subs(self, obj: Any, subs: dict) -> Any:
-        """Recursively replace exact-match ``{{...}}`` strings."""
-        if isinstance(obj, dict):
-            return {k: self._apply_mustache_subs(v, subs) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [self._apply_mustache_subs(x, subs) for x in obj]
-        if isinstance(obj, str) and obj in subs:
-            return subs[obj]
-        return obj
+        """Recursively replace exact-match ``{{...}}`` strings.
+
+        Delegates to the shared walker (``application_sdk.testing._mustache``) so
+        the e2e and SDR harnesses share one implementation and cannot drift.
+        """
+        from application_sdk.testing._mustache import (  # noqa: PLC0415
+            apply_mustache_subs,
+        )
+
+        return apply_mustache_subs(obj, subs)
 
     # ------------------------------------------------------------------
     # The actual flow

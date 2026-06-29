@@ -65,6 +65,7 @@ cryptography==49.0.0
     # via
     #   authlib
     #   azure-identity
+    #   google-auth
     #   msal
     #   pyjwt
     #   trustme
@@ -78,7 +79,7 @@ email-validator==2.3.0
     # via
     #   fastapi
     #   pydantic
-fastapi==0.138.0
+fastapi==0.138.1
     # via atlan-application-sdk
 fastapi-cli==0.0.27
     # via fastapi
@@ -96,6 +97,8 @@ frozenlist==1.8.0
     # via
     #   aiohttp
     #   aiosignal
+google-auth==2.55.1
+    # via atlan-application-sdk
 googleapis-common-protos==1.75.0
     # via
     #   opentelemetry-exporter-otlp-proto-grpc
@@ -174,7 +177,7 @@ nexus-rpc==1.4.0
     # via temporalio
 nodeenv==1.10.0
     # via pre-commit
-obstore==0.10.1
+obstore==0.11.0
     # via atlan-application-sdk
 opentelemetry-api==1.41.1
     # via
@@ -242,7 +245,7 @@ platformdirs==4.10.0
     #   virtualenv
 pluggy==1.6.0
     # via pytest
-poethepoet==0.46.0
+poethepoet==0.47.0
 pre-commit==4.6.0
 prometheus-client==0.25.0
     # via
@@ -257,7 +260,11 @@ protobuf==6.33.6
     #   googleapis-common-protos
     #   opentelemetry-proto
     #   temporalio
-pyatlan==9.7.6
+pyasn1==0.6.3
+    # via pyasn1-modules
+pyasn1-modules==0.4.2
+    # via google-auth
+pyatlan==9.8.0
     # via atlan-application-sdk
 pycparser==3.0 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy'
     # via cffi
@@ -349,7 +356,7 @@ temporalio==1.29.0
 tenacity==9.1.4
     # via pyatlan
 trustme==1.2.1
-typer==0.26.7
+typer==0.26.8
     # via
     #   fastapi-cli
     #   fastapi-cloud-cli

@@ -206,6 +206,33 @@
       "module": "application_sdk.templates.sql_query_extractor",
       "removal_version": "4.0.0",
       "symbol": "SqlQueryExtractor"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "TransformerInterface is deprecated; use the connector-side asset-mapper pattern (typed records \u2192 map_<entity>() \u2192 pyatlan_v9 Asset) instead \u2014 will be removed in v4.0. See docs/upgrade-guide-v3.md.",
+      "migration_target": true,
+      "module": "application_sdk.transformers",
+      "removal_version": "4.0",
+      "symbol": "TransformerInterface"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "AtlasTransformer is deprecated; use the connector-side asset-mapper pattern (typed records \u2192 map_<entity>() \u2192 pyatlan_v9 Asset) instead \u2014 will be removed in v4.0. See docs/upgrade-guide-v3.md.",
+      "migration_target": true,
+      "module": "application_sdk.transformers.atlas",
+      "removal_version": "4.0",
+      "symbol": "AtlasTransformer"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "QueryBasedTransformer is deprecated; use the connector-side asset-mapper pattern (typed records \u2192 map_<entity>() \u2192 pyatlan_v9 Asset) instead \u2014 will be removed in v4.0. See docs/upgrade-guide-v3.md.",
+      "migration_target": true,
+      "module": "application_sdk.transformers.query",
+      "removal_version": "4.0",
+      "symbol": "QueryBasedTransformer"
     }
   ]
 }

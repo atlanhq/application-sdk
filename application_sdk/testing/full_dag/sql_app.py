@@ -128,6 +128,7 @@ class SQLAppE2EFullTest(BaseFullDAGE2ETest):
         """
         from pyatlan.client.atlan import AtlanClient  # noqa: PLC0415
 
+        # conformance: ignore[P024] e2e harness admin-role lookup runs outside the async execution path; sync pyatlan is intentional
         client = AtlanClient(
             base_url=os.environ["ATLAN_BASE_URL"],
             api_key=os.environ["ATLAN_API_KEY"],

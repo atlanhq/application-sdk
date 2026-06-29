@@ -22,12 +22,16 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+import conformance.suite.checks.entrypoint as entrypoint
 import conformance.suite.checks.logging as logging_checks
 from conformance.suite.checks import (
     actions_pinning,
+    app_name_alignment,
     bootstrap_drift,
+    client_seam,
     dependency_conformance,
     deprecation,
+    determinism,
     dockerfile_conformance,
     entrypoint_alignment,
     error_handling,
@@ -72,6 +76,11 @@ _CHECKS: list[CheckRegistration] = [
         scan_path=bootstrap_drift.scan_path,
     ),
     CheckRegistration(
+        series=client_seam.SERIES,
+        discover=client_seam.discover,
+        scan_path=client_seam.scan_path,
+    ),
+    CheckRegistration(
         series=error_handling.SERIES,
         discover=error_handling.discover,
         scan_path=error_handling.scan_path,
@@ -105,6 +114,16 @@ _CHECKS: list[CheckRegistration] = [
         scan_all=orchestration.scan_all,
     ),
     CheckRegistration(
+        series=determinism.SERIES,
+        discover=determinism.discover,
+        scan_path=determinism.scan_path,
+    ),
+    CheckRegistration(
+        series=entrypoint.SERIES,
+        discover=entrypoint.discover,
+        scan_path=entrypoint.scan_path,
+    ),
+    CheckRegistration(
         series=logging_checks.SERIES,
         discover=logging_checks.discover,
         scan_path=logging_checks.scan_path,
@@ -131,6 +150,12 @@ _CHECKS: list[CheckRegistration] = [
         discover=entrypoint_alignment.discover,
         scan_path=entrypoint_alignment.scan_path,
         scan_all=entrypoint_alignment.scan_all,
+    ),
+    CheckRegistration(
+        series=app_name_alignment.SERIES,
+        discover=app_name_alignment.discover,
+        scan_path=app_name_alignment.scan_path,
+        scan_all=app_name_alignment.scan_all,
     ),
 ]
 

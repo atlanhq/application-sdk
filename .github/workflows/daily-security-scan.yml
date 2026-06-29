@@ -160,9 +160,10 @@ jobs:
 
   # ── Reconcile the allowlist + tickets against what the scanner still sees.
   #    Runs every scan (even with no new findings) so resolved CVEs are retired
-  #    automatically. A CVE is only removed after 3 consecutive clean scans
-  #    (debounce) — see reconcile_allowlist.py. Checks out as atlan-ci so the
-  #    removal PR it opens is auto-merged by vuln-auto-merge.yml.
+  #    automatically: by default a CVE is retired on the first scan that no longer
+  #    reports it (DEBOUNCE_SCANS=1; raise it to debounce transient drops) — see
+  #    reconcile_allowlist.py. Checks out as atlan-ci so the removal PR it opens
+  #    is auto-merged by vuln-auto-merge.yml.
   reconcile:
     name: Reconcile allowlist + tickets
     needs: scan-and-ticket
@@ -183,7 +184,7 @@ jobs:
         with:
           name: security-scan-raw-results
 
-      - name: Reconcile resolved CVEs (3-scan debounce)
+      - name: Reconcile resolved CVEs (acts on first clean scan)
         env:
           GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
           REPO: ${{ github.repository }}

@@ -39,6 +39,7 @@ from application_sdk.app.context import (
 from application_sdk.app.entrypoint import EntryPointMetadata
 from application_sdk.app.registry import AppMetadata, resolve_pool_queue
 from application_sdk.app.task import get_task_metadata, is_task, task
+from application_sdk.constants import LOCAL_WORKFLOW_ID
 from application_sdk.contracts.base import HeartbeatDetails, Input, Output
 from application_sdk.contracts.cleanup import (
     CleanupInput,
@@ -930,7 +931,7 @@ class App(ABC):
                 (single, "upstream" if single is upstream else "deployment", True)
             ]
 
-        run_prefix = f"artifacts/apps/{self._app_name}/workflows/{self.context.run_id}"
+        run_prefix = f"artifacts/apps/{self._app_name}/workflows/{self.context.workflow_id}/{self.context.run_id}"
         app_prefix = input.tier.upload_prefix(
             run_prefix=run_prefix, app_name=self._app_name
         )
@@ -1574,6 +1575,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
         # from application_sdk.app.client import WorkflowAppClient
         start_time = _safe_now()
         run_id = workflow.info().run_id
+        workflow_id = workflow.info().workflow_id
 
         try:
             with workflow.unsafe.imports_passed_through():
@@ -1596,6 +1598,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
             app_name=app_name,
             app_version=app_version,
             run_id=run_id,
+            workflow_id=workflow_id,
             correlation_id=correlation_id,
             started_at=start_time,
         )
@@ -1613,7 +1616,11 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
             self._app_instance = app_instance
         app_instance._context = context
 
-        context_data = {"run_id": run_id, "correlation_id": context.correlation_id}
+        context_data = {
+            "run_id": run_id,
+            "workflow_id": workflow_id,
+            "correlation_id": context.correlation_id,
+        }
         # BLDX-878: inter-app calls deactivated pending review.
         # app_instance._client = WorkflowAppClient(context_data)
         _wrap_instance_tasks(app_instance, context_data)
@@ -1779,7 +1786,7 @@ def _wrap_instance_tasks(app_instance: Any, context_data: dict[str, Any]) -> Non
 
     Args:
         app_instance: The app instance.
-        context_data: Context dict with run_id and correlation_id.
+        context_data: Context dict with run_id, workflow_id, and correlation_id.
     """
     for attr_name in dir(app_instance):
         if attr_name.startswith("_"):
@@ -1831,7 +1838,7 @@ def _create_task_activity_wrapper(
         retry_max_attempts: Maximum retry attempts.
         retry_max_interval_seconds: Maximum interval between retries.
         output_type: The typed output class for deserialization.
-        context_data: Context dict with run_id and correlation_id.
+        context_data: Context dict with run_id, workflow_id, and correlation_id.
         heartbeat_timeout_seconds: Heartbeat timeout. None disables.
         auto_heartbeat_seconds: Auto-heartbeat interval. None disables.
         retry_policy: Full retry policy (overrides max_attempts/interval if set).
@@ -1883,6 +1890,7 @@ def _create_task_activity_wrapper(
             app_name=app_name,
             task_name=task_name,
             run_id=context_data.get("run_id", ""),
+            workflow_id=context_data.get("workflow_id", LOCAL_WORKFLOW_ID),
             heartbeat_timeout_seconds=heartbeat_timeout_seconds,
             auto_heartbeat_seconds=auto_heartbeat_seconds,
         )

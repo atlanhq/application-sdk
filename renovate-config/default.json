@@ -115,6 +115,20 @@
       "addLabels": [
         "update:{{{updateType}}}"
       ]
+    },
+    {
+      "description": "Force chore commit type for all dependency updates. config:recommended includes :semanticPrefixFixDepsChoreOthers which sets semanticCommitType=fix via a packageRule, overriding any top-level semanticCommitType setting. Placing this rule last gives it higher precedence.",
+      "matchUpdateTypes": [
+        "major",
+        "minor",
+        "patch",
+        "digest",
+        "pin",
+        "pinDigest",
+        "rollback",
+        "replacement"
+      ],
+      "semanticCommitType": "chore"
     }
   ],
   "customManagers": [

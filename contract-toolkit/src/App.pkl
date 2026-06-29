@@ -2388,6 +2388,14 @@ local function generateExtractNode(): Mapping<String, Any> =
       ["task_queue"] = "\(taskQueuePrefix)-{deployment_name}"
       ["args"] = new Mapping {
         ["credential"] = "{{credential}}"
+        // SDR / agent-mode credential slot. Emitted whenever the app does not
+        // model `agent-json` — the gap that silently broke MSSQL's SDR rollout
+        // (atlan-mssql-app#177). When the app DOES model `agent-json`, the loop
+        // below emits it (AgentSelector constrains includeInManifest to true, so the
+        // loop always fires); this guard skips to avoid a duplicate key.
+        when (uiConfig == null || !uiConfig!!.properties.containsKey("agent-json")) {
+          ["agent_json"] = "{{agent-json}}"
+        }
         for (argName, formField in manifestTopLevelArgs) {
           when (uiConfig != null && uiConfig!!.properties.containsKey(formField) && uiConfig!!.properties[formField].includeInManifest) {
             [argName] = "{{" + formField + "}}"

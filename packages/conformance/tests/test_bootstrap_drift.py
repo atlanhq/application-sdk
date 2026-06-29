@@ -11,6 +11,7 @@ Covers:
 from __future__ import annotations
 
 import pathlib
+import re
 
 import pytest
 from conformance.bootstrap.render import MANAGED_WORKFLOWS, render
@@ -142,6 +143,46 @@ def test_drifted_workflow_finding_names_the_file(tmp_path: pathlib.Path) -> None
     wf.write_text("completely wrong content")
     findings = scan_path(wf, tmp_path)
     assert "commits.yaml" in findings[0].message
+
+
+# ---------------------------------------------------------------------------
+# Action pin bumps — ignored during drift comparison
+# ---------------------------------------------------------------------------
+
+_SHA_A = "a" * 40
+_SHA_B = "b" * 40
+
+
+def test_pin_only_change_not_flagged(tmp_path: pathlib.Path) -> None:
+    """Automations may bump SHA pins freely — a pin-only diff must not flag C002."""
+    _bootstrap(tmp_path)
+    wf = tmp_path / ".github" / "workflows" / "checks.yml"
+    bumped = re.sub(r"@[0-9a-f]{40}", f"@{_SHA_B}", wf.read_text())
+    wf.write_text(bumped)
+    assert scan_path(wf, tmp_path) == []
+
+
+def test_pin_and_comment_change_not_flagged(tmp_path: pathlib.Path) -> None:
+    """Renovate typically updates both the SHA and the adjacent version comment."""
+    _bootstrap(tmp_path)
+    wf = tmp_path / ".github" / "workflows" / "checks.yml"
+    bumped = re.sub(
+        r"@[0-9a-f]{40}(?:[ \t]+#[^\n]*)?", f"@{_SHA_B} # v99", wf.read_text()
+    )
+    wf.write_text(bumped)
+    assert scan_path(wf, tmp_path) == []
+
+
+def test_structural_change_alongside_pin_still_flagged(tmp_path: pathlib.Path) -> None:
+    """A structural edit is caught even when the SHA pin was also bumped."""
+    _bootstrap(tmp_path)
+    wf = tmp_path / ".github" / "workflows" / "checks.yml"
+    bumped = re.sub(r"@[0-9a-f]{40}", f"@{_SHA_B}", wf.read_text())
+    drifted = bumped + "\n# injected structural drift\n"
+    wf.write_text(drifted)
+    findings = scan_path(wf, tmp_path)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "C002"
 
 
 # ---------------------------------------------------------------------------
