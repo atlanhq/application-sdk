@@ -251,6 +251,7 @@ class BaseE2ETest:
                     AtlanClient,
                 )
 
+                # conformance: ignore[P024] e2e harness admin-role lookup runs outside the async execution path; sync pyatlan is intentional
                 _pc = AtlanClient(base_url=tenant_url, api_key=api_token)
                 _guid = _pc.role_cache.get_id_for_name("$admin")
                 if _guid:
@@ -309,6 +310,7 @@ class BaseE2ETest:
             if not tenant_url or not api_token:
                 return
 
+            # conformance: ignore[P024] e2e harness asset lookup runs outside the async execution path; sync pyatlan is intentional
             client = AtlanClient(base_url=tenant_url, api_key=api_token)
 
             # Collect GUIDs for all descendant assets.

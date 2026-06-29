@@ -27,8 +27,10 @@ import conformance.suite.checks.logging as logging_checks
 from conformance.suite.checks import (
     actions_pinning,
     bootstrap_drift,
+    client_seam,
     dependency_conformance,
     deprecation,
+    determinism,
     dockerfile_conformance,
     entrypoint_alignment,
     error_handling,
@@ -73,6 +75,11 @@ _CHECKS: list[CheckRegistration] = [
         scan_path=bootstrap_drift.scan_path,
     ),
     CheckRegistration(
+        series=client_seam.SERIES,
+        discover=client_seam.discover,
+        scan_path=client_seam.scan_path,
+    ),
+    CheckRegistration(
         series=error_handling.SERIES,
         discover=error_handling.discover,
         scan_path=error_handling.scan_path,
@@ -104,6 +111,11 @@ _CHECKS: list[CheckRegistration] = [
         discover=orchestration.discover,
         scan_path=orchestration.scan_path,
         scan_all=orchestration.scan_all,
+    ),
+    CheckRegistration(
+        series=determinism.SERIES,
+        discover=determinism.discover,
+        scan_path=determinism.scan_path,
     ),
     CheckRegistration(
         series=entrypoint.SERIES,
