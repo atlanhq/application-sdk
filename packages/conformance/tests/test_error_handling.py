@@ -919,6 +919,93 @@ except ValueError as e:
     )
 
 
+# ── E019 — ExceptionTextInContractField ──────────────────────────────────────
+
+
+def test_e019_str_exc_in_returned_contract() -> None:
+    # `return AuthOutput(message=str(e))` inside an except block leaks exc text.
+    # E004 (broad except) co-fires — assert E019 membership, like the E015 tests.
+    assert "E019" in _findings(
+        """\
+try:
+    authenticate()
+except Exception as e:
+    return AuthOutput(status="FAILED", message=str(e))
+"""
+    )
+
+
+def test_e019_fstring_exc_in_appended_contract() -> None:
+    # The dominant real shape: contract appended to a list, returned later.
+    assert "E019" in _findings(
+        """\
+try:
+    connect()
+except Exception as e:
+    checks.append(PreflightCheck(name="auth", passed=False, message=f"failed: {e}"))
+"""
+    )
+
+
+def test_e019_nested_contract_in_return() -> None:
+    # Exception text nested in a contract inside the returned envelope.
+    assert "E019" in _findings(
+        """\
+try:
+    connect()
+except Exception as e:
+    return PreflightOutput(checks=[PreflightCheck(message=f"failed: {e}")])
+"""
+    )
+
+
+def test_e019_no_finding_static_message() -> None:
+    # A stable, sanitised message= carries no exc text → E019 must not fire.
+    _none(
+        """\
+try:
+    authenticate()
+except Exception as e:
+    logger.warning("auth failed", exc_info=True)
+    return AuthOutput(status="FAILED", message="Authentication failed")
+"""
+    )
+
+
+def test_e019_no_finding_outside_except() -> None:
+    # Same construction outside any except block → no exc binding → no E019.
+    _none(
+        """\
+def build() -> AuthOutput:
+    return AuthOutput(status="OK", message=f"connected as {user}")
+"""
+    )
+
+
+def test_e019_no_double_fire_with_e015_on_raise() -> None:
+    # A raise is E015's job — E019 must NOT also fire on it.
+    assert "E019" not in _findings(
+        """\
+try:
+    fetch()
+except ValueError as e:
+    raise InternalError(message=str(e))
+"""
+    )
+
+
+def test_e019_suppressed_inline() -> None:
+    _suppressed(
+        """\
+try:
+    authenticate()
+except Exception as e:
+    return AuthOutput(message=str(e))  # conformance: ignore[E019] surfacing upstream auth error verbatim is intended here
+""",
+        "E019",
+    )
+
+
 # ── P016 — MissingExceptionChaining ──────────────────────────────────────────
 
 

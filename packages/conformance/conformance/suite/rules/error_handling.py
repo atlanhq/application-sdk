@@ -477,4 +477,37 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e018",
     ),
+    RuleDefinition(
+        id="E019",
+        scope=RuleScope.BOTH,
+        name="ExceptionTextInContractField",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="error-message-hygiene",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.9.0",
+        rationale=(
+            "E015 stops exception text leaking through a raised AppError's message=, but the "
+            "same text leaks just as readily when an except block returns a typed response "
+            "contract (AuthOutput, PreflightCheck) with message=str(exc). The returned value "
+            "crosses the typed boundary to operators and dashboards, and each distinct str(exc) "
+            "becomes its own aggregation bucket instead of one countable signal."
+        ),
+        short_description="Caught exception text interpolated into a returned contract message= field — leaks unsanitised text",
+        full_description=(
+            "An ``except … as exc:`` block that ``return``\\ s a call (typically a typed\n"
+            "response/output contract such as ``AuthOutput`` or ``PreflightCheck``) whose\n"
+            "``message=`` keyword embeds the caught exception via an f-string\n"
+            "(``f'…{exc}…'``), ``str(exc)``, or ``repr(exc)``.  This is the\n"
+            "return-value counterpart of E015 (which only covers ``raise``): the\n"
+            "unsanitised upstream text still crosses the typed boundary into a field\n"
+            "shown to operators and indexed in dashboards, and still collapses distinct\n"
+            "failure modes into one variable-text bucket.  Keep ``message=`` a stable\n"
+            "human summary and carry the exception detail in a typed field (e.g. raise a\n"
+            "typed ``AppError`` with ``cause=exc`` upstream, or record it in a dedicated\n"
+            "evidence field) rather than the user-facing contract message.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e019",
+    ),
 )
