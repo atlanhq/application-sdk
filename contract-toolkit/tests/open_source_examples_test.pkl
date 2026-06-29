@@ -217,15 +217,16 @@ facts {
     !minimalAtlanYaml.contains("tags:")
   }
 
-  ["packageId emits package_id and marketplace_card: true; absent = no card fields"] {
-    // Entrypoints with packageId get both fields; entrypoints without get neither.
+  ["packageId drives marketplace card: auto-derived for single-entrypoint, explicit for multi"] {
+    // Single-entrypoint apps auto-derive "@atlan/{name}" as their packageId.
+    minimalAtlanYaml.contains("package_id: '@atlan/minimal'")
+    minimalAtlanYaml.contains("marketplace_card: true")
+    fullAtlanYaml.contains("package_id: '@atlan/full-featured'")
+    fullAtlanYaml.contains("marketplace_card: true")
+    // Multi-entrypoint: explicit packageId on one entrypoint; route-only has neither field.
     cardSplitAtlanYaml.contains("package_id: '@atlan/card-split'")
     cardSplitAtlanYaml.contains("marketplace_card: true")
-    // Single-entrypoint apps without packageId omit both fields entirely.
-    !minimalAtlanYaml.contains("package_id:")
-    !minimalAtlanYaml.contains("marketplace_card:")
-    !fullAtlanYaml.contains("package_id:")
-    !fullAtlanYaml.contains("marketplace_card:")
+    !cardSplitAtlanYaml.contains("marketplace_card: false")
   }
 
   ["deploy block absent from atlan.yaml when deploy is not configured"] {

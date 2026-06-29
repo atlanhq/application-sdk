@@ -13,6 +13,8 @@ entrypoints:
   display_name: Deploy Config Example
   icon_url: https://assets.atlan.com/assets/fullscreen-open.svg
   type: connector
+  package_id: '@atlan/deploy'
+  marketplace_card: true
 deploy:
   execution_mode: native
   splitDeploymentEnabled: true

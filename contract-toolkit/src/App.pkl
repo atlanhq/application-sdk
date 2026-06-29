@@ -183,6 +183,18 @@ longDescription: String = ""
 /// no key in the rendered yaml (the `when` guard suppresses emission).
 tags: Listing<String> = new Listing {}
 
+/// Whether this app appears as a card in the marketplace (LM/GM).
+///
+/// Default: `true`. Single-entrypoint apps auto-derive `package_id: "@atlan/{name}"`
+/// and emit `marketplace_card: true` in `atlan.yaml` from this default.
+/// Set to `false` for purely behind-the-scenes apps that should never surface
+/// in the marketplace UI — the entrypoints block is still emitted for routing,
+/// but no `package_id` or `marketplace_card` key appears.
+///
+/// For multi-entrypoint apps this flag has no effect; control card presence
+/// per-entrypoint via `Entrypoint.packageId` instead.
+marketplaceCard: Boolean = true
+
 /// Extra top-level metadata fields for atlan.yaml.
 metadata: Mapping<String, Any> = new Mapping {}
 
@@ -3200,12 +3212,14 @@ local effectiveEntrypoints: Listing<Entrypoint> =
     let (_displayName = displayName)
     let (_iconUrl = iconUrl)
     let (_type = type)
+    let (_pkgId = if (marketplaceCard) "@atlan/\(_name)" else null)
     new Listing {
       new Entrypoint {
         name = _name
         displayName = _displayName
         iconUrl = _iconUrl
         type = _type
+        packageId = _pkgId
       }
     }
 

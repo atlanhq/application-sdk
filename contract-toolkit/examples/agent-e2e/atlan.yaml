@@ -13,3 +13,5 @@ entrypoints:
   display_name: Agent E2E Example
   icon_url: https://assets.atlan.com/assets/fullscreen-exit.svg
   type: connector
+  package_id: '@atlan/agent-e2e'
+  marketplace_card: true

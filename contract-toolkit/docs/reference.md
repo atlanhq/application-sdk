@@ -354,9 +354,10 @@ Set `entrypoints` to serve multiple marketplace tiles from one deployment. Per-e
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `entrypoints` | Listing<Entrypoint> | `[]` | SDK routing endpoints and (optionally) marketplace card definitions. When non-empty, enables bundle mode. All entrypoints are routable via `?entrypoint=`; only those with `marketplaceCard=true` render as UI cards. |
+| `entrypoints` | Listing<Entrypoint> | `[]` | SDK routing endpoints and (optionally) marketplace card definitions. When non-empty, enables bundle mode. All entrypoints are routable via `?entrypoint=`; only those with `packageId` set render as marketplace cards. |
+| `marketplaceCard` | Boolean | `true` | Whether this app appears in the marketplace. Single-entrypoint apps auto-derive `package_id: "@atlan/{name}"` from this default. Set to `false` for purely behind-the-scenes apps with no marketplace presence. Has no effect on multi-entrypoint apps; use `Entrypoint.packageId` per-entrypoint instead. |
 | `emitAtlanYaml` | Boolean | `true` | Emit `atlan.yaml`. |
-| `emitEntrypoints` | Boolean | `true` | **Deprecated** — use `marketplaceCard = false` on individual `Entrypoint`s instead. Emit the `entrypoints:` block. Will be removed in the next minor version. |
+| `emitEntrypoints` | Boolean | `true` | **Deprecated** — use `Entrypoint.packageId` to control card presence. Emit the `entrypoints:` block. Will be removed in the next minor version. |
 | `emitGeneratedArtifacts` | Boolean | `true` | Re-export entrypoint contract files. |
 
 **Entrypoint class:**

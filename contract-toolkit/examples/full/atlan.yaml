@@ -27,3 +27,5 @@ entrypoints:
   icon_url: https://assets.atlan.com/assets/fullscreen-open.svg
   type: connector
   docs_url: https://docs.example.com/apps/full-featured
+  package_id: '@atlan/full-featured'
+  marketplace_card: true

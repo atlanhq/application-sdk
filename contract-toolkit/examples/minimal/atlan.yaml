@@ -13,3 +13,5 @@ entrypoints:
   display_name: Minimal Example
   icon_url: https://assets.atlan.com/assets/fullscreen-exit.svg
   type: connector
+  package_id: '@atlan/minimal'
+  marketplace_card: true

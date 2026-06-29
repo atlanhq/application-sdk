@@ -13,3 +13,5 @@ entrypoints:
   display_name: Fan-in Example
   icon_url: https://assets.atlan.com/assets/trino.svg
   type: connector
+  package_id: '@atlan/fanin'
+  marketplace_card: true
