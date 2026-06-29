@@ -98,7 +98,7 @@ The `examples/` directory contains executable contracts that teach stable toolki
 - [`examples/full/`](examples/full/) — every overridable feature: JDBC URL auth, all pipeline steps, diverse widgets, UIRules, extraNodes.
 - [`examples/bundle/`](examples/bundle/) — multi-entrypoint app (crawler + miner); shared credential configmap; per-entrypoint artifact subfolders.
 - [`examples/card-split/`](examples/card-split/) — two entrypoints where only one is a marketplace UI card (`marketplaceCard = false` on the route-only entrypoint).
-- [`examples/deploy/`](examples/deploy/) — typed `deploy` block (deprecated single-pool path): KEDA, Dapr, resources, env, `deployOverrides`.
+- [`examples/deploy/`](examples/deploy/) — single-pool deployment: KEDA, resources, env, and per-pool `overrides` under `deploy.pools["default"]`.
 - [`examples/pools/`](examples/pools/) — `pools` map (preferred): named hot/cold worker pools with per-pool KEDA `cooldownPeriod` and resources.
 - [`examples/connection-ref/`](examples/connection-ref/) — `ConnectionRefInput` widget, `pipeline.publish = null`.
 - [`examples/publish-controls/`](examples/publish-controls/) — publish toggles, `includeInputFields`, `errorHandling`.
@@ -109,7 +109,7 @@ The `examples/` directory contains executable contracts that teach stable toolki
 
 ### `atlan.yaml` (repo root)
 
-Marketplace deployment manifest. Contains app identity, entrypoints list, and the typed `deploy` block (KEDA, Dapr, resources, env, and any `deployOverrides`). Emitted with a DO-NOT-EDIT header — edit `contract/app.pkl` instead.
+Marketplace deployment manifest. Contains app identity, the `entrypoints` list, and (when `deploy` is configured) a typed `deploy:` block — app-level `dapr` and `overrides` plus a `pools:` map carrying per-pool keda/resources/env/overrides. The top-level `deploy:` block is synthesised from the first pool for backward compatibility. Emitted with a DO-NOT-EDIT header — edit `contract/app.pkl` instead.
 
 ### `app.yaml` (repo root)
 
@@ -167,7 +167,7 @@ The single entry point for all new native app contracts. Amend this module and d
 - Credential config: `credentialCommonFields`, `credentialAuthOptions`, `credentialConnectorType`
 - Workflow config: `uiConfig` (form steps and fields using `Widgets.*` types)
 - Pipeline: typed `pipeline` block (extract → parseQueries → popularity → lineage → publish)
-- Deployment: `pools` map (preferred, explicit-overrides-only) or deprecated `deploy` block — see `Deployment.pkl`
+- Deployment: `deploy` (typed `DeployConfig?` — app-level `dapr` / `overrides` plus a named `pools` map; pool keys must match `@task(pool="…")` strings) — see `Deployment.pkl`
 
 All domain classes (`FieldSpec`, `AuthOption`, `UIConfig`, `UIRule`, `Entrypoint`, pipeline step classes, `Pool`, `DeployConfig`, `DaprComponents`, `KedaConfig`, `ResourceConfig`, `ErrorHandlingConfig`, `DependencyCondition`, `DAGNode`, etc.) are available directly in amending modules without additional imports. Deployment classes (`Pool`, `DeployConfig`, `DaprComponents`, `KedaConfig`, `KedaTemporalConfig`, `ResourceConfig`) are defined in `Deployment.pkl` and re-exported by `App.pkl`.
 
