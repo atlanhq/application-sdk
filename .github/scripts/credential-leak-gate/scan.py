@@ -156,12 +156,13 @@ TEST_PATH = re.compile(
     re.IGNORECASE,
 )
 
-# GitHub Actions file-redirect sinks: `>> "$GITHUB_ENV"` / `>> $GITHUB_OUTPUT`
-# etc. write to process-scoped masked files, not to stdout/logs — not a leak.
-# Used in the shell-echo forward-look (next ≤10 lines) to detect block-redirect
-# patterns like `{ echo "VAR=$SECRET"; } >> "$GITHUB_ENV"` where the redirect
-# is on the closing-brace line, not the echo line itself.
-_GITHUB_REDIRECT = re.compile(r">>\s*\"?\$GITHUB_(ENV|OUTPUT|STATE|PATH)\"?")
+# GitHub Actions block-redirect detection for the shell-echo false-positive rule.
+# Pattern: `{ echo "VAR=$SECRET"; ... } >> "$GITHUB_ENV"` — the redirect is on
+# the closing `}` line, not the echo line, so same-line checks miss it.
+# Two regexes let the forward-scan stop at the first `}` line without a fixed
+# line-count cap: if `}` carries the redirect → safe; bare `}` → stop, real sink.
+_GITHUB_BLOCK_CLOSE = re.compile(r"^\s*\}\s*>>\s*\"?\$GITHUB_(ENV|OUTPUT|STATE|PATH)\"?")
+_BLOCK_CLOSE = re.compile(r"^\s*\}")
 
 # Masking/redaction helpers — if present in the line, the value is already
 # protected before it reaches the sink (FP classes #4 / #5).
@@ -439,11 +440,18 @@ def scan(root: str) -> dict:
                     #
                     # Also skip GitHub Actions block-redirect: the closing `}`
                     # carries `>> "$GITHUB_ENV"` (a masked file sink), not the
-                    # echo line itself — look forward ≤10 lines to catch it.
+                    # echo line itself. Scan forward to the first `}` line:
+                    # if it redirects to a GitHub masked file → false positive;
+                    # bare `}` with no redirect → real sink, keep the finding.
                     if pattern_id == "shell-echo" and (
                         "-stdin" in code
                         or re.search(r"(?<!\|)\|(?!\|)", code)
-                        or _GITHUB_REDIRECT.search("".join(lines[lineno : lineno + 10]))
+                        or next(
+                            (_GITHUB_BLOCK_CLOSE.search(ln) is not None
+                             for ln in lines[lineno:]
+                             if _BLOCK_CLOSE.search(ln)),
+                            False,
+                        )
                     ):
                         break
                 var_norm = _norm(var)
