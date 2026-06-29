@@ -1,4 +1,4 @@
-module com.atlan.app.contract.Pool
+module com.atlan.app.contract.Deployment
 
 /// Lowercase kebab-case string: `[a-z][a-z0-9]*(-[a-z0-9]+)*`.
 typealias KebabCase = String(matches(Regex("[a-z][a-z0-9]*(-[a-z0-9]+)*")))

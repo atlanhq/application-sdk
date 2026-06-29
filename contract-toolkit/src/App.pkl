@@ -29,7 +29,7 @@
 open module com.atlan.app.contract.App
 
 import "Connectors.pkl"
-import "Pool.pkl" as PoolPkg
+import "Deployment.pkl" as DeploymentPkg
 import "Widgets.pkl"
 
 // ── WIDGET TYPE RE-EXPORTS ────────────────────────────────────────────────────
@@ -88,14 +88,14 @@ typealias CustomWidget = Widgets.CustomWidget
 
 // ── DEPLOYMENT TYPE RE-EXPORTS ────────────────────────────────────────────────
 // Typealiases so amending contracts write `new DeployConfig { }`, `new KedaConfig { }`, etc.
-// without needing a supplemental `import "@app-contract-toolkit/Pool.pkl"`.
+// without needing a supplemental `import "@app-contract-toolkit/Deployment.pkl"`.
 
-typealias DaprComponents = PoolPkg.DaprComponents
-typealias KedaTemporalConfig = PoolPkg.KedaTemporalConfig
-typealias KedaConfig = PoolPkg.KedaConfig
-typealias ResourceConfig = PoolPkg.ResourceConfig
-typealias DeployConfig = PoolPkg.DeployConfig
-typealias Pool = PoolPkg.Pool
+typealias DaprComponents = DeploymentPkg.DaprComponents
+typealias KedaTemporalConfig = DeploymentPkg.KedaTemporalConfig
+typealias KedaConfig = DeploymentPkg.KedaConfig
+typealias ResourceConfig = DeploymentPkg.ResourceConfig
+typealias DeployConfig = DeploymentPkg.DeployConfig
+typealias Pool = DeploymentPkg.Pool
 
 // ── CONSTRAINED TYPES ────────────────────────────────────────────────────────
 

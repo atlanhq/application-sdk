@@ -11,23 +11,12 @@ icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
 hasCredentialConfig = false
 
 deploy = new DeployConfig {
-  // Dapr sidecar toggles are deployment-wide (not per-pool).
-  dapr {
-    objectstore = true
-    secretstore = true
-    statestore = false
-    eventstore = false
-    subscription = false
-    configurationstore = false
-    lock = false
-  }
-
   pools {
     ["default"] = new Pool {
       // KEDA: scale-to-zero based on Temporal task-queue depth.
       keda {
         enabled = true
-        minReplicaCount = 1
+        minReplicaCount = 0
         temporal {
           targetQueueSize = 10
         }

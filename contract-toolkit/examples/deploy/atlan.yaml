@@ -17,17 +17,9 @@ entrypoints:
 deploy:
   execution_mode: native
   splitDeploymentEnabled: true
-  dapr:
-    objectstore: true
-    secretstore: true
-    statestore: false
-    eventstore: false
-    subscription: false
-    configurationstore: false
-    lock: false
   keda:
     enabled: true
-    minReplicaCount: 1
+    minReplicaCount: 0
     temporal:
       targetQueueSize: 10
   resources:
@@ -47,7 +39,7 @@ pools:
   default:
     keda:
       enabled: true
-      minReplicaCount: 1
+      minReplicaCount: 0
       temporal:
         targetQueueSize: 10
     resources:

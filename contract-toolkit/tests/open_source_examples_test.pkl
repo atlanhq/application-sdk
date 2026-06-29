@@ -330,7 +330,7 @@ facts {
     bundleApp.output.files["atlan.yaml"].text.contains("name: miner")
   }
 
-  ["Deploy example atlan.yaml includes KEDA, resources, env, dapr, and pool overrides"] {
+  ["Deploy example atlan.yaml includes KEDA, resources, env, and pool overrides — no dapr block"] {
     deployApp.output.files.containsKey("atlan.yaml")
     local deployYaml: String = deployApp.output.files["atlan.yaml"].text
     // execution_mode at top level (read by global-marketplace and atlan-local-marketplace-app)
@@ -338,9 +338,8 @@ facts {
     // KEDA settings
     deployYaml.contains("enabled: true")
     deployYaml.contains("targetQueueSize: 10")
-    // Dapr via deploy.dapr (global sidecar toggles)
-    deployYaml.contains("objectstore: true")
-    deployYaml.contains("secretstore: true")
+    // dapr omitted when all components are at default (false) — Heracles applies platform defaults
+    !deployYaml.contains("dapr:")
     // Resources
     deployYaml.contains("cpu: 500m")
     deployYaml.contains("memory: 4Gi")

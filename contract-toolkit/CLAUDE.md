@@ -24,6 +24,7 @@ Contracts generate — from one `pkl eval -m . contract/app.pkl` at repo root:
 
 - `src/App.pkl`: **canonical template** for all new native app contracts.
 - `src/Widgets.pkl`: widget catalog re-exported from `App.pkl`.
+- `src/Deployment.pkl`: deployment classes (`DeployConfig`, `Pool`, `KedaConfig`, `DaprComponents`, `ResourceConfig`) re-exported from `App.pkl`.
 - `src/Connectors.pkl`: connector type registry (still imported explicitly by consumers).
 - Legacy modules (reference only, not for new apps):
   - `src/NativeApp.pkl`, `src/NativeAppBundle.pkl`, `src/AgentConfig.pkl`

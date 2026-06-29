@@ -243,7 +243,7 @@ The auth-type radio's `ui.hidden` is auto-derived from `credentialAuthOptions.le
 
 Singleton fields (`executionMode`, `splitDeployment`, `dapr`) apply to the whole deployment. Per-pool scaling (KEDA, resources, env) goes inside `deploy.pools`.
 
-All deployment classes (`DeployConfig`, `Pool`, `DaprComponents`, `KedaConfig`, `KedaTemporalConfig`, `ResourceConfig`) are defined in `Pool.pkl` and re-exported by `App.pkl` — amending contracts do not need a supplemental import.
+All deployment classes (`DeployConfig`, `Pool`, `DaprComponents`, `KedaConfig`, `KedaTemporalConfig`, `ResourceConfig`) are defined in `Deployment.pkl` and re-exported by `App.pkl` — amending contracts do not need a supplemental import.
 
 | Property | Type | Default | Description |
 |---|---|---|---|
