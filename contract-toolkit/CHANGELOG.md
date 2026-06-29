@@ -6,6 +6,23 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [Unreleased]
+
+### Changed
+
+- **`agent_json` extract arg is now always emitted in generated manifests, even
+  when `includeInManifest = false`.** `generateExtractNode` (in `App.pkl` and
+  `NativeApp.pkl`) default-emits the `agent_json` slot (`"{{agent-json}}"`) for
+  every connector. This is a deliberate, field-specific deviation from the
+  normal contract: for every other field, `includeInManifest = false`
+  suppresses its manifest slot; for `agent-json` it does **not**, because
+  `agent_json` is structurally required for Self-Deployed Runtime (SDR)
+  credential routing. A guard skips the default emit when the app already models
+  `agent-json` with `includeInManifest = true`, so the slot is never duplicated.
+  This closes the gap that silently broke MSSQL's SDR rollout
+  (`atlan-mssql-app#177`). The single-emit invariant is pinned by
+  `tests/agent_json_default_emit_test.pkl`.
+
 ## [0.16.0] - 2026-06-25
 
 ### Features
