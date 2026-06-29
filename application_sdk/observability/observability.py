@@ -77,7 +77,7 @@ class AtlanObservability(Generic[T], ABC):
     - Periodic flushing to storage
     - Data retention management
     - Error handling and signal management
-    - Parquet file storage
+    - Gzip-compressed NDJSON file storage
     - Dapr object store integration
 
     Attributes:
@@ -406,20 +406,24 @@ class AtlanObservability(Generic[T], ABC):
                     ):
                         # Finalize the current partition before switching.
                         if current_writer is not None:
+                            # Swap out before close+upload so the triggering record is
+                            # never dropped: current_writer=None first means the code
+                            # below always opens a fresh writer for the new partition,
+                            # even if the upload raises.  _upload_and_delete's own
+                            # finally unlinks the local file, so no disk leak on failure.
+                            prev_writer = current_writer
+                            current_writer = None
                             try:
-                                current_writer.file.close()
-                                # _upload_and_delete unlinks the local file in its own finally.
+                                prev_writer.file.close()
                                 await self._upload_and_delete(
-                                    current_writer.local_path,
-                                    current_writer.remote_key,
+                                    prev_writer.local_path,
+                                    prev_writer.remote_key,
                                 )
-                            finally:
-                                # Reset atomically on both success and failure.  On failure,
-                                # _upload_and_delete's own finally already removed the local
-                                # file, so there is no disk leak.  Resetting here ensures the
-                                # next same-partition record opens a fresh file rather than
-                                # writing to a None handle.
-                                current_writer = None
+                            except Exception:
+                                logging.error(
+                                    "Error finalizing observability partition",
+                                    exc_info=True,
+                                )
 
                         # Open a fresh gzip file for the new partition.
                         os.makedirs(partition_path, exist_ok=True)

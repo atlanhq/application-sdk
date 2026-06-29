@@ -174,7 +174,7 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 |----------|---------|-------------|
 | `ATLAN_METRICS_BATCH_SIZE` | `100` | Records buffered before flushing to the object-store sink. |
 | `ATLAN_METRICS_FLUSH_INTERVAL_SECONDS` | `10` | Seconds between object-store sink flushes. |
-| `ATLAN_METRICS_RETENTION_DAYS` | `30` | Days to retain parquet metric files. |
+| `ATLAN_METRICS_RETENTION_DAYS` | `30` | Days to retain metric files in the object store before cleanup. |
 | `ATLAN_METRICS_CLEANUP_ENABLED` | `false` | Enable automatic cleanup of old metric files. Uses `.lower() == "true"` — safe to set to `"false"` to disable. |
 | `ATLAN_ENABLE_TEMPORAL_CORE_METRICS` | `true` | Bind the Temporal Rust-core Prometheus endpoint at `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` (loopback) in worker/combined mode so its metric set (`temporal_workflow_*`, `temporal_activity_*`, etc.) is reachable for the combined-mode FastAPI `/metrics` proxy and the worker's `TemporalCoreCollector`. The FastAPI `/metrics` route is always exposed regardless of this flag — when this flag is `false`, or in handler-only mode, the response simply omits the proxied Temporal Rust-core families. `run_dev_combined()` defaults to `false` to avoid hot-reload port collisions. See [Monitoring](concepts/monitoring.md). |
 | `ATLAN_PROMETHEUS_PUSHGATEWAY_URL` | _(empty)_ | Pushgateway URL workers push to (split deployment). Empty disables push — combined-mode pods leave it unset and rely on direct `/metrics` scrape. |

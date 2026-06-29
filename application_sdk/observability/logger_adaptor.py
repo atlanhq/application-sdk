@@ -542,7 +542,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
     This adapter provides enhanced logging capabilities including:
     - Structured logging with context
     - OpenTelemetry integration
-    - Parquet file logging
+    - Object-store file logging (gzip-compressed NDJSON)
     - Custom log levels for activities, metrics, and tracing
     - Temporal workflow and activity context integration
     """
@@ -577,7 +577,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         - Sets up Loguru with custom formatting
         - Configures custom log levels (ACTIVITY, METRIC, TRACING)
         - Sets up OTLP logging if enabled
-        - Initializes parquet logging if Dapr sink is enabled
+        - Initializes the object-store log sink when ENABLE_OBSERVABILITY_STORE_SINK is true
         - Starts periodic flush task for log buffering
         """
         super().__init__(

@@ -485,6 +485,55 @@ class TestFlushRecordsSinglePass:
         mock_upload.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_partition_switch_after_upload_failure_continues(self, tmp_path):
+        """Upload failure on partition switch does not drop the triggering record.
+
+        The _PartitionWriter swap-before-upload pattern ensures current_writer=None
+        before the upload attempt.  If the upload raises, the exception is caught
+        locally so the triggering record still reaches the fresh-writer-open path
+        below, and subsequent partitions are processed normally.
+        """
+        ts_h10 = datetime(2025, 6, 15, 10, 30, 0).timestamp()
+        ts_h11 = datetime(2025, 6, 15, 11, 10, 0).timestamp()
+        ts_h10b = datetime(2025, 6, 15, 10, 55, 0).timestamp()
+        records = [
+            self._make_record(ts_h10, "h10-first"),
+            self._make_record(ts_h11, "h11"),  # triggers switch; first upload raises
+            self._make_record(ts_h10b, "h10-second"),  # triggers second switch
+        ]
+        call_args: list[tuple[str, str]] = []
+
+        async def _upload_raises_first(local_path: str, remote_key: str) -> None:
+            call_args.append((local_path, remote_key))
+            if len(call_args) == 1:
+                raise OSError("simulated upstream upload failure")
+
+        with create_logger_adapter() as adapter:
+            adapter.data_dir = str(tmp_path)
+            with (
+                mock.patch.object(
+                    adapter, "_upload_and_delete", side_effect=_upload_raises_first
+                ),
+                mock.patch(
+                    "application_sdk.observability.observability.ENABLE_OBSERVABILITY_STORE_SINK",
+                    True,
+                ),
+            ):
+                # Must not propagate despite the first upload failing.
+                await adapter._flush_records(records)
+
+        # Three upload attempts: h10 (fails), h11 (succeeds), trailing h10 (succeeds).
+        assert len(call_args) == 3, f"Expected 3 upload attempts, got {len(call_args)}"
+        remote_keys = [a[1] for a in call_args]
+        assert "hour=10" in remote_keys[0], "first attempt should be for hour10"
+        assert "hour=11" in remote_keys[1], "second attempt should be for hour11"
+        assert "hour=10" in remote_keys[2], "third attempt should be trailing hour10"
+        # The trailing hour10 record reached a new file (different local path from the first h10).
+        assert (
+            call_args[0][0] != call_args[2][0]
+        ), "trailing hour10 record must be in a new file, not the failed-upload file"
+
+    @pytest.mark.asyncio
     async def test_out_of_order_records_writes_second_file_for_same_hour(
         self, tmp_path
     ):
