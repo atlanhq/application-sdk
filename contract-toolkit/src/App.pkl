@@ -2396,7 +2396,7 @@ local function generateExtractNode(): Mapping<String, Any> =
         // SDR / agent-mode credential slot. Emitted whenever the app does not
         // model `agent-json` — the gap that silently broke MSSQL's SDR rollout
         // (atlan-mssql-app#177). When the app DOES model `agent-json`, the loop
-        // below emits it (AgentSelector fixes includeInManifest=true, so the
+        // below emits it (AgentSelector constrains includeInManifest to true, so the
         // loop always fires); this guard skips to avoid a duplicate key.
         when (uiConfig == null || !uiConfig!!.properties.containsKey("agent-json")) {
           ["agent_json"] = "{{agent-json}}"
