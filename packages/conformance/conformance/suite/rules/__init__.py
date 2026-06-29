@@ -9,6 +9,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from types import MappingProxyType
 
+from conformance.suite.rules.app_name_alignment import (
+    RULES as _APP_NAME_ALIGNMENT_RULES,
+)
 from conformance.suite.rules.ci import RULES as _CI_RULES
 from conformance.suite.rules.client_seam import RULES as _CLIENT_SEAM_RULES
 from conformance.suite.rules.dependency import RULES as _D_RULES
@@ -52,6 +55,7 @@ _ALL_SERIES: tuple[tuple[RuleDefinition, ...], ...] = (
     _STORAGE_RULES,
     _CLIENT_SEAM_RULES,
     _EP_ALIGNMENT_RULES,
+    _APP_NAME_ALIGNMENT_RULES,
     _T_RULES,
     _B_RULES,
 )
