@@ -5,9 +5,9 @@
 /// must ALWAYS carry an `args["agent_json"]` slot. A missing slot silently
 /// breaks SDR runs (the gap that broke MSSQL's rollout, atlan-mssql-app#177).
 ///
-/// `AgentSelector` fixes `includeInManifest = true`, so opting out via
-/// `includeInManifest = false` is a compile error — only two guard branches
-/// remain:
+/// `AgentSelector` constrains `includeInManifest` to `true` (a `Boolean(this)`
+/// type), so setting it to `false` raises a constraint violation — only two
+/// guard branches remain:
 ///   1. app does NOT model `agent-json`       → guard emits the slot
 ///   2. app models `agent-json` (via AgentSelector) → loop emits it exactly once
 amends "pkl:test"
