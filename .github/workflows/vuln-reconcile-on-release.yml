@@ -26,12 +26,23 @@
 #
 # Checks out as atlan-ci so the allowlist-removal PR auto-merges via
 # vuln-auto-merge.yml. workflow_dispatch is provided for manual backfill / re-runs.
+#
+# Trigger dependency (load-bearing): this fires only because tag-and-publish.yaml
+# creates the GitHub Release with a PAT (secrets.ORG_PAT_GITHUB). A release
+# created with the default GITHUB_TOKEN would NOT trigger this workflow (GitHub's
+# workflow-recursion guard). Don't "simplify" that release step to GITHUB_TOKEN.
+#
+# `types: [released]` (NOT `published`): `published` also fires for prereleases,
+# and tag-and-publish.yaml marks `rc` versions prerelease. Stable connectors pull
+# the stable SDK, so an entry must persist through `-rc` publishes and only clear
+# when the stable release ships. `released` fires for non-prerelease publishes
+# (and prerelease→stable promotions) and excludes prereleases.
 
 name: Vuln Reconcile (on Release)
 
 on:
   release:
-    types: [published]
+    types: [released]
   workflow_dispatch:
 
 permissions:
@@ -62,6 +73,12 @@ jobs:
             --status success --limit 1 --json databaseId --jq '.[0].databaseId')
           echo "Reconciling against scan run $RUN_ID"
           gh run download "$RUN_ID" -R "$REPO" -n security-scan-raw-results
+          # Loud assertion: gh run download flattens artifact contents into the
+          # CWD (verified), and reconcile_allowlist.py reads trivy-*.json from
+          # there. If the download landed nothing here (empty RUN_ID, or a future
+          # gh change that nests the files), FAIL — do not let reconcile silently
+          # no-op its fail-safe and report green while retiring nothing forever.
+          ls trivy-*.json
 
       - name: Reconcile resolved CVEs (on release)
         env:
