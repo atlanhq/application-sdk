@@ -29,8 +29,8 @@ nears expiry. Concretely, for each CVE you:
   `vuln-auto-merge` label (as a draft) and tag a human. The gate is the safety
   boundary; these instructions are not.
 - Never push to `main`. Never `apk`-patch the Dockerfile / base image. Never set
-  the ticket to "Done" (reconciliation closes it once the scan confirms the CVE
-  is gone).
+  the ticket to "Done" (reconciliation closes it once a new SDK release no longer
+  ships the CVE).
 
 Every CVE exits this run in exactly one state, fully written into the ticket:
 - **ALLOWLISTED+PR** — Critical/High Case 1: allowlist PR + bump PR, both linked.
@@ -239,9 +239,11 @@ git checkout main && git checkout -b fix/bump-<pkg>-<version>-<cve-id> origin/ma
      --label "vuln-auto-merge" \
      --body "<CVEs resolved, fixed versions, changelog impact, validation grep results, GHA_RUN_URL>"
    ```
-5. Link both PRs (allowlist + bump) on the ticket. When the bump merges and
-   ships, the next scan stops seeing the CVE and reconciliation auto-removes the
-   allowlist entry + closes the ticket — no human action needed.
+5. Link both PRs (allowlist + bump) on the ticket. When the bump merges and the
+   SDK cuts a release that no longer ships the CVE, the release-gated
+   reconciliation auto-removes the allowlist entry + closes the ticket — no human
+   action needed. (Reconciliation runs on `release: published`, not on the hourly
+   scan, so the entry persists for downstream consumers until the fix is shipped.)
 
 ### 4b. Case 2 — our dep, no fix, upstream alive
 
@@ -274,8 +276,8 @@ Print: `[Stage 4/6 complete] <allow> allowlist PRs, <bump> bump PRs, <draft> hum
    outcome (bump PR link / allowlist-only / awaiting base-image rebuild / killed).
    Include `**Run:** [logs + cost](${GHA_RUN_URL})`.
 2. Leave the ticket open. **Never set "Done"** — reconciliation
-   (`reconcile_allowlist.py`) closes it once the scanner confirms every CVE on it
-   is gone for 3 consecutive scans.
+   (`reconcile_allowlist.py`, run on `release: published`) closes it once a new
+   SDK release no longer ships any CVE on it.
 3. Security audit: confirm no secrets/tokens leaked into any PR body or ticket.
 
 Print:

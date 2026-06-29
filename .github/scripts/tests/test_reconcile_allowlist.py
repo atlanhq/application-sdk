@@ -168,6 +168,7 @@ def test_default_debounce_is_one():
 def test_close_comment_body_mentions_cves_and_run():
     body = rec.close_comment_body(["CVE-2026-2303"], "https://x/run/1")
     assert "Auto-resolved" in body
+    assert "release" in body  # reconciliation is release-gated, not hourly
     assert "`CVE-2026-2303`" in body
     assert "vulnerability" in body  # singular for one CVE
     assert "https://x/run/1" in body
@@ -182,6 +183,44 @@ def test_close_comment_body_plural_and_no_run_url():
 def test_resolution_phrase():
     assert rec._resolution_phrase(1) == "the latest clean scan"
     assert "3 consecutive" in rec._resolution_phrase(3)
+
+
+# ---------------------------------------------------------------------------
+# scan_files_present + main() fail-safe — never reconcile against a phantom
+# empty scan. On `release: published` the scan artifact is downloaded from a
+# prior run; if that download is absent/failed, reconciling would treat every
+# allowlisted CVE as "gone" and delete the whole allowlist. main() must bail.
+# ---------------------------------------------------------------------------
+
+
+def test_scan_files_present_false_in_empty_dir(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    assert rec.scan_files_present() is False
+
+
+def test_scan_files_present_true_when_a_result_file_exists(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / rec.TRIVY_FILES[0]).write_text("{}")
+    assert rec.scan_files_present() is True
+
+
+def test_main_bails_when_no_scan_files_staged(monkeypatch, tmp_path):
+    # No trivy-*.json in the working dir → main must do nothing and return 0,
+    # never opening a removal PR or touching tickets.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(rec, "load_allowlisted_cves", lambda: {"CVE-WOULD-BE-WIPED"})
+    calls: list[str] = []
+    monkeypatch.setattr(
+        rec, "open_removal_pr", lambda *a, **k: calls.append("removal_pr")
+    )
+    monkeypatch.setattr(
+        rec, "reconcile_tickets", lambda *a, **k: calls.append("tickets")
+    )
+    monkeypatch.setattr(
+        rec, "load_prior_scan_cves", lambda *a, **k: calls.append("prior") or []
+    )
+    assert rec.main(runner=lambda *a, **k: None) == 0
+    assert calls == []  # bailed before any reconcile action
 
 
 # ---------------------------------------------------------------------------

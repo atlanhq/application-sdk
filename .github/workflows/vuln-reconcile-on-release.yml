@@ -1,0 +1,77 @@
+# Vuln Reconcile on Release — retire resolved allowlist entries + close tickets.
+#
+# Reconciliation (allowlist-entry removal + Linear ticket close/update) runs HERE,
+# on a published SDK release — NOT on the hourly security scan. Rationale:
+#
+#   The allowlist (.security/base-allowlist.json) is shared across all connector
+#   repos, and their build gates check out the allowlist from SDK `main`
+#   (build-and-scan.yaml) while their images still carry the CVE from the last
+#   *released* SDK. If we removed an entry the moment the hourly scan of `main`
+#   went clean (fix merged, not yet released), those connectors would lose
+#   allowlist coverage and check_allowlist.py would start failing for them.
+#   Gating removal on release retires the entry exactly when the fix becomes
+#   consumable downstream.
+#
+# Detection / ticketing / allowlisting stay hourly (daily-security-scan.yml):
+# a new Critical/High must be allowlisted promptly to start the SLA clock and
+# keep the continuous build gate green. Only reconciliation is deferred to here.
+#
+# How it works: at release time we reconcile against the most recent SUCCESSFUL
+# hourly scan of `main` (= the released code — releases are cut from main). We
+# download that run's `security-scan-raw-results` artifact and hand it to
+# reconcile_allowlist.py unchanged. Conservative by design: if no clean scan is
+# available yet, reconcile_allowlist.py's fail-safe leaves every entry in place
+# (an entry is never removed on thin/absent evidence) and the next release picks
+# it up.
+#
+# Checks out as atlan-ci so the allowlist-removal PR auto-merges via
+# vuln-auto-merge.yml. workflow_dispatch is provided for manual backfill / re-runs.
+
+name: Vuln Reconcile (on Release)
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read # list + download the latest hourly scan artifact
+
+jobs:
+  reconcile:
+    name: Reconcile allowlist + tickets
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout (as atlan-ci so the removal PR auto-merges)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          token: ${{ secrets.ORG_PAT_GITHUB }}
+
+      # Pull the latest successful hourly scan of main and stage its Trivy JSON
+      # in the working dir for reconcile_allowlist.py (it reads trivy-*.json from
+      # the CWD). Straight-line commands only; the resolution decision lives in
+      # the tested reconcile_allowlist.py, not here.
+      - name: Download latest hourly scan results
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          REPO: ${{ github.repository }}
+        run: |
+          RUN_ID=$(gh run list -R "$REPO" --workflow daily-security-scan.yml \
+            --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          echo "Reconciling against scan run $RUN_ID"
+          gh run download "$RUN_ID" -R "$REPO" -n security-scan-raw-results
+
+      - name: Reconcile resolved CVEs (on release)
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          REPO: ${{ github.repository }}
+          SCAN_WORKFLOW: daily-security-scan.yml
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_TEAM_ID: ${{ vars.LINEAR_SECURITY_SCAN_TEAM_ID }}
+        run: |
+          export RUN_DATE=$(date -u +%Y-%m-%d)
+          git config user.name "atlan-ci"
+          git config user.email "atlan-ci@users.noreply.github.com"
+          python3 .github/scripts/reconcile_allowlist.py
