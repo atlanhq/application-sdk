@@ -26,6 +26,7 @@ import conformance.suite.checks.entrypoint as entrypoint
 import conformance.suite.checks.logging as logging_checks
 from conformance.suite.checks import (
     actions_pinning,
+    app_name_alignment,
     bootstrap_drift,
     client_seam,
     dependency_conformance,
@@ -149,6 +150,12 @@ _CHECKS: list[CheckRegistration] = [
         discover=entrypoint_alignment.discover,
         scan_path=entrypoint_alignment.scan_path,
         scan_all=entrypoint_alignment.scan_all,
+    ),
+    CheckRegistration(
+        series=app_name_alignment.SERIES,
+        discover=app_name_alignment.discover,
+        scan_path=app_name_alignment.scan_path,
+        scan_all=app_name_alignment.scan_all,
     ),
 ]
 
