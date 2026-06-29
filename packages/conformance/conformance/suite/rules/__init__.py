@@ -10,11 +10,20 @@ from collections.abc import Mapping
 from types import MappingProxyType
 
 from conformance.suite.rules.ci import RULES as _CI_RULES
+from conformance.suite.rules.client_seam import RULES as _CLIENT_SEAM_RULES
 from conformance.suite.rules.dependency import RULES as _D_RULES
+from conformance.suite.rules.deprecation import RULES as _B_RULES
+from conformance.suite.rules.determinism import RULES as _DETERMINISM_RULES
+from conformance.suite.rules.dockerfile import RULES as _I_RULES
+from conformance.suite.rules.entrypoint import RULES as _ENTRYPOINT_RULES
+from conformance.suite.rules.entrypoint_alignment import RULES as _EP_ALIGNMENT_RULES
 from conformance.suite.rules.error_handling import RULES as _E_RULES
 from conformance.suite.rules.logging import RULES as _L_RULES
 from conformance.suite.rules.optimizations import RULES as _O_RULES
+from conformance.suite.rules.orchestration import RULES as _ORCHESTRATION_RULES
 from conformance.suite.rules.prescriptions import RULES as _P_RULES
+from conformance.suite.rules.storage import RULES as _STORAGE_RULES
+from conformance.suite.rules.tests import RULES as _T_RULES
 from conformance.suite.schema.catalog import RuleDefinition
 
 
@@ -34,8 +43,17 @@ _ALL_SERIES: tuple[tuple[RuleDefinition, ...], ...] = (
     _L_RULES,
     _CI_RULES,
     _D_RULES,
+    _I_RULES,
     _O_RULES,
     _P_RULES,
+    _ORCHESTRATION_RULES,
+    _DETERMINISM_RULES,
+    _ENTRYPOINT_RULES,
+    _STORAGE_RULES,
+    _CLIENT_SEAM_RULES,
+    _EP_ALIGNMENT_RULES,
+    _T_RULES,
+    _B_RULES,
 )
 
 

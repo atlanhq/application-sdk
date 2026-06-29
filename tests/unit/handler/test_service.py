@@ -1613,6 +1613,29 @@ class TestConfigMapEndpoints:
             assert data["metadata"]["name"] == "my-config"
             parsed_config = json.loads(data["data"]["config"])
             assert parsed_config == {"key": "value"}
+            # Absent from the file -> absent from the response.
+            assert "defaultConnectorType" not in data["data"]
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
+    def test_configmap_includes_default_connector_type_when_present(
+        self, tmp_path: Path
+    ) -> None:
+        from application_sdk.handler import service as svc_module
+
+        raw = {"defaultConnectorType": "jdbc", "config": {"key": "value"}}
+        (tmp_path / "my-config.json").write_text(json.dumps(raw))
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            client = _make_client()
+            response = client.get("/workflows/v1/configmap/my-config")
+            assert response.status_code == 200
+            data = response.json()["data"]
+            assert data["data"]["defaultConnectorType"] == "jdbc"
+            parsed_config = json.loads(data["data"]["config"])
+            assert parsed_config == {"key": "value"}
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
@@ -2162,7 +2185,13 @@ class TestManifestEndpoint:
             svc_module.CONTRACT_GENERATED_DIR = original_dir
             svc_module.DEPLOYMENT_NAME = original_dep
 
-    def test_manifest_disk_substitutes_app_name(self, tmp_path: Path) -> None:
+    def test_manifest_disk_bakes_app_name_and_substitutes_deployment(
+        self, tmp_path: Path
+    ) -> None:
+        """app_name is baked into the manifest by the contract toolkit (from the
+        contract `name`) and served unchanged — the endpoint substitutes only the
+        per-deployment token. The baked value is what logs are tagged with, so the
+        Workflow Center's log filter matches it (HYP-1678)."""
         from application_sdk.handler import service as svc_module
 
         manifest_data = {
@@ -2171,7 +2200,7 @@ class TestManifestEndpoint:
                 "extract": {
                     "activity_name": "execute_workflow",
                     "activity_display_name": "Extract",
-                    "app_name": "{app_name}",
+                    "app_name": "baked-name",
                     "inputs": {
                         "workflow_type": "extraction",
                         "task_queue": "{deployment_name}-queue",
@@ -2190,7 +2219,9 @@ class TestManifestEndpoint:
             response = client.get("/workflows/v1/manifest")
             assert response.status_code == 200
             body = response.json()
-            assert body["dag"]["extract"]["app_name"] == "test-app"
+            # app_name passes through unchanged (baked, not substituted).
+            assert body["dag"]["extract"]["app_name"] == "baked-name"
+            # deployment token is still substituted.
             assert body["dag"]["extract"]["inputs"]["task_queue"] == "prod-deploy-queue"
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original_dir

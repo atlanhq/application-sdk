@@ -12,3 +12,12 @@ class PublishControlsCredentialBody(CredentialBody):
     enable_ssl: str = Field(default="true", alias="enable_ssl")
     username: str = Field(default="", alias="username")
     password: str = Field(default="", alias="password")
+
+
+class PublishControlsAgentCredentialBody(CredentialBody):
+    name: str = Field(alias="name")
+    auth_type: str = Field(default="basic", alias="authType")
+    connector_config_name: str = Field(
+        default="atlan-connectors-publish-controls", alias="connectorConfigName"
+    )
+    extra: dict = Field(default_factory=dict, alias="extra")

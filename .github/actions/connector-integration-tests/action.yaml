@@ -16,15 +16,22 @@ description: |
 
   Steps:
   - Sets up Python + uv via `setup-deps` (which also checks out the caller repo).
-  - Installs Dapr CLI + Temporal CLI.
-  - Starts Dapr + Temporal (`poe start-deps`).
-  - Starts the connector app server (`python main.py`) and waits for health.
+  - Starts the connector app server (`python main.py`) and waits for health. On
+    SDK >= 3.13 this boots an embedded daprd + in-process Temporal itself
+    (`application_sdk.dev`), so no external runtime install is needed — that is
+    the default.
+  - Only on SDK < 3.13 (or when `force-external-runtime: true`): downloads the
+    `daprd` runtime binary (NOT the Dapr CLI) + Temporal CLI and starts daprd
+    directly alongside a Temporal dev server before the app server. The daprd
+    version follows the SDK's pinned `__dapr_version`. No Dapr CLI / `dapr init`
+    / `dapr run` is involved anywhere — daprd is invoked directly, the same way
+    the SDK container entrypoint and embedded local-dev runtime do.
   - Runs `pytest tests/integration/` with pytest-xdist for in-process parallelism.
   - Uploads junit XML + raw test output as artifacts.
-  - Cleans up app server + Dapr/Temporal.
+  - Cleans up the app server (and the external Dapr/Temporal when they were started).
 
-  pytest-xdist is installed transiently via `uv run --with pytest-xdist` so the
-  caller does not need to declare it as a dependency.
+  pytest-xdist and pytest-rerunfailures are installed transiently via `uv run --with`
+  so the caller does not need to declare them as dependencies.
 
   ## Connectors with native dependencies
 
@@ -42,7 +49,7 @@ description: |
   steps:
     - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
     - uses: ./.github/actions/mssql-native-deps   # connector-local action
-    - uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@v3.17.3
+    - uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@v3.20.1
       with:
         app-name: mssql
   ```
@@ -89,9 +96,10 @@ inputs:
     required: false
     description: |
       Extra arguments passed to pytest after the integration-tests path.
-      Default parallelises tests across xdist workers; override to dial worker
-      count or change distribution strategy.
-    default: "-n auto --dist=load --tb=short"
+      Default parallelises tests across xdist workers and retries only
+      transient network/socket failures; override to dial worker count,
+      change distribution strategy, or adjust retry count/pattern.
+    default: "-n auto --dist=load --tb=short --reruns 2 --reruns-delay 5 --only-rerun \"ConnectError|ConnectionError|ClientConnectorError|TimeoutError|ReadTimeout\""
   app-port:
     required: false
     description: HTTP port the connector app server listens on.
@@ -100,21 +108,41 @@ inputs:
     required: false
     description: How long to wait for the app server to become healthy.
     default: "60"
+  # MIGRATION: the Dapr CLI was removed entirely — this action now downloads the
+  # ``daprd`` runtime binary directly from ``dapr/dapr`` releases and invokes it
+  # directly (no ``dapr init`` / ``dapr run``). The earlier ``dapr-cli-version``
+  # input is long gone; GitHub Actions silently ignores unknown ``with:`` keys,
+  # so a caller still passing it won't error — it is simply not honoured.
   dapr-version:
     required: false
-    description: Dapr runtime version to install.
-    default: "1.18.0"
-  dapr-cli-version:
-    required: false
-    description: Dapr CLI version to download (may differ from the runtime version).
-    default: "1.18.0"
+    description: |
+      Version of the ``daprd`` runtime to download from ``dapr/dapr`` releases.
+      Leave empty (the default) to read the SDK's pinned ``__dapr_version``
+      from ``application_sdk/version.py`` — the single source of truth, bumped
+      by ``.github/workflows/check-dapr-version.yaml``. Set this only to force a
+      specific version (e.g. to reproduce an issue on an older daprd).
+
+      NOTE: this is the daprd *runtime* version (``dapr/dapr`` releases), which
+      is independent of the ``dapr/cli`` release cadence — the CLI is no longer
+      downloaded, so a runtime-only release (daprd published without a matching
+      CLI release) no longer breaks this action.
+    default: ""
   force-external-runtime:
     required: false
     description: >
-      Force the external Dapr CLI + Temporal CLI install steps to run even when the
-      installed SDK reports embedded runtime support (SDK >= 3.13). Use when the
-      connector's main.py has NOT been migrated to the embedded runtime path yet
-      and still expects external daprd at localhost:3500 + temporal at localhost:7233.
+      Force the external daprd + Temporal CLI install/start steps to run even when
+      the installed SDK reports embedded runtime support (SDK >= 3.13). Set this
+      only when the connector's main.py has NOT been migrated to the embedded
+      runtime path yet and still expects external daprd at localhost:3500 +
+      temporal at localhost:7233.
+
+      PREFER THE EMBEDDED RUNTIME (leave this unset / "false"). On SDK >= 3.13 the
+      app boots daprd + an in-process Temporal itself from `python main.py`, so CI
+      needs no external runtime at all — this is what the v3 reference connectors
+      (atlan-metabase-app, atlan-openapi-app, atlan-mysql-app) do. Migrating your
+      main.py to the embedded runtime and dropping this flag is the recommended
+      end state; see docs/guides/integration-testing.md. (Even when set, this no
+      longer uses the Dapr CLI — daprd is downloaded and run directly.)
     default: "false"
   application-sdk-ref:
     required: false
@@ -182,13 +210,12 @@ runs:
 
     # SDK 3.13+ boots an embedded daprd + Temporal directly from
     # `python main.py` (application_sdk/dev/_dapr.py + _embedded.py), each
-    # downloading its own runtime. On those versions the external Dapr CLI /
-    # Temporal CLI / `poe download-components` / `poe start-deps` below are
-    # redundant — worse, the embedded daprd roots its objectstore at
-    # ./local/objectstore while the external one roots at
-    # ./local/dapr/objectstore, so running both is a source of confusion.
-    # Detect the installed SDK version and skip the external infra when the
-    # embedded runtime is available. Pre-3.13 connectors still need it.
+    # downloading its own runtime. On those versions the external daprd +
+    # Temporal CLI install/start steps below are redundant — worse, the embedded
+    # daprd roots its objectstore at ./local/objectstore while the external one
+    # roots at ./local/dapr/objectstore, so running both is a source of
+    # confusion. Detect the installed SDK version and skip the external infra
+    # when the embedded runtime is available. Pre-3.13 connectors still need it.
     - name: Detect embedded runtime (SDK >= 3.13)
       id: runtime
       shell: bash
@@ -198,41 +225,88 @@ runs:
         echo "embedded=${EMBEDDED}" >> "$GITHUB_OUTPUT"
         echo "SDK ${VER} -> embedded runtime: ${EMBEDDED}"
 
-    - name: Install Dapr CLI
+    - name: Install daprd runtime (no Dapr CLI)
       if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
       shell: bash
+      env:
+        DAPR_VERSION_INPUT: ${{ inputs.dapr-version }}
       run: |
-        DAPR_CLI_VERSION="${{ inputs.dapr-cli-version }}"
-        DAPR_RUNTIME_VERSION="${{ inputs.dapr-version }}"
-        wget -q "https://github.com/dapr/cli/releases/download/v${DAPR_CLI_VERSION}/dapr_linux_amd64.tar.gz" -O /tmp/dapr.tar.gz
-        tar -xzf /tmp/dapr.tar.gz -C /tmp
-        sudo mv /tmp/dapr /usr/local/bin/
-        chmod +x /usr/local/bin/dapr
-        dapr init --runtime-version "${DAPR_RUNTIME_VERSION}" --slim
+        # Download the daprd RUNTIME binary directly from dapr/dapr releases —
+        # NOT the `dapr` CLI from dapr/cli. The CLI is intentionally not used:
+        # it adds a second release stream that can lag the runtime (a daprd-only
+        # release leaves `dapr/cli` without a matching tag → 404), and daprd is
+        # all we need (we invoke it directly, like the SDK's entrypoint.sh).
+        #
+        # Default to the SDK's pinned __dapr_version (single source of truth).
+        # This action ships inside application-sdk, so version.py sits three
+        # dirs up from the action dir. An explicit dapr-version input overrides.
+        DAPR_VERSION="${DAPR_VERSION_INPUT}"
+        if [ -z "$DAPR_VERSION" ]; then
+          DAPR_VERSION="$(grep '^__dapr_version' "${{ github.action_path }}/../../../application_sdk/version.py" | cut -d'"' -f2)"
+        fi
+        if [ -z "$DAPR_VERSION" ]; then
+          echo "::error::Could not resolve Dapr version (input empty and __dapr_version unreadable)"
+          exit 1
+        fi
+        echo "Installing daprd runtime v$DAPR_VERSION (no Dapr CLI)"
+        "${{ github.action_path }}/../../scripts/with-retry.sh" wget -q "https://github.com/dapr/dapr/releases/download/v${DAPR_VERSION}/daprd_linux_amd64.tar.gz" -O /tmp/daprd.tar.gz
+        tar -xzf /tmp/daprd.tar.gz -C /tmp
+        sudo mv /tmp/daprd /usr/local/bin/
+        sudo chmod +x /usr/local/bin/daprd
+        daprd --version
 
     - name: Install Temporal CLI
       if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
       shell: bash
-      run: curl -sSf https://temporal.download/cli.sh | sh
-
-    - name: Add Dapr and Temporal to PATH
-      if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
-      shell: bash
+      # Block scalar: a `run:` value that *starts* with a quote is parsed by YAML
+      # as a single quoted string, leaving the trailing args as an unexpected
+      # token (this exact line took the connector fleet down — invalid manifest).
       run: |
-        echo "$HOME/.dapr/bin" >> "$GITHUB_PATH"
-        echo "$HOME/.temporalio/bin" >> "$GITHUB_PATH"
+        "${{ github.action_path }}/../../scripts/with-retry.sh" bash -c "curl -sSf https://temporal.download/cli.sh | sh"
 
-    - name: Download Dapr components
+    - name: Add Temporal to PATH
       if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
       shell: bash
-      run: uv run poe download-components
+      # daprd is already on PATH (/usr/local/bin); only the Temporal CLI needs adding.
+      run: echo "$HOME/.temporalio/bin" >> "$GITHUB_PATH"
 
-    - name: Start Dapr + Temporal
+    - name: Start daprd + Temporal
       if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
       shell: bash
+      env:
+        APP_PORT: ${{ inputs.app-port }}
       run: |
-        uv run poe start-deps
-        sleep 5
+        # Start daprd directly (no `dapr run` wrapper). App-less sidecar on the
+        # default ports; the app server (next step) connects to it. We do NOT
+        # delegate to the caller's `poe start-deps` because that task lives in
+        # the *connector's* pyproject and runs `dapr run`, which needs the CLI.
+        # Record PIDs so cleanup kills exactly these processes (not every daprd
+        # on the box — matters on self-hosted runners).
+        daprd \
+          --app-id app \
+          --app-port "$APP_PORT" \
+          --dapr-http-port 3500 \
+          --dapr-grpc-port 50001 \
+          --resources-path components \
+          --log-level warn \
+          --placement-host-address '' \
+          --scheduler-host-address '' \
+          --max-body-size 1024Mi \
+          > daprd.log 2>&1 &
+        echo $! > daprd.pid
+        temporal server start-dev --db-filename /tmp/temporal.db > temporal.log 2>&1 &
+        echo $! > temporal.pid
+        # Export the sidecar ports so the (separate) app-server step runs in
+        # Dapr-backed mode — the SDK keys off DAPR_HTTP_PORT being set.
+        echo "DAPR_HTTP_PORT=3500" >> "$GITHUB_ENV"
+        echo "DAPR_GRPC_PORT=50001" >> "$GITHUB_ENV"
+        # Wait for daprd's HTTP API to answer (bounded, non-fatal). Poll
+        # /v1.0/metadata, not /v1.0/healthz — daprd holds healthz until all
+        # components init, which can outlast this bound.
+        for _ in $(seq 1 15); do
+          curl -sf http://localhost:3500/v1.0/metadata >/dev/null 2>&1 && break
+          sleep 1
+        done
 
     - name: Start runtime services (services-script hook)
       if: inputs.services-script != ''
@@ -272,10 +346,9 @@ runs:
       run: |
         mkdir -p results
         set +e
-        # pytest-cov added transiently so callers can opt in to coverage
-        # via pytest-args (e.g., `--cov=app --cov-report=xml ...`). No
-        # effect when coverage flags aren't passed.
-        uv run --with pytest-xdist --with pytest-cov pytest ${{ inputs.test-paths }} -v \
+        # pytest-xdist, pytest-cov, and pytest-rerunfailures are installed
+        # transiently — callers do not need to declare them as dependencies.
+        uv run --with pytest-xdist --with pytest-cov --with pytest-rerunfailures pytest ${{ inputs.test-paths }} -v \
           ${{ inputs.pytest-args }} \
           --junit-xml=results/test-results.xml \
           2>&1 | tee results/test-output.txt
@@ -300,4 +373,9 @@ runs:
       shell: bash
       run: |
         kill $(lsof -t -i :${{ inputs.app-port }}) 2>/dev/null || true
-        uv run poe stop-deps || true
+        # Kill exactly the daprd + Temporal we started (by recorded PID, not a
+        # broad pkill -f — avoids killing other jobs' processes on self-hosted
+        # runners). No `poe stop-deps`: that is a connector-side, CLI-era task.
+        for p in daprd.pid temporal.pid; do
+          [ -f "$p" ] && kill "$(cat "$p")" 2>/dev/null || true
+        done

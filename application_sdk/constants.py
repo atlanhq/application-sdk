@@ -62,6 +62,7 @@ load_dotenv(dotenv_path=".env")
 
 # Static Constants
 LOCAL_ENVIRONMENT = "local"
+LOCAL_WORKFLOW_ID = "local-no-temporal"
 
 # Application Constants
 #: Name of the application, used for identification
@@ -349,6 +350,36 @@ _HTTP_POOL_TIMEOUT_SECONDS = 30.0
 
 #: Whether to enable Atlan storage upload
 ENABLE_ATLAN_UPLOAD = os.getenv("ENABLE_ATLAN_UPLOAD", "false").lower() == "true"
+
+# Dual-write — BLDX-1464: when both stores are configured (SDR), App.upload writes
+# to the deployment (customer) store first, then to upstream (Atlan), at the same
+# run-scoped key.  See ADR-0014 §"App.upload() — dual-write when both stores are
+# configured (BLDX-1464)" for the full rationale.
+#
+# ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE accepts three values:
+#   disabled    — upstream only; pre-BLDX-1464 behaviour.
+#   best_effort — dual-write; deployment failure logs WARNING and run succeeds.
+#   required    — dual-write; deployment failure logs ERROR, upstream still runs,
+#                 then the run fails (customer copy missing is surfaced).
+_DEPLOYMENT_ARTIFACT_DUAL_WRITE: str = os.getenv(
+    "ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE", "best_effort"
+).lower()
+#: True when dual-write is active (best_effort or required).
+DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED: bool = (
+    _DEPLOYMENT_ARTIFACT_DUAL_WRITE != "disabled"
+)
+#: True only when dual-write is required (a failed deployment write fails the run).
+DEPLOYMENT_ARTIFACT_DUAL_WRITE_REQUIRED: bool = (
+    _DEPLOYMENT_ARTIFACT_DUAL_WRITE == "required"
+)
+if DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED:
+    import logging as _logging  # stdlib: constants.py cannot import from observability
+
+    _logging.getLogger(__name__).info(
+        "BLDX-1464 dual-write active (ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE=%s): "
+        "App.upload writes to both deployment and upstream stores per run.",
+        _DEPLOYMENT_ARTIFACT_DUAL_WRITE,
+    )
 # Dapr Client Configuration
 #: Maximum gRPC message length in bytes for Dapr client.
 #:
@@ -386,6 +417,13 @@ OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
 )
 #: Whether to enable OpenTelemetry log export
 ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true"
+#: Whether to emit SDK logger output during Temporal workflow replay.
+#: Default is False, matching Temporal's native ``workflow.logger`` behaviour.
+#: Set to True to re-enable replay logs for debugging (e.g. when using the
+#: ``temporalio.worker.Replayer`` to inspect history locally).
+ENABLE_WORKFLOW_REPLAY_LOGS: bool = (
+    os.getenv("ENABLE_WORKFLOW_REPLAY_LOGS", "false").lower() == "true"
+)
 #: Whether to enable a secondary OpenTelemetry log exporter for workflow-log
 #: archival (e.g. S3 sink). When true, logs are emitted to both the primary
 #: OTEL_EXPORTER_OTLP_ENDPOINT and OTEL_WORKFLOW_LOGS_ENDPOINT.
@@ -460,6 +498,19 @@ SEGMENT_BATCH_TIMEOUT_SECONDS = float(
 #: Production does not yet support traces; default is False.
 ENABLE_OTLP_TRACES = os.getenv("ATLAN_ENABLE_OTLP_TRACES", "false").lower() == "true"
 
+
+def _read_enable_tri_state(name: str) -> tuple[str | None, bool | None]:
+    """Return ``(raw, parsed)`` for an ``ATLAN_ENABLE_*`` env var.
+
+    ``raw`` is the literal env value (or ``None`` if unset).
+    ``parsed`` is ``True``/``False`` for "true"/"false", ``None`` if unset.
+    """
+    raw = os.getenv(name)
+    if raw is None:
+        return None, None
+    return raw, raw.strip().lower() == "true"
+
+
 # Store Sink Configuration (defaults to enabled)
 ENABLE_OBSERVABILITY_STORE_SINK: bool = (
     os.getenv(
@@ -468,7 +519,6 @@ ENABLE_OBSERVABILITY_STORE_SINK: bool = (
     ).lower()
     == "true"
 )
-
 # REMOVED: ATLAN_API_TOKEN_GUID, ATLAN_API_KEY, ATLAN_CLIENT_ID, ATLAN_CLIENT_SECRET — unused.
 # ATLAN_BASE_URL is still used by events interceptor (deferred import).
 ATLAN_BASE_URL = os.getenv("ATLAN_BASE_URL")

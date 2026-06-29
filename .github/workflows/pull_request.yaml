@@ -26,7 +26,12 @@ jobs:
       #          test matrix. The .github/actions/* entries are the test
       #          harness itself (the unit/integration deps + docstring-coverage
       #          wrappers), so changing *how* those checks run still re-runs them.
-      sdk: ${{ steps.filter.outputs.sdk }}
+      sdk: ${{ steps.sdk-refine.outputs.sdk }}
+      # 'ci'   — pull_request.yaml itself changed. Self-referential entry
+      #          (mirrors sdk-gate.yaml's own self-test pattern) so that editing
+      #          the connector / sdr-k8s-e2e dispatch glue re-runs those jobs
+      #          in the merge queue — otherwise workflow-only PRs merge blind.
+      ci: ${{ steps.filter.outputs.ci }}
       # 'scan' — wider net for the Trivy filesystem scan: every first-party
       #          source tree + the dependency lockfiles. Still short-circuits on
       #          pure docs/, .github-meta, and .security-only PRs.
@@ -39,6 +44,9 @@ jobs:
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4
         id: filter
         with:
+          # list-files: json is required so the sdk-refine step below can inspect
+          # which files actually matched and suppress markdown-only false positives.
+          list-files: json
           filters: |
             container:
               - 'Dockerfile'
@@ -51,10 +59,13 @@ jobs:
               - '.github/actions/unit-tests/**'
               - '.github/actions/setup-deps/**'
               - '.github/actions/docstring-coverage/**'
-              # Markdown-only changes never affect SDK behaviour. Listed LAST so
-              # paths-filter's gitignore-style last-match-wins excludes e.g.
-              # application_sdk/README.md while application_sdk/foo.py still runs.
-              - '!**/*.md'
+              # NOTE: do NOT add '!**/*.md' here. dorny/paths-filter passes '!'
+              # patterns straight to picomatch, which interprets '!**/*.md' as
+              # "match any file that is not a .md file" — a near-catch-all that
+              # makes sdk=true for every non-markdown change in the repo. Markdown
+              # exclusion is handled in the sdk-refine step below instead.
+            ci:
+              - '.github/workflows/pull_request.yaml'
             scan:
               - 'application_sdk/**'
               - 'contract-toolkit/**'
@@ -62,6 +73,24 @@ jobs:
               - 'pyproject.toml'
               - 'uv.lock'
               - '.github/actions/trivy/**'
+
+      # paths-filter sdk=true is necessary but not sufficient: the broad
+      # application_sdk/** pattern also matches .md files, so a PR that only
+      # touches e.g. application_sdk/README.md would incorrectly trigger the
+      # docstring-coverage check and the SDK test matrix. Check whether ANY
+      # matched file is non-.md; if all matched files are .md, suppress sdk=false.
+      - name: Refine sdk — suppress markdown-only matches
+        id: sdk-refine
+        env:
+          SDK_RESULT: ${{ steps.filter.outputs.sdk }}
+          SDK_FILES: ${{ steps.filter.outputs.sdk_files }}
+        run: |
+          set -euo pipefail
+          if [[ "$SDK_RESULT" != "true" ]]; then
+            echo "sdk=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python3 .github/scripts/sdk_changes_non_md.py
 
   # Required status check — the JOB has no `if:` so it always runs and always
   # concludes. The real validation step is gated to PR (non-fork) events: the
@@ -132,157 +161,10 @@ jobs:
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
           fail-on-vulns: 'true'
 
-  # Testing
-  # The matrix may skip when no SDK change — that is fine because the REQUIRED
-  # check is the always-run `unit-gate` aggregator below, not these cells.
-  unit:
-    name: Unit Tests
-    needs: changes
-    if: needs.changes.outputs.sdk == 'true'
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11", "3.12", "3.13", "3.14"]
-        os: [ubuntu-22.04, macOS-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: "./.github/actions/unit-tests"
-        with:
-          github-token: ${{ secrets.ORG_PAT_GITHUB }}
-          fail-under: "85"
-          python-version: ${{ matrix.python-version }}
-
-  unit-gate:
-    name: Unit Tests Gate
-    needs: [unit]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check unit test results
-        run: |
-          result="${{ needs.unit.result }}"
-          if [[ "$result" == "success" || "$result" == "skipped" ]]; then
-            echo "Unit tests passed or were intentionally skipped (result: $result)."
-          else
-            echo "Unit tests failed or were cancelled (result: $result)."
-            exit 1
-          fi
-
-  # Required status check — always runs and always concludes; short-circuits its
-  # real steps when no SDK change is present so non-code PRs and merge-queue
-  # entries pass in seconds rather than leaving a required check pending.
-  integration:
-    name: Integration Tests
-    needs: changes
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Short-circuit when no SDK change
-        if: needs.changes.outputs.sdk != 'true'
-        run: echo "No SDK change on this PR/merge-group entry — integration tests not needed."
-
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        if: needs.changes.outputs.sdk == 'true'
-      - uses: "./.github/actions/setup-deps"
-        if: needs.changes.outputs.sdk == 'true'
-
-      # Temporal and Dapr are provisioned in-process by the SDK's own embedded
-      # dev helpers (application_sdk.dev.embedded_runtime / embedded_dapr) — the
-      # same code path local development uses — so this job no longer installs
-      # or starts a standalone Temporal CLI or daprd. The Temporal dev-server
-      # version now follows the `temporalio` dep in uv.lock and the daprd
-      # version follows `__dapr_version` (application_sdk/version.py), so there
-      # is no separate CLI version pin to keep in sync.
-      #
-      # Both helpers fetch their binary to ~/.cache on first use; cache those
-      # paths across runs so we don't re-download every time.
-      - name: Cache embedded runtime binaries
-        if: needs.changes.outputs.sdk == 'true'
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: |
-            ~/.cache/atlan-sdk/temporal
-            ~/.cache/atlan-sdk/dapr
-          key: embedded-runtimes-${{ runner.os }}-${{ hashFiles('uv.lock', 'application_sdk/version.py') }}
-          restore-keys: |
-            embedded-runtimes-${{ runner.os }}-
-
-      - name: Run integration tests
-        if: needs.changes.outputs.sdk == 'true'
-        run: uv run pytest tests/integration/ -m integration -v --timeout=120
-
-  # Always runs and always concludes; short-circuits its steps when no SDK
-  # change is present (a job-level `if:` reports "skipped", which leaves a
-  # required check pending forever in the merge queue). Mirrors the integration
-  # job above.
-  storage-emulator:
-    name: Storage Emulator Tests
-    needs: changes
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Short-circuit when no SDK change
-        if: needs.changes.outputs.sdk != 'true'
-        run: echo "No SDK change on this PR/merge-group entry — storage emulator tests not needed."
-
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        if: needs.changes.outputs.sdk == 'true'
-      - uses: "./.github/actions/setup-deps"
-        if: needs.changes.outputs.sdk == 'true'
-
-      - name: Start object-store emulators
-        if: needs.changes.outputs.sdk == 'true'
-        run: |
-          set -euo pipefail
-          # S3 → MinIO
-          docker run -d --name minio -p 9000:9000 \
-            -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
-            minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
-          # Azure → Azurite
-          docker run -d --name azurite -p 10000:10000 \
-            mcr.microsoft.com/azure-storage/azurite:3.31.0 \
-            azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
-          # GCS → storage-testbench behind an nginx proxy that re-injects the
-          # ETag / Last-Modified headers testbench omits (obstore requires them).
-          docker network create gcs-net || true
-          docker run -d --name gcs-testbench --network gcs-net -e PORT=9000 \
-            gcr.io/cloud-devrel-public-resources/storage-testbench:v0.62.0
-          docker run -d --name gcs-proxy --network gcs-net -p 9095:9000 \
-            -v "$PWD/tests/integration/storage/gcs_emulator_proxy.conf:/etc/nginx/conf.d/default.conf:ro" \
-            nginx:1.27-alpine
-
-      - name: Wait for emulators + provision buckets/container
-        if: needs.changes.outputs.sdk == 'true'
-        run: |
-          set -euo pipefail
-          for i in $(seq 1 30); do curl -sf http://localhost:9000/minio/health/live >/dev/null 2>&1 && break; sleep 2; done
-          for i in $(seq 1 30); do curl -s --max-time 2 http://localhost:10000/devstoreaccount1 >/dev/null 2>&1 && break; sleep 2; done
-          for i in $(seq 1 40); do curl -sf "http://localhost:9095/storage/v1/b?project=test" >/dev/null 2>&1 && break; sleep 2; done
-          export AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin AWS_DEFAULT_REGION=us-east-1
-          # Provisioning is idempotent (|| true) so a step re-run on a still-warm
-          # runner doesn't abort on "bucket already exists" under set -e.
-          aws --endpoint-url http://localhost:9000 s3 mb s3://sdk-emulator-test || true
-          # SDR ENABLE_ATLAN_UPLOAD handoff: customer-managed + internal Atlan buckets.
-          aws --endpoint-url http://localhost:9000 s3 mb s3://sdk-customer-objectstore || true
-          aws --endpoint-url http://localhost:9000 s3 mb s3://sdk-atlan-objectstore || true
-          az storage container create --name sdk-emulator-test \
-            --connection-string "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;" || true
-          curl -sf -X POST "http://localhost:9095/storage/v1/b?project=test" \
-            -H "Content-Type: application/json" -d '{"name":"sdk-emulator-test"}' || true
-
-      - name: Run storage emulator tests
-        if: needs.changes.outputs.sdk == 'true'
-        env:
-          AWS_ENDPOINT_URL: http://localhost:9000
-          AZURE_STORAGE_ENDPOINT: http://localhost:10000
-          GCS_EMULATOR_ENDPOINT: http://localhost:9095
-        run: uv run pytest tests/integration/storage -m storage_emulator -v --timeout=300
-
-      - name: Teardown emulators
-        if: always() && needs.changes.outputs.sdk == 'true'
-        run: docker rm -f minio azurite gcs-testbench gcs-proxy 2>/dev/null || true
+  # NOTE: SDK unit / integration / storage-emulator tests moved to
+  # sdk-tests-reusable.yaml and now run under the composing sdk-gate.yaml.
+  # The orthogonal checks below (commits, docstring coverage, Trivy scans) and
+  # the connector e2e dispatch stay here.
 
   matrix-builder:
     name: Build Test Matrix
@@ -294,23 +176,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - name: Get PR Labels
-        id: get-labels
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const { data: labels } = await github.rest.issues.listLabelsOnIssue({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number
-            });
-            const labelNames = labels.map(label => label.name).join(',');
-            console.log(`PR Labels: ${labelNames}`);
-            core.setOutput('labels', labelNames);
-
-      - name: Build matrix from PR labels
+      - name: Build matrix
         id: set-matrix
         run: |
           # For pull_request, github.base_ref is the branch name (e.g. 'main').
@@ -321,51 +187,8 @@ jobs:
             TARGET_BRANCH="${{ github.event.merge_group.base_ref }}"
             TARGET_BRANCH="${TARGET_BRANCH#refs/heads/}"
           fi
-          # Default matrix if no label provided
-          DEFAULT_MATRIX="{\"include\":[{\"repo_name\":\"atlan-openapi-app\",\"target_branch\":\"${TARGET_BRANCH}\"},{\"repo_name\":\"atlan-mysql-app\",\"target_branch\":\"${TARGET_BRANCH}\"},{\"repo_name\":\"atlan-metabase-app\",\"target_branch\":\"${TARGET_BRANCH}\"}]}"
-
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            # Parse labels from GitHub Script output
-            LABELS="${{ steps.get-labels.outputs.labels }}"
-
-            FOUND_LABEL=false
-            INCLUDES=""
-
-            echo "Found labels: ${LABELS}"
-
-            IFS=',' read -ra LABEL_ARRAY <<< "$LABELS"
-            for LABEL in "${LABEL_ARRAY[@]}"; do
-              if [[ $LABEL =~ ^([^:]+):([^:]+)$ ]]; then
-                REPO="${BASH_REMATCH[1]}"
-                BRANCH="${BASH_REMATCH[2]}"
-
-                # Add comma if not the first entry
-                if [[ "$FOUND_LABEL" == "true" ]]; then
-                  INCLUDES="${INCLUDES},"
-                fi
-
-                # Add this pair as a direct include entry
-                INCLUDES="${INCLUDES}{\"repo_name\":\"${REPO}\",\"target_branch\":\"${BRANCH}\"}"
-                FOUND_LABEL=true
-                echo "Added pair: $REPO:$BRANCH"
-              fi
-            done
-
-            # Generate matrix JSON with includes
-            if [[ "$FOUND_LABEL" == "true" ]]; then
-              MATRIX="{\"include\":[${INCLUDES}]}"
-              echo "Generated matrix from labels: $MATRIX"
-            else
-              MATRIX="$DEFAULT_MATRIX"
-              echo "No repo:branch labels found, using default matrix"
-            fi
-          else
-            MATRIX="$DEFAULT_MATRIX"
-            echo "Not a PR event, using default matrix"
-          fi
-
+          MATRIX="{\"include\":[{\"repo_name\":\"atlan-openapi-app\",\"target_branch\":\"${TARGET_BRANCH}\"},{\"repo_name\":\"atlan-mysql-app\",\"target_branch\":\"${TARGET_BRANCH}\"},{\"repo_name\":\"atlan-metabase-app\",\"target_branch\":\"${TARGET_BRANCH}\"}]}"
           echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
-          echo "Matrix output: $MATRIX"
 
   # Build a PR-scoped SDK runtime base image so the connector e2e tests can
   # build the connector FROM the *rebuilt* base — exercising Dockerfile /
@@ -462,10 +285,12 @@ jobs:
     # back to the released base.
     if: |
       always() &&
-      (needs.changes.outputs.sdk == 'true' || needs.changes.outputs.container == 'true') &&
       needs.matrix-builder.result == 'success' &&
       (needs.build-sdk-base-image.result == 'success' || needs.build-sdk-base-image.result == 'skipped') && (
-        github.event_name == 'merge_group' ||
+        (
+          (needs.changes.outputs.sdk == 'true' || needs.changes.outputs.container == 'true' || needs.changes.outputs.ci == 'true') &&
+          github.event_name == 'merge_group'
+        ) ||
         (
           github.event_name == 'pull_request' &&
           contains(github.event.pull_request.labels.*.name, 'e2e') &&
@@ -486,6 +311,103 @@ jobs:
           target-branch: "refs/heads/${{ matrix.target_branch }}"
           workflow: tests.yaml
           workflow-inputs: ${{ github.event_name == 'merge_group' && format('{{"application_sdk_ref":"{0}"}}', github.sha) || format('{{"application_sdk_ref":"{0}","run_e2e":"true","base_image_ref":"{1}"}}', github.event.pull_request.head.sha, needs.build-sdk-base-image.outputs.image) }}
+
+  # SDR-on-Kubernetes e2e — dispatched cross-repo to atlan-local-marketplace-app,
+  # which owns the orchestrator + charts and runs the hermetic kind e2e. LM
+  # git-installs the SDK at application_sdk_ref (no base image needed), so this
+  # job doesn't depend on build-sdk-base-image. Heavy work happens in the
+  # dispatched LM run; this job dispatches + mirrors it.
+  #
+  # Gate design (mirrors the sdk-gate.yaml self-test pattern):
+  #   merge_group — fires on sdk/container/ci changes. The 'ci' entry covers
+  #     pull_request.yaml itself, so editing this dispatch glue re-runs the job
+  #     in the merge queue — workflow-only PRs no longer merge blind.
+  #   pull_request + 'e2e' label — opt-in regardless of what changed. The label
+  #     is the operator's explicit decision; it is NOT subordinated to the
+  #     sdk/container/ci filter (decoupled so workflow-only PRs can be validated
+  #     by adding the label without touching SDK code).
+  sdr-k8s-e2e:
+    name: SDR K8s E2E (LM)
+    needs: [changes]
+    if: |
+      (
+        (needs.changes.outputs.sdk == 'true' || needs.changes.outputs.container == 'true' || needs.changes.outputs.ci == 'true') &&
+        github.event_name == 'merge_group'
+      ) ||
+      (
+        github.event_name == 'pull_request' &&
+        contains(github.event.pull_request.labels.*.name, 'e2e') &&
+        github.event.pull_request.head.repo.fork != true &&
+        github.event.pull_request.user.login != 'dependabot[bot]'
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: "./.github/actions/e2e-apps"
+        with:
+          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          repo-name: atlan-local-marketplace-app
+          target-branch: "refs/heads/main"
+          workflow: sdr-k8s-e2e.yaml
+          workflow-inputs: ${{ github.event_name == 'merge_group' && format('{{"application_sdk_ref":"{0}"}}', github.sha) || format('{{"application_sdk_ref":"{0}"}}', github.event.pull_request.head.sha) }}
+
+  # ── The single required check for the connector e2e area ────────────────────
+  # Always runs and always concludes, so branch protection / the merge queue can
+  # require exactly this one stable context instead of the matrix legs
+  # (whose names are label-driven: "Connector Tests (<repo>)"). Without this,
+  # the matrix legs are not required, so the merge queue (ALLGREEN) merges as
+  # soon as the OTHER required contexts (SDK Gate, Trivy, …) conclude — even
+  # while the connector legs are still running. This gate closes that window.
+  #
+  # Fail-closed, mirroring SDK Gate: connector-tests is skipped both legitimately
+  # (docs-only PR: sdk==false && container==false) AND on upstream failure
+  # (matrix-builder failed, or the e2e-path base build failed). A naive
+  # "skipped → pass" would go green when ZERO connector tests ran because an
+  # upstream job died. So we require changes + matrix-builder to have SUCCEEDED
+  # and build-sdk-base-image to be success|skipped (never failure) before
+  # treating a skipped connector-tests as the genuine docs-only skip.
+  connector-gate:
+    name: Connector Tests Gate
+    needs: [changes, matrix-builder, build-sdk-base-image, connector-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate connector e2e area
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          MATRIX_RESULT: ${{ needs.matrix-builder.result }}
+          BASE_IMAGE_RESULT: ${{ needs.build-sdk-base-image.result }}
+          CONNECTOR_RESULT: ${{ needs.connector-tests.result }}
+        run: |
+          set -euo pipefail
+          # Detection / matrix build have no path-skip — anything other than
+          # success means we cannot trust whether the connector legs ran. A
+          # connector-tests skip downstream of these would then be an
+          # upstream-failure skip, not the docs-only skip. Fail closed.
+          if [[ "$CHANGES_RESULT" != "success" ]]; then
+            echo "::error::Detect Changes did not succeed ($CHANGES_RESULT) — failing the gate closed."
+            exit 1
+          fi
+          if [[ "$MATRIX_RESULT" != "success" ]]; then
+            echo "::error::Build Test Matrix did not succeed ($MATRIX_RESULT) — failing the gate closed."
+            exit 1
+          fi
+          # build-sdk-base-image is legitimately skipped on merge_group and on
+          # non-e2e PRs; only a genuine build FAILURE must block (a base that
+          # won't build is the signal, per the connector-tests if: comment).
+          if [[ "$BASE_IMAGE_RESULT" != "success" && "$BASE_IMAGE_RESULT" != "skipped" ]]; then
+            echo "::error::Build SDK base image did not succeed ($BASE_IMAGE_RESULT) — failing the gate closed."
+            exit 1
+          fi
+          # With upstream proven healthy, a skipped connector-tests is the
+          # genuine docs-only skip (sdk==false && container==false) → pass.
+          if [[ "$CONNECTOR_RESULT" == "success" || "$CONNECTOR_RESULT" == "skipped" ]]; then
+            echo "✓ Connector Tests: $CONNECTOR_RESULT"
+            echo "Connector gate passed."
+          else
+            echo "::error::Connector Tests did not pass ($CONNECTOR_RESULT) — failing the gate."
+            exit 1
+          fi
 
   # (sdr-matrix-builder, sdr-e2e-apps, and e2e-full-mysql removed —
   # superseded by connector-tests + the 'e2e' label on tests.yaml)

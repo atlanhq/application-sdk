@@ -67,7 +67,7 @@ class SeriesMeta:
 # of rules/prescriptions.py and rules/optimizations.py so the policy is visible
 # to consumers reading the rule catalog, not only to code readers.
 _ID_STABILITY_NOTE = (
-    "**Rule-id stability (non-migration policy):** P-ids and O-ids are a "
+    "**Rule-id stability (non-migration policy):** rule ids are a "
     "permanent public contract — each is exposed in the SARIF ``help_uri`` and "
     "referenced by inline ``# conformance: ignore[...]`` suppressions across the "
     "fleet.  An id therefore **never migrates and never changes**, even if a "
@@ -92,7 +92,7 @@ _SERIES_META: list[SeriesMeta] = [
         prefix="L",
         source_module="conformance/suite/rules/logging.py",
         output_filename="logging.md",
-        checker="`suite.checks.logging` (AST-based, not yet fully implemented)",
+        checker="`suite.checks.logging` (AST-based)",
         suppression_example="# conformance: ignore[L001] intentional: dynamic message",
     ),
     SeriesMeta(
@@ -116,9 +116,23 @@ _SERIES_META: list[SeriesMeta] = [
     SeriesMeta(
         title="Prescription Rules (P-series)",
         prefix="P",
-        source_module="conformance/suite/rules/prescriptions.py",
+        source_module=(
+            "conformance/suite/rules/prescriptions.py, "
+            "conformance/suite/rules/orchestration.py, "
+            "conformance/suite/rules/storage.py, "
+            "conformance/suite/rules/entrypoint_alignment.py, "
+            "conformance/suite/rules/entrypoint.py, "
+            "conformance/suite/rules/client_seam.py"
+        ),
         output_filename="prescriptions.md",
-        checker="`suite.checks.prescriptions` (AST-based)",
+        checker=(
+            "`suite.checks.prescriptions` (P001–P003, P008–P015), "
+            "`suite.checks.orchestration` (P004–P007, scans test files too), "
+            "`suite.checks.entrypoint_alignment` (P016), "
+            "`suite.checks.entrypoint` (P017–P018, scans test files too), "
+            "`suite.checks.client_seam` (P019) "
+            "(all AST-based)"
+        ),
         suppression_example="# conformance: ignore[P001] intentional: generic cleanup payload",
         stability_note=_ID_STABILITY_NOTE,
     ),
@@ -129,6 +143,37 @@ _SERIES_META: list[SeriesMeta] = [
         output_filename="optimizations.md",
         checker="`suite.checks.optimizations` (AST-based)",
         suppression_example="# conformance: ignore[O001] intentional: stdlib json required here",
+        stability_note=_ID_STABILITY_NOTE,
+    ),
+    SeriesMeta(
+        title="Test-Quality Rules (T-series)",
+        prefix="T",
+        source_module="conformance/suite/rules/tests.py",
+        output_filename="tests.md",
+        checker="`suite.checks.integration_marking` (AST-based)",
+        suppression_example=(
+            "# conformance: ignore[T001] intentional: marked dynamically via add_marker"
+        ),
+    ),
+    SeriesMeta(
+        title="Container Image Conformance Rules (I-series)",
+        prefix="I",
+        source_module="conformance/suite/rules/dockerfile.py",
+        output_filename="dockerfile.md",
+        checker="`suite.checks.dockerfile_conformance` (Dockerfile static analysis)",
+        suppression_example=(
+            "# conformance: ignore[I001] SDK builds the base image, not consuming it"
+        ),
+    ),
+    SeriesMeta(
+        title="Backwards-Compatibility / Deprecation Rules (B-series)",
+        prefix="B",
+        source_module="conformance/suite/rules/deprecation.py",
+        output_filename="deprecation.md",
+        checker="`suite.checks.deprecation` (AST-based)",
+        suppression_example=(
+            "# conformance: ignore[B001] intentional: migration deferred to next sprint"
+        ),
         stability_note=_ID_STABILITY_NOTE,
     ),
 ]
@@ -198,14 +243,15 @@ def _render_series(meta: SeriesMeta, rules: list[RuleDefinition]) -> str:
         lines.append("")
 
     # Summary table
-    lines.append("| ID | Name | Tier | Category | Autofixable | Since |")
-    lines.append("|---|---|---|---|---|---|")
+    lines.append("| ID | Name | Tier | Scope | Category | Autofixable | Since |")
+    lines.append("|---|---|---|---|---|---|---|")
     for rule in rules:
         anchor = _rule_anchor(rule)
         since = rule.since or "—"
         lines.append(
             f"| [{rule.id}](#{anchor}) | `{rule.name}` | {_tier_badge(rule.tier)}"
-            f" | `{rule.category}` | {_bool_icon(rule.autofixable)} | {since} |"
+            f" | `{rule.scope.value}` | `{rule.category}`"
+            f" | {_bool_icon(rule.autofixable)} | {since} |"
         )
     lines.append("")
     lines.append("---")
@@ -223,6 +269,7 @@ def _render_series(meta: SeriesMeta, rules: list[RuleDefinition]) -> str:
         # Metadata row
         lines.append(
             f"**Tier:** {_tier_badge(rule.tier)} · "
+            f"**Scope:** `{rule.scope.value}` · "
             f"**Category:** `{rule.category}` · "
             f"**Autofixable:** {autofixable} · "
             f"**Since:** {since}"

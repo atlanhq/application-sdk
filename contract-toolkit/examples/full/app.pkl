@@ -163,6 +163,7 @@ uiConfig = new UIConfig {
       inputs {
         ["credential-guid"] = new CredentialInput {
           credType = "atlan-connectors-full-featured"
+          placeholderText = "Credential GUID"
         }
       }
     }
@@ -226,6 +227,50 @@ uiConfig = new UIConfig {
           helpText = "How many hops of upstream lineage to resolve (required when lineage is on)."
           default = 3
           width = 4
+        }
+        ["table_prefix"] = new TextInput {
+          title = "Table prefix"
+          helpText = "Only extract tables whose name starts with this prefix."
+          width = 4
+          // `validationRules` (ui.rules) and `validation` (ui.validation) are
+          // independent pipelines; both can be set on the same widget.
+          validationRules {
+            new { required = false; max = 63; message = "Keep the prefix under 64 characters." }
+          }
+          // Regex validation: reject anything but lowercase alphanumerics and underscores.
+          validation = new {
+            type = "regex"
+            pattern = "^[a-z0-9_]+$"
+            message = "Only lowercase alphanumeric and underscores allowed."
+          }
+        }
+        ["custom_attributes"] = new TextBoxInput {
+          title = "Custom attributes"
+          helpText = "Extra attributes to attach to every asset, as a JSON object."
+          // JSON validation with auto-format on blur.
+          validation = new {
+            type = "json"
+            formatOnBlur = true
+          }
+        }
+        // lifecycle = "deprecated": generated Python field carries Field(deprecated=True).
+        ["legacy_timeout"] = new NumericInput {
+          title = "Legacy timeout"
+          helpText = "Deprecated: use the standard pipeline timeout instead."
+          required = false
+          default = 60
+          width = 4
+          lifecycle = "deprecated"
+          lifecycleMessage = "Use the standard pipeline timeout configuration instead."
+        }
+        // lifecycle = "sunset": generated Python field carries Field(deprecated=True,
+        // json_schema_extra={"x-lifecycle": "sunset"}).
+        ["old_batch_mode"] = new BooleanInput {
+          title = "Old batch mode"
+          helpText = "Sunset: no longer consumed by the extractor."
+          required = false
+          default = false
+          lifecycle = "sunset"
         }
       }
     }

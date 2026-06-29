@@ -39,7 +39,6 @@ from application_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 
 if TYPE_CHECKING:
-    import daft
     import pandas as pd
     from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
     from sqlalchemy.orm import Session
@@ -142,7 +141,7 @@ class BaseSQLClient(ClientInterface):
             # No exc_info here: SQLAlchemy errors embed the full connection
             # string (including the password) in their message, and the
             # traceback would print it verbatim into logs.
-            logger.error(  # conformance: ignore[E005] exc_info would expose SQLAlchemy password in traceback; cause sanitized above
+            logger.error(  # conformance: ignore[E005,L004] exc_info would expose SQLAlchemy password in traceback; cause sanitized above
                 "Error loading SQL client: %s", sanitize_cause_repr(e)
             )
             if self.engine:
@@ -455,29 +454,6 @@ class BaseSQLClient(ClientInterface):
         conn = session.connection()
         return self._execute_pandas_query(conn, query, chunksize=chunksize)
 
-    def _execute_query_daft(
-        self, query: str, chunksize: int | None
-    ) -> Union["daft.DataFrame", Iterator["daft.DataFrame"]]:
-        """Execute SQL query using the provided engine and daft.
-
-        Returns:
-            Union["daft.DataFrame", Iterator["daft.DataFrame"]]: Query results as DataFrame
-                or iterator of DataFrames if chunked.
-        """
-        # Guard must come before the daft import: daft's Rust OTel extension can
-        # raise BaseException at import time, which would prevent this check from running.
-        if not self.engine:
-            raise EngineNotInitializedError()
-
-        # Daft uses ConnectorX to read data from SQL by default for supported connectors
-        # If a connection string is passed, it will use ConnectorX to read data
-        # For unsupported connectors and if directly engine is passed, it will use SQLAlchemy
-        import daft  # noqa: PLC0415 — optional dep: daft
-
-        if isinstance(self.engine, str):
-            return daft.read_sql(query, self.engine, infer_schema_length=chunksize)
-        return daft.read_sql(query, self.engine.connect, infer_schema_length=chunksize)
-
     def _execute_query(
         self, query: str, chunksize: int | None
     ) -> Union["pd.DataFrame", Iterator["pd.DataFrame"]]:
@@ -641,7 +617,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
             # No exc_info here: SQLAlchemy errors embed the full connection
             # string (including the password) in their message, and the
             # traceback would print it verbatim into logs.
-            logger.error(  # conformance: ignore[E005] exc_info would expose SQLAlchemy password in traceback; cause sanitized above
+            logger.error(  # conformance: ignore[E005,L004] exc_info would expose SQLAlchemy password in traceback; cause sanitized above
                 "Error establishing database connection: %s", sanitize_cause_repr(e)
             )
             if self.engine:

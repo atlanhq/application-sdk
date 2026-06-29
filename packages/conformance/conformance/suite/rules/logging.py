@@ -3,64 +3,99 @@
 from __future__ import annotations
 
 from conformance.suite.schema.catalog import RuleDefinition
-from conformance.suite.schema.disposition import EnforcementTier, RuleMechanism
+from conformance.suite.schema.disposition import (
+    EnforcementTier,
+    RuleMechanism,
+    RuleScope,
+)
 
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="L001",
+        scope=RuleScope.BOTH,
         name="FStringInLogMessage",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="log-format",
         autofixable=True,
         orthogonal_gate="tests",
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "%-style message bodies are the fleet-wide logging convention: one consistent "
             "call-site style keeps log statements legible and reviewable, and the SDK's "
-            "loguru bridge renders the values in. f-strings render identically here — the "
-            "%-bridge is eager — so this is about consistency and readability, not lazy "
-            "evaluation; when a hot path genuinely needs deferred rendering, use "
-            "opt(lazy=True) with {}-style."
+            "loguru bridge renders the values in. Beyond consistency, %-style now carries "
+            "a real performance guarantee: the SDK adapter short-circuits before interpolation "
+            "when the level is filtered, so __str__ is never called on the arguments — the "
+            "same laziness stdlib logging provides for free. f-strings always evaluate "
+            "eagerly at the call site regardless of level, so they pay the formatting cost "
+            "even when the record is never emitted."
         ),
         short_description="f-string in log message — breaks log grouping and aggregation",
         full_description=(
             "Using an f-string creates a unique message string per call, breaking log\n"
             "grouping and aggregation in Grafana/ClickHouse.  It also always evaluates\n"
-            "eagerly.  Rewrite as %-style message body: embed context directly in the\n"
-            "format string, do not move values to kwargs.\n"
+            "eagerly — __str__ / __format__ is called on every interpolated value even\n"
+            "when the level is filtered and the record is never emitted.  %-style avoids\n"
+            "both: the SDK adapter's _is_enabled guard short-circuits before interpolation,\n"
+            "so argument __str__ is skipped entirely for filtered levels.  Rewrite as\n"
+            "%-style message body: embed context directly in the format string, do not\n"
+            "move values to kwargs.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l001",
     ),
     RuleDefinition(
         id="L002",
-        name="InconsistentLoggerFactory",
+        scope=RuleScope.BOTH,
+        name="NonCanonicalLoggerFactory",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="log-format",
         autofixable=True,
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
-            "Mixed logger factories produce incompatible record formats. The adapter that "
-            "injects Temporal context only activates for the canonical factory; records from "
-            "other factories arrive without correlation IDs, breaking cross-service traces."
+            "The SDK adapter (application_sdk.observability.logger_adaptor.get_logger) "
+            "is the only sanctioned way to obtain a logger. It injects Temporal context "
+            "(workflow_id, run_id, activity_type) as top-level indexed columns in "
+            "ClickHouse/Grafana and routes records through OTel. Direct use of "
+            "logging.getLogger(), structlog.get_logger(), or loguru's logger bypasses "
+            "all of this — correlation IDs are lost and records may not reach the "
+            "observability store."
         ),
-        short_description="Logger factory inconsistent with project canonical factory",
+        short_description=(
+            "Non-canonical logger factory — use "
+            "`from application_sdk.observability.logger_adaptor import get_logger`"
+        ),
         full_description=(
-            "Mixing logger factories produces inconsistent log formats, loses structured\n"
-            "fields, and breaks log correlation.  The checker discovers the canonical\n"
-            "factory (dominant by occurrence count) in Phase 1 and flags deviations.\n"
+            "Every module must obtain its logger via the SDK adapter::\n"
+            "\n"
+            "    from application_sdk.observability.logger_adaptor import get_logger\n"
+            "    logger = get_logger(__name__)\n"
+            "\n"
+            "Direct use of ``logging.getLogger()``, ``structlog.get_logger()``, or\n"
+            "``from loguru import logger`` bypasses the adapter that:\n"
+            "\n"
+            "* injects Temporal context fields (``workflow_id``, ``run_id``,\n"
+            "  ``activity_type``, ``task_queue``, ``attempt``) as top-level indexed\n"
+            "  columns in ClickHouse/Grafana;\n"
+            "* routes log records through OTel so they appear in the observability\n"
+            "  store;\n"
+            "* enforces the project's five-level model\n"
+            "  (DEBUG/INFO/WARNING/ERROR/CRITICAL).\n"
+            "\n"
+            "Adapter definition files are exempt — the file that defines\n"
+            "``AtlanLoggerAdapter`` or ``get_logger`` itself is skipped.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l002",
     ),
     RuleDefinition(
         id="L003",
+        scope=RuleScope.BOTH,
         name="ExtraKwargsWrongFramework",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="log-format",
         autofixable=False,
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "Whether kwargs land in indexed top-level fields or an unindexed nested dict "
             "depends on the framework. The wrong form routes context where aggregation "
@@ -77,13 +112,14 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L004",
+        scope=RuleScope.BOTH,
         name="ExceptBlockMissingExcInfoLog",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="missing-traceback",
         autofixable=True,
         orthogonal_gate="tests",
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "Same failure as E005 at the logging layer: the message appears in the stream "
             "but the stack trace is absent, so every postmortem hitting this pattern must "
@@ -100,12 +136,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L005",
+        scope=RuleScope.BOTH,
         name="PrintInProductionCode",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="log-format",
         autofixable=True,
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "print() bypasses the logging adapter entirely: no level, no correlation ID, "
             "no structured fields, no OTel forwarding. In containers, stdout may route to a "
@@ -122,12 +159,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L006",
+        scope=RuleScope.BOTH,
         name="InfoInTightLoop",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="log-level",
         autofixable=False,
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "Per-item INFO in a large loop emits O(N) records at the level operators "
             "monitor, drowning lifecycle signals in noise and inflating storage cost. INFO "
@@ -145,12 +183,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L007",
+        scope=RuleScope.BOTH,
         name="LoggerCriticalUsage",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="log-level",
         autofixable=True,
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "ADR-0011 codifies exactly four levels (DEBUG/INFO/WARNING/ERROR) — there is no "
             "CRITICAL. Fatal conditions are communicated through process exit codes and "
@@ -168,33 +207,49 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L008",
+        scope=RuleScope.BOTH,
         name="UnguardedExpensiveDebug",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="log-performance",
         autofixable=False,
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
-            "Log-call arguments evaluate eagerly regardless of level. An unguarded expensive "
-            "serialisation inside logger.debug() runs on every call in production — invisible "
-            "CPU/memory overhead that compounds on hot paths."
+            "Python evaluates all function arguments before calling the log method, so an "
+            "expensive expression in a log argument — json.dumps(big), obj.serialize(), a "
+            "comprehension — runs unconditionally even when the level is filtered. "
+            "The SDK adapter's _is_enabled guard short-circuits %-style __str__ interpolation "
+            "for simple object args, but it fires inside the method, after Python has already "
+            "evaluated every argument expression. Calls with expensive argument expressions "
+            "still need an explicit guard."
         ),
         short_description="Expensive computation in logger.debug() argument — evaluates eagerly",
         full_description=(
-            "Arguments to log calls are evaluated eagerly regardless of whether the\n"
-            "level is enabled.  Guard expensive serialization / computation with\n"
-            "``if logger.isEnabledFor(logging.DEBUG):``.\n"
+            "Python evaluates all arguments before calling the log method, so expensive\n"
+            "expressions in log arguments run on every call regardless of level:\n"
+            "\n"
+            "    logger.debug('snapshot: %s', json.dumps(big_dict))  # json.dumps always runs\n"
+            "\n"
+            "Note: the SDK adapter's _is_enabled guard does skip %-style __str__ calls for\n"
+            "simple object args (logger.debug('x: %s', obj) — obj.__str__ not called when\n"
+            "filtered).  But that guard fires inside the method, after Python has evaluated\n"
+            "the argument expressions.  When the expensive work is in the expression itself,\n"
+            "an explicit level guard is still required::\n"
+            "\n"
+            "    if logger.isEnabledFor(logging.DEBUG):\n"
+            "        logger.debug('snapshot: %s', json.dumps(big_dict))\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l008",
     ),
     RuleDefinition(
         id="L009",
+        scope=RuleScope.BOTH,
         name="WarnThenRaiseDuplication",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="log-noise",
         autofixable=False,
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "Logging immediately before re-raising creates two records for one event (raise "
             "site + handler), inflating error counts and making 'how many times did this "
@@ -210,13 +265,14 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L010",
+        scope=RuleScope.BOTH,
         name="CredentialInLogOutput",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="security",
         autofixable=False,
         orthogonal_gate="tests",
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "Log aggregation stores records in plaintext accessible to more people and "
             "systems than the credential store. A credential value in a log is a persistent "
@@ -234,12 +290,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L011",
+        scope=RuleScope.BOTH,
         name="StringConcatenationInLog",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="log-format",
         autofixable=True,
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "Same convention as L001: string concatenation is an ad-hoc alternative to the "
             "standard %-style message body. It reads worse at the call site and breaks "
@@ -254,12 +311,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L012",
+        scope=RuleScope.BOTH,
         name="StdlibExtraReservedKeyCollision",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="log-crash",
         autofixable=False,
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "stdlib's Logger.makeRecord() raises KeyError when an extra={} key collides "
             "with a LogRecord attribute, propagating to the caller's logger.info() site and "
@@ -278,12 +336,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L013",
+        scope=RuleScope.BOTH,
         name="StdlibArbitraryKwargs",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="log-crash",
         autofixable=True,
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "stdlib logger.info() raises TypeError immediately for any kwarg outside its "
             "short allowlist. The most common breakage when migrating from structlog (which "
@@ -300,12 +359,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L014",
+        scope=RuleScope.BOTH,
         name="StructlogEventKwargOverwrite",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="log-format",
         autofixable=False,
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "In structlog the first positional arg is the message (stored as 'event'). "
             "Passing event= as a keyword silently replaces the message with the domain "
@@ -322,12 +382,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L015",
+        scope=RuleScope.BOTH,
         name="DictConfigDisableExistingLoggers",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="log-config",
         autofixable=True,
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "dictConfig() defaults disable_existing_loggers=True, silently disabling every "
             "logger created before the call. SDK components create loggers at import — before "
@@ -345,12 +406,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L016",
+        scope=RuleScope.BOTH,
         name="BasicConfigNoopAfterFirstCall",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="log-config",
         autofixable=False,
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "basicConfig() is silently ignored if the root logger already has handlers. "
             "Multiple calls rely on import order to decide which wins; the rest are silently "
@@ -368,12 +430,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L017",
+        scope=RuleScope.BOTH,
         name="LoggerExceptionUsage",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="log-level",
         autofixable=True,
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "logger.exception() is rejected outright. ADR-0011 restricts logging to four "
             "levels with exc_info=True as the sanctioned way to attach a traceback; "
@@ -398,12 +461,13 @@ RULES: tuple[RuleDefinition, ...] = (
     ),
     RuleDefinition(
         id="L018",
+        scope=RuleScope.BOTH,
         name="KwargsInApplicationLogCalls",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="log-format",
         autofixable=False,
-        since="0.2.0",
+        since="0.4.0",
         rationale=(
             "The adapter auto-injects Temporal context (workflow/run/activity IDs) as the "
             "only top-level indexed columns in ClickHouse/Grafana. App kwargs land in an "
@@ -419,5 +483,91 @@ RULES: tuple[RuleDefinition, ...] = (
             "using %-style formatting.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l018",
+    ),
+    RuleDefinition(
+        id="L019",
+        scope=RuleScope.BOTH,
+        name="DiscardedBindResult",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="log-config",
+        autofixable=False,
+        since="0.4.0",
+        rationale=(
+            "structlog and loguru bind() returns a *new* logger with the bound context — "
+            "the original is unchanged. A bare call (result not assigned) constructs the "
+            "context and immediately discards it; the log call that follows has no extra "
+            "context attached."
+        ),
+        short_description="logger.bind() result discarded — bind() returns a new logger",
+        full_description=(
+            "``structlog`` and ``loguru`` ``bind()`` returns a *new* bound logger;\n"
+            "the original is unchanged.  A bare ``logger.bind(key=value)`` expression\n"
+            "discards the result, so the context is never attached to any log call.\n"
+            "Assign the result: ``log = logger.bind(key=value)``.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l019",
+    ),
+    RuleDefinition(
+        id="L020",
+        scope=RuleScope.BOTH,
+        name="DeprecatedLoggingWarn",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="log-format",
+        autofixable=True,
+        since="0.4.0",
+        rationale=(
+            "logging.warn() is a long-deprecated alias for logging.warning(). It emits "
+            "DeprecationWarning at import time in newer Python versions and will be removed. "
+            "The fix is a trivial rename."
+        ),
+        short_description="logger.warn() is deprecated — use logger.warning() instead",
+        full_description=(
+            "``logger.warn()`` / ``logging.warn()`` is a deprecated alias for\n"
+            "``logger.warning()`` that will be removed in a future Python version.\n"
+            "Rename every call site to ``logger.warning(...)``.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l020",
+    ),
+    RuleDefinition(
+        id="L021",
+        scope=RuleScope.BOTH,
+        name="MissingLoggingLintRules",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="log-config",
+        autofixable=True,
+        since="0.4.0",
+        rationale=(
+            "The conformance suite catches logging anti-patterns at review time; ruff "
+            "catches the same issues at edit time and in pre-commit. The two are "
+            "complementary — ruff gives faster feedback in the IDE, conformance gives "
+            "auditable SARIF output. Without the ruff rules enabled, engineers get no "
+            "in-editor signal for L001/L005/L011/L020 equivalents."
+        ),
+        short_description=(
+            "pyproject.toml ruff config is missing logging lint rules (G001, G003, "
+            "G004, T201, LOG009)"
+        ),
+        full_description=(
+            "The project's ``[tool.ruff.lint]`` ``select`` / ``extend-select`` must\n"
+            "cover the following rules (or their category prefixes, or ``ALL``):\n"
+            "\n"
+            "* ``G001`` — ``logging.warn()`` deprecated (overlaps L020)\n"
+            "* ``G003`` — string concatenation in log message (overlaps L011)\n"
+            "* ``G004`` — f-string in log message (overlaps L001)\n"
+            "* ``T201`` — ``print()`` statement (overlaps L005)\n"
+            "* ``LOG009`` — ``logging.warn()`` deprecated (overlaps L020)\n"
+            "\n"
+            "A rule is covered if its full ID, any prefix (e.g. ``G`` covers all\n"
+            "``G``-prefixed rules), or ``ALL`` appears in ``select`` or\n"
+            "``extend-select`` and is not in ``ignore`` / ``extend-ignore``.\n"
+            "\n"
+            "Self-check exemption: ``pyproject.toml`` files whose\n"
+            "``[project].name`` starts with ``atlan-application-sdk`` are skipped\n"
+            "(the SDK's own tooling config is managed separately).\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l021",
     ),
 )

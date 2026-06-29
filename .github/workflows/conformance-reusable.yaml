@@ -2,21 +2,35 @@
 #
 # Reusable workflow: full conformance suite gate.
 #
-# Runs each rule series (C, E, P, O) as a separate leg of one matrix job so each
-# appears as its own status check:
+# Runs each rule series (C, E, P, O, D, L, T, I) as a separate leg of one matrix job so
+# each appears as its own status check:
 #   Conformance / suite / CI
-#   Conformance / suite / Error-handling
+#   Conformance / suite / Error handling
 #   Conformance / suite / Prescriptions
 #   Conformance / suite / Optimizations
-#   Conformance / suite / Conformance Gate  (required gate)
+#   Conformance / suite / Dependencies
+#   Conformance / suite / Logging
+#   Conformance / suite / Tests
+#   Conformance / suite / Container images
+#   Conformance / suite / Deprecations
+#   Conformance / Contracts
+#   Conformance / Conformance Gate  (required gate)
 #
 # The series share an identical job body (checkout → changed-files filter → uv →
 # run → upload → Security-tab upload), so they are expressed as a single
-# `strategy.matrix` rather than four copy-pasted jobs.  The only per-series
+# `strategy.matrix` rather than copy-pasted jobs.  The only per-series
 # values are the matrix entries (series letter, display name, sarif slug,
 # changed-files path glob, and the caller's exclude-paths input).  Note C-series
-# watches `.github/**` while the AST series (E/P/O) watch `**/*.py`; that
-# asymmetry is just a matrix field, not a separate job.
+# watches `.github/**`, D-series watches `**/pyproject.toml`, T-series watches
+# `tests/integration/**`, I-series watches `Dockerfile`, and the AST series
+# (E/P/O/L) watch `**/*.py`; that asymmetry is just a matrix field, not a
+# separate job.
+#
+# Scope: the runner auto-detects whether the caller repo is the SDK or a consumer
+# app (from its `[project].name`) and runs only the rules in scope.  The
+# app-scoped rules (D001/D002 and the bootstrap-workflow-drift rule C002) no-op on
+# the SDK itself with no per-caller configuration; the both-scoped rules — which
+# include D003 (UnusedDependency) — run on the SDK as well.
 #
 # The matrix job is intentionally inline (not delegating to sub-workflows) so
 # GitHub reports the legs at the correct depth — one level of workflow_call from
@@ -43,7 +57,7 @@
 #     annotations.  Use this for production code in the SDK/app that has a
 #     legitimate, site-specific carve-out.
 #
-#   exclude-paths-c / exclude-paths-e / exclude-paths-p / exclude-paths-o
+#   exclude-paths-c / exclude-paths-e / exclude-paths-p / exclude-paths-o / exclude-paths-i
 #     A path prefix removed from scanning entirely.  Nothing from that path
 #     appears in the SARIF report.  Use this only for code that is categorically
 #     outside the SDK/app surface — tooling, migration scripts, generated files,
@@ -76,11 +90,6 @@ on:
         required: false
         default: ""
         type: string
-      upload-sarif:
-        description: "Upload SARIF report to GitHub Security tab (requires security-events: write)"
-        required: false
-        default: true
-        type: boolean
       event_name:
         description: "Caller's github.event_name (push / pull_request / merge_group); reusable workflows always see 'workflow_call' internally"
         required: false
@@ -114,10 +123,63 @@ on:
         required: false
         default: ""
         type: string
+      exclude-paths-d:
+        description: >
+          Comma-separated repo-root-relative path prefixes to exclude from D-series
+          (dependency) checks only, e.g. 'tools/,contract-toolkit/'.  Default: nothing excluded.
+        required: false
+        default: ""
+        type: string
+      exclude-paths-l:
+        description: >
+          Comma-separated repo-root-relative path prefixes to exclude from L-series
+          (logging) checks only, e.g. 'tools/,contract-toolkit/'.  Default: nothing excluded.
+        required: false
+        default: ""
+        type: string
+      exclude-paths-t:
+        description: >
+          Comma-separated repo-root-relative path prefixes to exclude from T-series
+          (test-marking) checks only, e.g. 'tests/integration/_example/'.  Default: nothing excluded.
+        required: false
+        default: ""
+        type: string
+      exclude-paths-i:
+        description: >
+          Comma-separated repo-root-relative path prefixes to exclude from I-series
+          (container image) checks only.  Default: nothing excluded.
+        required: false
+        default: ""
+        type: string
+      exclude-paths-b:
+        description: >
+          Comma-separated repo-root-relative path prefixes to exclude from B-series
+          (deprecation) checks only, e.g. 'tools/,contract-toolkit/'.  Default: nothing excluded.
+        required: false
+        default: ""
+        type: string
+      ledger-path:
+        description: >
+          Repo-relative path to the app's committed contract ledger
+          (contract_schema.lock.json).  The guard compares this file between
+          origin/main and HEAD and blocks any deletion or type change.
+          Default: contract_schema.lock.json (repo root — convention for app repos).
+          The SDK overrides this to packages/conformance/conformance/data/contract_schema.lock.json.
+        required: false
+        default: "contract_schema.lock.json"
+        type: string
+      force-all:
+        description: >
+          Run every rule series regardless of which paths changed.  Same effect
+          as event_name == 'push'; the SDK's sdk-gate.yaml sets this on
+          release / version-bump branches and v* tags so a release dry-runs the
+          full suite.  Default: false (per-series path selection applies).
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
-  security-events: write
 
 jobs:
   # ── Per-series checks (one matrix leg per rule series) ──────────────────────
@@ -139,26 +201,88 @@ jobs:
             paths: ".github/**"
             exclude_paths: ${{ inputs.exclude-paths-c }}
           - series: E
-            name: "Error-handling"
+            name: "Error handling"
             slug: error-handling
             paths: "**/*.py"
             exclude_paths: ${{ inputs.exclude-paths-e }}
           - series: P
             name: "Prescriptions"
             slug: prescriptions
-            paths: "**/*.py"
+            # P016 reads both Python sources (@entrypoint code) and the
+            # app/generated/ + contract/ trees (contract-side artifacts), so a
+            # PR that only re-runs pkl eval and commits regenerated app/generated/
+            # files — the canonical BLDX-1425 drift shape — must still trigger
+            # this leg.  Brace expansion (micromatch) covers all three sources
+            # with a single paths filter entry and no template change.
+            paths: "{**/*.py,app/generated/**,contract/**}"
             exclude_paths: ${{ inputs.exclude-paths-p }}
           - series: O
             name: "Optimizations"
             slug: optimizations
             paths: "**/*.py"
             exclude_paths: ${{ inputs.exclude-paths-o }}
+          # D003 (UnusedDependency) reads source imports too, but the changed-files
+          # filter watches only `**/pyproject.toml` to keep this (env-syncing,
+          # heavier) leg off every `*.py` PR.  A PR that removes the last import of
+          # a still-declared dependency therefore won't re-run this leg — that
+          # staleness is caught on push to main, where every leg runs
+          # unconditionally.  Acceptable at WARN tier (mirrors the T-series above).
+          - series: D
+            name: "Dependencies"
+            slug: dependency
+            paths: "**/pyproject.toml"
+            exclude_paths: ${{ inputs.exclude-paths-d }}
+            # D001/D002/D003 all map declared dependencies to import name(s) via
+            # installed package metadata, so the leg must run in an environment
+            # where the caller's dependencies are installed — not the isolated
+            # `uvx` env used by the other series.
+            needs_env: "true"
+          - series: L
+            name: "Logging"
+            slug: logging
+            paths: "**/*.py"
+            exclude_paths: ${{ inputs.exclude-paths-l }}
+          # T001's verdict also depends on the unit-job deselection markers in
+          # `pyproject.toml` (`addopts`), but the changed-files filter watches only
+          # `tests/integration/**` to avoid running every other leg on pyproject
+          # churn.  A PR that changes *only* `addopts` (e.g. dropping a `not <marker>`)
+          # therefore won't re-run this leg — that staleness is caught on push to
+          # main, where every leg runs unconditionally.  Acceptable at WARN tier.
+          - series: T
+            name: "Tests"
+            slug: tests
+            paths: "tests/integration/**"
+            exclude_paths: ${{ inputs.exclude-paths-t }}
+          # I-series (container image) is APP-scoped and no-ops on the SDK itself
+          # since the SDK Dockerfile builds the base image, not a consumer app.
+          # Watches only the root Dockerfile so Python-only PRs don't trigger it.
+          - series: I
+            name: "Container images"
+            slug: container-image
+            paths: "Dockerfile"
+            exclude_paths: ${{ inputs.exclude-paths-i }}
+          # B-series is mixed-scope: B001 (app) flags consumption of deprecated
+          # SDK symbols, B002/B003/B004 (sdk) check the SDK's own deprecation
+          # authoring.  Scope is auto-detected per caller, so on a consumer app
+          # only B001 runs and on the SDK only B002–B004 run — no per-app config.
+          - series: B
+            name: "Deprecations"
+            slug: deprecation
+            paths: "**/*.py"
+            exclude_paths: ${{ inputs.exclude-paths-b }}
     steps:
       - name: "Checkout caller repo"
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: "Detect changed files"
         id: changes
+        # Skip when forcing (release/version-bump/tag) or on push-to-main: in
+        # all those cases the downstream steps fire regardless (their `if:`s OR
+        # in `inputs.event_name == 'push' || inputs.force-all`), and a tag push
+        # has no clean diff base for paths-filter — running it could hard-fail
+        # the leg and turn the gate red on a release. Mirrors sdk-gate.yaml,
+        # which skips its own outer filter for the same reason.
+        if: inputs.event_name != 'push' && !inputs.force-all
         uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4
         with:
           filters: |
@@ -166,11 +290,14 @@ jobs:
               - "${{ matrix.paths }}"
 
       - name: "Set up uv"
-        if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push'
+        if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
 
+      # ── Isolated env (uvx) — every series except those needing the caller's
+      #    installed dependencies. The tool runs in an ephemeral env; the
+      #    caller's deps are not installed (and not needed for AST/text checks).
       - name: "Run ${{ matrix.series }}-series checks (published package)"
-        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push') && inputs.conformance-ref == ''
+        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && inputs.conformance-ref == '' && matrix.needs_env != 'true'
         env:
           EXCLUDE_PATHS: ${{ matrix.exclude_paths }}
         run: |
@@ -181,7 +308,7 @@ jobs:
           uvx atlan-application-sdk-conformance detect "${args[@]}"
 
       - name: "Run ${{ matrix.series }}-series checks (from git ref)"
-        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push') && inputs.conformance-ref != ''
+        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && inputs.conformance-ref != '' && matrix.needs_env != 'true'
         env:
           EXCLUDE_PATHS: ${{ matrix.exclude_paths }}
         run: |
@@ -193,26 +320,91 @@ jobs:
             --with "atlan-application-sdk-conformance @ git+https://github.com/atlanhq/application-sdk@${{ inputs.conformance-ref }}#subdirectory=packages/conformance" \
             -- atlan-application-sdk-conformance detect "${args[@]}"
 
+      # ── Resolved env — series whose checks inspect installed package metadata
+      #    (D003 UnusedDependency). Sync the caller repo so its dependencies are
+      #    importable, then overlay the conformance tool with `uv run --with`.
+      #    A dependency that still cannot be resolved is reported and skipped by
+      #    the check itself (never flagged), so a partial sync degrades safely.
+      - name: "Run ${{ matrix.series }}-series checks (resolved env, published package)"
+        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && inputs.conformance-ref == '' && matrix.needs_env == 'true'
+        env:
+          EXCLUDE_PATHS: ${{ matrix.exclude_paths }}
+        run: |
+          args=(--repo . --series ${{ matrix.series }} --output "${{ matrix.slug }}.sarif")
+          if [[ -n "$EXCLUDE_PATHS" ]]; then
+            args+=(--exclude "$EXCLUDE_PATHS")
+          fi
+          # D003 only needs the core [project.dependencies] importable, which a
+          # plain sync installs; avoid --all-extras/--all-groups so the leg does
+          # not pull heavier or private-index dev/optional deps it never inspects.
+          uv sync
+          uv run \
+            --with "atlan-application-sdk-conformance" \
+            -- atlan-application-sdk-conformance detect "${args[@]}"
+
+      - name: "Run ${{ matrix.series }}-series checks (resolved env, from git ref)"
+        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && inputs.conformance-ref != '' && matrix.needs_env == 'true'
+        env:
+          EXCLUDE_PATHS: ${{ matrix.exclude_paths }}
+        run: |
+          args=(--repo . --series ${{ matrix.series }} --output "${{ matrix.slug }}.sarif")
+          if [[ -n "$EXCLUDE_PATHS" ]]; then
+            args+=(--exclude "$EXCLUDE_PATHS")
+          fi
+          # D003 only needs the core [project.dependencies] importable, which a
+          # plain sync installs; avoid --all-extras/--all-groups so the leg does
+          # not pull heavier or private-index dev/optional deps it never inspects.
+          uv sync
+          uv run \
+            --with "atlan-application-sdk-conformance @ git+https://github.com/atlanhq/application-sdk@${{ inputs.conformance-ref }}#subdirectory=packages/conformance" \
+            -- atlan-application-sdk-conformance detect "${args[@]}"
+
       - name: "Upload SARIF artifact"
-        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push') && !cancelled()
+        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && !cancelled()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: conformance-${{ matrix.slug }}-sarif
           path: ${{ matrix.slug }}.sarif
 
-      - name: "Strip suppressed results for Security tab"
-        if: ${{ inputs.upload-sarif && inputs.event_name == 'push' }}
-        env:
-          SARIF_SLUG: ${{ matrix.slug }}
-        run: |
-          jq '.runs[] |= (.results |= map(select(.suppressions == null or (.suppressions | length == 0))))' \
-            "$SARIF_SLUG.sarif" > "$SARIF_SLUG-upload.sarif"
-
-      - name: "Upload SARIF to Security tab"
-        if: ${{ inputs.upload-sarif && inputs.event_name == 'push' }}
-        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+  # ── Contract ledger append-only guard ─────────────────────────────────────
+  # Verifies that no entry was deleted from the committed contract ledger and
+  # no recorded type was changed between origin/main and HEAD.  Adding entries
+  # and status changes (active→deprecated→sunset) are always allowed.
+  #
+  # Uses `uvx atlan-application-sdk-conformance ledger-guard` so the guard
+  # travels with the published package — no local script copy needed in app repos.
+  # The ledger-path input lets each caller point to its own ledger; the SDK
+  # overrides the default via conformance.yaml / sdk-gate.yaml.
+  #
+  # Requires fetch-depth: 0 so the full git history (and origin/main) is
+  # available to `git show`.  Skipped on push to main (no base-ref diff).
+  contract-ledger-guard:
+    name: "Contracts"
+    runs-on: ubuntu-latest
+    if: inputs.event_name != 'push'
+    steps:
+      - name: "Checkout (full history)"
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          sarif_file: ${{ matrix.slug }}-upload.sarif
+          fetch-depth: 0
+
+      - name: "Set up uv"
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+      - name: "Guard contract_schema.lock.json (published package)"
+        if: inputs.conformance-ref == ''
+        env:
+          LEDGER_PATH: ${{ inputs.ledger-path }}
+        run: uvx atlan-application-sdk-conformance ledger-guard --base-ref origin/main --ledger-path "$LEDGER_PATH"
+
+      - name: "Guard contract_schema.lock.json (in-flight conformance-ref)"
+        if: inputs.conformance-ref != ''
+        env:
+          LEDGER_PATH: ${{ inputs.ledger-path }}
+        run: >-
+          uvx
+          --from "atlan-application-sdk-conformance @ git+https://github.com/atlanhq/application-sdk@${{ inputs.conformance-ref }}#subdirectory=packages/conformance"
+          atlan-application-sdk-conformance ledger-guard --base-ref origin/main --ledger-path "$LEDGER_PATH"
 
   # ── Required gate ─────────────────────────────────────────────────────────
   # Always runs so it can be marked a required check without ever becoming
@@ -225,9 +417,19 @@ jobs:
     if: always()
     steps:
       - name: "Evaluate conformance results"
+        env:
+          SUITE_RESULT: ${{ needs.suite.result }}
         run: |
-          if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" ]]; then
-            echo "::error::Conformance gate FAILED — one or more series found violations."
+          set -euo pipefail
+          # Fail closed on anything that is not a clean pass. The matrix job's
+          # aggregate result is 'failure' if any leg failed, 'cancelled' if a
+          # run was cancelled, 'skipped' if every series self-skipped (nothing
+          # relevant changed), 'success' otherwise. Only success|skipped pass —
+          # 'cancelled' must NOT slip through (the old contains(...,'failure')
+          # rule let it).
+          if [[ "$SUITE_RESULT" == "success" || "$SUITE_RESULT" == "skipped" ]]; then
+            echo "Conformance gate passed (suite result: $SUITE_RESULT)."
+          else
+            echo "::error::Conformance gate FAILED — suite result: $SUITE_RESULT."
             exit 1
           fi
-          echo "Conformance gate passed (suite result: ${{ join(needs.*.result, ', ') }})."

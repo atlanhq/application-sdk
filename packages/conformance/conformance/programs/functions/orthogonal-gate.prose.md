@@ -23,7 +23,7 @@ description: >
 Run the repository's standard test command from `scope`:
 
 ```sh
-uv run poe test 2>&1
+uv run coverage run -m pytest --import-mode=importlib --capture=no --log-cli-level=INFO tests/ -v 2>&1
 ```
 
 Capture exit code and the last 20 lines of combined output.  Return `passed =

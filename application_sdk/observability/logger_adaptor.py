@@ -15,9 +15,11 @@ from opentelemetry.trace.span import TraceFlags
 
 from application_sdk.constants import (
     APPLICATION_NAME,
+    DEPLOYMENT_NAME,
     ENABLE_OBSERVABILITY_STORE_SINK,
     ENABLE_OTLP_LOGS,
     ENABLE_OTLP_WORKFLOW_LOGS,
+    ENABLE_WORKFLOW_REPLAY_LOGS,
     LOG_BATCH_SIZE,
     LOG_CLEANUP_ENABLED,
     LOG_CLOUDFLARE_504_SUMMARY_INTERVAL_SECONDS,
@@ -33,7 +35,11 @@ from application_sdk.constants import (
     OTEL_WORKFLOW_LOGS_ENDPOINT,
     SERVICE_NAME,
 )
-from application_sdk.observability.context import correlation_context, request_context
+from application_sdk.observability.context import (
+    correlation_context,
+    is_replaying,
+    request_context,
+)
 from application_sdk.observability.logger_adaptor_errors import (
     UnsupportedLogRecordError,
 )
@@ -95,6 +101,7 @@ _KNOWN_EXTRA_KEYS = frozenset(
         # ── Misc SDK ─────────────────────────────────────────────────────
         "log_type",
         "app_name",
+        "deployment_name",
         "trace_id",
         "span_id",
         "correlation_id",
@@ -344,6 +351,12 @@ class InterceptHandler(logging.Handler):
     """
 
     def emit(self, record: logging.LogRecord) -> None:
+        # Suppress stdlib/third-party logs emitted from within a replaying
+        # workflow so they don't duplicate alongside SDK-adapter logs.
+        # Honour the same ENABLE_WORKFLOW_REPLAY_LOGS env toggle.
+        if not ENABLE_WORKFLOW_REPLAY_LOGS and is_replaying():
+            return
+
         # Get corresponding Loguru level if it exists
         try:
             level = logger.level(record.levelname).name
@@ -378,6 +391,7 @@ class InterceptHandler(logging.Handler):
         # / ``setdefault`` preserves any field the caller explicitly set via
         # ``extra={"app_name": "X", ...}``.
         logger_extras.setdefault("app_name", APPLICATION_NAME)
+        logger_extras.setdefault("deployment_name", DEPLOYMENT_NAME)
         _apply_atlan_context(logger_extras, prefer_caller=True)
 
         logger.opt(depth=depth, exception=record.exc_info).bind(**logger_extras).log(
@@ -577,6 +591,13 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         self.logger_name = logger_name
         # Bind the logger name when creating the logger instance
         self.logger = logger
+        # Suppress workflow-body logs during Temporal replay by default,
+        # matching the behaviour of Temporal's native ``workflow.logger``
+        # (``log_during_replay=False``).  Set to True on this instance — or
+        # export ENABLE_WORKFLOW_REPLAY_LOGS=true — to re-enable replay logs
+        # for debugging (e.g. when using ``temporalio.worker.Replayer``
+        # locally to inspect workflow history).
+        self.log_during_replay: bool = ENABLE_WORKFLOW_REPLAY_LOGS
 
         if AtlanLoggerAdapter._initialized:
             return
@@ -848,12 +869,37 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         """
         kwargs["logger_name"] = self.logger_name
         kwargs["app_name"] = APPLICATION_NAME
+        kwargs["deployment_name"] = DEPLOYMENT_NAME
         # Enrichment is shared with :class:`InterceptHandler` so stdlib-bridged
         # records carry the same Atlan context; see :func:`_apply_atlan_context`.
         # ``prefer_caller=False`` preserves the historic SDK-adapter behaviour
         # of overwriting any caller-supplied value with the live context.
         _apply_atlan_context(kwargs, prefer_caller=False)
         return msg, kwargs
+
+    def _suppress_replay_log(self) -> bool:
+        """Return True when the current log call should be dropped.
+
+        Suppresses if ``log_during_replay`` is False AND the current execution
+        is inside a replaying Temporal workflow.  Returns False immediately
+        (single ContextVar.get()) for all non-workflow contexts — activities,
+        HTTP, CLI, tests — with no callable invocation or exception overhead.
+        """
+        if self.log_during_replay:
+            return False
+        return is_replaying()
+
+    def _is_enabled(self, level_no: int) -> bool:
+        """Return True if at least one active sink accepts records at *level_no*.
+
+        Used as a fast pre-flight guard before %-style arg formatting so that
+        string interpolation is skipped entirely when the level is filtered —
+        the same laziness stdlib logging.Logger provides for free.
+        """
+        try:
+            return level_no >= self.logger._core.min_level
+        except TypeError:
+            return True
 
     def debug(self, msg: str, *args: Any, **kwargs: Any):
         """Log a debug level message.
@@ -863,6 +909,10 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             *args: Additional positional arguments
             **kwargs: Additional keyword arguments for context
         """
+        if self._suppress_replay_log():
+            return
+        if not self._is_enabled(SEVERITY_MAPPING["DEBUG"]):
+            return
         try:
             msg, args = _format_printf_args(msg, args)
             exc_info = kwargs.pop("exc_info", False)
@@ -884,6 +934,10 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             *args: Additional positional arguments
             **kwargs: Additional keyword arguments for context
         """
+        if self._suppress_replay_log():
+            return
+        if not self._is_enabled(SEVERITY_MAPPING["INFO"]):
+            return
         try:
             msg, args = _format_printf_args(msg, args)
             exc_info = kwargs.pop("exc_info", False)
@@ -905,6 +959,10 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             *args: Additional positional arguments
             **kwargs: Additional keyword arguments for context
         """
+        if self._suppress_replay_log():
+            return
+        if not self._is_enabled(SEVERITY_MAPPING["WARNING"]):
+            return
         try:
             msg, args = _format_printf_args(msg, args)
             exc_info = kwargs.pop("exc_info", False)
@@ -928,6 +986,10 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
 
         Note: Forces an immediate flush of logs when called.
         """
+        if self._suppress_replay_log():
+            return
+        if not self._is_enabled(SEVERITY_MAPPING["ERROR"]):
+            return
         try:
             msg, args = _format_printf_args(msg, args)
             exc_info = kwargs.pop("exc_info", False)
@@ -968,6 +1030,10 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
 
         Note: Forces an immediate flush of logs when called.
         """
+        if self._suppress_replay_log():
+            return
+        if not self._is_enabled(SEVERITY_MAPPING["CRITICAL"]):
+            return
         try:
             msg, args = _format_printf_args(msg, args)
             exc_info = kwargs.pop("exc_info", False)
@@ -1027,6 +1093,10 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
 
         This method adds activity-specific context to the log message.
         """
+        if self._suppress_replay_log():
+            return
+        if not self._is_enabled(SEVERITY_MAPPING["ACTIVITY"]):
+            return
         try:
             msg, args = _format_printf_args(msg, args)
             local_kwargs = kwargs.copy()
@@ -1047,6 +1117,10 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
 
         This method adds metric-specific context to the log message.
         """
+        if self._suppress_replay_log():
+            return
+        if not self._is_enabled(SEVERITY_MAPPING["METRIC"]):
+            return
         try:
             msg, args = _format_printf_args(msg, args)
             local_kwargs = kwargs.copy()
@@ -1110,6 +1184,10 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
 
         This method adds trace-specific context to the log message.
         """
+        if self._suppress_replay_log():
+            return
+        if not self._is_enabled(SEVERITY_MAPPING["TRACING"]):
+            return
         msg, args = _format_printf_args(msg, args)
         local_kwargs = kwargs.copy()
         local_kwargs["log_type"] = "trace"

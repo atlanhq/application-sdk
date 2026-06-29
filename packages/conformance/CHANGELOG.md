@@ -2,6 +2,89 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.8.0] - 2026-06-25
+
+### Features
+
+- P017/P018 entrypoint-conformance rules (BLDX-1411) (#2355) ([8342bc6](https://github.com/atlanhq/application-sdk/commit/8342bc6))
+- additive-only contract gate B005/B006 (BLDX-1425) (#2350) ([225c8ed](https://github.com/atlanhq/application-sdk/commit/225c8ed))
+
+### Bug fixes
+
+- ignore action SHA pins in C002 drift comparison (#2358) ([1224379](https://github.com/atlanhq/application-sdk/commit/1224379))
+- make %-style log args lazily evaluated (#2353) ([4fcc98b](https://github.com/atlanhq/application-sdk/commit/4fcc98b))
+
+### Other changes
+
+- chore(deps): lock file maintenance (#2363) ([4f8b0a1](https://github.com/atlanhq/application-sdk/commit/4f8b0a1))
+- chore(deps): lock file maintenance (#2360) ([fdf1e27](https://github.com/atlanhq/application-sdk/commit/fdf1e27))
+- chore(deps): lock file maintenance (#2342) ([6a2e7f3](https://github.com/atlanhq/application-sdk/commit/6a2e7f3))
+- chore(deps): lock file maintenance (#2340) ([e1b98d1](https://github.com/atlanhq/application-sdk/commit/e1b98d1))
+
+## [0.7.0] - 2026-06-25
+
+### Features
+
+- add P016 EntryPointContractCodeDrift rule (BLDX-1425) (#2339) ([a5c8f2a](https://github.com/atlanhq/application-sdk/commit/a5c8f2a))
+- remove daft entirely, replace with pyarrow/orjson/duckdb (#2300) ([41f32e1](https://github.com/atlanhq/application-sdk/commit/41f32e1))
+- P013/P014/P015 typed-contract boundary rules (BLDX-1413) (#2336) ([300efb7](https://github.com/atlanhq/application-sdk/commit/300efb7))
+- Renovate fleet dashboard data feed (BLDX-1468) (#2289) ([9d3826c](https://github.com/atlanhq/application-sdk/commit/9d3826c))
+
+### Bug fixes
+
+- tolerate regenerate-contract override in C002 drift (#2323) ([55802cd](https://github.com/atlanhq/application-sdk/commit/55802cd))
+- resolve ARG-based FROM base image in I001 check (#2324) ([6118510](https://github.com/atlanhq/application-sdk/commit/6118510))
+- update conformance dashboard on every push to main (#2292) ([e6e32ef](https://github.com/atlanhq/application-sdk/commit/e6e32ef))
+
+### Other changes
+
+- chore(deps): lock file maintenance (#2337) ([c41c57a](https://github.com/atlanhq/application-sdk/commit/c41c57a))
+- chore(deps): lock file maintenance (#2332) ([94de56b](https://github.com/atlanhq/application-sdk/commit/94de56b))
+- chore(deps): lock file maintenance (#2296) ([fabafa1](https://github.com/atlanhq/application-sdk/commit/fabafa1))
+- chore(deps): lock file maintenance (#2291) ([d767fa7](https://github.com/atlanhq/application-sdk/commit/d767fa7))
+- chore(deps): lock file maintenance (#2284) ([90825e1](https://github.com/atlanhq/application-sdk/commit/90825e1))
+
+## [0.6.0] - 2026-06-20
+
+### Features
+
+- add I-series Dockerfile conformance rules (I001–I005) (#2256) ([aff34a3](https://github.com/atlanhq/application-sdk/commit/aff34a3))
+- orchestration-seam rules P004-P007 (BLDX-1417) (#2255) ([392922d](https://github.com/atlanhq/application-sdk/commit/392922d))
+- add D003 rule to warn about unused dependencies (BLDX-1462) (#2253) ([138ffc2](https://github.com/atlanhq/application-sdk/commit/138ffc2))
+- add T001 rule for integration test marking (#2224) ([be1af6e](https://github.com/atlanhq/application-sdk/commit/be1af6e))
+
+### Bug fixes
+
+- correct detect and test commands in remediate prose (#2246) ([9808adc](https://github.com/atlanhq/application-sdk/commit/9808adc))
+
+### Other changes
+
+- chore(deps): lock file maintenance (#2262) ([0534b42](https://github.com/atlanhq/application-sdk/commit/0534b42))
+- chore(deps): lock file maintenance (#2259) ([4be04ef](https://github.com/atlanhq/application-sdk/commit/4be04ef))
+- chore(deps): lock file maintenance (#2251) ([e6d04c2](https://github.com/atlanhq/application-sdk/commit/e6d04c2))
+- chore(deps): lock file maintenance (#2243) ([79eed5d](https://github.com/atlanhq/application-sdk/commit/79eed5d))
+- chore(deps): lock file maintenance (#2236) ([68e1083](https://github.com/atlanhq/application-sdk/commit/68e1083))
+
+## [0.5.0] - 2026-06-19
+
+### Features
+
+- L-series AST checker for logging anti-patterns (BLDX-1437) (#2221) ([c887557](https://github.com/atlanhq/application-sdk/commit/c887557))
+- rule scope (sdk/app/both) + wire D-series CI (#2216) ([85d7296](https://github.com/atlanhq/application-sdk/commit/85d7296))
+- add C003 GitignoreMissingEntry check (BLDX-1452) (#2209) ([44f8344](https://github.com/atlanhq/application-sdk/commit/44f8344))
+
+### Bug fixes
+
+- decouple SARIF upload from gate to fix Security tab errors (#2219) ([a7b0ac3](https://github.com/atlanhq/application-sdk/commit/a7b0ac3))
+- use conformance suite version in rule since fields (#2210) ([737e67b](https://github.com/atlanhq/application-sdk/commit/737e67b))
+- use ORG_PAT_GITHUB for bot-pushes on renovate branches (#2200) ([d7418bf](https://github.com/atlanhq/application-sdk/commit/d7418bf))
+
+### Other changes
+
+- chore(deps): lock file maintenance (#2228) ([1bd8864](https://github.com/atlanhq/application-sdk/commit/1bd8864))
+- chore(deps): lock file maintenance (#2215) ([c1ea14b](https://github.com/atlanhq/application-sdk/commit/c1ea14b))
+- chore(deps): lock file maintenance (#2199) ([1a2cdac](https://github.com/atlanhq/application-sdk/commit/1a2cdac))
+
 ## [0.4.0] - 2026-06-18
 
 ### Features

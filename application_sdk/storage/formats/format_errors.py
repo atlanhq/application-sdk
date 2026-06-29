@@ -128,15 +128,6 @@ class SingleFilePathWithFileNamesError(InvalidInputError):
 
 
 @dataclass(kw_only=True)
-class DaftNotInstalledError(DependencyUnavailableError):
-    """daft is required but not installed."""
-
-    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_DAFT"
-    message: str = "daft is not installed; install daft or use DataframeType.pandas"
-    service: str | None = "daft"
-
-
-@dataclass(kw_only=True)
 class TempFolderPathMissingError(InternalError):
     """A write to a temp folder was attempted before the folder was initialised."""
 

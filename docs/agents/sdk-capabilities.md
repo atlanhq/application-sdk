@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.17.2
-source-sha:    ab591dae78d51bb566d363d51e8223954a1aff91
-source-date:   2026-06-16T23:37:20Z
+sdk-version:   3.19.0
+source-sha:    b8d1704887637534f8a7a9fb0e33e55f177bbbe2
+source-date:   2026-06-24T12:00:54+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -24,13 +24,13 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 53 |
-| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 10 |
+| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 14 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 34 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 24 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 26 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 5 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 15 |
 
@@ -1046,217 +1046,217 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 
 - **Import:** `from application_sdk.errors import APP_ALREADY_REGISTERED`
 - **Signature:** `APP_ALREADY_REGISTERED`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `APP_CONTEXT_ERROR`
 
 - **Import:** `from application_sdk.errors import APP_CONTEXT_ERROR`
 - **Signature:** `APP_CONTEXT_ERROR`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `APP_ERROR`
 
 - **Import:** `from application_sdk.errors import APP_ERROR`
 - **Signature:** `APP_ERROR`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `APP_NON_RETRYABLE`
 
 - **Import:** `from application_sdk.errors import APP_NON_RETRYABLE`
 - **Signature:** `APP_NON_RETRYABLE`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `APP_NOT_FOUND`
 
 - **Import:** `from application_sdk.errors import APP_NOT_FOUND`
 - **Signature:** `APP_NOT_FOUND`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `BINDING_ERROR`
 
 - **Import:** `from application_sdk.errors import BINDING_ERROR`
 - **Signature:** `BINDING_ERROR`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `CONTRACT_VALIDATION`
 
 - **Import:** `from application_sdk.errors import CONTRACT_VALIDATION`
 - **Signature:** `CONTRACT_VALIDATION`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `CREDENTIAL_ERROR`
 
 - **Import:** `from application_sdk.errors import CREDENTIAL_ERROR`
 - **Signature:** `CREDENTIAL_ERROR`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `CREDENTIAL_NOT_FOUND`
 
 - **Import:** `from application_sdk.errors import CREDENTIAL_NOT_FOUND`
 - **Signature:** `CREDENTIAL_NOT_FOUND`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `CREDENTIAL_PARSE_ERROR`
 
 - **Import:** `from application_sdk.errors import CREDENTIAL_PARSE_ERROR`
 - **Signature:** `CREDENTIAL_PARSE_ERROR`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `CREDENTIAL_VALIDATION_ERROR`
 
 - **Import:** `from application_sdk.errors import CREDENTIAL_VALIDATION_ERROR`
 - **Signature:** `CREDENTIAL_VALIDATION_ERROR`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `CREDENTIAL_VAULT_ERROR`
 
 - **Import:** `from application_sdk.errors import CREDENTIAL_VAULT_ERROR`
 - **Signature:** `CREDENTIAL_VAULT_ERROR`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `DISCOVERY_ERROR`
 
 - **Import:** `from application_sdk.errors import DISCOVERY_ERROR`
 - **Signature:** `DISCOVERY_ERROR`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `EVENT_BUS`
 
 - **Import:** `from application_sdk.errors import EVENT_BUS`
 - **Signature:** `EVENT_BUS`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `EVENT_PUBLISH`
 
 - **Import:** `from application_sdk.errors import EVENT_PUBLISH`
 - **Signature:** `EVENT_PUBLISH`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `EXECUTION_ACTIVITY_ERROR`
 
 - **Import:** `from application_sdk.errors import EXECUTION_ACTIVITY_ERROR`
 - **Signature:** `EXECUTION_ACTIVITY_ERROR`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `EXECUTION_ERROR`
 
 - **Import:** `from application_sdk.errors import EXECUTION_ERROR`
 - **Signature:** `EXECUTION_ERROR`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `EXECUTION_WORKER_ERROR`
 
 - **Import:** `from application_sdk.errors import EXECUTION_WORKER_ERROR`
 - **Signature:** `EXECUTION_WORKER_ERROR`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `HANDLER_ERROR`
 
 - **Import:** `from application_sdk.errors import HANDLER_ERROR`
 - **Signature:** `HANDLER_ERROR`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `PAYLOAD_SAFETY`
 
 - **Import:** `from application_sdk.errors import PAYLOAD_SAFETY`
 - **Signature:** `PAYLOAD_SAFETY`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `PUBSUB_ERROR`
 
 - **Import:** `from application_sdk.errors import PUBSUB_ERROR`
 - **Signature:** `PUBSUB_ERROR`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `SECRET_NOT_FOUND`
 
 - **Import:** `from application_sdk.errors import SECRET_NOT_FOUND`
 - **Signature:** `SECRET_NOT_FOUND`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `SECRET_STORE_ERROR`
 
 - **Import:** `from application_sdk.errors import SECRET_STORE_ERROR`
 - **Signature:** `SECRET_STORE_ERROR`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `SEGMENT_ERROR`
 
 - **Import:** `from application_sdk.errors import SEGMENT_ERROR`
 - **Signature:** `SEGMENT_ERROR`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `STATE_STORE_ERROR`
 
 - **Import:** `from application_sdk.errors import STATE_STORE_ERROR`
 - **Signature:** `STATE_STORE_ERROR`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `STORAGE_CONFIG`
 
 - **Import:** `from application_sdk.errors import STORAGE_CONFIG`
 - **Signature:** `STORAGE_CONFIG`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `STORAGE_EMPTY_UPLOAD`
 
 - **Import:** `from application_sdk.errors import STORAGE_EMPTY_UPLOAD`
 - **Signature:** `STORAGE_EMPTY_UPLOAD`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `STORAGE_NOT_FOUND`
 
 - **Import:** `from application_sdk.errors import STORAGE_NOT_FOUND`
 - **Signature:** `STORAGE_NOT_FOUND`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `STORAGE_OPERATION`
 
 - **Import:** `from application_sdk.errors import STORAGE_OPERATION`
 - **Signature:** `STORAGE_OPERATION`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `STORAGE_PERMISSION`
 
 - **Import:** `from application_sdk.errors import STORAGE_PERMISSION`
 - **Signature:** `STORAGE_PERMISSION`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `TASK_NOT_FOUND`
 
 - **Import:** `from application_sdk.errors import TASK_NOT_FOUND`
 - **Signature:** `TASK_NOT_FOUND`
-- **Summary:** _(no docstring)_
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
 #### `WORKER_EVICTED_TYPE`
@@ -1286,6 +1286,13 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Summary:** Wraps Temporal Worker to emit worker_start on startup and to push
 - **Defined in:** `application_sdk/execution/_temporal/worker.py`
 
+#### `RetryPolicy`
+
+- **Import:** `from application_sdk.execution import RetryPolicy`
+- **Signature:** `class RetryPolicy(max_attempts: int = 3, ...)`
+- **Summary:** Configuration for retry behavior.
+- **Defined in:** `application_sdk/execution/retry.py`
+
 #### `TemporalAuthConfig`
 
 - **Import:** `from application_sdk.execution import TemporalAuthConfig`
@@ -1299,6 +1306,13 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Signature:** `class TemporalAuthManager(config: TemporalAuthConfig, ...)`
 - **Summary:** Manages OAuth token lifecycle for Temporal client connections.
 - **Defined in:** `application_sdk/execution/_temporal/auth.py`
+
+#### `TemporalExecutorBackend`
+
+- **Import:** `from application_sdk.execution import TemporalExecutorBackend`
+- **Signature:** `class TemporalExecutorBackend(client: Client, task_queue: str = 'application-sdk')`
+- **Summary:** Temporal-based executor backend for running Apps as workflows.
+- **Defined in:** `application_sdk/execution/_temporal/backend.py`
 
 ### Functions
 
@@ -1314,6 +1328,13 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Import:** `from application_sdk.execution import create_data_converter`
 - **Signature:** `create_data_converter(additional_converters: list[EncodingPayloadConverter] | None = None)`
 - **Summary:** Create a data converter with Pydantic support.
+- **Defined in:** `application_sdk/execution/_temporal/converter.py`
+
+#### `create_data_converter_for_app`
+
+- **Import:** `from application_sdk.execution import create_data_converter_for_app`
+- **Signature:** `create_data_converter_for_app(app_class: type[App])`
+- **Summary:** Create a data converter for a specific app, including any app-specific converters.
 - **Defined in:** `application_sdk/execution/_temporal/converter.py`
 
 #### `create_temporal_client`
@@ -1343,6 +1364,11 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Signature:** `needs_lock(max_locks: int = 5, lock_name: Optional[str] = None)`
 - **Summary:** Decorator to mark activities that require distributed locking.
 - **Defined in:** `application_sdk/execution/decorators.py`
+
+#### `TemporalClient`
+
+- **Import:** `from application_sdk.execution import TemporalClient`
+- **Summary:** _(no docstring)_
 
 ## `application_sdk.handler`
 
@@ -1918,6 +1944,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Summary:** Async client for external customer-provided cloud object stores.
 - **Defined in:** `application_sdk/storage/cloud.py`
 
+#### `ObjectStorePreflightError`
+
+- **Import:** `from application_sdk.storage import ObjectStorePreflightError`
+- **Signature:** `class ObjectStorePreflightError(message: str, ...)`
+- **Summary:** One or more object stores failed the SDR boot-time access preflight.
+- **Defined in:** `application_sdk/storage/errors.py`
+
 #### `StorageBindingBrokenError`
 
 - **Import:** `from application_sdk.storage import StorageBindingBrokenError`
@@ -2073,6 +2106,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Signature:** `upload_prefix(local_dir: str | Path, ...)`
 - **Summary:** Upload all files under *local_dir* to the store under *prefix*.
 - **Defined in:** `application_sdk/storage/batch.py`
+
+#### `verify_object_store_access`
+
+- **Import:** `from application_sdk.storage import verify_object_store_access`
+- **Signature:** `verify_object_store_access(infra: InfrastructureContext)`
+- **Summary:** In SDR mode, verify read+write access to every configured object store.
+- **Defined in:** `application_sdk/storage/preflight.py`
 
 ## `application_sdk.templates`
 

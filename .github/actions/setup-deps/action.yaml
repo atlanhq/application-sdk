@@ -24,13 +24,13 @@ runs:
 
     - name: Set up Python
       id: setup-python
-      uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
       with:
         python-version: ${{ inputs.python-version }}
 
     - name: Cache uv binary
       id: cache-uv-bin
-      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.tool_cache }}/uv
         key: uv-bin-${{ runner.os }}-${{ runner.arch }}-0.11.21
@@ -38,7 +38,7 @@ runs:
     - name: Install uv
       uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
       with:
-        version: "0.11.21"
+        version: "0.11.25"
         enable-cache: true
         cache-dependency-glob: "uv.lock"
         github-token: ${{ github.token }}
@@ -46,7 +46,7 @@ runs:
 
     - name: Cache virtual environment
       id: cache-venv
-      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: .venv
         key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('uv.lock') }}
@@ -58,7 +58,7 @@ runs:
         PYTHON_MINOR=$(echo "${{ inputs.python-version }}" | cut -d. -f2)
         if [ "${PYTHON_MINOR}" -ge 14 ] 2>/dev/null; then
           # Python 3.14+: skip dev group (libcst's pyo3 doesn't support 3.14 yet)
-          uv sync --all-extras --no-group dev
+          "${{ github.action_path }}/../../scripts/with-retry.sh" uv sync --all-extras --no-group dev
         else
-          uv sync --all-extras --all-groups
+          "${{ github.action_path }}/../../scripts/with-retry.sh" uv sync --all-extras --all-groups
         fi

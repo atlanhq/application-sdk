@@ -238,6 +238,8 @@ asyncio.run(
 Tell the user:
 1. Run `uv sync` to install dependencies.
 2. Copy and configure `.env.example → .env`.
-3. Start local deps: `temporal server start-dev` + `dapr run ...` (see [Getting Started](../../docs/guides/getting-started.md)).
-4. Run `uv run python run_dev.py` to test the scaffold.
-5. Run the `contract` skill to generate the PKL contract and `app/generated/` artifacts.
+3. Run `uv run python run_dev.py` to test the scaffold — this boots the embedded
+   Dapr (`daprd`) + in-process Temporal automatically; no Dapr CLI needed. To
+   instead mirror production against external services, see the optional
+   external-infrastructure section of [Getting Started](../../docs/guides/getting-started.md).
+4. Run the `contract` skill to generate the PKL contract and `app/generated/` artifacts.

@@ -1,14 +1,18 @@
 name: "Conformance"
 
+# PR / merge_group conformance gating now lives in sdk-gate.yaml (the composing
+# SDK gate), which calls conformance-reusable.yaml as one of its three areas.
+# This workflow is kept ONLY for the push-to-main run: with event_name == 'push'
+# the reusable runs every series and publishes the per-series SARIF artifacts.
+# conformance-upload-sarif.yaml then picks those up via `workflow_run` on this
+# workflow's name ("Conformance") and uploads the branch baseline to the GitHub
+# Security tab — so the workflow NAME and the push-to-main trigger must stay.
 on:
-  pull_request: {}
-  merge_group: {}
   push:
     branches: [main]
 
 permissions:
   contents: read
-  security-events: write
 
 jobs:
   suite:
@@ -20,4 +24,9 @@ jobs:
       # O-series (orjson) excludes the conformance package itself: the suite
       # legitimately uses stdlib json for SARIF string output (orjson returns bytes).
       exclude-paths-o: "tools/,contract-toolkit/,packages/conformance/"
+      # B-series (sdk scope) grades only application_sdk/ deprecation authoring;
+      # exclude the conformance package (its tests embed deprecation-notice strings).
+      exclude-paths-b: "tools/,contract-toolkit/,packages/conformance/"
+      # SDK's own ledger lives inside the conformance package data dir.
+      ledger-path: "packages/conformance/conformance/data/contract_schema.lock.json"
       event_name: ${{ github.event_name }}

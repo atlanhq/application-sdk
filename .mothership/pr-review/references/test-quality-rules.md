@@ -345,7 +345,11 @@ Flag:
 
 ### Minimum Threshold
 
-Coverage minimum is 50% (`fail_under = 50` in pyproject.toml). Flag PRs that would drop coverage below this.
+Coverage minimum is 85% (`fail_under = 85` in pyproject.toml, enforced
+by the `sdk-tests` CI job). CI already blocks any PR that drops
+coverage below this threshold, so do NOT raise a finding for the raw
+percentage — it is redundant with CI (see the CI-enforced exclusion
+list in `retro-log.md`). Focus instead on *meaningful* coverage (below).
 
 ### Meaningful Coverage
 

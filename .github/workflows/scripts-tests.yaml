@@ -1,0 +1,37 @@
+name: CI script tests
+
+# Runs the pytest suite for the CI driver scripts in .github/scripts/.
+# These scripts carry the conditional logic for our automations (release
+# bumps, allowlist validation, renovate sync, …); per docs/standards/ci.md
+# that logic must live in tested external scripts rather than inlined shell.
+# Until this workflow existed, .github/scripts/tests/ ran nowhere in CI.
+#
+# Not a path-gated *required* check (a path-filtered required check sits
+# pending forever when the paths are untouched). To make it blocking, add it
+# to branch protection AND gate it behind an always-concluding job — see
+# sdk-gate.yaml for that pattern.
+
+on:
+  pull_request:
+    paths:
+      - ".github/scripts/**"
+      - ".github/workflows/scripts-tests.yaml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scripts-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    name: pytest .github/scripts/tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+
+      - name: Run script tests
+        run: uv run --extra workflows --with pytest python -m pytest .github/scripts/tests -q

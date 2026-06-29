@@ -4,10 +4,10 @@
     "extract": {
       "activity_name": "execute_workflow",
       "activity_display_name": "Extract",
-      "app_name": "{app_name}",
+      "app_name": "publish-controls",
       "inputs": {
         "workflow_type": "publish-controls",
-        "app_name": "{app_name}",
+        "app_name": "publish-controls",
         "app_id": "",
         "argo_workflow_slug": "",
         "task_queue": "atlan-publish-controls-{deployment_name}",

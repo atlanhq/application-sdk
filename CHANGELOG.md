@@ -1,5 +1,64 @@
 # Changelog
 
+## v3.20.1 (June 26, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.20.0...v3.20.1
+
+### Bug Fixes
+
+- remove delete from preflight probe; use fixed key (#2347) (by @cmgrote in [9128001](https://github.com/atlanhq/application-sdk/commit/9128001))
+- make %-style log args lazily evaluated (#2353) (by @cmgrote in [4fcc98b](https://github.com/atlanhq/application-sdk/commit/4fcc98b))
+- forward daprd sidecar logs into the SDK pipeline (#2345) (by @Lalit3716-atlan in [06ba53c](https://github.com/atlanhq/application-sdk/commit/06ba53c))
+- align App.upload() path with WORKFLOW_OUTPUT_PATH_TEMPLATE (#2364) (by @cmgrote in [3316da0](https://github.com/atlanhq/application-sdk/commit/3316da0))
+
+
+## v3.20.0 (June 25, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.19.0...v3.20.0
+
+### Features
+
+- export TemporalExecutorBackend and RetryPolicy from package root (#2307) (by @cmgrote in [57b187b](https://github.com/atlanhq/application-sdk/commit/57b187b))
+- expose TemporalClient and create_data_converter_for_app publicly (#2321) (by @cmgrote in [13af2c7](https://github.com/atlanhq/application-sdk/commit/13af2c7))
+- remove daft entirely, replace with pyarrow/orjson/duckdb (#2300) (by @cmgrote in [41f32e1](https://github.com/atlanhq/application-sdk/commit/41f32e1))
+
+### Bug Fixes
+
+- Surface `defaultConnectorType` in configmap (#2319) (by @AngadSethi in [e84fd71](https://github.com/atlanhq/application-sdk/commit/e84fd71))
+- isolate explicit Azure credentials from the host's ambient AZURE_* env (#2335) (by @chaitanyaatlan in [1b3b46b](https://github.com/atlanhq/application-sdk/commit/1b3b46b))
+
+
+## v3.19.0 (June 22, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.18.0...v3.19.0
+
+### Features
+
+- dual-write App.upload artifacts to deployment + upstream stores (BLDX-1464) (#2267) (by @cmgrote in [4b3223e](https://github.com/atlanhq/application-sdk/commit/4b3223e))
+- report dapr binding types on worker_start (#2278) (by @Lalit3716-atlan in [a615acf](https://github.com/atlanhq/application-sdk/commit/a615acf))
+
+### Bug Fixes
+
+- suppress SDK logger output during workflow replay (#2283) (by @cmgrote in [42d4b6f](https://github.com/atlanhq/application-sdk/commit/42d4b6f))
+
+
+## v3.18.0 (June 19, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.17.3...v3.18.0
+
+### Features
+
+- fail-fast object-store access preflight for SDR mode (#2217) (by @cmgrote in [63ca79d](https://github.com/atlanhq/application-sdk/commit/63ca79d))
+
+### Bug Fixes
+
+- bump redis pin to <9.0.0 and pin socket_timeout=5 (#2203) (by @cmgrote in [4a41412](https://github.com/atlanhq/application-sdk/commit/4a41412))
+- assume cross-account S3 role via STS provider in CloudStore (BLDX-1441) (#2195) (by @adityachoudhury-cloud in [5bea953](https://github.com/atlanhq/application-sdk/commit/5bea953))
+- drive Dapr-component log level from ATLAN_ENABLE_* env vars (#2212) (by @mothership-ai[bot] in [9a22d26](https://github.com/atlanhq/application-sdk/commit/9a22d26))
+- remediate blocking L004 violations (#2234) (by @cmgrote in [c1b0beb](https://github.com/atlanhq/application-sdk/commit/c1b0beb))
+- use artifacts/apps/ prefix for SDR preflight probe key (#2239) (by @cmgrote in [85d45b3](https://github.com/atlanhq/application-sdk/commit/85d45b3))
+
+
 ## v3.17.3 (June 17, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.17.2...v3.17.3

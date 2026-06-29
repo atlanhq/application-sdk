@@ -22,18 +22,27 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+import conformance.suite.checks.entrypoint as entrypoint
+import conformance.suite.checks.logging as logging_checks
 from conformance.suite.checks import (
     actions_pinning,
     bootstrap_drift,
+    client_seam,
     dependency_conformance,
+    deprecation,
+    determinism,
+    dockerfile_conformance,
+    entrypoint_alignment,
     error_handling,
     gitignore_entries,
+    integration_marking,
     optimizations,
+    orchestration,
     prescriptions,
 )
-from conformance.suite.checks._ast_common import TOOL_VERSION
-from conformance.suite.rules import assert_registry_consistent, get_rule
-from conformance.suite.schema.disposition import EnforcementTier
+from conformance.suite.checks._ast_common import TOOL_VERSION, detect_scope
+from conformance.suite.rules import CATALOG, assert_registry_consistent, get_rule
+from conformance.suite.schema.disposition import EnforcementTier, RuleScope
 from conformance.suite.schema.findings import Finding, findings_to_report
 
 
@@ -66,6 +75,11 @@ _CHECKS: list[CheckRegistration] = [
         scan_path=bootstrap_drift.scan_path,
     ),
     CheckRegistration(
+        series=client_seam.SERIES,
+        discover=client_seam.discover,
+        scan_path=client_seam.scan_path,
+    ),
+    CheckRegistration(
         series=error_handling.SERIES,
         discover=error_handling.discover,
         scan_path=error_handling.scan_path,
@@ -74,6 +88,7 @@ _CHECKS: list[CheckRegistration] = [
         series=dependency_conformance.SERIES,
         discover=dependency_conformance.discover,
         scan_path=dependency_conformance.scan_path,
+        scan_all=dependency_conformance.scan_all,
     ),
     CheckRegistration(
         series=optimizations.SERIES,
@@ -91,6 +106,50 @@ _CHECKS: list[CheckRegistration] = [
         discover=gitignore_entries.discover,
         scan_path=gitignore_entries.scan_path,
     ),
+    CheckRegistration(
+        series=orchestration.SERIES,
+        discover=orchestration.discover,
+        scan_path=orchestration.scan_path,
+        scan_all=orchestration.scan_all,
+    ),
+    CheckRegistration(
+        series=determinism.SERIES,
+        discover=determinism.discover,
+        scan_path=determinism.scan_path,
+    ),
+    CheckRegistration(
+        series=entrypoint.SERIES,
+        discover=entrypoint.discover,
+        scan_path=entrypoint.scan_path,
+    ),
+    CheckRegistration(
+        series=logging_checks.SERIES,
+        discover=logging_checks.discover,
+        scan_path=logging_checks.scan_path,
+        scan_all=logging_checks.scan_all,
+    ),
+    CheckRegistration(
+        series=integration_marking.SERIES,
+        discover=integration_marking.discover,
+        scan_path=integration_marking.scan_path,
+    ),
+    CheckRegistration(
+        series=dockerfile_conformance.SERIES,
+        discover=dockerfile_conformance.discover,
+        scan_path=dockerfile_conformance.scan_path,
+    ),
+    CheckRegistration(
+        series=deprecation.SERIES,
+        discover=deprecation.discover,
+        scan_path=deprecation.scan_path,
+        scan_all=deprecation.scan_all,
+    ),
+    CheckRegistration(
+        series=entrypoint_alignment.SERIES,
+        discover=entrypoint_alignment.discover,
+        scan_path=entrypoint_alignment.scan_path,
+        scan_all=entrypoint_alignment.scan_all,
+    ),
 ]
 
 
@@ -101,6 +160,31 @@ assert_registry_consistent(check_series=frozenset(c.series for c in _CHECKS))
 
 def _tier(f: Finding) -> EnforcementTier:
     return get_rule(f.rule_id).tier
+
+
+def _rule_in_scope(rule_scope: RuleScope, active: RuleScope | None) -> bool:
+    """True if a rule with ``rule_scope`` applies under the ``active`` scope.
+
+    ``active`` is ``None`` when the scope could not be determined and ``--scope``
+    was not given — in that case every rule is in scope (the pre-feature
+    behaviour).  Otherwise a rule applies iff its scope is ``BOTH`` or matches.
+    """
+    return active is None or rule_scope == RuleScope.BOTH or rule_scope == active
+
+
+def _series_in_scope(series: str, active: RuleScope | None) -> bool:
+    """True if *any* rule in ``series`` is in scope under ``active``.
+
+    Used to skip a whole check's discovery+scan when none of its series' rules
+    could ever produce an in-scope finding (e.g. the all-APP D-series on the SDK).
+    Series that mix scopes (C001/C003 are ``both`` while C002 is ``app``) stay
+    active and rely on the post-scan finding filter for correctness.
+    """
+    return any(
+        _rule_in_scope(rule.scope, active)
+        for rule in CATALOG.values()
+        if rule.id[0] == series
+    )
 
 
 def _print_human_summary(
@@ -240,6 +324,17 @@ def main(argv: list[str] | None = None) -> int:
             "it works uniformly across every registered series."
         ),
     )
+    parser.add_argument(
+        "--scope",
+        choices=[RuleScope.SDK.value, RuleScope.APP.value],
+        default=None,
+        help=(
+            "Restrict to rules that apply to this consumer surface ('sdk' or "
+            "'app'); 'both'-scoped rules always run.  Default: auto-detected from "
+            "the repo's [project].name (atlan-application-sdk* -> sdk, else app); "
+            "if undetectable, every rule runs."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.series:
@@ -257,8 +352,17 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     root = Path(args.repo).resolve()
+
+    # Resolve the active scope: an explicit --scope wins; otherwise auto-detect
+    # from the repo under scan.  ``None`` means "scope unknown — run everything".
+    active_scope = RuleScope(args.scope) if args.scope else detect_scope(root)
+
     all_findings: list[Finding] = []
     for check in active:
+        # Skip a whole check when none of its series' rules could be in scope
+        # (e.g. the all-APP D-series when scanning the SDK itself).
+        if not _series_in_scope(check.series, active_scope):
+            continue
         paths: list[Path] = []
         for p in check.discover(root):
             if excluded_prefixes:
@@ -274,6 +378,16 @@ def main(argv: list[str] | None = None) -> int:
         else:
             for p in paths:
                 all_findings.extend(check.scan_path(p, root))
+
+    # Drop findings for rules outside the active scope.  This is the
+    # finding-level counterpart to the series-level skip above: it covers
+    # mixed-scope series (e.g. C, where C001 is 'both' but C002/C003 are 'app')
+    # so the SARIF report, counts, and exit code reflect only in-scope rules.
+    all_findings = [
+        f
+        for f in all_findings
+        if _rule_in_scope(get_rule(f.rule_id).scope, active_scope)
+    ]
 
     # Always surface violations in a human-readable form so CI logs are actionable.
     _print_human_summary(all_findings, args.series, excluded_prefixes)

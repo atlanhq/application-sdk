@@ -1716,11 +1716,17 @@ def _register_workflow_routes(
         if target is not None:
             with open(target) as f:
                 raw = json.load(f)
+            data: dict[str, Any] = {"config": json.dumps(raw.get("config", raw))}
+            # Some configmaps (e.g., connector apps) carry a top-level
+            # `defaultConnectorType`; surface it alongside `config` when present.
+            default_connector_type = raw.get("defaultConnectorType")
+            if default_connector_type is not None:
+                data["defaultConnectorType"] = default_connector_type
             configmap = {
                 "kind": "ConfigMap",
                 "apiVersion": "v1",
                 "metadata": {"name": config_map_id},
-                "data": {"config": json.dumps(raw.get("config", raw))},
+                "data": data,
             }
             return JSONResponse(
                 content=_wrap_response(
@@ -1787,8 +1793,9 @@ def _register_workflow_routes(
                 detail=f"No manifest found for entrypoint {entrypoint_name!r}",
             )
         raw = ep_manifest.read_bytes()
+        # app_name is baked into the generated manifest by the contract toolkit
+        # (from the contract `name`); only the per-deployment token is substituted here.
         raw = raw.replace(b"{deployment_name}", deployment)
-        raw = raw.replace(b"{app_name}", (app_name or "").encode())
 
         # Dynamic-manifest hook: if the app defines
         # `app.<entrypoint_snake>.core.compute_manifest`, hand the
@@ -1854,8 +1861,9 @@ def _register_workflow_routes(
             # substitution. No parse/reserialize: the file is already valid JSON,
             # validated at build time by the contract tooling.
             raw = manifest_path.read_bytes()
+            # app_name is baked into the manifest by the toolkit; only the
+            # per-deployment token is substituted here (see note above).
             raw = raw.replace(b"{deployment_name}", deployment)
-            raw = raw.replace(b"{app_name}", (app_name or "").encode())
             return Response(content=raw, media_type="application/json")
 
         # Default-entrypoint fallback (aligns with PR #1965 semantics used

@@ -4,10 +4,10 @@
     "extract": {
       "activity_name": "execute_workflow",
       "activity_display_name": "Extract Deploy Config Example Metadata",
-      "app_name": "{app_name}",
+      "app_name": "deploy",
       "inputs": {
         "workflow_type": "deploy",
-        "app_name": "{app_name}",
+        "app_name": "deploy",
         "app_id": "",
         "argo_workflow_slug": "",
         "task_queue": "atlan-deploy-{deployment_name}",

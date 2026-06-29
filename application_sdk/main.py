@@ -390,11 +390,20 @@ async def _log_dapr_components(
     emits one INFO log line per component showing its type, version, and any
     non-sensitive metadata from the corresponding component YAML.
 
-    Warns about expected components (state store, secret store, object store,
-    event binding) that are not registered in the sidecar.
+    Then emits one outcome line per *expected* binding (state store, secret
+    store, deployment object store, event binding), classifying it against the
+    ``ATLAN_ENABLE_*`` env vars the chart derives from ``atlan.yaml``'s
+    ``deploy.dapr`` block:
 
-    This is best-effort: any failure is logged as a WARNING and never blocks
-    startup.
+    * registered + declared enabled / unset → INFO ("accepted")
+    * registered + declared disabled        → INFO ("drift")
+    * missing    + declared enabled         → WARNING ("declared but missing")
+    * missing    + declared disabled        → INFO ("disabled by config")
+    * missing    + declared unset           → INFO ("legacy/unknown intent")
+
+    Every binding always produces a log line so operators can see, with a
+    reason, how each one was handled. This is best-effort: any failure to
+    query Dapr metadata is logged as a WARNING and never blocks startup.
 
     Returns:
         Set of registered component names. Empty set if metadata query fails.
@@ -404,6 +413,7 @@ async def _log_dapr_components(
         EVENT_STORE_NAME,
         SECRET_STORE_NAME,
         STATE_STORE_NAME,
+        _read_enable_tri_state,
     )
 
     try:
@@ -442,18 +452,65 @@ async def _log_dapr_components(
                 comp.get("version", "unknown"),
             )
 
-    expected = {
-        STATE_STORE_NAME: "state_store",
-        SECRET_STORE_NAME: "secret_store",
-        DEPLOYMENT_OBJECT_STORE_NAME: "object_store",
-        EVENT_STORE_NAME: "event_binding",
-    }
-    for comp_name, role in expected.items():
-        if comp_name not in registered:
-            logger.warning(
-                "Expected Dapr component %s (role=%s) not registered in sidecar",
+    # Each expected binding is keyed off the ATLAN_ENABLE_* env var the chart
+    # derives from atlan.yaml's deploy.dapr block. Tuple shape:
+    # (component_name, role_label, enable_env_var, atlan_yaml_key)
+    expected: tuple[tuple[str, str, str, str], ...] = (
+        (STATE_STORE_NAME, "state_store", "ATLAN_ENABLE_STATESTORE", "statestore"),
+        (SECRET_STORE_NAME, "secret_store", "ATLAN_ENABLE_SECRETSTORE", "secretstore"),
+        (
+            DEPLOYMENT_OBJECT_STORE_NAME,
+            "object_store",
+            "ATLAN_ENABLE_OBJECTSTORE",
+            "objectstore",
+        ),
+        (EVENT_STORE_NAME, "event_binding", "ATLAN_ENABLE_EVENTSTORE", "eventstore"),
+    )
+    for comp_name, role, enable_var, yaml_key in expected:
+        raw, declared = _read_enable_tri_state(enable_var)
+        is_registered = comp_name in registered
+
+        if is_registered and declared is not False:
+            logger.info(
+                "Dapr binding %s (role=%s) accepted: registered in sidecar (%s=%s)",
                 comp_name,
                 role,
+                enable_var,
+                raw if raw is not None else "<unset>",
+            )
+        elif is_registered and declared is False:
+            logger.info(
+                "Dapr binding %s (role=%s) registered in sidecar despite %s=false — "
+                "possible drift between atlan.yaml deploy.dapr.%s and the deployed chart values",
+                comp_name,
+                role,
+                enable_var,
+                yaml_key,
+            )
+        elif not is_registered and declared is True:
+            logger.warning(
+                "Dapr binding %s (role=%s) declared enabled (%s=true) but not registered in sidecar — "
+                "runtime calls using this component will fail; check chart values and Dapr component templates",
+                comp_name,
+                role,
+                enable_var,
+            )
+        elif not is_registered and declared is False:
+            logger.info(
+                "Dapr binding %s (role=%s) disabled by config (%s=false); not registered in sidecar (expected)",
+                comp_name,
+                role,
+                enable_var,
+            )
+        else:  # not registered, declared is None
+            logger.info(
+                "Dapr binding %s (role=%s) not registered in sidecar and %s is unset — "
+                "the SDK cannot determine whether your app needs it; "
+                "set deploy.dapr.%s in atlan.yaml (true or false) to silence this",
+                comp_name,
+                role,
+                enable_var,
+                yaml_key,
             )
 
     return set(registered)
@@ -489,6 +546,7 @@ async def _create_infrastructure(
 
         from application_sdk.constants import (  # noqa: PLC0415 — cold path: lazy access to env-var-derived constants
             DEPLOYMENT_OBJECT_STORE_NAME,
+            ENABLE_ATLAN_UPLOAD,
             EVENT_STORE_NAME,
             SECRET_STORE_NAME,
             STATE_STORE_NAME,
@@ -520,6 +578,7 @@ async def _create_infrastructure(
             _create_store_from_binding_optional_with_put_attrs(
                 UPSTREAM_OBJECT_STORE_NAME,
                 components_dir=components_dir,
+                required=ENABLE_ATLAN_UPLOAD,
             )
         )
 
@@ -783,6 +842,11 @@ async def run_worker_mode(config: AppConfig) -> None:
     )
 
     infra = await _create_infrastructure()
+    from application_sdk.storage.preflight import (  # noqa: PLC0415 — cold path: SDR-gated; only runs when ENABLE_ATLAN_UPLOAD=true
+        verify_object_store_access,
+    )
+
+    await verify_object_store_access(infra)
     set_infrastructure(infra)
 
     app_class = load_app_class(config.app_module)
@@ -926,6 +990,11 @@ def run_handler_mode(config: AppConfig) -> None:
     )
 
     infra = asyncio.run(_create_infrastructure())
+    from application_sdk.storage.preflight import (  # noqa: PLC0415 — cold path: SDR-gated; only runs when ENABLE_ATLAN_UPLOAD=true
+        verify_object_store_access,
+    )
+
+    asyncio.run(verify_object_store_access(infra))
     set_infrastructure(infra)
 
     logger.info(
@@ -1032,6 +1101,11 @@ async def run_combined_mode(config: AppConfig) -> None:
     _existing_infra = get_infrastructure()
     if _existing_infra is None:
         infra = await _create_infrastructure()
+        from application_sdk.storage.preflight import (  # noqa: PLC0415 — cold path: SDR-gated; only runs when ENABLE_ATLAN_UPLOAD=true
+            verify_object_store_access,
+        )
+
+        await verify_object_store_access(infra)
         set_infrastructure(infra)
     else:
         infra = _existing_infra
@@ -1374,6 +1448,11 @@ async def _run_dev_combined_inner(
     )
 
     infra = await _create_infrastructure(credential_stores=credential_stores)
+    from application_sdk.storage.preflight import (  # noqa: PLC0415 — cold path: SDR-gated; only runs when ENABLE_ATLAN_UPLOAD=true
+        verify_object_store_access,
+    )
+
+    await verify_object_store_access(infra)
     set_infrastructure(infra)
 
     # Auto-provision credentials if provided (mimics Heracles writing to
@@ -1592,7 +1671,23 @@ def main() -> NoReturn:
         sys.exit(1)
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
-    except Exception:
+    except Exception as exc:
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — cold path: lazy import avoids loading storage module on every boot
+            ObjectStorePreflightError,
+        )
+
+        if isinstance(exc, ObjectStorePreflightError):
+            logger.error(
+                "SDR object-store preflight failed — cannot start:\n%s",
+                exc,
+                exc_info=True,
+            )
+            try:
+                asyncio.run(_flush_observability())
+            # conformance: ignore[E002,E004] best-effort flush on fatal exit; fatal error already logged above
+            except Exception:  # noqa: S110 — best-effort flush on fatal exit; error already logged above
+                pass
+            sys.exit(1)
         logger.error("Fatal error", exc_info=True)
         try:
             asyncio.run(_flush_observability())

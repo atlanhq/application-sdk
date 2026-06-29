@@ -72,16 +72,13 @@ import orjson
 from temporalio import workflow as _temporal_workflow
 
 from application_sdk.app.base import App
+from application_sdk.app.registry import AppRegistry
 from application_sdk.app.task import task
 from application_sdk.common.sql_filters import (
     normalize_filters,
     safe_substitute_placeholders,
 )
-from application_sdk.constants import (
-    APPLICATION_NAME,
-    TEMPORARY_PATH,
-    WORKFLOW_OUTPUT_PATH_TEMPLATE,
-)
+from application_sdk.constants import TEMPORARY_PATH, WORKFLOW_OUTPUT_PATH_TEMPLATE
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.credentials import CredentialResolver, legacy_credential_ref
 from application_sdk.credentials.ref import CredentialRef
@@ -340,7 +337,7 @@ class SqlApp(App):
             # ourselves and redact secrets before logging — frames preserved,
             # credentials stripped.
             safe_traceback = redact_secrets("".join(traceback.format_exception(exc)))
-            logger.error(  # conformance: ignore[E005] exc_info would expose SQLAlchemy password in traceback; safe_traceback built above with secrets redacted
+            logger.error(  # conformance: ignore[E005,L004] exc_info would expose SQLAlchemy password in traceback; safe_traceback built above with secrets redacted
                 "SQL auth cache prime FAILED after %.1fms (%s) — short-circuiting "
                 "before parallel extract burst to avoid stacking failed_login_attempts "
                 "on the source.\n%s",
@@ -847,7 +844,9 @@ class SqlApp(App):
             resolved_base = os.path.join(
                 TEMPORARY_PATH,
                 WORKFLOW_OUTPUT_PATH_TEMPLATE.format(
-                    application_name=APPLICATION_NAME or self._app_name or "app",
+                    application_name=AppRegistry.resolve_running_app_name(
+                        prefer=self._app_name
+                    ),
                     workflow_id=info.workflow_id,
                     run_id=info.run_id,
                 ),

@@ -6,6 +6,34 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.16.0] - 2026-06-25
+
+### Features
+
+- add WidgetValidation property to TextInput and TextBoxInput (#2286) ([12b72d3](https://github.com/atlanhq/application-sdk/commit/12b72d3))
+
+### Bug fixes
+
+- close App.pkl parity gaps for CredentialInput placeholder, argoPackageNames, workflowTypeOverride (#2313) ([ffae058](https://github.com/atlanhq/application-sdk/commit/ffae058))
+
+## [0.15.0] - 2026-06-24
+
+### Features
+
+- add e2eCredentialMode + widen ConditionalInput Literal for agent e2e (#2299) ([51995b2](https://github.com/atlanhq/application-sdk/commit/51995b2))
+
+## [0.14.2] - 2026-06-22
+
+### Bug fixes
+
+- bake manifest app_name from contract name; drop runtime placeholder (#2271) ([b78ce51](https://github.com/atlanhq/application-sdk/commit/b78ce51))
+
+## [0.14.1] - 2026-06-18
+
+### Bug fixes
+
+- allow 10-day timeout cap (#2223) ([4b88b9b](https://github.com/atlanhq/application-sdk/commit/4b88b9b))
+
 ## [0.14.0] - 2026-06-17
 
 ### Features
