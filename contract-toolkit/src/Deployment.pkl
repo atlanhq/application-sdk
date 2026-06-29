@@ -97,5 +97,9 @@ class DeployConfig {
   overrides: Mapping<String, Any> = new Mapping {}
   /// Named worker-pool map. Pool keys must be lowercase kebab-case.
   /// An empty map (the default) emits no `pools:` block in `atlan.yaml`.
+  /// Order matters: the first key in insertion order drives the synthesised
+  /// top-level `deploy:` block (keda, resources, env). Put the primary
+  /// always-on pool first; placing a scale-to-zero pool first will silently
+  /// synthesise a scale-to-zero `deploy:` block.
   pools: Mapping<KebabCase, Pool> = new Mapping {}
 }

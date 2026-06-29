@@ -289,25 +289,27 @@ To replace the generated node, define `extraNodes["notifications"]`.
 
 `extraNodes` is still available as an escape hatch for nodes that fall outside the canonical pipeline (e.g. custom fan-in steps).
 
-## Pools Map (preferred)
+## Pools Map
 
 The `pools` map declares named worker pools. It is **fully optional and explicit-overrides-only** — an empty map (the default) emits nothing. Declare named pools to configure per-pool KEDA, resources, or env.
 
-The pool key must exactly match the string passed to `@task(pool="…")` in Python.
+The pool key must exactly match the string passed to `@task(pool="…")` in Python. Order matters: the first key in insertion order drives the synthesised top-level `deploy:` block — put the primary always-on pool first.
 
 ```pkl
-pools {
-  ["hot"] = new Pool {
-    keda {
-      minReplicaCount = 1        // always-on
-      cooldownPeriod = 300       // lenient cooldown — don't kill warm workers between bursts
-      temporal { targetQueueSize = 10 }
+deploy = new DeployConfig {
+  pools {
+    ["hot"] = new Pool {
+      keda {
+        minReplicaCount = 1        // always-on
+        cooldownPeriod = 300       // lenient cooldown — don't kill warm workers between bursts
+        temporal { targetQueueSize = 10 }
+      }
     }
-  }
-  ["cold"] = new Pool {
-    keda {
-      minReplicaCount = 0        // scale-to-zero
-      cooldownPeriod = 30        // aggressive cooldown — reclaim resources fast
+    ["cold"] = new Pool {
+      keda {
+        minReplicaCount = 0        // scale-to-zero
+        cooldownPeriod = 30        // aggressive cooldown — reclaim resources fast
+      }
     }
   }
 }
@@ -315,46 +317,7 @@ pools {
 
 For the single-pool case, use the key `"default"`. See `examples/pools/` for a full two-pool example.
 
-## Deploy Block (deprecated)
-
-> **Deprecated** — use `pools` instead. Will be removed in the next minor version.
-
-The `deploy` block was the original single-pool deployment configuration. Anything unmodeled goes in `deployOverrides` (deep-merged last). Requires `emitDeploy = true` to emit anything.
-
-```pkl
-deploy {
-  keda {
-    // enabled = true and minReplicaCount = 0 (scale-to-zero) by default.
-    // Set minReplicaCount = 1 to keep at least one replica running at all times.
-    minReplicaCount = 1
-    temporal { targetQueueSize = 10 }  // Note: must be set here, NOT on keda.targetQueueSize
-  }
-
-  dapr {
-    objectstore = true
-    secretstore = true
-    // statestore, eventstore, subscription, configurationstore, lock default to false
-  }
-
-  resources = new ResourceConfig {
-    requests { ["cpu"] = "500m"; ["memory"] = "1Gi" }
-    limits   { ["cpu"] = "2";   ["memory"] = "4Gi" }
-  }
-
-  env {
-    ["LOG_LEVEL"] = "INFO"
-    ["MAX_WORKERS"] = "4"
-  }
-}
-
-// Deep-merged on top of deploy section — for unmodeled marketplace keys:
-deployOverrides {
-  ["verticalPodAutoscaler"] = new Mapping {
-    ["enabled"] = true
-    ["updateMode"] = "Auto"
-  }
-}
-```
+> **Migrating from v0.16.x?** The old `deploy { keda/resources/env }` flat fields and `deployOverrides` escape hatch are removed. See `docs/reference.md` § Migration Notes → v0.17.0.
 
 ## Multi-Entrypoint Bundle
 
