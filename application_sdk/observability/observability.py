@@ -146,6 +146,7 @@ class AtlanObservability(Generic[T], ABC):
         self._cleanup_enabled = cleanup_enabled
         self.data_dir = data_dir
         self.file_name = file_name
+        self._writer_seq = 0
 
         # Ensure data directory exists
         os.makedirs(data_dir, exist_ok=True)
@@ -431,10 +432,13 @@ class AtlanObservability(Generic[T], ABC):
                         # Use datetime.now() rather than time.time_ns(): the latter is
                         # restricted inside Temporal's workflow sandbox (non-deterministic),
                         # while datetime.now() is patched by the SDK to be safe there.
+                        # The monotonic _writer_seq counter is a tie-breaker for when
+                        # datetime.now() has insufficient resolution (e.g. ~15 ms on
+                        # Windows), which would otherwise produce duplicate filenames
+                        # when two partition switches happen within the same clock tick.
                         ts_ns = int(datetime.now().timestamp() * 1e9)
-                        filename = (
-                            f"{ts_ns}_{DEPLOYMENT_NAME}_{APPLICATION_NAME}.json.gz"
-                        )
+                        self._writer_seq += 1
+                        filename = f"{ts_ns}_{self._writer_seq:06d}_{DEPLOYMENT_NAME}_{APPLICATION_NAME}.json.gz"
                         local_path = os.path.join(partition_path, filename)
                         current_writer = _PartitionWriter(
                             partition_path=partition_path,
