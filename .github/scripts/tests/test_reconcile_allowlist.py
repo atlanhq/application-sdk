@@ -187,9 +187,10 @@ def test_resolution_phrase():
 
 # ---------------------------------------------------------------------------
 # scan_files_present + main() fail-safe — never reconcile against a phantom
-# empty scan. On `release: released` the scan artifact is downloaded from a
-# prior run; if that download is absent/failed, reconciling would treat every
-# allowlisted CVE as "gone" and delete the whole allowlist. main() must bail.
+# empty scan. On `release: released` the release workflow scans fresh into the
+# CWD; if that scan produced nothing (failed/absent results), reconciling would
+# treat every allowlisted CVE as "gone" and delete the whole allowlist. main()
+# must bail.
 # ---------------------------------------------------------------------------
 
 
@@ -221,6 +222,19 @@ def test_main_bails_when_no_scan_files_staged(monkeypatch, tmp_path):
     )
     assert rec.main(runner=lambda *a, **k: None) == 0
     assert calls == []  # bailed before any reconcile action
+
+
+def test_load_prior_scan_cves_skips_api_when_count_not_positive():
+    # debounce=1 → count=0: the fresh current scan is the only evidence, so no
+    # `gh run list` call is made (and no actions: read is needed).
+    runner_calls: list = []
+
+    def runner(*args, **kwargs):
+        runner_calls.append(args)
+        raise AssertionError("runner must not be called when count <= 0")
+
+    assert rec.load_prior_scan_cves("repo", "wf.yml", 0, runner) == []
+    assert runner_calls == []
 
 
 # ---------------------------------------------------------------------------
