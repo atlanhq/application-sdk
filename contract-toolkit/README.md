@@ -107,7 +107,7 @@ The `examples/` directory contains executable contracts that teach stable toolki
 
 ### `atlan.yaml` (repo root)
 
-Marketplace deployment manifest. Contains app identity, entrypoints list, and the typed `deploy` block (KEDA, Dapr, resources, env, and any `deployOverrides`). Emitted with a DO-NOT-EDIT header — edit `contract/app.pkl` instead.
+Marketplace deployment manifest. Contains app identity (`name`, `display_name`, `icon_url`), marketplace metadata (`short_description`, `long_description`, `docs_url`, `tags`), entrypoints list, and the typed `deploy` block (KEDA, Dapr, resources, env, and any `deployOverrides`). Emitted with a DO-NOT-EDIT header — edit `contract/app.pkl` instead.
 
 ### `app.yaml` (repo root)
 

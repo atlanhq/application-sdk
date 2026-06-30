@@ -23,8 +23,10 @@ tags:
 entrypoints:
 - name: full-featured
   display_name: Full-Featured Example
+  description: Reference contract that exercises every App.pkl property.
   icon_url: https://assets.atlan.com/assets/fullscreen-open.svg
   type: connector
+  docs_url: https://docs.example.com/apps/full-featured
 deploy:
   execution_mode: native
   splitDeploymentEnabled: true

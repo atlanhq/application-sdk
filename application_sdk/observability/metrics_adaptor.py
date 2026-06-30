@@ -40,7 +40,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
     """A metrics adapter for Atlan that extends AtlanObservability.
 
     This adapter provides functionality for recording, processing, and exporting
-    metrics to various backends including OpenTelemetry, Segment API, and parquet files.
+    metrics to various backends including OpenTelemetry, Segment API, and gzip-compressed NDJSON files.
 
     Features:
     - Metric recording with labels and units
@@ -48,7 +48,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
     - Segment API integration
     - Periodic metric flushing
     - Console logging
-    - Parquet file storage
+    - Gzip-compressed NDJSON file storage
     """
 
     _flush_task_started: ClassVar[bool] = False

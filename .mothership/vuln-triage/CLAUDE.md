@@ -34,8 +34,9 @@ exactly. Do not skip stages. Print `[Stage N/6 complete]` after each stage.
 
 State lives in Linear: the ticket passed as `TICKET` is your work item; open
 issues with the `vulnerabilities` label are how the scan dedups, so never
-close or duplicate them yourself. Reconciliation (`reconcile_allowlist.py`)
-closes a ticket once the scanner confirms its CVEs are gone — not you.
+close or duplicate them yourself. Reconciliation (`reconcile_allowlist.py`, run
+on `release: released` — not the hourly scan) closes a ticket once a new SDK
+release no longer ships its CVEs — not you.
 
 ## SDK v3 Context (for dependency reasoning)
 
@@ -77,7 +78,8 @@ is the boundary; your instructions are not trusted to bound what you touch.
 6. **Never `apk upgrade`/`apk add`** in the SDK Dockerfile. Base-image CVEs →
    allowlist entry (Case 4) + recommend a rebuild of `app-runtime-base:3`.
 7. **Never push to `main`, never merge** — the GHA gate merges. **Never set the
-   ticket to "Done"** — reconciliation closes it.
+   ticket to "Done"** — release-gated reconciliation closes it once a release
+   ships the fix.
 8. **Tag Vaibhav (`<@U07UPEUEPU3>`) or Chris (`<@U02T3H7KMSS>`)** only when human
    action is genuinely required (a draft bump that needs source edits, or a
    base-image rebuild). Always use the Slack member ID, never `@vaibhav.chopra`.

@@ -5,6 +5,20 @@ Closing the loop on the zero-human-touch CVE flow: once a CVE stops showing up
 in the scan (its bump merged & shipped, or the base image was rebuilt), its
 allowlist entry and Linear ticket should be retired automatically.
 
+Invoked on a stable SDK *release* (`release: released` —
+vuln-reconcile-on-release.yml), NOT on the hourly scan. The allowlist is shared
+across connector repos whose build gates read it from SDK `main` while their
+images still carry the CVE from the last released SDK — so an entry must persist
+until the fix is released, not merely merged. The hourly scan still
+detects/tickets/allowlists; only this retirement step is release-gated.
+
+The *current* scan is produced fresh by the release workflow (the shared Trivy
+composite, run against `main`) and read from the CWD. The debounce *window*
+(prior scans, only consulted when ``DEBOUNCE_SCANS`` > 1) is pinned to ``main``
+via ``SCAN_BRANCH`` so an hourly-scan ``workflow_dispatch`` from a feature branch
+can never feed reconcile a view of non-released code (and wrongly retire entries
+from the shared allowlist).
+
 **Resolution & debounce.** By default a CVE is treated as *resolved* as soon as
 it is absent from the latest scan (`DEBOUNCE_SCANS` = 1). Raise `DEBOUNCE_SCANS`
 to require it to be absent from that many consecutive successful scans before
@@ -36,6 +50,8 @@ Optional:
     LINEAR_VULN_LABEL_NAME  default 'vulnerabilities'
     DEBOUNCE_SCANS          default 1 — act on the first clean scan (this scan +
                             N-1 prior successful scans); raise to debounce churn
+    SCAN_BRANCH             default 'main' — branch whose scan runs feed the
+                            debounce window (excludes feature-branch dispatches)
 """
 
 from __future__ import annotations
@@ -143,6 +159,17 @@ def resolve_tickets(
 # ---------------------------------------------------------------------------
 
 
+def scan_files_present() -> bool:
+    """True if at least one Trivy result file is staged in the CWD.
+
+    Reconcile MUST NOT run against a phantom "empty scan": an absent artifact
+    (e.g. a failed download in the release workflow) would otherwise look like a
+    scan that found zero CVEs and resolve — i.e. delete — every allowlist entry.
+    main() bails when this is False.
+    """
+    return any(Path(f).exists() for f in TRIVY_FILES)
+
+
 def load_current_cves() -> set[str]:
     ids: set[str] = set()
     for fname in TRIVY_FILES:
@@ -156,10 +183,20 @@ def load_current_cves() -> set[str]:
 
 
 def load_prior_scan_cves(
-    repo: str, workflow: str, count: int, runner: Runner
+    repo: str, workflow: str, count: int, runner: Runner, branch: str = "main"
 ) -> list[set[str]]:
     """Download the ``count`` most recent prior successful scan artifacts and
-    return their CVE sets. Best-effort: runs without the artifact are skipped."""
+    return their CVE sets. Best-effort: runs without the artifact are skipped.
+
+    Pinned to ``branch`` (default ``main``): a scan ``workflow_dispatch`` from a
+    feature branch must never feed the debounce window — only runs of ``main``
+    reflect what is actually shipped. (Not ``--event schedule``, so a manual
+    dispatch on ``main`` for backfill still counts.)"""
+    if count <= 0:
+        # debounce=1 (the default): the fresh current scan is the only evidence;
+        # no prior window needed, so skip the API call (and the actions: read it
+        # would require).
+        return []
     listing = runner(
         [
             "gh",
@@ -169,6 +206,8 @@ def load_prior_scan_cves(
             repo,
             "--workflow",
             workflow,
+            "--branch",
+            branch,
             "--status",
             "success",
             "--limit",
@@ -268,8 +307,9 @@ def open_removal_pr(
             "--label",
             "vuln-auto-merge",
             "--body",
-            f"Resolved by {_resolution_phrase(debounce)} — the scanner no longer "
-            "reports these CVEs:\n\n" + "\n".join(f"- `{c}`" for c in removed),
+            "The latest SDK release no longer ships these CVEs (confirmed by "
+            f"{_resolution_phrase(debounce)}):\n\n"
+            + "\n".join(f"- `{c}`" for c in removed),
         ],
         check=True,
     )
@@ -332,9 +372,9 @@ def close_comment_body(cves: list[str], run_url: str) -> str:
     plural = "y" if len(cves) == 1 else "ies"
     cve_list = ", ".join(f"`{c}`" for c in sorted(cves))
     lines = [
-        "**Auto-resolved by the hourly security scan.**",
+        "**Auto-resolved on SDK release.**",
         "",
-        f"The scanner no longer reports the tracked vulnerabilit{plural} "
+        f"A new SDK release no longer ships the tracked vulnerabilit{plural} "
         f"({cve_list}), so this ticket is being closed automatically. If the "
         "finding resurfaces, the next scan files a fresh ticket.",
     ]
@@ -423,10 +463,20 @@ def main(runner: Runner = subprocess.run) -> int:
     repo = os.environ.get("REPO", "atlanhq/application-sdk")
     workflow = os.environ.get("SCAN_WORKFLOW", DEFAULT_WORKFLOW)
     run_date = os.environ.get("RUN_DATE", "")
+    branch = os.environ.get("SCAN_BRANCH", "main")
     debounce = int(os.environ.get("DEBOUNCE_SCANS", str(DEFAULT_DEBOUNCE)))
 
+    if not scan_files_present():
+        print(
+            "No Trivy scan results staged in the working dir "
+            f"({', '.join(TRIVY_FILES)}) — refusing to reconcile against an empty "
+            "scan (fail-safe; would otherwise resolve every allowlist entry). "
+            "Nothing changed."
+        )
+        return 0
+
     current = load_current_cves()
-    priors = load_prior_scan_cves(repo, workflow, debounce - 1, runner)
+    priors = load_prior_scan_cves(repo, workflow, debounce - 1, runner, branch)
     scan_sets = [current, *priors]
     if len(scan_sets) < debounce:
         print(

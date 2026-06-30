@@ -150,8 +150,8 @@ curl -s "$PROXY_BASE/proxy/linear" \
 ```
 
 Leave the ticket open — do not set "Done". Reconciliation
-(`reconcile_allowlist.py`) closes it once the scanner confirms its CVEs are gone
-for 3 consecutive scans.
+(`reconcile_allowlist.py`, run on `release: released` — not the hourly scan)
+closes it once a new SDK release no longer ships its CVEs.
 
 ## Prohibited
 
