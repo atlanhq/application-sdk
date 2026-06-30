@@ -17,7 +17,9 @@ import time
 from collections.abc import Callable
 from typing import Any, Protocol, TypeVar
 
-from application_sdk.observability import resource_sampler as _resource_sampler
+from application_sdk.observability import (
+    resource_sampler as _resource_sampler,  # module alias kept so tests can patch _resource_sampler.sample()
+)
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.resource_sampler import parse_pod_memory_limit
 

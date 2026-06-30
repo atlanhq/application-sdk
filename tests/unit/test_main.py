@@ -2220,3 +2220,31 @@ class TestLogProcessMemoryBaseline:
         # args: (fmt, rss_gib, limit_gib, pct_float)
         _fmt, _rss, _lim, pct = info_calls[0].args
         assert abs(pct - 25.0) < 0.5
+
+    def test_silent_when_limit_unset(self, monkeypatch) -> None:
+        """No INFO log when K8S_POD_MEMORY_LIMIT is absent (local dev / non-K8s)."""
+        import application_sdk.main as main_mod
+
+        monkeypatch.delenv("K8S_POD_MEMORY_LIMIT", raising=False)
+
+        with patch.object(main_mod, "logger") as mock_logger:
+            _log_process_memory_baseline()
+
+        mock_logger.info.assert_not_called()
+
+    def test_silent_when_sample_returns_none(self, monkeypatch) -> None:
+        """No INFO log when resource sampling fails (e.g. on Windows)."""
+        import application_sdk.main as main_mod
+
+        monkeypatch.setenv("K8S_POD_MEMORY_LIMIT", str(4 * 1024**3))
+
+        with (
+            patch(
+                "application_sdk.observability.resource_sampler.sample",
+                return_value=None,
+            ),
+            patch.object(main_mod, "logger") as mock_logger,
+        ):
+            _log_process_memory_baseline()
+
+        mock_logger.info.assert_not_called()
