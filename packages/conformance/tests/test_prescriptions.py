@@ -2108,6 +2108,30 @@ def test_p026_fires_on_kwonly_input() -> None:
     assert "P026" in _ids(src)
 
 
+def test_p026_fires_on_pep604_optional_input() -> None:
+    # input: FetchInput | None (PEP 604 union) must unwrap to the typed contract,
+    # like Optional[FetchInput] and bare FetchInput already do.
+    src = (
+        "class MyApp:\n"
+        "    @task\n"
+        "    async def fetch(self, input: FetchInput | None) -> FetchOutput:\n"
+        '        wid = getattr(input, "workflow_id", "")\n'
+        "        return FetchOutput()\n"
+    )
+    assert "P026" in _ids(src)
+
+
+def test_p026_fires_on_optional_input() -> None:
+    src = (
+        "class MyApp:\n"
+        "    @task\n"
+        "    async def fetch(self, input: Optional[FetchInput]) -> FetchOutput:\n"
+        '        wid = getattr(input, "workflow_id", "")\n'
+        "        return FetchOutput()\n"
+    )
+    assert "P026" in _ids(src)
+
+
 def test_p026_no_finding_on_attribute_access() -> None:
     src = (
         "class MyApp:\n"

@@ -19,13 +19,12 @@ import ast
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.schema.findings import Finding
 
-from ._contract_common import _terminal_name
 from ._decorator_provenance import (
     collect_import_provenance,
     is_entrypoint_decorator,
     is_task_decorator,
 )
-from ._typed_boundaries import _CLEARLY_UNTYPED
+from ._typed_boundaries import _CLEARLY_UNTYPED, _annotation_terminal_name
 
 
 def _typed_param_names(func: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
@@ -38,7 +37,9 @@ def _typed_param_names(func: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]
     for arg in [*args.posonlyargs, *args.args, *args.kwonlyargs]:
         if arg is None or arg.arg in ("self", "cls") or arg.annotation is None:
             continue
-        terminal = _terminal_name(arg.annotation)
+        # Unwrap Optional[X] / X | None / Annotated[X, ...] like P013/P014's helper,
+        # so a PEP 604 union (input: FetchInput | None) is still seen as typed.
+        terminal = _annotation_terminal_name(arg.annotation)
         # A real contract class — exclude clearly-untyped primitives/containers,
         # whose untyped boundary is already P013/P014's concern.
         if terminal is not None and terminal not in _CLEARLY_UNTYPED:
