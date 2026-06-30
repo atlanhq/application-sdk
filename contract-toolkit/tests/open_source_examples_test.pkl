@@ -1,5 +1,6 @@
 amends "pkl:test"
 
+import "../examples/behind-the-scenes/app.pkl" as behindTheScenesApp
 import "../examples/bundle/app.pkl" as bundleApp
 import "../examples/card-split/app.pkl" as cardSplitApp
 import "../examples/connection-ref/app.pkl" as connectionRefApp
@@ -13,6 +14,8 @@ import "../examples/publish-controls/app.pkl" as publishControlsApp
 import "../src/App.pkl" as App
 import "../src/Config.pkl"
 import "../src/NativeApp.pkl"
+
+local behindTheScenesAtlanYaml: String = behindTheScenesApp.output.files["atlan.yaml"].text
 
 local connectionRefWorkflowJson: String = connectionRefApp.output.files["app/generated/connection-ref.json"].text
 local connectionRefManifestJson: String = connectionRefApp.output.files["app/generated/manifest.json"].text
@@ -227,6 +230,14 @@ facts {
     cardSplitAtlanYaml.contains("package_id: '@atlan/card-split'")
     cardSplitAtlanYaml.contains("marketplace_card: true")
     !cardSplitAtlanYaml.contains("marketplace_card: false")
+  }
+
+  ["marketplaceCard = false suppresses package_id and marketplace_card for single-entrypoint apps"] {
+    // Entrypoints block still emitted (app remains routable).
+    behindTheScenesAtlanYaml.contains("entrypoints:")
+    // Neither card field appears — opt-out is honoured.
+    !behindTheScenesAtlanYaml.contains("package_id:")
+    !behindTheScenesAtlanYaml.contains("marketplace_card:")
   }
 
   ["deploy block absent from atlan.yaml when deploy is not configured"] {
