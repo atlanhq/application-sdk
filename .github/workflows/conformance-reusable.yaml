@@ -180,6 +180,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   # ── Per-series checks (one matrix leg per rule series) ──────────────────────

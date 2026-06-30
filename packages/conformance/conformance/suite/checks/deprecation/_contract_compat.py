@@ -445,8 +445,9 @@ def scan_contract_compat(
                                 "recorded in the contract ledger "
                                 "(contract_schema.lock.json). Run "
                                 "'uv run atlan-application-sdk-conformance "
-                                "gen-contract-ledger' and commit the updated ledger "
-                                "in the same PR. The generator is append-only — it "
+                                "gen-contract-ledger' (writes contract_schema.lock.json "
+                                "in the repo root) and commit that file in the same PR. "
+                                "The generator is append-only — it "
                                 "can never launder a removal."
                             ),
                             directives=directives,
