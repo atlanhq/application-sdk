@@ -5,7 +5,7 @@
 
 # Error-Handling Rules (E-series)
 
-**19 rules** · Checker: `suite.checks.error_handling` (AST-based)
+**20 rules** · Checker: `suite.checks.error_handling` (AST-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -34,6 +34,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [E017](#e017) | `SecretNamedEvidenceKey` | `block` | `both` | `security` | — | 0.2.0 |
 | [E018](#e018) | `BareParentLeafRaise` | `warn` | `both` | `untyped-raise` | — | 0.2.0 |
 | [E019](#e019) | `ExceptionTextInContractField` | `warn` | `both` | `error-message-hygiene` | — | 0.9.0 |
+| [E020](#e020) | `HttpFailureToEmptyReturn` | `warn` | `app` | `error-to-return-value` | — | 0.9.0 |
 
 ---
 
@@ -390,5 +391,36 @@ Detection scope mirrors E015 exactly (they share one matcher): it covers f-strin
 except binding, but not a bare `message=exc` or attribute access such as
 `message=exc.args[0]`. Extending both rules to those shapes is a deliberate future
 follow-up kept symmetric across E015/E019.
+
+---
+
+## E020 — `HttpFailureToEmptyReturn` {#e020}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `error-to-return-value` · **Autofixable:** — · **Since:** 0.9.0
+
+> Checked HTTP-response failure returns an empty/None sentinel instead of raising — silently publishes a failure as success
+
+**Rationale:** A guard that checks an HTTP response for failure and then returns an empty/None sentinel
+converts a remote API failure into an empty successful result — the workflow publishes a
+zero or partial crawl as if it completed, with no error surfaced. Unlike E001/E002/E007
+there is no except/raise to key on; the failure is swallowed by a plain if-guard.
+
+An `if` whose test inspects an HTTP response for failure (a negation or comparison on
+`is_success` / `ok` / `status_code`) and whose branch `return`\ s an empty/None sentinel
+(`return`, `None`, `[]`, `{}`, `()`, `""`, `list()`/`dict()`/`set()`).  The remote
+failure is coerced into an empty *successful* result, so the workflow reports a
+zero/partial crawl as complete and no error reaches the operator or the Automation
+Engine.
+
+Both polarities are covered: failure-in-the-test → empty body (`if not resp.is_success:
+return []`) and its mirror, success-in-the- test → empty `else` (`if resp.is_success: …
+else: return []`).
+
+This escapes the rest of the E-series because there is no `except`/`raise` — it is a
+plain response guard.  Fix: raise a typed `AppError` (e.g. `DependencyUnavailableError`)
+on the failure branch so it propagates.  Anchored on HTTP-response markers and a
+failure-shaped test to avoid flagging ordinary `if x is None: return None` guards;
+suppress with `# conformance: ignore[E020] <reason>` where an empty result is the
+deliberate, documented contract.
 
 ---

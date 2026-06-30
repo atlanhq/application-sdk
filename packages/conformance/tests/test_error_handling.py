@@ -1671,3 +1671,215 @@ def test_runner_exclude_empty_string_is_noop(tmp_path: Path) -> None:
         ]
     )
     assert exit_code == 1  # violation still found
+
+
+# ── E020 HttpFailureToEmptyReturn ──────────────────────────────────────────────
+
+
+def test_e020_fires_on_not_is_success_return_empty_list() -> None:
+    assert "E020" in _findings(
+        """\
+async def fetch():
+    response = await client.execute_http_get(url)
+    if response is None or not response.is_success:
+        logger.warning("failed")
+        return []
+"""
+    )
+
+
+def test_e020_fires_on_not_ok_bare_return() -> None:
+    assert "E020" in _findings(
+        """\
+def fetch():
+    resp = client.get(url)
+    if not resp.ok:
+        return
+"""
+    )
+
+
+def test_e020_fires_on_status_code_comparison_return_none() -> None:
+    assert "E020" in _findings(
+        """\
+def fetch():
+    resp = client.get(url)
+    if resp.status_code >= 400:
+        return None
+"""
+    )
+
+
+def test_e020_no_finding_on_success_check_returning_empty() -> None:
+    # status_code == 204 is a SUCCESS check; bare return exits a loop normally.
+    _none(
+        """\
+def poll():
+    r = client.get(url)
+    if r.status_code == 204:
+        return
+"""
+    )
+
+
+def test_e020_no_finding_on_plain_none_guard() -> None:
+    # No HTTP-response marker — an ordinary guard clause, not the hazard.
+    _none(
+        """\
+def f(x):
+    if x is None:
+        return []
+    return x
+"""
+    )
+
+
+def test_e020_no_finding_when_failure_branch_raises() -> None:
+    src = """\
+def fetch():
+    resp = client.get(url)
+    if not resp.is_success:
+        raise DependencyUnavailableError("upstream down")
+    return resp.json()
+"""
+    assert "E020" not in _findings(src)
+
+
+def test_e020_no_finding_when_failure_branch_returns_value() -> None:
+    src = """\
+def fetch():
+    resp = client.get(url)
+    if not resp.is_success:
+        return resp.json()
+"""
+    assert "E020" not in _findings(src)
+
+
+def test_e020_suppressed_inline() -> None:
+    _suppressed(
+        """\
+async def fetch():
+    response = await client.execute_http_get(url)
+    if not response.is_success:
+        return []  # conformance: ignore[E020] empty result is the documented contract for this optional probe
+""",
+        "E020",
+    )
+
+
+def test_e020_no_finding_on_success_and_unrelated_is_none() -> None:
+    # HTTP 200 + empty/None body → return empty page is a legitimate connector
+    # idiom: the marker check is success-shaped, the `is None` is on another var.
+    _none(
+        """\
+def fetch(resp, parsed):
+    if resp.is_success and parsed is None:
+        return []
+"""
+    )
+
+
+def test_e020_no_finding_on_success_or_unrelated_is_none() -> None:
+    _none(
+        """\
+def fetch(resp, x):
+    if resp.is_success or x is None:
+        return []
+"""
+    )
+
+
+def test_e020_fires_on_elif_failure_branch() -> None:
+    # elif parses as a nested If in orelse; visit_If recurses and fires once.
+    assert (
+        _findings(
+            """\
+def fetch(resp):
+    if resp is None:
+        return None
+    elif not resp.ok:
+        return []
+    return resp.json()
+"""
+        ).count("E020")
+        == 1
+    )
+
+
+def test_e020_fires_twice_on_sequential_failure_guards() -> None:
+    assert (
+        _findings(
+            """\
+def fetch(a, b):
+    if not a.is_success:
+        return []
+    if not b.is_success:
+        return []
+"""
+        ).count("E020")
+        == 2
+    )
+
+
+def test_e020_fires_on_success_test_with_empty_else() -> None:
+    # Polarity mirror: success in the test → the else is the failure branch.
+    assert "E020" in _findings(
+        """\
+def fetch(resp):
+    if resp.is_success:
+        return resp.json()
+    else:
+        return []
+"""
+    )
+
+
+def test_e020_fires_on_status_200_with_empty_else() -> None:
+    assert "E020" in _findings(
+        """\
+def fetch(resp):
+    if resp.status_code == 200:
+        return resp.json()
+    else:
+        return None
+"""
+    )
+
+
+def test_e020_no_finding_when_else_raises() -> None:
+    _none(
+        """\
+def fetch(resp):
+    if resp.is_success:
+        return resp.json()
+    else:
+        raise UpstreamError("source failed")
+"""
+    )
+
+
+def test_e020_no_finding_on_empty_else_of_ambiguous_boolop() -> None:
+    # `resp.is_success and parsed` — the else also fires when parsed is falsy on a
+    # successful response, so the else is not purely a remote-failure path.
+    _none(
+        """\
+def fetch(resp, parsed):
+    if resp.is_success and parsed:
+        return parsed
+    else:
+        return []
+"""
+    )
+
+
+def test_e020_no_finding_on_empty_body_of_success_test() -> None:
+    # `if resp.is_success: return []` — empty result on the SUCCESS path is a
+    # legitimate empty-result-set, not the hazard; only the else is scanned.
+    _none(
+        """\
+def fetch(resp):
+    if resp.is_success:
+        return []
+    raise UpstreamError("source failed")
+"""
+    )

@@ -143,6 +143,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # K001/K002: contract-toolkit conformance — only app repos have a contract/
     # directory with .pkl source files; the SDK has no contract/ dir to scan
     # (BLDX-1479).
+    # E020: HTTP-failure-to-empty-return — the harm (publishing a partial crawl as
+    # complete) is a connector extract/publish concern; the SDK's matching sites are
+    # legitimate best-effort infra (health/metric scrapes), not crawlers (BLDX-1503).
     assert app_scoped == {
         "B001",
         "C002",
@@ -153,6 +156,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "D006",
         "D007",
         "D008",
+        "E020",
         "K001",
         "K002",
         "P004",
@@ -218,6 +222,7 @@ def test_catalog_e_series_present() -> None:
         "E017",
         "E018",
         "E019",
+        "E020",
     }
     missing = expected - e_ids
     assert not missing, f"Missing E-series rules: {missing}"
