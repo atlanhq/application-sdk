@@ -62,8 +62,9 @@ runs:
         EXIT_ZERO: ${{ inputs.exit-zero }}
       run: |
         set -euo pipefail
-        mapfile -t detect_args < <(python "$GITHUB_ACTION_PATH/../../scripts/build_conformance_args.py" \
+        raw=$(python "$GITHUB_ACTION_PATH/../../scripts/build_conformance_args.py" \
           --series "$SERIES" --slug "$SLUG")
+        mapfile -t detect_args <<< "$raw"
         uvx atlan-application-sdk-conformance detect "${detect_args[@]}"
 
     - name: "Detect (published package, resolved env)"
@@ -76,8 +77,9 @@ runs:
         EXIT_ZERO: ${{ inputs.exit-zero }}
       run: |
         set -euo pipefail
-        mapfile -t detect_args < <(python "$GITHUB_ACTION_PATH/../../scripts/build_conformance_args.py" \
+        raw=$(python "$GITHUB_ACTION_PATH/../../scripts/build_conformance_args.py" \
           --series "$SERIES" --slug "$SLUG")
+        mapfile -t detect_args <<< "$raw"
         uv run \
           --with "atlan-application-sdk-conformance" \
           -- atlan-application-sdk-conformance detect "${detect_args[@]}"
@@ -93,8 +95,9 @@ runs:
         CONFORMANCE_REF: ${{ inputs.conformance-ref }}
       run: |
         set -euo pipefail
-        mapfile -t detect_args < <(python "$GITHUB_ACTION_PATH/../../scripts/build_conformance_args.py" \
+        raw=$(python "$GITHUB_ACTION_PATH/../../scripts/build_conformance_args.py" \
           --series "$SERIES" --slug "$SLUG")
+        mapfile -t detect_args <<< "$raw"
         uv run \
           --with "atlan-application-sdk-conformance @ git+https://github.com/atlanhq/application-sdk@${CONFORMANCE_REF}#subdirectory=packages/conformance" \
           -- atlan-application-sdk-conformance detect "${detect_args[@]}"
