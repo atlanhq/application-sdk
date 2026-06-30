@@ -2095,6 +2095,19 @@ def test_p026_fires_on_entrypoint_too() -> None:
     assert "P026" in _ids(src)
 
 
+def test_p026_fires_on_kwonly_input() -> None:
+    # def fetch(self, *, input: FetchInput) — keyword-only typed contract param,
+    # the canonical form P013/P014 accept; getattr-with-default must still fire.
+    src = (
+        "class MyApp:\n"
+        "    @task\n"
+        "    async def fetch(self, *, input: FetchInput) -> FetchOutput:\n"
+        '        wid = getattr(input, "workflow_id", "")\n'
+        "        return FetchOutput()\n"
+    )
+    assert "P026" in _ids(src)
+
+
 def test_p026_no_finding_on_attribute_access() -> None:
     src = (
         "class MyApp:\n"

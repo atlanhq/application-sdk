@@ -32,7 +32,10 @@ def _typed_param_names(func: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]
     """Names of params whose annotation looks like a typed contract (not a primitive)."""
     names: set[str] = set()
     args = func.args
-    for arg in [*args.posonlyargs, *args.args, *([args.kwarg] if args.kwarg else [])]:
+    # Include keyword-only params (def fetch(self, *, input: X)) — the canonical
+    # entrypoint/task form P013/P014 accept. Exclude **kwargs (args.kwarg): the
+    # splat is a dict, never a typed contract.
+    for arg in [*args.posonlyargs, *args.args, *args.kwonlyargs]:
         if arg is None or arg.arg in ("self", "cls") or arg.annotation is None:
             continue
         terminal = _terminal_name(arg.annotation)

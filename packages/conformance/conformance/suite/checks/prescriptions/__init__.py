@@ -154,9 +154,9 @@ def scan_text(text: str, file: str) -> list[Finding]:
 
 
 def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan a single Python file (P001 + P002 + P008–P012 + P015).
+    """Scan a single Python file (P001 + P002 + P008–P012 + P015 + P026 + P028).
 
-    P003, P013, and P014 require :func:`scan_all` for cross-file resolution.
+    P003, P013, P014 and P027 require :func:`scan_all` for cross-file resolution.
     """
     try:
         text = path.read_text(encoding="utf-8")
@@ -172,10 +172,10 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     """Multi-pass scan over *paths*, emitting all P-series findings.
 
-    Pass 1 — parse every file once, run P001, P002, P008–P012, P015 per-file,
-    collect every ``ClassDef`` into a name-keyed registry along with its base
-    names and any literal ``code`` declaration.  Store each parsed tree for the
-    P013/P014 cross-file pass.
+    Pass 1 — parse every file once, run the per-file rules (P001, P002,
+    P008–P012, P015, P026, P028), collect every ``ClassDef`` into a name-keyed
+    registry along with its base names and any literal ``code`` declaration.
+    Store each parsed tree for the P013/P014 and P027 cross-file passes.
 
     Pass 2 — for each registered class, walk its (transitive) base chain to
     find the deepest ancestor that names one of the 14 leaves in
@@ -189,6 +189,10 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
 
     Pass 4 — emit P013/P014 using the pre-built ``by_name`` class registry and
     stored trees.  Resolution is transitive and memoised across all files.
+
+    Pass 5 — emit P027 (app-wide ``app_state`` read-with-no-writer): resolve key
+    constants across all stored trees and flag every ``get_app_state(KEY)`` whose
+    ``KEY`` has no populating ``set_app_state`` writer anywhere.
     """
     findings: list[Finding] = []
 
