@@ -133,6 +133,13 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # methods and no contract to drift from (BLDX-1425).
     # P017/P018: apps must boot through the SDK launcher, not hand-roll
     # workers or servers (BLDX-1411).
+    # P026: getattr-with-default on a typed entrypoint/task contract param —
+    # only apps own the @entrypoint/@task methods that consume the contract
+    # (BLDX-1501). P027: app_state used as a cross-task data channel — the SDK
+    # defines get/set_app_state but apps are the ones that (mis)use it as a
+    # conduit (BLDX-1500). P028: hand-built qualifiedName f-strings — connectors
+    # mint asset qualifiedNames; the SDK is the framework, not an asset author
+    # (BLDX-1499).
     # P025: app-name alignment — only apps have an atlan.yaml and .env.example;
     # the SDK has neither, so this check is meaningless there (BLDX-1491).
     # I001–I005: Dockerfile conformance (SDK builds the base image, not consuming it).
@@ -173,6 +180,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P017",
         "P018",
         "P025",
+        "P026",
+        "P027",
+        "P028",
         "O002",
         "O003",
         "O004",
@@ -327,6 +337,9 @@ def test_catalog_p_series_present() -> None:
         "P023",
         "P024",
         "P025",
+        "P026",
+        "P027",
+        "P028",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
