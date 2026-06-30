@@ -20,6 +20,7 @@ class _SQLHierarchy(BaseE2ETest):
         "Database": 1,
         "Schema": 2,
         "Table": 3,
+        "View": 3,
         "Column": 4,
     }
 
@@ -44,6 +45,7 @@ def test_correct_hierarchy_passes() -> None:
         "Database": ["default/x/123/db"],
         "Schema": ["default/x/123/db/sch"],
         "Table": ["default/x/123/db/sch/tbl", "default/x/123/db/sch/tbl2"],
+        "View": ["default/x/123/db/sch/vw"],
         "Column": ["default/x/123/db/sch/tbl/col"],
     }
     assert inst._validate_asset_locations(samples) == []

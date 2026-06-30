@@ -986,6 +986,11 @@ class AEWorkflowClient:
                 ]
                 return qns[:per_type]
             except Exception:
+                # Fails OPEN: an empty result makes the location check skip this
+                # type (a silent pass), unlike the count path where 0 can trip a
+                # floor. Hence the location assertion must be validated against a
+                # real tenant before adopters rely on it. Logged at exception
+                # level so the fault is at least visible in CI output.
                 logger.exception(
                     "qualifiedName sample for %s under %s failed", type_name, prefix
                 )

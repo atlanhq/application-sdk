@@ -191,11 +191,28 @@ class BaseE2ETest:
     # (for the SQL db>schema>table>column shape: Database=1, Schema=2,
     # Table=3, View=3, Column=4). For each declared type the harness samples a
     # few landed assets and asserts each is nested under the connection at
-    # exactly that depth — catching assets published to the wrong hierarchy
-    # level (mis-parented / flattened / dropped segment), which the counts
-    # alone can't see. This is the structural complement to the count +
-    # non-empty checks for the recurring egress->publish path-drift incident
-    # class. Empty = skip (counts + non-empty backstop still run).
+    # exactly that depth — catching a whole type that published to the wrong
+    # hierarchy level (mis-parented / flattened / a dropped path-template
+    # segment), which the counts alone can't see. This is the structural
+    # complement to the count + non-empty checks for the recurring
+    # egress->publish path-drift incident class. Empty = skip (counts +
+    # non-empty backstop still run).
+    #
+    # Scope + contract (so adopters don't over-trust it):
+    #   * Systematic-drift detector, NOT per-asset integrity: it samples a few
+    #     assets per type (no sort), so it reliably catches "the whole type is
+    #     at the wrong depth" but will almost never catch one mis-parented asset
+    #     among thousands. That's the right tradeoff for the path-drift class.
+    #   * A FULLY-DROPPED type is invisible here (no samples -> the type is
+    #     skipped). "Too few / none" is the COUNT check's job — so pair every
+    #     type you put here with an expected_min_asset_counts floor for the same
+    #     type. (The harness folds these types into its count-poll wait, so the
+    #     samples are read AFTER ES indexes them, but a genuinely-zero type is
+    #     still only surfaced by the floor.)
+    #   * Depth is computed by splitting the QN tail on "/", so it assumes
+    #     qualifiedName segments don't themselves contain "/". True for SQL
+    #     (db>schema>table>column); BI / object-store connectors whose QNs embed
+    #     slashes would mis-count — don't enable it there without adjusting.
     expected_asset_qn_depth: ClassVar[dict[str, int]] = {}
 
     # ------------------------------------------------------------------
@@ -625,10 +642,21 @@ class BaseE2ETest:
                 timeout_seconds=self.atlas_poll_timeout_seconds,
             )
             if connection_in_atlas:
-                # Probe the union of types referenced by floors + exact-count
-                # parity, so both kinds of expectation get real Atlas counts.
+                # Probe the union of types referenced by floors, exact-count
+                # parity, AND location-depth checks, so all three kinds of
+                # expectation get real Atlas counts. Including the location types
+                # here is what makes the count-poll loop below WAIT for them to
+                # index — otherwise a connector that declares only
+                # expected_asset_qn_depth (no counts) would sample immediately
+                # after the Connection lands, race ES indexing, get empty
+                # samples, and the location check would skip every type (false
+                # green). Folding them in makes the feature self-sufficient.
                 probe_types = tuple(
-                    {*self.expected_min_asset_counts, *self.expected_exact_counts}
+                    {
+                        *self.expected_min_asset_counts,
+                        *self.expected_exact_counts,
+                        *self.expected_asset_qn_depth,
+                    }
                 )
                 if probe_types:
                     # Poll for asset counts — Elasticsearch is eventually
@@ -790,6 +818,14 @@ class BaseE2ETest:
         is correct. Types with no sampled assets are skipped: "too few / none"
         is already covered by the count floors + the non-empty backstop, so this
         check is purely about the *shape* of assets that did land.
+
+        NOTE - fails open: the sampling read path
+        (``sample_asset_qualified_names_under_connection``) returns ``[]`` on any
+        search error, which lands here as "no samples -> skip". So an auth / API
+        fault degrades to a silent pass, not a failure. The ``run_full_dag``
+        "Atlas qualifiedName samples under ..." log line is how you confirm
+        samples were actually non-empty - which is why first-run validation
+        against a real tenant is required, not optional.
         """
         failures: list[str] = []
         prefix = f"{self.connection_qualified_name}/"
