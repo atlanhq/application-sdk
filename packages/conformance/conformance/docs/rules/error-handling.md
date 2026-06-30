@@ -381,4 +381,9 @@ bucket.  Keep `message=` a stable human summary and carry the exception detail i
 typed field (e.g. raise a typed `AppError` with `cause=exc` upstream, or record it in a
 dedicated evidence field) rather than the user-facing contract message.
 
+Detection scope mirrors E015 exactly (they share one matcher): it covers f-string,
+`str(exc)` and `repr(exc)` interpolation of the except binding, but not a bare
+`message=exc` or attribute access such as `message=exc.args[0]`.  Extending both rules
+to those shapes is a deliberate future follow-up kept symmetric across E015/E019.
+
 ---

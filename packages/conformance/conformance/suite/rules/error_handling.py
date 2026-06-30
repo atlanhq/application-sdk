@@ -507,6 +507,12 @@ RULES: tuple[RuleDefinition, ...] = (
             "human summary and carry the exception detail in a typed field (e.g. raise a\n"
             "typed ``AppError`` with ``cause=exc`` upstream, or record it in a dedicated\n"
             "evidence field) rather than the user-facing contract message.\n"
+            "\n"
+            "Detection scope mirrors E015 exactly (they share one matcher): it covers\n"
+            "f-string, ``str(exc)`` and ``repr(exc)`` interpolation of the except\n"
+            "binding, but not a bare ``message=exc`` or attribute access such as\n"
+            "``message=exc.args[0]``.  Extending both rules to those shapes is a\n"
+            "deliberate future follow-up kept symmetric across E015/E019.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e019",
     ),

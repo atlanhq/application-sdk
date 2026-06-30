@@ -1,7 +1,7 @@
 """E-series error-handling checks — AST-based.
 
 Scans Python source files for error-handling anti-patterns defined in the
-E001–E018 rule catalog.  Every check is purely deterministic: the same
+E001–E019 rule catalog.  Every check is purely deterministic: the same
 source text always produces the same set of findings.
 
 Inline suppression
@@ -22,7 +22,7 @@ Rule implementations are split by category:
 
 * ``silent_swallow``     — E001–E011, E014 (swallowing without logging/re-raising)
 * ``untyped_raise``      — E012, E013, E018 (untyped or legacy raise sites)
-* ``exception_chaining`` — E015, E016 (chaining and message hygiene)
+* ``exception_chaining`` — E015, E016, E019 (chaining and message hygiene)
 * ``security``           — E017 (secrets in error evidence fields)
 
 ``_checker.py`` assembles these into a single ``Checker`` visitor.

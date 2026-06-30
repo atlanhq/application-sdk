@@ -212,6 +212,7 @@ def test_catalog_e_series_present() -> None:
         "E016",
         "E017",
         "E018",
+        "E019",
     }
     missing = expected - e_ids
     assert not missing, f"Missing E-series rules: {missing}"
