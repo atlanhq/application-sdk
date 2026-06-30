@@ -61,7 +61,9 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-_MAX_CHAIN_WALK = 20  # belt-and-suspenders depth cap alongside cycle detection
+# Must match _MAX_CHAIN_DEPTH in activities.py: an AppError sitting between the
+# walk cap and the sever cap would be silently invisible to OTel attributes.
+_MAX_CHAIN_WALK = 50
 
 
 def _extract_failure_attrs(exc: BaseException | None) -> dict[str, str]:

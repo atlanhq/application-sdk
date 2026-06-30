@@ -49,6 +49,12 @@ def _sever_cause_chain(exc: BaseException) -> None:
     once we hit the depth cap or detect a cycle via object identity.  Mutates
     the exception objects in place — safe because this is called immediately
     before we raise a fresh ApplicationError that will own the chain.
+
+    At the cut point both ``__cause__`` and ``__context__`` are nulled out so
+    that neither link re-opens the chain.  Any un-traversed alternate link
+    (e.g. a ``__context__`` branch not followed because ``__cause__`` was
+    taken) is also discarded — this is a deliberate trade-off to guarantee
+    termination; the primary causal path up to the depth cap is preserved.
     """
     seen: set[int] = set()
     current: BaseException | None = exc
@@ -281,6 +287,7 @@ def create_activity_from_task(
                     ApplicationError,
                 )
 
+                _sever_cause_chain(e)
                 raise ApplicationError(
                     "Activity terminated because the worker pod is shutting down",
                     type=WORKER_EVICTED_TYPE,
