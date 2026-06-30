@@ -500,8 +500,9 @@ class AEWorkflowClient:
             f"/automation/api/v1/workflows/{slug}/versions/{version}/publish",
             total_attempts=retries,
             sleep_seconds=retry_sleep_seconds,
-            retryable=lambda s, b: s >= 300
-            or not (isinstance(b, dict) and b.get("status") == "success"),
+            retryable=lambda s, b: (
+                s >= 300 or not (isinstance(b, dict) and b.get("status") == "success")
+            ),
             op_name="publish_version",
         )
         if status < 300 and isinstance(body, dict) and body.get("status") == "success":
@@ -981,9 +982,7 @@ class AEWorkflowClient:
                 results = await client.asset.search(request)
                 page = results.current_page() or []
                 qns = [
-                    a.qualified_name
-                    for a in page
-                    if getattr(a, "qualified_name", None)
+                    a.qualified_name for a in page if getattr(a, "qualified_name", None)
                 ]
                 return qns[:per_type]
             except Exception:
