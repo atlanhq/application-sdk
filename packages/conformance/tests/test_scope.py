@@ -239,6 +239,41 @@ def test_runner_autodetects_sdk_scope_runs_d003(tmp_path: Path) -> None:
     assert exit_code == 0  # D003 is warn-tier
 
 
+def test_runner_d003_unresolvable_dep_is_skipped_not_flagged(tmp_path: Path) -> None:
+    """D003 skips deps whose package metadata cannot be read (not installed in
+    the active env); it must not flag them as violations.
+
+    This documents the silent-skip behaviour that occurs when the tool runs in
+    an isolated uvx env (every declared dep is unresolvable → zero D003
+    findings).  The "Detect (published package, resolved env)" composite-action
+    step uses `uv run --with atlan-application-sdk-conformance` instead of
+    `uvx` so that the caller's synced `.venv` IS visible and this path is
+    taken only for the isolated case.
+    """
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "atlan-application-sdk"\nversion = "0.1.0"\n'
+        'dependencies = ["some-nonexistent-package-zzz>=1.0"]\n',
+        encoding="utf-8",
+    )
+    out = tmp_path / "report.sarif"
+    exit_code = main(
+        [
+            "--repo",
+            str(tmp_path),
+            "--series",
+            "D",
+            "--scope",
+            "sdk",
+            "--output",
+            str(out),
+        ]
+    )
+    ids = _rule_ids(out)
+    # The dep cannot be resolved → skipped, NOT flagged as a violation.
+    assert "D003" not in ids
+    assert exit_code == 0
+
+
 # ---------------------------------------------------------------------------
 # --exit-zero: process exits 0 even on blocking violations; SARIF unchanged
 # ---------------------------------------------------------------------------

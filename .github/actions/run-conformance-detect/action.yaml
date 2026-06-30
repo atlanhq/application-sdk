@@ -52,8 +52,8 @@ runs:
         # not pull heavier or private-index dev/optional deps it never inspects.
         uv sync
 
-    - name: "Detect (published package)"
-      if: inputs.conformance-ref == ''
+    - name: "Detect (published package, isolated env)"
+      if: inputs.conformance-ref == '' && inputs.needs-env != 'true'
       shell: bash
       env:
         EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
@@ -62,6 +62,19 @@ runs:
         mapfile -t detect_args < <(python "$GITHUB_ACTION_PATH/../../scripts/build_conformance_args.py" \
           --series "${{ inputs.series }}" --slug "${{ inputs.slug }}")
         uvx atlan-application-sdk-conformance detect "${detect_args[@]}"
+
+    - name: "Detect (published package, resolved env)"
+      if: inputs.conformance-ref == '' && inputs.needs-env == 'true'
+      shell: bash
+      env:
+        EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
+        EXIT_ZERO: ${{ inputs.exit-zero }}
+      run: |
+        mapfile -t detect_args < <(python "$GITHUB_ACTION_PATH/../../scripts/build_conformance_args.py" \
+          --series "${{ inputs.series }}" --slug "${{ inputs.slug }}")
+        uv run \
+          --with "atlan-application-sdk-conformance" \
+          -- atlan-application-sdk-conformance detect "${detect_args[@]}"
 
     - name: "Detect (from git ref)"
       if: inputs.conformance-ref != ''
