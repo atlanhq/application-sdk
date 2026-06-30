@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.19.0
-source-sha:    b8d1704887637534f8a7a9fb0e33e55f177bbbe2
-source-date:   2026-06-24T12:00:54+01:00
+sdk-version:   3.20.2
+source-sha:    608918bbf110ce7c48028ce7b12af3b24d767cec
+source-date:   2026-06-30T21:51:41+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -25,7 +25,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 53 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 14 |
-| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
+| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 23 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 34 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
@@ -1524,6 +1524,13 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 - **Signature:** `create_app_handler_service(handler: Handler, ...)`
 - **Summary:** Create a FastAPI app for a single handler.
 - **Defined in:** `application_sdk/handler/service.py`
+
+#### `flatten_handler_credentials`
+
+- **Import:** `from application_sdk.handler import flatten_handler_credentials`
+- **Signature:** `flatten_handler_credentials(credentials: list[HandlerCredential])`
+- **Summary:** Re-nest a list of ``HandlerCredential`` pairs into a flat credential dict.
+- **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `run_app_handler_service`
 
