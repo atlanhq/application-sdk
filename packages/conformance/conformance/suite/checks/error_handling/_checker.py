@@ -131,4 +131,5 @@ class Checker(
     def visit_Call(self, node: ast.Call) -> None:
         self._check_p003(node)
         self._check_p017_call(node)
+        self._check_e019(node)
         self.generic_visit(node)
