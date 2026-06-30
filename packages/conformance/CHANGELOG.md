@@ -6,6 +6,12 @@ All notable changes to `atlan-application-sdk-conformance` are documented here.
 
 ### Features
 
+- add --enforce flag for soft-rollout mode (#2426) ([daec2ea](https://github.com/atlanhq/application-sdk/commit/daec2ea))
+- add SDR-readiness rules P029, P030, T002, T003 (#2425) ([1a7917d](https://github.com/atlanhq/application-sdk/commit/1a7917d))
+- add E020 HttpFailureToEmptyReturn (BLDX-1503) (#2418) ([356e86b](https://github.com/atlanhq/application-sdk/commit/356e86b))
+- add P-series rules P026/P027/P028 (BLDX-1499/1500/1501) (#2417) ([ab88dbe](https://github.com/atlanhq/application-sdk/commit/ab88dbe))
+- add E019 ExceptionTextInContractField (BLDX-1498) (#2405) ([978137d](https://github.com/atlanhq/application-sdk/commit/978137d))
+- add K-series contract-toolkit conformance rules (BLDX-1479) (#2424) ([1ce6be1](https://github.com/atlanhq/application-sdk/commit/1ce6be1))
 - enforce correct asset-mapper usage (pyatlan_v9, serialization, typed returns) (#2385) ([11a4f2b](https://github.com/atlanhq/application-sdk/commit/11a4f2b))
 - app-name alignment gate P025 (#2386) ([564d260](https://github.com/atlanhq/application-sdk/commit/564d260))
 - flag legacy transformer usage via B001, steer apps to asset-mapper (BLDX-1399) (#2382) ([49b9fa4](https://github.com/atlanhq/application-sdk/commit/49b9fa4))
@@ -18,6 +24,8 @@ All notable changes to `atlan-application-sdk-conformance` are documented here.
 
 ### Other changes
 
+- chore(deps): lock file maintenance (#2435) ([9c3bc82](https://github.com/atlanhq/application-sdk/commit/9c3bc82))
+- chore(deps): lock file maintenance (#2434) ([84c688f](https://github.com/atlanhq/application-sdk/commit/84c688f))
 - chore(deps): lock file maintenance (#2422) ([38b4d33](https://github.com/atlanhq/application-sdk/commit/38b4d33))
 - chore(deps): lock file maintenance (#2421) ([ecd98a6](https://github.com/atlanhq/application-sdk/commit/ecd98a6))
 - chore(deps): lock file maintenance (#2420) ([f6f5949](https://github.com/atlanhq/application-sdk/commit/f6f5949))
