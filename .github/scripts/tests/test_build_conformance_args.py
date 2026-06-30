@@ -46,7 +46,9 @@ def test_slug_used_for_sarif_filename() -> None:
     assert result[idx + 1] == "error-handling.sarif"
 
 
-def test_main_reads_env(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_main_reads_env(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     monkeypatch.setenv("EXCLUDE_PATHS", "tools/")
     monkeypatch.setenv("EXIT_ZERO", "true")
     main(["--series", "C", "--slug", "ci"])
@@ -55,10 +57,23 @@ def test_main_reads_env(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureF
     assert "--exit-zero" in out
 
 
-def test_main_empty_env(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_main_empty_env(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     monkeypatch.delenv("EXCLUDE_PATHS", raising=False)
     monkeypatch.delenv("EXIT_ZERO", raising=False)
     main(["--series", "C", "--slug", "ci"])
     out = capsys.readouterr().out.splitlines()
     assert "--exclude" not in out
+    assert "--exit-zero" not in out
+
+
+def test_main_exit_zero_false_string(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # inputs.exit-zero: false renders as the literal string "false" in GitHub
+    # Actions env blocks — the most common production path; must not add --exit-zero.
+    monkeypatch.setenv("EXIT_ZERO", "false")
+    main(["--series", "C", "--slug", "ci"])
+    out = capsys.readouterr().out.splitlines()
     assert "--exit-zero" not in out

@@ -42,7 +42,9 @@ def main(argv: list[str] | None = None) -> int:
     exclude = os.environ.get("EXCLUDE_PATHS", "")
     exit_zero = os.environ.get("EXIT_ZERO", "").lower() == "true"
 
-    detect_args = build_args(args.series, args.slug, exclude=exclude, exit_zero=exit_zero)
+    detect_args = build_args(
+        args.series, args.slug, exclude=exclude, exit_zero=exit_zero
+    )
     print("\n".join(detect_args))
     return 0
 
