@@ -56,22 +56,28 @@ runs:
       if: inputs.conformance-ref == '' && inputs.needs-env != 'true'
       shell: bash
       env:
+        SERIES: ${{ inputs.series }}
+        SLUG: ${{ inputs.slug }}
         EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
         EXIT_ZERO: ${{ inputs.exit-zero }}
       run: |
+        set -euo pipefail
         mapfile -t detect_args < <(python "$GITHUB_ACTION_PATH/../../scripts/build_conformance_args.py" \
-          --series "${{ inputs.series }}" --slug "${{ inputs.slug }}")
+          --series "$SERIES" --slug "$SLUG")
         uvx atlan-application-sdk-conformance detect "${detect_args[@]}"
 
     - name: "Detect (published package, resolved env)"
       if: inputs.conformance-ref == '' && inputs.needs-env == 'true'
       shell: bash
       env:
+        SERIES: ${{ inputs.series }}
+        SLUG: ${{ inputs.slug }}
         EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
         EXIT_ZERO: ${{ inputs.exit-zero }}
       run: |
+        set -euo pipefail
         mapfile -t detect_args < <(python "$GITHUB_ACTION_PATH/../../scripts/build_conformance_args.py" \
-          --series "${{ inputs.series }}" --slug "${{ inputs.slug }}")
+          --series "$SERIES" --slug "$SLUG")
         uv run \
           --with "atlan-application-sdk-conformance" \
           -- atlan-application-sdk-conformance detect "${detect_args[@]}"
@@ -80,11 +86,15 @@ runs:
       if: inputs.conformance-ref != ''
       shell: bash
       env:
+        SERIES: ${{ inputs.series }}
+        SLUG: ${{ inputs.slug }}
         EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
         EXIT_ZERO: ${{ inputs.exit-zero }}
+        CONFORMANCE_REF: ${{ inputs.conformance-ref }}
       run: |
+        set -euo pipefail
         mapfile -t detect_args < <(python "$GITHUB_ACTION_PATH/../../scripts/build_conformance_args.py" \
-          --series "${{ inputs.series }}" --slug "${{ inputs.slug }}")
+          --series "$SERIES" --slug "$SLUG")
         uv run \
-          --with "atlan-application-sdk-conformance @ git+https://github.com/atlanhq/application-sdk@${{ inputs.conformance-ref }}#subdirectory=packages/conformance" \
+          --with "atlan-application-sdk-conformance @ git+https://github.com/atlanhq/application-sdk@${CONFORMANCE_REF}#subdirectory=packages/conformance" \
           -- atlan-application-sdk-conformance detect "${detect_args[@]}"
