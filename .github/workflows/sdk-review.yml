@@ -651,13 +651,14 @@ jobs:
           # comment that belonged to a previous head.
           #
           # Lower-bound timestamp: the starter comment's created-at, captured
-          # in STARTER_STARTED_AT (posted unconditionally at the very start of
-          # this run). NOTE: `github.run_started_at` is NOT a real field of the
-          # github context — it always expands to empty. The previous code
-          # keyed this bound off it, so the `[ -n ... ]` guard below was always
-          # false and this whole soft-success block never ran: every
-          # delivered-then-dropped review hard-failed. The starter timestamp is
-          # the correct per-run bound and is always populated.
+          # in STARTER_STARTED_AT and set by this run's own starter step via
+          # core.setOutput('started_at', ...). We prefer it over
+          # github.run_started_at because it is deterministically populated by
+          # a step in this run. The previous code keyed this bound off
+          # github.run_started_at, which evaluated to empty here (seen in the
+          # run's env dump); the empty value made the `[ -n ... ]` guard below
+          # false, so this whole soft-success block was skipped and every
+          # delivered-then-dropped review hard-failed.
           VERDICT_POSTED=0
           RUN_STARTED_AT="${STARTER_STARTED_AT:-}"
           if [ -n "${PR_NUMBER}" ] && [ -n "${RUN_STARTED_AT}" ]; then
