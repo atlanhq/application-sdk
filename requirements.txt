@@ -83,7 +83,7 @@ fastapi==0.138.2
     # via atlan-application-sdk
 fastapi-cli==0.0.27
     # via fastapi
-fastapi-cloud-cli==0.21.0
+fastapi-cloud-cli==0.22.0
     # via fastapi-cli
 fastar==0.11.0
     # via
