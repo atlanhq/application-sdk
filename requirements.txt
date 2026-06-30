@@ -328,7 +328,7 @@ requests==2.34.2
     #   azure-core
     #   msal
     #   opentelemetry-exporter-otlp-proto-http
-rich==15.0.0
+rich==14.3.4
     # via
     #   rich-toolkit
     #   typer
