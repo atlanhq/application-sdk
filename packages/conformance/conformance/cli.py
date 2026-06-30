@@ -140,6 +140,15 @@ def _parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
     --enable-e2e BOOL            enable e2e job in tests.yaml scaffold (default: true)
     --services-script PATH       path to services setup script for tests.yaml scaffold
                                  (default: auto-detected from .github/test/setup-services.sh)
+    --enforce BOOL               enforcement mode (default: true).
+                                 true  — hard gate: conformance blocks on violations,
+                                         Renovate auto-merges when CI is green.
+                                 false — soft/observe mode: conformance tracks violations
+                                         without blocking, Renovate raises PRs but humans
+                                         must merge.
+                                 When passed explicitly (either value), renovate.json is
+                                 always updated even if it already exists, so re-running
+                                 bootstrap with --enforce true upgrades a soft-mode repo.
     """
     result: dict[str, str] = {
         "package_name": "app",
@@ -148,6 +157,7 @@ def _parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
         "app_image_name": "",
         "enable_e2e": "true",
         "services_script": "",
+        "enforce": "",  # "" = not explicitly set; "true"/"false" = explicit
     }
     _flags = {
         "--package-name": "package_name",
@@ -156,6 +166,7 @@ def _parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
         "--app-image-name": "app_image_name",
         "--enable-e2e": "enable_e2e",
         "--services-script": "services_script",
+        "--enforce": "enforce",
     }
     i = 0
     while i < len(argv):
@@ -173,6 +184,13 @@ def _parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
     if result["enable_e2e"] not in ("true", "false"):
         print(
             f"error: --enable-e2e must be 'true' or 'false', got {result['enable_e2e']!r}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    if result["enforce"] not in ("", "true", "false"):
+        print(
+            f"error: --enforce must be 'true' or 'false', got {result['enforce']!r}",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -198,6 +216,15 @@ def _cmd_bootstrap(argv: list[str]) -> int:
         if candidate.exists():
             kwargs["services_script"] = ".github/test/setup-services.sh"
 
+    # Derive the two render variables from --enforce.
+    # enforce="" (not set) → hard defaults but no force-overwrite of scaffolds.
+    # enforce="false"      → soft/observe mode + force-overwrite renovate.json.
+    # enforce="true"       → hard mode + force-overwrite renovate.json.
+    enforce = kwargs.pop("enforce")
+    kwargs["exit_zero"] = "true" if enforce == "false" else "false"
+    kwargs["automerge"] = "false" if enforce == "false" else "true"
+    force_renovate = enforce in ("true", "false")
+
     _bootstrap_file(
         root / ".claude" / "skills" / "remediate" / "SKILL.md",
         render("remediate.md", **kwargs),
@@ -208,20 +235,31 @@ def _cmd_bootstrap(argv: list[str]) -> int:
             render(name, **kwargs),
         )
 
-    # Write-if-absent scaffolds — created once; apps customise freely.
+    # tests.yaml — write-if-absent scaffold; apps customise freely.
     # C002 tracks drift at WARN only.  Delete + re-run to force-regenerate.
-    for scaffold_dest, scaffold_name in [
-        (root / ".github" / "workflows" / "tests.yaml", "tests.yaml"),
-        (root / "renovate.json", "renovate.json"),
-    ]:
-        if not scaffold_dest.exists():
-            scaffold_dest.parent.mkdir(parents=True, exist_ok=True)
-            scaffold_dest.write_text(render(scaffold_name, **kwargs), encoding="utf-8")
-            print(f"scaffolded: {scaffold_dest}")
-        else:
-            print(
-                f"ok (exists): {scaffold_dest}  (edit freely; C002 tracks drift at WARN)"
-            )
+    tests_dest = root / ".github" / "workflows" / "tests.yaml"
+    if not tests_dest.exists():
+        tests_dest.parent.mkdir(parents=True, exist_ok=True)
+        tests_dest.write_text(render("tests.yaml", **kwargs), encoding="utf-8")
+        print(f"scaffolded: {tests_dest}")
+    else:
+        print(f"ok (exists): {tests_dest}  (edit freely; C002 tracks drift at WARN)")
+
+    # renovate.json — write-if-absent normally; force-overwrite when --enforce
+    # is passed explicitly so re-running with --enforce true upgrades a
+    # soft-mode repo without needing to delete the file first.
+    renovate_dest = root / "renovate.json"
+    if not renovate_dest.exists():
+        renovate_dest.write_text(render("renovate.json", **kwargs), encoding="utf-8")
+        print(f"scaffolded: {renovate_dest}")
+    elif force_renovate:
+        renovate_dest.write_text(render("renovate.json", **kwargs), encoding="utf-8")
+        print(f"updated: {renovate_dest}")
+    else:
+        print(
+            f"ok (exists): {renovate_dest}"
+            "  (edit freely; pass --enforce to update enforcement mode)"
+        )
 
     # .gitignore — write-if-absent scaffold.  C003 warns about missing entries.
     gitignore_dest = root / ".gitignore"
@@ -273,14 +311,21 @@ commands:
   remediate      Print programs path + version banner (SKILL.md drives execution)
   bootstrap      Write .claude/skills/remediate/SKILL.md + all standard CI workflow
                  shims into .github/workflows/. The 14 managed shims always overwrite
-                 (re-running eradicates drift). tests.yaml is write-if-absent
-                 (scaffolded once; delete it and re-run to regenerate from canonical).
+                 (re-running eradicates drift). tests.yaml and renovate.json are
+                 write-if-absent by default; pass --enforce to update them too.
                    --package-name NAME         docstring-coverage package (default: app)
                    --unit-tests-workflow FILE   build-and-publish test workflow (default: tests.yaml)
                    --app-name NAME             connector app name for tests.yaml (default: from atlan.yaml, else "app")
                    --app-image-name NAME       GHCR image name for tests.yaml (default: atlan-<app-name>-app)
                    --enable-e2e true|false     enable e2e in tests.yaml (default: true, line omitted)
                    --services-script PATH      services setup script (default: auto-detected from .github/test/setup-services.sh)
+                   --enforce true|false        enforcement mode (default: true when omitted).
+                                               true  — hard gate: conformance blocks on violations,
+                                                       Renovate auto-merges when CI is green.
+                                               false — soft/observe: conformance tracks without blocking,
+                                                       Renovate raises PRs but humans must merge.
+                                               Passing --enforce (either value) also force-updates
+                                               renovate.json even if it already exists.
   renovate-scan  Build Renovate fleet dashboard JSON from gh pr list output files
 """
 

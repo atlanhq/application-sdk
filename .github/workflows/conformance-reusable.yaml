@@ -177,6 +177,16 @@ on:
         required: false
         default: false
         type: boolean
+      exit-zero:
+        description: >
+          When true, the detect command exits 0 even when blocking violations are
+          found.  The SARIF invocation.exitCode still records the real result so
+          Security-tab tracking is unaffected; only the CI job exit code changes.
+          Use during soft-enforcement rollouts where violations should be observed
+          but must not block merges.  Default: false (hard gate).
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -300,10 +310,14 @@ jobs:
         if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && inputs.conformance-ref == '' && matrix.needs_env != 'true'
         env:
           EXCLUDE_PATHS: ${{ matrix.exclude_paths }}
+          EXIT_ZERO: ${{ inputs.exit-zero }}
         run: |
           args=(--repo . --series ${{ matrix.series }} --output "${{ matrix.slug }}.sarif")
           if [[ -n "$EXCLUDE_PATHS" ]]; then
             args+=(--exclude "$EXCLUDE_PATHS")
+          fi
+          if [[ "$EXIT_ZERO" == "true" ]]; then
+            args+=(--exit-zero)
           fi
           uvx atlan-application-sdk-conformance detect "${args[@]}"
 
@@ -311,10 +325,14 @@ jobs:
         if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && inputs.conformance-ref != '' && matrix.needs_env != 'true'
         env:
           EXCLUDE_PATHS: ${{ matrix.exclude_paths }}
+          EXIT_ZERO: ${{ inputs.exit-zero }}
         run: |
           args=(--repo . --series ${{ matrix.series }} --output "${{ matrix.slug }}.sarif")
           if [[ -n "$EXCLUDE_PATHS" ]]; then
             args+=(--exclude "$EXCLUDE_PATHS")
+          fi
+          if [[ "$EXIT_ZERO" == "true" ]]; then
+            args+=(--exit-zero)
           fi
           uv run \
             --with "atlan-application-sdk-conformance @ git+https://github.com/atlanhq/application-sdk@${{ inputs.conformance-ref }}#subdirectory=packages/conformance" \
@@ -329,10 +347,14 @@ jobs:
         if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && inputs.conformance-ref == '' && matrix.needs_env == 'true'
         env:
           EXCLUDE_PATHS: ${{ matrix.exclude_paths }}
+          EXIT_ZERO: ${{ inputs.exit-zero }}
         run: |
           args=(--repo . --series ${{ matrix.series }} --output "${{ matrix.slug }}.sarif")
           if [[ -n "$EXCLUDE_PATHS" ]]; then
             args+=(--exclude "$EXCLUDE_PATHS")
+          fi
+          if [[ "$EXIT_ZERO" == "true" ]]; then
+            args+=(--exit-zero)
           fi
           # D003 only needs the core [project.dependencies] importable, which a
           # plain sync installs; avoid --all-extras/--all-groups so the leg does
@@ -346,10 +368,14 @@ jobs:
         if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && inputs.conformance-ref != '' && matrix.needs_env == 'true'
         env:
           EXCLUDE_PATHS: ${{ matrix.exclude_paths }}
+          EXIT_ZERO: ${{ inputs.exit-zero }}
         run: |
           args=(--repo . --series ${{ matrix.series }} --output "${{ matrix.slug }}.sarif")
           if [[ -n "$EXCLUDE_PATHS" ]]; then
             args+=(--exclude "$EXCLUDE_PATHS")
+          fi
+          if [[ "$EXIT_ZERO" == "true" ]]; then
+            args+=(--exit-zero)
           fi
           # D003 only needs the core [project.dependencies] importable, which a
           # plain sync installs; avoid --all-extras/--all-groups so the leg does

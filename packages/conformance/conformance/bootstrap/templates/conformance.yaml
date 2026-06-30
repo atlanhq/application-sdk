@@ -14,3 +14,4 @@ jobs:
     uses: atlanhq/application-sdk/.github/workflows/conformance-reusable.yaml@main
     with:
       event_name: ${{ github.event_name }}
+      exit-zero: << exit_zero >>

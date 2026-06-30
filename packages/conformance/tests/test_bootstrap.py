@@ -73,6 +73,7 @@ def test_parse_bootstrap_args_defaults() -> None:
         "app_image_name": "",
         "enable_e2e": "true",
         "services_script": "",
+        "enforce": "",
     }
 
 
@@ -197,6 +198,72 @@ def test_cmd_bootstrap_returns_zero(
 # ---------------------------------------------------------------------------
 # Template fidelity assertions
 # ---------------------------------------------------------------------------
+
+
+def test_parse_bootstrap_args_enforce_false() -> None:
+    result = _parse_bootstrap_args(["--enforce", "false"])
+    assert result["enforce"] == "false"
+
+
+def test_parse_bootstrap_args_enforce_true() -> None:
+    result = _parse_bootstrap_args(["--enforce", "true"])
+    assert result["enforce"] == "true"
+
+
+def test_parse_bootstrap_args_enforce_equals_form() -> None:
+    result = _parse_bootstrap_args(["--enforce=false"])
+    assert result["enforce"] == "false"
+
+
+def test_parse_bootstrap_args_enforce_invalid(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        _parse_bootstrap_args(["--enforce", "maybe"])
+    assert exc_info.value.code == 2
+    assert "--enforce" in capsys.readouterr().err
+
+
+def test_conformance_yaml_default_exit_zero_false() -> None:
+    """Default bootstrap renders exit-zero: false (hard gate)."""
+    content = render("conformance.yaml")
+    assert "exit-zero: false" in content
+
+
+def test_conformance_yaml_exit_zero_true() -> None:
+    """render() with exit_zero='true' renders exit-zero: true for soft mode."""
+    content = render("conformance.yaml", exit_zero="true")
+    assert "exit-zero: true" in content
+
+
+def test_cmd_bootstrap_enforce_false_writes_soft_mode(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--enforce false writes exit-zero: true into conformance.yaml."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--enforce", "false"])
+    conformance = (tmp_path / ".github" / "workflows" / "conformance.yaml").read_text()
+    assert "exit-zero: true" in conformance
+
+
+def test_cmd_bootstrap_enforce_true_writes_hard_mode(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--enforce true writes exit-zero: false into conformance.yaml."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--enforce", "true"])
+    conformance = (tmp_path / ".github" / "workflows" / "conformance.yaml").read_text()
+    assert "exit-zero: false" in conformance
+
+
+def test_cmd_bootstrap_no_enforce_defaults_hard_mode(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without --enforce, bootstrap defaults to hard mode (exit-zero: false)."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    conformance = (tmp_path / ".github" / "workflows" / "conformance.yaml").read_text()
+    assert "exit-zero: false" in conformance
 
 
 def test_conformance_workflow_contains_event_name() -> None:
@@ -351,6 +418,85 @@ def test_renovate_json_contains_fleet_preset() -> None:
 def test_renovate_json_contains_schema() -> None:
     content = render("renovate.json")
     assert "renovate-schema.json" in content
+
+
+def test_renovate_json_default_no_automerge_override() -> None:
+    """Default bootstrap does not add automerge overrides (auto-merge enabled via preset)."""
+    content = render("renovate.json")
+    assert '"automerge": false' not in content
+    assert "packageRules" not in content
+
+
+def test_renovate_json_automerge_false_adds_overrides() -> None:
+    """--automerge false injects catch-all rule that disables auto-merge."""
+    content = render("renovate.json", automerge="false")
+    assert '"automerge": false' in content
+    assert '"platformAutomerge": false' in content
+    assert "packageRules" in content
+    assert "lockFileMaintenance" in content
+
+
+def test_renovate_json_automerge_false_is_valid_json() -> None:
+    """Rendered renovate.json with automerge=false is parseable JSON."""
+    import json
+
+    content = render("renovate.json", automerge="false")
+    parsed = json.loads(content)
+    assert parsed["extends"] == [
+        "github>atlanhq/application-sdk//renovate-config/default.json"
+    ]
+    assert parsed["lockFileMaintenance"]["automerge"] is False
+    assert any(r.get("automerge") is False for r in parsed.get("packageRules", []))
+
+
+def test_cmd_bootstrap_enforce_false_writes_soft_renovate(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--enforce false injects disable-automerge overrides into the renovate.json scaffold."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--enforce", "false"])
+    renovate = (tmp_path / "renovate.json").read_text()
+    assert '"automerge": false' in renovate
+    assert "packageRules" in renovate
+
+
+def test_cmd_bootstrap_no_enforce_hard_renovate_default(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Default bootstrap (no --enforce) writes minimal renovate.json (auto-merge via preset)."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    renovate = (tmp_path / "renovate.json").read_text()
+    assert '"automerge": false' not in renovate
+
+
+def test_cmd_bootstrap_enforce_force_overwrites_existing_renovate(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Passing --enforce (either value) force-overwrites an existing renovate.json."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    rj = tmp_path / "renovate.json"
+    rj.write_text('{"customised": true}\n')
+    # Re-run with --enforce false → must overwrite despite file existing.
+    _cmd_bootstrap(["--enforce", "false"])
+    content = rj.read_text()
+    assert '"automerge": false' in content  # soft-mode overrides applied
+
+
+def test_cmd_bootstrap_enforce_true_force_overwrites_existing_renovate(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--enforce true force-overwrites a soft-mode renovate.json to re-enable auto-merge."""
+    monkeypatch.chdir(tmp_path)
+    # First bootstrap in soft mode.
+    _cmd_bootstrap(["--enforce", "false"])
+    rj = tmp_path / "renovate.json"
+    assert '"automerge": false' in rj.read_text()
+    # Upgrade to hard mode.
+    _cmd_bootstrap(["--enforce", "true"])
+    content = rj.read_text()
+    assert '"automerge": false' not in content  # overrides removed
 
 
 # ---------------------------------------------------------------------------

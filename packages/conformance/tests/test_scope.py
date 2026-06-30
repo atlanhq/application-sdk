@@ -235,3 +235,69 @@ def test_runner_autodetects_sdk_scope_runs_d003(tmp_path: Path) -> None:
     assert ids == {"D003"}
     assert "D001" not in ids and "D002" not in ids
     assert exit_code == 0  # D003 is warn-tier
+
+
+# ---------------------------------------------------------------------------
+# --exit-zero: process exits 0 even on blocking violations; SARIF unchanged
+# ---------------------------------------------------------------------------
+
+
+def test_runner_exit_zero_returns_zero_on_blocking_violation(tmp_path: Path) -> None:
+    """--exit-zero makes main() return 0 even when a BLOCK-tier rule fires."""
+    _make_app_repo(tmp_path)
+    out = tmp_path / "report.sarif"
+    exit_code = main(
+        [
+            "--repo",
+            str(tmp_path),
+            "--series",
+            "D",
+            "--scope",
+            "app",
+            "--exit-zero",
+            "--output",
+            str(out),
+        ]
+    )
+    assert exit_code == 0  # process exits 0 despite D001 (block-tier)
+
+
+def test_runner_exit_zero_sarif_still_records_real_exit_code(tmp_path: Path) -> None:
+    """SARIF invocation.exitCode remains 1 when --exit-zero suppresses the process exit."""
+    _make_app_repo(tmp_path)
+    out = tmp_path / "report.sarif"
+    main(
+        [
+            "--repo",
+            str(tmp_path),
+            "--series",
+            "D",
+            "--scope",
+            "app",
+            "--exit-zero",
+            "--output",
+            str(out),
+        ]
+    )
+    data = json.loads(out.read_text(encoding="utf-8"))
+    sarif_exit_code = data["runs"][0]["invocations"][0]["exitCode"]
+    assert sarif_exit_code == 1  # SARIF honestly records that violations were found
+
+
+def test_runner_exit_zero_false_preserves_normal_gating(tmp_path: Path) -> None:
+    """Without --exit-zero (default), a BLOCK-tier violation still exits 1."""
+    _make_app_repo(tmp_path)
+    out = tmp_path / "report.sarif"
+    exit_code = main(
+        [
+            "--repo",
+            str(tmp_path),
+            "--series",
+            "D",
+            "--scope",
+            "app",
+            "--output",
+            str(out),
+        ]
+    )
+    assert exit_code == 1  # hard gate unchanged when --exit-zero is absent

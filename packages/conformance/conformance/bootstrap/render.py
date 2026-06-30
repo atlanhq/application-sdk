@@ -73,6 +73,8 @@ def render(
     app_image_name: str = "",
     enable_e2e: str = "true",
     services_script: str = "",
+    exit_zero: str = "false",
+    automerge: str = "true",
 ) -> str:
     """Render template *name* with the given substitution variables.
 
@@ -80,7 +82,14 @@ def render(
     Parameterised templates:
 
     - ``build-and-publish.yaml``: ``unit_tests_workflow`` (default ``"tests.yaml"``)
+    - ``conformance.yaml``: ``exit_zero`` (default ``"false"``; set to ``"true"``
+      for soft-enforcement rollouts where violations are tracked but do not block
+      merges — flip to ``"false"`` when the app is ready for hard gating).
     - ``docstring-coverage.yaml``: ``package_name`` (default ``"app"``)
+    - ``renovate.json``: ``automerge`` (default ``"true"``; set to ``"false"``
+      to disable Renovate auto-merge during initial rollouts — the preset's
+      ``automerge: true`` packageRules are overridden by a catch-all rule so
+      PRs are raised and CI-gated but humans must click merge).
     - ``tests.yaml``: ``app_name`` (default ``"app"``), ``app_image_name``
       (default derived as ``"atlan-<app_name>-app"``), ``enable_e2e``
       (default ``"true"``), ``services_script`` (default ``""`` — renders the
@@ -103,4 +112,6 @@ def render(
         app_image_name=app_image_name,
         enable_e2e=enable_e2e,
         services_script=services_script,
+        exit_zero=exit_zero,
+        automerge=automerge,
     )
