@@ -61,6 +61,9 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+_MAX_CHAIN_WALK = 20  # belt-and-suspenders depth cap alongside cycle detection
+
+
 def _extract_failure_attrs(exc: BaseException | None) -> dict[str, str]:
     """Flatten SDK error classification onto OTel attributes for ERROR logs.
 
@@ -84,8 +87,10 @@ def _extract_failure_attrs(exc: BaseException | None) -> dict[str, str]:
         return {}
     seen: set[int] = set()
     current: BaseException | None = exc
-    while current is not None and id(current) not in seen:
+    depth = 0
+    while current is not None and id(current) not in seen and depth < _MAX_CHAIN_WALK:
         seen.add(id(current))
+        depth += 1
         if isinstance(current, AppError):
             return {
                 "failure.category": current.category.value,
