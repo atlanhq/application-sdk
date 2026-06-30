@@ -20,6 +20,7 @@ from application_sdk.handler.contracts import (
     PreflightStatus,
     SqlMetadataObject,
     SqlMetadataOutput,
+    flatten_handler_credentials,
 )
 
 
@@ -513,3 +514,61 @@ class TestEntrypointRefAlias:
         )
         assert inp.entrypoint == "asset-export-advanced"
         assert inp.entrypoint_ref == "csa-uber-asset-export-advanced"
+
+
+class TestFlattenHandlerCredentials:
+    def test_flattens_top_level_and_extra(self):
+        creds = [
+            HandlerCredential(key="host", value="db.example.com"),
+            HandlerCredential(key="username", value="svc"),
+            HandlerCredential(key="extra.region", value="us-east-1"),
+            HandlerCredential(key="extra.role", value="reader"),
+        ]
+        assert flatten_handler_credentials(creds) == {
+            "host": "db.example.com",
+            "username": "svc",
+            "extra": {"region": "us-east-1", "role": "reader"},
+        }
+
+    def test_empty_list(self):
+        assert flatten_handler_credentials([]) == {}
+
+    def test_no_extra_keys(self):
+        creds = [HandlerCredential(key="host", value="db")]
+        result = flatten_handler_credentials(creds)
+        assert result == {"host": "db"}
+        assert "extra" not in result
+
+    def test_duplicate_key_last_wins(self):
+        creds = [
+            HandlerCredential(key="host", value="old"),
+            HandlerCredential(key="host", value="new"),
+        ]
+        assert flatten_handler_credentials(creds) == {"host": "new"}
+
+    def test_round_trip_inverse_of_flatten_to_pairs(self):
+        # flatten_handler_credentials is the documented inverse of the wire
+        # encoder _flatten_to_pairs (values are stringified on the wire).
+        from application_sdk.handler.service import _flatten_to_pairs
+
+        pairs = _flatten_to_pairs(
+            {"host": "db", "port": 5432, "extra": {"region": "us"}}
+        )
+        creds = [HandlerCredential(key=p["key"], value=p["value"]) for p in pairs]
+        assert flatten_handler_credentials(creds) == {
+            "host": "db",
+            "port": "5432",
+            "extra": {"region": "us"},
+        }
+
+    def test_context_as_credentials_dict(self):
+        from application_sdk.handler.context import HandlerContext
+
+        ctx = HandlerContext(
+            app_name="test-app",
+            _credentials=[
+                HandlerCredential(key="host", value="db"),
+                HandlerCredential(key="extra.region", value="us"),
+            ],
+        )
+        assert ctx.as_credentials_dict() == {"host": "db", "extra": {"region": "us"}}

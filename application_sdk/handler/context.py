@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 from application_sdk.app.base_errors import SecretStoreNotConfiguredError
+from application_sdk.handler.contracts import flatten_handler_credentials
 from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
@@ -78,6 +79,17 @@ class HandlerContext:
     def has_credential(self, key: str) -> bool:
         """Check if a credential exists in the context."""
         return any(cred.key == key for cred in self._credentials)
+
+    def as_credentials_dict(self) -> dict[str, Any]:
+        """Return all credentials as a flat dict, re-nesting ``extra.*`` keys.
+
+        Convenience over :attr:`credentials` for handlers that need the whole
+        credential payload (e.g. to build a connection string) rather than a
+        single key via :meth:`get_credential`.  Delegates to
+        :func:`application_sdk.handler.contracts.flatten_handler_credentials` —
+        use this instead of re-implementing the ``extra.``-prefix decode loop.
+        """
+        return flatten_handler_credentials(self._credentials)
 
     @property
     def log(self) -> Any:

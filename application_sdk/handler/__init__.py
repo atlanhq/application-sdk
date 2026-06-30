@@ -24,6 +24,7 @@ from application_sdk.handler.contracts import (
     PreflightStatus,
     SqlMetadataObject,
     SqlMetadataOutput,
+    flatten_handler_credentials,
 )
 from application_sdk.handler.service import (
     create_app_handler_service,
@@ -51,6 +52,7 @@ __all__ = [
     "PreflightStatus",
     "SqlMetadataObject",
     "SqlMetadataOutput",
+    "flatten_handler_credentials",
     "create_app_handler_service",
     "run_app_handler_service",
 ]

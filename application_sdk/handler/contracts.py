@@ -177,6 +177,42 @@ class HandlerCredential(BaseModel):
     """Credential value (sensitive — never log this directly)."""
 
 
+def flatten_handler_credentials(
+    credentials: list[HandlerCredential],
+) -> dict[str, Any]:
+    """Re-nest a list of ``HandlerCredential`` pairs into a flat credential dict.
+
+    This is the inverse of the SDK's wire encoder (``_flatten_to_pairs``): a
+    top-level pair such as ``{"host": "..."}`` maps directly, and every
+    ``extra.<subkey>`` pair is collected back under a single nested ``extra``
+    dict.  It is the canonical way for a handler to turn the
+    ``list[HandlerCredential]`` it receives into the connection dict its client
+    expects — call this instead of re-implementing the
+    ``cred.key.startswith("extra.")`` loop in each connector.
+
+    Values are the opaque strings carried on the wire; no type coercion is
+    performed.  On a duplicate key the last pair wins, matching dict-construction
+    semantics.
+
+    Example::
+
+        # ctx.credentials == [HandlerCredential(key="host", value="db"),
+        #                     HandlerCredential(key="extra.region", value="us")]
+        flatten_handler_credentials(ctx.credentials)
+        # -> {"host": "db", "extra": {"region": "us"}}
+    """
+    flat: dict[str, Any] = {}
+    extra: dict[str, str] = {}
+    for cred in credentials:
+        if cred.key.startswith("extra."):
+            extra[cred.key[len("extra.") :]] = cred.value
+        else:
+            flat[cred.key] = cred.value
+    if extra:
+        flat["extra"] = extra
+    return flat
+
+
 class AuthStatus(SerializableEnum):
     """Result of an authentication attempt."""
 
