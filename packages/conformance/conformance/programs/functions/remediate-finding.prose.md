@@ -40,6 +40,10 @@ remediator may not touch the gate it is judged against.  The `Dockerfile`
 exception is limited to I-series findings; no other area may propose Dockerfile
 edits.
 
+For K-series findings, edits to `contract/*.pkl` files are also permitted.
+The `pkl-eval` orthogonal gate verifies that the edited contract still compiles
+and regenerates its artifacts correctly.
+
 ### Dispatch by area
 
 Route on `finding.area` to the matching area file and follow its
@@ -57,3 +61,4 @@ relevant area file — this is the progressive-disclosure boundary.
 | `deprecation` | PHASE 1 | `areas/deprecation.prose.md` |
 | `tests` | PHASE 2 (strict-only) | `areas/tests.prose.md` |
 | `ci` | DEFERRED | `areas/ci.prose.md` — return `not_remediable = true` |
+| `contract-toolkit` | PHASE 1 (strict-only; WARN-tier) | `areas/contract-toolkit.prose.md` |

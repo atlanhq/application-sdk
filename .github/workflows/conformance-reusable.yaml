@@ -2,7 +2,7 @@
 #
 # Reusable workflow: full conformance suite gate.
 #
-# Runs each rule series (C, E, P, O, D, L, T, I) as a separate leg of one matrix job so
+# Runs each rule series (C, E, P, O, D, L, T, I, B, K) as a separate leg of one matrix job so
 # each appears as its own status check:
 #   Conformance / suite / CI
 #   Conformance / suite / Error handling
@@ -13,6 +13,7 @@
 #   Conformance / suite / Tests
 #   Conformance / suite / Container images
 #   Conformance / suite / Deprecations
+#   Conformance / suite / Contract toolkit
 #   Conformance / Contracts
 #   Conformance / Conformance Gate  (required gate)
 #
@@ -57,7 +58,7 @@
 #     annotations.  Use this for production code in the SDK/app that has a
 #     legitimate, site-specific carve-out.
 #
-#   exclude-paths-c / exclude-paths-e / exclude-paths-p / exclude-paths-o / exclude-paths-i
+#   exclude-paths-c / exclude-paths-e / exclude-paths-p / exclude-paths-o / exclude-paths-i / exclude-paths-k
 #     A path prefix removed from scanning entirely.  Nothing from that path
 #     appears in the SARIF report.  Use this only for code that is categorically
 #     outside the SDK/app surface — tooling, migration scripts, generated files,
@@ -155,6 +156,13 @@ on:
         description: >
           Comma-separated repo-root-relative path prefixes to exclude from B-series
           (deprecation) checks only, e.g. 'tools/,contract-toolkit/'.  Default: nothing excluded.
+        required: false
+        default: ""
+        type: string
+      exclude-paths-k:
+        description: >
+          Comma-separated repo-root-relative path prefixes to exclude from K-series
+          (contract-toolkit) checks only.  Default: nothing excluded.
         required: false
         default: ""
         type: string
@@ -271,6 +279,14 @@ jobs:
             slug: deprecation
             paths: "**/*.py"
             exclude_paths: ${{ inputs.exclude-paths-b }}
+          # K-series is APP-scoped and no-ops on the SDK itself (no contract/
+          # directory).  Watches contract/**/*.pkl only; a PR that modifies only
+          # Python sources will not trigger this leg (and vice versa).
+          - series: K
+            name: "Contract toolkit"
+            slug: contract-toolkit
+            paths: "contract/**"
+            exclude_paths: ${{ inputs.exclude-paths-k }}
     steps:
       - name: "Checkout caller repo"
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
