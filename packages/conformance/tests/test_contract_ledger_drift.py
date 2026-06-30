@@ -19,11 +19,13 @@ would produce from the current SDK source.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 from conformance.suite.checks.deprecation._ledger_schema import (
     LEDGER_PATH,
+    LEDGER_VERSION,
     load_ledger,
     serialize,
 )
@@ -47,6 +49,77 @@ def test_ledger_is_committed() -> None:
     ledger = load_ledger()
     # Empty ledger is valid; SDK has no app entrypoints
     assert isinstance(ledger.fields, list)
+
+
+# ── load_ledger repo_root resolution ─────────────────────────────────────────
+
+
+def test_load_ledger_repo_root_picks_up_committed_file(tmp_path: Path) -> None:
+    """repo_root/contract_schema.lock.json is loaded when present."""
+    ledger_data = {"version": LEDGER_VERSION, "fields": []}
+    (tmp_path / "contract_schema.lock.json").write_text(
+        json.dumps(ledger_data), encoding="utf-8"
+    )
+    ledger = load_ledger(repo_root=tmp_path)
+    assert ledger.fields == []
+
+
+def test_load_ledger_repo_root_falls_back_to_package_data_when_absent(
+    tmp_path: Path,
+) -> None:
+    """When no contract_schema.lock.json exists in repo_root, package data is used."""
+    ledger = load_ledger(repo_root=tmp_path)
+    # Package data has the SDK template contracts — non-empty for a real install.
+    assert isinstance(ledger.fields, list)
+
+
+def test_load_ledger_env_override_takes_priority_over_repo_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ATLAN_CONTRACT_LEDGER_PATH wins over repo_root when both are set."""
+    env_file = tmp_path / "env_ledger.json"
+    env_data = {
+        "version": LEDGER_VERSION,
+        "fields": [
+            {"contract": "Env", "field": "x", "type": "str", "status": "active"}
+        ],
+    }
+    env_file.write_text(json.dumps(env_data), encoding="utf-8")
+
+    repo_file = tmp_path / "contract_schema.lock.json"
+    repo_data = {"version": LEDGER_VERSION, "fields": []}
+    repo_file.write_text(json.dumps(repo_data), encoding="utf-8")
+
+    monkeypatch.setenv("ATLAN_CONTRACT_LEDGER_PATH", str(env_file))
+    ledger = load_ledger(repo_root=tmp_path)
+    assert len(ledger.fields) == 1
+    assert ledger.fields[0].contract == "Env"
+
+
+def test_load_ledger_explicit_path_takes_priority_over_repo_root(
+    tmp_path: Path,
+) -> None:
+    """An explicit *path* argument wins over repo_root."""
+    explicit_file = tmp_path / "explicit.json"
+    explicit_data = {
+        "version": LEDGER_VERSION,
+        "fields": [
+            {"contract": "Explicit", "field": "y", "type": "int", "status": "active"}
+        ],
+    }
+    explicit_file.write_text(json.dumps(explicit_data), encoding="utf-8")
+
+    repo_file = tmp_path / "contract_schema.lock.json"
+    repo_file.write_text(
+        json.dumps({"version": LEDGER_VERSION, "fields": []}), encoding="utf-8"
+    )
+
+    ledger = load_ledger(path=explicit_file, repo_root=tmp_path)
+    assert len(ledger.fields) == 1
+    assert ledger.fields[0].contract == "Explicit"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 def test_committed_ledger_matches_fresh_scan() -> None:

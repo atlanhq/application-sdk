@@ -74,11 +74,19 @@ def _parse(payload: dict) -> ContractLedger:
     return ContractLedger(version=payload.get("version", LEDGER_VERSION), fields=fields)
 
 
-def load_ledger(path: Path | None = None) -> ContractLedger:
+def load_ledger(
+    path: Path | None = None, *, repo_root: Path | None = None
+) -> ContractLedger:
     """Load the committed ledger.
 
-    With *path* ``None`` (the normal B005/B006 path) reads from the
-    ``conformance`` package resource.  A *path* override is used by tests.
+    Resolution order (first match wins):
+    1. *path* — explicit override used by tests and the generator.
+    2. ``ATLAN_CONTRACT_LEDGER_PATH`` env var — CI override.
+    3. ``<repo_root>/contract_schema.lock.json`` — the app's committed ledger
+       when the detector is given a repo root (the normal B005/B006 path for
+       consumer apps).  Skipped when the file is absent so the SDK, which
+       keeps its ledger inside the package, falls through to step 4.
+    4. Package data — the SDK's own bundled ledger (fallback / SDK-self-scan).
 
     A genuinely **absent** ledger yields an empty result silently (graceful
     degradation — an older wheel without the file simply produces no B005
@@ -86,7 +94,12 @@ def load_ledger(path: Path | None = None) -> ContractLedger:
     """
     if path is None:
         env_override = os.environ.get("ATLAN_CONTRACT_LEDGER_PATH")
-        path = Path(env_override) if env_override else None
+        if env_override:
+            path = Path(env_override)
+        elif repo_root is not None:
+            candidate = repo_root / "contract_schema.lock.json"
+            if candidate.exists():
+                path = candidate
     try:
         if path is None:
             text = (
