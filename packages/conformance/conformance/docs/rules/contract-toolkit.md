@@ -114,6 +114,12 @@ After editing, run `pkl eval -m . contract/app.pkl` (or `uv run poe generate`) t
 regenerate `app/generated/**` and `atlan.yaml`.  Never hand-edit generated artifacts —
 C002 catches staleness.
 
+**Scanner limitation:** the checker is not string-literal aware.  A property name that
+appears only inside a string literal (e.g. `description = "flatManifestArgs is removed
+in App.pkl"` on a single line) may be flagged.  Use `// conformance: ignore[K002]
+<reason>` to suppress false positives; that directive is the intended workaround for any
+case where the pattern matches non-code content.
+
 **Suppress** with `// conformance: ignore[K002] <reason>` on the violating line or the
 comment-only line directly above it.
 

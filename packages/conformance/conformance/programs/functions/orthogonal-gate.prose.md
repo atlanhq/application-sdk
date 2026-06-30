@@ -39,6 +39,11 @@ of the finding as returned by `detect-violations`):
 - `"pkl-eval"` → delegate to `pkl-eval-gate` with `scope = scope`.  Return its
   `passed`, `exit_code`, and `summary` directly.
 
+- **any other value** → fail closed: emit `passed = false`, `exit_code = -1`,
+  and `summary = "Unknown orthogonal_gate value: <value> — revert the edit and
+  route to residue.  The rule definition contains a typo; do not proceed."`.
+  Never fall through to the tests branch on an unrecognised gate name.
+
 Do not attempt to interpret or fix test/eval failures — that is a separate facet's
 job.  Simply report the result so the loop can decide to revert the triggering
 edit.

@@ -133,6 +133,33 @@ def test_k001_not_fired_for_commented_out_amends(tmp_path: Path) -> None:
     assert k001 == []
 
 
+def test_k001_not_fired_for_user_named_module(tmp_path: Path) -> None:
+    """K001 must NOT fire for a user-named module that ends in 'NativeApp.pkl'.
+
+    ``amends "@x/MyNativeApp.pkl"`` should not match — only exact legacy names
+    (``NativeApp.pkl`` or ``NativeAppBundle.pkl``) immediately after a ``/``.
+    """
+    content = 'amends "@x/MyNativeApp.pkl"\n'
+    findings = _scan_all(tmp_path, {"contract/app.pkl": content})
+    k001 = [f for f in findings if f.rule_id == "K001"]
+    assert k001 == [], f"Unexpected K001 firing: {k001}"
+
+
+def test_k001_not_fired_for_inline_trailing_comment(tmp_path: Path) -> None:
+    """An amends target in an inline trailing comment must NOT fire K001.
+
+    ``name = "foo"  // amends "@x/NativeApp.pkl"`` — the ``amends`` keyword
+    appears only inside a ``//`` comment, so K001 must not fire.
+    """
+    content = dedent("""\
+        amends "@app-contract-toolkit/App.pkl"
+        name = "foo"  // amends "@app-contract-toolkit/NativeApp.pkl"
+    """)
+    findings = _scan_all(tmp_path, {"contract/app.pkl": content})
+    k001 = [f for f in findings if f.rule_id == "K001"]
+    assert k001 == [], f"Unexpected K001 firing: {k001}"
+
+
 def test_k001_not_fired_for_block_commented_amends(tmp_path: Path) -> None:
     """A block-comment-wrapped legacy amends must NOT produce a K001 finding."""
     content = dedent("""\
@@ -281,6 +308,18 @@ def test_k002_renderers_import(tmp_path: Path) -> None:
     k002 = [f for f in findings if f.rule_id == "K002"]
     assert len(k002) == 1
     assert "Argo-era" in k002[0].message
+
+
+def test_k002_not_fired_for_user_named_import(tmp_path: Path) -> None:
+    """K002 must NOT fire for a user-named module that ends in 'Config.pkl'.
+
+    ``import "@x/AppConfig.pkl"`` should not match — only the exact legacy
+    module names (``Config.pkl`` etc.) immediately after a ``/``.
+    """
+    content = 'amends "@app-contract-toolkit/App.pkl"\nimport "@x/AppConfig.pkl"\n'
+    findings = _scan_all(tmp_path, {"contract/app.pkl": content})
+    k002 = [f for f in findings if f.rule_id == "K002"]
+    assert k002 == [], f"Unexpected K002 firing: {k002}"
 
 
 def test_k002_property_in_line_comment_not_flagged(tmp_path: Path) -> None:

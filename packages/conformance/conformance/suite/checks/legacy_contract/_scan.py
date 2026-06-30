@@ -42,8 +42,11 @@ from ._directives_pkl import _make_pkl_finding_suppressed, _parse_pkl_directives
 # Matches: amends "…NativeApp.pkl" or amends "…NativeAppBundle.pkl"
 # The package form: amends "@app-contract-toolkit/NativeApp.pkl"
 # The relative form: amends "../../src/NativeApp.pkl"
+# The (?:[^"]*/)? prefix requires the module name to sit immediately after a
+# path separator (or at the start of the string), so "MyNativeApp.pkl" and
+# "NotNativeApp.pkl" are not matched — only the exact legacy names.
 _K001_RE = re.compile(
-    r'\bamends\s+"[^"]*(?:NativeApp|NativeAppBundle)\.pkl"',
+    r'\bamends\s+"(?:[^"]*/)?(?:NativeApp|NativeAppBundle)\.pkl"',
 )
 
 # K002 — NativeApp-only property names and legacy imports.
@@ -51,8 +54,10 @@ _K001_RE = re.compile(
 _K002_PROP_RE = re.compile(
     r"\b(flatManifestArgs|manifestMetadataArgs|workflowTypeOverride)\b"
 )
+# Same (?:[^"]*/)? anchor as K001: "AppConfig.pkl" and "MyConfig.pkl" must not
+# match — only the exact legacy module names directly after a path separator.
 _K002_IMPORT_RE = re.compile(
-    r'\bimport\s+"[^"]*(?:Config|Connectors|Credential|Renderers)\.pkl"'
+    r'\bimport\s+"(?:[^"]*/)?(?:Config|Connectors|Credential|Renderers)\.pkl"'
 )
 
 # ---------------------------------------------------------------------------
@@ -83,13 +88,15 @@ _LINE_COMMENT_RE = re.compile(r"//.*$")
 
 
 def _strip_line_comment(line: str) -> str:
-    """Strip the trailing ``// …`` portion from a line (for property detection).
+    """Strip the trailing ``// …`` portion from a line.
 
-    K002 property-name patterns must not match names that appear only inside
-    a line comment (e.g. ``// flatManifestArgs is removed in App.pkl``).  This
-    function strips the comment suffix so the regex only sees non-comment content.
-    It is NOT used for K001/K002 import detection since those use the raw line
-    (and import statements are never inline after other code in pkl).
+    Applied to every non-blank line before K001, K002a, and K002b pattern
+    matching so that inline trailing comments are ignored symmetrically across
+    all three sub-patterns.  For example, a line such as::
+
+        name = "foo"  // amends "@x/NativeApp.pkl"
+
+    must not trigger K001 — the amends target is in a comment, not in code.
     """
     return _LINE_COMMENT_RE.sub("", line)
 
@@ -132,8 +139,14 @@ def scan_text(text: str, rel: str) -> list[Finding]:
         if stripped.startswith("//"):
             continue
 
+        # Strip the trailing ``// …`` portion once, before all three
+        # sub-patterns, so that inline trailing comments are ignored
+        # symmetrically: a property name or amends target that appears only
+        # inside a comment is never flagged.
+        code_only = _strip_line_comment(line)
+
         # ── K001: amends legacy module ────────────────────────────────────
-        m = _K001_RE.search(line)
+        m = _K001_RE.search(code_only)
         if m:
             module = (
                 "NativeAppBundle.pkl"
@@ -163,9 +176,6 @@ def scan_text(text: str, rel: str) -> list[Finding]:
             )
 
         # ── K002a: NativeApp-only property names ──────────────────────────
-        # Strip the line comment before scanning for property names so that
-        # comment-only references (documentation) are not flagged.
-        code_only = _strip_line_comment(line)
         for pm in _K002_PROP_RE.finditer(code_only):
             prop = pm.group(1)
             col = pm.start() + 1
@@ -189,7 +199,7 @@ def scan_text(text: str, rel: str) -> list[Finding]:
             )
 
         # ── K002b: legacy import statements ──────────────────────────────
-        im = _K002_IMPORT_RE.search(line)
+        im = _K002_IMPORT_RE.search(code_only)
         if im:
             import_str = im.group(0)
             col = im.start() + 1
