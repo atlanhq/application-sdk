@@ -135,7 +135,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # workers or servers (BLDX-1411).
     # P025: app-name alignment — only apps have an atlan.yaml and .env.example;
     # the SDK has neither, so this check is meaningless there (BLDX-1491).
-    # P026/P027: SDR-readiness — only apps declare self_deployed_runtime; the SDK
+    # P029/P030: SDR-readiness — only apps declare self_deployed_runtime; the SDK
     # itself never does, so these are APP-scoped (DISTR-752).
     # T002/T003: SDR test-quality — apps that declare SDR must have an SDR test
     # class; the SDK itself is not an SDR app (DISTR-752).
@@ -168,8 +168,8 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P017",
         "P018",
         "P025",
-        "P026",
-        "P027",
+        "P029",
+        "P030",
         "T002",
         "T003",
         "O002",
@@ -293,7 +293,9 @@ def test_catalog_p_series_present() -> None:
     blocking calls in async defs, and pyatlan sync ``AtlanClient`` use.
     P025 is the app-name alignment rule — code name, atlan.yaml name:, and
     .env.example ATLAN_APPLICATION_NAME must agree (BLDX-1491).
-    P026/P027 are the SDR-readiness rules — manifest agent_json slot and
+    P026–P028 are reserved by PR #2417 (GetattrOnTypedContractField,
+    AppStateAsCrossTaskChannel, ManualQualifiedNameFString).
+    P029/P030 are the SDR-readiness rules — manifest agent_json slot and
     upload call presence (DISTR-752).
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
@@ -326,8 +328,8 @@ def test_catalog_p_series_present() -> None:
         "P023",
         "P024",
         "P025",
-        "P026",
-        "P027",
+        "P029",
+        "P030",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"

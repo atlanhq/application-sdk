@@ -1,18 +1,21 @@
-"""P-series SDR-readiness checks (P026–P027, DISTR-752).
+"""P-series SDR-readiness checks (P029–P030, DISTR-752).
 
 Cross-artifact checks that gate on ``self_deployed_runtime: true`` in
 ``atlan.yaml`` and verify two structural invariants:
 
-* ``P026`` — every ``manifest.json`` under ``app/generated/`` must declare an
+* ``P029`` — every ``manifest.json`` under ``app/generated/`` must declare an
   ``agent_json`` slot in ``dag.extract.inputs.args``.  Missing it causes the
   SDR worker to start, the workflow to complete with status "success", and zero
   assets to land in the Atlan bucket — the silent-failure pattern from the
   MSSQL regression (atlan-mssql-app#177).
 
-* ``P027`` — at least one Python source file (outside ``tests/``) must contain
+* ``P030`` — at least one Python source file (outside ``tests/``) must contain
   a ``self.upload(`` call so the ``ENABLE_ATLAN_UPLOAD`` path is reachable.
   Without it extraction "passes" but no assets transfer to the Atlan tenant
   bucket in SDR deployments.
+
+P026–P028 are reserved by a concurrent PR (GetattrOnTypedContractField,
+AppStateAsCrossTaskChannel, ManualQualifiedNameFString — PR #2417).
 
 Both are APP-scoped: the SDK itself never declares ``self_deployed_runtime``
 and is always skipped.
@@ -32,8 +35,8 @@ from conformance.suite.checks._ast_common import discover, make_cli_main
 from conformance.suite.schema.findings import Finding
 
 SERIES = "P"
-RULE_P026 = "P026"
-RULE_P027 = "P027"
+RULE_P029 = "P029"
+RULE_P030 = "P030"
 
 _SDR_FLAG_RE = re.compile(
     r"^self_deployed_runtime:\s*(true|false)\b",
@@ -57,7 +60,7 @@ def _is_sdr_app(root: Path) -> bool:
 
 
 def _check_p026(root: Path) -> list[Finding]:
-    """P026: every manifest.json under app/generated/ must have agent_json."""
+    """P029: every manifest.json under app/generated/ must have agent_json."""
     generated = root / "app" / "generated"
     if not generated.is_dir():
         return []
@@ -94,7 +97,7 @@ def _check_p026(root: Path) -> list[Finding]:
         if not isinstance(args, dict) or "agent_json" not in args:
             findings.append(
                 Finding(
-                    rule_id=RULE_P026,
+                    rule_id=RULE_P029,
                     file=rel_str,
                     line=1,
                     column=1,
@@ -114,7 +117,7 @@ def _check_p026(root: Path) -> list[Finding]:
 
 
 def _check_p027(paths: list[Path]) -> list[Finding]:
-    """P027: at least one source file must contain self.upload(."""
+    """P030: at least one source file must contain self.upload(."""
     for path in paths:
         try:
             text = path.read_text(encoding="utf-8")
@@ -125,7 +128,7 @@ def _check_p027(paths: list[Path]) -> list[Finding]:
 
     return [
         Finding(
-            rule_id=RULE_P027,
+            rule_id=RULE_P030,
             file="atlan.yaml",
             line=1,
             column=1,
@@ -141,18 +144,18 @@ def _check_p027(paths: list[Path]) -> list[Finding]:
 
 
 def scan_path(path: Path, root: Path) -> list[Finding]:  # noqa: ARG001
-    """No-op: P026/P027 require cross-artifact analysis; use scan_all."""
+    """No-op: P029/P030 require cross-artifact analysis; use scan_all."""
     return []
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:
-    """Check P026 and P027 for the repo at root.
+    """Check P029 and P030 for the repo at root.
 
     Parameters
     ----------
     paths:
         Python source files to inspect (as returned by :func:`discover`).
-        These are the files checked by P027 for a ``self.upload(`` call.
+        These are the files checked by P030 for a ``self.upload(`` call.
     root:
         Repo root — used to locate ``atlan.yaml`` and ``app/generated/``.
     """
@@ -168,8 +171,8 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
 main = make_cli_main(
     scan_all=scan_all,
     description=(
-        "P026/P027: SDR-readiness checks — manifest agent_json slot (P026) "
-        "and upload call presence (P027)."
+        "P029/P030: SDR-readiness checks — manifest agent_json slot (P029) "
+        "and upload call presence (P030)."
     ),
 )
 

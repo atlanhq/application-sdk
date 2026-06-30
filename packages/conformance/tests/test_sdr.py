@@ -1,10 +1,10 @@
-"""Meta-tests for the P-series SDR-readiness checks (P026–P027, DISTR-752).
+"""Meta-tests for the P-series SDR-readiness checks (P029–P030, DISTR-752).
 
-P026 catches the MSSQL regression pattern: an SDR app whose manifest.json is
+P029 catches the MSSQL regression pattern: an SDR app whose manifest.json is
 missing agent_json in dag.extract.inputs.args.  The SDR worker starts, the
 workflow status is "success", but no credentials are routed so no assets move.
 
-P027 catches apps that never call self.upload(): the ENABLE_ATLAN_UPLOAD gate
+P030 catches apps that never call self.upload(): the ENABLE_ATLAN_UPLOAD gate
 is structurally unreachable, so assets never land in the Atlan tenant bucket
 even when the flag is true.
 
@@ -91,7 +91,7 @@ def _rule_ids(findings: list) -> list[str]:
 
 
 def test_p026_rule_metadata() -> None:
-    rule = get_rule("P026")
+    rule = get_rule("P029")
     assert rule.name == "SdrManifestMissingAgentJson"
     assert rule.tier == EnforcementTier.BLOCK
     assert rule.scope == RuleScope.APP
@@ -102,7 +102,7 @@ def test_p026_rule_metadata() -> None:
 
 
 def test_p027_rule_metadata() -> None:
-    rule = get_rule("P027")
+    rule = get_rule("P030")
     assert rule.name == "SdrUploadNotCalled"
     assert rule.tier == EnforcementTier.WARN
     assert rule.scope == RuleScope.APP
@@ -112,7 +112,7 @@ def test_p027_rule_metadata() -> None:
     assert rule.category == "sdr-readiness"
 
 
-# ── P026: manifest missing agent_json ───────────────────────────────────────
+# ── P029: manifest missing agent_json ───────────────────────────────────────
 
 
 def test_p026_fires_on_manifest_without_agent_json(tmp_path: Path) -> None:
@@ -125,7 +125,7 @@ def test_p026_fires_on_manifest_without_agent_json(tmp_path: Path) -> None:
         },
     )
     findings = _run(tmp_path)
-    p026 = [f for f in findings if f.rule_id == "P026"]
+    p026 = [f for f in findings if f.rule_id == "P029"]
     assert len(p026) == 1
     assert "agent_json" in p026[0].message
     assert p026[0].line == 1
@@ -142,7 +142,7 @@ def test_p026_silent_when_manifest_has_agent_json(tmp_path: Path) -> None:
         },
     )
     findings = _run(tmp_path)
-    assert not any(f.rule_id == "P026" for f in findings)
+    assert not any(f.rule_id == "P029" for f in findings)
 
 
 def test_p026_silent_when_no_manifest(tmp_path: Path) -> None:
@@ -154,7 +154,7 @@ def test_p026_silent_when_no_manifest(tmp_path: Path) -> None:
         },
     )
     findings = _run(tmp_path)
-    assert not any(f.rule_id == "P026" for f in findings)
+    assert not any(f.rule_id == "P029" for f in findings)
 
 
 def test_p026_silent_on_non_sdr_app(tmp_path: Path) -> None:
@@ -188,7 +188,7 @@ def test_p026_fires_on_missing_args_key(tmp_path: Path) -> None:
         },
     )
     findings = _run(tmp_path)
-    assert any(f.rule_id == "P026" for f in findings)
+    assert any(f.rule_id == "P029" for f in findings)
 
 
 def test_p026_fires_on_missing_inputs_key(tmp_path: Path) -> None:
@@ -201,7 +201,7 @@ def test_p026_fires_on_missing_inputs_key(tmp_path: Path) -> None:
         },
     )
     findings = _run(tmp_path)
-    assert any(f.rule_id == "P026" for f in findings)
+    assert any(f.rule_id == "P029" for f in findings)
 
 
 def test_p026_fires_per_manifest_in_multi_ep(tmp_path: Path) -> None:
@@ -214,7 +214,7 @@ def test_p026_fires_per_manifest_in_multi_ep(tmp_path: Path) -> None:
             "app/connector.py": "class Connector:\n    async def run(self):\n        await self.upload('output')\n",
         },
     )
-    findings = [f for f in _run(tmp_path) if f.rule_id == "P026"]
+    findings = [f for f in _run(tmp_path) if f.rule_id == "P029"]
     assert len(findings) == 2
 
 
@@ -228,7 +228,7 @@ def test_p026_silent_on_valid_manifest_in_multi_ep(tmp_path: Path) -> None:
             "app/connector.py": "class Connector:\n    async def run(self):\n        await self.upload('output')\n",
         },
     )
-    assert not any(f.rule_id == "P026" for f in _run(tmp_path))
+    assert not any(f.rule_id == "P029" for f in _run(tmp_path))
 
 
 def test_p026_mixed_ep_one_fire_one_silent(tmp_path: Path) -> None:
@@ -241,7 +241,7 @@ def test_p026_mixed_ep_one_fire_one_silent(tmp_path: Path) -> None:
             "app/connector.py": "class Connector:\n    async def run(self):\n        await self.upload('output')\n",
         },
     )
-    findings = [f for f in _run(tmp_path) if f.rule_id == "P026"]
+    findings = [f for f in _run(tmp_path) if f.rule_id == "P029"]
     assert len(findings) == 1
     assert "extract" in findings[0].file
 
@@ -257,10 +257,10 @@ def test_p026_skips_invalid_json_manifest(tmp_path: Path) -> None:
     )
     # No crash — invalid JSON is silently skipped
     findings = _run(tmp_path)
-    assert not any(f.rule_id == "P026" for f in findings)
+    assert not any(f.rule_id == "P029" for f in findings)
 
 
-# ── P027: upload call absent ─────────────────────────────────────────────────
+# ── P030: upload call absent ─────────────────────────────────────────────────
 
 
 def test_p027_fires_when_no_upload_call(tmp_path: Path) -> None:
@@ -272,7 +272,7 @@ def test_p027_fires_when_no_upload_call(tmp_path: Path) -> None:
         },
     )
     findings = _run(tmp_path)
-    p027 = [f for f in findings if f.rule_id == "P027"]
+    p027 = [f for f in findings if f.rule_id == "P030"]
     assert len(p027) == 1
     assert "self.upload" in p027[0].message
     assert p027[0].file == "atlan.yaml"
@@ -288,7 +288,7 @@ def test_p027_silent_when_upload_call_present(tmp_path: Path) -> None:
         },
     )
     findings = _run(tmp_path)
-    assert not any(f.rule_id == "P027" for f in findings)
+    assert not any(f.rule_id == "P030" for f in findings)
 
 
 def test_p027_silent_on_non_sdr_app(tmp_path: Path) -> None:
@@ -321,9 +321,9 @@ def test_p027_fires_even_when_upload_only_in_tests(tmp_path: Path) -> None:
             "tests/test_connector.py": "# calls self.upload() in test\nresult = 'self.upload()'\n",
         },
     )
-    # discover() excludes tests/ — upload call in test files does NOT satisfy P027
+    # discover() excludes tests/ — upload call in test files does NOT satisfy P030
     findings = _run(tmp_path)
-    assert any(f.rule_id == "P027" for f in findings)
+    assert any(f.rule_id == "P030" for f in findings)
 
 
 def test_p027_upload_call_in_any_source_file_satisfies(tmp_path: Path) -> None:
@@ -336,13 +336,13 @@ def test_p027_upload_call_in_any_source_file_satisfies(tmp_path: Path) -> None:
         },
     )
     findings = _run(tmp_path)
-    assert not any(f.rule_id == "P027" for f in findings)
+    assert not any(f.rule_id == "P030" for f in findings)
 
 
 def test_p027_fires_when_source_dir_empty(tmp_path: Path) -> None:
     _write(tmp_path, {"atlan.yaml": _SDR_ATLAN_YAML})
     findings = _run(tmp_path)
-    assert any(f.rule_id == "P027" for f in findings)
+    assert any(f.rule_id == "P030" for f in findings)
 
 
 # ── scan_path no-op ──────────────────────────────────────────────────────────

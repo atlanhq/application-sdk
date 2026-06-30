@@ -1,16 +1,16 @@
-"""SDR-readiness rule definitions (P026–P027, DISTR-752).
+"""SDR-readiness rule definitions (P029–P030, DISTR-752).
 
 Apps that declare ``self_deployed_runtime: true`` in ``atlan.yaml`` must satisfy
 two structural invariants before they can be considered SDR-ready:
 
-* ``P026`` — every ``manifest.json`` under ``app/generated/`` must include an
+* ``P029`` — every ``manifest.json`` under ``app/generated/`` must include an
   ``agent_json`` key inside ``dag.extract.inputs.args``.  Missing this field
   causes a silent production failure: the SDR worker starts, the workflow
   completes with status "success", but no credentials are routed to the
   extraction agent — assets never move to the Atlan bucket.  The MSSQL
   connector regression (atlan-mssql-app#177) is the canonical example.
 
-* ``P027`` — at least one Python source file (outside ``tests/``) must contain
+* ``P030`` — at least one Python source file (outside ``tests/``) must contain
   a ``self.upload(`` call.  Without it the ``ENABLE_ATLAN_UPLOAD`` path is
   never reached: extraction "passes" (workflow status = success) but no assets
   are transferred to the Atlan tenant bucket.  The regression slipped because
@@ -32,7 +32,7 @@ from conformance.suite.schema.disposition import (
 
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
-        id="P026",
+        id="P029",
         scope=RuleScope.APP,
         name="SdrManifestMissingAgentJson",
         tier=EnforcementTier.BLOCK,
@@ -78,7 +78,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "regenerate ``app/generated/<name>/manifest.json``.  Do not\n"
             "hand-edit the generated manifest — C002 tracks drift.\n"
             "\n"
-            "Suppress with ``# conformance: ignore[P026] <reason>`` on the\n"
+            "Suppress with ``# conformance: ignore[P029] <reason>`` on the\n"
             "first line of the manifest file when the app genuinely does not\n"
             "use agent-mode credential routing.\n"
         ),
@@ -88,7 +88,7 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
     ),
     RuleDefinition(
-        id="P027",
+        id="P030",
         scope=RuleScope.APP,
         name="SdrUploadNotCalled",
         tier=EnforcementTier.WARN,
@@ -131,10 +131,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "``run()`` method or the relevant ``@entrypoint`` method.\n"
             "\n"
             "Note: P008 flags ``self.upload()`` *inside* ``@task`` methods (the\n"
-            "wrong location); P027 flags the *absence* of any upload call.  They\n"
+            "wrong location); P030 flags the *absence* of any upload call.  They\n"
             "are complementary: both should be clean for a correctly-wired SDR app.\n"
             "\n"
-            "Suppress with ``# conformance: ignore[P027] <reason>`` on the first\n"
+            "Suppress with ``# conformance: ignore[P030] <reason>`` on the first\n"
             "line of ``atlan.yaml`` (a repo-level finding with no finer anchor)\n"
             "when the app genuinely has no direct upload call.\n"
         ),
