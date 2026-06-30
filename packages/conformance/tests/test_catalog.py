@@ -133,6 +133,13 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # methods and no contract to drift from (BLDX-1425).
     # P017/P018: apps must boot through the SDK launcher, not hand-roll
     # workers or servers (BLDX-1411).
+    # P026: getattr-with-default on a typed entrypoint/task contract param —
+    # only apps own the @entrypoint/@task methods that consume the contract
+    # (BLDX-1501). P027: app_state used as a cross-task data channel — the SDK
+    # defines get/set_app_state but apps are the ones that (mis)use it as a
+    # conduit (BLDX-1500). P028: hand-built qualifiedName f-strings — connectors
+    # mint asset qualifiedNames; the SDK is the framework, not an asset author
+    # (BLDX-1499).
     # P025: app-name alignment — only apps have an atlan.yaml and .env.example;
     # the SDK has neither, so this check is meaningless there (BLDX-1491).
     # P029/P030: SDR-readiness — only apps declare self_deployed_runtime; the SDK
@@ -147,6 +154,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # K001/K002: contract-toolkit conformance — only app repos have a contract/
     # directory with .pkl source files; the SDK has no contract/ dir to scan
     # (BLDX-1479).
+    # E020: HTTP-failure-to-empty-return — the harm (publishing a partial crawl as
+    # complete) is a connector extract/publish concern; the SDK's matching sites are
+    # legitimate best-effort infra (health/metric scrapes), not crawlers (BLDX-1503).
     assert app_scoped == {
         "B001",
         "C002",
@@ -157,6 +167,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "D006",
         "D007",
         "D008",
+        "E020",
         "K001",
         "K002",
         "P004",
@@ -173,6 +184,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P017",
         "P018",
         "P025",
+        "P026",
+        "P027",
+        "P028",
         "P029",
         "P030",
         "T002",
@@ -225,6 +239,8 @@ def test_catalog_e_series_present() -> None:
         "E016",
         "E017",
         "E018",
+        "E019",
+        "E020",
     }
     missing = expected - e_ids
     assert not missing, f"Missing E-series rules: {missing}"
@@ -333,6 +349,9 @@ def test_catalog_p_series_present() -> None:
         "P023",
         "P024",
         "P025",
+        "P026",
+        "P027",
+        "P028",
         "P029",
         "P030",
     }

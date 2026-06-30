@@ -99,9 +99,13 @@ lines around `finding.line` in `finding.file` before proposing a fix.
   Propose narrowing to `except Exception as exc:` and adding
   `exc_info=True` to any existing log calls in the body.
 
-- **All other E-series rules (E003, E004, E007–E012, E014, E015, E017, E018)** — produce
+- **All other E-series rules (E003, E004, E007–E012, E014, E015, E017, E018, E019, E020)** — produce
   `classification = "judgment"` and a best-effort fix guided by the `hint` and
-  `message`.
+  `message`.  (E019 is the return/append-value counterpart of E015: route the
+  caught exception into a typed `AppError`/evidence field and keep the contract
+  `message=` a stable, sanitised summary.  E020: replace the empty/None return on
+  a checked HTTP-failure branch with a raised typed `AppError` so the failure
+  propagates instead of publishing an empty success.)
 
 **Suppress outcome (strict mode only, WARNING-tier findings)**:
 

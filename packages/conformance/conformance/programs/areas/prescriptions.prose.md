@@ -84,6 +84,19 @@ semantically load-bearing.  All five draft a proposal for human review and never
 auto-apply.  (These rules are backed by a separate `suite.checks.determinism`
 check — see its module docs.)
 
+The typed-boundary / state-seam / asset-modeling rules (P026–P028) are also
+P-series and suggest-only.  P026 (getattr-with-default on a typed contract param)
+has a concrete mechanical proposal — replace `getattr(input, "f", default)` with
+attribute access `input.f` — but whether the field is genuinely optional (and the
+default intended) is the developer's call.  P027 (app_state read with no
+populating writer) describes a structural fix — route the data through the typed
+entrypoint/task contract — that no local edit can perform, and the writer may be
+external to the scanned source.  P028 (hand-built qualifiedName f-string) proposes
+constructing assets via the pyatlan `.creator()` factories, a semantic rewrite
+gated on the SDK exposing a qualifiedName seam.  All three draft a proposal for
+human review and never auto-apply.  (These rules are backed by
+`suite.checks.prescriptions` alongside P001–P003.)
+
 ### Requires
 
 - `scope` — repository root path.
