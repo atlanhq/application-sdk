@@ -522,4 +522,48 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e019",
     ),
+    RuleDefinition(
+        id="E020",
+        scope=RuleScope.APP,
+        name="HttpFailureToEmptyReturn",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="error-to-return-value",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.9.0",
+        rationale=(
+            "A guard that checks an HTTP response for failure and then returns an "
+            "empty/None sentinel converts a remote API failure into an empty "
+            "successful result — the workflow publishes a zero or partial crawl as "
+            "if it completed, with no error surfaced. Unlike E001/E002/E007 there is "
+            "no except/raise to key on; the failure is swallowed by a plain if-guard."
+        ),
+        short_description=(
+            "Checked HTTP-response failure returns an empty/None sentinel instead of "
+            "raising — silently publishes a failure as success"
+        ),
+        full_description=(
+            "An ``if`` whose test inspects an HTTP response for failure (a negation\n"
+            "or comparison on ``is_success`` / ``ok`` / ``status_code``) and whose\n"
+            "branch ``return``\\ s an empty/None sentinel (``return``, ``None``,\n"
+            '``[]``, ``{}``, ``()``, ``""``, ``list()``/``dict()``/``set()``).  The\n'
+            "remote failure is coerced into an empty *successful* result, so the\n"
+            "workflow reports a zero/partial crawl as complete and no error reaches\n"
+            "the operator or the Automation Engine.\n"
+            "\n"
+            "Both polarities are covered: failure-in-the-test → empty body\n"
+            "(``if not resp.is_success: return []``) and its mirror, success-in-the-\n"
+            "test → empty ``else`` (``if resp.is_success: … else: return []``).\n"
+            "\n"
+            "This escapes the rest of the E-series because there is no\n"
+            "``except``/``raise`` — it is a plain response guard.  Fix: raise a typed\n"
+            "``AppError`` (e.g. ``DependencyUnavailableError``) on the failure branch\n"
+            "so it propagates.  Anchored on HTTP-response markers and a failure-shaped\n"
+            "test to avoid flagging ordinary ``if x is None: return None`` guards;\n"
+            "suppress with ``# conformance: ignore[E020] <reason>`` where an empty\n"
+            "result is the deliberate, documented contract.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e020",
+    ),
 )
