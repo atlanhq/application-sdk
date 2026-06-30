@@ -13,6 +13,10 @@ description: Trivy image + filesystem scan of the SDK base image and installed d
 
 inputs:
   target-image:
+    # Single source of truth for the base image scanned by BOTH the hourly scan
+    # and the release reconcile. Callers rely on this default rather than holding
+    # their own copy — bump it here only. The hourly workflow reads it back via
+    # the `target-image` output below for its summary header.
     description: Base image to scan.
     required: false
     default: registry.atlan.com/public/app-runtime-base:3
@@ -21,12 +25,19 @@ inputs:
     required: false
     default: v0.70.0
 
+outputs:
+  target-image:
+    description: The resolved base image that was scanned (for callers' summaries).
+    value: ${{ inputs.target-image }}
+
 runs:
   using: composite
   steps:
     - name: Pull target image
       shell: bash
-      run: docker pull "${{ inputs.target-image }}"
+      env:
+        TARGET_IMAGE: ${{ inputs.target-image }}
+      run: docker pull "$TARGET_IMAGE"
 
     # Install latest Trivy CLI via the official setup-trivy action. The pinned
     # aquasecurity/trivy-action v0.36.0 ships an older Trivy that emits

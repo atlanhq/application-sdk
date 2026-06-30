@@ -14,9 +14,6 @@ permissions:
   contents: read
   actions: write # dispatch the vuln-triage rover for newly-created tickets
 
-env:
-  TARGET_IMAGE: registry.atlan.com/public/app-runtime-base:3
-
 jobs:
   scan-and-ticket:
     name: Scan SDK for vulnerabilities
@@ -30,10 +27,11 @@ jobs:
       # shared composite so the hourly scan and the release reconcile
       # (vuln-reconcile-on-release.yml) can never drift. Leaves
       # trivy-image-results.json + trivy-fs-results.json in the working dir.
+      # The target image is the composite's default (single source of truth);
+      # the parse step reads it back via the step's `target-image` output.
       - name: Scan SDK with Trivy
+        id: scan
         uses: ./.github/actions/sdk-trivy-scan
-        with:
-          target-image: ${{ env.TARGET_IMAGE }}
 
       # ── Parse results ─────────────────────────────────────────────────────
 
@@ -55,7 +53,7 @@ jobs:
         id: parse
         if: always()
         env:
-          TARGET_IMAGE: ${{ env.TARGET_IMAGE }}
+          TARGET_IMAGE: ${{ steps.scan.outputs.target-image }}
         run: python3 .github/scripts/parse_scan_results.py
 
       # ── Create Linear issues (one per severity, deduped against open
