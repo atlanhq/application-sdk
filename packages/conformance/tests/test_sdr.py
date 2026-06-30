@@ -125,11 +125,11 @@ def test_p029_fires_on_manifest_without_agent_json(tmp_path: Path) -> None:
         },
     )
     findings = _run(tmp_path)
-    p026 = [f for f in findings if f.rule_id == "P029"]
-    assert len(p026) == 1
-    assert "agent_json" in p026[0].message
-    assert p026[0].line == 1
-    assert p026[0].column == 1
+    p029 = [f for f in findings if f.rule_id == "P029"]
+    assert len(p029) == 1
+    assert "agent_json" in p029[0].message
+    assert p029[0].line == 1
+    assert p029[0].column == 1
 
 
 def test_p029_silent_when_manifest_has_agent_json(tmp_path: Path) -> None:
@@ -272,11 +272,11 @@ def test_p030_fires_when_no_upload_call(tmp_path: Path) -> None:
         },
     )
     findings = _run(tmp_path)
-    p027 = [f for f in findings if f.rule_id == "P030"]
-    assert len(p027) == 1
-    assert "self.upload" in p027[0].message
-    assert p027[0].file == "atlan.yaml"
-    assert p027[0].line == 1
+    p030 = [f for f in findings if f.rule_id == "P030"]
+    assert len(p030) == 1
+    assert "self.upload" in p030[0].message
+    assert p030[0].file == "atlan.yaml"
+    assert p030[0].line == 1
 
 
 def test_p030_silent_when_upload_call_present(tmp_path: Path) -> None:

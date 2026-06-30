@@ -85,30 +85,57 @@ def _is_sdr_subclass(node: ast.ClassDef) -> bool:
     return bool(_base_names(node.bases) & _BASE_SDR_NAMES)
 
 
+def _is_nonempty_literal(val: ast.expr) -> bool:
+    """Return True when *val* is a non-empty literal (constitutes a real assignment).
+
+    Accepts Constant (truthy value), Dict (non-empty keys), List/Tuple/Set
+    (non-empty elts), JoinedStr (non-empty f-string), and any other expression
+    node (Name, Call, Subscript, …) — which is always considered non-empty.
+    """
+    if isinstance(val, ast.Constant):
+        return bool(val.value)
+    if isinstance(val, ast.Dict):
+        return bool(val.keys)
+    if isinstance(val, (ast.List, ast.Tuple, ast.Set)):
+        return bool(val.elts)
+    if isinstance(val, ast.JoinedStr):
+        return bool(val.values)
+    return True
+
+
 def _class_var_state(node: ast.ClassDef) -> tuple[bool, bool]:
     """Return (has_agent_spec_template, has_manifest_path) for the class body.
 
-    A ClassVar is considered *set* when it is assigned a non-empty string
-    literal in the class body.  An absent assignment or one set to an empty
-    string / None is treated as unset (using the base-class default).
+    A ClassVar is considered *set* when it is assigned any non-empty literal
+    in the class body (Constant, Dict, List, Tuple, JoinedStr, or any other
+    expression).  Handles both plain ``Assign`` and ``AnnAssign`` nodes so
+    that ``agent_spec_template: dict[str, Any] = {...}`` (which mirrors the
+    base-class annotation) is detected correctly.
     """
     has_agent_spec = False
     has_manifest_path = False
     for item in node.body:
-        if not isinstance(item, ast.Assign):
-            continue
-        for target in item.targets:
-            if not isinstance(target, ast.Name):
-                continue
+        if isinstance(item, ast.Assign):
+            for target in item.targets:
+                if not isinstance(target, ast.Name):
+                    continue
+                val = item.value
+                if not _is_nonempty_literal(val):
+                    continue
+                if target.id == "agent_spec_template":
+                    has_agent_spec = True
+                elif target.id == "manifest_path":
+                    has_manifest_path = True
+        elif isinstance(item, ast.AnnAssign):
+            target = item.target
             val = item.value
-            is_nonempty_str = (
-                isinstance(val, ast.Constant)
-                and isinstance(val.value, str)
-                and bool(val.value)
-            )
-            if target.id == "agent_spec_template" and is_nonempty_str:
+            if not isinstance(target, ast.Name) or val is None:
+                continue
+            if not _is_nonempty_literal(val):
+                continue
+            if target.id == "agent_spec_template":
                 has_agent_spec = True
-            elif target.id == "manifest_path" and is_nonempty_str:
+            elif target.id == "manifest_path":
                 has_manifest_path = True
     return has_agent_spec, has_manifest_path
 

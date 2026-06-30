@@ -289,6 +289,31 @@ def test_t003_inline_suppression(tmp_path: Path) -> None:
     assert findings[0].suppressed is True
 
 
+def test_t003_fires_on_dict_literal_agent_spec(tmp_path: Path) -> None:
+    # Dict-literal is the canonical legacy form (base class is ClassVar[dict[str, Any]])
+    src = (
+        "from application_sdk.testing.sdr.base import BaseSDRIntegrationTest\n\n\n"
+        "class TestMySDR(BaseSDRIntegrationTest):\n"
+        '    agent_spec_template = {"connection_qualified_name": "default/mssql/1"}\n'
+    )
+    _write(tmp_path, {"tests/test_sdr.py": src})
+    findings = [f for f in _run(tmp_path) if f.rule_id == "T003"]
+    assert len(findings) == 1
+
+
+def test_t003_fires_on_annotated_dict_agent_spec(tmp_path: Path) -> None:
+    # Annotated assignment mirrors the base-class ClassVar annotation
+    src = (
+        "from application_sdk.testing.sdr.base import BaseSDRIntegrationTest\n"
+        "from typing import Any\n\n\n"
+        "class TestMySDR(BaseSDRIntegrationTest):\n"
+        '    agent_spec_template: dict[str, Any] = {"connection_qualified_name": "default/mssql/1"}\n'
+    )
+    _write(tmp_path, {"tests/test_sdr.py": src})
+    findings = [f for f in _run(tmp_path) if f.rule_id == "T003"]
+    assert len(findings) == 1
+
+
 def test_t003_silent_on_empty_agent_spec_string(tmp_path: Path) -> None:
     # An empty string assignment is treated as "not set" — no legacy signal.
     src = (

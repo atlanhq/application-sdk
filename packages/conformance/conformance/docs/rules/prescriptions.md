@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**25 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.determinism` (P020–P024), `suite.checks.app_name_alignment` (P025) (all AST-based / cross-artifact)
+**27 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.determinism` (P020–P024), `suite.checks.app_name_alignment` (P025) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -48,6 +48,8 @@ reassigned.
 | [P023](#p023) | `BlockingCallInAsyncDef` | `warn` | `both` | `async-correctness` | — | 0.8.0 |
 | [P024](#p024) | `SyncAtlanClientInApp` | `warn` | `both` | `async-correctness` | — | 0.8.0 |
 | [P025](#p025) | `AppNameContractCodeDrift` | `block` | `app` | `app-name-alignment` | — | 0.9.0 |
+| [P029](#p029) | `SdrManifestMissingAgentJson` | `block` | `app` | `sdr-readiness` | — | 0.9.0 |
+| [P030](#p030) | `SdrUploadNotCalled` | `warn` | `app` | `sdr-readiness` | — | 0.9.0 |
 
 ---
 
@@ -844,5 +846,75 @@ the code name is unambiguous.
 
 Suppress with `# conformance: ignore[P025] <reason>` on the App class definition line
 (or the comment-only line directly above it) when a deliberate mismatch is justified.
+
+---
+
+## P029 — `SdrManifestMissingAgentJson` {#p029}
+
+**Tier:** `block` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.9.0
+
+> SDR app manifest.json is missing agent_json in dag.extract.inputs.args
+
+**Rationale:** In SDR (agent) mode the platform routes credentials through the agent_json field in
+dag.extract.inputs.args of the connector manifest. A manifest that omits this field
+causes the SDR worker to start and the workflow to complete with status 'success', but
+the extraction agent receives no credentials and produces zero assets — a silent failure
+invisible to status-only test pipelines. This was the root cause of the MSSQL connector
+regression (atlan-mssql-app#177, DISTR-752).
+
+For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, every `manifest.json`
+under `app/generated/` must contain an `agent_json` key inside
+`dag.extract.inputs.args`.
+
+In SDR (agent) mode the platform (Heracles/AE) fills `agent_json` at dispatch time with
+the credential-routing spec that tells the extraction worker how to resolve credentials
+from the customer's secret store.  A manifest that does not declare this slot cannot
+receive the value — the workflow starts, runs to completion, and reports success while
+the extraction agent silently operates with no credentials and writes zero assets.
+
+The MSSQL regression (atlan-mssql-app#177) was caused by exactly this: the manifest had
+no `agent_json` slot, the hand-written SDR test supplied the value directly (bypassing
+the manifest), so the test passed while production runs failed silently.  Adopting
+`BaseSDRIntegrationTest.manifest_path` (T003) closes the test gap; this rule closes the
+static gap.
+
+**Remediation:** add the `agent_json` slot to the app's `contract/app.pkl` extract
+inputs and re-run `pkl eval` to regenerate `app/generated/<name>/manifest.json`.  Do not
+hand-edit the generated manifest — C002 tracks drift.
+
+---
+
+## P030 — `SdrUploadNotCalled` {#p030}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.9.0
+
+> SDR app has no self.upload() call in source — ENABLE_ATLAN_UPLOAD path unreachable
+
+**Rationale:** In SDR mode the ENABLE_ATLAN_UPLOAD env var gates whether extracted assets are
+transferred to the Atlan tenant bucket. If the app never calls self.upload(), the
+ENABLE_ATLAN_UPLOAD path is unreachable: extraction completes with status 'success' but
+no assets land in the bucket — a regression that slipped through status-only SDR CI
+(DISTR-752). This rule detects the structural absence of the upload call in app source
+so the regression class is caught at static-analysis time rather than in a customer
+deployment.
+
+For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, at least one Python
+source file (outside `tests/`) must contain a `self.upload(` call.
+
+`App.upload()` is the SDK's sanctioned way to transfer extracted assets to the Atlan
+tenant bucket (the upstream store) in SDR mode. It is gated by `ENABLE_ATLAN_UPLOAD`:
+when the env var is `true` the upload runs and assets land in the bucket; when false,
+the app runs in a local-only mode.  If `self.upload()` is never called anywhere in the
+app source, the gate is structurally unreachable — the workflow completes with status
+'success' regardless of the flag value, and no assets move to the bucket in production.
+
+This is a WARN (not BLOCK): some apps are legitimately preflight-only or delegate upload
+to a base-class method defined in the SDK template. Review the finding before
+suppressing — if the app genuinely performs an extract-and-upload cycle, add `await
+self.upload(...)` to the `run()` method or the relevant `@entrypoint` method.
+
+Note: P008 flags `self.upload()` *inside* `@task` methods (the wrong location); P030
+flags the *absence* of any upload call.  They are complementary: both should be clean
+for a correctly-wired SDR app.
 
 ---
