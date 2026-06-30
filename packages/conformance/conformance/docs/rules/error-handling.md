@@ -284,12 +284,13 @@ leaks unsanitised upstream text into a field shown to operators and indexed by
 aggregation.
 
 A typed `AppError` raise whose `message=` keyword value embeds the caught exception via
-an f-string (`f'…{exc}…'`), `str(exc)`, or `repr(exc)` — see typed-error-prescription.md
-§6.  This leaks unsanitised, potentially user-facing text from an upstream library into
-a field that is displayed to operators and indexed in dashboards.  It also breaks
-aggregation by collapsing distinct failure modes into one variable-text bucket.  Place
-the exception context in a typed evidence field (`cause=exc`, `network_error=str(exc)`)
-and keep `message=` a stable human summary.
+an f-string (`f'…{exc}…'`), `str(exc)`, `repr(exc)`, or string concatenation (`'…: ' +
+str(exc)`) — see typed-error-prescription.md §6.  This leaks unsanitised, potentially
+user-facing text from an upstream library into a field that is displayed to operators
+and indexed in dashboards.  It also breaks aggregation by collapsing distinct failure
+modes into one variable-text bucket.  Place the exception context in a typed evidence
+field (`cause=exc`, `network_error=str(exc)`) and keep `message=` a stable human
+summary.
 
 ---
 
@@ -371,19 +372,23 @@ text leaks just as readily when an except block returns a typed response contrac
 boundary to operators and dashboards, and each distinct str(exc) becomes its own
 aggregation bucket instead of one countable signal.
 
-An `except … as exc:` block that `return`\ s a call (typically a typed response/output
-contract such as `AuthOutput` or `PreflightCheck`) whose `message=` keyword embeds the
-caught exception via an f-string (`f'…{exc}…'`), `str(exc)`, or `repr(exc)`.  This is
-the return-value counterpart of E015 (which only covers `raise`): the unsanitised
-upstream text still crosses the typed boundary into a field shown to operators and
-indexed in dashboards, and still collapses distinct failure modes into one variable-text
-bucket.  Keep `message=` a stable human summary and carry the exception detail in a
-typed field (e.g. raise a typed `AppError` with `cause=exc` upstream, or record it in a
-dedicated evidence field) rather than the user-facing contract message.
+Inside an `except … as exc:` block, a call (typically a typed response/output contract
+such as `AuthOutput` or `PreflightCheck`) is constructed with a `message=` keyword that
+embeds the caught exception — whether that call is returned (`return
+AuthOutput(message=str(exc))`), appended/collected for a later return
+(`checks.append(PreflightCheck(message=f'…{exc}'))`), or simply assigned.  The
+interpolation may be an f-string (`f'…{exc}…'`), `str(exc)`, `repr(exc)`, or string
+concatenation (`'…: ' + str(exc)`). This is the non-`raise` counterpart of E015: the
+unsanitised upstream text still crosses the typed boundary into a field shown to
+operators and indexed in dashboards, and still collapses distinct failure modes into one
+variable-text bucket.  Keep `message=` a stable human summary and carry the exception
+detail in a typed field (e.g. raise a typed `AppError` with `cause=exc` upstream, or
+record it in a dedicated evidence field) rather than the user-facing contract message.
 
 Detection scope mirrors E015 exactly (they share one matcher): it covers f-string,
-`str(exc)` and `repr(exc)` interpolation of the except binding, but not a bare
-`message=exc` or attribute access such as `message=exc.args[0]`.  Extending both rules
-to those shapes is a deliberate future follow-up kept symmetric across E015/E019.
+`str(exc)`, `repr(exc)` and string-concatenation (`'…' + str(exc)`) interpolation of the
+except binding, but not a bare `message=exc` or attribute access such as
+`message=exc.args[0]`. Extending both rules to those shapes is a deliberate future
+follow-up kept symmetric across E015/E019.
 
 ---

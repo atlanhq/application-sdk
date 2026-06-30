@@ -374,8 +374,9 @@ RULES: tuple[RuleDefinition, ...] = (
         short_description="Caught exception text interpolated into typed error message= — leaks unsanitised text",
         full_description=(
             "A typed ``AppError`` raise whose ``message=`` keyword value embeds the\n"
-            "caught exception via an f-string (``f'…{exc}…'``), ``str(exc)``, or\n"
-            "``repr(exc)`` — see typed-error-prescription.md §6.  This leaks\n"
+            "caught exception via an f-string (``f'…{exc}…'``), ``str(exc)``,\n"
+            "``repr(exc)``, or string concatenation (``'…: ' + str(exc)``) — see\n"
+            "typed-error-prescription.md §6.  This leaks\n"
             "unsanitised, potentially user-facing text from an upstream library into a\n"
             "field that is displayed to operators and indexed in dashboards.  It also\n"
             "breaks aggregation by collapsing distinct failure modes into one\n"
@@ -496,11 +497,15 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         short_description="Caught exception text interpolated into a returned contract message= field — leaks unsanitised text",
         full_description=(
-            "An ``except … as exc:`` block that ``return``\\ s a call (typically a typed\n"
-            "response/output contract such as ``AuthOutput`` or ``PreflightCheck``) whose\n"
-            "``message=`` keyword embeds the caught exception via an f-string\n"
-            "(``f'…{exc}…'``), ``str(exc)``, or ``repr(exc)``.  This is the\n"
-            "return-value counterpart of E015 (which only covers ``raise``): the\n"
+            "Inside an ``except … as exc:`` block, a call (typically a typed\n"
+            "response/output contract such as ``AuthOutput`` or ``PreflightCheck``)\n"
+            "is constructed with a ``message=`` keyword that embeds the caught\n"
+            "exception — whether that call is returned\n"
+            "(``return AuthOutput(message=str(exc))``), appended/collected for a later\n"
+            "return (``checks.append(PreflightCheck(message=f'…{exc}'))``), or simply\n"
+            "assigned.  The interpolation may be an f-string (``f'…{exc}…'``),\n"
+            "``str(exc)``, ``repr(exc)``, or string concatenation (``'…: ' + str(exc)``).\n"
+            "This is the non-``raise`` counterpart of E015: the\n"
             "unsanitised upstream text still crosses the typed boundary into a field\n"
             "shown to operators and indexed in dashboards, and still collapses distinct\n"
             "failure modes into one variable-text bucket.  Keep ``message=`` a stable\n"
@@ -509,10 +514,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "evidence field) rather than the user-facing contract message.\n"
             "\n"
             "Detection scope mirrors E015 exactly (they share one matcher): it covers\n"
-            "f-string, ``str(exc)`` and ``repr(exc)`` interpolation of the except\n"
-            "binding, but not a bare ``message=exc`` or attribute access such as\n"
-            "``message=exc.args[0]``.  Extending both rules to those shapes is a\n"
-            "deliberate future follow-up kept symmetric across E015/E019.\n"
+            "f-string, ``str(exc)``, ``repr(exc)`` and string-concatenation\n"
+            "(``'…' + str(exc)``) interpolation of the except binding, but not a bare\n"
+            "``message=exc`` or attribute access such as ``message=exc.args[0]``.\n"
+            "Extending both rules to those shapes is a deliberate future follow-up kept\n"
+            "symmetric across E015/E019.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e019",
     ),
