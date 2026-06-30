@@ -436,6 +436,13 @@ def test_renovate_json_automerge_false_adds_overrides() -> None:
     assert "lockFileMaintenance" in content
 
 
+def test_renovate_json_uses_match_package_names_not_patterns() -> None:
+    """Renovate v37+ deprecates matchPackagePatterns; template must use matchPackageNames."""
+    content = render("renovate.json", automerge="false")
+    assert "matchPackageNames" in content
+    assert "matchPackagePatterns" not in content
+
+
 def test_renovate_json_automerge_false_is_valid_json() -> None:
     """Rendered renovate.json with automerge=false is parseable JSON."""
     import json
@@ -473,15 +480,45 @@ def test_cmd_bootstrap_no_enforce_hard_renovate_default(
 def test_cmd_bootstrap_enforce_force_overwrites_existing_renovate(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Passing --enforce (either value) force-overwrites an existing renovate.json."""
+    """--enforce with custom content writes a .bak before overwriting."""
     monkeypatch.chdir(tmp_path)
     _cmd_bootstrap([])
     rj = tmp_path / "renovate.json"
     rj.write_text('{"customised": true}\n')
-    # Re-run with --enforce false → must overwrite despite file existing.
+    # Re-run with --enforce false → must overwrite and back up custom content.
     _cmd_bootstrap(["--enforce", "false"])
     content = rj.read_text()
     assert '"automerge": false' in content  # soft-mode overrides applied
+    assert (tmp_path / "renovate.json.bak").exists()  # custom content backed up
+
+
+def test_cmd_bootstrap_enforce_idempotent_on_matching_content(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--enforce is a no-op (and prints 'up to date') when file already matches target."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--enforce", "false"])
+    rj = tmp_path / "renovate.json"
+    mtime_before = rj.stat().st_mtime
+    capsys.readouterr()  # clear
+    _cmd_bootstrap(["--enforce", "false"])
+    assert "up to date" in capsys.readouterr().out
+    # File must not have been rewritten (mtime unchanged).
+    assert rj.stat().st_mtime == mtime_before
+
+
+def test_cmd_bootstrap_enforce_no_bak_when_canonical_content(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Switching from soft to hard mode doesn't write .bak (canonical content)."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--enforce", "false"])
+    rj = tmp_path / "renovate.json"
+    # Upgrade to hard mode — existing content is the canonical soft render, not custom.
+    _cmd_bootstrap(["--enforce", "true"])
+    assert not (tmp_path / "renovate.json.bak").exists()
 
 
 def test_cmd_bootstrap_enforce_true_force_overwrites_existing_renovate(

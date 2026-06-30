@@ -9,8 +9,10 @@ Covers:
 
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from conformance.suite.checks._ast_common import detect_scope
@@ -301,3 +303,55 @@ def test_runner_exit_zero_false_preserves_normal_gating(tmp_path: Path) -> None:
         ]
     )
     assert exit_code == 1  # hard gate unchanged when --exit-zero is absent
+
+
+def test_runner_exit_zero_github_annotations_downgraded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Under --exit-zero, blocking violations emit ::warning not ::error annotations."""
+    _make_app_repo(tmp_path)
+    out = tmp_path / "report.sarif"
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    buf = io.StringIO()
+    with patch("sys.stdout", buf):
+        main(
+            [
+                "--repo",
+                str(tmp_path),
+                "--series",
+                "D",
+                "--scope",
+                "app",
+                "--exit-zero",
+                "--output",
+                str(out),
+            ]
+        )
+    output = buf.getvalue()
+    assert "::warning" in output
+    assert "::error" not in output
+
+
+def test_runner_hard_mode_github_annotations_use_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without --exit-zero, blocking violations still emit ::error annotations."""
+    _make_app_repo(tmp_path)
+    out = tmp_path / "report.sarif"
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    buf = io.StringIO()
+    with patch("sys.stdout", buf):
+        main(
+            [
+                "--repo",
+                str(tmp_path),
+                "--series",
+                "D",
+                "--scope",
+                "app",
+                "--output",
+                str(out),
+            ]
+        )
+    output = buf.getvalue()
+    assert "::error" in output

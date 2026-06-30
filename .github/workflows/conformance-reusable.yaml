@@ -312,14 +312,9 @@ jobs:
           EXCLUDE_PATHS: ${{ matrix.exclude_paths }}
           EXIT_ZERO: ${{ inputs.exit-zero }}
         run: |
-          args=(--repo . --series ${{ matrix.series }} --output "${{ matrix.slug }}.sarif")
-          if [[ -n "$EXCLUDE_PATHS" ]]; then
-            args+=(--exclude "$EXCLUDE_PATHS")
-          fi
-          if [[ "$EXIT_ZERO" == "true" ]]; then
-            args+=(--exit-zero)
-          fi
-          uvx atlan-application-sdk-conformance detect "${args[@]}"
+          mapfile -t detect_args < <(python .github/scripts/build_conformance_args.py \
+            --series "${{ matrix.series }}" --slug "${{ matrix.slug }}")
+          uvx atlan-application-sdk-conformance detect "${detect_args[@]}"
 
       - name: "Run ${{ matrix.series }}-series checks (from git ref)"
         if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && inputs.conformance-ref != '' && matrix.needs_env != 'true'
@@ -327,16 +322,11 @@ jobs:
           EXCLUDE_PATHS: ${{ matrix.exclude_paths }}
           EXIT_ZERO: ${{ inputs.exit-zero }}
         run: |
-          args=(--repo . --series ${{ matrix.series }} --output "${{ matrix.slug }}.sarif")
-          if [[ -n "$EXCLUDE_PATHS" ]]; then
-            args+=(--exclude "$EXCLUDE_PATHS")
-          fi
-          if [[ "$EXIT_ZERO" == "true" ]]; then
-            args+=(--exit-zero)
-          fi
+          mapfile -t detect_args < <(python .github/scripts/build_conformance_args.py \
+            --series "${{ matrix.series }}" --slug "${{ matrix.slug }}")
           uv run \
             --with "atlan-application-sdk-conformance @ git+https://github.com/atlanhq/application-sdk@${{ inputs.conformance-ref }}#subdirectory=packages/conformance" \
-            -- atlan-application-sdk-conformance detect "${args[@]}"
+            -- atlan-application-sdk-conformance detect "${detect_args[@]}"
 
       # ── Resolved env — series whose checks inspect installed package metadata
       #    (D003 UnusedDependency). Sync the caller repo so its dependencies are
@@ -349,20 +339,15 @@ jobs:
           EXCLUDE_PATHS: ${{ matrix.exclude_paths }}
           EXIT_ZERO: ${{ inputs.exit-zero }}
         run: |
-          args=(--repo . --series ${{ matrix.series }} --output "${{ matrix.slug }}.sarif")
-          if [[ -n "$EXCLUDE_PATHS" ]]; then
-            args+=(--exclude "$EXCLUDE_PATHS")
-          fi
-          if [[ "$EXIT_ZERO" == "true" ]]; then
-            args+=(--exit-zero)
-          fi
+          mapfile -t detect_args < <(python .github/scripts/build_conformance_args.py \
+            --series "${{ matrix.series }}" --slug "${{ matrix.slug }}")
           # D003 only needs the core [project.dependencies] importable, which a
           # plain sync installs; avoid --all-extras/--all-groups so the leg does
           # not pull heavier or private-index dev/optional deps it never inspects.
           uv sync
           uv run \
             --with "atlan-application-sdk-conformance" \
-            -- atlan-application-sdk-conformance detect "${args[@]}"
+            -- atlan-application-sdk-conformance detect "${detect_args[@]}"
 
       - name: "Run ${{ matrix.series }}-series checks (resolved env, from git ref)"
         if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && inputs.conformance-ref != '' && matrix.needs_env == 'true'
@@ -370,20 +355,15 @@ jobs:
           EXCLUDE_PATHS: ${{ matrix.exclude_paths }}
           EXIT_ZERO: ${{ inputs.exit-zero }}
         run: |
-          args=(--repo . --series ${{ matrix.series }} --output "${{ matrix.slug }}.sarif")
-          if [[ -n "$EXCLUDE_PATHS" ]]; then
-            args+=(--exclude "$EXCLUDE_PATHS")
-          fi
-          if [[ "$EXIT_ZERO" == "true" ]]; then
-            args+=(--exit-zero)
-          fi
+          mapfile -t detect_args < <(python .github/scripts/build_conformance_args.py \
+            --series "${{ matrix.series }}" --slug "${{ matrix.slug }}")
           # D003 only needs the core [project.dependencies] importable, which a
           # plain sync installs; avoid --all-extras/--all-groups so the leg does
           # not pull heavier or private-index dev/optional deps it never inspects.
           uv sync
           uv run \
             --with "atlan-application-sdk-conformance @ git+https://github.com/atlanhq/application-sdk@${{ inputs.conformance-ref }}#subdirectory=packages/conformance" \
-            -- atlan-application-sdk-conformance detect "${args[@]}"
+            -- atlan-application-sdk-conformance detect "${detect_args[@]}"
 
       - name: "Upload SARIF artifact"
         if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && !cancelled()

@@ -10,7 +10,7 @@
   "packageRules": [
     {
       "description": "Soft rollout: Renovate raises PRs but does not auto-merge. Remove this rule (and the lockFileMaintenance override above) when the app's test gate is proven and auto-merge is desired.",
-      "matchPackagePatterns": ["*"],
+      "matchPackageNames": ["*"],
       "automerge": false,
       "platformAutomerge": false
     }

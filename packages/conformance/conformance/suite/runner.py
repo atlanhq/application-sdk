@@ -239,6 +239,8 @@ def _emit_github_summary_annotations(
     findings: list[Finding],
     series: str | None,
     excluded_prefixes: tuple[str, ...] = (),
+    *,
+    exit_zero: bool = False,
 ) -> None:
     """Emit at most four summary annotations to the GitHub Actions log.
 
@@ -250,6 +252,10 @@ def _emit_github_summary_annotations(
 
     A fourth ``::notice`` is emitted when paths were excluded from scanning,
     so the reduced scope is always visible alongside the finding counts.
+
+    When ``exit_zero=True`` (soft-enforcement mode), blocking violations are
+    downgraded from ``::error`` to ``::warning`` so the annotation severity
+    matches the job exit code — preventing red error banners on a green job.
 
     Emits nothing when there are no findings and no exclusions.
     """
@@ -279,8 +285,10 @@ def _emit_github_summary_annotations(
         msg = _pct(
             f"{n} blocking violation{'s' if n != 1 else ''} found by {label}. {detail}"
         )
+        # Soft mode: job exits 0, so downgrade annotation to ::warning to match.
+        level = "warning" if exit_zero else "error"
         print(
-            f"::error title=Conformance: {n} blocking violation{'s' if n != 1 else ''} ({label})::{msg}"
+            f"::{level} title=Conformance: {n} blocking violation{'s' if n != 1 else ''} ({label})::{msg}"
         )
 
     if warns:
@@ -412,7 +420,9 @@ def main(argv: list[str] | None = None) -> int:
     _print_human_summary(all_findings, args.series, excluded_prefixes)
 
     if os.getenv("GITHUB_ACTIONS") == "true":
-        _emit_github_summary_annotations(all_findings, args.series, excluded_prefixes)
+        _emit_github_summary_annotations(
+            all_findings, args.series, excluded_prefixes, exit_zero=args.exit_zero
+        )
 
     report = findings_to_report(
         all_findings,

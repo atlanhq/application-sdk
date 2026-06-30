@@ -140,15 +140,14 @@ def _parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
     --enable-e2e BOOL            enable e2e job in tests.yaml scaffold (default: true)
     --services-script PATH       path to services setup script for tests.yaml scaffold
                                  (default: auto-detected from .github/test/setup-services.sh)
-    --enforce BOOL               enforcement mode (default: true).
+    --enforce BOOL               enforcement mode; omit for hard-gate defaults without
+                                 force-updating renovate.json. Pass explicitly (either
+                                 value) to also force-update renovate.json.
                                  true  — hard gate: conformance blocks on violations,
                                          Renovate auto-merges when CI is green.
                                  false — soft/observe mode: conformance tracks violations
                                          without blocking, Renovate raises PRs but humans
                                          must merge.
-                                 When passed explicitly (either value), renovate.json is
-                                 always updated even if it already exists, so re-running
-                                 bootstrap with --enforce true upgrades a soft-mode repo.
     """
     result: dict[str, str] = {
         "package_name": "app",
@@ -253,8 +252,22 @@ def _cmd_bootstrap(argv: list[str]) -> int:
         renovate_dest.write_text(render("renovate.json", **kwargs), encoding="utf-8")
         print(f"scaffolded: {renovate_dest}")
     elif force_renovate:
-        renovate_dest.write_text(render("renovate.json", **kwargs), encoding="utf-8")
-        print(f"updated: {renovate_dest}")
+        existing = renovate_dest.read_text(encoding="utf-8")
+        target = render("renovate.json", **kwargs)
+        if existing == target:
+            print(f"ok (up to date): {renovate_dest}")
+        else:
+            canonical_hard = render("renovate.json", automerge="true")
+            canonical_soft = render("renovate.json", automerge="false")
+            if existing not in (canonical_hard, canonical_soft):
+                bak = renovate_dest.with_suffix(".json.bak")
+                bak.write_text(existing, encoding="utf-8")
+                print(
+                    f"backed up: {bak}"
+                    "  (had custom content; review before committing)"
+                )
+            renovate_dest.write_text(target, encoding="utf-8")
+            print(f"updated: {renovate_dest}")
     else:
         print(
             f"ok (exists): {renovate_dest}"
@@ -319,13 +332,13 @@ commands:
                    --app-image-name NAME       GHCR image name for tests.yaml (default: atlan-<app-name>-app)
                    --enable-e2e true|false     enable e2e in tests.yaml (default: true, line omitted)
                    --services-script PATH      services setup script (default: auto-detected from .github/test/setup-services.sh)
-                   --enforce true|false        enforcement mode (default: true when omitted).
+                   --enforce true|false        enforcement mode; omit for hard-gate defaults without
+                                               force-updating renovate.json. Pass explicitly (either
+                                               value) to also force-update renovate.json.
                                                true  — hard gate: conformance blocks on violations,
                                                        Renovate auto-merges when CI is green.
                                                false — soft/observe: conformance tracks without blocking,
                                                        Renovate raises PRs but humans must merge.
-                                               Passing --enforce (either value) also force-updates
-                                               renovate.json even if it already exists.
   renovate-scan  Build Renovate fleet dashboard JSON from gh pr list output files
 """
 
