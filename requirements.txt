@@ -341,7 +341,7 @@ rignore==0.7.6
 s3transfer==0.19.0
     # via boto3
 semver==3.0.4
-sentry-sdk==2.63.0
+sentry-sdk==2.64.0
     # via fastapi-cloud-cli
 shellingham==1.5.4
     # via typer
