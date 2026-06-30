@@ -206,6 +206,12 @@ def test_conformance_workflow_contains_event_name() -> None:
     assert "sdk-ref" not in content
 
 
+def test_conformance_workflow_has_pull_requests_read() -> None:
+    """pull-requests: read is required for dorny/paths-filter on private repos."""
+    content = render("conformance.yaml")
+    assert "pull-requests: read" in content
+
+
 def test_conformance_upload_sarif_workflow_run_trigger() -> None:
     """Upload workflow is triggered by the Conformance workflow_run on main."""
     content = render("conformance-upload-sarif.yaml")

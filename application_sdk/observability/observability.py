@@ -146,6 +146,7 @@ class AtlanObservability(Generic[T], ABC):
         self._cleanup_enabled = cleanup_enabled
         self.data_dir = data_dir
         self.file_name = file_name
+        self._writer_seq = 0
 
         # Ensure data directory exists
         os.makedirs(data_dir, exist_ok=True)
@@ -221,7 +222,7 @@ class AtlanObservability(Generic[T], ABC):
 
         Args:
             partition_time: Timestamp used to derive the year/month/day/hour prefix.
-            filename: The local filename (e.g. ``<ts>_<deployment>_<app>.json.gz``).
+            filename: The local filename (e.g. ``<ts>_<seq>_<deployment>_<app>.json.gz``).
 
         Returns:
             str: The fully qualified S3 key, e.g.
@@ -362,8 +363,10 @@ class AtlanObservability(Generic[T], ABC):
         Records are assumed to arrive in emission order (chronologically), so
         hour-partitions appear as contiguous runs.  If a rare cross-thread reorder
         causes a stale partition to reappear mid-flush, a second uniquely-named
-        ``.json.gz`` file is written for that hour — harmless since filenames carry a
-        nanosecond timestamp.
+        ``.json.gz`` file is written for that hour.  Uniqueness is jointly enforced by
+        the ``ts_ns`` wall-clock prefix and a per-instance monotonic ``_writer_seq``
+        counter, so two writers opened within the same clock tick (e.g. ~15 ms on
+        Windows) still produce distinct filenames.
 
         - Writes gzip-compressed NDJSON (no pandas/pyarrow dependency)
         - SDR path: ``artifacts/apps/observability/sdr/logs/``    (``ENABLE_ATLAN_UPLOAD=true``)
@@ -431,10 +434,13 @@ class AtlanObservability(Generic[T], ABC):
                         # Use datetime.now() rather than time.time_ns(): the latter is
                         # restricted inside Temporal's workflow sandbox (non-deterministic),
                         # while datetime.now() is patched by the SDK to be safe there.
+                        # The monotonic _writer_seq counter is a tie-breaker for when
+                        # datetime.now() has insufficient resolution (e.g. ~15 ms on
+                        # Windows), which would otherwise produce duplicate filenames
+                        # when two partition switches happen within the same clock tick.
                         ts_ns = int(datetime.now().timestamp() * 1e9)
-                        filename = (
-                            f"{ts_ns}_{DEPLOYMENT_NAME}_{APPLICATION_NAME}.json.gz"
-                        )
+                        self._writer_seq += 1
+                        filename = f"{ts_ns}_{self._writer_seq:06d}_{DEPLOYMENT_NAME}_{APPLICATION_NAME}.json.gz"
                         local_path = os.path.join(partition_path, filename)
                         current_writer = _PartitionWriter(
                             partition_path=partition_path,

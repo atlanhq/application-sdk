@@ -7,7 +7,7 @@
           {
             "type": "command",
             "if": "Bash(git commit *)",
-            "command": "staged=$(git diff --name-only --cached); for i in 1 2 3; do uv run pre-commit run && exit 0; while IFS= read -r f; do [ -n \"$f\" ] && git add -- \"$f\"; done <<< \"$staged\"; done; exit 2",
+            "command": "root=$(git rev-parse --show-toplevel); for i in 1 2 3; do (cd \"$root\" && uv run pre-commit run) && exit 0; git -C \"$root\" add -u; done; exit 2",
             "statusMessage": "Running pre-commit checks..."
           }
         ]

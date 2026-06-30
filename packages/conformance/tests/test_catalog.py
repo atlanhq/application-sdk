@@ -144,6 +144,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # O002/O003/O004: asset-mapper usage — connectors build assets with pyatlan_v9,
     # serialize with to_nested_bytes, and type their mapper returns (BLDX-1492); the
     # SDK is the framework, not a connector.
+    # K001/K002: contract-toolkit conformance — only app repos have a contract/
+    # directory with .pkl source files; the SDK has no contract/ dir to scan
+    # (BLDX-1479).
     assert app_scoped == {
         "B001",
         "C002",
@@ -154,6 +157,8 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "D006",
         "D007",
         "D008",
+        "K001",
+        "K002",
         "P004",
         "P005",
         "P008",
@@ -364,6 +369,17 @@ def test_catalog_b_series_present() -> None:
     assert not missing, f"Missing B-series rules: {missing}"
     extra = b_ids - expected
     assert not extra, f"Unexpected B-series rules: {extra}"
+
+
+def test_catalog_k_series_present() -> None:
+    """The K-series contract-toolkit conformance rules are exactly K001 and K002."""
+    rules = load_catalog()
+    k_ids = {r.id for r in rules if r.id.startswith("K")}
+    expected = {"K001", "K002"}
+    missing = expected - k_ids
+    assert not missing, f"Missing K-series rules: {missing}"
+    extra = k_ids - expected
+    assert not extra, f"Unexpected K-series rules: {extra}"
 
 
 def test_catalog_is_mapping_keyed_by_id() -> None:

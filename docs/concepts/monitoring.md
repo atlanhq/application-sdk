@@ -211,6 +211,57 @@ If you need replay logs — for example when using `temporalio.worker.Replayer` 
 
 ---
 
+## Memory pressure and OOM diagnostics
+
+OOM kills produce no application-level log — the kernel sends SIGKILL and the
+process vanishes silently. The SDK surfaces four log signals so operators have
+a clear evidence trail and a short time-to-diagnosis.
+
+### Log surfaces (grep patterns)
+
+| # | When | Level | Where | Grep |
+|---|------|-------|-------|------|
+| 1 | Worker/combined/handler startup | `INFO` | pod log (first lines) | `"Process memory at start"` |
+| 2 | Every 20 s during an active task, once RSS ≥ 80 % of limit | `WARNING` | pod log | `"Memory pressure on task"` |
+| 3 | Immediately after pod restart, if `exitCode == 137` | `CRITICAL` | pod log (first lines of new pod) | `"exit code 137 = SIGKILL"` |
+| 4 | When Temporal re-dispatches an activity after worker loss | `WARNING` | workflow log | `"re-dispatched after worker eviction"` |
+
+Signal 1 establishes a baseline (RSS at startup, limit, %) so you can see
+where memory stood when the pod was last healthy. Signal 2 fires on the rising
+edge and re-arms after the ratio drops below 75 %, giving pre-kill leading
+indicators in the killed pod's log. Signal 3 fires in the **replacement** pod's
+entrypoint immediately on restart — before any Temporal heartbeat timeout — so
+the first thing you see in `kubectl logs` is the exit code, along with the
+diagnostic commands to run. Signal 4 names OOM kill (pod exit 137) explicitly
+alongside KEDA scale-down, spot preemption, and rolling deploys.
+
+### Required Kubernetes configuration
+
+Signal 2 and signal 1's percentage require `K8S_POD_MEMORY_LIMIT` to be
+injected via the Downward API:
+
+```yaml
+env:
+  - name: K8S_POD_MEMORY_LIMIT
+    valueFrom:
+      resourceFieldRef:
+        resource: limits.memory
+        divisor: "1"          # raw bytes; parse_pod_memory_limit() also accepts Ki/Mi/Gi suffixes
+```
+
+When this env var is absent the memory-pressure warning is silently disabled
+(no false positives in local dev / non-Kubernetes environments).
+
+### Diagnostic runbook (OOM kill)
+
+1. **Check exit code in the new pod** (`kubectl logs <pod>` — look for the exit-137 CRITICAL line at the top, or the process memory at start line showing a high baseline).
+2. **Confirm OOM kill** — `kubectl describe pod <pod>` → `lastState.terminated.reason: OOMKilled`.
+3. **Check cluster events** — `kubectl get events -n <namespace> --field-selector=reason=OOMKilling`.
+4. **Review memory trajectory** — search the killed pod's log for `Memory pressure on task` lines to see how fast RSS climbed before the kill.
+5. **Check eviction retries** — search the workflow log for `re-dispatched after worker eviction` to understand how many attempts Temporal made.
+
+---
+
 ## Correlation IDs
 
 The `correlation_id` propagates automatically across:

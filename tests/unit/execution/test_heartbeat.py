@@ -239,6 +239,136 @@ class TestAutoHeartbeatLoop:
 
         assert hb_calls  # heartbeat was sent
 
+    @pytest.mark.asyncio
+    async def test_memory_pressure_silent_when_env_unset(self, monkeypatch) -> None:
+        """No memory-pressure WARNING when K8S_POD_MEMORY_LIMIT is not set."""
+        from application_sdk.execution import heartbeat as hb_mod
+
+        monkeypatch.delenv("K8S_POD_MEMORY_LIMIT", raising=False)
+        stop = asyncio.Event()
+
+        def hb_fn():
+            stop.set()
+
+        with patch.object(hb_mod, "logger") as mock_logger:
+            await auto_heartbeat_loop(0.001, hb_fn, stop, task_name="t")
+
+        memory_warnings = [
+            c for c in mock_logger.warning.call_args_list if "Memory pressure" in str(c)
+        ]
+        assert not memory_warnings
+
+    @pytest.mark.asyncio
+    async def test_memory_pressure_warning_emitted_above_threshold(
+        self, monkeypatch
+    ) -> None:
+        """WARNING is emitted with correct percentage when RSS ≥ 80% of limit."""
+        from application_sdk.execution import heartbeat as hb_mod
+        from application_sdk.observability.resource_sampler import ResourceSample
+
+        limit = 4 * 1024**3  # 4 GiB in bytes
+        rss = int(limit * 0.85)  # 85%
+        monkeypatch.setenv("K8S_POD_MEMORY_LIMIT", str(limit))
+
+        stop = asyncio.Event()
+
+        def hb_fn():
+            stop.set()
+
+        with (
+            patch(
+                "application_sdk.execution.heartbeat._resource_sampler.sample",
+                return_value=ResourceSample(cpu_time_s=1.0, rss_bytes=rss),
+            ),
+            patch.object(hb_mod, "logger") as mock_logger,
+        ):
+            await auto_heartbeat_loop(0.001, hb_fn, stop, task_name="mem-task")
+
+        warning_calls = [
+            c for c in mock_logger.warning.call_args_list if "Memory pressure" in str(c)
+        ]
+        assert warning_calls, "Expected memory-pressure WARNING"
+        # args: (fmt, task_name, pct_float, rss_gib, limit_gib)
+        _fmt, task, pct, *_ = warning_calls[0].args
+        assert task == "mem-task"
+        assert abs(pct - 85.0) < 0.5
+
+    @pytest.mark.asyncio
+    async def test_memory_pressure_warning_latches_above_threshold(
+        self, monkeypatch
+    ) -> None:
+        """Warning fires exactly once when ratio stays ≥ 80% across N ticks."""
+        from application_sdk.execution import heartbeat as hb_mod
+        from application_sdk.observability.resource_sampler import ResourceSample
+
+        limit = 4 * 1024**3
+        rss = int(limit * 0.85)  # constant 85% — always above threshold
+        monkeypatch.setenv("K8S_POD_MEMORY_LIMIT", str(limit))
+
+        tick = {"n": 0}
+        stop = asyncio.Event()
+
+        def hb_fn():
+            tick["n"] += 1
+            if tick["n"] >= 4:  # run 4 ticks to confirm latch holds
+                stop.set()
+
+        with (
+            patch(
+                "application_sdk.execution.heartbeat._resource_sampler.sample",
+                return_value=ResourceSample(cpu_time_s=1.0, rss_bytes=rss),
+            ),
+            patch.object(hb_mod, "logger") as mock_logger,
+        ):
+            await auto_heartbeat_loop(0.001, hb_fn, stop, task_name="latch-task")
+
+        assert tick["n"] >= 4, "Expected at least 4 ticks"
+        mem_warnings = [
+            c for c in mock_logger.warning.call_args_list if "Memory pressure" in str(c)
+        ]
+        assert (
+            len(mem_warnings) == 1
+        ), f"Expected exactly 1 warning, got {len(mem_warnings)}"
+
+    @pytest.mark.asyncio
+    async def test_memory_pressure_rearms_after_drop_below_hysteresis(
+        self, monkeypatch
+    ) -> None:
+        """Warning fires twice: once at 0.85, re-arms after dropping to 0.70, fires again at 0.85."""
+        from application_sdk.execution import heartbeat as hb_mod
+        from application_sdk.observability.resource_sampler import ResourceSample
+
+        limit = 4 * 1024**3
+        # Sample sequence: 0.85 → 0.70 → 0.85 (must produce 2 warnings)
+        ratios = [0.85, 0.70, 0.85]
+        samples = [
+            ResourceSample(cpu_time_s=float(i), rss_bytes=int(limit * r))
+            for i, r in enumerate(ratios)
+        ]
+        monkeypatch.setenv("K8S_POD_MEMORY_LIMIT", str(limit))
+
+        tick = {"n": 0}
+        stop = asyncio.Event()
+
+        def hb_fn():
+            tick["n"] += 1
+            if tick["n"] >= len(samples):
+                stop.set()
+
+        with (
+            patch(
+                "application_sdk.execution.heartbeat._resource_sampler.sample",
+                side_effect=samples,
+            ),
+            patch.object(hb_mod, "logger") as mock_logger,
+        ):
+            await auto_heartbeat_loop(0.001, hb_fn, stop, task_name="rearm-task")
+
+        mem_warnings = [
+            c for c in mock_logger.warning.call_args_list if "Memory pressure" in str(c)
+        ]
+        assert len(mem_warnings) == 2, f"Expected 2 warnings, got {len(mem_warnings)}"
+
 
 # ---------------------------------------------------------------------------
 # run_in_thread — must NOT use real threads in tests
