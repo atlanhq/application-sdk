@@ -219,19 +219,11 @@ class TestExtractFailureAttrsDepthCap:
 # ---------------------------------------------------------------------------
 
 
-class _DeepErrIn(Input, allow_unbounded_fields=True):
+class _DeepIn(Input, allow_unbounded_fields=True):
     x: str = ""
 
 
-class _DeepErrOut(Output, allow_unbounded_fields=True):
-    y: str = ""
-
-
-class _DeepMsgIn(Input, allow_unbounded_fields=True):
-    x: str = ""
-
-
-class _DeepMsgOut(Output, allow_unbounded_fields=True):
+class _DeepOut(Output, allow_unbounded_fields=True):
     y: str = ""
 
 
@@ -242,18 +234,6 @@ class TestActivityExceptionHandlerDeepChain:
     Uses create_activity_from_task() rather than reconstructing the handler
     inline so regressions in the actual handler path are caught.
     """
-
-    def setup_method(self) -> None:
-        from application_sdk.app.registry import AppRegistry, TaskRegistry
-
-        AppRegistry.reset()
-        TaskRegistry.reset()
-
-    def teardown_method(self) -> None:
-        from application_sdk.app.registry import AppRegistry, TaskRegistry
-
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
     def _build_deep_chain_error(self, chain_length: int) -> _ConfigError:
         tail = ValueError("tail")
@@ -282,10 +262,10 @@ class TestActivityExceptionHandlerDeepChain:
 
         class _DeepErrApp(App):
             @task(timeout_seconds=60)
-            async def deep_fail(self, input: _DeepErrIn) -> _DeepErrOut:
+            async def deep_fail(self, input: _DeepIn) -> _DeepOut:
                 raise deep_err
 
-            async def run(self, input: _DeepErrIn) -> _DeepErrOut:  # type: ignore[override]
+            async def run(self, input: _DeepIn) -> _DeepOut:  # type: ignore[override]
                 return await self.deep_fail(input)
 
         task_registry = TaskRegistry.get_instance()
@@ -313,7 +293,7 @@ class TestActivityExceptionHandlerDeepChain:
             ),
             pytest.raises(ApplicationError) as exc_info,
         ):
-            await activity_fn(ctx, _DeepErrIn(x=""))
+            await activity_fn(ctx, _DeepIn(x=""))
 
         raised = exc_info.value
         # The chain rooted at raised must be finite and within safe bounds
@@ -345,10 +325,10 @@ class TestActivityExceptionHandlerDeepChain:
 
         class _DeepMsgApp(App):
             @task(timeout_seconds=60)
-            async def deep_fail(self, input: _DeepMsgIn) -> _DeepMsgOut:
+            async def deep_fail(self, input: _DeepIn) -> _DeepOut:
                 raise deep_err
 
-            async def run(self, input: _DeepMsgIn) -> _DeepMsgOut:  # type: ignore[override]
+            async def run(self, input: _DeepIn) -> _DeepOut:  # type: ignore[override]
                 return await self.deep_fail(input)
 
         task_registry = TaskRegistry.get_instance()
@@ -376,7 +356,7 @@ class TestActivityExceptionHandlerDeepChain:
             ),
             pytest.raises(ApplicationError) as exc_info,
         ):
-            await activity_fn(ctx, _DeepMsgIn(x=""))
+            await activity_fn(ctx, _DeepIn(x=""))
 
         raised = exc_info.value
         assert raised.type == "_ConfigError"
