@@ -93,6 +93,44 @@ to residue):
   `classification` is always `"judgment"` — the specific marker choice requires
   reading the test's I/O intent.
 
+- **T002 MissingSdrTestClass** — the app declares `self_deployed_runtime: true`
+  in `atlan.yaml` but no `BaseSDRIntegrationTest` subclass exists anywhere under
+  `tests/`.  Draft a new test file (e.g. `tests/integration/test_sdr.py`) with
+  a minimal subclass:
+
+  ```python
+  class TestMyAppSDR(BaseSDRIntegrationTest):
+      manifest_path = "app/generated/manifest.json"
+      workflow_type = "extraction"
+  ```
+
+  Use `manifest_path` (not `agent_spec_template`) so the test reads inputs from
+  the committed manifest — see T003.  Apply `@pytest.mark.integration` (or the
+  repo's equivalent SDR marker) so T001 is satisfied and the integration CI job
+  picks it up.  Route to residue — the correct `manifest_path` and
+  `workflow_type` require reading the app's contract and generated manifests.
+
+  `classification` is always `"judgment"`.
+
+- **T003 SdrTestLegacyAgentSpec** — a `BaseSDRIntegrationTest` subclass sets
+  `agent_spec_template` (with a non-empty dict/string literal) but no
+  `manifest_path`.  The hand-crafted spec bypasses manifest validation: the test
+  can pass even when `manifest.json` is missing the `agent_json` slot — the
+  exact mechanism behind the MSSQL regression (atlan-mssql-app#177, DISTR-752).
+  Fix: on the class body, replace the `agent_spec_template` assignment with:
+
+  ```python
+  manifest_path = "app/generated/<name>/manifest.json"
+  ```
+
+  Use the committed manifest path for this app's workflow type.  Suppress with
+  `# conformance: ignore[T003] <reason>` on the class definition line only when
+  `agent_spec_template` is intentionally used for a non-manifest test scenario
+  (e.g. a negative-path test that supplies deliberately invalid credentials) —
+  and state that reason explicitly.
+
+  `classification` is always `"judgment"`.
+
 **Suppress outcome (strict mode only, WARNING-tier findings)**:
 
 When `mode == "strict"` and `finding.disposition == "warning"`, the model may

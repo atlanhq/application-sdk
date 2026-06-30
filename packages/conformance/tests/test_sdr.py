@@ -90,7 +90,7 @@ def _rule_ids(findings: list) -> list[str]:
 # ── Rule metadata ────────────────────────────────────────────────────────────
 
 
-def test_p026_rule_metadata() -> None:
+def test_p029_rule_metadata() -> None:
     rule = get_rule("P029")
     assert rule.name == "SdrManifestMissingAgentJson"
     assert rule.tier == EnforcementTier.BLOCK
@@ -101,7 +101,7 @@ def test_p026_rule_metadata() -> None:
     assert rule.category == "sdr-readiness"
 
 
-def test_p027_rule_metadata() -> None:
+def test_p030_rule_metadata() -> None:
     rule = get_rule("P030")
     assert rule.name == "SdrUploadNotCalled"
     assert rule.tier == EnforcementTier.WARN
@@ -115,7 +115,7 @@ def test_p027_rule_metadata() -> None:
 # ── P029: manifest missing agent_json ───────────────────────────────────────
 
 
-def test_p026_fires_on_manifest_without_agent_json(tmp_path: Path) -> None:
+def test_p029_fires_on_manifest_without_agent_json(tmp_path: Path) -> None:
     _write(
         tmp_path,
         {
@@ -132,7 +132,7 @@ def test_p026_fires_on_manifest_without_agent_json(tmp_path: Path) -> None:
     assert p026[0].column == 1
 
 
-def test_p026_silent_when_manifest_has_agent_json(tmp_path: Path) -> None:
+def test_p029_silent_when_manifest_has_agent_json(tmp_path: Path) -> None:
     _write(
         tmp_path,
         {
@@ -145,7 +145,7 @@ def test_p026_silent_when_manifest_has_agent_json(tmp_path: Path) -> None:
     assert not any(f.rule_id == "P029" for f in findings)
 
 
-def test_p026_silent_when_no_manifest(tmp_path: Path) -> None:
+def test_p029_silent_when_no_manifest(tmp_path: Path) -> None:
     _write(
         tmp_path,
         {
@@ -157,7 +157,7 @@ def test_p026_silent_when_no_manifest(tmp_path: Path) -> None:
     assert not any(f.rule_id == "P029" for f in findings)
 
 
-def test_p026_silent_on_non_sdr_app(tmp_path: Path) -> None:
+def test_p029_silent_on_non_sdr_app(tmp_path: Path) -> None:
     _write(
         tmp_path,
         {
@@ -168,7 +168,7 @@ def test_p026_silent_on_non_sdr_app(tmp_path: Path) -> None:
     assert not _run(tmp_path)
 
 
-def test_p026_silent_when_no_atlan_yaml(tmp_path: Path) -> None:
+def test_p029_silent_when_no_atlan_yaml(tmp_path: Path) -> None:
     _write(
         tmp_path,
         {
@@ -178,7 +178,7 @@ def test_p026_silent_when_no_atlan_yaml(tmp_path: Path) -> None:
     assert not _run(tmp_path)
 
 
-def test_p026_fires_on_missing_args_key(tmp_path: Path) -> None:
+def test_p029_fires_on_missing_args_key(tmp_path: Path) -> None:
     _write(
         tmp_path,
         {
@@ -191,7 +191,7 @@ def test_p026_fires_on_missing_args_key(tmp_path: Path) -> None:
     assert any(f.rule_id == "P029" for f in findings)
 
 
-def test_p026_fires_on_missing_inputs_key(tmp_path: Path) -> None:
+def test_p029_fires_on_missing_inputs_key(tmp_path: Path) -> None:
     _write(
         tmp_path,
         {
@@ -204,7 +204,7 @@ def test_p026_fires_on_missing_inputs_key(tmp_path: Path) -> None:
     assert any(f.rule_id == "P029" for f in findings)
 
 
-def test_p026_fires_per_manifest_in_multi_ep(tmp_path: Path) -> None:
+def test_p029_fires_per_manifest_in_multi_ep(tmp_path: Path) -> None:
     _write(
         tmp_path,
         {
@@ -218,7 +218,7 @@ def test_p026_fires_per_manifest_in_multi_ep(tmp_path: Path) -> None:
     assert len(findings) == 2
 
 
-def test_p026_silent_on_valid_manifest_in_multi_ep(tmp_path: Path) -> None:
+def test_p029_silent_on_valid_manifest_in_multi_ep(tmp_path: Path) -> None:
     _write(
         tmp_path,
         {
@@ -231,7 +231,7 @@ def test_p026_silent_on_valid_manifest_in_multi_ep(tmp_path: Path) -> None:
     assert not any(f.rule_id == "P029" for f in _run(tmp_path))
 
 
-def test_p026_mixed_ep_one_fire_one_silent(tmp_path: Path) -> None:
+def test_p029_mixed_ep_one_fire_one_silent(tmp_path: Path) -> None:
     _write(
         tmp_path,
         {
@@ -246,7 +246,7 @@ def test_p026_mixed_ep_one_fire_one_silent(tmp_path: Path) -> None:
     assert "extract" in findings[0].file
 
 
-def test_p026_skips_invalid_json_manifest(tmp_path: Path) -> None:
+def test_p029_skips_invalid_json_manifest(tmp_path: Path) -> None:
     _write(
         tmp_path,
         {
@@ -263,7 +263,7 @@ def test_p026_skips_invalid_json_manifest(tmp_path: Path) -> None:
 # ── P030: upload call absent ─────────────────────────────────────────────────
 
 
-def test_p027_fires_when_no_upload_call(tmp_path: Path) -> None:
+def test_p030_fires_when_no_upload_call(tmp_path: Path) -> None:
     _write(
         tmp_path,
         {
@@ -279,7 +279,7 @@ def test_p027_fires_when_no_upload_call(tmp_path: Path) -> None:
     assert p027[0].line == 1
 
 
-def test_p027_silent_when_upload_call_present(tmp_path: Path) -> None:
+def test_p030_silent_when_upload_call_present(tmp_path: Path) -> None:
     _write(
         tmp_path,
         {
@@ -291,7 +291,7 @@ def test_p027_silent_when_upload_call_present(tmp_path: Path) -> None:
     assert not any(f.rule_id == "P030" for f in findings)
 
 
-def test_p027_silent_on_non_sdr_app(tmp_path: Path) -> None:
+def test_p030_silent_on_non_sdr_app(tmp_path: Path) -> None:
     _write(
         tmp_path,
         {
@@ -302,7 +302,7 @@ def test_p027_silent_on_non_sdr_app(tmp_path: Path) -> None:
     assert not _run(tmp_path)
 
 
-def test_p027_silent_when_no_atlan_yaml(tmp_path: Path) -> None:
+def test_p030_silent_when_no_atlan_yaml(tmp_path: Path) -> None:
     _write(
         tmp_path,
         {
@@ -312,7 +312,7 @@ def test_p027_silent_when_no_atlan_yaml(tmp_path: Path) -> None:
     assert not _run(tmp_path)
 
 
-def test_p027_fires_even_when_upload_only_in_tests(tmp_path: Path) -> None:
+def test_p030_fires_even_when_upload_only_in_tests(tmp_path: Path) -> None:
     _write(
         tmp_path,
         {
@@ -326,7 +326,7 @@ def test_p027_fires_even_when_upload_only_in_tests(tmp_path: Path) -> None:
     assert any(f.rule_id == "P030" for f in findings)
 
 
-def test_p027_upload_call_in_any_source_file_satisfies(tmp_path: Path) -> None:
+def test_p030_upload_call_in_any_source_file_satisfies(tmp_path: Path) -> None:
     _write(
         tmp_path,
         {
@@ -339,7 +339,7 @@ def test_p027_upload_call_in_any_source_file_satisfies(tmp_path: Path) -> None:
     assert not any(f.rule_id == "P030" for f in findings)
 
 
-def test_p027_fires_when_source_dir_empty(tmp_path: Path) -> None:
+def test_p030_fires_when_source_dir_empty(tmp_path: Path) -> None:
     _write(tmp_path, {"atlan.yaml": _SDR_ATLAN_YAML})
     findings = _run(tmp_path)
     assert any(f.rule_id == "P030" for f in findings)

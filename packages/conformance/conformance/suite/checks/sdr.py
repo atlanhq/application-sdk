@@ -59,7 +59,7 @@ def _is_sdr_app(root: Path) -> bool:
     return m is not None and m.group(1).lower() == "true"
 
 
-def _check_p026(root: Path) -> list[Finding]:
+def _check_p029(root: Path) -> list[Finding]:
     """P029: every manifest.json under app/generated/ must have agent_json."""
     generated = root / "app" / "generated"
     if not generated.is_dir():
@@ -116,7 +116,7 @@ def _check_p026(root: Path) -> list[Finding]:
     return findings
 
 
-def _check_p027(paths: list[Path]) -> list[Finding]:
+def _check_p030(paths: list[Path]) -> list[Finding]:
     """P030: at least one source file must contain self.upload(."""
     for path in paths:
         try:
@@ -163,8 +163,8 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         return []
 
     findings: list[Finding] = []
-    findings.extend(_check_p026(root))
-    findings.extend(_check_p027(paths))
+    findings.extend(_check_p029(root))
+    findings.extend(_check_p030(paths))
     return findings
 
 

@@ -178,7 +178,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "manifest entirely.  This means the test can pass even when\n"
             "``manifest.json`` is missing the ``agent_json`` slot or has other\n"
             "defects — the template fills in what the manifest was supposed to\n"
-            "provide.  P026 closes the static manifest gap; T003 closes the test\n"
+            "provide.  P029 closes the static manifest gap; T003 closes the test\n"
             "gap: a subclass using ``manifest_path`` will fail at test time\n"
             "whenever ``manifest.json`` is broken, not silently pass.\n"
             "\n"

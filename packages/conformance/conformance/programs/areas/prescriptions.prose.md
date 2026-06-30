@@ -374,3 +374,30 @@ drafting.
   downstream calls on the client then become `await`-ed, so this is a restructure
   — route to residue with the proposed shape; do not mechanically rename the
   class.  Leave `AsyncAtlanClient` usage untouched.
+
+**SDR-readiness rules (P029–P030, DISTR-752)** — all suggest-only, scope=app;
+`classification` is always `"judgment"`.  Both gate on `self_deployed_runtime: true`
+in `atlan.yaml`.
+
+- **P029 SdrManifestMissingAgentJson** (BLOCK) — a `manifest.json` under
+  `app/generated/` is missing the `agent_json` key in `dag.extract.inputs.args`.
+  Without this slot the SDR platform cannot inject credentials at dispatch time;
+  the workflow runs to "success" but the extraction agent receives no credentials
+  and writes zero assets (the MSSQL regression pattern, atlan-mssql-app#177).
+  The finding is anchored at line 1 of the manifest file — JSON has no comment
+  syntax and inline suppression is not available.  The only remedy is a Pkl-layer
+  change: add `agent_json` to the extract inputs in `contract/app.pkl` and
+  re-run `pkl eval` to regenerate the manifest.  Do not hand-edit the generated
+  JSON.  Draft the required `app.pkl` addition and route to residue for the
+  developer to apply.
+
+- **P030 SdrUploadNotCalled** (WARN) — no `self.upload(` call exists in any app
+  source file outside `tests/`, making the `ENABLE_ATLAN_UPLOAD` gate structurally
+  unreachable.  The finding is anchored at line 1 of `atlan.yaml` — the check
+  builds its `Finding` directly and does not call `_parse_directives`, so inline
+  YAML suppression is not honoured.  Draft a proposal that adds
+  `await self.upload(output_key)` in the appropriate `@entrypoint`-decorated
+  method or `run()` method, after extraction completes.  Read the app's workflow
+  structure first — some apps delegate upload to a base class or a helper method
+  that the scanner cannot see; if that is the case, note it in residue rather
+  than adding a redundant call.  Route to residue for human confirmation.

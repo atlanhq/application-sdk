@@ -77,14 +77,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "``contract/app.pkl`` extract inputs and re-run ``pkl eval`` to\n"
             "regenerate ``app/generated/<name>/manifest.json``.  Do not\n"
             "hand-edit the generated manifest — C002 tracks drift.\n"
-            "\n"
-            "Suppress with ``# conformance: ignore[P029] <reason>`` on the\n"
-            "first line of the manifest file when the app genuinely does not\n"
-            "use agent-mode credential routing.\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/sdr.md#p026"
+            "packages/conformance/conformance/docs/rules/prescriptions.md#p029"
         ),
     ),
     RuleDefinition(
@@ -133,14 +129,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "Note: P008 flags ``self.upload()`` *inside* ``@task`` methods (the\n"
             "wrong location); P030 flags the *absence* of any upload call.  They\n"
             "are complementary: both should be clean for a correctly-wired SDR app.\n"
-            "\n"
-            "Suppress with ``# conformance: ignore[P030] <reason>`` on the first\n"
-            "line of ``atlan.yaml`` (a repo-level finding with no finer anchor)\n"
-            "when the app genuinely has no direct upload call.\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
-            "packages/conformance/conformance/docs/rules/sdr.md#p027"
+            "packages/conformance/conformance/docs/rules/prescriptions.md#p030"
         ),
     ),
 )
