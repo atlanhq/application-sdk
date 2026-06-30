@@ -78,6 +78,10 @@ class FullDAGOutcome:
             Connection QN. Empty when the Connection probe didn't succeed.
         lineage_present: True iff at least one Process / ColumnProcess
             asset exists under the Connection QN.
+        asset_qn_samples: A few sampled qualifiedNames per type (only for
+            the types in ``expected_asset_qn_depth``); used to assert assets
+            landed at the correct hierarchy depth. Empty when location
+            validation isn't requested or the Connection probe didn't succeed.
     """
 
     ae_result: DAGRunResult
@@ -86,6 +90,7 @@ class FullDAGOutcome:
     asset_counts: dict[str, int] = field(default_factory=dict)
     total_assets: int = 0
     lineage_present: bool = False
+    asset_qn_samples: dict[str, list[str]] = field(default_factory=dict)
 
     @property
     def succeeded(self) -> bool:
@@ -179,6 +184,19 @@ class BaseE2ETest:
     # themselves assert zero (only non-positive floors/exacts).
     require_nonempty_assets: ClassVar[bool] = True
     expect_lineage: ClassVar[bool] = True
+
+    # Opt-in: validate the LOCATION (qualifiedName hierarchy) of published
+    # assets, not just their counts. Maps typeName -> the number of path
+    # segments its qualifiedName must have BELOW the connection QN
+    # (for the SQL db>schema>table>column shape: Database=1, Schema=2,
+    # Table=3, View=3, Column=4). For each declared type the harness samples a
+    # few landed assets and asserts each is nested under the connection at
+    # exactly that depth — catching assets published to the wrong hierarchy
+    # level (mis-parented / flattened / dropped segment), which the counts
+    # alone can't see. This is the structural complement to the count +
+    # non-empty checks for the recurring egress->publish path-drift incident
+    # class. Empty = skip (counts + non-empty backstop still run).
+    expected_asset_qn_depth: ClassVar[dict[str, int]] = {}
 
     # ------------------------------------------------------------------
     # Setup
@@ -597,6 +615,7 @@ class BaseE2ETest:
         )
 
         asset_counts: dict[str, int] = {}
+        asset_qn_samples: dict[str, list[str]] = {}
         total_assets = 0
         lineage_present = False
         if ae_result.all_nodes_succeeded:
@@ -660,6 +679,21 @@ class BaseE2ETest:
                         lineage_counts,
                         lineage_present,
                     )
+                # Sample qualifiedNames for the location/hierarchy assertion
+                # (opt-in). Only the declared types are probed, so connectors
+                # that don't set expected_asset_qn_depth pay no extra Atlas call.
+                if self.expected_asset_qn_depth:
+                    asset_qn_samples = (
+                        self.client.sample_asset_qualified_names_under_connection(
+                            self.connection_qualified_name,
+                            type_names=tuple(self.expected_asset_qn_depth),
+                        )
+                    )
+                    logger.info(
+                        "Atlas qualifiedName samples under %s: %s",
+                        self.connection_qualified_name,
+                        asset_qn_samples,
+                    )
         else:
             failed_names = ", ".join(n.name for n in ae_result.failed_nodes) or "(none)"
             logger.warning(
@@ -677,6 +711,7 @@ class BaseE2ETest:
             asset_counts=asset_counts,
             total_assets=total_assets,
             lineage_present=lineage_present,
+            asset_qn_samples=asset_qn_samples,
         )
 
     # ------------------------------------------------------------------
@@ -740,6 +775,41 @@ class BaseE2ETest:
 
         return failures
 
+    def _validate_asset_locations(
+        self, asset_qn_samples: dict[str, list[str]]
+    ) -> list[str]:
+        """Validate sampled assets are nested under the connection at the
+        expected hierarchy depth.
+
+        Pure function of the samples + ``expected_asset_qn_depth`` + the
+        connection QN, so it is unit-testable without a tenant. For each
+        declared type, every sampled qualifiedName must (a) be nested under the
+        connection prefix and (b) have exactly the declared number of segments
+        below it — catching assets that landed at the wrong hierarchy level
+        (mis-parented / flattened / a dropped path segment) even when the COUNT
+        is correct. Types with no sampled assets are skipped: "too few / none"
+        is already covered by the count floors + the non-empty backstop, so this
+        check is purely about the *shape* of assets that did land.
+        """
+        failures: list[str] = []
+        prefix = f"{self.connection_qualified_name}/"
+        for type_name, depth in self.expected_asset_qn_depth.items():
+            for qn in asset_qn_samples.get(type_name, []):
+                if not qn.startswith(prefix):
+                    failures.append(
+                        f"  - {type_name} {qn!r} is not nested under the "
+                        f"connection {self.connection_qualified_name}"
+                    )
+                    continue
+                below = qn[len(prefix) :].split("/")
+                if len(below) != depth:
+                    failures.append(
+                        f"  - {type_name} {qn!r} has {len(below)} segment(s) "
+                        f"below the connection, expected {depth} "
+                        "(wrong hierarchy level)"
+                    )
+        return failures
+
     # ------------------------------------------------------------------
     # Default test method
     # ------------------------------------------------------------------
@@ -753,7 +823,9 @@ class BaseE2ETest:
           3. Asset-count expectations: ``expected_min_asset_counts`` floors,
              ``expected_exact_counts`` parity vs. the direct-run baseline, and
              the non-empty backstop (see ``_evaluate_asset_expectations``).
-          4. At least one Process/ColumnProcess exists (unless ``expect_lineage``
+          4. Asset locations: sampled assets are nested under the connection at
+             the depth declared in ``expected_asset_qn_depth`` (opt-in).
+          5. At least one Process/ColumnProcess exists (unless ``expect_lineage``
              is False).
         """
         outcome = self.run_full_dag()
@@ -785,6 +857,15 @@ class BaseE2ETest:
                 f"{outcome.connection_qualified_name} did not meet expectations:\n"
                 + "\n".join(asset_failures)
                 + f"\nFull counts: {outcome.asset_counts}"
+            )
+
+        location_failures = self._validate_asset_locations(outcome.asset_qn_samples)
+        if location_failures:
+            raise AssertionError(
+                "Published assets are at the wrong location under "
+                f"{outcome.connection_qualified_name} (extract succeeded and the "
+                "counts may look right, but the qualifiedName hierarchy is "
+                "wrong):\n" + "\n".join(location_failures)
             )
 
         if self.expect_lineage and not outcome.lineage_present:

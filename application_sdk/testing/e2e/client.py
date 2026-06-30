@@ -937,6 +937,66 @@ class AEWorkflowClient:
                 await asyncio.gather(*(_count_one(client, tn) for tn in type_names))
             )
 
+    def sample_asset_qualified_names_under_connection(
+        self,
+        connection_qualified_name: str,
+        *,
+        type_names: tuple[str, ...],
+        per_type: int = 3,
+    ) -> dict[str, list[str]]:
+        """Sample up to *per_type* qualifiedNames per type under the connection.
+
+        Backs the location/hierarchy assertion: the harness checks the *shape*
+        (nesting depth) of a few landed assets per type, not just their counts.
+        Returns ``{typeName: [qualifiedName, ...]}`` with an empty list for
+        types that produced no hits (or on search error).
+        """
+        if not type_names:
+            return {}
+        prefix = f"{connection_qualified_name}/"
+        results = asyncio.run(self._sample_qns_async(prefix, type_names, per_type))
+        return dict(zip(type_names, results))
+
+    async def _sample_qns_async(
+        self, prefix: str, type_names: tuple[str, ...], per_type: int
+    ) -> list[list[str]]:
+        """Parallel per-type searches returning a few qualifiedNames each.
+
+        Mirrors :meth:`_search_counts_async` (same shared async client /
+        connection pool, same OAuth-vs-API-key identity handling) but requests a
+        small page and reads ``qualifiedName`` off the hits instead of ``.count``.
+        """
+        from pyatlan.model.assets import Asset  # noqa: PLC0415
+        from pyatlan.model.fluent_search import FluentSearch  # noqa: PLC0415
+
+        async def _sample_one(client: Any, type_name: str) -> list[str]:
+            try:
+                request = (
+                    FluentSearch()
+                    .where(Asset.QUALIFIED_NAME.startswith(prefix))
+                    .where(Asset.TYPE_NAME.eq(type_name))
+                    .include_on_results(Asset.QUALIFIED_NAME)
+                ).to_request()
+                request.dsl.size = per_type
+                results = await client.asset.search(request)
+                page = results.current_page() or []
+                qns = [
+                    a.qualified_name
+                    for a in page
+                    if getattr(a, "qualified_name", None)
+                ]
+                return qns[:per_type]
+            except Exception:
+                logger.exception(
+                    "qualifiedName sample for %s under %s failed", type_name, prefix
+                )
+                return []
+
+        async with self._build_async_atlan_client() as client:
+            return list(
+                await asyncio.gather(*(_sample_one(client, tn) for tn in type_names))
+            )
+
 
 # ---------------------------------------------------------------------------
 # Helpers — defensive parsing for forward-compat
