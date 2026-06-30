@@ -5,7 +5,7 @@
 
 # Test-Quality Rules (T-series)
 
-**1 rule** · Checker: `suite.checks.integration_marking` (AST-based)
+**3 rules** · Checker: `suite.checks.integration_marking` (AST-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -16,6 +16,8 @@ Suppress a finding on the violating line or the line directly above it:
 | ID | Name | Tier | Scope | Category | Autofixable | Since |
 |---|---|---|---|---|---|---|
 | [T001](#t001) | `UnmarkedIntegrationTest` | `warn` | `both` | `test-marking` | — | 0.4.0 |
+| [T002](#t002) | `MissingSdrTestClass` | `warn` | `app` | `sdr-test-coverage` | — | 0.9.0 |
+| [T003](#t003) | `SdrTestLegacyAgentSpec` | `warn` | `app` | `sdr-test-coverage` | — | 0.9.0 |
 
 ---
 
@@ -46,5 +48,89 @@ leak into the unit matrix — where the embedded Temporal/Dapr/emulator boot can
 the unit job timeout — and are skipped by the dedicated integration job.  Tracked in
 BLDX-1455; chosen over an auto-marking `conftest.py` hook precisely to avoid non-obvious
 hidden behaviour.
+
+---
+
+## T002 — `MissingSdrTestClass` {#t002}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-test-coverage` · **Autofixable:** — · **Since:** 0.9.0
+
+> SDR app declares self_deployed_runtime but has no BaseSDRIntegrationTest subclass
+
+**Rationale:** An SDR app that declares self_deployed_runtime: true in atlan.yaml but has no
+BaseSDRIntegrationTest subclass has no automated test that validates SDR-specific
+behaviour: manifest inputs (agent_json, etc.), credential routing via the agent-mode
+dispatch path, and the ENABLE_ATLAN_UPLOAD upload gate. The MSSQL regression (DISTR-752)
+slipped through status-only CI exactly because no SDR test class validated
+manifest-derived inputs — the manifest was broken but all status checks passed.
+
+For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, at least one
+`BaseSDRIntegrationTest` subclass must be present somewhere under `tests/`.
+
+`BaseSDRIntegrationTest` (from `application_sdk.testing.sdr.base`) is the SDK's
+integration test harness for SDR apps.  It boots a Temporal dev server, injects
+credentials from the test environment, and validates that the end-to-end SDR workflow
+completes correctly — including manifest-derived inputs, credential routing, and the
+`ENABLE_ATLAN_UPLOAD` gate.  An SDR app without this harness has no automated coverage
+of the code paths that differ between standard and SDR deployments.
+
+**Remediation:** create a test class that:
+
+.. code-block:: python
+
+    class TestMyAppSDR(BaseSDRIntegrationTest):         manifest_path =
+'app/generated/manifest.json'         workflow_type = 'extraction'
+
+Set `manifest_path` (not the legacy `agent_spec_template`) so the test reads inputs from
+the committed manifest and validates the `agent_json` slot — see T003 for the
+complementary rule.
+
+---
+
+## T003 — `SdrTestLegacyAgentSpec` {#t003}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-test-coverage` · **Autofixable:** — · **Since:** 0.9.0
+
+> BaseSDRIntegrationTest subclass uses legacy agent_spec_template instead of manifest_path
+
+**Rationale:** A BaseSDRIntegrationTest subclass that sets agent_spec_template (and not manifest_path)
+supplies credentials to the test workflow via a hand-crafted JSON blob rather than
+reading inputs from the committed manifest.json. This means the test can pass even when
+the manifest is missing the agent_json slot — the hand-crafted spec fills the gap the
+manifest was supposed to fill. This is the exact mechanism that allowed the MSSQL
+regression (atlan-mssql-app#177, DISTR-752) to slip through: the test passed because
+agent_spec_template bypassed the broken manifest, but production runs failed because the
+manifest had no agent_json slot. Switching to manifest_path forces the test to read
+inputs from the committed manifest, catching missing-agent_json and other manifest
+defects at CI time.
+
+A `BaseSDRIntegrationTest` subclass must use `manifest_path` (not `agent_spec_template`)
+so the test reads workflow inputs from the committed `manifest.json` file.
+
+`agent_spec_template` is the legacy class var: it supplies a hand-crafted JSON blob
+directly to the test workflow, bypassing the manifest entirely.  This means the test can
+pass even when `manifest.json` is missing the `agent_json` slot or has other defects —
+the template fills in what the manifest was supposed to provide.  P029 closes the static
+manifest gap; T003 closes the test gap: a subclass using `manifest_path` will fail at
+test time whenever `manifest.json` is broken, not silently pass.
+
+**Remediation:** in the subclass body, replace::
+
+    agent_spec_template = '{...}'    # legacy
+
+with::
+
+    manifest_path = 'app/generated/manifest.json'
+
+The `manifest_path` class var tells `BaseSDRIntegrationTest` to call
+`_manifest_extract_inputs()` which reads `dag.extract.inputs` from the manifest —
+including the `agent_json` slot — and passes them as the workflow start parameters.  If
+`agent_json` is missing from the manifest the test will raise a `KeyError` at startup,
+surface the defect, and fail the CI run rather than letting the broken manifest reach
+production.
+
+Suppress with `# conformance: ignore[T003] <reason>` on the class definition line when
+`agent_spec_template` is intentionally used for a non-manifest test scenario (e.g. a
+negative-path test that supplies deliberately invalid credentials).
 
 ---

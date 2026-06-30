@@ -12,9 +12,11 @@ images still carry the CVE from the last released SDK — so an entry must persi
 until the fix is released, not merely merged. The hourly scan still
 detects/tickets/allowlists; only this retirement step is release-gated.
 
-The scan history it walks (current + debounce window) is pinned to ``main`` via
-``SCAN_BRANCH`` so an hourly-scan ``workflow_dispatch`` from a feature branch can
-never become the source of truth for what `main` ships (and thus what to retire
+The *current* scan is produced fresh by the release workflow (the shared Trivy
+composite, run against `main`) and read from the CWD. The debounce *window*
+(prior scans, only consulted when ``DEBOUNCE_SCANS`` > 1) is pinned to ``main``
+via ``SCAN_BRANCH`` so an hourly-scan ``workflow_dispatch`` from a feature branch
+can never feed reconcile a view of non-released code (and wrongly retire entries
 from the shared allowlist).
 
 **Resolution & debounce.** By default a CVE is treated as *resolved* as soon as
@@ -190,6 +192,11 @@ def load_prior_scan_cves(
     feature branch must never feed the debounce window — only runs of ``main``
     reflect what is actually shipped. (Not ``--event schedule``, so a manual
     dispatch on ``main`` for backfill still counts.)"""
+    if count <= 0:
+        # debounce=1 (the default): the fresh current scan is the only evidence;
+        # no prior window needed, so skip the API call (and the actions: read it
+        # would require).
+        return []
     listing = runner(
         [
             "gh",

@@ -20,6 +20,7 @@ from application_sdk.main import (
     _install_excepthook,
     _install_graceful_signal_handlers,
     _log_dapr_components,
+    _log_process_memory_baseline,
     _loop_exception_handler,
     _parse_all_component_yamls,
     _parse_workflow_max_timeout_hours,
@@ -2184,3 +2185,66 @@ class TestRunCombinedAuth:
         auth_mgr.acquire_initial_token.assert_awaited_once()
         auth_mgr.start_background_refresh.assert_called_once()
         auth_mgr.shutdown.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# _log_process_memory_baseline
+# ---------------------------------------------------------------------------
+
+
+class TestLogProcessMemoryBaseline:
+    def test_emits_info_with_percentage(self, monkeypatch) -> None:
+        """INFO log is emitted with RSS/limit ratio when both are available."""
+        import application_sdk.main as main_mod
+        from application_sdk.observability.resource_sampler import ResourceSample
+
+        limit = 8 * 1024**3  # 8 GiB
+        rss = 2 * 1024**3  # 2 GiB → 25%
+        monkeypatch.setenv("K8S_POD_MEMORY_LIMIT", str(limit))
+
+        with (
+            patch(
+                "application_sdk.observability.resource_sampler.sample",
+                return_value=ResourceSample(cpu_time_s=0.5, rss_bytes=rss),
+            ),
+            patch.object(main_mod, "logger") as mock_logger,
+        ):
+            _log_process_memory_baseline()
+
+        info_calls = [
+            c
+            for c in mock_logger.info.call_args_list
+            if "memory at start" in str(c).lower()
+        ]
+        assert info_calls, "Expected INFO memory baseline log"
+        # args: (fmt, rss_gib, limit_gib, pct_float)
+        _fmt, _rss, _lim, pct = info_calls[0].args
+        assert abs(pct - 25.0) < 0.5
+
+    def test_silent_when_limit_unset(self, monkeypatch) -> None:
+        """No INFO log when K8S_POD_MEMORY_LIMIT is absent (local dev / non-K8s)."""
+        import application_sdk.main as main_mod
+
+        monkeypatch.delenv("K8S_POD_MEMORY_LIMIT", raising=False)
+
+        with patch.object(main_mod, "logger") as mock_logger:
+            _log_process_memory_baseline()
+
+        mock_logger.info.assert_not_called()
+
+    def test_silent_when_sample_returns_none(self, monkeypatch) -> None:
+        """No INFO log when resource sampling fails (e.g. on Windows)."""
+        import application_sdk.main as main_mod
+
+        monkeypatch.setenv("K8S_POD_MEMORY_LIMIT", str(4 * 1024**3))
+
+        with (
+            patch(
+                "application_sdk.observability.resource_sampler.sample",
+                return_value=None,
+            ),
+            patch.object(main_mod, "logger") as mock_logger,
+        ):
+            _log_process_memory_baseline()
+
+        mock_logger.info.assert_not_called()

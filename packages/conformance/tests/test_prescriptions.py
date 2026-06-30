@@ -2069,3 +2069,228 @@ def test_p013_fires_on_kwonly_input(tmp_path: Path) -> None:
     p013 = [f for f in findings if f.rule_id == "P013"]
     assert len(p013) == 1
     assert "input" in p013[0].message
+
+
+# ── P026 GetattrOnTypedContractField ───────────────────────────────────────────
+
+
+def test_p026_fires_on_getattr_with_default_on_typed_param() -> None:
+    src = (
+        "class MyApp:\n"
+        "    @task\n"
+        "    async def fetch(self, input: FetchInput) -> FetchOutput:\n"
+        '        wid = getattr(input, "workflow_id", "")\n'
+        "        return FetchOutput()\n"
+    )
+    assert "P026" in _ids(src)
+
+
+def test_p026_fires_on_entrypoint_too() -> None:
+    src = (
+        "class MyApp:\n"
+        "    @entrypoint\n"
+        "    async def run_it(self, input: FetchInput) -> FetchOutput:\n"
+        '        return getattr(input, "output_path", None)\n'
+    )
+    assert "P026" in _ids(src)
+
+
+def test_p026_fires_on_kwonly_input() -> None:
+    # def fetch(self, *, input: FetchInput) — keyword-only typed contract param,
+    # the canonical form P013/P014 accept; getattr-with-default must still fire.
+    src = (
+        "class MyApp:\n"
+        "    @task\n"
+        "    async def fetch(self, *, input: FetchInput) -> FetchOutput:\n"
+        '        wid = getattr(input, "workflow_id", "")\n'
+        "        return FetchOutput()\n"
+    )
+    assert "P026" in _ids(src)
+
+
+def test_p026_fires_on_pep604_optional_input() -> None:
+    # input: FetchInput | None (PEP 604 union) must unwrap to the typed contract,
+    # like Optional[FetchInput] and bare FetchInput already do.
+    src = (
+        "class MyApp:\n"
+        "    @task\n"
+        "    async def fetch(self, input: FetchInput | None) -> FetchOutput:\n"
+        '        wid = getattr(input, "workflow_id", "")\n'
+        "        return FetchOutput()\n"
+    )
+    assert "P026" in _ids(src)
+
+
+def test_p026_fires_on_optional_input() -> None:
+    src = (
+        "class MyApp:\n"
+        "    @task\n"
+        "    async def fetch(self, input: Optional[FetchInput]) -> FetchOutput:\n"
+        '        wid = getattr(input, "workflow_id", "")\n'
+        "        return FetchOutput()\n"
+    )
+    assert "P026" in _ids(src)
+
+
+def test_p026_no_finding_on_attribute_access() -> None:
+    src = (
+        "class MyApp:\n"
+        "    @task\n"
+        "    async def fetch(self, input: FetchInput) -> FetchOutput:\n"
+        "        wid = input.workflow_id\n"
+        "        return FetchOutput()\n"
+    )
+    assert "P026" not in _ids(src)
+
+
+def test_p026_no_finding_on_untyped_param() -> None:
+    # input: dict is clearly-untyped — that boundary is P013/P014's concern.
+    src = (
+        "class MyApp:\n"
+        "    @task\n"
+        "    async def fetch(self, input: dict) -> FetchOutput:\n"
+        '        wid = getattr(input, "workflow_id", "")\n'
+        "        return FetchOutput()\n"
+    )
+    assert "P026" not in _ids(src)
+
+
+def test_p026_no_finding_without_default() -> None:
+    # Two-arg getattr still raises AttributeError — not the silent-substitution hazard.
+    src = (
+        "class MyApp:\n"
+        "    @task\n"
+        "    async def fetch(self, input: FetchInput) -> FetchOutput:\n"
+        '        wid = getattr(input, "workflow_id")\n'
+        "        return FetchOutput()\n"
+    )
+    assert "P026" not in _ids(src)
+
+
+def test_p026_no_finding_outside_entrypoint_or_task() -> None:
+    src = (
+        "class MyApp:\n"
+        "    async def helper(self, input: FetchInput) -> FetchOutput:\n"
+        '        wid = getattr(input, "workflow_id", "")\n'
+        "        return FetchOutput()\n"
+    )
+    assert "P026" not in _ids(src)
+
+
+def test_p026_suppressed_inline() -> None:
+    src = (
+        "class MyApp:\n"
+        "    @task\n"
+        "    async def fetch(self, input: FetchInput) -> FetchOutput:\n"
+        '        wid = getattr(input, "workflow_id", "")  '
+        "# conformance: ignore[P026] input is sometimes a raw dict in this legacy path\n"
+        "        return FetchOutput()\n"
+    )
+    fs = [f for f in scan_text(src, "x.py") if f.rule_id == "P026"]
+    assert fs and all(f.suppressed for f in fs)
+
+
+# ── P027 AppStateAsCrossTaskChannel ────────────────────────────────────────────
+
+
+def _p027_ids(findings: list) -> list[str]:
+    return [f.rule_id for f in findings if f.rule_id == "P027"]
+
+
+def test_p027_fires_on_read_with_no_writer(tmp_path: Path) -> None:
+    src = (
+        "class MyApp:\n"
+        "    def run(self):\n"
+        '        return self.get_app_state("auth_header")\n'
+    )
+    assert _p027_ids(_scan_one(tmp_path, src)) == ["P027"]
+
+
+def test_p027_fires_when_only_writer_stores_none(tmp_path: Path) -> None:
+    # The openapi shape: a "claim ownership" write of None, no real populating write.
+    src = (
+        "class MyApp:\n"
+        "    def run(self):\n"
+        '        h = self.get_app_state("auth_header")\n'
+        '        self.set_app_state("auth_header", None)\n'
+    )
+    assert _p027_ids(_scan_one(tmp_path, src)) == ["P027"]
+
+
+def test_p027_no_finding_when_populating_writer_exists(tmp_path: Path) -> None:
+    src = (
+        "class MyApp:\n"
+        "    def run(self):\n"
+        '        cfg = self.get_app_state("cfg")\n'
+        "        if cfg is None:\n"
+        "            cfg = build()\n"
+        '            self.set_app_state("cfg", cfg)\n'
+    )
+    assert _p027_ids(_scan_one(tmp_path, src)) == []
+
+
+def test_p027_no_finding_on_dynamic_key(tmp_path: Path) -> None:
+    src = (
+        "class MyApp:\n"
+        "    def run(self, k):\n"
+        "        return self.get_app_state(k)\n"
+    )
+    assert _p027_ids(_scan_one(tmp_path, src)) == []
+
+
+def test_p027_resolves_key_constant_across_files(tmp_path: Path) -> None:
+    # Key defined in one module, read in another, no writer anywhere.
+    files = {
+        "consts.py": 'AUTH_KEY = "_validated_auth_header"\n',
+        "connector.py": (
+            "from consts import AUTH_KEY\n"
+            "class MyApp:\n"
+            "    def run(self):\n"
+            "        return self.get_app_state(AUTH_KEY)\n"
+        ),
+    }
+    assert _p027_ids(_scan_files(tmp_path, files)) == ["P027"]
+
+
+def test_p027_suppressed_inline(tmp_path: Path) -> None:
+    src = (
+        "class MyApp:\n"
+        "    def run(self):\n"
+        '        return self.get_app_state("auth_header")  '
+        "# conformance: ignore[P027] writer lives in an external base class\n"
+    )
+    fs = [f for f in _scan_one(tmp_path, src) if f.rule_id == "P027"]
+    assert fs and all(f.suppressed for f in fs)
+
+
+# ── P028 ManualQualifiedNameFString ────────────────────────────────────────────
+
+
+def test_p028_fires_on_qualified_name_fstring() -> None:
+    src = 'db_qn = f"{connection_qualified_name}/{db_name}"\n'
+    assert "P028" in _ids(src)
+
+
+def test_p028_fires_on_qn_chain_variable() -> None:
+    # Second link references db_qn (matches *_qn) and has a separator.
+    src = 'schema_qn = f"{db_qn}/{schema_name}"\n'
+    assert "P028" in _ids(src)
+
+
+def test_p028_no_finding_without_separator() -> None:
+    src = 'label = f"qn is {connection_qualified_name}"\n'
+    assert "P028" not in _ids(src)
+
+
+def test_p028_no_finding_without_qualified_name_ref() -> None:
+    src = 'path = f"{base_dir}/{child}"\n'
+    assert "P028" not in _ids(src)
+
+
+def test_p028_suppressed_inline() -> None:
+    src = (
+        'qn = f"{connection_qualified_name}/{db_name}"  '
+        "# conformance: ignore[P028] raw qualifiedName required for a lineage shim\n"
+    )
+    fs = [f for f in scan_text(src, "x.py") if f.rule_id == "P028"]
+    assert fs and all(f.suppressed for f in fs)

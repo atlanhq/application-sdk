@@ -61,6 +61,11 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+# Must match _MAX_CHAIN_DEPTH in activities.py: an AppError sitting between the
+# walk cap and the sever cap would be silently invisible to OTel attributes.
+_MAX_CHAIN_WALK = 50
+
+
 def _extract_failure_attrs(exc: BaseException | None) -> dict[str, str]:
     """Flatten SDK error classification onto OTel attributes for ERROR logs.
 
@@ -84,8 +89,10 @@ def _extract_failure_attrs(exc: BaseException | None) -> dict[str, str]:
         return {}
     seen: set[int] = set()
     current: BaseException | None = exc
-    while current is not None and id(current) not in seen:
+    depth = 0
+    while current is not None and id(current) not in seen and depth < _MAX_CHAIN_WALK:
         seen.add(id(current))
+        depth += 1
         if isinstance(current, AppError):
             return {
                 "failure.category": current.category.value,

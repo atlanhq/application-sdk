@@ -15,7 +15,7 @@ description: >
   with the OpenProse skill to use the full Reactor-ready contract semantics; or
   invoke the program directly via the instructions below.
 
-argument-hint: "[--area error-handling|deprecation|dependency|prescriptions|optimizations|dockerfile|tests|logging|ci] [--strict] [path]"
+argument-hint: "[--area error-handling|deprecation|dependency|prescriptions|optimizations|dockerfile|tests|logging|ci|contract-toolkit] [--strict] [path]"
 
 inputs:
   - name: area
@@ -25,7 +25,7 @@ inputs:
       prescriptions, optimizations, dockerfile, tests; logging and ci are
       detected but route to residue).  Example: --area deprecation
     required: false
-    default: "error-handling,deprecation,dependency,prescriptions,optimizations,dockerfile,tests,logging,ci"
+    default: "error-handling,deprecation,dependency,prescriptions,optimizations,dockerfile,tests,logging,ci,contract-toolkit"
   - name: strict
     description: >
       When present, also remediates WARNING-tier findings.  Each WARNING is
@@ -129,9 +129,14 @@ dispatches each finding to its area prescription.
 | tests | T | ✅ Strict-only | WARNING-tier; strict mode |
 | logging | L | 🚧 Deferred | Detection runs; all findings → residue |
 | ci | C | 🚧 Deferred | Detection runs; all findings → residue |
+| contract-toolkit | K | ✅ Strict-only | K001/K002 guided migration to App.pkl; verified by pkl-eval gate |
 
 To add a new area prescription: author `<programs-dir>/areas/<name>.prose.md`
 and add a dispatch branch to `<programs-dir>/functions/remediate-finding.prose.md`.
+The `contract-toolkit` area is the first example of an area using
+`orthogonal_gate="pkl-eval"` instead of `"tests"` — useful precedent for any
+future area whose fixes are validated by regenerating derived artifacts rather
+than by running the test suite.
 
 ## Execution instructions
 
@@ -152,7 +157,7 @@ so app-only series no-op on the SDK):
 ```
 let before = call detect-violations
   scope: .
-  series: E,L,C,P,O,D,B,I,T
+  series: E,L,C,P,O,D,B,I,T,K
   target: if strict then "failing+warning" else "failing"
   path_prefix: <path argument, if any>
 ```
@@ -173,8 +178,9 @@ OpenProse runtime required for the skill path).
 Execution order (from `conformance-remediation.prose.md`):
 
 1. Run every area responsibility in parallel (error-handling, deprecation,
-   dependency, prescriptions, optimizations, dockerfile, tests, logging, ci) —
-   the top-level contract fans out to all of them; do not hardcode a subset.
+   dependency, prescriptions, optimizations, dockerfile, tests, logging, ci,
+   contract-toolkit) — the top-level contract fans out to all of them; do not
+   hardcode a subset.
 
 2. Each area responsibility calls the `detect-fix-recheck` pattern
    (`patterns/detect-fix-recheck.prose.md`), which loops:
@@ -196,7 +202,7 @@ Call `detect-violations` again and copy the result to `after.sarif`:
 ```
 let after = call detect-violations
   scope: .
-  series: E,L,C,P,O,D,B,I,T
+  series: E,L,C,P,O,D,B,I,T,K
   target: if strict then "failing+warning" else "failing"
   path_prefix: <path argument, if any>
 ```

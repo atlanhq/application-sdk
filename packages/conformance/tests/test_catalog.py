@@ -133,13 +133,30 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # methods and no contract to drift from (BLDX-1425).
     # P017/P018: apps must boot through the SDK launcher, not hand-roll
     # workers or servers (BLDX-1411).
+    # P026: getattr-with-default on a typed entrypoint/task contract param —
+    # only apps own the @entrypoint/@task methods that consume the contract
+    # (BLDX-1501). P027: app_state used as a cross-task data channel — the SDK
+    # defines get/set_app_state but apps are the ones that (mis)use it as a
+    # conduit (BLDX-1500). P028: hand-built qualifiedName f-strings — connectors
+    # mint asset qualifiedNames; the SDK is the framework, not an asset author
+    # (BLDX-1499).
     # P025: app-name alignment — only apps have an atlan.yaml and .env.example;
     # the SDK has neither, so this check is meaningless there (BLDX-1491).
+    # P029/P030: SDR-readiness — only apps declare self_deployed_runtime; the SDK
+    # itself never does, so these are APP-scoped (DISTR-752).
+    # T002/T003: SDR test-quality — apps that declare SDR must have an SDR test
+    # class; the SDK itself is not an SDR app (DISTR-752).
     # I001–I005: Dockerfile conformance (SDK builds the base image, not consuming it).
     # B001: consuming a deprecated SDK symbol (BLDX-1418).
     # O002/O003/O004: asset-mapper usage — connectors build assets with pyatlan_v9,
     # serialize with to_nested_bytes, and type their mapper returns (BLDX-1492); the
     # SDK is the framework, not a connector.
+    # K001/K002: contract-toolkit conformance — only app repos have a contract/
+    # directory with .pkl source files; the SDK has no contract/ dir to scan
+    # (BLDX-1479).
+    # E020: HTTP-failure-to-empty-return — the harm (publishing a partial crawl as
+    # complete) is a connector extract/publish concern; the SDK's matching sites are
+    # legitimate best-effort infra (health/metric scrapes), not crawlers (BLDX-1503).
     assert app_scoped == {
         "B001",
         "C002",
@@ -150,6 +167,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "D006",
         "D007",
         "D008",
+        "E020",
+        "K001",
+        "K002",
         "P004",
         "P005",
         "P008",
@@ -164,6 +184,13 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P017",
         "P018",
         "P025",
+        "P026",
+        "P027",
+        "P028",
+        "P029",
+        "P030",
+        "T002",
+        "T003",
         "O002",
         "O003",
         "O004",
@@ -212,6 +239,8 @@ def test_catalog_e_series_present() -> None:
         "E016",
         "E017",
         "E018",
+        "E019",
+        "E020",
     }
     missing = expected - e_ids
     assert not missing, f"Missing E-series rules: {missing}"
@@ -285,6 +314,10 @@ def test_catalog_p_series_present() -> None:
     blocking calls in async defs, and pyatlan sync ``AtlanClient`` use.
     P025 is the app-name alignment rule — code name, atlan.yaml name:, and
     .env.example ATLAN_APPLICATION_NAME must agree (BLDX-1491).
+    P026–P028 are reserved by PR #2417 (GetattrOnTypedContractField,
+    AppStateAsCrossTaskChannel, ManualQualifiedNameFString).
+    P029/P030 are the SDR-readiness rules — manifest agent_json slot and
+    upload call presence (DISTR-752).
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -316,6 +349,11 @@ def test_catalog_p_series_present() -> None:
         "P023",
         "P024",
         "P025",
+        "P026",
+        "P027",
+        "P028",
+        "P029",
+        "P030",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
@@ -336,7 +374,7 @@ def test_catalog_t_series_present() -> None:
     """The T-series test-quality rules are all present."""
     rules = load_catalog()
     t_ids = {r.id for r in rules if r.id.startswith("T")}
-    expected = {"T001"}
+    expected = {"T001", "T002", "T003"}
     missing = expected - t_ids
     assert not missing, f"Missing T-series rules: {missing}"
 
@@ -350,6 +388,17 @@ def test_catalog_b_series_present() -> None:
     assert not missing, f"Missing B-series rules: {missing}"
     extra = b_ids - expected
     assert not extra, f"Unexpected B-series rules: {extra}"
+
+
+def test_catalog_k_series_present() -> None:
+    """The K-series contract-toolkit conformance rules are exactly K001 and K002."""
+    rules = load_catalog()
+    k_ids = {r.id for r in rules if r.id.startswith("K")}
+    expected = {"K001", "K002"}
+    missing = expected - k_ids
+    assert not missing, f"Missing K-series rules: {missing}"
+    extra = k_ids - expected
+    assert not extra, f"Unexpected K-series rules: {extra}"
 
 
 def test_catalog_is_mapping_keyed_by_id() -> None:

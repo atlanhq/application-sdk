@@ -24,6 +24,8 @@ from pathlib import Path
 
 import conformance.suite.checks.entrypoint as entrypoint
 import conformance.suite.checks.logging as logging_checks
+import conformance.suite.checks.sdr as sdr_checks
+import conformance.suite.checks.sdr_test_checks as sdr_test_checks
 from conformance.suite.checks import (
     actions_pinning,
     app_name_alignment,
@@ -37,6 +39,7 @@ from conformance.suite.checks import (
     error_handling,
     gitignore_entries,
     integration_marking,
+    legacy_contract,
     optimizations,
     orchestration,
     prescriptions,
@@ -156,6 +159,23 @@ _CHECKS: list[CheckRegistration] = [
         discover=app_name_alignment.discover,
         scan_path=app_name_alignment.scan_path,
         scan_all=app_name_alignment.scan_all,
+    ),
+    CheckRegistration(
+        series=legacy_contract.SERIES,
+        discover=legacy_contract.discover,
+        scan_path=legacy_contract.scan_path,
+    ),
+    CheckRegistration(
+        series=sdr_checks.SERIES,
+        discover=sdr_checks.discover,
+        scan_path=sdr_checks.scan_path,
+        scan_all=sdr_checks.scan_all,
+    ),
+    CheckRegistration(
+        series=sdr_test_checks.SERIES,
+        discover=sdr_test_checks.discover,
+        scan_path=sdr_test_checks.scan_path,
+        scan_all=sdr_test_checks.scan_all,
     ),
 ]
 

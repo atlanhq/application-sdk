@@ -17,7 +17,7 @@ Rule ID namespaces:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from conformance.suite.schema.disposition import (
     EnforcementTier,
@@ -62,7 +62,12 @@ class RuleDefinition(BaseModel):
     short_description: str = ""
     full_description: str = ""
     help_uri: str | None = None
-    orthogonal_gate: str | None = None
+    orthogonal_gate: Literal["tests", "pkl-eval"] | None = None
+    """Named gate to run after a source-code fix.  ``None`` or ``"tests"`` runs
+    the repository's standard test suite; ``"pkl-eval"`` runs the pkl-eval gate.
+    The field is an exhaustive ``Literal`` so that a typo (e.g. ``"pkleval"``)
+    is caught at rule-definition time rather than silently falling through to the
+    wrong gate at remediation time."""
     since: str | None = None
     """Conformance suite version when the behaviour behind this rule was first enforced.
     Tracks the behavioural appearance, not when a specific rule ID was assigned —

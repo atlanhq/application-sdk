@@ -14,6 +14,7 @@ from conformance.suite.rules.app_name_alignment import (
 )
 from conformance.suite.rules.ci import RULES as _CI_RULES
 from conformance.suite.rules.client_seam import RULES as _CLIENT_SEAM_RULES
+from conformance.suite.rules.contract_toolkit import RULES as _CONTRACT_TOOLKIT_RULES
 from conformance.suite.rules.dependency import RULES as _D_RULES
 from conformance.suite.rules.deprecation import RULES as _B_RULES
 from conformance.suite.rules.determinism import RULES as _DETERMINISM_RULES
@@ -25,6 +26,7 @@ from conformance.suite.rules.logging import RULES as _L_RULES
 from conformance.suite.rules.optimizations import RULES as _O_RULES
 from conformance.suite.rules.orchestration import RULES as _ORCHESTRATION_RULES
 from conformance.suite.rules.prescriptions import RULES as _P_RULES
+from conformance.suite.rules.sdr import RULES as _SDR_RULES
 from conformance.suite.rules.storage import RULES as _STORAGE_RULES
 from conformance.suite.rules.tests import RULES as _T_RULES
 from conformance.suite.schema.catalog import RuleDefinition
@@ -56,8 +58,10 @@ _ALL_SERIES: tuple[tuple[RuleDefinition, ...], ...] = (
     _CLIENT_SEAM_RULES,
     _EP_ALIGNMENT_RULES,
     _APP_NAME_ALIGNMENT_RULES,
+    _SDR_RULES,
     _T_RULES,
     _B_RULES,
+    _CONTRACT_TOOLKIT_RULES,
 )
 
 
