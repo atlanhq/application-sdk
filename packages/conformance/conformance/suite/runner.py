@@ -37,6 +37,7 @@ from conformance.suite.checks import (
     error_handling,
     gitignore_entries,
     integration_marking,
+    legacy_contract,
     optimizations,
     orchestration,
     prescriptions,
@@ -156,6 +157,11 @@ _CHECKS: list[CheckRegistration] = [
         discover=app_name_alignment.discover,
         scan_path=app_name_alignment.scan_path,
         scan_all=app_name_alignment.scan_all,
+    ),
+    CheckRegistration(
+        series=legacy_contract.SERIES,
+        discover=legacy_contract.discover,
+        scan_path=legacy_contract.scan_path,
     ),
 ]
 
