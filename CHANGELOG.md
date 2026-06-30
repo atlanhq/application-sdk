@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.20.2 (June 30, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.20.1...v3.20.2
+
+### Bug Fixes
+
+- prefer _app_name over APPLICATION_NAME for output path derivation (#2380) (by @cmgrote in [f28312c](https://github.com/atlanhq/application-sdk/commit/f28312c))
+- stamp deployment_name on every log record (#2383) (by @Lalit3716-atlan in [04eda87](https://github.com/atlanhq/application-sdk/commit/04eda87))
+- add monotonic counter to partition filenames to prevent Windows clock-collision (#2411) (by @cmgrote in [6fa1dad](https://github.com/atlanhq/application-sdk/commit/6fa1dad))
+- surface OOM kills immediately in logs (#2409) (by @cmgrote in [31ec533](https://github.com/atlanhq/application-sdk/commit/31ec533))
+
+
 ## v3.20.1 (June 26, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.20.0...v3.20.1

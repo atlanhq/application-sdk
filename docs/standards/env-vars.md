@@ -75,6 +75,72 @@ If the var has no replacement (the controlling feature was removed
 entirely), the chart can drop it whenever the last SDK version that read
 it is retired.
 
+---
+
+## Kubernetes-injected variables
+
+These env vars are **not** set by the app or the SDK — they are injected by the
+Kubernetes Downward API in the pod spec. The SDK reads them but cannot validate
+that they were injected; when absent, the dependent feature is silently
+disabled.
+
+### `K8S_POD_MEMORY_LIMIT`
+
+Gates the memory-pressure observability feature (startup RSS baseline log,
+heartbeat WARNING at ≥ 80 % of limit).
+
+**Inject via:**
+
+```yaml
+env:
+  - name: K8S_POD_MEMORY_LIMIT
+    valueFrom:
+      resourceFieldRef:
+        resource: limits.memory
+        divisor: "1"   # plain bytes string; no suffix
+```
+
+**Accepted formats** (the SDK's `parse_pod_memory_limit()` helper accepts all of these):
+
+| Format | Example | Notes |
+|--------|---------|-------|
+| Raw bytes | `4294967296` | What `resourceFieldRef` with `divisor: "1"` produces |
+| Binary SI | `4Gi`, `512Mi`, `1Ti` | Ki / Mi / Gi / Ti / Pi / Ei (powers of 1024) |
+| Decimal SI | `4G`, `512M`, `1T` | k / M / G / T / P / E (powers of 1000) |
+
+Any other value (including floats like `1.5Gi`) is treated as 0 (feature disabled).
+
+### `K8S_POD_NAME`
+
+The pod's name as assigned by Kubernetes. Used in diagnostic log messages
+(e.g., the entrypoint's exit-137 SIGKILL trailer).
+
+**Inject via:**
+
+```yaml
+env:
+  - name: K8S_POD_NAME
+    valueFrom:
+      fieldRef:
+        fieldPath: metadata.name
+```
+
+### `K8S_POD_NAMESPACE`
+
+The pod's namespace. Used in diagnostic log messages alongside `K8S_POD_NAME`.
+
+**Inject via:**
+
+```yaml
+env:
+  - name: K8S_POD_NAMESPACE
+    valueFrom:
+      fieldRef:
+        fieldPath: metadata.namespace
+```
+
+---
+
 ## Checklist when removing/renaming an env var
 
 1. Remove the read site (`os.getenv(...)` / `os.environ.get(...)`).

@@ -3,9 +3,12 @@
 import sys
 from unittest.mock import patch
 
+import pytest
+
 from application_sdk.observability.resource_sampler import (
     ResourceSample,
     compute_deltas,
+    parse_pod_memory_limit,
     sample,
 )
 
@@ -72,3 +75,46 @@ class TestComputeDeltas:
         end = ResourceSample(cpu_time_s=3.0, rss_bytes=1024**3)
         cpu, mem = compute_deltas(start, end, 10.0)
         assert cpu == 0.0
+
+
+# ---------------------------------------------------------------------------
+# parse_pod_memory_limit
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        # Binary SI suffixes
+        ("1Ki", 1024),
+        ("2Mi", 2 * 1024**2),
+        ("3Gi", 3 * 1024**3),
+        ("4Ti", 4 * 1024**4),
+        ("5Pi", 5 * 1024**5),
+        ("6Ei", 6 * 1024**6),
+        # Decimal SI suffixes
+        ("1k", 1000),
+        ("2M", 2 * 1000**2),
+        ("3G", 3 * 1000**3),
+        ("4T", 4 * 1000**4),
+        ("5P", 5 * 1000**5),
+        ("6E", 6 * 1000**6),
+        # Raw bytes (resourceFieldRef divisor="1")
+        ("0", 0),
+        ("1024", 1024),
+        ("4294967296", 4 * 1024**3),
+        # Leading/trailing whitespace is stripped
+        ("  2Gi  ", 2 * 1024**3),
+        # Empty / whitespace-only → 0
+        ("", 0),
+        ("   ", 0),
+        # Suffix only (no numeric part) → 0
+        ("Gi", 0),
+        ("Mi", 0),
+        # Invalid / garbage → 0
+        ("notanumber", 0),
+        ("12.5Gi", 0),  # float not accepted
+    ],
+)
+def test_parse_pod_memory_limit(raw: str, expected: int) -> None:
+    assert parse_pod_memory_limit(raw) == expected

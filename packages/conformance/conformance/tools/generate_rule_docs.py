@@ -180,6 +180,19 @@ _SERIES_META: list[SeriesMeta] = [
         ),
         stability_note=_ID_STABILITY_NOTE,
     ),
+    SeriesMeta(
+        title="Contract-Toolkit Conformance Rules (K-series)",
+        prefix="K",
+        source_module="conformance/suite/rules/contract_toolkit.py",
+        output_filename="contract-toolkit.md",
+        checker=(
+            "`suite.checks.legacy_contract` (pkl-source regex, scans "
+            "``contract/**/*.pkl``)"
+        ),
+        suppression_example=(
+            "// conformance: ignore[K001] intentional: phased migration tracked in BLDX-XXXX"
+        ),
+    ),
 ]
 
 

@@ -464,6 +464,11 @@ LOG_RETENTION_DAYS = int(os.environ.get("ATLAN_LOG_RETENTION_DAYS", 30))
 LOG_CLEANUP_ENABLED = os.getenv("ATLAN_LOG_CLEANUP_ENABLED", "false").lower() == "true"
 
 # Log Location configuration
+# NOTE: Despite the ".parquet" default value, LOG_FILE_NAME is used purely as a
+# signal-type discriminator in AtlanObservability._get_signal_type() to route records
+# to the correct observability sub-path (logs / metrics / traces).  The actual output
+# format is gzip-compressed NDJSON (.json.gz) — not parquet.  Do not change the
+# default value; doing so would silently reroute log records to the "other" sub-path.
 LOG_FILE_NAME = os.environ.get("ATLAN_LOG_FILE_NAME", "log.parquet")
 # REMOVED: ENABLE_HIVE_PARTITIONING — unused.
 
@@ -476,6 +481,7 @@ METRICS_RETENTION_DAYS = int(os.environ.get("ATLAN_METRICS_RETENTION_DAYS", 30))
 METRICS_CLEANUP_ENABLED = (
     os.getenv("ATLAN_METRICS_CLEANUP_ENABLED", "false").lower() == "true"
 )
+# Same signal-discriminator convention as LOG_FILE_NAME above — not a real file name.
 METRICS_FILE_NAME = os.environ.get("ATLAN_METRICS_FILE_NAME", "metrics.parquet")
 TRACES_FILE_NAME = os.environ.get("ATLAN_TRACES_FILE_NAME", "traces.parquet")
 
