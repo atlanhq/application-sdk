@@ -84,7 +84,7 @@ async def list_keys(
 
     Raises:
         StorageError: If the listing fails.
-        ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
+        RuntimeError: If *store* is ``None`` and no infrastructure store is set.
     """
     resolved = _resolve_store(store)
     prefix = _normalize_listing_prefix(prefix, normalize)
@@ -136,7 +136,7 @@ async def delete_prefix(
 
     Raises:
         StorageError: If the listing or any deletion fails.
-        ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
+        RuntimeError: If *store* is ``None`` and no infrastructure store is set.
     """
     resolved = _resolve_store(store)
     prefix = _normalize_listing_prefix(prefix, normalize)
@@ -231,7 +231,7 @@ async def download_prefix(
 
     Raises:
         StorageError: If listing or downloading fails.
-        ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
+        RuntimeError: If *store* is ``None`` and no infrastructure store is set.
     """
     import asyncio  # noqa: PLC0415 — stdlib asyncio; lazy use only
 

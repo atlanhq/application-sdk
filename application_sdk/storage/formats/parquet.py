@@ -11,7 +11,6 @@ from application_sdk.contracts.types import FileReference
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.storage.batch import delete_prefix as _delete_prefix
-from application_sdk.storage.errors import ObjectStoreNotProvidedError
 from application_sdk.storage.formats import DataframeType, Reader, Writer
 from application_sdk.storage.formats.utils import (
     PARQUET_FILE_EXTENSION,
@@ -490,13 +489,10 @@ class ParquetFileWriter(Writer):
 
         try:
             deleted_count = await _delete_prefix(self.path)
-        except ObjectStoreNotProvidedError:
-            logger.warning(
-                "No object store configured, skipping prefix replacement — "
-                "existing objects under %s were not deleted",
-                normalized_prefix,
-                exc_info=True,
-            )
+        except RuntimeError as exc:
+            if "No ObjectStore provided" not in str(exc):
+                raise
+            logger.debug("No object store configured, skipping prefix replacement")
         else:
             logger.info(
                 "Cleared existing parquet object-store prefix",
@@ -763,21 +759,9 @@ class ParquetFileWriter(Writer):
             if os.path.exists(output_file_name):
                 try:
                     await self._upload_file(output_file_name)
-                except ObjectStoreNotProvidedError:
-                    # Local dev with no object store configured. Any other
-                    # exception (transient blob upload failure, auth token
-                    # rotation, network error) must propagate: the base
-                    # _flush_buffer has already incremented
-                    # total_record_count, and swallowing here would make the
-                    # writer report more rows in statistics.json than
-                    # actually reached object storage. Mirrors the safe
-                    # pattern used in _ensure_prefix_replaced above.
-                    logger.warning(
-                        "No object store configured, skipping upload — %s "
-                        "was written locally only and will not reach object storage",
-                        output_file_name,
-                        exc_info=True,
-                    )
+                except RuntimeError:
+                    # No object store configured (local dev) — file stays on disk.
+                    logger.debug("No object store configured, skipping upload")
         # Advance part so the next sub-chunk gets a unique filename.
         self.chunk_part += 1
 
