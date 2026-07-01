@@ -267,7 +267,7 @@ _FORCE_ALL_SCHEDULE = (
     "force-all: ${{ github.event_name == 'schedule' "
     "|| github.event_name == 'workflow_dispatch' }}"
 )
-_SCHEDULE_CRON = '- cron: "17 */6 * * *"'
+_SCHEDULE_BLOCK = 'schedule:\n    - cron: "17 */6 * * *"'
 
 
 def test_conformance_yaml_default_exit_zero_false() -> None:
@@ -315,7 +315,7 @@ def test_cmd_bootstrap_no_enforce_defaults_hard_mode(
 def test_conformance_yaml_schedule_force_refresh_trigger() -> None:
     """Bootstrap wires the force-refresh schedule/dispatch trigger and force-all override."""
     content = render("conformance.yaml")
-    assert _SCHEDULE_CRON in content
+    assert _SCHEDULE_BLOCK in content
     assert "workflow_dispatch: {}" in content
     assert _FORCE_ALL_SCHEDULE in content
 
