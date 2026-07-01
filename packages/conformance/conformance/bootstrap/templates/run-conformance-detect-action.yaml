@@ -84,8 +84,26 @@ runs:
           --with "atlan-application-sdk-conformance" \
           -- atlan-application-sdk-conformance detect "${detect_args[@]}"
 
-    - name: "Detect (from git ref)"
-      if: inputs.conformance-ref != ''
+    - name: "Detect (from git ref, isolated env)"
+      if: inputs.conformance-ref != '' && inputs.needs-env != 'true'
+      shell: bash
+      env:
+        SERIES: ${{ inputs.series }}
+        SLUG: ${{ inputs.slug }}
+        EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
+        EXIT_ZERO: ${{ inputs.exit-zero }}
+        CONFORMANCE_REF: ${{ inputs.conformance-ref }}
+      run: |
+        set -euo pipefail
+        raw=$(python "$GITHUB_ACTION_PATH/../../scripts/build_conformance_args.py" \
+          --series "$SERIES" --slug "$SLUG")
+        mapfile -t detect_args <<< "$raw"
+        uv run \
+          --with "atlan-application-sdk-conformance @ git+https://github.com/atlanhq/application-sdk@${CONFORMANCE_REF}#subdirectory=packages/conformance" \
+          -- atlan-application-sdk-conformance detect "${detect_args[@]}"
+
+    - name: "Detect (from git ref, resolved env)"
+      if: inputs.conformance-ref != '' && inputs.needs-env == 'true'
       shell: bash
       env:
         SERIES: ${{ inputs.series }}

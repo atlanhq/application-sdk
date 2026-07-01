@@ -164,12 +164,15 @@ def test_cmd_bootstrap_writes_all_managed_action_files(
         ), f"Content mismatch: {dest_rel}"
 
 
+@pytest.mark.parametrize("dest_rel,template_name", MANAGED_ACTION_FILES)
 def test_cmd_bootstrap_managed_action_files_always_overwrite(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dest_rel: str,
+    template_name: str,
 ) -> None:
     monkeypatch.chdir(tmp_path)
     _cmd_bootstrap([])
-    dest_rel, template_name = MANAGED_ACTION_FILES[0]
     dest = tmp_path / dest_rel
     dest.write_text("corrupted content")
     _cmd_bootstrap([])
