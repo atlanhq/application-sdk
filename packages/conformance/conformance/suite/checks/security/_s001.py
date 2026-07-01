@@ -53,6 +53,20 @@ def _is_flaggable_secret_literal(value: ast.expr, target_name: str) -> bool:
     return True
 
 
+def _target_credential_name(target: ast.expr) -> str | None:
+    """Return the credential-name to check for a ``Name`` or ``Attribute`` target.
+
+    Covers ``password = "..."`` and ``self.password = "..."`` alike — both are
+    hardcoded-credential surfaces (the latter common in ``__init__`` methods and
+    settings classes).
+    """
+    if isinstance(target, ast.Name) and is_credential_value_name(target.id):
+        return target.id
+    if isinstance(target, ast.Attribute) and is_credential_value_name(target.attr):
+        return target.attr
+    return None
+
+
 class HardcodedCredentialChecker(ast.NodeVisitor):
     """Walk a module AST and emit S001 findings."""
 
@@ -92,20 +106,16 @@ class HardcodedCredentialChecker(ast.NodeVisitor):
     def visit_Assign(self, node: ast.Assign) -> None:
         if self._enum_depth == 0:
             for target in node.targets:
-                if isinstance(target, ast.Name) and is_credential_value_name(target.id):
-                    if _is_flaggable_secret_literal(node.value, target.id):
-                        self._add(node.value, target.id)
+                name = _target_credential_name(target)
+                if name is not None and _is_flaggable_secret_literal(node.value, name):
+                    self._add(node.value, name)
         self.generic_visit(node)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
-        if (
-            self._enum_depth == 0
-            and node.value is not None
-            and isinstance(node.target, ast.Name)
-            and is_credential_value_name(node.target.id)
-            and _is_flaggable_secret_literal(node.value, node.target.id)
-        ):
-            self._add(node.value, node.target.id)
+        if self._enum_depth == 0 and node.value is not None:
+            name = _target_credential_name(node.target)
+            if name is not None and _is_flaggable_secret_literal(node.value, name):
+                self._add(node.value, name)
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:

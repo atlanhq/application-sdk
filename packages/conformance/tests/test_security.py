@@ -116,6 +116,12 @@ def test_s001_silent_on_non_credential_name() -> None:
     assert _ids('username = "admin"\n') == []
 
 
+def test_s001_fires_on_attribute_assignment() -> None:
+    # self.password = "..." in __init__ methods / settings classes
+    src = 'class Client:\n    def __init__(self) -> None:\n        self.password = "hunter2"\n'
+    assert _ids(src) == ["S001"]
+
+
 def test_s001_suppressed_by_directive_line_above() -> None:
     src = (
         "# conformance: ignore[S001] fixture password for a local-only sample\n"
@@ -155,6 +161,11 @@ def test_s002_fires_on_environ_subscript() -> None:
 
 def test_s002_fires_on_environ_get() -> None:
     assert _ids('import os\nk = os.environ.get("AE_TOKEN")\n') == ["S002"]
+
+
+def test_s002_fires_on_environ_pop() -> None:
+    # pop still returns (and exposes) the value, so it counts as a read
+    assert _ids('import os\nk = os.environ.pop("ATLAN_API_KEY")\n') == ["S002"]
 
 
 def test_s002_fires_on_aliased_os_import() -> None:

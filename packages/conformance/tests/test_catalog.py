@@ -410,6 +410,17 @@ def test_catalog_k_series_present() -> None:
     assert not extra, f"Unexpected K-series rules: {extra}"
 
 
+def test_catalog_s_series_present() -> None:
+    """The S-series secret-hygiene rules are exactly S001 and S002."""
+    rules = load_catalog()
+    s_ids = {r.id for r in rules if r.id.startswith("S")}
+    expected = {"S001", "S002"}
+    missing = expected - s_ids
+    assert not missing, f"Missing S-series rules: {missing}"
+    extra = s_ids - expected
+    assert not extra, f"Unexpected S-series rules: {extra}"
+
+
 def test_catalog_is_mapping_keyed_by_id() -> None:
     """CATALOG is a Mapping whose keys equal each rule's id."""
     from collections.abc import Mapping

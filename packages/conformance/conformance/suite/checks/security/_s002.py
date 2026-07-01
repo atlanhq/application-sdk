@@ -2,9 +2,11 @@
 
 Application code that reads a credential-named environment variable directly —
 ``os.getenv("...SECRET")``, ``os.environ["...TOKEN"]``,
-``os.environ.get("...API_KEY")`` — bypasses the SDK secret-store seam.  Only the
-env-var *name* (a string literal) is classified; dynamic keys are left alone.
-Environment *writes* (``os.environ[x] = v``) are never flagged — only reads.
+``os.environ.get("...API_KEY")``, ``os.environ.pop("...API_KEY")`` — bypasses the
+SDK secret-store seam.  Only the env-var *name* (a string literal) is classified;
+dynamic keys are left alone.  Environment *writes* (``os.environ[x] = v``) are
+never flagged — only reads (``pop`` still returns and exposes the value, so it
+counts as a read for this rule).
 
 App-scoped: the SDK is the provider of the seam (``EnvironmentSecretStore``
 legitimately reads ``os.environ``), so the runner skips this rule on the SDK.
@@ -117,8 +119,8 @@ def check_s002(
                 name = _string_literal(node.args[0]) if node.args else None
                 if name is not None:
                     _emit(name, node)
-            # os.environ.get("NAME") / environ.get("NAME")
-            elif func.attr == "get" and _is_environ_expr(func.value):
+            # os.environ.get("NAME") / os.environ.pop("NAME") / environ.get(...)
+            elif func.attr in {"get", "pop"} and _is_environ_expr(func.value):
                 name = _string_literal(node.args[0]) if node.args else None
                 if name is not None:
                     _emit(name, node)
