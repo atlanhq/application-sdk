@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from conformance.renovate.classify import classify
 from conformance.renovate.models import (
@@ -14,10 +14,11 @@ from conformance.renovate.models import (
 )
 from conformance.renovate.scan import _parse_checks_state
 
-# Anchor "now" once so age computations are deterministic within a run. _OLD is
-# clamped to day-of-month >= 1 so the 3-day-old PR stays in the same month.
+# Anchor "now" once so age computations are deterministic within a run. _OLD is a
+# true 3-day offset via timedelta — subtracting from the day-of-month clamped to
+# the same month, which collapsed to 0 days on the 1st-3rd (max(1, day-3) == day).
 _NOW = datetime.now(timezone.utc)
-_OLD = datetime(_NOW.year, _NOW.month, max(1, _NOW.day - 3), tzinfo=timezone.utc)
+_OLD = _NOW - timedelta(days=3)
 
 
 def make_pr(
