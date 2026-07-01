@@ -2,6 +2,14 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.10.1] - 2026-07-01
+
+### Other changes
+
+- chore(deps): lock file maintenance (#2460) ([1f8f7a6](https://github.com/atlanhq/application-sdk/commit/1f8f7a6))
+- chore(deps): lock file maintenance (#2459) ([fa95c66](https://github.com/atlanhq/application-sdk/commit/fa95c66))
+- chore(deps): lock file maintenance (#2453) ([4feedd8](https://github.com/atlanhq/application-sdk/commit/4feedd8))
+
 ## [0.10.0] - 2026-07-01
 
 ### Features
