@@ -188,10 +188,11 @@ class DefaultHandler(Handler):
         )
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        """Always returns READY with no checks."""
+        """Returns a non-blocking no-op result when no handler is registered.
+
+        No checks → no blocking checks → ``should_block`` is ``False``."""
         return PreflightOutput(
-            status=PreflightStatus.READY,
-            message="All preflight checks passed",
+            status=PreflightStatus.READY, message="No preflight handler registered"
         )
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:

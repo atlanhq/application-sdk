@@ -96,11 +96,12 @@ class TestDefaultHandler:
         assert isinstance(result, AuthOutput)
         assert result.status == AuthStatus.SUCCESS
 
-    async def test_preflight_check_returns_ready(self, handler):
+    async def test_preflight_check_returns_non_blocking(self, handler):
         inp = PreflightInput()
         result = await handler.preflight_check(inp)
         assert isinstance(result, PreflightOutput)
         assert result.status == PreflightStatus.READY
+        assert result.should_block is False
 
     async def test_fetch_metadata_returns_empty(self, handler):
         inp = MetadataInput()

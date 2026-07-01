@@ -14,6 +14,7 @@ on ingress (``model_validate``), direct JSON serialization on egress
 
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -21,6 +22,8 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 from application_sdk.contracts.base import SerializableEnum
+from application_sdk.credentials.ref import CredentialRef
+from application_sdk.credentials.spec import AgentCredentialSpec
 
 
 class _DictLikeConfigBase(BaseModel):
@@ -176,6 +179,48 @@ class HandlerCredential(BaseModel):
     value: str
     """Credential value (sensitive — never log this directly)."""
 
+    @classmethod
+    def list_from_raw(cls, creds_dict: dict[str, Any]) -> list[HandlerCredential]:
+        """Build a credential list from a raw resolved credential dict.
+
+        Produces the same v3 ``[{key, value}]`` shape Heracles sends on the
+        HTTP path, so a handler's ``input.credentials`` round-trips identically
+        whether creds arrive over HTTP or are resolved inside the injected
+        preflight gate. Nested ``extra`` keys flatten to ``extra.<k>``.
+        """
+        return [
+            cls(key=pair["key"], value=pair["value"])
+            for pair in flatten_credentials_to_pairs(creds_dict)
+        ]
+
+
+def _serialize_credential_value(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    return json.dumps(value)
+
+
+def flatten_credentials_to_pairs(creds_dict: dict[str, Any]) -> list[dict[str, str]]:
+    """Flatten a credential dict to v3 ``[{key, value}]`` pairs.
+
+    Nested ``extra`` is hoisted to ``extra.<k>`` keys. Shared by the HTTP
+    preflight path (heracles-normalized requests) and the injected gate's
+    resolved-credential conversion so both emit identical shapes.
+    """
+    pairs: list[dict[str, str]] = []
+    extra = creds_dict.get("extra")
+    for key, value in creds_dict.items():
+        if key == "extra" or value is None:
+            continue
+        pairs.append({"key": key, "value": _serialize_credential_value(value)})
+    if isinstance(extra, dict):
+        for key, value in extra.items():
+            if value is not None:
+                pairs.append(
+                    {"key": f"extra.{key}", "value": _serialize_credential_value(value)}
+                )
+    return pairs
+
 
 class AuthStatus(SerializableEnum):
     """Result of an authentication attempt."""
@@ -260,7 +305,14 @@ class AuthOutput(BaseModel):
 
 
 class PreflightStatus(SerializableEnum):
-    """Overall result of a preflight check."""
+    """Advisory result of a preflight check — for display/diagnostics only.
+
+    Surfaced to the Sage UI, the connector-pulse dashboard, and the Automation
+    Engine event. It does **not** decide whether a run is blocked: that is the
+    gate's job, driven by per-check :attr:`PreflightCheck.blocking` and folded
+    into :attr:`PreflightOutput.should_block`. Keeping status purely advisory
+    avoids overloading one field with two concerns (display vs gate decision).
+    """
 
     READY = "ready"
     NOT_READY = "not_ready"
@@ -273,8 +325,20 @@ class PreflightCheck(BaseModel):
     name: str = Field(..., min_length=1)
     """Check name (e.g., 'connectivity', 'permissions')."""
 
+    title: str = ""
+    """Optional display title for the check."""
+
     passed: bool = False
     """Whether the check passed."""
+
+    blocking: bool = False
+    """Whether failing this check must stop the run before extraction.
+
+    Advisory checks (e.g. server version, optional permissions) leave this
+    ``False`` — they surface in the UI but never block. A failed check with
+    ``blocking=True`` aborts the run via :attr:`PreflightOutput.should_block`.
+    Defaults to ``False`` so blocking is always an explicit, per-check opt-in.
+    """
 
     message: str = ""
     """Details about the check result."""
@@ -336,21 +400,81 @@ class PreflightInput(BaseModel):
     timeout_seconds: int = 60
     """Maximum seconds to wait for all checks."""
 
+    source: str = ""
+    """Caller surface, e.g. ``automation_engine_preflight``. Empty for UI checks."""
+
+    workflow_slug: str = ""
+    """Workflow slug for the current run (runtime preflight only)."""
+
+    workflow_run_guid: str = ""
+    """WorkflowRun GUID for the current run (runtime preflight only)."""
+
+    triggered_by: str = ""
+    """Trigger source such as manual, schedule, or event_watchdog."""
+
 
 class PreflightOutput(BaseModel):
     """Output from the preflight_check handler operation."""
 
     status: PreflightStatus
-    """Overall preflight result."""
+    """Advisory result for display (Sage UI / connector-pulse / AE event).
+
+    This is **not** the gate decision — see :attr:`should_block`. Set it to
+    reflect what a human should see (e.g. ``READY`` on a clean pass,
+    ``NOT_READY`` when something is off)."""
 
     checks: list[PreflightCheck] = []
-    """Individual check results."""
+    """Individual check results. A check's :attr:`PreflightCheck.blocking` flag
+    decides whether failing it stops the run."""
 
     message: str = ""
     """Human-readable summary."""
 
     total_duration_ms: float = 0.0
     """Total time for all checks in milliseconds."""
+
+    @property
+    def should_block(self) -> bool:
+        """Whether the gate must abort the run (a blocking check failed).
+
+        ``True`` iff a check with ``blocking=True`` failed. Advisory failures
+        (``blocking=False``) never block, and a handler with no blocking checks
+        — the default — never blocks. Blocking is strictly opt-in: an app marks
+        the checks that gate extraction and the SDK derives the rest."""
+        return any(check.blocking and not check.passed for check in self.checks)
+
+
+class PreflightGateInput(BaseModel):
+    """Credential-routing fields the injected preflight gate threads from the
+    extraction input into the gate activity.
+
+    Built deterministically inside the generated workflow ``_run`` from the
+    extraction ``input_data`` (which satisfies
+    :class:`~application_sdk.credentials.ref.CredentialResolvable`). Carries
+    only secret-free references — resolution happens inside the gate activity,
+    never in the deterministic workflow. Declares the
+    ``extraction_method``/``credential_guid``/``agent_json`` triple so it
+    satisfies ``CredentialResolvable`` and ``CredentialRef.resolve`` works on
+    it directly.
+    """
+
+    extraction_method: str = ""
+    """Credential routing mode (e.g. ``agent`` / ``direct``)."""
+
+    credential_guid: str = ""
+    """Platform credential GUID for direct (vault) resolution."""
+
+    agent_json: AgentCredentialSpec | None = None
+    """Agent-shape credential spec for inline (secret-manager) resolution."""
+
+    credential_ref: CredentialRef | None = None
+    """Pre-built reference, when the extraction input already carries one."""
+
+    entrypoint: str = ""
+    """Bare entry-point name of the gated workflow (for per-entrypoint checks)."""
+
+    metadata: BaseMetadataConfig = Field(default_factory=BaseMetadataConfig)
+    """Form-level metadata forwarded to the handler, mirroring the HTTP path."""
 
 
 # ---------------------------------------------------------------------------

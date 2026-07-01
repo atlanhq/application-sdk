@@ -68,7 +68,11 @@ from application_sdk.handler.contracts import (
     HandlerCredential,
     MetadataInput,
     PreflightInput,
+    PreflightOutput,
     SubscriptionConfig,
+)
+from application_sdk.handler.contracts import (
+    flatten_credentials_to_pairs as _flatten_to_pairs,
 )
 from application_sdk.handler.manifest import AppManifest
 from application_sdk.handler.service_errors import (
@@ -131,12 +135,6 @@ def _record_proxy_failure(
     logger.warning(log_message, *log_args, exc_info=exc_info)
 
 
-def _serialize_credential_value(v: Any) -> str:
-    if isinstance(v, str):
-        return v
-    return json.dumps(v)
-
-
 _CREDENTIAL_KEYS = frozenset(
     {
         "host",
@@ -149,22 +147,6 @@ _CREDENTIAL_KEYS = frozenset(
         "extra",
     }
 )
-
-
-def _flatten_to_pairs(creds_dict: dict[str, Any]) -> list[dict[str, str]]:
-    """Convert a flat credential dict to v3 [{key, value}] pairs."""
-    pairs: list[dict[str, str]] = []
-    extra = creds_dict.pop("extra", None)
-    for k, v in creds_dict.items():
-        if v is not None:
-            pairs.append({"key": k, "value": _serialize_credential_value(v)})
-    if isinstance(extra, dict):
-        for k, v in extra.items():
-            if v is not None:
-                pairs.append(
-                    {"key": f"extra.{k}", "value": _serialize_credential_value(v)}
-                )
-    return pairs
 
 
 # v2-compat: remove when Heracles sends credentials in v3 list[{key, value}] format.
@@ -208,6 +190,45 @@ def _normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
         return {**body, "credentials": _flatten_to_pairs(flat_creds)}
 
     return body
+
+
+def _normalize_preflight_request(body: dict[str, Any]) -> dict[str, Any]:
+    """Normalize preflight-specific compatibility fields before validation."""
+    normalized = _normalize_credentials(body)
+    has_metadata = "metadata" in normalized and normalized["metadata"] is not None
+    has_connection_config = (
+        "connection_config" in normalized
+        and normalized["connection_config"] is not None
+    )
+
+    if has_metadata and not has_connection_config:
+        return {**normalized, "connection_config": normalized["metadata"]}
+    if has_connection_config and not has_metadata:
+        return {**normalized, "metadata": normalized["connection_config"]}
+    return normalized
+
+
+def _preflight_runtime_summary(result: PreflightOutput) -> dict[str, Any]:
+    """Runtime metadata kept outside the SageV2 ``data`` map.
+
+    ``should_block`` is the gate signal: ``True`` iff a blocking check failed.
+    ``status`` / ``app_status`` carry the advisory handler status (``ready`` /
+    ``not_ready`` / ``partial``) — downstream consumers (Heracles, the Automation
+    Engine event, the connector-pulse dashboard) read it to distinguish a
+    soft-failure from a clean pass and to track adoption. Per-check ``blocking``
+    flags are included in ``checks``. Keep these key names in sync with those
+    consumers if ever renamed.
+    """
+    return {
+        "status": result.status.value,
+        "app_status": result.status.value,
+        "should_block": result.should_block,
+        "message": result.message,
+        "total_duration_ms": result.total_duration_ms,
+        "checks": [
+            check.model_dump(mode="json", exclude_none=True) for check in result.checks
+        ],
+    }
 
 
 if TYPE_CHECKING:
@@ -2239,7 +2260,7 @@ def create_app_handler_service(
 
     @app.post("/workflows/v1/check")
     async def preflight_check(request: Request) -> JSONResponse:
-        body = _normalize_credentials(await request.json())
+        body = _normalize_preflight_request(await request.json())
         preflight_input = PreflightInput.model_validate(body)
         credentials = [
             HandlerCredential(key=c.key, value=c.value)
@@ -2307,17 +2328,16 @@ def create_app_handler_service(
                 # behaviour) made every PARTIAL/NOT_READY response surface
                 # as "Check failed" with a blank "Hide details" panel
                 # (DBBI-665). Tying envelope success to "any check ran"
-                # keeps it false when the handler produced no checks (a
-                # genuine preflight-system failure) and lets the widget
-                # render per-check rows otherwise.
-                return JSONResponse(
-                    content=_wrap_response(
-                        v2_data,
-                        message=result.message
-                        or f"Preflight check {result.status.value}",
-                        success=len(result.checks) > 0,
-                    )
+                # keeps it false when a handler produced no checks and lets
+                # the widget render per-check rows otherwise. The canonical
+                # status is exposed separately under ``preflight``.
+                response = _wrap_response(
+                    v2_data,
+                    message=result.message or f"Preflight check {result.status.value}",
+                    success=len(result.checks) > 0,
                 )
+                response["preflight"] = _preflight_runtime_summary(result)
+                return JSONResponse(content=response)
             except HandlerError as e:
                 # TODO(signal-over-noise): [P13] Deprecated path — HandlerError is an
                 # AppError subclass caught here first so http_status is preserved.

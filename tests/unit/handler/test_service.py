@@ -12,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from application_sdk.contracts.base import Input, Output
-from application_sdk.handler.base import Handler, HandlerError
+from application_sdk.handler.base import DefaultHandler, Handler, HandlerError
 from application_sdk.handler.contracts import (
     ApiMetadataObject,
     ApiMetadataOutput,
@@ -381,6 +381,29 @@ class TestPreflightEndpoint:
         # v2 format: data is a dict of check results keyed by camelCase name.
         assert body["data"] == {}
         assert body["message"] == "ready"
+        assert body["preflight"]["status"] == "ready"
+        assert body["preflight"]["app_status"] == "ready"
+        assert body["preflight"]["should_block"] is False
+        assert body["preflight"]["checks"] == []
+
+    def test_default_handler_reports_success_with_no_checks(self) -> None:
+        client = _make_client(handler=DefaultHandler())
+        response = client.post(
+            "/workflows/v1/check",
+            json={"credentials": []},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        # No checks emitted, so the SageV2 envelope is success=False (same as
+        # any zero-check handler); with no blocking checks should_block is False.
+        assert body["success"] is False
+        assert body["data"] == {}
+        assert body["message"] == "No preflight handler registered"
+        assert body["preflight"]["status"] == "ready"
+        assert body["preflight"]["app_status"] == "ready"
+        assert body["preflight"]["should_block"] is False
+        assert body["preflight"]["checks"] == []
 
     def test_preflight_handler_error_returns_500(self) -> None:
         client = _make_client(handler=_FailingHandler())
@@ -425,6 +448,97 @@ class TestPreflightEndpoint:
                 "extraction-type": "objectstore",
                 "manifest-source": "atlan",
                 "core-extract-output-prefix": "artifacts/dbt/prod",
+            }
+        ]
+
+    def test_preflight_metadata_only_mirrors_to_connection_config(self) -> None:
+        received: list[dict[str, dict]] = []
+
+        class _ConfigCapture(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                received.append(
+                    {
+                        "metadata": dict(input.metadata),
+                        "connection_config": dict(input.connection_config),
+                    }
+                )
+                return PreflightOutput(status=PreflightStatus.READY, message="ready")
+
+        client = _make_client(handler=_ConfigCapture())
+        response = client.post(
+            "/workflows/v1/check",
+            json={
+                "credentials": [],
+                "metadata": {"warehouse": "COMPUTE_WH"},
+            },
+        )
+
+        assert response.status_code == 200
+        assert received == [
+            {
+                "metadata": {"warehouse": "COMPUTE_WH"},
+                "connection_config": {"warehouse": "COMPUTE_WH"},
+            }
+        ]
+
+    def test_preflight_connection_config_only_mirrors_to_metadata(self) -> None:
+        received: list[dict[str, dict]] = []
+
+        class _ConfigCapture(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                received.append(
+                    {
+                        "metadata": dict(input.metadata),
+                        "connection_config": dict(input.connection_config),
+                    }
+                )
+                return PreflightOutput(status=PreflightStatus.READY, message="ready")
+
+        client = _make_client(handler=_ConfigCapture())
+        response = client.post(
+            "/workflows/v1/check",
+            json={
+                "credentials": [],
+                "connection_config": {"warehouse": "COMPUTE_WH"},
+            },
+        )
+
+        assert response.status_code == 200
+        assert received == [
+            {
+                "metadata": {"warehouse": "COMPUTE_WH"},
+                "connection_config": {"warehouse": "COMPUTE_WH"},
+            }
+        ]
+
+    def test_preflight_connection_config_and_metadata_are_preserved(self) -> None:
+        received: list[dict[str, dict]] = []
+
+        class _ConfigCapture(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                received.append(
+                    {
+                        "metadata": dict(input.metadata),
+                        "connection_config": dict(input.connection_config),
+                    }
+                )
+                return PreflightOutput(status=PreflightStatus.READY, message="ready")
+
+        client = _make_client(handler=_ConfigCapture())
+        response = client.post(
+            "/workflows/v1/check",
+            json={
+                "credentials": [],
+                "metadata": {"legacy": "kept"},
+                "connection_config": {"canonical": "kept"},
+            },
+        )
+
+        assert response.status_code == 200
+        assert received == [
+            {
+                "metadata": {"legacy": "kept"},
+                "connection_config": {"canonical": "kept"},
             }
         ]
 
@@ -512,6 +626,43 @@ class TestPreflightEndpoint:
         assert entry["message"] == "Metadata GraphQL API returned no sites"
         assert entry["failureMessage"] == "Metadata GraphQL API returned no sites"
         assert entry["successMessage"] == ""
+        assert body["preflight"]["status"] == "not_ready"
+        assert body["preflight"]["app_status"] == "not_ready"
+        assert body["preflight"]["should_block"] is False
+        assert "status" not in body["data"]
+
+    def test_preflight_blocking_failure_sets_should_block(self) -> None:
+        class _OneCheck(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                from application_sdk.handler.contracts import PreflightCheck
+
+                return PreflightOutput(
+                    status=PreflightStatus.NOT_READY,
+                    message="Credentials are invalid",
+                    checks=[
+                        PreflightCheck(
+                            name="loginCheck",
+                            title="Validate credentials",
+                            passed=False,
+                            blocking=True,
+                            message="Credentials are invalid",
+                        )
+                    ],
+                )
+
+        client = _make_client(handler=_OneCheck())
+        body = client.post("/workflows/v1/check", json={"credentials": []}).json()
+
+        assert body["success"] is True
+        assert list(body["data"]) == ["loginCheck"]
+        assert body["data"]["loginCheck"]["success"] is False
+        assert body["preflight"]["should_block"] is True
+        assert body["preflight"]["status"] == "not_ready"
+        assert body["preflight"]["app_status"] == "not_ready"
+        assert body["preflight"]["checks"][0]["title"] == "Validate credentials"
+        assert body["preflight"]["checks"][0]["blocking"] is True
+        assert "status" not in body["data"]
+        assert "checks" not in body["data"]
 
     def test_preflight_check_multiple_checks_v2_fields_per_check(self) -> None:
         """Mixed pass/fail set — each check entry carries its own v2 fields."""
@@ -703,6 +854,9 @@ class TestPreflightEndpoint:
         )
         assert body["success"] is False
         assert body["data"] == {}
+        assert body["preflight"]["status"] == "not_ready"
+        assert body["preflight"]["app_status"] == "not_ready"
+        assert body["preflight"]["should_block"] is False
 
 
 class TestMetadataEndpoint:
@@ -2736,11 +2890,11 @@ class TestFlattenToPairs:
         keys = {p["key"] for p in result}
         assert keys == {"host"}
 
-    def test_mutates_input_extra_key(self) -> None:
-        """_flatten_to_pairs pops 'extra' from the input dict."""
+    def test_does_not_mutate_input(self) -> None:
+        """_flatten_to_pairs must not mutate its argument (shared helper)."""
         creds = {"host": "db.example.com", "extra": {"role": "ADMIN"}}
         _flatten_to_pairs(creds)
-        assert "extra" not in creds
+        assert creds == {"host": "db.example.com", "extra": {"role": "ADMIN"}}
 
 
 class TestStartCredentialStripping:

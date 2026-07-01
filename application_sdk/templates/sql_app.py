@@ -978,26 +978,13 @@ class SqlApp(App):
     def _resolve_credential_ref(self, input: ExtractionInput) -> CredentialRef | None:
         """Resolve credential ref from extraction input.
 
-        Handles both direct (credential_guid) and SDR (agent_json) modes
-        via :meth:`CredentialRef.resolve`, falling back to
-        ``legacy_credential_ref`` for older inputs.
+        Delegates to :meth:`CredentialRef.resolve_or_none` — prefers a pre-built
+        ref, routes direct (credential_guid) / agent (agent_json) modes, and
+        degrades to a legacy GUID ref or ``None`` on a routing edge case. Shared
+        with the injected preflight gate so both paths route identically.
         """
-        if hasattr(input, "credential_ref") and input.credential_ref:
-            return input.credential_ref
-        # CredentialRef.resolve handles both direct (credential_guid) and
-        # SDR (agent_json) modes — works on ExtractionInput which has the
-        # full set of routing fields. Per-task ExtractionTaskInput doesn't
-        # expose extraction_method/agent_json and isn't routed through here.
-        try:
-            return CredentialRef.resolve(input)
-        except (ValueError, TypeError):
-            logger.warning(
-                "CredentialRef.resolve failed; falling back to legacy_credential_ref or None",
-                exc_info=True,
-            )
-            if input.credential_guid:
-                return legacy_credential_ref(input.credential_guid)
-            return None
+        prebuilt = getattr(input, "credential_ref", None)
+        return CredentialRef.resolve_or_none(input, prebuilt=prebuilt)
 
     async def _extract_entity(
         self,

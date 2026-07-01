@@ -78,18 +78,33 @@ class TestPreflightStatus:
         assert PreflightStatus.NOT_READY == "not_ready"
         assert PreflightStatus.PARTIAL == "partial"
 
+    def test_advisory_only_no_gate_values(self):
+        # status is advisory; the gate decision is PreflightOutput.should_block,
+        # so there are no success/failed status values to overlap the legacy set.
+        assert {s.value for s in PreflightStatus} == {"ready", "not_ready", "partial"}
+
 
 class TestPreflightCheck:
     def test_defaults(self):
         check = PreflightCheck(name="connectivity")
         assert check.name == "connectivity"
+        assert check.title == ""
         assert check.passed is False
+        assert check.blocking is False
         assert check.message == ""
         assert check.duration_ms == 0.0
 
     def test_passed(self):
-        check = PreflightCheck(name="connectivity", passed=True, duration_ms=50.0)
+        check = PreflightCheck(
+            name="connectivity",
+            title="Connectivity",
+            passed=True,
+            blocking=True,
+            duration_ms=50.0,
+        )
+        assert check.title == "Connectivity"
         assert check.passed is True
+        assert check.blocking is True
         assert check.duration_ms == 50.0
 
     def test_empty_name_rejected(self):
@@ -102,6 +117,7 @@ class TestPreflightOutput:
         out = PreflightOutput(status=PreflightStatus.READY)
         assert out.status == PreflightStatus.READY
         assert out.checks == []
+        assert out.should_block is False
 
     def test_with_checks(self):
         checks = [
@@ -110,6 +126,31 @@ class TestPreflightOutput:
         ]
         out = PreflightOutput(status=PreflightStatus.PARTIAL, checks=checks)
         assert len(out.checks) == 2
+
+    def test_should_block_only_on_failed_blocking_check(self):
+        # advisory failure (blocking=False) does NOT block
+        advisory = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[PreflightCheck(name="version", passed=False, blocking=False)],
+        )
+        assert advisory.should_block is False
+
+        # a failed blocking check blocks
+        blocked = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[PreflightCheck(name="auth", passed=False, blocking=True)],
+        )
+        assert blocked.should_block is True
+
+        # a passing blocking check does not block
+        ok = PreflightOutput(
+            status=PreflightStatus.READY,
+            checks=[PreflightCheck(name="auth", passed=True, blocking=True)],
+        )
+        assert ok.should_block is False
+
+    def test_no_checks_never_blocks(self):
+        assert PreflightOutput(status=PreflightStatus.NOT_READY).should_block is False
 
 
 class TestMetadataOutput:
@@ -451,6 +492,27 @@ class TestPreflightInputFieldTypes:
         assert isinstance(inp.metadata, BaseMetadataConfig)
         assert inp.connection_config.model_extra == {}
         assert inp.metadata.model_extra == {}
+        assert inp.source == ""
+
+    def test_runtime_fields_populate_from_known_keys(self):
+        inp = PreflightInput.model_validate(
+            {
+                "credentials": [],
+                "source": "automation_engine_preflight",
+                "workflow_slug": "daily-sync",
+                "workflow_run_guid": "run-1",
+                "triggered_by": "schedule",
+            }
+        )
+        assert inp.source == "automation_engine_preflight"
+        assert inp.workflow_slug == "daily-sync"
+        assert inp.workflow_run_guid == "run-1"
+        assert inp.triggered_by == "schedule"
+
+    def test_unknown_runtime_keys_are_dropped(self):
+        inp = PreflightInput.model_validate({"credentials": [], "tenant": "default"})
+        assert inp.model_extra is None
+        assert not hasattr(inp, "tenant")
 
 
 class TestMetadataInputFieldTypes:

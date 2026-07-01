@@ -345,28 +345,50 @@ def create_worker(
     app_workflows = get_all_app_workflows()
     task_activities = get_all_task_activities()
 
-    if enable_sdr and handler is not None:
-        from application_sdk.execution._temporal.sdr import (  # noqa: PLC0415 — lazy: only load SDR/handler modules when a Handler is provided
+    from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — lazy: handler-activity machinery loaded at worker assembly
+        build_preflight_gate_activity,
+    )
+    from application_sdk.handler.base import DefaultHandler  # noqa: PLC0415
+
+    # When the app ships no Handler, DefaultHandler's no-op (no checks → never blocks)
+    # keeps the gate present but non-blocking.
+    gate_handler = handler if handler is not None else DefaultHandler()
+
+    sdr_registry = AppRegistry.get_instance()
+    sdr_registered_apps = sdr_registry.list_all()
+    resolved_app_name = (
+        sdr_registered_apps[0].name
+        if sdr_registered_apps
+        else (service_name or task_queue)
+    )
+
+    # The preflight gate is a CORE extraction-lifecycle activity dispatched by
+    # every generated workflow's _run — register it UNCONDITIONALLY, independent
+    # of the SDR opt-out, so the mandatory gate is always dispatchable. The gate
+    # name is app-namespaced ({app}:preflight), so register one per registered
+    # app to match each workflow's own app_name (single entry for single-app
+    # workers, the common case).
+    gate_app_names = [m.name for m in sdr_registered_apps] or [resolved_app_name]
+    task_activities = [
+        *task_activities,
+        *(build_preflight_gate_activity(gate_handler, name) for name in gate_app_names),
+    ]
+
+    if enable_sdr:
+        from application_sdk.execution._temporal.sdr import (  # noqa: PLC0415 — lazy: only load SDR workflows when SDR is enabled
             SDR_WORKFLOWS,
             build_sdr_activities,
         )
 
-        sdr_registry = AppRegistry.get_instance()
-        sdr_registered_apps = sdr_registry.list_all()
-        sdr_app_name = (
-            sdr_registered_apps[0].name
-            if sdr_registered_apps
-            else (service_name or task_queue)
-        )
         app_workflows = [*app_workflows, *SDR_WORKFLOWS]
         task_activities = [
             *task_activities,
-            *build_sdr_activities(handler, sdr_app_name),
+            *build_sdr_activities(gate_handler, resolved_app_name),
         ]
         logger.info(
             "SDR workflows registered for handler %s (app=%s)",
-            type(handler).__name__,
-            sdr_app_name,
+            type(gate_handler).__name__,
+            resolved_app_name,
         )
 
     interceptor_settings = load_interceptor_settings()

@@ -1,0 +1,230 @@
+"""Unit tests for the injected pre-extraction preflight gate (HYP-1883).
+
+Exercises ``_run_preflight_gate`` directly with ``workflow.patched`` and
+``workflow.execute_activity`` mocked, so the gate's guard + abort logic is
+verified without a full Temporal workflow environment.
+"""
+
+from __future__ import annotations
+
+from unittest import mock
+
+import pytest
+
+from application_sdk.app.base import _run_preflight_gate
+from application_sdk.execution.errors import ApplicationError
+from application_sdk.handler.contracts import (
+    PreflightCheck,
+    PreflightOutput,
+    PreflightStatus,
+)
+
+
+class _ResolvableInput:
+    """Minimal object satisfying the CredentialResolvable protocol."""
+
+    def __init__(
+        self,
+        *,
+        guid: str = "g-1",
+        method: str = "direct",
+        agent_json=None,
+        credential_ref=None,
+        metadata=None,
+    ) -> None:
+        self.extraction_method = method
+        self.credential_guid = guid
+        self.agent_json = agent_json
+        self.credential_ref = credential_ref
+        if metadata is not None:
+            self.metadata = metadata
+
+
+class _NonResolvableInput:
+    """Carries no credential routing — must skip the gate (e.g. openapi-app)."""
+
+
+def _blocking() -> PreflightOutput:
+    """A failed blocking check → should_block is True."""
+    return PreflightOutput(
+        status=PreflightStatus.NOT_READY,
+        checks=[
+            PreflightCheck(
+                name="auth",
+                passed=False,
+                blocking=True,
+                message="Auth failed: bad creds",
+            )
+        ],
+    )
+
+
+def _proceeding() -> PreflightOutput:
+    """No blocking failure → should_block is False."""
+    return PreflightOutput(status=PreflightStatus.READY, checks=[])
+
+
+def _advisory_failure() -> PreflightOutput:
+    """A failed NON-blocking check → should_block is False (advisory only)."""
+    return PreflightOutput(
+        status=PreflightStatus.NOT_READY,
+        checks=[PreflightCheck(name="version", passed=False, blocking=False)],
+    )
+
+
+def _patched(value: bool):
+    return mock.patch("application_sdk.app.base.workflow.patched", return_value=value)
+
+
+def _exec(return_value=None):
+    m = mock.AsyncMock(return_value=return_value)
+    return m, mock.patch("application_sdk.app.base.workflow.execute_activity", m)
+
+
+class TestRunPreflightGate:
+    async def test_skipped_when_not_patched(self) -> None:
+        exec_mock, exec_patch = _exec()
+        with _patched(False), exec_patch:
+            await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        exec_mock.assert_not_called()
+
+    async def test_skipped_for_non_resolvable_input(self) -> None:
+        exec_mock, exec_patch = _exec()
+        with _patched(True), exec_patch:
+            await _run_preflight_gate(_NonResolvableInput(), "myapp", "crawl")
+        exec_mock.assert_not_called()
+
+    async def test_aborts_when_should_block(self) -> None:
+        exec_mock, exec_patch = _exec(_blocking())
+        with _patched(True), exec_patch:
+            with pytest.raises(ApplicationError) as excinfo:
+                await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        assert excinfo.value.non_retryable is True
+        assert excinfo.value.type == "PreflightFailed"
+        # The failed blocking check's reason is surfaced on the abort, not the
+        # generic fallback — so an automated run's failure says why.
+        assert "Auth failed: bad creds" in excinfo.value.message
+
+    async def test_abort_reason_excludes_advisory_messages(self) -> None:
+        # Only blocking-and-failed checks contribute to the surfaced reason;
+        # a failed advisory check must not leak into the abort message.
+        verdict = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(
+                    name="auth", passed=False, blocking=True, message="auth blocked"
+                ),
+                PreflightCheck(
+                    name="version", passed=False, blocking=False, message="old version"
+                ),
+            ],
+        )
+        exec_mock, exec_patch = _exec(verdict)
+        with _patched(True), exec_patch:
+            with pytest.raises(ApplicationError) as excinfo:
+                await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        assert "auth blocked" in excinfo.value.message
+        assert "old version" not in excinfo.value.message
+
+    async def test_abort_reason_falls_back_when_no_check_message(self) -> None:
+        # A blocking failure with no message still aborts with the generic reason.
+        verdict = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[PreflightCheck(name="auth", passed=False, blocking=True)],
+        )
+        exec_mock, exec_patch = _exec(verdict)
+        with _patched(True), exec_patch:
+            with pytest.raises(ApplicationError) as excinfo:
+                await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        assert "aborting before extraction" in excinfo.value.message
+
+    async def test_abort_reason_joins_multiple_blocking_failures(self) -> None:
+        # Multiple blocking failures are joined with "; " — pin the separator so
+        # a switch to newline/comma output is caught.
+        verdict = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(
+                    name="auth", passed=False, blocking=True, message="auth down"
+                ),
+                PreflightCheck(
+                    name="net", passed=False, blocking=True, message="host unreachable"
+                ),
+            ],
+        )
+        exec_mock, exec_patch = _exec(verdict)
+        with _patched(True), exec_patch:
+            with pytest.raises(ApplicationError) as excinfo:
+                await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        assert "auth down" in excinfo.value.message
+        assert "host unreachable" in excinfo.value.message
+        assert "; " in excinfo.value.message
+
+    async def test_explicit_output_message_wins_over_per_check_join(self) -> None:
+        # Precedence: an explicit PreflightOutput.message takes priority over the
+        # folded per-check reasons (result.message or reasons or generic).
+        verdict = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            message="Summary: 3 of 5 checks failed",
+            checks=[
+                PreflightCheck(
+                    name="auth", passed=False, blocking=True, message="auth down"
+                ),
+            ],
+        )
+        exec_mock, exec_patch = _exec(verdict)
+        with _patched(True), exec_patch:
+            with pytest.raises(ApplicationError) as excinfo:
+                await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        assert excinfo.value.message == "Summary: 3 of 5 checks failed"
+        assert "auth down" not in excinfo.value.message
+
+    async def test_proceeds_on_success(self) -> None:
+        exec_mock, exec_patch = _exec(_proceeding())
+        with _patched(True), exec_patch:
+            result = await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        assert result is None
+        exec_mock.assert_awaited_once()
+
+    async def test_advisory_failure_does_not_block(self) -> None:
+        # A failed non-blocking check must not abort the run.
+        exec_mock, exec_patch = _exec(_advisory_failure())
+        with _patched(True), exec_patch:
+            result = await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        assert result is None
+
+    async def test_handler_raise_propagates(self) -> None:
+        # A handler that raises its own typed error surfaces as a FailureError
+        # and propagates straight through to fail the run.
+        from temporalio.exceptions import ApplicationError as TemporalApplicationError
+
+        exec_mock = mock.AsyncMock(side_effect=TemporalApplicationError("boom"))
+        with (
+            _patched(True),
+            mock.patch("application_sdk.app.base.workflow.execute_activity", exec_mock),
+        ):
+            with pytest.raises(TemporalApplicationError):
+                await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+
+    async def test_dispatches_activity_with_preflight_output_result_type(self) -> None:
+        # Regression: execute_activity dispatched by name returns a raw dict
+        # unless result_type is set — and the workflow calls .should_block
+        # on the result, which a dict doesn't have. Caught live on mysql canary.
+        exec_mock, exec_patch = _exec(_proceeding())
+        with _patched(True), exec_patch:
+            await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        _, kwargs = exec_mock.call_args
+        assert kwargs.get("result_type") is PreflightOutput
+
+    async def test_forwards_routing_fields_to_activity(self) -> None:
+        exec_mock, exec_patch = _exec(_proceeding())
+        with _patched(True), exec_patch:
+            await _run_preflight_gate(
+                _ResolvableInput(guid="abc", method="agent"), "myapp", "asset-export"
+            )
+        args, _ = exec_mock.call_args
+        assert args[0] == "myapp:preflight"
+        gate_input = args[1]
+        assert gate_input.credential_guid == "abc"
+        assert gate_input.extraction_method == "agent"
+        assert gate_input.entrypoint == "asset-export"
