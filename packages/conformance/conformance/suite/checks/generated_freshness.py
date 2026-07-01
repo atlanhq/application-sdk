@@ -160,15 +160,18 @@ def _version_satisfied(pin: str, resolved: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _header(text: str) -> str:
-    """Return the first ``_BANNER_SCAN_LINES`` lines of *text*."""
-    return "\n".join(text.splitlines()[:_BANNER_SCAN_LINES])
-
-
 def _has_banner(text: str) -> bool:
-    """True when the file header carries a toolkit provenance banner."""
-    head = _header(text)
-    return bool(_BANNER_GENERATED_RE.search(head) and _BANNER_DONOTEDIT_RE.search(head))
+    """True when a single header line carries both provenance markers.
+
+    Requiring both markers on the *same* line (rather than anywhere in the
+    header window) avoids a false positive on a hand-written preamble that
+    happens to mention "generated" and "do not edit" on separate lines.
+    """
+    lines = text.splitlines()[:_BANNER_SCAN_LINES]
+    return any(
+        _BANNER_GENERATED_RE.search(line) and _BANNER_DONOTEDIT_RE.search(line)
+        for line in lines
+    )
 
 
 def _hash_suppressed(text: str, rule_id: str) -> tuple[bool, str | None]:

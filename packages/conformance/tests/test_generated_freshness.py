@@ -221,6 +221,21 @@ def test_k005_generated_py_missing_banner(tmp_path: Path) -> None:
     assert findings[0].file == "app/generated/_input.py"
 
 
+def test_k005_markers_on_separate_lines_not_a_banner(tmp_path: Path) -> None:
+    """A hand-written preamble that mentions "generated" and "do not edit" on
+    separate lines is not a valid banner — both markers must appear together
+    on the same header line."""
+    files = _clean_files()
+    files["atlan.yaml"] = (
+        "# This file is auto-generated for reference only.\n"
+        "# Please do not edit unless explicitly asked to.\n"
+        "name: demo\n"
+    )
+    findings = [f for f in _scan(tmp_path, files) if f.rule_id == "K005"]
+    assert len(findings) == 1
+    assert findings[0].file == "atlan.yaml"
+
+
 def test_k005_suppressed(tmp_path: Path) -> None:
     files = _clean_files()
     files["atlan.yaml"] = "# conformance: ignore[K005] hand-maintained\nname: demo\n"
