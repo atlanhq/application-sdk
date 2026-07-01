@@ -258,45 +258,45 @@ def test_parse_bootstrap_args_enforce_invalid(
 
 
 def test_conformance_yaml_default_exit_zero_false() -> None:
-    """Default bootstrap renders exit-zero: false (hard gate)."""
+    """Default bootstrap renders the hard-gate tail (schedule/dispatch still exit-zero)."""
     content = render("conformance.yaml")
-    assert "exit-zero: false" in content
+    assert "workflow_dispatch' || false }}" in content
 
 
 def test_conformance_yaml_exit_zero_true() -> None:
-    """render() with exit_zero='true' renders exit-zero: true for soft mode."""
+    """render() with exit_zero='true' renders the soft-mode tail."""
     content = render("conformance.yaml", exit_zero="true")
-    assert "exit-zero: true" in content
+    assert "workflow_dispatch' || true }}" in content
 
 
 def test_cmd_bootstrap_enforce_false_writes_soft_mode(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """--enforce false writes exit-zero: true into conformance.yaml."""
+    """--enforce false writes the soft-mode tail into conformance.yaml."""
     monkeypatch.chdir(tmp_path)
     _cmd_bootstrap(["--enforce", "false"])
     conformance = (tmp_path / ".github" / "workflows" / "conformance.yaml").read_text()
-    assert "exit-zero: true" in conformance
+    assert "workflow_dispatch' || true }}" in conformance
 
 
 def test_cmd_bootstrap_enforce_true_writes_hard_mode(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """--enforce true writes exit-zero: false into conformance.yaml."""
+    """--enforce true writes the hard-gate tail into conformance.yaml."""
     monkeypatch.chdir(tmp_path)
     _cmd_bootstrap(["--enforce", "true"])
     conformance = (tmp_path / ".github" / "workflows" / "conformance.yaml").read_text()
-    assert "exit-zero: false" in conformance
+    assert "workflow_dispatch' || false }}" in conformance
 
 
 def test_cmd_bootstrap_no_enforce_defaults_hard_mode(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Without --enforce, bootstrap defaults to hard mode (exit-zero: false)."""
+    """Without --enforce, bootstrap defaults to the hard-gate tail."""
     monkeypatch.chdir(tmp_path)
     _cmd_bootstrap([])
     conformance = (tmp_path / ".github" / "workflows" / "conformance.yaml").read_text()
-    assert "exit-zero: false" in conformance
+    assert "workflow_dispatch' || false }}" in conformance
 
 
 def test_conformance_workflow_contains_event_name() -> None:
