@@ -122,6 +122,11 @@ def test_s001_fires_on_attribute_assignment() -> None:
     assert _ids(src) == ["S001"]
 
 
+def test_s001_fires_on_subscript_assignment() -> None:
+    # cfg["password"] = "..." — item assignment, not a dict literal
+    assert _ids('cfg["password"] = "hunter2"\n') == ["S001"]
+
+
 def test_s001_suppressed_by_directive_line_above() -> None:
     src = (
         "# conformance: ignore[S001] fixture password for a local-only sample\n"

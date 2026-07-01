@@ -54,16 +54,26 @@ def _is_flaggable_secret_literal(value: ast.expr, target_name: str) -> bool:
 
 
 def _target_credential_name(target: ast.expr) -> str | None:
-    """Return the credential-name to check for a ``Name`` or ``Attribute`` target.
+    """Return the credential-name to check for a ``Name``/``Attribute``/``Subscript``
+    target.
 
-    Covers ``password = "..."`` and ``self.password = "..."`` alike — both are
-    hardcoded-credential surfaces (the latter common in ``__init__`` methods and
-    settings classes).
+    Covers ``password = "..."``, ``self.password = "..."``, and
+    ``cfg["password"] = "..."`` alike — all are hardcoded-credential surfaces (the
+    attribute form is common in ``__init__`` methods and settings classes; the
+    subscript form in config dicts built via item assignment rather than a
+    dict-literal).
     """
     if isinstance(target, ast.Name) and is_credential_value_name(target.id):
         return target.id
     if isinstance(target, ast.Attribute) and is_credential_value_name(target.attr):
         return target.attr
+    if (
+        isinstance(target, ast.Subscript)
+        and isinstance(target.slice, ast.Constant)
+        and isinstance(target.slice.value, str)
+        and is_credential_value_name(target.slice.value)
+    ):
+        return target.slice.value
     return None
 
 
