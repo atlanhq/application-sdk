@@ -14,9 +14,7 @@ from conformance.renovate.models import (
 )
 from conformance.renovate.scan import _parse_checks_state
 
-# Anchor "now" once so age computations are deterministic within a run. _OLD is a
-# true 3-day offset via timedelta — subtracting from the day-of-month clamped to
-# the same month, which collapsed to 0 days on the 1st-3rd (max(1, day-3) == day).
+# Anchor "now" once so age computations are deterministic within a run.
 _NOW = datetime.now(timezone.utc)
 _OLD = _NOW - timedelta(days=3)
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 import pathlib
 
 import pytest
-from conformance.bootstrap.render import MANAGED_WORKFLOWS, render
+from conformance.bootstrap.render import MANAGED_ACTION_FILES, MANAGED_WORKFLOWS, render
 from conformance.cli import (
     _bootstrap_file,
     _cmd_bootstrap,
@@ -144,6 +144,39 @@ def test_cmd_bootstrap_writes_all_managed_workflows(
         dest = wf_dir / name
         assert dest.exists(), f"Missing: {name}"
         assert dest.read_text() == render(name), f"Content mismatch: {name}"
+
+
+def test_cmd_bootstrap_writes_all_managed_action_files(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """conformance-reusable.yaml resolves `./...` paths against the caller's
+
+    checkout, so bootstrap must vendor the composite action + arg-building
+    script it needs into every consumer repo, not just .github/workflows/.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    for dest_rel, template_name in MANAGED_ACTION_FILES:
+        dest = tmp_path / dest_rel
+        assert dest.exists(), f"Missing: {dest_rel}"
+        assert dest.read_text() == render(
+            template_name
+        ), f"Content mismatch: {dest_rel}"
+
+
+@pytest.mark.parametrize("dest_rel,template_name", MANAGED_ACTION_FILES)
+def test_cmd_bootstrap_managed_action_files_always_overwrite(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dest_rel: str,
+    template_name: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    dest = tmp_path / dest_rel
+    dest.write_text("corrupted content")
+    _cmd_bootstrap([])
+    assert dest.read_text() == render(template_name)
 
 
 def test_cmd_bootstrap_adds_remediation_to_gitignore(
@@ -824,6 +857,34 @@ def test_derive_no_affixes(tmp_path: pathlib.Path) -> None:
 def test_derive_hello_world(tmp_path: pathlib.Path) -> None:
     assert (
         _derive_app_name_from_dir(tmp_path / "atlan-hello-world-app") == "hello-world"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Vendored-template sync guard
+#
+# MANAGED_ACTION_FILES ships byte copies of files that also live in this
+# monorepo (used directly by application-sdk's own conformance-reusable.yaml
+# run, and vendored into every consumer repo by `bootstrap`). If the two
+# drift apart, the SDK's own CI would keep exercising the fixed version while
+# every bootstrapped consumer repo silently gets a stale one. Skipped when
+# the monorepo tree isn't checked out (e.g. an isolated sdist build).
+# ---------------------------------------------------------------------------
+
+_MONOREPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+
+
+@pytest.mark.parametrize("dest_rel,template_name", MANAGED_ACTION_FILES)
+def test_managed_action_template_matches_canonical_source(
+    dest_rel: str, template_name: str
+) -> None:
+    canonical = _MONOREPO_ROOT / dest_rel
+    if not canonical.exists():
+        pytest.skip(f"monorepo source not checked out: {canonical}")
+    assert render(template_name) == canonical.read_text(encoding="utf-8"), (
+        f"packages/conformance/conformance/bootstrap/templates/{template_name} has "
+        f"drifted from the canonical {dest_rel} — copy the canonical file's content "
+        "back into the template so consumer repos vendor the current version."
     )
 
 
