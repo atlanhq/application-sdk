@@ -491,7 +491,12 @@ class ParquetFileWriter(Writer):
         try:
             deleted_count = await _delete_prefix(self.path)
         except ObjectStoreNotProvidedError:
-            logger.debug("No object store configured, skipping prefix replacement")
+            logger.warning(
+                "No object store configured, skipping prefix replacement — "
+                "existing objects under %s were not deleted",
+                normalized_prefix,
+                exc_info=True,
+            )
         else:
             logger.info(
                 "Cleared existing parquet object-store prefix",
@@ -767,7 +772,12 @@ class ParquetFileWriter(Writer):
                     # writer report more rows in statistics.json than
                     # actually reached object storage. Mirrors the safe
                     # pattern used in _ensure_prefix_replaced above.
-                    logger.debug("No object store configured, skipping upload")
+                    logger.warning(
+                        "No object store configured, skipping upload — %s "
+                        "was written locally only and will not reach object storage",
+                        output_file_name,
+                        exc_info=True,
+                    )
         # Advance part so the next sub-chunk gets a unique filename.
         self.chunk_part += 1
 

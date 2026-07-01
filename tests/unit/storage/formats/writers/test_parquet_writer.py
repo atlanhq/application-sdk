@@ -563,8 +563,8 @@ class TestParquetFileWriterCloseContract:
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
         """The 'no object store configured' local-dev error must still be
-        swallowed at DEBUG in _flush_buffer — the writer keeps the local
-        parquet and the flush returns without raising.
+        swallowed (logged at WARNING) in _flush_buffer — the writer keeps
+        the local parquet and the flush returns without raising.
         """
         writer = ParquetFileWriter(path=base_output_path, typename="t")
         # Stub the writer's own _upload_file to raise the exact exception
