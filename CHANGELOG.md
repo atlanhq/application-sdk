@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.20.3 (July 01, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.20.2...v3.20.3
+
+### Bug Fixes
+
+- guard Temporal failure serialiser against deep/cyclic exception chains (BLDX-1512) (#2423) (by @cmgrote in [c59066a](https://github.com/atlanhq/application-sdk/commit/c59066a))
+- narrow ParquetFileWriter inline-upload RuntimeError catch (#2442) (by @mothership-ai[bot] in [8551d32](https://github.com/atlanhq/application-sdk/commit/8551d32))
+
+
 ## v3.20.2 (June 30, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.20.1...v3.20.2
