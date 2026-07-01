@@ -43,6 +43,7 @@ from conformance.suite.checks import (
     optimizations,
     orchestration,
     prescriptions,
+    security,
 )
 from conformance.suite.checks._ast_common import TOOL_VERSION, detect_scope
 from conformance.suite.rules import CATALOG, assert_registry_consistent, get_rule
@@ -176,6 +177,11 @@ _CHECKS: list[CheckRegistration] = [
         discover=sdr_test_checks.discover,
         scan_path=sdr_test_checks.scan_path,
         scan_all=sdr_test_checks.scan_all,
+    ),
+    CheckRegistration(
+        series=security.SERIES,
+        discover=security.discover,
+        scan_path=security.scan_path,
     ),
 ]
 

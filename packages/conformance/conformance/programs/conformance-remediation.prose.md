@@ -11,7 +11,8 @@ description: >
 
 The current remediation state of the working tree across all enabled
 conformance rule areas (error-handling, logging, CI, prescriptions,
-optimizations, dependency, deprecation, dockerfile, tests, contract-toolkit).
+optimizations, dependency, deprecation, dockerfile, tests, contract-toolkit,
+security).
 
 #### violations-summary
 
@@ -63,6 +64,7 @@ the reason each was routed here:
 - `violations-dockerfile` from `dockerfile-area`
 - `violations-tests` from `tests-area`
 - `violations-contract-toolkit` from `contract-toolkit-area`
+- `violations-security` from `security-area`
 
 Forme auto-wires these subscriptions from the matching `#### facet` names in
 the area responsibilities.  This node is clean only when every subscribed
@@ -106,6 +108,9 @@ parallel:
     scope: scope
     mode: mode
   call contract-toolkit-area
+    scope: scope
+    mode: mode
+  call security-area
     scope: scope
     mode: mode
 

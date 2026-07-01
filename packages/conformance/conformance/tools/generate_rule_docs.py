@@ -181,6 +181,17 @@ _SERIES_META: list[SeriesMeta] = [
         stability_note=_ID_STABILITY_NOTE,
     ),
     SeriesMeta(
+        title="Security / Secret-Hygiene Rules (S-series)",
+        prefix="S",
+        source_module="conformance/suite/rules/security.py",
+        output_filename="security.md",
+        checker="`suite.checks.security` (AST-based)",
+        suppression_example=(
+            "# conformance: ignore[S002] intentional: platform self-auth, no SDK seam"
+        ),
+        stability_note=_ID_STABILITY_NOTE,
+    ),
+    SeriesMeta(
         title="Contract-Toolkit Conformance Rules (K-series)",
         prefix="K",
         source_module="conformance/suite/rules/contract_toolkit.py",
