@@ -146,6 +146,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # itself never does, so these are APP-scoped (DISTR-752).
     # T002/T003: SDR test-quality — apps that declare SDR must have an SDR test
     # class; the SDK itself is not an SDR app (DISTR-752).
+    # T004: dev-entrypoint delegation — only consumer apps have a root main.py
+    # that CI's connector-integration-tests action runs directly; the SDK has
+    # no such file (BLDX-1520).
     # I001–I005: Dockerfile conformance (SDK builds the base image, not consuming it).
     # B001: consuming a deprecated SDK symbol (BLDX-1418).
     # O002/O003/O004: asset-mapper usage — connectors build assets with pyatlan_v9,
@@ -197,6 +200,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P030",
         "T002",
         "T003",
+        "T004",
         "O002",
         "O003",
         "O004",
@@ -380,7 +384,7 @@ def test_catalog_t_series_present() -> None:
     """The T-series test-quality rules are all present."""
     rules = load_catalog()
     t_ids = {r.id for r in rules if r.id.startswith("T")}
-    expected = {"T001", "T002", "T003"}
+    expected = {"T001", "T002", "T003", "T004"}
     missing = expected - t_ids
     assert not missing, f"Missing T-series rules: {missing}"
 

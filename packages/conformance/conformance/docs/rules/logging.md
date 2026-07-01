@@ -76,10 +76,12 @@ through OTel. Direct use of logging.getLogger(), structlog.get_logger(), or logu
 logger bypasses all of this — correlation IDs are lost and records may not reach the
 observability store.
 
-Every module must obtain its logger via the SDK adapter::
+Every module must obtain its logger via the SDK adapter:
 
-    from application_sdk.observability.logger_adaptor import get_logger     logger =
-get_logger(__name__)
+```python
+from application_sdk.observability.logger_adaptor import get_logger
+logger = get_logger(__name__)
+```
 
 Direct use of `logging.getLogger()`, `structlog.get_logger()`, or `from loguru import
 logger` bypasses the adapter that:
@@ -200,10 +202,12 @@ Note: the SDK adapter's _is_enabled guard does skip %-style __str__ calls for si
 object args (logger.debug('x: %s', obj) — obj.__str__ not called when filtered).  But
 that guard fires inside the method, after Python has evaluated the argument expressions.
 When the expensive work is in the expression itself, an explicit level guard is still
-required::
+required:
 
-    if logger.isEnabledFor(logging.DEBUG):         logger.debug('snapshot: %s',
-json.dumps(big_dict))
+```python
+if logger.isEnabledFor(logging.DEBUG):
+    logger.debug('snapshot: %s', json.dumps(big_dict))
+```
 
 ---
 

@@ -34,6 +34,7 @@ from conformance.suite.checks import (
     dependency_conformance,
     deprecation,
     determinism,
+    dev_entrypoint,
     dockerfile_conformance,
     entrypoint_alignment,
     error_handling,
@@ -183,6 +184,11 @@ _CHECKS: list[CheckRegistration] = [
         discover=sdr_test_checks.discover,
         scan_path=sdr_test_checks.scan_path,
         scan_all=sdr_test_checks.scan_all,
+    ),
+    CheckRegistration(
+        series=dev_entrypoint.SERIES,
+        discover=dev_entrypoint.discover,
+        scan_path=dev_entrypoint.scan_path,
     ),
 ]
 
