@@ -231,7 +231,7 @@ def _split_literal_blocks(text: str) -> list[tuple[str, bool]]:
     This exists because a naive "split on blank lines, then ``textwrap.fill``
     every paragraph" pass (the previous behaviour) reflows literal blocks
     exactly like prose — collapsing every code example in the rule docs onto
-    one run-on line (see PR #2448 review).  Callers must render ``is_code``
+    one run-on line (see BLDX-1520).  Callers must render ``is_code``
     chunks verbatim (dedented, inside a fenced block) and leave everything
     else to the existing paragraph-fill logic.
     """

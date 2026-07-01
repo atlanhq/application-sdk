@@ -3,10 +3,11 @@ kind: responsibility
 name: tests-area
 description: >
   Maintains the current T-series violation-set and drives remediation of
-  test-quality conformance findings.  T001 (unmarked integration test) is the
-  only rule in this series; its fix is mechanical — add the correct pytest
-  marker — but classification is "judgment" because the caller must confirm
-  which marker is appropriate for the test's integration scope.
+  test-quality conformance findings: unmarked integration tests (T001), SDR
+  test-coverage gaps (T002-T003), and dev-entrypoint delegation (T004).  Every
+  rule in this series classifies as "judgment" — each fix requires reading the
+  test's I/O intent, the app's manifest/contract, or the app's App subclass
+  before a fix can be proposed with confidence.
 ---
 
 ### Maintains
@@ -128,6 +129,41 @@ to residue):
   `agent_spec_template` is intentionally used for a non-manifest test scenario
   (e.g. a negative-path test that supplies deliberately invalid credentials) —
   and state that reason explicitly.
+
+  `classification` is always `"judgment"`.
+
+- **T004 DevEntrypointRequiresAppModule** — the repo-root `main.py` calls
+  `application_sdk.main.main()` directly (via a bare name, an aliased module
+  import, or a bare dotted chain).  `main()` always resolves its `App` class
+  from `ATLAN_APP_MODULE`/`--app`, but `main.py` is also what CI's
+  `connector-integration-tests` action runs directly (`python main.py`) for
+  local/dev-mode testing, and the bootstrapped `tests-reusable.yaml` path has
+  no input that lets a caller inject `ATLAN_APP_MODULE` into that job — so
+  this fails every PR with `MissingAppModuleError`.  Fix: delegate to a local
+  dev entrypoint — conventionally `app/run_dev.py` — that constructs the
+  app's `App` subclass directly and calls `run_dev_combined(MyApp, ...)`:
+
+  ```python
+  # main.py
+  import asyncio
+  from app.run_dev import main
+
+  if __name__ == "__main__":
+      asyncio.run(main())
+  ```
+
+  If `app/run_dev.py` doesn't exist yet, draft one following the reference
+  pattern in `atlan-metabase-app`, `atlan-openapi-app`, or `atlan-mysql-app`:
+  import the app's own `App` subclass and call
+  `await run_dev_combined(MyApp, credential_stores={...}, example_input={...})`.
+  Route to residue — identifying the app's `App` subclass (module path and
+  constructor requirements) and a representative `example_input` requires
+  reading the app's own code, not just the finding.
+
+  Suppress with `# conformance: ignore[T004] <reason>` on the call's line
+  only when the app genuinely has no local dev-mode boot path and relies on
+  `ATLAN_APP_MODULE` being set out-of-band even for CI (e.g. some
+  utility/CSA apps) — state that reason explicitly.
 
   `classification` is always `"judgment"`.
 

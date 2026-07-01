@@ -109,7 +109,7 @@ class TestT004Silent:
         `main` is imported from application_sdk.main but then redefined by a
         local `def main(): ...` before it's ever called — the call resolves
         to the local function, not the production launcher, so this must not
-        fire (regression: PR #2448 review).
+        fire (regression: BLDX-1520).
         """
         src = (
             "from application_sdk.main import main\n"

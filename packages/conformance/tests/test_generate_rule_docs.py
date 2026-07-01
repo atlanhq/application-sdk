@@ -1,4 +1,4 @@
-"""Tests for the rule-doc generator's literal-block handling (PR #2448 review).
+"""Tests for the rule-doc generator's literal-block handling (BLDX-1520).
 
 A naive "split on blank lines, then textwrap.fill every paragraph" pass reflows
 RST literal blocks exactly like prose, collapsing every code example in the
