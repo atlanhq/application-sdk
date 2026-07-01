@@ -1,0 +1,26 @@
+name: Generated Artifact Freshness
+
+# Managed shim (BLDX-1414). Delegates to the reusable freshness gate in
+# application-sdk: on a PR that touches the contract or its generated outputs,
+# regenerate from contract/app.pkl and flag any stale or hand-edited artifact.
+# Informational (non-blocking) — see the reusable workflow for details.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'contract/**'
+      - 'atlan.yaml'
+      - 'app.yaml'
+      - 'app/generated/**'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  freshness:
+    uses: atlanhq/application-sdk/.github/workflows/generated-freshness.yaml@main
+    # An app that intentionally hand-maintains its generated artifacts opts out:
+    # with:
+    #   check-freshness: false

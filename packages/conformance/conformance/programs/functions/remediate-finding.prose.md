@@ -62,3 +62,4 @@ relevant area file — this is the progressive-disclosure boundary.
 | `tests` | PHASE 2 (strict-only) | `areas/tests.prose.md` |
 | `ci` | DEFERRED | `areas/ci.prose.md` — return `not_remediable = true` |
 | `contract-toolkit` | PHASE 1 (strict-only; WARN-tier) | `areas/contract-toolkit.prose.md` |
+| `security` | PHASE 1 (suggest-only) | `areas/security.prose.md` |

@@ -30,6 +30,21 @@ SDR test-quality rules (DISTR-752):
   committed ``manifest.json`` is broken.  The MSSQL regression (atlan-mssql-app#177,
   DISTR-752) slipped through exactly this way.  Subclasses must switch to
   ``manifest_path`` so the test reads inputs from the committed manifest.
+
+Dev-entrypoint conformance (BLDX-1520):
+
+* ``T004`` — root ``main.py`` must not call ``application_sdk.main.main()``
+  directly.  That is the production, ``ATLAN_APP_MODULE``-driven launcher, but
+  ``main.py`` is also what CI's ``connector-integration-tests`` composite
+  action runs directly (``python main.py``) for local/dev-mode testing — and
+  the bootstrapped ``tests-reusable.yaml`` path has no input to inject
+  ``ATLAN_APP_MODULE`` into that job.  A ``main.py`` that delegates straight to
+  ``application_sdk.main.main()`` therefore fails every PR with
+  ``MissingAppModuleError``.  Delegate instead to a local dev entrypoint
+  (conventionally ``app/run_dev.py``) that constructs the ``App`` subclass
+  directly and calls ``run_dev_combined(MyApp, ...)`` — see
+  ``atlan-metabase-app``, ``atlan-openapi-app``, or ``atlan-mysql-app`` for the
+  reference pattern.
 """
 
 from __future__ import annotations
@@ -206,6 +221,75 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t003"
+        ),
+    ),
+    RuleDefinition(
+        id="T004",
+        scope=RuleScope.APP,
+        name="DevEntrypointRequiresAppModule",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="dev-entrypoint",
+        autofixable=False,
+        since="0.10.0",
+        rationale=(
+            "application_sdk.main.main() is the production, "
+            "ATLAN_APP_MODULE-driven launcher: it always calls "
+            "AppConfig.from_args_and_env(args), which raises "
+            "MissingAppModuleError unless ATLAN_APP_MODULE (or --app) is set. "
+            "That is correct in production, where the base image's own CMD "
+            "sets the env var and never even executes the repo's main.py. But "
+            "main.py is also what CI's connector-integration-tests composite "
+            "action runs directly ('python main.py') to boot the app for "
+            "local/dev-mode testing, and the bootstrapped tests-reusable.yaml "
+            "path exposes no input to inject ATLAN_APP_MODULE into that job. A "
+            "main.py that delegates straight to application_sdk.main.main() "
+            "therefore fails every PR with MissingAppModuleError / 'App server "
+            "failed to start within 60s' (BLDX-1520)."
+        ),
+        short_description=(
+            "Root main.py calls application_sdk.main.main() directly, which "
+            "requires ATLAN_APP_MODULE and breaks CI's dev-mode boot"
+        ),
+        full_description=(
+            "Root ``main.py`` must not call ``application_sdk.main.main()``\n"
+            "directly (whether via ``from application_sdk.main import main``,\n"
+            "an aliased module import, or a bare dotted call).\n"
+            "\n"
+            "``main()`` always resolves its ``App`` class from\n"
+            "``ATLAN_APP_MODULE``/``--app`` — there is no way to supply it any\n"
+            "other way.  That is the right contract for the production\n"
+            "container, which never runs ``main.py`` at all (the base image's\n"
+            "own CMD sets ``ATLAN_APP_MODULE`` and boots directly).  But\n"
+            "``main.py`` *is* what CI's ``connector-integration-tests``\n"
+            "composite action runs directly (``python main.py``) to boot the\n"
+            "app for local/dev-mode testing, and the bootstrapped\n"
+            "``tests-reusable.yaml`` path has no input that lets a caller\n"
+            "inject ``ATLAN_APP_MODULE`` into that job.  A ``main.py`` wired\n"
+            "this way fails every PR with ``MissingAppModuleError``.\n"
+            "\n"
+            "**Remediation:** delegate to a local dev entrypoint —\n"
+            "conventionally ``app/run_dev.py`` — that constructs your ``App``\n"
+            "subclass directly and calls ``run_dev_combined(MyApp, ...)``: no\n"
+            "env var required.  See ``atlan-metabase-app``,\n"
+            "``atlan-openapi-app``, or ``atlan-mysql-app`` for the reference\n"
+            "pattern::\n"
+            "\n"
+            "    # main.py\n"
+            "    import asyncio\n"
+            "    from app.run_dev import main\n"
+            "\n"
+            "    if __name__ == '__main__':\n"
+            "        asyncio.run(main())\n"
+            "\n"
+            "Suppress with ``# conformance: ignore[T004] <reason>`` on the\n"
+            "call's line when the app genuinely has no local dev-mode boot\n"
+            "path and relies on ``ATLAN_APP_MODULE`` being set out-of-band\n"
+            "even for CI (e.g. some utility/CSA apps).\n"
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/tests.md#t004"
         ),
     ),
 )
