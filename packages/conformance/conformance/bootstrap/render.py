@@ -57,11 +57,41 @@ MANAGED_WORKFLOWS: tuple[str, ...] = (
     "renovate-pkl-sync.yaml",
 )
 
+# Non-workflow files that must also be vendored into every consumer repo,
+# keyed by (repo-root-relative dest path, template filename in templates/).
+#
+# ``conformance-reusable.yaml`` references these via a local ``uses: ./...``
+# step and a ``$GITHUB_ACTION_PATH``-relative script path. GitHub resolves
+# both against the *caller's* checkout, not application-sdk's — so every
+# consumer app needs its own copy or the C/D-series (and any other series
+# whose changed-files filter matches) legs fail with "Can't find action.yml"
+# the first time they actually run. Static templates (no per-repo params),
+# always-overwrite like MANAGED_WORKFLOWS.
+MANAGED_ACTION_FILES: tuple[tuple[str, str], ...] = (
+    (
+        ".github/actions/run-conformance-detect/action.yaml",
+        "run-conformance-detect-action.yaml",
+    ),
+    (".github/scripts/build_conformance_args.py", "build_conformance_args.py"),
+)
+
 
 def _load_template(name: str) -> str:
     """Read a template file from the embedded templates directory."""
     pkg = _ir.files("conformance.bootstrap") / "templates"
     return (pkg / name).read_text(encoding="utf-8")  # type: ignore[union-attr]
+
+
+# Templates that are byte-for-byte vendored copies of files living elsewhere
+# (action.yaml / shell scripts) and never take substitution variables. These
+# skip the jinja env entirely rather than relying on "just don't define any
+# << >> vars" — vendored scripts legitimately contain bash constructs like
+# the here-string operator (`<<<`) that collide with our custom `<< `
+# variable-start delimiter (Jinja matches it starting at the *second* `<`,
+# then fails deep in the following line looking for the closing ` >>`).
+_STATIC_TEMPLATES: frozenset[str] = frozenset(
+    template_name for _, template_name in MANAGED_ACTION_FILES
+)
 
 
 def render(
@@ -99,11 +129,14 @@ def render(
     All other keyword arguments are accepted but unused, so callers can pass
     the full variable set without knowing which template is parametric.
     """
+    raw = _load_template(name)
+    if name in _STATIC_TEMPLATES:
+        return raw
+
     # Derive app_image_name from app_name if not supplied.
     if not app_image_name:
         app_image_name = f"atlan-{app_name}-app"
 
-    raw = _load_template(name)
     tmpl = _ENV.from_string(raw)
     return tmpl.render(
         package_name=package_name,
