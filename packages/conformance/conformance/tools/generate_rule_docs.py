@@ -154,7 +154,10 @@ _SERIES_META: list[SeriesMeta] = [
         prefix="T",
         source_module="conformance/suite/rules/tests.py",
         output_filename="tests.md",
-        checker="`suite.checks.integration_marking` (AST-based)",
+        checker=(
+            "`suite.checks.integration_marking`, `suite.checks.sdr_test_checks`, "
+            "and `suite.checks.dev_entrypoint` (AST-based)"
+        ),
         suppression_example=(
             "# conformance: ignore[T001] intentional: marked dynamically via add_marker"
         ),
