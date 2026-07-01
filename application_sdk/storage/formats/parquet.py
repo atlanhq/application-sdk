@@ -11,6 +11,7 @@ from application_sdk.contracts.types import FileReference
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.storage.batch import delete_prefix as _delete_prefix
+from application_sdk.storage.errors import ObjectStoreNotProvidedError
 from application_sdk.storage.formats import DataframeType, Reader, Writer
 from application_sdk.storage.formats.utils import (
     PARQUET_FILE_EXTENSION,
@@ -489,9 +490,7 @@ class ParquetFileWriter(Writer):
 
         try:
             deleted_count = await _delete_prefix(self.path)
-        except RuntimeError as exc:
-            if "No ObjectStore provided" not in str(exc):
-                raise
+        except ObjectStoreNotProvidedError:
             logger.debug("No object store configured, skipping prefix replacement")
         else:
             logger.info(
@@ -759,20 +758,15 @@ class ParquetFileWriter(Writer):
             if os.path.exists(output_file_name):
                 try:
                     await self._upload_file(output_file_name)
-                except RuntimeError as exc:
-                    # Only swallow the "no object store configured" (local dev)
-                    # case that the ObjectStore layer raises as RuntimeError.
-                    # Any other RuntimeError (transient blob upload failure,
-                    # auth token rotation, network error) means the local
-                    # parquet chunk did NOT land in object storage, so we
-                    # must NOT continue silently — the base _flush_buffer
-                    # has already incremented total_record_count, and if we
-                    # swallow here the writer will report more rows in
-                    # statistics.json than actually reached object storage.
-                    # Mirrors the safe pattern used in
-                    # _ensure_prefix_replaced above.
-                    if "No ObjectStore provided" not in str(exc):
-                        raise
+                except ObjectStoreNotProvidedError:
+                    # Local dev with no object store configured. Any other
+                    # exception (transient blob upload failure, auth token
+                    # rotation, network error) must propagate: the base
+                    # _flush_buffer has already incremented
+                    # total_record_count, and swallowing here would make the
+                    # writer report more rows in statistics.json than
+                    # actually reached object storage. Mirrors the safe
+                    # pattern used in _ensure_prefix_replaced above.
                     logger.debug("No object store configured, skipping upload")
         # Advance part so the next sub-chunk gets a unique filename.
         self.chunk_part += 1

@@ -17,6 +17,7 @@ from application_sdk.infrastructure.context import (
     set_infrastructure,
 )
 from application_sdk.storage.batch import list_keys, upload_prefix
+from application_sdk.storage.errors import ObjectStoreNotProvidedError
 from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.formats.parquet import ParquetFileReader, ParquetFileWriter
 from application_sdk.storage.formats.utils import path_gen
@@ -558,18 +559,19 @@ class TestParquetFileWriterCloseContract:
         delete_prefix.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_flush_buffer_swallows_only_no_object_store_runtime_error(
+    async def test_flush_buffer_swallows_only_object_store_not_provided_error(
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
-        """The 'no object store configured' local-dev RuntimeError must
-        still be swallowed at DEBUG in _flush_buffer — the writer keeps
-        the local parquet and the flush returns without raising.
+        """The 'no object store configured' local-dev error must still be
+        swallowed at DEBUG in _flush_buffer — the writer keeps the local
+        parquet and the flush returns without raising.
         """
         writer = ParquetFileWriter(path=base_output_path, typename="t")
-        # Stub the writer's own _upload_file to raise the local-dev-shaped
-        # RuntimeError. _flush_buffer's inline-upload site must swallow.
+        # Stub the writer's own _upload_file to raise the exact exception
+        # type _resolve_store raises for local dev. _flush_buffer's
+        # inline-upload site must swallow it.
         writer._upload_file = AsyncMock(  # type: ignore[method-assign]
-            side_effect=RuntimeError("No ObjectStore provided in the config")
+            side_effect=ObjectStoreNotProvidedError()
         )
         # _flush_buffer writes a local parquet then attempts inline upload.
         # With the narrow catch, this returns normally.
@@ -579,18 +581,19 @@ class TestParquetFileWriterCloseContract:
         assert writer.total_record_count == len(sample_dataframe)
 
     @pytest.mark.asyncio
-    async def test_flush_buffer_propagates_non_no_object_store_runtime_error(
+    async def test_flush_buffer_propagates_non_object_store_not_provided_error(
         self, base_output_path: str, sample_dataframe: pd.DataFrame
     ):
-        """Any RuntimeError other than 'No ObjectStore provided' must
-        propagate out of _flush_buffer so the activity fails loudly
-        instead of reporting a rowcount for chunks that never reached
-        the object store.
+        """Any error other than ObjectStoreNotProvidedError must propagate
+        out of _flush_buffer so the activity fails loudly instead of
+        reporting a rowcount for chunks that never reached the object
+        store.
 
         Regression test — a prior implementation caught every
-        RuntimeError, which silently masked transient object-store upload
-        failures. That let statistics.json report more rows than actually
-        landed in blob storage, tripping downstream diff-delete logic.
+        RuntimeError (via string-matching a substring of the message),
+        which silently masked transient object-store upload failures.
+        That let statistics.json report more rows than actually landed
+        in blob storage, tripping downstream diff-delete logic.
         """
         writer = ParquetFileWriter(path=base_output_path, typename="t")
         writer._upload_file = AsyncMock(  # type: ignore[method-assign]
