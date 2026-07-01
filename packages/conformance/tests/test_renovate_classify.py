@@ -14,7 +14,10 @@ from conformance.renovate.models import (
 )
 from conformance.renovate.scan import _parse_checks_state
 
-# Anchor "now" once so age computations are deterministic within a run.
+# Anchor "now" once so age computations are deterministic within a run. _OLD is
+# exactly 3 days before _NOW via timedelta so it is correct across month
+# boundaries — the previous day-of-month clamp collapsed _OLD onto _NOW on days
+# 1–3 of a month (age_days would be 0, not 3).
 _NOW = datetime.now(timezone.utc)
 _OLD = _NOW - timedelta(days=3)
 

@@ -189,8 +189,11 @@ _SERIES_META: list[SeriesMeta] = [
         source_module="conformance/suite/rules/contract_toolkit.py",
         output_filename="contract-toolkit.md",
         checker=(
-            "`suite.checks.legacy_contract` (pkl-source regex, scans "
-            "``contract/**/*.pkl``)"
+            "`suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans "
+            "``contract/**/*.pkl``), "
+            "`suite.checks.generated_freshness` (K003–K005, scans "
+            "``contract/PklProject``, ``contract/PklProject.deps.json``, "
+            "``atlan.yaml``, ``app.yaml``, and ``app/generated/**``)"
         ),
         suppression_example=(
             "// conformance: ignore[K001] intentional: phased migration tracked in BLDX-XXXX"

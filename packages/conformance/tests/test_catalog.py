@@ -157,6 +157,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # K001/K002: contract-toolkit conformance — only app repos have a contract/
     # directory with .pkl source files; the SDK has no contract/ dir to scan
     # (BLDX-1479).
+    # K003/K004/K005: generated-artifact freshness — a stale Pkl lock, a missing
+    # generated output, or a stripped provenance banner are all app-repo concerns
+    # (the SDK has no contract/ + generated app artifacts) (BLDX-1414).
     # E020: HTTP-failure-to-empty-return — the harm (publishing a partial crawl as
     # complete) is a connector extract/publish concern; the SDK's matching sites are
     # legitimate best-effort infra (health/metric scrapes), not crawlers (BLDX-1503).
@@ -173,6 +176,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "E020",
         "K001",
         "K002",
+        "K003",
+        "K004",
+        "K005",
         "P004",
         "P005",
         "P008",
@@ -395,10 +401,11 @@ def test_catalog_b_series_present() -> None:
 
 
 def test_catalog_k_series_present() -> None:
-    """The K-series contract-toolkit conformance rules are exactly K001 and K002."""
+    """The K-series contract-toolkit rules are K001/K002 (source) plus the
+    generated-artifact freshness rules K003/K004/K005 (BLDX-1414)."""
     rules = load_catalog()
     k_ids = {r.id for r in rules if r.id.startswith("K")}
-    expected = {"K001", "K002"}
+    expected = {"K001", "K002", "K003", "K004", "K005"}
     missing = expected - k_ids
     assert not missing, f"Missing K-series rules: {missing}"
     extra = k_ids - expected
