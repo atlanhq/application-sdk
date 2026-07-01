@@ -759,8 +759,20 @@ class ParquetFileWriter(Writer):
             if os.path.exists(output_file_name):
                 try:
                     await self._upload_file(output_file_name)
-                except RuntimeError:
-                    # No object store configured (local dev) — file stays on disk.
+                except RuntimeError as exc:
+                    # Only swallow the "no object store configured" (local dev)
+                    # case that the ObjectStore layer raises as RuntimeError.
+                    # Any other RuntimeError (transient blob upload failure,
+                    # auth token rotation, network error) means the local
+                    # parquet chunk did NOT land in object storage, so we
+                    # must NOT continue silently — the base _flush_buffer
+                    # has already incremented total_record_count, and if we
+                    # swallow here the writer will report more rows in
+                    # statistics.json than actually reached object storage.
+                    # Mirrors the safe pattern used in
+                    # _ensure_prefix_replaced above.
+                    if "No ObjectStore provided" not in str(exc):
+                        raise
                     logger.debug("No object store configured, skipping upload")
         # Advance part so the next sub-chunk gets a unique filename.
         self.chunk_part += 1

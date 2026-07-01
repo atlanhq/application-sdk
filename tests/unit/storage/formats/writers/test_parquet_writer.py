@@ -557,6 +557,48 @@ class TestParquetFileWriterCloseContract:
         parquet_upload.assert_not_called()
         delete_prefix.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_flush_buffer_swallows_only_no_object_store_runtime_error(
+        self, base_output_path: str, sample_dataframe: pd.DataFrame
+    ):
+        """The 'no object store configured' local-dev RuntimeError must
+        still be swallowed at DEBUG in _flush_buffer — the writer keeps
+        the local parquet and the flush returns without raising.
+        """
+        writer = ParquetFileWriter(path=base_output_path, typename="t")
+        # Stub the writer's own _upload_file to raise the local-dev-shaped
+        # RuntimeError. _flush_buffer's inline-upload site must swallow.
+        writer._upload_file = AsyncMock(  # type: ignore[method-assign]
+            side_effect=RuntimeError("No ObjectStore provided in the config")
+        )
+        # _flush_buffer writes a local parquet then attempts inline upload.
+        # With the narrow catch, this returns normally.
+        await writer._flush_buffer(sample_dataframe, chunk_part=0)
+        # Base _flush_buffer bumped the counter for what it wrote locally;
+        # nothing was thrown, so the writer accepted the flush.
+        assert writer.total_record_count == len(sample_dataframe)
+
+    @pytest.mark.asyncio
+    async def test_flush_buffer_propagates_non_no_object_store_runtime_error(
+        self, base_output_path: str, sample_dataframe: pd.DataFrame
+    ):
+        """Any RuntimeError other than 'No ObjectStore provided' must
+        propagate out of _flush_buffer so the activity fails loudly
+        instead of reporting a rowcount for chunks that never reached
+        the object store.
+
+        Regression test — a prior implementation caught every
+        RuntimeError, which silently masked transient object-store upload
+        failures. That let statistics.json report more rows than actually
+        landed in blob storage, tripping downstream diff-delete logic.
+        """
+        writer = ParquetFileWriter(path=base_output_path, typename="t")
+        writer._upload_file = AsyncMock(  # type: ignore[method-assign]
+            side_effect=RuntimeError("obstore: connection reset by peer")
+        )
+        with pytest.raises(RuntimeError, match="connection reset by peer"):
+            await writer._flush_buffer(sample_dataframe, chunk_part=0)
+
 
 class TestParquetFileWriterMetrics:
     """Test ParquetFileWriter metrics recording."""
