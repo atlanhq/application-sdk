@@ -45,12 +45,20 @@ sys.path.insert(0, str(Path(__file__).parent))
 from renovate_pkl_sync import OUTPUT_PATHS, regenerate  # noqa: E402
 
 
-def _changed_output_paths() -> list[str]:
+def _changed_output_paths() -> list[str] | None:
     """Return generated-output paths that regeneration changed or created.
 
     Combines tracked modifications (``git diff``) with untracked additions
     (``git ls-files --others``), both scoped to ``OUTPUT_PATHS``, so a brand-new
     generated file that was never committed is caught alongside edits.
+
+    ``--exclude-standard`` is deliberately omitted from the untracked lookup: a
+    ``.gitignore`` rule covering ``OUTPUT_PATHS`` would otherwise hide a
+    brand-new generated file from this check, silently defeating the "never
+    committed" case this function exists to catch.
+
+    Returns ``None`` if a git invocation fails, so a broken/absent git command
+    degrades to inconclusive rather than being silently read as "no changes".
     """
     changed: set[str] = set()
     tracked = subprocess.run(
@@ -58,12 +66,23 @@ def _changed_output_paths() -> list[str]:
         text=True,
         capture_output=True,
     )
+    if tracked.returncode != 0:
+        print(
+            f"::warning::'git diff' failed ({tracked.stderr.strip()}); freshness check skipped."
+        )
+        return None
     changed.update(line for line in tracked.stdout.splitlines() if line.strip())
+
     untracked = subprocess.run(
-        ["git", "ls-files", "--others", "--exclude-standard", "--", *OUTPUT_PATHS],
+        ["git", "ls-files", "--others", "--", *OUTPUT_PATHS],
         text=True,
         capture_output=True,
     )
+    if untracked.returncode != 0:
+        print(
+            f"::warning::'git ls-files' failed ({untracked.stderr.strip()}); freshness check skipped."
+        )
+        return None
     changed.update(line for line in untracked.stdout.splitlines() if line.strip())
     return sorted(changed)
 
@@ -74,8 +93,9 @@ def check_freshness(contract_dir: str = "contract") -> tuple[str, list[str]]:
     ``status`` is one of:
       * ``"clean"``  — regeneration produced no changes.
       * ``"drift"``  — regeneration changed/created output files (``changed_paths``).
-      * ``"na"``     — nothing to check: no ``contract/app.pkl``, or ``pkl eval``
-                       could not run / failed (inconclusive, treated as pass).
+      * ``"na"``     — nothing to check: no ``contract/app.pkl``, ``pkl eval``
+                       could not run / failed, or a ``git`` invocation failed
+                       (all inconclusive, treated as pass).
     """
     if not (Path(contract_dir) / "app.pkl").exists():
         print(f"::notice::No {contract_dir}/app.pkl — no generated artifacts to check.")
@@ -94,6 +114,8 @@ def check_freshness(contract_dir: str = "contract") -> tuple[str, list[str]]:
         return ("na", [])
 
     changed = _changed_output_paths()
+    if changed is None:
+        return ("na", [])
     return ("drift" if changed else "clean", changed)
 
 

@@ -71,6 +71,15 @@ jobs:
         with:
           # The PR branch HEAD, not the synthetic merge commit — we diff exactly
           # what the contributor committed against a fresh regeneration.
+          #
+          # Accepted posture: a fork PR can point contract/PklProject at an
+          # attacker-controlled module URI, which `pkl eval` (below) then
+          # fetches and evaluates. This is accepted rather than allowlisted:
+          # pkl is a config DSL with no I/O primitives, permissions here are
+          # contents:read + pull-requests:write (no secrets exposed), and the
+          # same posture already exists on renovate-pkl-sync.yaml. A
+          # PklProject module-URI allowlist, if ever added, should cover all
+          # such pkl-eval-on-PR-head workflows at once, not just this one.
           ref: ${{ github.event.pull_request.head.sha }}
 
       # Provides `uvx ruff`, used by the driver to format generated Python so the
@@ -103,10 +112,12 @@ jobs:
 
       - name: Check generated-artifact freshness
         id: freshness
+        env:
+          CHECK_FRESHNESS: ${{ inputs.check-freshness }}
         run: |
           python3 .sdk-scripts/.github/scripts/check_generated_freshness.py \
             --contract-dir contract \
-            --check-freshness "${{ inputs.check-freshness }}"
+            --check-freshness "$CHECK_FRESHNESS"
 
       - name: Post sticky comment on drift
         if: failure() && github.event.pull_request.head.repo.fork == false

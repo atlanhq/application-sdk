@@ -138,3 +138,41 @@ def test_na_when_eval_fails(repo, monkeypatch):
     monkeypatch.setattr(sync, "run", _fake_run(eval_rc=1))
     # eval failure is inconclusive, not a drift failure — non-blocking.
     assert mod.main([]) == 0
+
+
+def test_na_when_git_diff_fails(repo, monkeypatch):
+    monkeypatch.setattr(sync, "run", _fake_run())
+    real_run = subprocess.run
+
+    def fake_subprocess_run(cmd, **kwargs):
+        if cmd[:2] == ["git", "diff"]:
+            return subprocess.CompletedProcess(
+                cmd, returncode=128, stdout="", stderr="fatal: boom"
+            )
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_subprocess_run)
+    # a broken git invocation is inconclusive, not silently "clean" — non-blocking.
+    assert mod.main([]) == 0
+
+
+def test_untracked_output_ignored_by_gitignore_still_caught(repo, monkeypatch):
+    # A .gitignore rule covering the output path must not hide a brand-new
+    # generated file from the freshness check (--exclude-standard is dropped).
+    (repo / ".gitignore").write_text("app/generated/\n")
+
+    def fake_run(cmd, *, check=False):
+        if cmd[0] == "pkl" and cmd[1] == "eval":
+            out_dir = Path(cmd[cmd.index("-m") + 1])
+            gen = out_dir / "app" / "generated"
+            gen.mkdir(parents=True, exist_ok=True)
+            (gen / "manifest.json").write_text(COMMITTED_MANIFEST)
+            (gen / "_input.py").write_text("x = 1\n")  # new, gitignored file
+            (out_dir / "atlan.yaml").write_text(COMMITTED_ATLAN)
+            return types.SimpleNamespace(returncode=0)
+        if cmd[0] == "uvx":
+            return types.SimpleNamespace(returncode=0)
+        return subprocess.run(cmd, check=check, text=True, capture_output=True)
+
+    monkeypatch.setattr(sync, "run", fake_run)
+    assert mod.main([]) == 1
