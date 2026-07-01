@@ -163,6 +163,10 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # E020: HTTP-failure-to-empty-return — the harm (publishing a partial crawl as
     # complete) is a connector extract/publish concern; the SDK's matching sites are
     # legitimate best-effort infra (health/metric scrapes), not crawlers (BLDX-1503).
+    # S002: raw-env credential reads — the SDK is the *provider* of the secret-store
+    # seam (EnvironmentSecretStore legitimately reads os.environ), so the rule that
+    # steers apps onto that seam is meaningless on the SDK itself (BLDX-1419). S001
+    # (hardcoded credentials) stays 'both'.
     assert app_scoped == {
         "B001",
         "C002",
@@ -209,6 +213,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "I003",
         "I004",
         "I005",
+        "S002",
     }, app_scoped
     # SDK-only rules: the SDK must keep Temporal contained behind its seam
     # (P006/P007, BLDX-1417) and declare its deprecations correctly (B002–B004).
@@ -410,6 +415,17 @@ def test_catalog_k_series_present() -> None:
     assert not missing, f"Missing K-series rules: {missing}"
     extra = k_ids - expected
     assert not extra, f"Unexpected K-series rules: {extra}"
+
+
+def test_catalog_s_series_present() -> None:
+    """The S-series secret-hygiene rules are exactly S001 and S002."""
+    rules = load_catalog()
+    s_ids = {r.id for r in rules if r.id.startswith("S")}
+    expected = {"S001", "S002"}
+    missing = expected - s_ids
+    assert not missing, f"Missing S-series rules: {missing}"
+    extra = s_ids - expected
+    assert not extra, f"Unexpected S-series rules: {extra}"
 
 
 def test_catalog_is_mapping_keyed_by_id() -> None:
