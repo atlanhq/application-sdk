@@ -199,7 +199,7 @@ def _resolve_store(store: BoundStore | ObjectStore | None) -> ObjectStore:
     (resolved from the infrastructure context).
 
     Raises:
-        RuntimeError: If *store* is ``None`` and no infrastructure context is set.
+        ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure context is set.
     """
     if store is not None:
         return store.store if isinstance(store, BoundStore) else store
@@ -468,7 +468,7 @@ async def upload_file(
 
     Raises:
         StorageError: If the upload fails.
-        RuntimeError: If *store* is ``None`` and no infrastructure store is set.
+        ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
 
     Note:
         Zero-byte uploads are allowed but emit a warning — some S3-style backends
@@ -595,7 +595,7 @@ async def download_file(
     Raises:
         StorageNotFoundError: If *key* does not exist in the store.
         StorageError: If the download or write fails.
-        RuntimeError: If *store* is ``None`` and no infrastructure store is set.
+        ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
     """
     resolved = _resolve_store(store)
     if normalize:
@@ -709,7 +709,7 @@ async def get_file_size(
 
     Raises:
         StorageError: For non-404 errors.
-        RuntimeError: If *store* is ``None`` and no infrastructure store is set.
+        ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
     """
     resolved = _resolve_store(store)
     if normalize:
@@ -767,7 +767,7 @@ async def download_file_chunked(
     Raises:
         StorageNotFoundError: If *key* does not exist.
         StorageError: If a chunk download or the disk write fails.
-        RuntimeError: If *store* is ``None`` and no infrastructure store is set.
+        ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
     """
 
     resolved = _resolve_store(store)
@@ -897,7 +897,7 @@ async def _get_bytes(
 
     Raises:
         StorageError: For non-404 errors (permission denied, I/O error, etc.).
-        RuntimeError: If *store* is ``None`` and no infrastructure store is set.
+        ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
     """
     resolved = _resolve_store(store)
     if normalize:
@@ -942,7 +942,7 @@ async def _put(
 
     Raises:
         StorageError: If the write fails.
-        RuntimeError: If *store* is ``None`` and no infrastructure store is set.
+        ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
     """
     resolved = _resolve_store(store)
     put_attributes = _resolve_put_attributes(store)
@@ -984,7 +984,7 @@ async def put_json(
 
     Raises:
         StorageError: If the write fails.
-        RuntimeError: If *store* is ``None`` and no infrastructure store is set.
+        ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
     """
     await _put(key, orjson.dumps(obj), store, normalize=normalize)
 
@@ -1012,7 +1012,7 @@ async def delete(
 
     Raises:
         StorageError: For non-404 errors.
-        RuntimeError: If *store* is ``None`` and no infrastructure store is set.
+        ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
     """
     resolved = _resolve_store(store)
     if normalize:
@@ -1054,7 +1054,7 @@ async def exists(
 
     Raises:
         StorageError: For non-404 errors (permission denied, I/O error, etc.).
-        RuntimeError: If *store* is ``None`` and no infrastructure store is set.
+        ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
     """
     resolved = _resolve_store(store)
     if normalize:

@@ -34,15 +34,18 @@ from conformance.suite.checks import (
     dependency_conformance,
     deprecation,
     determinism,
+    dev_entrypoint,
     dockerfile_conformance,
     entrypoint_alignment,
     error_handling,
+    generated_freshness,
     gitignore_entries,
     integration_marking,
     legacy_contract,
     optimizations,
     orchestration,
     prescriptions,
+    security,
 )
 from conformance.suite.checks._ast_common import TOOL_VERSION, detect_scope
 from conformance.suite.rules import CATALOG, assert_registry_consistent, get_rule
@@ -166,6 +169,12 @@ _CHECKS: list[CheckRegistration] = [
         scan_path=legacy_contract.scan_path,
     ),
     CheckRegistration(
+        series=generated_freshness.SERIES,
+        discover=generated_freshness.discover,
+        scan_path=generated_freshness.scan_path,
+        scan_all=generated_freshness.scan_all,
+    ),
+    CheckRegistration(
         series=sdr_checks.SERIES,
         discover=sdr_checks.discover,
         scan_path=sdr_checks.scan_path,
@@ -176,6 +185,16 @@ _CHECKS: list[CheckRegistration] = [
         discover=sdr_test_checks.discover,
         scan_path=sdr_test_checks.scan_path,
         scan_all=sdr_test_checks.scan_all,
+    ),
+    CheckRegistration(
+        series=dev_entrypoint.SERIES,
+        discover=dev_entrypoint.discover,
+        scan_path=dev_entrypoint.scan_path,
+    ),
+    CheckRegistration(
+        series=security.SERIES,
+        discover=security.discover,
+        scan_path=security.scan_path,
     ),
 ]
 

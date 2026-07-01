@@ -146,6 +146,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # itself never does, so these are APP-scoped (DISTR-752).
     # T002/T003: SDR test-quality — apps that declare SDR must have an SDR test
     # class; the SDK itself is not an SDR app (DISTR-752).
+    # T004: dev-entrypoint delegation — only consumer apps have a root main.py
+    # that CI's connector-integration-tests action runs directly; the SDK has
+    # no such file (BLDX-1520).
     # I001–I005: Dockerfile conformance (SDK builds the base image, not consuming it).
     # B001: consuming a deprecated SDK symbol (BLDX-1418).
     # O002/O003/O004: asset-mapper usage — connectors build assets with pyatlan_v9,
@@ -154,9 +157,16 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # K001/K002: contract-toolkit conformance — only app repos have a contract/
     # directory with .pkl source files; the SDK has no contract/ dir to scan
     # (BLDX-1479).
+    # K003/K004/K005: generated-artifact freshness — a stale Pkl lock, a missing
+    # generated output, or a stripped provenance banner are all app-repo concerns
+    # (the SDK has no contract/ + generated app artifacts) (BLDX-1414).
     # E020: HTTP-failure-to-empty-return — the harm (publishing a partial crawl as
     # complete) is a connector extract/publish concern; the SDK's matching sites are
     # legitimate best-effort infra (health/metric scrapes), not crawlers (BLDX-1503).
+    # S002: raw-env credential reads — the SDK is the *provider* of the secret-store
+    # seam (EnvironmentSecretStore legitimately reads os.environ), so the rule that
+    # steers apps onto that seam is meaningless on the SDK itself (BLDX-1419). S001
+    # (hardcoded credentials) stays 'both'.
     assert app_scoped == {
         "B001",
         "C002",
@@ -170,6 +180,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "E020",
         "K001",
         "K002",
+        "K003",
+        "K004",
+        "K005",
         "P004",
         "P005",
         "P008",
@@ -191,6 +204,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P030",
         "T002",
         "T003",
+        "T004",
         "O002",
         "O003",
         "O004",
@@ -199,6 +213,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "I003",
         "I004",
         "I005",
+        "S002",
     }, app_scoped
     # SDK-only rules: the SDK must keep Temporal contained behind its seam
     # (P006/P007, BLDX-1417) and declare its deprecations correctly (B002–B004).
@@ -374,7 +389,7 @@ def test_catalog_t_series_present() -> None:
     """The T-series test-quality rules are all present."""
     rules = load_catalog()
     t_ids = {r.id for r in rules if r.id.startswith("T")}
-    expected = {"T001", "T002", "T003"}
+    expected = {"T001", "T002", "T003", "T004"}
     missing = expected - t_ids
     assert not missing, f"Missing T-series rules: {missing}"
 
@@ -391,14 +406,26 @@ def test_catalog_b_series_present() -> None:
 
 
 def test_catalog_k_series_present() -> None:
-    """The K-series contract-toolkit conformance rules are exactly K001 and K002."""
+    """The K-series contract-toolkit rules are K001/K002 (source) plus the
+    generated-artifact freshness rules K003/K004/K005 (BLDX-1414)."""
     rules = load_catalog()
     k_ids = {r.id for r in rules if r.id.startswith("K")}
-    expected = {"K001", "K002"}
+    expected = {"K001", "K002", "K003", "K004", "K005"}
     missing = expected - k_ids
     assert not missing, f"Missing K-series rules: {missing}"
     extra = k_ids - expected
     assert not extra, f"Unexpected K-series rules: {extra}"
+
+
+def test_catalog_s_series_present() -> None:
+    """The S-series secret-hygiene rules are exactly S001 and S002."""
+    rules = load_catalog()
+    s_ids = {r.id for r in rules if r.id.startswith("S")}
+    expected = {"S001", "S002"}
+    missing = expected - s_ids
+    assert not missing, f"Missing S-series rules: {missing}"
+    extra = s_ids - expected
+    assert not extra, f"Unexpected S-series rules: {extra}"
 
 
 def test_catalog_is_mapping_keyed_by_id() -> None:

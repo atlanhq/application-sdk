@@ -27,6 +27,7 @@ from conformance.suite.rules.optimizations import RULES as _O_RULES
 from conformance.suite.rules.orchestration import RULES as _ORCHESTRATION_RULES
 from conformance.suite.rules.prescriptions import RULES as _P_RULES
 from conformance.suite.rules.sdr import RULES as _SDR_RULES
+from conformance.suite.rules.security import RULES as _S_RULES
 from conformance.suite.rules.storage import RULES as _STORAGE_RULES
 from conformance.suite.rules.tests import RULES as _T_RULES
 from conformance.suite.schema.catalog import RuleDefinition
@@ -62,6 +63,7 @@ _ALL_SERIES: tuple[tuple[RuleDefinition, ...], ...] = (
     _T_RULES,
     _B_RULES,
     _CONTRACT_TOOLKIT_RULES,
+    _S_RULES,
 )
 
 

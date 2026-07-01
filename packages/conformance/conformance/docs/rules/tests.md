@@ -5,7 +5,7 @@
 
 # Test-Quality Rules (T-series)
 
-**3 rules** · Checker: `suite.checks.integration_marking` (AST-based)
+**4 rules** · Checker: `suite.checks.integration_marking`, `suite.checks.sdr_test_checks`, and `suite.checks.dev_entrypoint` (AST-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -18,6 +18,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [T001](#t001) | `UnmarkedIntegrationTest` | `warn` | `both` | `test-marking` | — | 0.4.0 |
 | [T002](#t002) | `MissingSdrTestClass` | `warn` | `app` | `sdr-test-coverage` | — | 0.9.0 |
 | [T003](#t003) | `SdrTestLegacyAgentSpec` | `warn` | `app` | `sdr-test-coverage` | — | 0.9.0 |
+| [T004](#t004) | `DevEntrypointRequiresAppModule` | `warn` | `app` | `dev-entrypoint` | — | 0.10.0 |
 
 ---
 
@@ -76,10 +77,11 @@ of the code paths that differ between standard and SDR deployments.
 
 **Remediation:** create a test class that:
 
-.. code-block:: python
-
-    class TestMyAppSDR(BaseSDRIntegrationTest):         manifest_path =
-'app/generated/manifest.json'         workflow_type = 'extraction'
+```python
+class TestMyAppSDR(BaseSDRIntegrationTest):
+    manifest_path = 'app/generated/manifest.json'
+    workflow_type = 'extraction'
+```
 
 Set `manifest_path` (not the legacy `agent_spec_template`) so the test reads inputs from
 the committed manifest and validates the `agent_json` slot — see T003 for the
@@ -114,13 +116,17 @@ the template fills in what the manifest was supposed to provide.  P029 closes th
 manifest gap; T003 closes the test gap: a subclass using `manifest_path` will fail at
 test time whenever `manifest.json` is broken, not silently pass.
 
-**Remediation:** in the subclass body, replace::
+**Remediation:** in the subclass body, replace:
 
-    agent_spec_template = '{...}'    # legacy
+```python
+agent_spec_template = '{...}'    # legacy
+```
 
-with::
+with:
 
-    manifest_path = 'app/generated/manifest.json'
+```python
+manifest_path = 'app/generated/manifest.json'
+```
 
 The `manifest_path` class var tells `BaseSDRIntegrationTest` to call
 `_manifest_extract_inputs()` which reads `dag.extract.inputs` from the manifest —
@@ -132,5 +138,53 @@ production.
 Suppress with `# conformance: ignore[T003] <reason>` on the class definition line when
 `agent_spec_template` is intentionally used for a non-manifest test scenario (e.g. a
 negative-path test that supplies deliberately invalid credentials).
+
+---
+
+## T004 — `DevEntrypointRequiresAppModule` {#t004}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `dev-entrypoint` · **Autofixable:** — · **Since:** 0.10.0
+
+> Root main.py calls application_sdk.main.main() directly, which requires ATLAN_APP_MODULE and breaks CI's dev-mode boot
+
+**Rationale:** application_sdk.main.main() is the production, ATLAN_APP_MODULE-driven launcher: it
+always calls AppConfig.from_args_and_env(args), which raises MissingAppModuleError
+unless ATLAN_APP_MODULE (or --app) is set. That is correct in production, where the base
+image's own CMD sets the env var and never even executes the repo's main.py. But main.py
+is also what CI's connector-integration-tests composite action runs directly ('python
+main.py') to boot the app for local/dev-mode testing, and the bootstrapped
+tests-reusable.yaml path exposes no input to inject ATLAN_APP_MODULE into that job. A
+main.py that delegates straight to application_sdk.main.main() therefore fails every PR
+with MissingAppModuleError / 'App server failed to start within 60s' (BLDX-1520).
+
+Root `main.py` must not call `application_sdk.main.main()` directly (whether via `from
+application_sdk.main import main`, an aliased module import, or a bare dotted call).
+
+`main()` always resolves its `App` class from `ATLAN_APP_MODULE`/`--app` — there is no
+way to supply it any other way.  That is the right contract for the production
+container, which never runs `main.py` at all (the base image's own CMD sets
+`ATLAN_APP_MODULE` and boots directly).  But `main.py` *is* what CI's
+`connector-integration-tests` composite action runs directly (`python main.py`) to boot
+the app for local/dev-mode testing, and the bootstrapped `tests-reusable.yaml` path has
+no input that lets a caller inject `ATLAN_APP_MODULE` into that job.  A `main.py` wired
+this way fails every PR with `MissingAppModuleError`.
+
+**Remediation:** delegate to a local dev entrypoint — conventionally `app/run_dev.py` —
+that constructs your `App` subclass directly and calls `run_dev_combined(MyApp, ...)`:
+no env var required.  See `atlan-metabase-app`, `atlan-openapi-app`, or
+`atlan-mysql-app` for the reference pattern:
+
+```python
+# main.py
+import asyncio
+from app.run_dev import main
+
+if __name__ == '__main__':
+    asyncio.run(main())
+```
+
+Suppress with `# conformance: ignore[T004] <reason>` on the call's line when the app
+genuinely has no local dev-mode boot path and relies on `ATLAN_APP_MODULE` being set
+out-of-band even for CI (e.g. some utility/CSA apps).
 
 ---

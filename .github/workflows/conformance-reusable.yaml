@@ -2,7 +2,7 @@
 #
 # Reusable workflow: full conformance suite gate.
 #
-# Runs each rule series (C, E, P, O, D, L, T, I, B, K) as a separate leg of one matrix job so
+# Runs each rule series (C, E, P, O, D, L, T, I, B, K, S) as a separate leg of one matrix job so
 # each appears as its own status check:
 #   Conformance / suite / CI
 #   Conformance / suite / Error handling
@@ -14,6 +14,7 @@
 #   Conformance / suite / Container images
 #   Conformance / suite / Deprecations
 #   Conformance / suite / Contract toolkit
+#   Conformance / suite / Security
 #   Conformance / Contracts
 #   Conformance / Conformance Gate  (required gate)
 #
@@ -166,6 +167,13 @@ on:
         required: false
         default: ""
         type: string
+      exclude-paths-s:
+        description: >
+          Comma-separated repo-root-relative path prefixes to exclude from S-series
+          (security / secret-hygiene) checks only.  Default: nothing excluded.
+        required: false
+        default: ""
+        type: string
       ledger-path:
         description: >
           Repo-relative path to the app's committed contract ledger
@@ -290,13 +298,23 @@ jobs:
             paths: "**/*.py"
             exclude_paths: ${{ inputs.exclude-paths-b }}
           # K-series is APP-scoped and no-ops on the SDK itself (no contract/
-          # directory).  Watches contract/**/*.pkl only; a PR that modifies only
-          # Python sources will not trigger this leg (and vice versa).
+          # directory).  Watches the contract source (K001/K002/K003) AND the
+          # generated artifacts (K004/K005): a hand-edit to atlan.yaml or
+          # app/generated/** with no contract/ change must still trigger this leg.
           - series: K
             name: "Contract toolkit"
             slug: contract-toolkit
-            paths: "contract/**"
+            paths: "{contract/**,atlan.yaml,app.yaml,app/generated/**}"
             exclude_paths: ${{ inputs.exclude-paths-k }}
+          # S-series (secret hygiene) is mixed-scope: S001 (hardcoded credentials)
+          # is 'both'; S002 (raw-env credential reads) is APP-scoped and no-ops on
+          # the SDK, which is the provider of the secret-store seam.  Scope is
+          # auto-detected per caller, so no per-app config is needed.
+          - series: S
+            name: "Security"
+            slug: security
+            paths: "**/*.py"
+            exclude_paths: ${{ inputs.exclude-paths-s }}
     steps:
       - name: "Checkout caller repo"
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
