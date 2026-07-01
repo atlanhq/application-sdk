@@ -270,6 +270,21 @@ runs:
       # daprd is already on PATH (/usr/local/bin); only the Temporal CLI needs adding.
       run: echo "$HOME/.temporalio/bin" >> "$GITHUB_PATH"
 
+    - name: Provision default Dapr components (external runtime)
+      if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
+      shell: bash
+      run: |
+        # The external daprd below runs with `--resources-path components`, and
+        # the SDK reads the same YAML off disk to resolve its bindings at boot
+        # (objectstore, statestore, secretstore …). Almost no connector ships a
+        # components/ dir, so daprd would come up with no `objectstore` binding
+        # and app startup would crash with StorageBindingNotFoundError
+        # [AAF-STR-003]. Provision the default local-backed set here. The script
+        # is write-if-absent, so a real components/*.yaml a connector already
+        # ships (e.g. the real-cloud S3/Azure/GCS suite) is left untouched. It
+        # is pure-stdlib — no extra deps needed to emit the YAML.
+        python3 "${{ github.action_path }}/../../scripts/write_dapr_components.py" components
+
     - name: Start daprd + Temporal
       if: steps.runtime.outputs.embedded != 'true' || inputs.force-external-runtime == 'true'
       shell: bash
