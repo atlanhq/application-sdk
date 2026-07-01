@@ -1474,12 +1474,20 @@ jobs:
           if [ -n "$TENANTS" ]; then
             CHANNEL_USED="tenants: $TENANTS"
           fi
-          if [ "$CHANNEL_USED" = "all" ]; then
-            echo "Channel 'all' creates a draft release — admin approval required"
-          fi
 
           echo "### Publish complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Published \`${APP_NAME}\` version \`${IMAGE_TAG}\` to \`${CHANNEL_USED}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Refer to [Global Marketplace](https://globalmarketplaceui.atlan.com/admin/) for approval." >> $GITHUB_STEP_SUMMARY
+          # release_model=semver — the release cut IS the gate. GM auto-approves
+          # the release (no manual sign-off). Certification still gates before
+          # tenants receive it. Wording stays channel-agnostic: canary applies
+          # on the 'all' channel per the app's config; beta/staging/specific
+          # activate directly. cd apps keep the GM approval step for 'all'.
+          if [ "${RELEASE_MODEL}" = "semver" ]; then
+            echo "\`release_model: semver\` — the release cut is the gate, so **no manual Global Marketplace approval is required**. Certification still runs and gates before the release reaches tenants." >> $GITHUB_STEP_SUMMARY
+          elif [ "$CHANNEL_USED" = "all" ]; then
+            echo "Channel 'all' creates a draft release — admin approval required." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Refer to [Global Marketplace](https://globalmarketplaceui.atlan.com/admin/) for approval." >> $GITHUB_STEP_SUMMARY
+          fi
