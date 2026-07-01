@@ -644,13 +644,16 @@ class BaseE2ETest:
             if connection_in_atlas:
                 # Probe the union of types referenced by floors, exact-count
                 # parity, AND location-depth checks, so all three kinds of
-                # expectation get real Atlas counts. Including the location types
-                # here is what makes the count-poll loop below WAIT for them to
-                # index — otherwise a connector that declares only
-                # expected_asset_qn_depth (no counts) would sample immediately
-                # after the Connection lands, race ES indexing, get empty
-                # samples, and the location check would skip every type (false
-                # green). Folding them in makes the feature self-sufficient.
+                # expectation get real Atlas counts and the post-loop location
+                # sample reads populated data once those types have indexed.
+                # NOTE: adding a location type here does NOT by itself make the
+                # poll WAIT for that type — the loop only stays alive via a
+                # per-type floor or the non-empty backstop (total == 0), so a
+                # location-only type with no floor can still be zero when the
+                # loop exits (the moment any other type makes total > 0). The
+                # real wait-for-this-type safeguard is pairing each
+                # expected_asset_qn_depth type with an expected_min_asset_counts
+                # floor — see that attr's docstring.
                 probe_types = tuple(
                     {
                         *self.expected_min_asset_counts,
@@ -837,7 +840,12 @@ class BaseE2ETest:
                         f"connection {self.connection_qualified_name}"
                     )
                     continue
-                below = qn[len(prefix) :].split("/")
+                # rstrip a trailing "/" first: a QN that ends in "/" would
+                # otherwise split into an empty tail segment and over-count the
+                # depth by one. (Atlan QNs conventionally don't end in "/", so
+                # this is defensive.)
+                tail = qn[len(prefix) :].rstrip("/")
+                below = tail.split("/") if tail else []
                 if len(below) != depth:
                     failures.append(
                         f"  - {type_name} {qn!r} has {len(below)} segment(s) "

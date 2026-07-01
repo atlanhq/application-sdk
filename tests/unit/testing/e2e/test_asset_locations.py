@@ -77,6 +77,13 @@ def test_empty_samples_for_a_type_are_skipped() -> None:
     assert inst._validate_asset_locations(samples) == []
 
 
+def test_trailing_slash_does_not_overcount() -> None:
+    inst = _make(_SQLHierarchy)
+    # A QN that ends in "/" must not count an empty tail segment as depth.
+    samples = {"Database": ["default/x/123/db/"]}
+    assert inst._validate_asset_locations(samples) == []
+
+
 def test_no_expected_depth_is_a_noop() -> None:
     inst = _make(_NoLocationCheck)
     # Even obviously-wrong samples pass when the connector opts out.
