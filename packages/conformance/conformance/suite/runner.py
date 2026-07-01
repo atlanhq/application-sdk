@@ -37,6 +37,7 @@ from conformance.suite.checks import (
     dockerfile_conformance,
     entrypoint_alignment,
     error_handling,
+    generated_freshness,
     gitignore_entries,
     integration_marking,
     legacy_contract,
@@ -164,6 +165,12 @@ _CHECKS: list[CheckRegistration] = [
         series=legacy_contract.SERIES,
         discover=legacy_contract.discover,
         scan_path=legacy_contract.scan_path,
+    ),
+    CheckRegistration(
+        series=generated_freshness.SERIES,
+        discover=generated_freshness.discover,
+        scan_path=generated_freshness.scan_path,
+        scan_all=generated_freshness.scan_all,
     ),
     CheckRegistration(
         series=sdr_checks.SERIES,

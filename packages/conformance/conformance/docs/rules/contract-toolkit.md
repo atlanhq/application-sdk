@@ -5,7 +5,7 @@
 
 # Contract-Toolkit Conformance Rules (K-series)
 
-**2 rules** · Checker: `suite.checks.legacy_contract` (pkl-source regex, scans ``contract/**/*.pkl``)
+**5 rules** · Checker: `suite.checks.legacy_contract` (pkl-source regex, scans ``contract/**/*.pkl``)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -17,6 +17,9 @@ Suppress a finding on the violating line or the line directly above it:
 |---|---|---|---|---|---|---|
 | [K001](#k001) | `ContractAmendsLegacyModule` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
 | [K002](#k002) | `LegacyContractApi` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
+| [K003](#k003) | `ContractLockDrift` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
+| [K004](#k004) | `MissingGeneratedArtifact` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
+| [K005](#k005) | `GeneratedArtifactBannerStripped` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
 
 ---
 
@@ -60,8 +63,8 @@ App.pkl's typed `entrypoints` block.  Each child contract file that also amends
 `NativeApp.pkl` will produce its own K001 finding and must be migrated separately.
 
 5. Run `pkl eval -m . contract/app.pkl` (or `uv run poe generate`) to regenerate
-`app/generated/**` and `atlan.yaml`.  Never hand-edit generated artifacts — C002 catches
-staleness.
+`app/generated/**` and `atlan.yaml`.  Never hand-edit generated artifacts — K004/K005
+and the generated-artifact freshness gate catch staleness.
 
 **Suppress** with `// conformance: ignore[K001] <reason>` on the `amends` line or the
 comment-only line directly above it when a deliberate delay is justified (e.g. phased
@@ -112,7 +115,7 @@ because App.pkl simply lacks those properties.
 
 After editing, run `pkl eval -m . contract/app.pkl` (or `uv run poe generate`) to
 regenerate `app/generated/**` and `atlan.yaml`.  Never hand-edit generated artifacts —
-C002 catches staleness.
+K004/K005 and the generated-artifact freshness gate catch staleness.
 
 **Scanner limitation:** the checker is not string-literal aware.  A property name that
 appears only inside a string literal (e.g. `description = "flatManifestArgs is removed
@@ -122,5 +125,122 @@ case where the pattern matches non-code content.
 
 **Suppress** with `// conformance: ignore[K002] <reason>` on the violating line or the
 comment-only line directly above it.
+
+---
+
+## K003 — `ContractLockDrift` {#k003}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.9.0
+
+> contract/PklProject pin does not match the resolved version in PklProject.deps.json — re-resolve the lock
+
+**Rationale:** contract/PklProject pins each pkl dependency (e.g. app-contract-toolkit) at an exact
+@<version>; contract/PklProject.deps.json is the resolved lock that records the version
+pkl actually fetched, with its checksum.  When someone bumps the pin in PklProject but
+does not re-resolve, the lock stays behind: pkl eval regenerates from the OLD toolkit,
+so the committed generated artifacts silently reflect a version the contract no longer
+claims.  Renovate's renovate-pkl-sync workflow keeps these two in sync on bot bumps, but
+a manual pin edit bypasses it entirely.  Comparing the two files is a pure,
+deterministic text check that needs no pkl toolchain, so it catches the drift the moment
+it lands (BLDX-1414).
+
+A dependency pinned in `contract/PklProject` resolves to a different version in
+`contract/PklProject.deps.json` (or the lock file is missing / does not contain the
+dependency at all).  The lock is stale relative to the pin.
+
+`pkl eval` generates `app/generated/**` and `atlan.yaml` from whatever the lock resolves
+to — so a stale lock means the committed artifacts were generated from a toolkit version
+the contract no longer pins.  A bump to the `@<version>` in `PklProject` must be paired
+with a re-resolve.
+
+**Fix:** re-resolve the Pkl project so the lock matches the pin, then regenerate:
+
+    pkl project resolve   # rewrites contract/PklProject.deps.json     pkl eval -m .
+contract/app.pkl   # regenerates the artifacts
+
+On a `renovate/**` branch this happens automatically via the `renovate-pkl-sync`
+workflow; on a manual bump run the commands above (or `uv run poe generate` where the
+app defines it).
+
+The version match is prefix-aware: a broad pin such as `@0` is satisfied by any resolved
+`0.y.z` and is never flagged — only a fully-specified pin (`@0.16.0`) that disagrees
+with the lock, or a lock that lacks the dependency, is a finding.
+
+**Suppress** with `// conformance: ignore[K003] <reason>` on the `uri` line in
+`contract/PklProject` (or the comment-only line directly above it) when a deliberate lag
+is justified.
+
+---
+
+## K004 — `MissingGeneratedArtifact` {#k004}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.9.0
+
+> contract/app.pkl exists but an expected generated artifact (atlan.yaml / manifest.json / _input.py) is missing — regenerate
+
+**Rationale:** An app that defines contract/app.pkl commits the pkl eval outputs (atlan.yaml,
+app/generated/manifest.json, app/generated/_input.py) so that deployment and CI consume
+them without a pkl toolchain.  When one of those outputs is absent while the contract
+exists, the app was never generated (or the artifact was deleted): the platform reads a
+manifest that does not exist, and the app fails to deploy or register.  File existence
+is a fully deterministic check that needs no pkl (BLDX-1414).
+
+The app defines `contract/app.pkl` but one or more of the artifacts `pkl eval` is
+expected to produce is absent:
+
+* `atlan.yaml` * `app/generated/manifest.json` * `app/generated/_input.py`
+
+These are the outputs the deployment pipeline and the SDK read at runtime; a missing one
+means the contract was never generated (or an output was deleted).
+
+**Fix:** regenerate from the contract —
+
+    pkl eval -m . contract/app.pkl
+
+(or `uv run poe generate` where the app defines it) and commit the result.
+
+**Suppress** with `// conformance: ignore[K004] <reason>` on the `amends` line of
+`contract/app.pkl` when an output is legitimately not produced for this app.
+
+---
+
+## K005 — `GeneratedArtifactBannerStripped` {#k005}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.9.0
+
+> A generated text artifact (atlan.yaml / app/generated/*.py) is missing its AUTO-GENERATED provenance banner — likely hand-edited
+
+**Rationale:** Every text artifact the contract toolkit emits carries a provenance banner in its first
+lines — 'AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY' (or the '… via
+contract-toolkit. DO NOT EDIT' variant).  A generated file that is MISSING that banner
+has almost always been hand-authored or hand-edited in place, which means it will
+silently diverge from the contract on the next regeneration.  This is a heuristic proxy,
+not a proof: a hand-edit that preserves the banner is invisible to a static scanner
+(only the CI regenerate-and-diff gate catches that).  Because a deliberately
+hand-maintained app legitimately strips the now-untrue banner, K005 stays WARN and is
+suppressed per file rather than ever graduating to BLOCK (BLDX-1414).
+
+A file the contract toolkit is expected to generate (`atlan.yaml`, `app.yaml`, or a
+`.py` file under `app/generated/` other than `__init__.py`) does not carry the
+provenance banner the toolkit stamps into the first lines of every output it writes:
+
+    # AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY.
+
+(or the `# Generated from contract/app.pkl via contract-toolkit. DO NOT EDIT.` variant).
+A missing banner means the file was authored or edited by hand and will diverge from the
+contract the next time `pkl eval` runs.
+
+`.json` artifacts (`manifest.json` etc.) are exempt — JSON has no comment syntax to
+carry a banner — as is the empty `app/generated/__init__.py`.
+
+**Fix:** regenerate from the contract (`pkl eval -m . contract/app.pkl`) so the file is
+re-emitted with its banner.
+
+**Limitation:** this rule cannot see content-level hand-edits that leave the banner
+intact; the CI generated-artifact freshness gate (regenerate-and-diff) is the check that
+proves full freshness.
+
+**Suppress** with `# conformance: ignore[K005] <reason>` on the first line of the file
+(or the line above it) for an app that deliberately hand-maintains this artifact.
 
 ---

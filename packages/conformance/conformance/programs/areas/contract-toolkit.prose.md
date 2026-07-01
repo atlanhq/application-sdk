@@ -3,11 +3,13 @@ kind: responsibility
 name: contract-toolkit-area
 description: >
   Maintains the current K-series violation-set and drives remediation of
-  legacy-contract findings.  K001 (contract amends NativeApp.pkl or
+  contract-toolkit findings.  K001 (contract amends NativeApp.pkl or
   NativeAppBundle.pkl instead of App.pkl) and K002 (NativeApp-only APIs present:
   flatManifestArgs, manifestMetadataArgs, workflowTypeOverride, or legacy
-  Config/Connectors/Credential/Renderers imports) are guided migration fixes
-  verified by the pkl-eval gate.
+  Config/Connectors/Credential/Renderers imports) are guided migration fixes.
+  K003 (stale Pkl lock), K004 (missing generated output), and K005 (stripped
+  provenance banner) are generated-artifact freshness findings fixed by
+  re-resolving / regenerating — all verified by the pkl-eval gate.
 ---
 
 ### Maintains
@@ -24,9 +26,9 @@ K-series rules are WARN-tier, so in **default** mode this facet is always empty
 (warnings do not fail the gate).  In **strict** mode the fingerprint-set includes
 unsuppressed WARNING results, which is where K-series remediation actually runs.
 
-The active scope decides which rules can appear: both K001 and K002 are
-`scope=APP`, so they surface only on consumer app repos.  The runner
-auto-detects scope, so the SDK repo sees 0 findings.
+The active scope decides which rules can appear: K001–K005 are all `scope=APP`,
+so they surface only on consumer app repos.  The runner auto-detects scope, so
+the SDK repo sees 0 findings.
 
 This facet's fingerprint moves when any K-series finding is resolved (fixed or
 suppressed with justification) or when new ones appear.  An unchanged
@@ -47,8 +49,10 @@ Postcondition (deterministic validator — never render-attested):
 
 ### Continuity
 
-Input-driven: re-render this node when any `contract/**/*.pkl` file under `scope`
-changes.  In the Claude Code skill path the skill caller re-invokes on demand.
+Input-driven: re-render this node when any `contract/**/*.pkl` file, the Pkl lock
+(`contract/PklProject`, `contract/PklProject.deps.json`), or a generated artifact
+(`atlan.yaml`, `app.yaml`, `app/generated/**`) under `scope` changes.  In the
+Claude Code skill path the skill caller re-invokes on demand.
 
 ### Execution
 
@@ -64,12 +68,22 @@ call detect-fix-recheck
 
 _Read by `remediate-finding` when `finding.area == "contract-toolkit"`._
 
-Both K001 and K002 are **WARN-tier** — they surface only under `--strict` mode.
+All K-series rules are **WARN-tier** — they surface only under `--strict` mode.
 Before proposing any edit, read the actual lines around `finding.line` in
-`finding.file` (a `contract/*.pkl` file).  **Never edit `atlan.yaml`,
-`app/generated/`, or any other generated artifact directly** — those are outputs
-of `pkl eval`; C002 catches staleness.  After every edit, the `pkl-eval-gate`
-runs `pkl eval` to verify the migration compiled and regenerated cleanly.
+`finding.file`.  **Never hand-edit `atlan.yaml`, `app/generated/`, or any other
+generated artifact directly** — those are outputs of `pkl eval`, and K004/K005
+catch the staleness that hand-editing causes.  The *only* sanctioned way to
+change a generated artifact is to regenerate it from the contract.  After every
+edit, the `pkl-eval` gate runs `pkl eval` to verify the contract compiled and
+regenerated cleanly.
+
+The freshness rules (K003/K004/K005) are remediated by running a pkl command
+(`pkl project resolve` and/or `pkl eval -m . contract/app.pkl`), so they are
+**remediable only when the `pkl` toolchain is available** in the environment.
+When `pkl` is not installed, the fix cannot be applied or gate-verified — route
+the finding to **residue** with a note to regenerate locally (or let the
+`renovate-pkl-sync` / CI freshness gate handle it), rather than hand-editing the
+artifact.
 
 ---
 
@@ -137,6 +151,62 @@ Read the specific knob(s) named in the `finding.message` and apply:
 If the contract file also has a K001 finding (amends a legacy module), address
 K001 first — many K002 knobs disappear automatically when the module changes
 because App.pkl lacks those properties.
+
+---
+
+**K003 ContractLockDrift** — `contract/PklProject` pins a dependency at a version
+the resolved lock `contract/PklProject.deps.json` does not match (or the lock is
+missing / lacks the dependency).  `classification = "mechanical"` (the fix is a
+deterministic re-resolve), but it **requires `pkl`**.
+
+*Procedure:*
+
+1. Run `pkl project resolve` in the `contract/` directory to rewrite
+   `PklProject.deps.json` so the lock matches the pin.
+2. Run `pkl eval -m . contract/app.pkl` (or `uv run poe generate` where defined)
+   so the regenerated artifacts reflect the newly-locked toolkit version.
+3. Stage `contract/PklProject.deps.json` and every regenerated artifact.
+
+If `pkl` is unavailable, do not hand-edit the lock JSON — route to residue with a
+note to re-resolve locally (the `renovate-pkl-sync` workflow does this
+automatically on renovate bumps).
+
+---
+
+**K004 MissingGeneratedArtifact** — `contract/app.pkl` exists but an expected
+output (`atlan.yaml`, `app/generated/manifest.json`, `app/generated/_input.py`)
+is absent.  `classification = "mechanical"`; **requires `pkl`**.
+
+*Procedure:*
+
+1. Run `pkl eval -m . contract/app.pkl` (or `uv run poe generate`) to regenerate
+   all outputs, then stage the newly-produced files.
+2. If an output is legitimately not produced for this app (e.g. a utility app
+   that emits no manifest), the finding is `classification = "judgment"` —
+   suppress with `// conformance: ignore[K004] <reason>` on the `amends` line of
+   `contract/app.pkl` and route to residue.
+
+If `pkl` is unavailable, route to residue with a regenerate-locally note.
+
+---
+
+**K005 GeneratedArtifactBannerStripped** — a generated text artifact
+(`atlan.yaml` / `app.yaml` / an `app/generated/*.py` other than `__init__.py`) is
+missing its `DO NOT EDIT` provenance banner, indicating a hand-edit.
+`classification = "judgment"` — a stripped banner usually means deliberate
+hand-authoring, which the static scanner cannot distinguish from an accidental
+edit.
+
+*Procedure:*
+
+1. If the artifact should be generated, run `pkl eval -m . contract/app.pkl` to
+   re-emit it with its banner, then stage the result.  **Do not** re-add the
+   banner by hand to a file whose *content* was hand-edited — that hides real
+   drift from the CI regenerate-and-diff freshness gate.
+2. If the app deliberately hand-maintains this artifact, suppress with
+   `# conformance: ignore[K005] <reason>` on the first line and route to residue.
+
+K005 never graduates to BLOCK; a hand-maintaining app suppresses per file.
 
 ---
 
