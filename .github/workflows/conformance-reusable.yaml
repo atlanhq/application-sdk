@@ -290,12 +290,13 @@ jobs:
             paths: "**/*.py"
             exclude_paths: ${{ inputs.exclude-paths-b }}
           # K-series is APP-scoped and no-ops on the SDK itself (no contract/
-          # directory).  Watches contract/**/*.pkl only; a PR that modifies only
-          # Python sources will not trigger this leg (and vice versa).
+          # directory).  Watches the contract source (K001/K002/K003) AND the
+          # generated artifacts (K004/K005): a hand-edit to atlan.yaml or
+          # app/generated/** with no contract/ change must still trigger this leg.
           - series: K
             name: "Contract toolkit"
             slug: contract-toolkit
-            paths: "contract/**"
+            paths: "{contract/**,atlan.yaml,app.yaml,app/generated/**}"
             exclude_paths: ${{ inputs.exclude-paths-k }}
     steps:
       - name: "Checkout caller repo"
