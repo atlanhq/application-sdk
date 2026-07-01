@@ -116,6 +116,9 @@ runs:
         raw=$(python "$GITHUB_ACTION_PATH/../../scripts/build_conformance_args.py" \
           --series "$SERIES" --slug "$SLUG")
         mapfile -t detect_args <<< "$raw"
+        # uv run --with overlays this leg's ephemeral requirement onto the resolved
+        # env from the preceding sync step; needed so the suite's own D-series detect
+        # sees consumer deps.
         uv run \
           --with "atlan-application-sdk-conformance @ git+https://github.com/atlanhq/application-sdk@${CONFORMANCE_REF}#subdirectory=packages/conformance" \
           -- atlan-application-sdk-conformance detect "${detect_args[@]}"
