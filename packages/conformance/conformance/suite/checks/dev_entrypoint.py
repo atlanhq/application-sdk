@@ -102,6 +102,32 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
     return scan_text(text, str(rel))
 
 
+def _module_level_rebind_lines(tree: ast.AST, name: str) -> list[int]:
+    """Line numbers of top-level statements that rebind *name* to something else.
+
+    Only module-scope ``def``/``class``/assignment targeting *name* count —
+    they shadow an earlier import of the same name for any call that comes
+    after them.  Nested rebindings (inside a function/class body) create a
+    new local scope and don't affect module-level call sites, so they're
+    deliberately not walked.
+    """
+    lines: list[int] = []
+    for stmt in getattr(tree, "body", []):
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if stmt.name == name:
+                lines.append(stmt.lineno)
+        elif isinstance(stmt, ast.Assign):
+            if any(
+                isinstance(target, ast.Name) and target.id == name
+                for target in stmt.targets
+            ):
+                lines.append(stmt.lineno)
+        elif isinstance(stmt, ast.AnnAssign):
+            if isinstance(stmt.target, ast.Name) and stmt.target.id == name:
+                lines.append(stmt.lineno)
+    return lines
+
+
 def _check_t004(
     tree: ast.AST,
     filename: str,
@@ -118,7 +144,10 @@ def _check_t004(
 
         # from application_sdk.main import main [as X]; X()
         if isinstance(func, ast.Name):
-            if origins.get(func.id) == _PRODUCTION_ENTRYPOINT_ORIGIN:
+            if origins.get(func.id) == _PRODUCTION_ENTRYPOINT_ORIGIN and not any(
+                rebind_line < node.lineno
+                for rebind_line in _module_level_rebind_lines(tree, func.id)
+            ):
                 findings.append(
                     make_finding(
                         filename=filename,

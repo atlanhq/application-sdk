@@ -77,10 +77,11 @@ of the code paths that differ between standard and SDR deployments.
 
 **Remediation:** create a test class that:
 
-.. code-block:: python
-
-    class TestMyAppSDR(BaseSDRIntegrationTest):         manifest_path =
-'app/generated/manifest.json'         workflow_type = 'extraction'
+```python
+class TestMyAppSDR(BaseSDRIntegrationTest):
+    manifest_path = 'app/generated/manifest.json'
+    workflow_type = 'extraction'
+```
 
 Set `manifest_path` (not the legacy `agent_spec_template`) so the test reads inputs from
 the committed manifest and validates the `agent_json` slot — see T003 for the
@@ -115,13 +116,17 @@ the template fills in what the manifest was supposed to provide.  P029 closes th
 manifest gap; T003 closes the test gap: a subclass using `manifest_path` will fail at
 test time whenever `manifest.json` is broken, not silently pass.
 
-**Remediation:** in the subclass body, replace::
+**Remediation:** in the subclass body, replace:
 
-    agent_spec_template = '{...}'    # legacy
+```python
+agent_spec_template = '{...}'    # legacy
+```
 
-with::
+with:
 
-    manifest_path = 'app/generated/manifest.json'
+```python
+manifest_path = 'app/generated/manifest.json'
+```
 
 The `manifest_path` class var tells `BaseSDRIntegrationTest` to call
 `_manifest_extract_inputs()` which reads `dag.extract.inputs` from the manifest —
@@ -167,11 +172,16 @@ this way fails every PR with `MissingAppModuleError`.
 **Remediation:** delegate to a local dev entrypoint — conventionally `app/run_dev.py` —
 that constructs your `App` subclass directly and calls `run_dev_combined(MyApp, ...)`:
 no env var required.  See `atlan-metabase-app`, `atlan-openapi-app`, or
-`atlan-mysql-app` for the reference pattern::
+`atlan-mysql-app` for the reference pattern:
 
-    # main.py     import asyncio     from app.run_dev import main
+```python
+# main.py
+import asyncio
+from app.run_dev import main
 
-    if __name__ == '__main__':         asyncio.run(main())
+if __name__ == '__main__':
+    asyncio.run(main())
+```
 
 Suppress with `# conformance: ignore[T004] <reason>` on the call's line when the app
 genuinely has no local dev-mode boot path and relies on `ATLAN_APP_MODULE` being set

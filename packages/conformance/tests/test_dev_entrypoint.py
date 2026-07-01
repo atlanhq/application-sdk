@@ -103,6 +103,35 @@ class TestT004Silent:
         src = "from application_sdk.main import main\n"
         assert _rule(src) == []
 
+    def test_silent_when_name_reassigned_before_call(self) -> None:
+        """A later module-level rebinding shadows the import at runtime.
+
+        `main` is imported from application_sdk.main but then redefined by a
+        local `def main(): ...` before it's ever called — the call resolves
+        to the local function, not the production launcher, so this must not
+        fire (regression: PR #2448 review).
+        """
+        src = (
+            "from application_sdk.main import main\n"
+            "\n"
+            "def main():\n"
+            "    print('local dev shim')\n"
+            "\n"
+            "main()\n"
+        )
+        assert _rule(src) == []
+
+    def test_fires_when_call_precedes_reassignment(self) -> None:
+        """A rebinding *after* the call doesn't retroactively excuse it."""
+        src = (
+            "from application_sdk.main import main\n"
+            "main()\n"
+            "\n"
+            "def main():\n"
+            "    print('too late, already called the production launcher')\n"
+        )
+        assert len(_rule(src)) == 1
+
 
 # ── suppression ────────────────────────────────────────────────────────────────
 
