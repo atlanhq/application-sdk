@@ -199,7 +199,11 @@ def _parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
 
 def _cmd_bootstrap(argv: list[str]) -> int:
     """Write the SKILL.md shim and standard CI workflows into the current repo."""
-    from conformance.bootstrap.render import MANAGED_WORKFLOWS, render
+    from conformance.bootstrap.render import (
+        MANAGED_ACTION_FILES,
+        MANAGED_WORKFLOWS,
+        render,
+    )
 
     kwargs = _parse_bootstrap_args(argv)
     root = pathlib.Path.cwd()
@@ -234,6 +238,14 @@ def _cmd_bootstrap(argv: list[str]) -> int:
             render(name, **kwargs),
         )
 
+    # Non-workflow files referenced by conformance-reusable.yaml via a local
+    # `./...`-relative path, which GitHub resolves against the caller's
+    # checkout — every consumer repo needs its own copy or the C/D-series
+    # (and any other series whose paths filter matches) legs fail with
+    # "Can't find action.yml". Static, always-overwrite like MANAGED_WORKFLOWS.
+    for dest_rel, template_name in MANAGED_ACTION_FILES:
+        _bootstrap_file(root / dest_rel, render(template_name))
+
     # tests.yaml — write-if-absent scaffold; apps customise freely.
     # C002 tracks drift at WARN only.  Delete + re-run to force-regenerate.
     tests_dest = root / ".github" / "workflows" / "tests.yaml"
@@ -263,8 +275,7 @@ def _cmd_bootstrap(argv: list[str]) -> int:
                 bak = renovate_dest.with_suffix(".json.bak")
                 bak.write_text(existing, encoding="utf-8")
                 print(
-                    f"backed up: {bak}"
-                    "  (had custom content; review before committing)"
+                    f"backed up: {bak}  (had custom content; review before committing)"
                 )
             renovate_dest.write_text(target, encoding="utf-8")
             print(f"updated: {renovate_dest}")
@@ -323,7 +334,10 @@ commands:
                          --ledger-path PATH  repo-relative path to the ledger file
   remediate      Print programs path + version banner (SKILL.md drives execution)
   bootstrap      Write .claude/skills/remediate/SKILL.md + all standard CI workflow
-                 shims into .github/workflows/. The 14 managed shims always overwrite
+                 shims into .github/workflows/, plus the vendored
+                 .github/actions/run-conformance-detect/action.yaml and
+                 .github/scripts/build_conformance_args.py that conformance-reusable.yaml
+                 needs on disk in every caller repo. All of these always overwrite
                  (re-running eradicates drift). tests.yaml and renovate.json are
                  write-if-absent by default; pass --enforce to update them too.
                    --package-name NAME         docstring-coverage package (default: app)
