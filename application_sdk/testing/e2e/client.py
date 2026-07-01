@@ -41,9 +41,12 @@ import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import orjson
+
+if TYPE_CHECKING:
+    from pyatlan.client.aio.client import AsyncAtlanClient
 
 from application_sdk.errors.base import AppError
 from application_sdk.observability.logger_adaptor import get_logger
@@ -500,8 +503,9 @@ class AEWorkflowClient:
             f"/automation/api/v1/workflows/{slug}/versions/{version}/publish",
             total_attempts=retries,
             sleep_seconds=retry_sleep_seconds,
-            retryable=lambda s, b: s >= 300
-            or not (isinstance(b, dict) and b.get("status") == "success"),
+            retryable=lambda s, b: (
+                s >= 300 or not (isinstance(b, dict) and b.get("status") == "success")
+            ),
             op_name="publish_version",
         )
         if status < 300 and isinstance(body, dict) and body.get("status") == "success":
@@ -935,6 +939,84 @@ class AEWorkflowClient:
         async with self._build_async_atlan_client() as client:
             return list(
                 await asyncio.gather(*(_count_one(client, tn) for tn in type_names))
+            )
+
+    def sample_asset_qualified_names_under_connection(
+        self,
+        connection_qualified_name: str,
+        *,
+        type_names: tuple[str, ...],
+        per_type: int = 3,
+    ) -> dict[str, list[str]]:
+        """Sample up to *per_type* qualifiedNames per type under the connection.
+
+        Backs the location/hierarchy assertion: the harness checks the *shape*
+        (nesting depth) of a few landed assets per type, not just their counts.
+        Returns ``{typeName: [qualifiedName, ...]}`` with an empty list for
+        types that produced no hits (or on search error).
+        """
+        if not type_names:
+            return {}
+        prefix = f"{connection_qualified_name}/"
+        results = asyncio.run(self._sample_qns_async(prefix, type_names, per_type))
+        return dict(zip(type_names, results))
+
+    async def _sample_qns_async(
+        self, prefix: str, type_names: tuple[str, ...], per_type: int
+    ) -> list[list[str]]:
+        """Parallel per-type searches returning a few qualifiedNames each.
+
+        Mirrors :meth:`_search_counts_async` (same shared async client /
+        connection pool, same OAuth-vs-API-key identity handling) but requests a
+        small page and reads ``qualifiedName`` off the hits instead of ``.count``.
+        """
+        from pyatlan.model.assets import Asset  # noqa: PLC0415
+        from pyatlan.model.fluent_search import FluentSearch  # noqa: PLC0415
+
+        # connectionQualifiedName is the canonical "which connection owns this
+        # asset" field the Atlan UI filters on, and is required to be populated
+        # on every asset — so match on it directly (not just the QN path prefix)
+        # to sample the assets exactly as the product surfaces them.
+        connection_qn = prefix.rstrip("/")
+
+        async def _sample_one(client: "AsyncAtlanClient", type_name: str) -> list[str]:
+            try:
+                request = (
+                    FluentSearch()
+                    .where(Asset.QUALIFIED_NAME.startswith(prefix))
+                    .where(Asset.CONNECTION_QUALIFIED_NAME.eq(connection_qn))
+                    .where(Asset.TYPE_NAME.eq(type_name))
+                    .include_on_results(Asset.QUALIFIED_NAME)
+                    .include_on_results(Asset.CONNECTION_QUALIFIED_NAME)
+                ).to_request()
+                request.dsl.size = per_type
+                results = await client.asset.search(request)
+                page = results.current_page() or []
+                # Asset.qualified_name is str | None; the `if qn` narrows it to
+                # str so the return stays list[str], and the len cap enforces
+                # per_type without a trailing slice.
+                qns: list[str] = []
+                for asset in page:
+                    qn = asset.qualified_name
+                    if qn:
+                        qns.append(qn)
+                    if len(qns) >= per_type:
+                        break
+                return qns
+            except Exception:
+                # Fails OPEN: an empty result makes the location check skip this
+                # type (a silent pass), unlike the count path where 0 can trip a
+                # floor. Hence the location assertion must be validated against a
+                # real tenant before adopters rely on it. Logged at exception
+                # level so the fault is at least visible in CI output.
+                logger.exception(
+                    "qualifiedName sample for %s under %s failed", type_name, prefix
+                )
+                return []
+
+        async with self._build_async_atlan_client() as client:
+            return list(
+                await asyncio.gather(*(_sample_one(client, tn) for tn in type_names))
             )
 
 
