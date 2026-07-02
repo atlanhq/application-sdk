@@ -40,7 +40,6 @@ from conformance.suite.checks.deprecation._contract_compat import (
     _iter_fields,
 )
 from conformance.suite.checks.deprecation._ledger_schema import (
-    LEDGER_PATH,
     ContractField,
     ContractLedger,
     load_ledger,
@@ -165,8 +164,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--outfile",
         type=Path,
-        default=LEDGER_PATH,
-        help=f"Ledger path to write (default: {LEDGER_PATH}).",
+        default=Path("contract_schema.lock.json"),
+        help="Ledger path to write (default: contract_schema.lock.json in cwd).",
     )
     parser.add_argument(
         "--check",

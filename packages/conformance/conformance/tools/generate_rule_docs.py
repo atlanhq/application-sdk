@@ -122,7 +122,9 @@ _SERIES_META: list[SeriesMeta] = [
             "conformance/suite/rules/storage.py, "
             "conformance/suite/rules/entrypoint_alignment.py, "
             "conformance/suite/rules/entrypoint.py, "
-            "conformance/suite/rules/client_seam.py"
+            "conformance/suite/rules/client_seam.py, "
+            "conformance/suite/rules/determinism.py, "
+            "conformance/suite/rules/app_name_alignment.py"
         ),
         output_filename="prescriptions.md",
         checker=(
@@ -130,8 +132,10 @@ _SERIES_META: list[SeriesMeta] = [
             "`suite.checks.orchestration` (P004–P007, scans test files too), "
             "`suite.checks.entrypoint_alignment` (P016), "
             "`suite.checks.entrypoint` (P017–P018, scans test files too), "
-            "`suite.checks.client_seam` (P019) "
-            "(all AST-based)"
+            "`suite.checks.client_seam` (P019), "
+            "`suite.checks.determinism` (P020–P024), "
+            "`suite.checks.app_name_alignment` (P025) "
+            "(all AST-based / cross-artifact)"
         ),
         suppression_example="# conformance: ignore[P001] intentional: generic cleanup payload",
         stability_note=_ID_STABILITY_NOTE,
@@ -150,7 +154,10 @@ _SERIES_META: list[SeriesMeta] = [
         prefix="T",
         source_module="conformance/suite/rules/tests.py",
         output_filename="tests.md",
-        checker="`suite.checks.integration_marking` (AST-based)",
+        checker=(
+            "`suite.checks.integration_marking`, `suite.checks.sdr_test_checks`, "
+            "and `suite.checks.dev_entrypoint` (AST-based)"
+        ),
         suppression_example=(
             "# conformance: ignore[T001] intentional: marked dynamically via add_marker"
         ),
@@ -176,6 +183,33 @@ _SERIES_META: list[SeriesMeta] = [
         ),
         stability_note=_ID_STABILITY_NOTE,
     ),
+    SeriesMeta(
+        title="Security / Secret-Hygiene Rules (S-series)",
+        prefix="S",
+        source_module="conformance/suite/rules/security.py",
+        output_filename="security.md",
+        checker="`suite.checks.security` (AST-based)",
+        suppression_example=(
+            "# conformance: ignore[S002] intentional: platform self-auth, no SDK seam"
+        ),
+        stability_note=_ID_STABILITY_NOTE,
+    ),
+    SeriesMeta(
+        title="Contract-Toolkit Conformance Rules (K-series)",
+        prefix="K",
+        source_module="conformance/suite/rules/contract_toolkit.py",
+        output_filename="contract-toolkit.md",
+        checker=(
+            "`suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans "
+            "``contract/**/*.pkl``), "
+            "`suite.checks.generated_freshness` (K003–K005, scans "
+            "``contract/PklProject``, ``contract/PklProject.deps.json``, "
+            "``atlan.yaml``, ``app.yaml``, and ``app/generated/**``)"
+        ),
+        suppression_example=(
+            "// conformance: ignore[K001] intentional: phased migration tracked in BLDX-XXXX"
+        ),
+    ),
 ]
 
 
@@ -194,6 +228,79 @@ _AUTOGEN_BANNER = """\
 def _rst_to_md(text: str) -> str:
     """Convert RST-style double-backtick literals to Markdown single-backtick code spans."""
     return re.sub(r"``([^`]+)``", r"`\1`", text)
+
+
+_CODE_BLOCK_DIRECTIVE_RE = re.compile(r"^\.\.\s+code-block::")
+
+
+def _split_literal_blocks(text: str) -> list[tuple[str, bool]]:
+    """Split RST-ish *text* into ``(chunk, is_code)`` segments.
+
+    A literal block is opened either by a ``.. code-block:: <lang>`` directive
+    or by a line ending in ``::`` (the RST "expository text::" convention), and
+    extends through every immediately-following blank or indented line, ending
+    at the first non-indented, non-blank line (or EOF).  Blank lines bordering
+    the block are trimmed.  Everything else is prose.
+
+    This exists because a naive "split on blank lines, then ``textwrap.fill``
+    every paragraph" pass (the previous behaviour) reflows literal blocks
+    exactly like prose — collapsing every code example in the rule docs onto
+    one run-on line (see BLDX-1520).  Callers must render ``is_code``
+    chunks verbatim (dedented, inside a fenced block) and leave everything
+    else to the existing paragraph-fill logic.
+    """
+    lines = text.split("\n")
+    segments: list[tuple[str, bool]] = []
+    prose_buf: list[str] = []
+
+    def flush_prose() -> None:
+        if not prose_buf:
+            return
+        para = "\n".join(prose_buf)
+        if para.strip():
+            segments.append((para, False))
+        prose_buf.clear()
+
+    i = 0
+    n = len(lines)
+    while i < n:
+        line = lines[i]
+        stripped = line.rstrip()
+        opens_block = _CODE_BLOCK_DIRECTIVE_RE.match(stripped) or (
+            stripped.endswith("::") and stripped != "::"
+        )
+        if not opens_block:
+            prose_buf.append(line)
+            i += 1
+            continue
+
+        j = i + 1
+        block_lines: list[str] = []
+        while j < n and (lines[j].strip() == "" or lines[j].startswith((" ", "\t"))):
+            block_lines.append(lines[j])
+            j += 1
+        while block_lines and block_lines[0].strip() == "":
+            block_lines.pop(0)
+        while block_lines and block_lines[-1].strip() == "":
+            block_lines.pop()
+
+        if not block_lines:
+            # Nothing indented followed — not actually a literal block intro.
+            prose_buf.append(line)
+            i += 1
+            continue
+
+        # A bare "::"-ending line becomes ":" in the surrounding prose; a
+        # ".. code-block::" directive line is dropped entirely (the fenced
+        # block below replaces it).
+        if not _CODE_BLOCK_DIRECTIVE_RE.match(stripped):
+            prose_buf.append(stripped[:-1])
+        flush_prose()
+        segments.append((textwrap.dedent("\n".join(block_lines)), True))
+        i = j
+
+    flush_prose()
+    return segments
 
 
 def _tier_badge(tier: EnforcementTier) -> str:
@@ -290,17 +397,22 @@ def _render_series(meta: SeriesMeta, rules: list[RuleDefinition]) -> str:
             lines.append(f"**Rationale:** {wrapped}")
             lines.append("")
 
-        # Full description — convert RST backticks, preserve paragraph breaks
+        # Full description — convert RST backticks, preserve paragraph breaks,
+        # and render literal blocks verbatim as fenced code (not reflowed).
         if rule.full_description:
             desc = _rst_to_md(rule.full_description.strip())
-            # Rewrap each paragraph individually to 88 chars for clean diff
-            paragraphs = re.split(r"\n{2,}", desc)
-            for para in paragraphs:
-                wrapped = textwrap.fill(
-                    para, width=88, break_long_words=False, break_on_hyphens=False
-                )
-                lines.append(wrapped)
-                lines.append("")
+            for chunk, is_code in _split_literal_blocks(desc):
+                if is_code:
+                    lines.append(f"```python\n{chunk}\n```")
+                    lines.append("")
+                    continue
+                # Rewrap each prose paragraph individually to 88 chars for clean diff
+                for para in re.split(r"\n{2,}", chunk):
+                    wrapped = textwrap.fill(
+                        para, width=88, break_long_words=False, break_on_hyphens=False
+                    )
+                    lines.append(wrapped)
+                    lines.append("")
 
         lines.append("---")
         lines.append("")

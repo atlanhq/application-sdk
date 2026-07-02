@@ -1,0 +1,50 @@
+/// Tests for the extract-node `agent_json` default-emit guard (PR #2312).
+///
+/// `agent_json` is the SDR / agent-mode credential slot. It is structurally
+/// required for agent-mode credential routing, so the generated extract node
+/// must ALWAYS carry an `args["agent_json"]` slot. A missing slot silently
+/// breaks SDR runs (the gap that broke MSSQL's rollout, atlan-mssql-app#177).
+///
+/// `AgentSelector` constrains `includeInManifest` to `true` (a `Boolean(this)`
+/// type), so setting it to `false` raises a constraint violation (proven by
+/// the negative test in `scripts/check-invariants.sh` §6) — only two guard
+/// branches remain:
+///   1. app does NOT model `agent-json`       → guard emits the slot
+///   2. app models `agent-json` (via AgentSelector) → loop emits it exactly once
+amends "pkl:test"
+
+import "pkl:json"
+import "fixtures/default_pipeline.pkl" as noAgentJsonApp
+import "../examples/agent-e2e/app.pkl" as modeledAgentJsonApp
+
+local function extractArgs(app) =
+  let (text = app.output.files["app/generated/manifest.json"].text)
+  let (manifest = new json.Parser { useMapping = true }.parse(text))
+    manifest["dag"]["extract"]["inputs"]["args"]
+
+local noAgentJsonArgs = extractArgs(noAgentJsonApp)
+local modeledArgs = extractArgs(modeledAgentJsonApp)
+
+// Raw manifest text for the modeled case, to assert the slot is emitted exactly
+// once (no duplicate key from the guard AND the properties loop).
+local modeledManifestText = modeledAgentJsonApp.output.files["app/generated/manifest.json"].text
+
+facts {
+  // Branch 1: app does not model `agent-json` at all → guard emits the slot.
+  ["app without a modeled agent-json still gets agent_json in extract args"] {
+    noAgentJsonArgs["agent_json"] == "{{agent-json}}"
+  }
+
+  // Branch 2: app models `agent-json` via AgentSelector (includeInManifest is
+  // fixed true) → the properties loop emits it; the guard skips to avoid a
+  // duplicate key.
+  ["app modeling agent-json gets agent_json in extract args"] {
+    modeledArgs["agent_json"] == "{{agent-json}}"
+  }
+
+  // Branch 2 (no duplicate): the slot appears exactly once in the rendered
+  // manifest — guard + loop must not both emit it.
+  ["modeled agent-json emits the agent_json slot exactly once"] {
+    modeledManifestText.split("\"agent_json\"").length == 2
+  }
+}

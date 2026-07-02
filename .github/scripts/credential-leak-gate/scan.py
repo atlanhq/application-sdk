@@ -156,6 +156,16 @@ TEST_PATH = re.compile(
     re.IGNORECASE,
 )
 
+# GitHub Actions block-redirect detection for the shell-echo false-positive rule.
+# Pattern: `{ echo "VAR=$SECRET"; ... } >> "$GITHUB_ENV"` — the redirect is on
+# the closing `}` line, not the echo line, so same-line checks miss it.
+# Two regexes let the forward-scan stop at the first `}` line without a fixed
+# line-count cap: if `}` carries the redirect → safe; bare `}` → stop, real sink.
+_GITHUB_BLOCK_CLOSE = re.compile(
+    r"^\s*\}\s*>>\s*\"?\$GITHUB_(ENV|OUTPUT|STATE|PATH)\"?"
+)
+_BLOCK_CLOSE = re.compile(r"^\s*\}")
+
 # Masking/redaction helpers — if present in the line, the value is already
 # protected before it reaches the sink (FP classes #4 / #5).
 REDACT = re.compile(
@@ -429,8 +439,25 @@ def scan(root: str) -> dict:
                     # --password-stdin`) feeds the value to stdin, not a
                     # log/console sink — the *recommended* way to pass a secret.
                     # Skip when the echo/printf is piped on, or `--*-stdin` used.
+                    #
+                    # Also skip GitHub Actions block-redirect: the closing `}`
+                    # carries `>> "$GITHUB_ENV"` (a masked file sink), not the
+                    # echo line itself. Scan forward to the first `}` within
+                    # 12 lines: if it redirects to a GitHub masked file →
+                    # false positive; bare `}` with no redirect → real sink.
+                    # Cap at 12 prevents cross-step/job suppression — a real
+                    # `{ echo; } >> $GITHUB_ENV` block is always compact.
                     if pattern_id == "shell-echo" and (
-                        "-stdin" in code or re.search(r"(?<!\|)\|(?!\|)", code)
+                        "-stdin" in code
+                        or re.search(r"(?<!\|)\|(?!\|)", code)
+                        or next(
+                            (
+                                _GITHUB_BLOCK_CLOSE.search(ln) is not None
+                                for ln in lines[lineno : lineno + 12]
+                                if _BLOCK_CLOSE.search(ln)
+                            ),
+                            False,
+                        )
                     ):
                         break
                 var_norm = _norm(var)

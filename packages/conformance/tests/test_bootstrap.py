@@ -10,7 +10,7 @@ from __future__ import annotations
 import pathlib
 
 import pytest
-from conformance.bootstrap.render import MANAGED_WORKFLOWS, render
+from conformance.bootstrap.render import MANAGED_ACTION_FILES, MANAGED_WORKFLOWS, render
 from conformance.cli import (
     _bootstrap_file,
     _cmd_bootstrap,
@@ -73,6 +73,7 @@ def test_parse_bootstrap_args_defaults() -> None:
         "app_image_name": "",
         "enable_e2e": "true",
         "services_script": "",
+        "enforce": "",
     }
 
 
@@ -145,6 +146,39 @@ def test_cmd_bootstrap_writes_all_managed_workflows(
         assert dest.read_text() == render(name), f"Content mismatch: {name}"
 
 
+def test_cmd_bootstrap_writes_all_managed_action_files(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """conformance-reusable.yaml resolves `./...` paths against the caller's
+
+    checkout, so bootstrap must vendor the composite action + arg-building
+    script it needs into every consumer repo, not just .github/workflows/.
+    """
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    for dest_rel, template_name in MANAGED_ACTION_FILES:
+        dest = tmp_path / dest_rel
+        assert dest.exists(), f"Missing: {dest_rel}"
+        assert dest.read_text() == render(
+            template_name
+        ), f"Content mismatch: {dest_rel}"
+
+
+@pytest.mark.parametrize("dest_rel,template_name", MANAGED_ACTION_FILES)
+def test_cmd_bootstrap_managed_action_files_always_overwrite(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dest_rel: str,
+    template_name: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    dest = tmp_path / dest_rel
+    dest.write_text("corrupted content")
+    _cmd_bootstrap([])
+    assert dest.read_text() == render(template_name)
+
+
 def test_cmd_bootstrap_adds_remediation_to_gitignore(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -199,11 +233,104 @@ def test_cmd_bootstrap_returns_zero(
 # ---------------------------------------------------------------------------
 
 
+def test_parse_bootstrap_args_enforce_false() -> None:
+    result = _parse_bootstrap_args(["--enforce", "false"])
+    assert result["enforce"] == "false"
+
+
+def test_parse_bootstrap_args_enforce_true() -> None:
+    result = _parse_bootstrap_args(["--enforce", "true"])
+    assert result["enforce"] == "true"
+
+
+def test_parse_bootstrap_args_enforce_equals_form() -> None:
+    result = _parse_bootstrap_args(["--enforce=false"])
+    assert result["enforce"] == "false"
+
+
+def test_parse_bootstrap_args_enforce_invalid(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        _parse_bootstrap_args(["--enforce", "maybe"])
+    assert exc_info.value.code == 2
+    assert "--enforce" in capsys.readouterr().err
+
+
+_EXIT_ZERO_SCHEDULE_PREFIX = (
+    "exit-zero: ${{ github.event_name == 'schedule' "
+    "|| github.event_name == 'workflow_dispatch' || "
+)
+_EXIT_ZERO_HARD = _EXIT_ZERO_SCHEDULE_PREFIX + "false }}"
+_EXIT_ZERO_SOFT = _EXIT_ZERO_SCHEDULE_PREFIX + "true }}"
+_FORCE_ALL_SCHEDULE = (
+    "force-all: ${{ github.event_name == 'schedule' "
+    "|| github.event_name == 'workflow_dispatch' }}"
+)
+_SCHEDULE_BLOCK = 'schedule:\n    - cron: "17 */6 * * *"'
+
+
+def test_conformance_yaml_default_exit_zero_false() -> None:
+    """Default bootstrap renders the full hard-gate expression (schedule/dispatch still exit-zero)."""
+    content = render("conformance.yaml")
+    assert _EXIT_ZERO_HARD in content
+
+
+def test_conformance_yaml_exit_zero_true() -> None:
+    """render() with exit_zero='true' renders the full soft-mode expression."""
+    content = render("conformance.yaml", exit_zero="true")
+    assert _EXIT_ZERO_SOFT in content
+
+
+def test_cmd_bootstrap_enforce_false_writes_soft_mode(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--enforce false writes the full soft-mode expression into conformance.yaml."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--enforce", "false"])
+    conformance = (tmp_path / ".github" / "workflows" / "conformance.yaml").read_text()
+    assert _EXIT_ZERO_SOFT in conformance
+
+
+def test_cmd_bootstrap_enforce_true_writes_hard_mode(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--enforce true writes the full hard-gate expression into conformance.yaml."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--enforce", "true"])
+    conformance = (tmp_path / ".github" / "workflows" / "conformance.yaml").read_text()
+    assert _EXIT_ZERO_HARD in conformance
+
+
+def test_cmd_bootstrap_no_enforce_defaults_hard_mode(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without --enforce, bootstrap defaults to the full hard-gate expression."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    conformance = (tmp_path / ".github" / "workflows" / "conformance.yaml").read_text()
+    assert _EXIT_ZERO_HARD in conformance
+
+
+def test_conformance_yaml_schedule_force_refresh_trigger() -> None:
+    """Bootstrap wires the force-refresh schedule/dispatch trigger and force-all override."""
+    content = render("conformance.yaml")
+    assert _SCHEDULE_BLOCK in content
+    assert "workflow_dispatch: {}" in content
+    assert _FORCE_ALL_SCHEDULE in content
+
+
 def test_conformance_workflow_contains_event_name() -> None:
     """The bundled workflow uses event_name, not the stale sdk-ref input."""
     content = render("conformance.yaml")
     assert "event_name:" in content
     assert "sdk-ref" not in content
+
+
+def test_conformance_workflow_has_pull_requests_read() -> None:
+    """pull-requests: read is required for dorny/paths-filter on private repos."""
+    content = render("conformance.yaml")
+    assert "pull-requests: read" in content
 
 
 def test_conformance_upload_sarif_workflow_run_trigger() -> None:
@@ -351,6 +478,122 @@ def test_renovate_json_contains_fleet_preset() -> None:
 def test_renovate_json_contains_schema() -> None:
     content = render("renovate.json")
     assert "renovate-schema.json" in content
+
+
+def test_renovate_json_default_no_automerge_override() -> None:
+    """Default bootstrap does not add automerge overrides (auto-merge enabled via preset)."""
+    content = render("renovate.json")
+    assert '"automerge": false' not in content
+    assert "packageRules" not in content
+
+
+def test_renovate_json_automerge_false_adds_overrides() -> None:
+    """--automerge false injects catch-all rule that disables auto-merge."""
+    content = render("renovate.json", automerge="false")
+    assert '"automerge": false' in content
+    assert '"platformAutomerge": false' in content
+    assert "packageRules" in content
+    assert "lockFileMaintenance" in content
+
+
+def test_renovate_json_uses_match_package_names_not_patterns() -> None:
+    """Renovate v37+ deprecates matchPackagePatterns; template must use matchPackageNames."""
+    content = render("renovate.json", automerge="false")
+    assert "matchPackageNames" in content
+    assert "matchPackagePatterns" not in content
+
+
+def test_renovate_json_automerge_false_is_valid_json() -> None:
+    """Rendered renovate.json with automerge=false is parseable JSON."""
+    import json
+
+    content = render("renovate.json", automerge="false")
+    parsed = json.loads(content)
+    assert parsed["extends"] == [
+        "github>atlanhq/application-sdk//renovate-config/default.json"
+    ]
+    assert parsed["lockFileMaintenance"]["automerge"] is False
+    assert any(r.get("automerge") is False for r in parsed.get("packageRules", []))
+
+
+def test_cmd_bootstrap_enforce_false_writes_soft_renovate(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--enforce false injects disable-automerge overrides into the renovate.json scaffold."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--enforce", "false"])
+    renovate = (tmp_path / "renovate.json").read_text()
+    assert '"automerge": false' in renovate
+    assert "packageRules" in renovate
+
+
+def test_cmd_bootstrap_no_enforce_hard_renovate_default(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Default bootstrap (no --enforce) writes minimal renovate.json (auto-merge via preset)."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    renovate = (tmp_path / "renovate.json").read_text()
+    assert '"automerge": false' not in renovate
+
+
+def test_cmd_bootstrap_enforce_force_overwrites_existing_renovate(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--enforce with custom content writes a .bak before overwriting."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    rj = tmp_path / "renovate.json"
+    rj.write_text('{"customised": true}\n')
+    # Re-run with --enforce false → must overwrite and back up custom content.
+    _cmd_bootstrap(["--enforce", "false"])
+    content = rj.read_text()
+    assert '"automerge": false' in content  # soft-mode overrides applied
+    assert (tmp_path / "renovate.json.bak").exists()  # custom content backed up
+
+
+def test_cmd_bootstrap_enforce_idempotent_on_matching_content(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--enforce is a no-op (and prints 'up to date') when file already matches target."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--enforce", "false"])
+    rj = tmp_path / "renovate.json"
+    mtime_before = rj.stat().st_mtime
+    capsys.readouterr()  # clear
+    _cmd_bootstrap(["--enforce", "false"])
+    assert "up to date" in capsys.readouterr().out
+    # File must not have been rewritten (mtime unchanged).
+    assert rj.stat().st_mtime == mtime_before
+
+
+def test_cmd_bootstrap_enforce_no_bak_when_canonical_content(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Switching from soft to hard mode doesn't write .bak (canonical content)."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--enforce", "false"])
+    rj = tmp_path / "renovate.json"
+    # Upgrade to hard mode — existing content is the canonical soft render, not custom.
+    _cmd_bootstrap(["--enforce", "true"])
+    assert not (tmp_path / "renovate.json.bak").exists()
+
+
+def test_cmd_bootstrap_enforce_true_force_overwrites_existing_renovate(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--enforce true force-overwrites a soft-mode renovate.json to re-enable auto-merge."""
+    monkeypatch.chdir(tmp_path)
+    # First bootstrap in soft mode.
+    _cmd_bootstrap(["--enforce", "false"])
+    rj = tmp_path / "renovate.json"
+    assert '"automerge": false' in rj.read_text()
+    # Upgrade to hard mode.
+    _cmd_bootstrap(["--enforce", "true"])
+    content = rj.read_text()
+    assert '"automerge": false' not in content  # overrides removed
 
 
 # ---------------------------------------------------------------------------
@@ -635,6 +878,34 @@ def test_derive_no_affixes(tmp_path: pathlib.Path) -> None:
 def test_derive_hello_world(tmp_path: pathlib.Path) -> None:
     assert (
         _derive_app_name_from_dir(tmp_path / "atlan-hello-world-app") == "hello-world"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Vendored-template sync guard
+#
+# MANAGED_ACTION_FILES ships byte copies of files that also live in this
+# monorepo (used directly by application-sdk's own conformance-reusable.yaml
+# run, and vendored into every consumer repo by `bootstrap`). If the two
+# drift apart, the SDK's own CI would keep exercising the fixed version while
+# every bootstrapped consumer repo silently gets a stale one. Skipped when
+# the monorepo tree isn't checked out (e.g. an isolated sdist build).
+# ---------------------------------------------------------------------------
+
+_MONOREPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+
+
+@pytest.mark.parametrize("dest_rel,template_name", MANAGED_ACTION_FILES)
+def test_managed_action_template_matches_canonical_source(
+    dest_rel: str, template_name: str
+) -> None:
+    canonical = _MONOREPO_ROOT / dest_rel
+    if not canonical.exists():
+        pytest.skip(f"monorepo source not checked out: {canonical}")
+    assert render(template_name) == canonical.read_text(encoding="utf-8"), (
+        f"packages/conformance/conformance/bootstrap/templates/{template_name} has "
+        f"drifted from the canonical {dest_rel} — copy the canonical file's content "
+        "back into the template so consumer repos vendor the current version."
     )
 
 

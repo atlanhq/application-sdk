@@ -2,5 +2,17 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "github>atlanhq/application-sdk//renovate-config/default.json"
-  ]
+  ]<% if automerge == 'false' %>,
+  "lockFileMaintenance": {
+    "automerge": false,
+    "platformAutomerge": false
+  },
+  "packageRules": [
+    {
+      "description": "Soft rollout: Renovate raises PRs but does not auto-merge. Remove this rule (and the lockFileMaintenance override above) when the app's test gate is proven and auto-merge is desired.",
+      "matchPackageNames": ["*"],
+      "automerge": false,
+      "platformAutomerge": false
+    }
+  ]<% endif %>
 }

@@ -9,8 +9,10 @@ Covers:
 
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from conformance.suite.checks._ast_common import detect_scope
@@ -235,3 +237,156 @@ def test_runner_autodetects_sdk_scope_runs_d003(tmp_path: Path) -> None:
     assert ids == {"D003"}
     assert "D001" not in ids and "D002" not in ids
     assert exit_code == 0  # D003 is warn-tier
+
+
+def test_runner_d003_unresolvable_dep_is_skipped_not_flagged(tmp_path: Path) -> None:
+    """D003 skips deps whose package metadata cannot be read (not installed in
+    the active env); it must not flag them as violations.
+
+    This documents the silent-skip behaviour that occurs when the tool runs in
+    an isolated uvx env (every declared dep is unresolvable → zero D003
+    findings).  The "Detect (published package, resolved env)" composite-action
+    step uses `uv run --with atlan-application-sdk-conformance` instead of
+    `uvx` so that the caller's synced `.venv` IS visible and this path is
+    taken only for the isolated case.
+    """
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "atlan-application-sdk"\nversion = "0.1.0"\n'
+        'dependencies = ["some-nonexistent-package-zzz>=1.0"]\n',
+        encoding="utf-8",
+    )
+    out = tmp_path / "report.sarif"
+    exit_code = main(
+        [
+            "--repo",
+            str(tmp_path),
+            "--series",
+            "D",
+            "--scope",
+            "sdk",
+            "--output",
+            str(out),
+        ]
+    )
+    ids = _rule_ids(out)
+    # The dep cannot be resolved → skipped, NOT flagged as a violation.
+    assert "D003" not in ids
+    assert exit_code == 0
+
+
+# ---------------------------------------------------------------------------
+# --exit-zero: process exits 0 even on blocking violations; SARIF unchanged
+# ---------------------------------------------------------------------------
+
+
+def test_runner_exit_zero_returns_zero_on_blocking_violation(tmp_path: Path) -> None:
+    """--exit-zero makes main() return 0 even when a BLOCK-tier rule fires."""
+    _make_app_repo(tmp_path)
+    out = tmp_path / "report.sarif"
+    exit_code = main(
+        [
+            "--repo",
+            str(tmp_path),
+            "--series",
+            "D",
+            "--scope",
+            "app",
+            "--exit-zero",
+            "--output",
+            str(out),
+        ]
+    )
+    assert exit_code == 0  # process exits 0 despite D001 (block-tier)
+
+
+def test_runner_exit_zero_sarif_still_records_real_exit_code(tmp_path: Path) -> None:
+    """SARIF invocation.exitCode remains 1 when --exit-zero suppresses the process exit."""
+    _make_app_repo(tmp_path)
+    out = tmp_path / "report.sarif"
+    main(
+        [
+            "--repo",
+            str(tmp_path),
+            "--series",
+            "D",
+            "--scope",
+            "app",
+            "--exit-zero",
+            "--output",
+            str(out),
+        ]
+    )
+    data = json.loads(out.read_text(encoding="utf-8"))
+    sarif_exit_code = data["runs"][0]["invocations"][0]["exitCode"]
+    assert sarif_exit_code == 1  # SARIF honestly records that violations were found
+
+
+def test_runner_exit_zero_false_preserves_normal_gating(tmp_path: Path) -> None:
+    """Without --exit-zero (default), a BLOCK-tier violation still exits 1."""
+    _make_app_repo(tmp_path)
+    out = tmp_path / "report.sarif"
+    exit_code = main(
+        [
+            "--repo",
+            str(tmp_path),
+            "--series",
+            "D",
+            "--scope",
+            "app",
+            "--output",
+            str(out),
+        ]
+    )
+    assert exit_code == 1  # hard gate unchanged when --exit-zero is absent
+
+
+def test_runner_exit_zero_github_annotations_downgraded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Under --exit-zero, blocking violations emit ::warning not ::error annotations."""
+    _make_app_repo(tmp_path)
+    out = tmp_path / "report.sarif"
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    buf = io.StringIO()
+    with patch("sys.stdout", buf):
+        main(
+            [
+                "--repo",
+                str(tmp_path),
+                "--series",
+                "D",
+                "--scope",
+                "app",
+                "--exit-zero",
+                "--output",
+                str(out),
+            ]
+        )
+    output = buf.getvalue()
+    assert "::warning" in output
+    assert "::error" not in output
+
+
+def test_runner_hard_mode_github_annotations_use_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without --exit-zero, blocking violations still emit ::error annotations."""
+    _make_app_repo(tmp_path)
+    out = tmp_path / "report.sarif"
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    buf = io.StringIO()
+    with patch("sys.stdout", buf):
+        main(
+            [
+                "--repo",
+                str(tmp_path),
+                "--series",
+                "D",
+                "--scope",
+                "app",
+                "--output",
+                str(out),
+            ]
+        )
+    output = buf.getvalue()
+    assert "::error" in output

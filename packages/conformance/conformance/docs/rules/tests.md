@@ -5,7 +5,7 @@
 
 # Test-Quality Rules (T-series)
 
-**1 rule** · Checker: `suite.checks.integration_marking` (AST-based)
+**4 rules** · Checker: `suite.checks.integration_marking`, `suite.checks.sdr_test_checks`, and `suite.checks.dev_entrypoint` (AST-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -16,6 +16,9 @@ Suppress a finding on the violating line or the line directly above it:
 | ID | Name | Tier | Scope | Category | Autofixable | Since |
 |---|---|---|---|---|---|---|
 | [T001](#t001) | `UnmarkedIntegrationTest` | `warn` | `both` | `test-marking` | — | 0.4.0 |
+| [T002](#t002) | `MissingSdrTestClass` | `warn` | `app` | `sdr-test-coverage` | — | 0.9.0 |
+| [T003](#t003) | `SdrTestLegacyAgentSpec` | `warn` | `app` | `sdr-test-coverage` | — | 0.9.0 |
+| [T004](#t004) | `DevEntrypointRequiresAppModule` | `warn` | `app` | `dev-entrypoint` | — | 0.10.0 |
 
 ---
 
@@ -46,5 +49,142 @@ leak into the unit matrix — where the embedded Temporal/Dapr/emulator boot can
 the unit job timeout — and are skipped by the dedicated integration job.  Tracked in
 BLDX-1455; chosen over an auto-marking `conftest.py` hook precisely to avoid non-obvious
 hidden behaviour.
+
+---
+
+## T002 — `MissingSdrTestClass` {#t002}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-test-coverage` · **Autofixable:** — · **Since:** 0.9.0
+
+> SDR app declares self_deployed_runtime but has no BaseSDRIntegrationTest subclass
+
+**Rationale:** An SDR app that declares self_deployed_runtime: true in atlan.yaml but has no
+BaseSDRIntegrationTest subclass has no automated test that validates SDR-specific
+behaviour: manifest inputs (agent_json, etc.), credential routing via the agent-mode
+dispatch path, and the ENABLE_ATLAN_UPLOAD upload gate. The MSSQL regression (DISTR-752)
+slipped through status-only CI exactly because no SDR test class validated
+manifest-derived inputs — the manifest was broken but all status checks passed.
+
+For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, at least one
+`BaseSDRIntegrationTest` subclass must be present somewhere under `tests/`.
+
+`BaseSDRIntegrationTest` (from `application_sdk.testing.sdr.base`) is the SDK's
+integration test harness for SDR apps.  It boots a Temporal dev server, injects
+credentials from the test environment, and validates that the end-to-end SDR workflow
+completes correctly — including manifest-derived inputs, credential routing, and the
+`ENABLE_ATLAN_UPLOAD` gate.  An SDR app without this harness has no automated coverage
+of the code paths that differ between standard and SDR deployments.
+
+**Remediation:** create a test class that:
+
+```python
+class TestMyAppSDR(BaseSDRIntegrationTest):
+    manifest_path = 'app/generated/manifest.json'
+    workflow_type = 'extraction'
+```
+
+Set `manifest_path` (not the legacy `agent_spec_template`) so the test reads inputs from
+the committed manifest and validates the `agent_json` slot — see T003 for the
+complementary rule.
+
+---
+
+## T003 — `SdrTestLegacyAgentSpec` {#t003}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `sdr-test-coverage` · **Autofixable:** — · **Since:** 0.9.0
+
+> BaseSDRIntegrationTest subclass uses legacy agent_spec_template instead of manifest_path
+
+**Rationale:** A BaseSDRIntegrationTest subclass that sets agent_spec_template (and not manifest_path)
+supplies credentials to the test workflow via a hand-crafted JSON blob rather than
+reading inputs from the committed manifest.json. This means the test can pass even when
+the manifest is missing the agent_json slot — the hand-crafted spec fills the gap the
+manifest was supposed to fill. This is the exact mechanism that allowed the MSSQL
+regression (atlan-mssql-app#177, DISTR-752) to slip through: the test passed because
+agent_spec_template bypassed the broken manifest, but production runs failed because the
+manifest had no agent_json slot. Switching to manifest_path forces the test to read
+inputs from the committed manifest, catching missing-agent_json and other manifest
+defects at CI time.
+
+A `BaseSDRIntegrationTest` subclass must use `manifest_path` (not `agent_spec_template`)
+so the test reads workflow inputs from the committed `manifest.json` file.
+
+`agent_spec_template` is the legacy class var: it supplies a hand-crafted JSON blob
+directly to the test workflow, bypassing the manifest entirely.  This means the test can
+pass even when `manifest.json` is missing the `agent_json` slot or has other defects —
+the template fills in what the manifest was supposed to provide.  P029 closes the static
+manifest gap; T003 closes the test gap: a subclass using `manifest_path` will fail at
+test time whenever `manifest.json` is broken, not silently pass.
+
+**Remediation:** in the subclass body, replace:
+
+```python
+agent_spec_template = '{...}'    # legacy
+```
+
+with:
+
+```python
+manifest_path = 'app/generated/manifest.json'
+```
+
+The `manifest_path` class var tells `BaseSDRIntegrationTest` to call
+`_manifest_extract_inputs()` which reads `dag.extract.inputs` from the manifest —
+including the `agent_json` slot — and passes them as the workflow start parameters.  If
+`agent_json` is missing from the manifest the test will raise a `KeyError` at startup,
+surface the defect, and fail the CI run rather than letting the broken manifest reach
+production.
+
+Suppress with `# conformance: ignore[T003] <reason>` on the class definition line when
+`agent_spec_template` is intentionally used for a non-manifest test scenario (e.g. a
+negative-path test that supplies deliberately invalid credentials).
+
+---
+
+## T004 — `DevEntrypointRequiresAppModule` {#t004}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `dev-entrypoint` · **Autofixable:** — · **Since:** 0.10.0
+
+> Root main.py calls application_sdk.main.main() directly, which requires ATLAN_APP_MODULE and breaks CI's dev-mode boot
+
+**Rationale:** application_sdk.main.main() is the production, ATLAN_APP_MODULE-driven launcher: it
+always calls AppConfig.from_args_and_env(args), which raises MissingAppModuleError
+unless ATLAN_APP_MODULE (or --app) is set. That is correct in production, where the base
+image's own CMD sets the env var and never even executes the repo's main.py. But main.py
+is also what CI's connector-integration-tests composite action runs directly ('python
+main.py') to boot the app for local/dev-mode testing, and the bootstrapped
+tests-reusable.yaml path exposes no input to inject ATLAN_APP_MODULE into that job. A
+main.py that delegates straight to application_sdk.main.main() therefore fails every PR
+with MissingAppModuleError / 'App server failed to start within 60s' (BLDX-1520).
+
+Root `main.py` must not call `application_sdk.main.main()` directly (whether via `from
+application_sdk.main import main`, an aliased module import, or a bare dotted call).
+
+`main()` always resolves its `App` class from `ATLAN_APP_MODULE`/`--app` — there is no
+way to supply it any other way.  That is the right contract for the production
+container, which never runs `main.py` at all (the base image's own CMD sets
+`ATLAN_APP_MODULE` and boots directly).  But `main.py` *is* what CI's
+`connector-integration-tests` composite action runs directly (`python main.py`) to boot
+the app for local/dev-mode testing, and the bootstrapped `tests-reusable.yaml` path has
+no input that lets a caller inject `ATLAN_APP_MODULE` into that job.  A `main.py` wired
+this way fails every PR with `MissingAppModuleError`.
+
+**Remediation:** delegate to a local dev entrypoint — conventionally `app/run_dev.py` —
+that constructs your `App` subclass directly and calls `run_dev_combined(MyApp, ...)`:
+no env var required.  See `atlan-metabase-app`, `atlan-openapi-app`, or
+`atlan-mysql-app` for the reference pattern:
+
+```python
+# main.py
+import asyncio
+from app.run_dev import main
+
+if __name__ == '__main__':
+    asyncio.run(main())
+```
+
+Suppress with `# conformance: ignore[T004] <reason>` on the call's line when the app
+genuinely has no local dev-mode boot path and relies on `ATLAN_APP_MODULE` being set
+out-of-band even for CI (e.g. some utility/CSA apps).
 
 ---

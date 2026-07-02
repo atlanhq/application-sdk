@@ -675,7 +675,7 @@ async def fetch(
         A ``FileReference`` with ``local_path`` set to the downloaded file.
 
     Raises:
-        RuntimeError: If *store* is ``None`` and no infrastructure store is
+        ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is
             available (i.e. called outside an activity without an explicit store).
     """
     if not ref.is_durable:

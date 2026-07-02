@@ -28,9 +28,9 @@ from application_sdk.transformers.query.errors import (
 )
 
 warnings.warn(
-    "application_sdk.transformers.query is deprecated and will be removed in the next major version. "
-    "Use the connector-side typed-record → mapper-function pattern instead. "
-    "See docs/upgrade-guide-v3.md.",
+    "application_sdk.transformers.query is deprecated; use the connector-side "
+    "asset-mapper pattern (typed records → map_<entity>() → pyatlan_v9 Asset) instead "
+    "— will be removed in v4.0. See docs/upgrade-guide-v3.md.",
     DeprecationWarning,
     stacklevel=2,
 )
@@ -60,9 +60,21 @@ class QueryBasedTransformer(TransformerInterface):
         connector_name: Name of the connector
         tenant_id: ID of the tenant
         **kwargs: Additional keyword arguments
+
+    .. deprecated:: 3.20.0
+        Use the connector-side asset-mapper pattern (typed records →
+        ``map_<entity>()`` → ``pyatlan_v9`` Asset) instead — will be removed in
+        v4.0. See ``docs/upgrade-guide-v3.md``.
     """
 
     def __init__(self, connector_name: str, tenant_id: str, **kwargs: Any):
+        warnings.warn(
+            "QueryBasedTransformer is deprecated; use the connector-side asset-mapper "
+            "pattern (typed records → map_<entity>() → pyatlan_v9 Asset) instead — "
+            "will be removed in v4.0. See docs/upgrade-guide-v3.md.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.connector_name = connector_name
         self.tenant_id = tenant_id
         self.entity_class_definitions: dict[str, str] = (
@@ -185,9 +197,10 @@ class QueryBasedTransformer(TransformerInterface):
         return sql_query, literal_columns or None
 
     def _build_struct(self, level: dict, prefix: str = "") -> None:  # type: ignore[return]
-        """Deprecated: struct building is now handled by get_grouped_dataframe_by_prefix.
+        """No-op shim — struct building moved to get_grouped_dataframe_by_prefix.
 
         Kept as a no-op so callers that were patching this in tests do not blow up.
+        (The enclosing class is itself deprecated; see the class notice.)
 
         Args:
             level (dict): The current level of the struct hierarchy

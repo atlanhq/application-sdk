@@ -2,7 +2,7 @@
 #
 # Reusable workflow: full conformance suite gate.
 #
-# Runs each rule series (C, E, P, O, D, L, T, I) as a separate leg of one matrix job so
+# Runs each rule series (C, E, P, O, D, L, T, I, B, K, S) as a separate leg of one matrix job so
 # each appears as its own status check:
 #   Conformance / suite / CI
 #   Conformance / suite / Error handling
@@ -13,6 +13,8 @@
 #   Conformance / suite / Tests
 #   Conformance / suite / Container images
 #   Conformance / suite / Deprecations
+#   Conformance / suite / Contract toolkit
+#   Conformance / suite / Security
 #   Conformance / Contracts
 #   Conformance / Conformance Gate  (required gate)
 #
@@ -57,7 +59,7 @@
 #     annotations.  Use this for production code in the SDK/app that has a
 #     legitimate, site-specific carve-out.
 #
-#   exclude-paths-c / exclude-paths-e / exclude-paths-p / exclude-paths-o / exclude-paths-i
+#   exclude-paths-c / exclude-paths-e / exclude-paths-p / exclude-paths-o / exclude-paths-i / exclude-paths-k
 #     A path prefix removed from scanning entirely.  Nothing from that path
 #     appears in the SARIF report.  Use this only for code that is categorically
 #     outside the SDK/app surface — tooling, migration scripts, generated files,
@@ -158,6 +160,20 @@ on:
         required: false
         default: ""
         type: string
+      exclude-paths-k:
+        description: >
+          Comma-separated repo-root-relative path prefixes to exclude from K-series
+          (contract-toolkit) checks only.  Default: nothing excluded.
+        required: false
+        default: ""
+        type: string
+      exclude-paths-s:
+        description: >
+          Comma-separated repo-root-relative path prefixes to exclude from S-series
+          (security / secret-hygiene) checks only.  Default: nothing excluded.
+        required: false
+        default: ""
+        type: string
       ledger-path:
         description: >
           Repo-relative path to the app's committed contract ledger
@@ -177,9 +193,20 @@ on:
         required: false
         default: false
         type: boolean
+      exit-zero:
+        description: >
+          When true, the detect command exits 0 even when blocking violations are
+          found.  The SARIF invocation.exitCode still records the real result so
+          Security-tab tracking is unaffected; only the CI job exit code changes.
+          Use during soft-enforcement rollouts where violations should be observed
+          but must not block merges.  Default: false (hard gate).
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   # ── Per-series checks (one matrix leg per rule series) ──────────────────────
@@ -270,6 +297,24 @@ jobs:
             slug: deprecation
             paths: "**/*.py"
             exclude_paths: ${{ inputs.exclude-paths-b }}
+          # K-series is APP-scoped and no-ops on the SDK itself (no contract/
+          # directory).  Watches the contract source (K001/K002/K003) AND the
+          # generated artifacts (K004/K005): a hand-edit to atlan.yaml or
+          # app/generated/** with no contract/ change must still trigger this leg.
+          - series: K
+            name: "Contract toolkit"
+            slug: contract-toolkit
+            paths: "{contract/**,atlan.yaml,app.yaml,app/generated/**}"
+            exclude_paths: ${{ inputs.exclude-paths-k }}
+          # S-series (secret hygiene) is mixed-scope: S001 (hardcoded credentials)
+          # is 'both'; S002 (raw-env credential reads) is APP-scoped and no-ops on
+          # the SDK, which is the provider of the secret-store seam.  Scope is
+          # auto-detected per caller, so no per-app config is needed.
+          - series: S
+            name: "Security"
+            slug: security
+            paths: "**/*.py"
+            exclude_paths: ${{ inputs.exclude-paths-s }}
     steps:
       - name: "Checkout caller repo"
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -293,71 +338,16 @@ jobs:
         if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
 
-      # ── Isolated env (uvx) — every series except those needing the caller's
-      #    installed dependencies. The tool runs in an ephemeral env; the
-      #    caller's deps are not installed (and not needed for AST/text checks).
-      - name: "Run ${{ matrix.series }}-series checks (published package)"
-        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && inputs.conformance-ref == '' && matrix.needs_env != 'true'
-        env:
-          EXCLUDE_PATHS: ${{ matrix.exclude_paths }}
-        run: |
-          args=(--repo . --series ${{ matrix.series }} --output "${{ matrix.slug }}.sarif")
-          if [[ -n "$EXCLUDE_PATHS" ]]; then
-            args+=(--exclude "$EXCLUDE_PATHS")
-          fi
-          uvx atlan-application-sdk-conformance detect "${args[@]}"
-
-      - name: "Run ${{ matrix.series }}-series checks (from git ref)"
-        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && inputs.conformance-ref != '' && matrix.needs_env != 'true'
-        env:
-          EXCLUDE_PATHS: ${{ matrix.exclude_paths }}
-        run: |
-          args=(--repo . --series ${{ matrix.series }} --output "${{ matrix.slug }}.sarif")
-          if [[ -n "$EXCLUDE_PATHS" ]]; then
-            args+=(--exclude "$EXCLUDE_PATHS")
-          fi
-          uv run \
-            --with "atlan-application-sdk-conformance @ git+https://github.com/atlanhq/application-sdk@${{ inputs.conformance-ref }}#subdirectory=packages/conformance" \
-            -- atlan-application-sdk-conformance detect "${args[@]}"
-
-      # ── Resolved env — series whose checks inspect installed package metadata
-      #    (D003 UnusedDependency). Sync the caller repo so its dependencies are
-      #    importable, then overlay the conformance tool with `uv run --with`.
-      #    A dependency that still cannot be resolved is reported and skipped by
-      #    the check itself (never flagged), so a partial sync degrades safely.
-      - name: "Run ${{ matrix.series }}-series checks (resolved env, published package)"
-        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && inputs.conformance-ref == '' && matrix.needs_env == 'true'
-        env:
-          EXCLUDE_PATHS: ${{ matrix.exclude_paths }}
-        run: |
-          args=(--repo . --series ${{ matrix.series }} --output "${{ matrix.slug }}.sarif")
-          if [[ -n "$EXCLUDE_PATHS" ]]; then
-            args+=(--exclude "$EXCLUDE_PATHS")
-          fi
-          # D003 only needs the core [project.dependencies] importable, which a
-          # plain sync installs; avoid --all-extras/--all-groups so the leg does
-          # not pull heavier or private-index dev/optional deps it never inspects.
-          uv sync
-          uv run \
-            --with "atlan-application-sdk-conformance" \
-            -- atlan-application-sdk-conformance detect "${args[@]}"
-
-      - name: "Run ${{ matrix.series }}-series checks (resolved env, from git ref)"
-        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && inputs.conformance-ref != '' && matrix.needs_env == 'true'
-        env:
-          EXCLUDE_PATHS: ${{ matrix.exclude_paths }}
-        run: |
-          args=(--repo . --series ${{ matrix.series }} --output "${{ matrix.slug }}.sarif")
-          if [[ -n "$EXCLUDE_PATHS" ]]; then
-            args+=(--exclude "$EXCLUDE_PATHS")
-          fi
-          # D003 only needs the core [project.dependencies] importable, which a
-          # plain sync installs; avoid --all-extras/--all-groups so the leg does
-          # not pull heavier or private-index dev/optional deps it never inspects.
-          uv sync
-          uv run \
-            --with "atlan-application-sdk-conformance @ git+https://github.com/atlanhq/application-sdk@${{ inputs.conformance-ref }}#subdirectory=packages/conformance" \
-            -- atlan-application-sdk-conformance detect "${args[@]}"
+      - name: "Run ${{ matrix.series }}-series checks"
+        if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all
+        uses: ./.github/actions/run-conformance-detect
+        with:
+          series: ${{ matrix.series }}
+          slug: ${{ matrix.slug }}
+          exclude-paths: ${{ matrix.exclude_paths }}
+          exit-zero: ${{ inputs.exit-zero }}
+          conformance-ref: ${{ inputs.conformance-ref }}
+          needs-env: ${{ matrix.needs_env }}
 
       - name: "Upload SARIF artifact"
         if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && !cancelled()

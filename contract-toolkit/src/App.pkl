@@ -2427,6 +2427,14 @@ local function generateExtractNode(): Mapping<String, Any> =
       ["task_queue"] = "\(taskQueuePrefix)-{deployment_name}"
       ["args"] = new Mapping {
         ["credential"] = "{{credential}}"
+        // SDR / agent-mode credential slot. Emitted whenever the app does not
+        // model `agent-json` — the gap that silently broke MSSQL's SDR rollout
+        // (atlan-mssql-app#177). When the app DOES model `agent-json`, the loop
+        // below emits it (AgentSelector constrains includeInManifest to true, so the
+        // loop always fires); this guard skips to avoid a duplicate key.
+        when (uiConfig == null || !uiConfig!!.properties.containsKey("agent-json")) {
+          ["agent_json"] = "{{agent-json}}"
+        }
         for (argName, formField in manifestTopLevelArgs) {
           when (uiConfig != null && uiConfig!!.properties.containsKey(formField) && uiConfig!!.properties[formField].includeInManifest) {
             [argName] = "{{" + formField + "}}"
@@ -3139,13 +3147,13 @@ local function renderEntrypoint(e: Entrypoint): Mapping<String, Any> = new Mappi
   when (e.id != null) { ["id"] = e.id }
   ["name"] = e.name
   ["display_name"] = e.displayName
-  when (e.description != null) { ["description"] = e.description }
+  when (e.description != null || shortDescription != "") { ["description"] = e.description ?? shortDescription }
   when (e.iconUrl != null || iconUrl != null) { ["icon_url"] = e.iconUrl ?? iconUrl }
   ["type"] = e.type
   when (e.source != null) { ["source"] = e.source }
   when (e.sourceCategory != null) { ["source_category"] = e.sourceCategory }
   when (!e.categories.isEmpty) { ["categories"] = e.categories }
-  when (e.docsUrl != null) { ["docs_url"] = e.docsUrl }
+  when (e.docsUrl != null || docsUrl != "") { ["docs_url"] = e.docsUrl ?? docsUrl }
   ...e.metadata
 }
 

@@ -32,8 +32,18 @@ jobs:
             name: "Upload Prescriptions SARIF"
           - slug: optimizations
             name: "Upload Optimizations SARIF"
+          - slug: dependency
+            name: "Upload Dependency SARIF"
           - slug: logging
             name: "Upload Logging SARIF"
+          - slug: tests
+            name: "Upload Tests SARIF"
+          - slug: container-image
+            name: "Upload Container-image SARIF"
+          - slug: deprecation
+            name: "Upload Deprecation SARIF"
+          - slug: contract-toolkit
+            name: "Upload Contract-toolkit SARIF"
     steps:
       - name: "Download SARIF artifact"
         id: download

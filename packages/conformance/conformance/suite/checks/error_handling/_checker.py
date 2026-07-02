@@ -8,6 +8,7 @@ from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.schema.findings import Finding
 
 from .exception_chaining import ExceptionChainingMixin
+from .http_failure import HttpFailureMixin
 from .security import SecurityMixin
 from .silent_swallow import SilentSwallowMixin
 from .untyped_raise import UntypedRaiseMixin
@@ -17,6 +18,7 @@ class Checker(
     SilentSwallowMixin,
     UntypedRaiseMixin,
     ExceptionChainingMixin,
+    HttpFailureMixin,
     SecurityMixin,
     ast.NodeVisitor,
 ):
@@ -128,7 +130,12 @@ class Checker(
         self.generic_visit(node)
         self._in_raise_call = False
 
+    def visit_If(self, node: ast.If) -> None:
+        self._check_e020(node)
+        self.generic_visit(node)
+
     def visit_Call(self, node: ast.Call) -> None:
         self._check_p003(node)
         self._check_p017_call(node)
+        self._check_e019(node)
         self.generic_visit(node)

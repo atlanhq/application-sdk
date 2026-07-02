@@ -1,0 +1,218 @@
+---
+kind: responsibility
+name: contract-toolkit-area
+description: >
+  Maintains the current K-series violation-set and drives remediation of
+  contract-toolkit findings.  K001 (contract amends NativeApp.pkl or
+  NativeAppBundle.pkl instead of App.pkl) and K002 (NativeApp-only APIs present:
+  flatManifestArgs, manifestMetadataArgs, workflowTypeOverride, or legacy
+  Config/Connectors/Credential/Renderers imports) are guided migration fixes.
+  K003 (stale Pkl lock), K004 (missing generated output), and K005 (stripped
+  provenance banner) are generated-artifact freshness findings fixed by
+  re-resolving / regenerating — all verified by the pkl-eval gate.
+---
+
+### Maintains
+
+The current set of unsuppressed K-series (contract-toolkit conformance)
+findings in the working tree, classified by disposition and remediability.
+
+#### violations-contract-toolkit
+
+The fingerprint-set of all unsuppressed FAILING/WARNING K-series results in the
+current working tree, as reported by `suite.runner --series K`.
+
+K-series rules are WARN-tier, so in **default** mode this facet is always empty
+(warnings do not fail the gate).  In **strict** mode the fingerprint-set includes
+unsuppressed WARNING results, which is where K-series remediation actually runs.
+
+The active scope decides which rules can appear: K001–K005 are all `scope=APP`,
+so they surface only on consumer app repos.  The runner auto-detects scope, so
+the SDK repo sees 0 findings.
+
+This facet's fingerprint moves when any K-series finding is resolved (fixed or
+suppressed with justification) or when new ones appear.  An unchanged
+fingerprint-set across loop iterations is the oscillation signal.
+
+Postcondition (deterministic validator — never render-attested):
+
+> `atlan-application-sdk-conformance detect --repo . --series K` exits 0
+> (zero unsuppressed FAILING results).  In strict mode, additionally: the
+> `atlan/summary.warning` count for K-series in the SARIF output is 0 (every
+> K-series WARNING was cleared by a real fix or a justified suppression).
+
+### Requires
+
+- `scope` — repository root path (provided by the top-level responsibility at
+  expansion time).
+- `mode` — `"default"` or `"strict"` (propagated from the top-level entry).
+
+### Continuity
+
+Input-driven: re-render this node when any `contract/**/*.pkl` file, the Pkl lock
+(`contract/PklProject`, `contract/PklProject.deps.json`), or a generated artifact
+(`atlan.yaml`, `app.yaml`, `app/generated/**`) under `scope` changes.  In the
+Claude Code skill path the skill caller re-invokes on demand.
+
+### Execution
+
+```prose
+call detect-fix-recheck
+  scope: scope
+  series: "K"
+  mode: mode
+  max_attempts: 5
+```
+
+### Fix Prescription
+
+_Read by `remediate-finding` when `finding.area == "contract-toolkit"`._
+
+All K-series rules are **WARN-tier** — they surface only under `--strict` mode.
+Before proposing any edit, read the actual lines around `finding.line` in
+`finding.file`.  **Never hand-edit `atlan.yaml`, `app/generated/`, or any other
+generated artifact directly** — those are outputs of `pkl eval`, and K004/K005
+catch the staleness that hand-editing causes.  The *only* sanctioned way to
+change a generated artifact is to regenerate it from the contract.  After every
+edit, the `pkl-eval` gate runs `pkl eval` to verify the contract compiled and
+regenerated cleanly.
+
+The freshness rules (K003/K004/K005) are remediated by running a pkl command
+(`pkl project resolve` and/or `pkl eval -m . contract/app.pkl`), so they are
+**remediable only when the `pkl` toolchain is available** in the environment.
+When `pkl` is not installed, the fix cannot be applied or gate-verified — route
+the finding to **residue** with a note to regenerate locally (or let the
+`renovate-pkl-sync` / CI freshness gate handle it), rather than hand-editing the
+artifact.
+
+---
+
+**K001 ContractAmendsLegacyModule** — the contract file's `amends` line points at
+a legacy module (`NativeApp.pkl` or `NativeAppBundle.pkl`) instead of `App.pkl`.
+`classification = "judgment"` (structural migration; no two contracts are
+identical).  After applying the edit, the `pkl-eval` gate determines whether the
+migration compiled.
+
+*Procedure:*
+
+1. **Change the amends line** to `amends "@app-contract-toolkit/App.pkl"` (for a
+   package-dependency contract) or `amends "../../src/App.pkl"` (for the
+   toolkit's own examples/tests).
+
+2. **Fix the workflowType** — NativeApp.pkl used a `workflowType`
+   (PascalCase) + optional `workflowTypeOverride` pair with automatic
+   kebab-casing.  App.pkl accepts the verbatim string.  Take the string that the
+   legacy contract would have emitted (apply PascalCase→kebab-case manually if
+   needed), and set it as App.pkl's `workflowType`.  Omit `workflowType`
+   entirely when it equals the `name` field (App.pkl defaults to kebab-casing
+   `name`).  Drop `workflowTypeOverride` — it does not exist in App.pkl.
+
+3. **Fix the connector field** — `NativeApp.pkl` required `connector` (it typed
+   it as `Connectors.Type`).  `App.pkl` makes `connector` nullable; utility apps
+   that have no connector type should set `connector = null` or omit the field.
+
+4. **Remove NativeAppBundle wiring** (K001 on `NativeAppBundle.pkl`) — the
+   bundle entrypoints should be collapsed into App.pkl's typed `entrypoints`
+   block.  Each per-entrypoint contract file (`amends "@app-contract-toolkit/
+   NativeApp.pkl"`) must also be migrated (K001 will fire for each file separately).
+
+5. **Stage the `contract/*.pkl` edits** — do NOT run `pkl eval` manually; the
+   `pkl-eval` gate does it and captures the result.
+
+If `NativeAppBundle.pkl` is involved and the migration requires restructuring
+multiple entrypoint files, `classification = "judgment"` and every migrated file
+is individually residue-listed for human review.
+
+---
+
+**K002 LegacyContractApi** — the contract file carries NativeApp-only knobs or
+imports that do not exist in `App.pkl`.  `classification = "judgment"` (each
+knob requires understanding the intent).
+
+Read the specific knob(s) named in the `finding.message` and apply:
+
+- **`flatManifestArgs`** and **`manifestMetadataArgs`** — remove both properties.
+  `App.pkl` always emits flat top-level args; these flags are structural no-ops.
+
+- **`workflowTypeOverride`** — see K001 step 2 above.  Remove the property after
+  resolving it into the `workflowType` field.
+
+- **`import "…Config.pkl"`** — remove the import.  Switch any `Config.*` widget
+  references to the re-exported `Widgets.*` typealiases provided by `App.pkl`
+  directly (e.g. `Config.UIConfig` → `UIConfig`, `Config.TextInput` →
+  `TextInput`).
+
+- **`import "…Connectors.pkl"`** — remove the import.  App.pkl re-exports all
+  connector constants as `Connectors.*` with no import needed.
+
+- **`import "…Credential.pkl"`** (Argo-era) and **`import "…Renderers.pkl"`**
+  (Argo-era) — remove both; these modules are no longer used by App.pkl.
+
+If the contract file also has a K001 finding (amends a legacy module), address
+K001 first — many K002 knobs disappear automatically when the module changes
+because App.pkl lacks those properties.
+
+---
+
+**K003 ContractLockDrift** — `contract/PklProject` pins a dependency at a version
+the resolved lock `contract/PklProject.deps.json` does not match (or the lock is
+missing / lacks the dependency).  `classification = "mechanical"` (the fix is a
+deterministic re-resolve), but it **requires `pkl`**.
+
+*Procedure:*
+
+1. Run `pkl project resolve` in the `contract/` directory to rewrite
+   `PklProject.deps.json` so the lock matches the pin.
+2. Run `pkl eval -m . contract/app.pkl` (or `uv run poe generate` where defined)
+   so the regenerated artifacts reflect the newly-locked toolkit version.
+3. Stage `contract/PklProject.deps.json` and every regenerated artifact.
+
+If `pkl` is unavailable, do not hand-edit the lock JSON — route to residue with a
+note to re-resolve locally (the `renovate-pkl-sync` workflow does this
+automatically on renovate bumps).
+
+---
+
+**K004 MissingGeneratedArtifact** — `contract/app.pkl` exists but an expected
+output (`atlan.yaml`, `app/generated/manifest.json`, `app/generated/_input.py`)
+is absent.  `classification = "mechanical"`; **requires `pkl`**.
+
+*Procedure:*
+
+1. Run `pkl eval -m . contract/app.pkl` (or `uv run poe generate`) to regenerate
+   all outputs, then stage the newly-produced files.
+2. If an output is legitimately not produced for this app (e.g. a utility app
+   that emits no manifest), the finding is `classification = "judgment"` —
+   suppress with `// conformance: ignore[K004] <reason>` on the `amends` line of
+   `contract/app.pkl` and route to residue.
+
+If `pkl` is unavailable, route to residue with a regenerate-locally note.
+
+---
+
+**K005 GeneratedArtifactBannerStripped** — a generated text artifact
+(`atlan.yaml` / `app.yaml` / an `app/generated/*.py` other than `__init__.py`) is
+missing its `DO NOT EDIT` provenance banner, indicating a hand-edit.
+`classification = "judgment"` — a stripped banner usually means deliberate
+hand-authoring, which the static scanner cannot distinguish from an accidental
+edit.
+
+*Procedure:*
+
+1. If the artifact should be generated, run `pkl eval -m . contract/app.pkl` to
+   re-emit it with its banner, then stage the result.  **Do not** re-add the
+   banner by hand to a file whose *content* was hand-edited — that hides real
+   drift from the CI regenerate-and-diff freshness gate.
+2. If the app deliberately hand-maintains this artifact, suppress with
+   `# conformance: ignore[K005] <reason>` on the first line and route to residue.
+
+K005 never graduates to BLOCK; a hand-maintaining app suppresses per file.
+
+---
+
+**Suppress outcome (strict mode only, WARNING-tier findings)**: the model may
+propose an inline `// conformance: ignore[Kxxx] <8–40 word justification>` on
+the violating line or the comment-only line directly above it when a legitimate
+exception exists (e.g. a K001 finding on a contract intentionally kept at the
+legacy module during a phased migration with a tracked follow-on ticket).  Route
+every suppression to residue for human audit.
