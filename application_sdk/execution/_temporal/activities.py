@@ -194,6 +194,15 @@ def create_activity_from_task(
         )
         app_instance._task_context = task_exec_context
 
+        # Seed pod/node identity into the heartbeat so an abrupt kill (spot
+        # reclaim / OOM) can be attributed after the fact via its last
+        # heartbeat details. No-op unless infra diagnosis is enabled.
+        from application_sdk.execution._temporal.infra_diagnosis import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+            seed_activity_identity,
+        )
+
+        seed_activity_identity(heartbeat_controller)
+
         stop_event = asyncio.Event()
         heartbeat_task = None
 
