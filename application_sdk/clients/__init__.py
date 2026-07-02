@@ -20,6 +20,9 @@ from application_sdk.clients.models import DatabaseConfig as DatabaseConfig
 from application_sdk.clients.sql import AsyncBaseSQLClient as AsyncBaseSQLClient
 from application_sdk.clients.sql import BaseSQLClient as BaseSQLClient
 from application_sdk.clients.ssl_utils import (
+    configure_requests_ca_bundle as configure_requests_ca_bundle,
+)
+from application_sdk.clients.ssl_utils import (
     create_ssl_context_with_custom_certs as create_ssl_context_with_custom_certs,
 )
 from application_sdk.clients.ssl_utils import get_ssl_context as get_ssl_context
@@ -48,6 +51,7 @@ __all__ = [
     "DatabaseConfig",
     "RedisClient",
     "RedisClientAsync",
+    "configure_requests_ca_bundle",
     "create_ssl_context_with_custom_certs",
     "get_ssl_context",
 ]
