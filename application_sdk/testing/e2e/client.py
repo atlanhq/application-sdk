@@ -73,6 +73,13 @@ _HTTP_TIMEOUT = 60
 # existing 5xx retry loop handles) rather than a raw TimeoutError.
 _SUBMIT_TIMEOUT = 120
 
+# Transient network-layer errors (DNS blips, read timeouts, connection resets)
+# are common during multi-minute polls over a VPN/loft tunnel to a tenant. Retry
+# each HTTP call a few times before surfacing the failure, so a single blip in a
+# 10-15 min poll doesn't fail the whole run.
+_REQUEST_MAX_ATTEMPTS = 4
+_REQUEST_BACKOFF_SECONDS = 3
+
 # Cadence for "still polling" heartbeat log lines in
 # ``poll_native_status`` — lineage stages take 2-5 min on small
 # datasets and the status string doesn't change during that time, so
@@ -255,25 +262,59 @@ class AEWorkflowClient:
         req.add_header("User-Agent", _USER_AGENT)
         if body is not None:
             req.add_header("Content-Type", "application/json")
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                raw = resp.read()
+        last_exc: Exception | None = None
+        for attempt in range(1, _REQUEST_MAX_ATTEMPTS + 1):
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    raw = resp.read()
+                    try:
+                        return resp.status, orjson.loads(raw)
+                    except orjson.JSONDecodeError:
+                        logger.warning(
+                            "Response body is not JSON; returning raw text",
+                            exc_info=True,
+                        )
+                        return resp.status, raw.decode(errors="replace")
+            except urllib.error.HTTPError as e:
+                # A real HTTP response (4xx/5xx), NOT a transient network error —
+                # return it so the caller's status-based retry/handling applies.
+                raw = e.read()
                 try:
-                    return resp.status, orjson.loads(raw)
+                    return e.code, orjson.loads(raw)
                 except orjson.JSONDecodeError:
                     logger.warning(
-                        "Response body is not JSON; returning raw text", exc_info=True
+                        "HTTP error body is not JSON; returning raw text",
+                        exc_info=True,
                     )
-                    return resp.status, raw.decode(errors="replace")
-        except urllib.error.HTTPError as e:
-            raw = e.read()
-            try:
-                return e.code, orjson.loads(raw)
-            except orjson.JSONDecodeError:
-                logger.warning(
-                    "HTTP error body is not JSON; returning raw text", exc_info=True
-                )
-                return e.code, raw.decode(errors="replace")
+                    return e.code, raw.decode(errors="replace")
+            except (urllib.error.URLError, TimeoutError, OSError) as e:
+                # Transient network-layer error (DNS blip / read timeout / conn
+                # reset) — common on multi-minute polls over a VPN/loft tunnel.
+                # Retry a few times; if it persists, surface as AtlanApiTimeoutError
+                # (an AppError) so callers' transient-tolerance (e.g. the poll loop)
+                # handles it instead of a raw crash. NOTE: HTTPError is a URLError
+                # subclass but is caught above, so it never reaches here.
+                last_exc = e
+                if attempt < _REQUEST_MAX_ATTEMPTS:
+                    logger.warning(
+                        "transient network error on %s %s (attempt %d/%d): %s — "
+                        "retrying in %ds",
+                        method,
+                        path,
+                        attempt,
+                        _REQUEST_MAX_ATTEMPTS,
+                        e,
+                        _REQUEST_BACKOFF_SECONDS,
+                        exc_info=True,
+                    )
+                    time.sleep(_REQUEST_BACKOFF_SECONDS)
+        raise AtlanApiTimeoutError(
+            message=(
+                f"{method} {path} failed after {_REQUEST_MAX_ATTEMPTS} attempts: "
+                f"{last_exc!r}"
+            ),
+            operation=path,
+        )
 
     # ------------------------------------------------------------------
     # Endpoints
@@ -313,7 +354,7 @@ class AEWorkflowClient:
                 status, resp_body = self._request(
                     "POST", path, body=body, timeout=_SUBMIT_TIMEOUT
                 )
-            except (TimeoutError, OSError) as exc:
+            except (TimeoutError, OSError, AtlanApiTimeoutError) as exc:
                 if attempt < total_attempts:
                     logger.warning(
                         "%s attempt %d/%d: timeout (%s) — retrying in %ds",

@@ -14,7 +14,7 @@ import pathlib
 import re
 
 import pytest
-from conformance.bootstrap.render import MANAGED_WORKFLOWS, render
+from conformance.bootstrap.render import MANAGED_ACTION_FILES, MANAGED_WORKFLOWS, render
 from conformance.cli import _cmd_bootstrap
 from conformance.suite.checks.bootstrap_drift import discover, scan_path
 from conformance.suite.rules import get_rule
@@ -64,17 +64,21 @@ def test_c002_is_autofixable() -> None:
 def test_discover_returns_all_managed_paths(tmp_path: pathlib.Path) -> None:
     paths = discover(tmp_path)
     names = {p.name for p in paths}
+    rels = {p.relative_to(tmp_path).as_posix() for p in paths}
     # Must include all managed shims plus the write-if-absent scaffolds.
     assert set(MANAGED_WORKFLOWS).issubset(names)
     assert "tests.yaml" in names
     assert "renovate.json" in names
+    # And the vendored non-workflow files (action.yaml + arg-building script).
+    for dest_rel, _template_name in MANAGED_ACTION_FILES:
+        assert dest_rel in rels
 
 
 def test_discover_returns_paths_even_when_absent(tmp_path: pathlib.Path) -> None:
     """discover() must not filter out non-existent files."""
     paths = discover(tmp_path)
-    # managed shims + tests.yaml + renovate.json scaffolds.
-    assert len(paths) == len(MANAGED_WORKFLOWS) + 2
+    # managed shims + managed action files + tests.yaml + renovate.json scaffolds.
+    assert len(paths) == len(MANAGED_WORKFLOWS) + len(MANAGED_ACTION_FILES) + 2
     # None of them exist yet.
     assert all(not p.exists() for p in paths)
 
@@ -122,6 +126,19 @@ def test_missing_workflow_finding_mentions_bootstrap_command(
     assert "bootstrap" in findings[0].message
 
 
+@pytest.mark.parametrize("dest_rel", [d for d, _ in MANAGED_ACTION_FILES])
+def test_missing_managed_action_file_produces_finding(
+    tmp_path: pathlib.Path, dest_rel: str
+) -> None:
+    # Don't bootstrap — the vendored action/script isn't on disk at all.
+    path = tmp_path / dest_rel
+    findings = scan_path(path, tmp_path)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "C002"
+    assert "absent" in findings[0].message
+    assert dest_rel in findings[0].message
+
+
 # ---------------------------------------------------------------------------
 # Drifted file → finding
 # ---------------------------------------------------------------------------
@@ -143,6 +160,20 @@ def test_drifted_workflow_finding_names_the_file(tmp_path: pathlib.Path) -> None
     wf.write_text("completely wrong content")
     findings = scan_path(wf, tmp_path)
     assert "commits.yaml" in findings[0].message
+
+
+@pytest.mark.parametrize("dest_rel", [d for d, _ in MANAGED_ACTION_FILES])
+def test_drifted_managed_action_file_produces_finding(
+    tmp_path: pathlib.Path, dest_rel: str
+) -> None:
+    _bootstrap(tmp_path)
+    path = tmp_path / dest_rel
+    path.write_text("completely wrong content")
+    findings = scan_path(path, tmp_path)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "C002"
+    assert "drifted" in findings[0].message
+    assert dest_rel in findings[0].message
 
 
 # ---------------------------------------------------------------------------

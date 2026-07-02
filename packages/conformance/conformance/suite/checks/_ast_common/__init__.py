@@ -13,6 +13,7 @@ from ._cli import TOOL_VERSION, make_cli_main
 from ._directives import _IgnoreDirective, _parse_directives, parse_ignore_directive
 from ._discovery import EXCLUDE_DIRS, discover
 from ._findings import make_finding
+from ._imports import collect_import_origins, qualify_chained_attr_call
 from ._scope import SDK_PACKAGE_PREFIX, detect_scope, is_sdk_package_name
 
 __all__ = [
@@ -21,10 +22,12 @@ __all__ = [
     "TOOL_VERSION",
     "_IgnoreDirective",
     "_parse_directives",
+    "collect_import_origins",
     "detect_scope",
     "discover",
     "is_sdk_package_name",
     "make_cli_main",
     "make_finding",
     "parse_ignore_directive",
+    "qualify_chained_attr_call",
 ]

@@ -7,12 +7,15 @@ transient_streak budget works correctly.
 
 from __future__ import annotations
 
+import io
+import urllib.error
 from unittest.mock import patch
 
 import pytest
 
 from application_sdk.testing.e2e._errors import AtlanApiHttpError, AtlanApiTimeoutError
 from application_sdk.testing.e2e.client import (
+    _REQUEST_MAX_ATTEMPTS,
     AEWorkflowClient,
     DAGNodeResult,
     DAGNodeStatus,
@@ -238,3 +241,78 @@ class TestPostWithRetry:
         assert status == 200
         assert isinstance(body, dict) and body.get("status") == "success"
         mock_sleep.assert_called_once()
+
+
+class _FakeResponse:
+    """Minimal urlopen() return value usable as a context manager."""
+
+    def __init__(self, status: int, raw: bytes):
+        self.status = status
+        self._raw = raw
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self) -> bytes:
+        return self._raw
+
+
+class TestRequestNetworkRetry:
+    """_request: transient network errors retry; sustained ones surface as
+    AtlanApiTimeoutError (an AppError) so the poll loop tolerates them instead
+    of crashing on a raw URLError/TimeoutError mid-poll."""
+
+    def test_retries_transient_then_succeeds(self):
+        """URLError on attempt 1 → succeeds on attempt 2."""
+        client = _make_client()
+        ok = _FakeResponse(200, b'{"ok": true}')
+        with (
+            patch(
+                "application_sdk.testing.e2e.client.urllib.request.urlopen",
+                side_effect=[urllib.error.URLError("dns blip"), ok],
+            ),
+            patch("time.sleep"),
+        ):
+            status, body = client._request("GET", "/native-status")
+        assert status == 200
+        assert body == {"ok": True}
+
+    def test_sustained_network_error_raises_atlan_timeout(self):
+        """URLError on every attempt → AtlanApiTimeoutError after max attempts."""
+        client = _make_client()
+        with (
+            patch(
+                "application_sdk.testing.e2e.client.urllib.request.urlopen",
+                side_effect=urllib.error.URLError("name resolution"),
+            ) as mock_open,
+            patch("time.sleep"),
+            pytest.raises(AtlanApiTimeoutError),
+        ):
+            client._request("GET", "/native-status")
+        assert mock_open.call_count == _REQUEST_MAX_ATTEMPTS
+
+    def test_httperror_returns_immediately_without_retry(self):
+        """A real 5xx HTTP response is returned, not retried as a network error."""
+        client = _make_client()
+        http_err = urllib.error.HTTPError(
+            url="https://tenant.example.com/native-status",
+            code=500,
+            msg="server error",
+            hdrs=None,
+            fp=io.BytesIO(b'{"err": "boom"}'),
+        )
+        with (
+            patch(
+                "application_sdk.testing.e2e.client.urllib.request.urlopen",
+                side_effect=http_err,
+            ) as mock_open,
+            patch("time.sleep") as mock_sleep,
+        ):
+            status, body = client._request("GET", "/native-status")
+        assert status == 500
+        assert body == {"err": "boom"}
+        assert mock_open.call_count == 1
+        mock_sleep.assert_not_called()

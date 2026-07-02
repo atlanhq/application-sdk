@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "3.20.1"
+version = "3.20.3"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
@@ -36,9 +36,12 @@ dependencies = [
     "obstore>=0.11.0,<0.12.0",
     # Cloud credential libraries — required at runtime for any storage auth mode;
     # connectors don't know which auth mechanism a deployment will choose, so
-    # these cannot be optional extras.
+    # these cannot be optional extras. google-auth powers GCS Application Default
+    # Credentials / Workload Identity Federation (via obstore.auth.google) — the
+    # GKE WI / customer-infra path obstore's built-in GCS file decoder can't do.
     "boto3>=1.38.6,<2.0.0",
     "azure-identity>=1.15.0",
+    "google-auth>=2.0.0,<3.0.0",
     # Temporal runtime (httpx-retries at L29 is the Dapr HTTP client replacement)
     "temporalio>=1.25.0,<2.0.0",
     "orjson>=3.11.6,<4.0.0",
@@ -114,7 +117,7 @@ tests = [
     "httpx>=0.27.0,<0.29.0",
 ]
 scale_data_generator = [
-    "faker>=40.23.0,<40.24.0",
+    "faker>=40.28.1,<40.29.0",
     "numpy>=1.23.5,<3.0.0",
 ]
 # Removed in v3.1 — use sql extra instead
@@ -133,7 +136,7 @@ dev = [
     "pre-commit>=4.2.0,<5.0.0",
     "isort>=8.0.1,<8.1.0",
     "boto3-stubs>=1.38.6,<2.0.0",
-    "poethepoet>=0.46.0,<0.47.0",
+    "poethepoet>=0.47.0,<0.48.0",
     "libcst>=1.4.0,<2.0.0",
 ]
 test = [
@@ -143,7 +146,7 @@ test = [
     "coverage>=7.6.1,<8.0.0",
     "pytest-asyncio>=1.4.0,<2.0.0",
     "pytest-timeout>=2.3.0,<3.0.0",
-    "pytest-rerunfailures>=16.3,<16.4",
+    "pytest-rerunfailures>=16.4,<16.5",
     "pytest-socket>=0.7.0,<1.0.0",
     "hypothesis>=6.114.0,<7.0.0",
     "trustme>=1.2.1,<2.0.0",
@@ -248,9 +251,9 @@ addopts = "-m 'not integration and not e2e and not s3_integration and not azure_
 markers = [
     "integration: tests requiring local Temporal server",
     "e2e: tests requiring a live K8s cluster",
-    "s3_integration: tests requiring real AWS S3 credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_BUCKET)",
-    "azure_integration: tests requiring real Azure Blob Storage credentials (AZURE_STORAGE_ACCOUNT, AZURE_STORAGE_KEY)",
-    "gcs_integration: tests requiring real GCS credentials (GCS_BUCKET, GCS_PROJECT_ID, GOOGLE_APPLICATION_CREDENTIALS)",
+    "s3_integration: tests requiring keyless AWS access (S3_BUCKET + ambient AWS credentials, e.g. OIDC role)",
+    "azure_integration: tests requiring keyless Azure Workload Identity Federation (AZURE_STORAGE_ACCOUNT, AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_FEDERATED_TOKEN_FILE)",
+    "gcs_integration: tests requiring keyless GCS access (GCS_BUCKET, GCS_PROJECT_ID + ambient ADC, e.g. Workload Identity Federation)",
     "storage_emulator: hermetic object-store tests against local emulators (MinIO/Azurite/storage-testbench); run in CI with emulator sidecars",
 ]
 

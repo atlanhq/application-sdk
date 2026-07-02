@@ -1,25 +1,25 @@
-"""Integration tests for create_store_from_binding → Google Cloud Storage (real service).
+"""Integration tests for create_store_from_binding → Google Cloud Storage (real, keyless).
 
-Verifies that each supported auth mode is correctly wired end-to-end by calling
-``list`` on the resulting store. No data is written or deleted.
+Verifies that the SDK builds a working GCS store and authenticates end-to-end.
+Auth is KEYLESS: the binding carries only bucket + project_id, so obstore uses
+Application Default Credentials — in CI these come from the GitHub Workload
+Identity Federation auth step (GOOGLE_APPLICATION_CREDENTIALS). Embedded
+service-account-key resolution (inline SA JSON fields in Dapr metadata) is
+covered hermetically by the emulator tests (``test_emulator_gcs.py``) and unit
+tests.
 
-Prerequisites:
+Prerequisites (set by the keyless CI job; or locally for an ad-hoc run):
     export GCS_BUCKET=<existing-bucket>
     export GCS_PROJECT_ID=<project-id>
-    # For SA key test, also set:
-    export GOOGLE_APPLICATION_CREDENTIALS=<path-to-sa-key.json>
+    export GOOGLE_APPLICATION_CREDENTIALS=<ADC / WIF credential file>
 
 Run:
     uv run pytest tests/integration/storage/test_binding_gcs.py -m gcs_integration -v
-
-All tests use ``create_store_from_binding`` against a real Dapr component YAML —
-no monkey-patching of the SDK factory.
 """
 
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import secrets
 import warnings
@@ -32,7 +32,6 @@ from application_sdk.storage.cloud import CloudStore
 from tests.integration.storage.conftest import (
     GCS_BUCKET,
     GCS_PROJECT_ID,
-    GOOGLE_APPLICATION_CREDENTIALS,
     write_dapr_component,
 )
 
@@ -52,20 +51,9 @@ async def _assert_auth(store) -> None:
     await cs.list(prefix="integ-auth-probe/")
 
 
-def _load_sa_key() -> dict:
-    """Load SA JSON from GOOGLE_APPLICATION_CREDENTIALS; skip if unavailable."""
-    if not GOOGLE_APPLICATION_CREDENTIALS:
-        pytest.skip("GOOGLE_APPLICATION_CREDENTIALS not set")
-    path = os.path.expandvars(GOOGLE_APPLICATION_CREDENTIALS)
-    if not os.path.isfile(path):
-        pytest.skip(f"SA key file not found: {path}")
-    with open(path) as fh:
-        data = json.load(fh)
-    if "private_key" not in data:
-        pytest.skip(
-            "GOOGLE_APPLICATION_CREDENTIALS does not contain a private_key (not a SA key file)"
-        )
-    return data
+def _adc_metadata() -> dict[str, str]:
+    """ADC / Workload-Identity binding metadata (no embedded key)."""
+    return {"bucket": GCS_BUCKET, "project_id": GCS_PROJECT_ID}
 
 
 # ---------------------------------------------------------------------------
@@ -74,47 +62,35 @@ def _load_sa_key() -> dict:
 
 
 @pytest.mark.gcs_integration
-async def test_service_account_key_auth(tmp_path):
-    """Inline SA key fields in Dapr metadata → list succeeds."""
-    sa = _load_sa_key()
-    # Dapr gcp.bucket binding embeds SA JSON fields as individual metadata entries.
-    metadata = {
-        "bucket": GCS_BUCKET,
-        "project_id": sa.get("project_id", GCS_PROJECT_ID),
-        "type": sa.get("type", "service_account"),
-        "private_key_id": sa["private_key_id"],
-        "private_key": sa["private_key"],
-        "client_email": sa["client_email"],
-        "client_id": sa.get("client_id", ""),
-        "auth_uri": sa.get("auth_uri", "https://accounts.google.com/o/oauth2/auth"),
-        "token_uri": sa.get("token_uri", "https://oauth2.googleapis.com/token"),
-    }
+async def test_adc_auth(tmp_path):
+    """bucket + project_id only → ADC / Workload Identity → list succeeds.
+
+    The SDR / customer-infra production path on GKE: no key in the binding,
+    obstore authenticates via Application Default Credentials.
+    """
     write_dapr_component(
         tmp_path / "components",
-        name="gcs-sa-store",
+        name="gcs-adc-store",
         binding_type="bindings.gcp.bucket",
-        metadata=metadata,
+        metadata=_adc_metadata(),
     )
     store = create_store_from_binding(
-        "gcs-sa-store", components_dir=tmp_path / "components"
+        "gcs-adc-store", components_dir=tmp_path / "components"
     )
     await _assert_auth(store)
 
 
 @pytest.mark.gcs_integration
-async def test_adc_auth(tmp_path):
-    """bucket + project_id only → ADC / Workload Identity → list succeeds."""
+async def test_bindings_gcs_type_alias(tmp_path):
+    """``bindings.gcs`` type alias is accepted (same as ``bindings.gcp.bucket``)."""
     write_dapr_component(
         tmp_path / "components",
-        name="gcs-adc-store",
-        binding_type="bindings.gcp.bucket",
-        metadata={
-            "bucket": GCS_BUCKET,
-            "project_id": GCS_PROJECT_ID,
-        },
+        name="gcs-alias-store",
+        binding_type="bindings.gcs",
+        metadata=_adc_metadata(),
     )
     store = create_store_from_binding(
-        "gcs-adc-store", components_dir=tmp_path / "components"
+        "gcs-alias-store", components_dir=tmp_path / "components"
     )
     await _assert_auth(store)
 
@@ -126,21 +102,13 @@ async def test_large_payload_round_trip(tmp_path):
 
     Exercises both SDK entry points end-to-end with SHA-256: CloudStore.upload/
     download (single PUT/GET) and ops.upload_file/download_file (obstore
-    multipart writer + streaming range-GET).
+    multipart writer + streaming range-GET). Keyless (ADC).
     """
-    sa = _load_sa_key()
     write_dapr_component(
         tmp_path / "components",
         name="gcs-large-store",
         binding_type="bindings.gcp.bucket",
-        metadata={
-            "bucket": GCS_BUCKET,
-            "project_id": sa.get("project_id", GCS_PROJECT_ID),
-            "type": sa.get("type", "service_account"),
-            "private_key_id": sa["private_key_id"],
-            "private_key": sa["private_key"],
-            "client_email": sa["client_email"],
-        },
+        metadata=_adc_metadata(),
     )
     cs = CloudStore(
         create_store_from_binding(
@@ -187,29 +155,5 @@ async def test_large_payload_round_trip(tmp_path):
         for k in (cs_key, ops_key):
             try:
                 await ops.delete(k, store=cs.store)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — best-effort cleanup
                 warnings.warn(f"GCS cleanup failed for {k!r}: {exc}", stacklevel=1)
-
-
-@pytest.mark.gcs_integration
-async def test_bindings_gcs_type_alias(tmp_path):
-    """``bindings.gcs`` type alias is accepted (same as ``bindings.gcp.bucket``)."""
-    sa = _load_sa_key()
-    metadata = {
-        "bucket": GCS_BUCKET,
-        "project_id": sa.get("project_id", GCS_PROJECT_ID),
-        "type": sa.get("type", "service_account"),
-        "private_key_id": sa["private_key_id"],
-        "private_key": sa["private_key"],
-        "client_email": sa["client_email"],
-    }
-    write_dapr_component(
-        tmp_path / "components",
-        name="gcs-alias-store",
-        binding_type="bindings.gcs",
-        metadata=metadata,
-    )
-    store = create_store_from_binding(
-        "gcs-alias-store", components_dir=tmp_path / "components"
-    )
-    await _assert_auth(store)

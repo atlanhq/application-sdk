@@ -4,6 +4,7 @@ import logging
 import os
 import threading
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from time import time
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
@@ -49,6 +50,22 @@ OBSERVABILITY_S3_PREFIX_MAP = {
 T = TypeVar("T")
 
 
+@dataclass
+class _PartitionWriter:
+    """State for the single open gzip partition file inside ``_flush_records``.
+
+    Invariant: an instance is live (file open, local file on disk) from the moment
+    it is created until ``_upload_and_delete`` completes or the outer ``finally``
+    block of ``_flush_records`` cleans it up.  The local ``current_writer`` variable
+    being ``None`` is the signal that no partition file is currently open.
+    """
+
+    partition_path: str
+    local_path: str
+    remote_key: str
+    file: gzip.GzipFile
+
+
 class AtlanObservability(Generic[T], ABC):
     """Base class for Atlan observability functionality.
 
@@ -60,7 +77,7 @@ class AtlanObservability(Generic[T], ABC):
     - Periodic flushing to storage
     - Data retention management
     - Error handling and signal management
-    - Parquet file storage
+    - Gzip-compressed NDJSON file storage
     - Dapr object store integration
 
     Attributes:
@@ -129,7 +146,7 @@ class AtlanObservability(Generic[T], ABC):
         self._cleanup_enabled = cleanup_enabled
         self.data_dir = data_dir
         self.file_name = file_name
-        self._update_parquet_path()
+        self._writer_seq = 0
 
         # Ensure data directory exists
         os.makedirs(data_dir, exist_ok=True)
@@ -200,12 +217,69 @@ class AtlanObservability(Generic[T], ABC):
             f"hour={timestamp.hour:02d}",
         )
 
-    def _update_parquet_path(self):
-        """Update the parquet file path based on current timestamp."""
-        current_time = datetime.now()
-        partition_path = self._get_partition_path(current_time)
-        os.makedirs(partition_path, exist_ok=True)
-        self.parquet_path = os.path.join(partition_path, "data.parquet")
+    def _build_remote_key(self, partition_time: datetime, filename: str) -> str:
+        """Build the S3 remote key for a partition file.
+
+        Args:
+            partition_time: Timestamp used to derive the year/month/day/hour prefix.
+            filename: The local filename (e.g. ``<ts>_<seq>_<deployment>_<app>.json.gz``).
+
+        Returns:
+            str: The fully qualified S3 key, e.g.
+                ``artifacts/apps/observability/sdr/logs/year=2025/month=06/day=29/hour=14/<filename>``.
+        """
+        signal_type = self._get_signal_type()
+        s3_prefix = OBSERVABILITY_S3_PREFIX_MAP.get(
+            signal_type,
+            f"artifacts/apps/observability/{_OBS_MODE}/other",
+        )
+        return os.path.join(
+            s3_prefix,
+            f"year={partition_time.year}",
+            f"month={partition_time.month:02d}",
+            f"day={partition_time.day:02d}",
+            f"hour={partition_time.hour:02d}",
+            filename,
+        )
+
+    async def _upload_and_delete(self, local_path: str, remote_key: str) -> None:
+        """Upload *local_path* to object store(s) then remove the local file.
+
+        The deployment-store upload is non-fatal (failure is logged at WARNING and
+        the method continues). The upstream-store upload (when ``ENABLE_ATLAN_UPLOAD``
+        is true) is allowed to propagate — the caller handles it.  The local file is
+        always deleted in the ``finally`` block to prevent disk leaks.
+
+        Args:
+            local_path: Absolute path to the local ``.json.gz`` file.
+            remote_key: S3 key (from :meth:`_build_remote_key`) to upload to.
+        """
+        from application_sdk.storage import upload_file  # noqa: PLC0415
+
+        try:
+            try:
+                await upload_file(
+                    remote_key,
+                    local_path,
+                    store=self._get_deployment_store(),
+                )
+            except Exception:
+                logging.warning(
+                    "Deployment objectstore upload failed (non-fatal)",
+                    exc_info=True,
+                )
+
+            if ENABLE_ATLAN_UPLOAD:
+                await upload_file(
+                    remote_key,
+                    local_path,
+                    store=self._get_upstream_store(),
+                )
+
+            logging.debug("Exported records → %s", remote_key)
+        finally:
+            if os.path.exists(local_path):
+                os.unlink(local_path)
 
     @abstractmethod
     def process_record(self, record: T) -> dict[str, Any]:
@@ -264,8 +338,10 @@ class AtlanObservability(Generic[T], ABC):
         """
         with self._buffer_lock:
             if self._buffer:
-                buffer_copy = self._buffer[:]
-                self._buffer.clear()
+                # Swap rather than copy: O(1) instead of O(n) — the old list reference
+                # is handed off to the flusher while a fresh list starts accumulating.
+                buffer_copy = self._buffer
+                self._buffer = []
             else:
                 buffer_copy = None
         if buffer_copy:
@@ -277,18 +353,29 @@ class AtlanObservability(Generic[T], ABC):
         Args:
             records: List of records to flush
 
-        This method:
-        - Groups records by partition (year/month/day/hour)
-        - Writes json.gz format (lightweight, no pandas dependency)
-        - Uses centralized path based on ENABLE_ATLAN_UPLOAD
-        - SDR path: artifacts/apps/observability/sdr-logs/ (MDLH reads from Atlan bucket)
-        - Non-SDR path: artifacts/apps/observability/logs/ (to be deprecated)
+        Uses a **single-pass streaming writer** to reduce peak memory.  Rather than
+        grouping all records into a ``partition_records`` dict (which holds two copies
+        of the full batch at peak), the method opens one gzip file per active partition
+        and writes each record as an NDJSON line as it is consumed.  Only one record
+        and one gzip write buffer are alive at any moment — O(1) extra memory
+        regardless of batch size.
+
+        Records are assumed to arrive in emission order (chronologically), so
+        hour-partitions appear as contiguous runs.  If a rare cross-thread reorder
+        causes a stale partition to reappear mid-flush, a second uniquely-named
+        ``.json.gz`` file is written for that hour.  Uniqueness is jointly enforced by
+        the ``ts_ns`` wall-clock prefix and a per-instance monotonic ``_writer_seq``
+        counter, so two writers opened within the same clock tick (e.g. ~15 ms on
+        Windows) still produce distinct filenames.
+
+        - Writes gzip-compressed NDJSON (no pandas/pyarrow dependency)
+        - SDR path: ``artifacts/apps/observability/sdr/logs/``    (``ENABLE_ATLAN_UPLOAD=true``)
+        - Non-SDR path: ``artifacts/apps/observability/non-sdr/logs/``
         - Uploads to customer bucket (DEPLOYMENT_OBJECT_STORE) always
-        - Uploads to Atlan bucket (UPSTREAM_OBJECT_STORE) when ENABLE_ATLAN_UPLOAD=true
+        - Uploads to Atlan bucket (UPSTREAM_OBJECT_STORE) when ``ENABLE_ATLAN_UPLOAD=true``
         """
         if not ENABLE_OBSERVABILITY_STORE_SINK or not records:
             return
-        from application_sdk.storage import upload_file  # noqa: PLC0415
 
         # File I/O is restricted inside Temporal's workflow sandbox — skip the
         # store sink there; records are still exported via OTLP/console.
@@ -301,89 +388,82 @@ class AtlanObservability(Generic[T], ABC):
                 return
         except ImportError:  # conformance: ignore[E002,E008] Temporal sandbox check unavailable outside a worker; normal flush
             pass
+
+        # ``current_writer`` is non-None iff a gzip partition file is currently open.
+        # The _PartitionWriter dataclass bundles all four related state fields so they
+        # are always updated atomically — preventing the bug where an upload failure
+        # left current_partition_path pointing at the closed partition while
+        # current_file was None, causing the next same-partition record to call
+        # write() on None.
+        current_writer: _PartitionWriter | None = None
+
         try:
-            # Group records by partition using record's own timestamp
-            partition_records: dict[str, list[dict[str, Any]]] = {}
             for record in records:
-                record_time = datetime.fromtimestamp(record["timestamp"])
-                partition_path = self._get_partition_path(record_time)
-
-                if partition_path not in partition_records:
-                    partition_records[partition_path] = []
-                partition_records[partition_path].append(record)
-
-            # Write each partition as json.gz and upload
-            for partition_path, partition_data in partition_records.items():
-                local_path = None
                 try:
-                    os.makedirs(partition_path, exist_ok=True)
+                    record_time = datetime.fromtimestamp(record["timestamp"])
+                    partition_path = self._get_partition_path(record_time)
 
-                    # Get timestamp from first record for remote key partitioning
-                    first_record_time = datetime.fromtimestamp(
-                        partition_data[0]["timestamp"]
-                    )
+                    if (
+                        current_writer is None
+                        or partition_path != current_writer.partition_path
+                    ):
+                        # Finalize the current partition before switching.
+                        if current_writer is not None:
+                            # Swap out before close+upload so the triggering record is
+                            # never dropped: current_writer=None first means the code
+                            # below always opens a fresh writer for the new partition,
+                            # even if the upload raises.  _upload_and_delete's own
+                            # finally unlinks the local file, so no disk leak on failure.
+                            prev_writer = current_writer
+                            current_writer = None
+                            try:
+                                prev_writer.file.close()
+                                await self._upload_and_delete(
+                                    prev_writer.local_path,
+                                    prev_writer.remote_key,
+                                )
+                            except Exception:
+                                logging.error(
+                                    "Error finalizing observability partition",
+                                    exc_info=True,
+                                )
 
-                    # Lexi-sortable filename.
-                    # Use datetime.now() rather than time.time_ns(): the latter is
-                    # restricted inside Temporal's workflow sandbox (non-deterministic),
-                    # while datetime.now() is patched by the SDK to be safe there.
-                    ts_ns = int(datetime.now().timestamp() * 1e9)
-                    filename = f"{ts_ns}_{DEPLOYMENT_NAME}_{APPLICATION_NAME}.json.gz"
-                    local_path = os.path.join(partition_path, filename)
-
-                    # Write NDJSON with gzip compression
-                    with gzip.open(local_path, "wb") as f:
-                        for record in partition_data:
-                            f.write(orjson.dumps(record) + b"\n")
-
-                    # Compute remote key using signal-type-specific S3 prefix
-                    signal_type = self._get_signal_type()
-                    s3_prefix = OBSERVABILITY_S3_PREFIX_MAP.get(
-                        signal_type,
-                        f"artifacts/apps/observability/{_OBS_MODE}/other",
-                    )
-                    remote_key = os.path.join(
-                        s3_prefix,
-                        f"year={first_record_time.year}",
-                        f"month={first_record_time.month:02d}",
-                        f"day={first_record_time.day:02d}",
-                        f"hour={first_record_time.hour:02d}",
-                        filename,
-                    )
-
-                    # Upload to customer bucket (non-fatal if fails)
-                    try:
-                        await upload_file(
-                            remote_key,
-                            local_path,
-                            store=self._get_deployment_store(),
-                        )
-                    except Exception:
-                        logging.warning(
-                            "Deployment objectstore upload failed (non-fatal)",
-                            exc_info=True,
-                        )
-
-                    # Upload to Atlan bucket (independent, MDLH reads from here)
-                    if ENABLE_ATLAN_UPLOAD:
-                        await upload_file(
-                            remote_key,
-                            local_path,
-                            store=self._get_upstream_store(),
+                        # Open a fresh gzip file for the new partition.
+                        os.makedirs(partition_path, exist_ok=True)
+                        # Lexi-sortable filename.
+                        # Use datetime.now() rather than time.time_ns(): the latter is
+                        # restricted inside Temporal's workflow sandbox (non-deterministic),
+                        # while datetime.now() is patched by the SDK to be safe there.
+                        # The monotonic _writer_seq counter is a tie-breaker for when
+                        # datetime.now() has insufficient resolution (e.g. ~15 ms on
+                        # Windows), which would otherwise produce duplicate filenames
+                        # when two partition switches happen within the same clock tick.
+                        ts_ns = int(datetime.now().timestamp() * 1e9)
+                        self._writer_seq += 1
+                        filename = f"{ts_ns}_{self._writer_seq:06d}_{DEPLOYMENT_NAME}_{APPLICATION_NAME}.json.gz"
+                        local_path = os.path.join(partition_path, filename)
+                        current_writer = _PartitionWriter(
+                            partition_path=partition_path,
+                            local_path=local_path,
+                            remote_key=self._build_remote_key(record_time, filename),
+                            file=gzip.open(local_path, "wb"),
                         )
 
-                    logging.debug(
-                        "Exported %d records → %s", len(partition_data), remote_key
-                    )
+                    current_writer.file.write(orjson.dumps(record) + b"\n")
 
                 except Exception:
-                    logging.error(
-                        "Error processing partition %s", partition_path, exc_info=True
+                    logging.error("Error writing observability record", exc_info=True)
+
+            # Finalize the last open partition.
+            if current_writer is not None:
+                try:
+                    current_writer.file.close()
+                    await self._upload_and_delete(
+                        current_writer.local_path,
+                        current_writer.remote_key,
                     )
                 finally:
-                    # Always clean up local file to prevent disk leaks
-                    if local_path and os.path.exists(local_path):
-                        os.unlink(local_path)
+                    current_writer = None
 
             # Clean up old records if enabled
             if self._cleanup_enabled:
@@ -391,6 +471,17 @@ class AtlanObservability(Generic[T], ABC):
 
         except Exception:
             logging.error("Error flushing records batch", exc_info=True)
+
+        finally:
+            # Defensive: if an unexpected exception left the writer open, close its
+            # file handle and remove any orphaned local file to prevent leaks.
+            if current_writer is not None:
+                try:
+                    current_writer.file.close()
+                except Exception:
+                    logging.warning("Error closing orphaned gzip file", exc_info=True)
+                if os.path.exists(current_writer.local_path):
+                    os.unlink(current_writer.local_path)
 
     async def _check_and_cleanup(self):
         """Check if cleanup is needed and perform it if necessary.
@@ -529,8 +620,9 @@ class AtlanObservability(Generic[T], ABC):
                     or (now - self._last_flush_time) >= self._flush_interval
                 ):
                     self._last_flush_time = now
-                    buffer_copy = self._buffer[:]
-                    self._buffer.clear()
+                    # Swap rather than copy: O(1) instead of O(n).
+                    buffer_copy = self._buffer
+                    self._buffer = []
                 else:
                     buffer_copy = None
 

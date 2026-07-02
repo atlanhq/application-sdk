@@ -34,8 +34,11 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from conformance.bootstrap.render import MANAGED_WORKFLOWS, render
+from conformance.bootstrap.render import MANAGED_ACTION_FILES, MANAGED_WORKFLOWS, render
 from conformance.suite.schema.findings import Finding
+
+# Dest-path (repo-root-relative) -> template filename, for O(1) lookup in scan_path.
+_MANAGED_ACTION_FILES_BY_DEST = dict(MANAGED_ACTION_FILES)
 
 SERIES = "C"
 RULE_ID = "C002"
@@ -140,6 +143,8 @@ def discover(root: Path) -> list[Path]:
     """
     wf_dir = root / ".github" / "workflows"
     paths = [wf_dir / name for name in MANAGED_WORKFLOWS]
+    # Non-workflow vendored files (composite action + arg-building script).
+    paths.extend(root / dest_rel for dest_rel in _MANAGED_ACTION_FILES_BY_DEST)
     # Write-if-absent scaffolds (WARN-only drift tracking).
     paths.append(wf_dir / _TESTS_WORKFLOW)
     paths.append(root / _RENOVATE_JSON)
@@ -152,7 +157,55 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
         return _scan_tests_yaml(path, root)
     if path.name == _RENOVATE_JSON:
         return _scan_renovate_json(path, root)
+    try:
+        rel = path.relative_to(root).as_posix()
+    except ValueError:
+        rel = None
+    if rel in _MANAGED_ACTION_FILES_BY_DEST:
+        return _scan_managed_action_file(path, root, _MANAGED_ACTION_FILES_BY_DEST[rel])
     return _scan_managed_shim(path, root)
+
+
+def _scan_managed_action_file(
+    path: Path, root: Path, template_name: str
+) -> list[Finding]:
+    """Scan one of the vendored non-workflow files (action.yaml / scripts)."""
+    try:
+        rel = path.relative_to(root).as_posix()
+    except ValueError:
+        rel = str(path)
+
+    if not path.exists():
+        return [
+            Finding(
+                rule_id=RULE_ID,
+                file=rel,
+                line=1,
+                column=1,
+                message=(
+                    f"Managed file '{rel}' is absent. Run `{_CLI_CMD}` to install it."
+                ),
+            )
+        ]
+
+    on_disk = path.read_text(encoding="utf-8")
+    canonical = render(template_name)
+
+    if _strip_action_pins(on_disk) == _strip_action_pins(canonical):
+        return []
+
+    return [
+        Finding(
+            rule_id=RULE_ID,
+            file=rel,
+            line=1,
+            column=1,
+            message=(
+                f"Managed file '{rel}' has drifted from the bootstrap canonical. "
+                f"Run `{_CLI_CMD}` to re-sync."
+            ),
+        )
+    ]
 
 
 def _scan_managed_shim(path: Path, root: Path) -> list[Finding]:
