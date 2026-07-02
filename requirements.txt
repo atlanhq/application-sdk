@@ -366,7 +366,7 @@ types-protobuf==6.32.1.20260221
     # via temporalio
 types-s3transfer==0.16.0
     # via boto3-stubs
-typing-extensions==4.15.0
+typing-extensions==4.16.0
     # via
     #   aiohttp
     #   aiosignal
