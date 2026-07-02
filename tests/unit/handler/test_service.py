@@ -642,7 +642,6 @@ class TestPreflightEndpoint:
                     checks=[
                         PreflightCheck(
                             name="loginCheck",
-                            title="Validate credentials",
                             passed=False,
                             blocking=True,
                             message="Credentials are invalid",
@@ -659,7 +658,6 @@ class TestPreflightEndpoint:
         assert body["preflight"]["should_block"] is True
         assert body["preflight"]["status"] == "not_ready"
         assert body["preflight"]["app_status"] == "not_ready"
-        assert body["preflight"]["checks"][0]["title"] == "Validate credentials"
         assert body["preflight"]["checks"][0]["blocking"] is True
         assert "status" not in body["data"]
         assert "checks" not in body["data"]

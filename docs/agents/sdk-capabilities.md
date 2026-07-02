@@ -2599,7 +2599,6 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Summary:** Result of a single preflight check.
 - **Fields:**
   - `name: str` `= Field(..., min_length=1)` — Check name (e.g., 'connectivity', 'permissions').
-  - `title: str` `= ''` — Optional display title for the check.
   - `passed: bool` `= False` — Whether the check passed.
   - `blocking: bool` `= False` — Whether failing this check must stop the run before extraction.
   - `message: str` `= ''` — Details about the check result.
@@ -2631,10 +2630,6 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `metadata: BaseMetadataConfig` `= Field(default_factory=BaseMetadataConfig)` — Form-level metadata forwarded by heracles alongside the credential.
   - `checks_to_run: list[str]` `= []` — Specific checks to run (empty = run all).
   - `timeout_seconds: int` `= 60` — Maximum seconds to wait for all checks.
-  - `source: str` `= ''` — Caller surface, e.g. ``automation_engine_preflight``. Empty for UI checks.
-  - `workflow_slug: str` `= ''` — Workflow slug for the current run (runtime preflight only).
-  - `workflow_run_guid: str` `= ''` — WorkflowRun GUID for the current run (runtime preflight only).
-  - `triggered_by: str` `= ''` — Trigger source such as manual, schedule, or event_watchdog.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `PreflightOutput`

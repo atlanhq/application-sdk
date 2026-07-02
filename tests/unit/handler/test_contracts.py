@@ -88,7 +88,6 @@ class TestPreflightCheck:
     def test_defaults(self):
         check = PreflightCheck(name="connectivity")
         assert check.name == "connectivity"
-        assert check.title == ""
         assert check.passed is False
         assert check.blocking is False
         assert check.message == ""
@@ -97,12 +96,10 @@ class TestPreflightCheck:
     def test_passed(self):
         check = PreflightCheck(
             name="connectivity",
-            title="Connectivity",
             passed=True,
             blocking=True,
             duration_ms=50.0,
         )
-        assert check.title == "Connectivity"
         assert check.passed is True
         assert check.blocking is True
         assert check.duration_ms == 50.0
@@ -492,22 +489,6 @@ class TestPreflightInputFieldTypes:
         assert isinstance(inp.metadata, BaseMetadataConfig)
         assert inp.connection_config.model_extra == {}
         assert inp.metadata.model_extra == {}
-        assert inp.source == ""
-
-    def test_runtime_fields_populate_from_known_keys(self):
-        inp = PreflightInput.model_validate(
-            {
-                "credentials": [],
-                "source": "automation_engine_preflight",
-                "workflow_slug": "daily-sync",
-                "workflow_run_guid": "run-1",
-                "triggered_by": "schedule",
-            }
-        )
-        assert inp.source == "automation_engine_preflight"
-        assert inp.workflow_slug == "daily-sync"
-        assert inp.workflow_run_guid == "run-1"
-        assert inp.triggered_by == "schedule"
 
     def test_unknown_runtime_keys_are_dropped(self):
         inp = PreflightInput.model_validate({"credentials": [], "tenant": "default"})

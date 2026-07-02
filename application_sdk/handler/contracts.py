@@ -325,9 +325,6 @@ class PreflightCheck(BaseModel):
     name: str = Field(..., min_length=1)
     """Check name (e.g., 'connectivity', 'permissions')."""
 
-    title: str = ""
-    """Optional display title for the check."""
-
     passed: bool = False
     """Whether the check passed."""
 
@@ -399,18 +396,6 @@ class PreflightInput(BaseModel):
 
     timeout_seconds: int = 60
     """Maximum seconds to wait for all checks."""
-
-    source: str = ""
-    """Caller surface, e.g. ``automation_engine_preflight``. Empty for UI checks."""
-
-    workflow_slug: str = ""
-    """Workflow slug for the current run (runtime preflight only)."""
-
-    workflow_run_guid: str = ""
-    """WorkflowRun GUID for the current run (runtime preflight only)."""
-
-    triggered_by: str = ""
-    """Trigger source such as manual, schedule, or event_watchdog."""
 
 
 class PreflightOutput(BaseModel):
