@@ -35,7 +35,11 @@ logger = get_logger(__name__)
 
 _DEFAULT_DAPR_HTTP_PORT = 3500
 _DEFAULT_TIMEOUT = 30.0
-_DEFAULT_RETRY_TOTAL = 3
+# Retry budget spans the sidecar cold-start: with backoff_factor=1.0 the waits
+# are ~1+2+4+8s, so a Dapr call issued just before daprd is accepting requests
+# retries across ~15s rather than giving up in ~1.5s (the old total=3,
+# backoff=0.5). Retries only fire on failures; healthy calls are unaffected.
+_DEFAULT_RETRY_TOTAL = 5
 
 # Dapr HTTP API v1.0 building blocks
 _API_PREFIX = "/v1.0"
@@ -50,7 +54,16 @@ METADATA_PATH = f"{_API_PREFIX}/metadata"
 
 
 _HEALTHZ_PATH = "/v1.0/healthz"
-_DEFAULT_SIDECAR_WAIT_TIMEOUT = 10.0
+# How long to wait at startup for the Dapr sidecar's HTTP server to accept
+# connections + finish component init. The old 10s was too short for cold
+# starts (image pull + daprd boot + component init on a fresh CI runner
+# routinely exceed it); when we proceeded before the sidecar was up, the first
+# Dapr call — e.g. an agent secret-bundle fetch during a workflow's preflight —
+# failed with "ConnectError: All connection attempts failed". Overridable via
+# env for pathologically slow (or fast) environments.
+_DEFAULT_SIDECAR_WAIT_TIMEOUT = float(
+    os.environ.get("ATLAN_DAPR_SIDECAR_WAIT_TIMEOUT", "60")
+)
 _DEFAULT_SIDECAR_POLL_INTERVAL = 0.5
 
 
@@ -132,8 +145,21 @@ class AsyncDaprClient:
             transport=httpx.AsyncHTTPTransport(limits=_HTTP_POOL_LIMITS),
             retry=Retry(
                 total=retries,
-                backoff_factor=0.5,
+                backoff_factor=1.0,
                 status_forcelist=[500, 502, 503, 504],
+                # Retry connection-level failures too, not just HTTP 5xx: a Dapr
+                # call issued while the sidecar is still cold raises
+                # ConnectError/ReadError (daprd not yet accepting connections),
+                # and the retry window bridges the gap until it is. Explicit so
+                # the intent survives any change to the library's defaults.
+                retry_on_exceptions=[
+                    httpx.ConnectError,
+                    httpx.ConnectTimeout,
+                    httpx.ReadError,
+                    httpx.ReadTimeout,
+                    httpx.RemoteProtocolError,
+                    httpx.PoolTimeout,
+                ],
             ),
         )
         self._client = httpx.AsyncClient(

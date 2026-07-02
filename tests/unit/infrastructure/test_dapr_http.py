@@ -358,6 +358,50 @@ class TestRetryConfiguration:
         client = AsyncDaprClient(base_url="http://localhost:3500", retries=0)
         assert isinstance(client._client._transport, RetryTransport)
 
+    def test_retry_covers_connection_errors_with_widened_budget(self):
+        """Connection-level failures (not just HTTP 5xx) must be retried, over a
+        window wide enough to bridge a cold-starting sidecar.
+
+        A Dapr call issued while daprd isn't yet accepting connections raises
+        ConnectError; if that isn't retried (or the budget is ~1.5s) the call
+        fails with "All connection attempts failed" instead of riding out the
+        startup. Guards against a regression to 5xx-only / tiny-budget retries.
+        """
+        import httpx
+
+        from application_sdk.infrastructure._dapr.http import _DEFAULT_RETRY_TOTAL
+
+        retry = AsyncDaprClient(
+            base_url="http://localhost:3500"
+        )._client._transport.retry
+        assert retry.is_retryable_exception(httpx.ConnectError("x")) is True
+        assert retry.is_retryable_exception(httpx.ReadError("x")) is True
+        assert _DEFAULT_RETRY_TOTAL >= 5
+        assert retry.backoff_factor >= 1.0
+
+
+class TestSidecarWaitTimeout:
+    """The startup readiness gate must wait long enough for a cold-starting
+    sidecar (the old 10s let CI proceed before daprd was up)."""
+
+    def test_default_timeout_raised_and_env_configurable(self, monkeypatch):
+        import importlib
+
+        import application_sdk.infrastructure._dapr.http as http_mod
+
+        # Default is generous enough for a CI cold start.
+        assert http_mod._DEFAULT_SIDECAR_WAIT_TIMEOUT >= 60.0
+
+        # ...and overridable via env. Reload under the patched env, then restore
+        # so the module globals don't leak into other tests.
+        monkeypatch.setenv("ATLAN_DAPR_SIDECAR_WAIT_TIMEOUT", "123")
+        try:
+            reloaded = importlib.reload(http_mod)
+            assert reloaded._DEFAULT_SIDECAR_WAIT_TIMEOUT == 123.0
+        finally:
+            monkeypatch.delenv("ATLAN_DAPR_SIDECAR_WAIT_TIMEOUT", raising=False)
+            importlib.reload(http_mod)
+
 
 class TestWaitForDaprSidecar:
     # The implementation early-returns when DEPLOYMENT_NAME == LOCAL_ENVIRONMENT
