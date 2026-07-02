@@ -1,5 +1,6 @@
 """Tests for SSL utilities."""
 
+import os
 import ssl
 import tempfile
 from unittest.mock import patch
@@ -225,3 +226,75 @@ class TestGetCustomCaCertBytes:
                 assert b"-----BEGIN CERTIFICATE-----" in result
                 assert b"-----END CERTIFICATE-----" in result
                 assert result.count(b"-----BEGIN CERTIFICATE-----") > 1
+
+
+class TestConfigureRequestsCaBundle:
+    """Test cases for configure_requests_ca_bundle function."""
+
+    def test_noop_when_no_cert_dir(self, monkeypatch):
+        """Returns None and leaves env untouched when SSL_CERT_DIR is unset."""
+        monkeypatch.delenv("REQUESTS_CA_BUNDLE", raising=False)
+        monkeypatch.delenv("CURL_CA_BUNDLE", raising=False)
+        with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", ""):
+            from application_sdk.clients.ssl_utils import configure_requests_ca_bundle
+
+            result = configure_requests_ca_bundle()
+            assert result is None
+            assert "REQUESTS_CA_BUNDLE" not in os.environ
+
+    def test_respects_existing_override(self, monkeypatch):
+        """An operator-set REQUESTS_CA_BUNDLE is left untouched."""
+        monkeypatch.setenv("REQUESTS_CA_BUNDLE", "/operator/set/bundle.pem")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with open(f"{tmpdir}/ca.pem", "wb") as f:
+                f.write(b"-----BEGIN CERTIFICATE-----\nX\n-----END CERTIFICATE-----")
+            with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
+                from application_sdk.clients.ssl_utils import (
+                    configure_requests_ca_bundle,
+                )
+
+                result = configure_requests_ca_bundle()
+                assert result == "/operator/set/bundle.pem"
+                assert os.environ["REQUESTS_CA_BUNDLE"] == "/operator/set/bundle.pem"
+
+    def test_exports_combined_bundle_when_cert_dir_set(self, monkeypatch):
+        """Writes the combined default+custom bundle and exports the env vars."""
+        monkeypatch.delenv("REQUESTS_CA_BUNDLE", raising=False)
+        monkeypatch.delenv("CURL_CA_BUNDLE", raising=False)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            custom_cert = (
+                b"-----BEGIN CERTIFICATE-----\nCUSTOM_ROOT\n-----END CERTIFICATE-----"
+            )
+            with open(f"{tmpdir}/ca.pem", "wb") as f:
+                f.write(custom_cert)
+            with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
+                from application_sdk.clients.ssl_utils import (
+                    configure_requests_ca_bundle,
+                )
+
+                result = configure_requests_ca_bundle()
+                assert result is not None
+                assert os.environ["REQUESTS_CA_BUNDLE"] == result
+                assert os.environ["CURL_CA_BUNDLE"] == result
+                with open(result, "rb") as f:
+                    written = f.read()
+                # Custom root present AND combined with system defaults.
+                assert b"CUSTOM_ROOT" in written
+                assert written.count(b"-----BEGIN CERTIFICATE-----") > 1
+
+    def test_idempotent(self, monkeypatch):
+        """A second call reuses the already-exported bundle path."""
+        monkeypatch.delenv("REQUESTS_CA_BUNDLE", raising=False)
+        monkeypatch.delenv("CURL_CA_BUNDLE", raising=False)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with open(f"{tmpdir}/ca.pem", "wb") as f:
+                f.write(b"-----BEGIN CERTIFICATE-----\nY\n-----END CERTIFICATE-----")
+            with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
+                from application_sdk.clients.ssl_utils import (
+                    configure_requests_ca_bundle,
+                )
+
+                first = configure_requests_ca_bundle()
+                second = configure_requests_ca_bundle()
+                assert first is not None
+                assert first == second

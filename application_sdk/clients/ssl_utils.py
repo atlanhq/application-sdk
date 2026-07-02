@@ -3,6 +3,7 @@
 import functools
 import os
 import ssl
+import tempfile
 
 from application_sdk.constants import SSL_CERT_DIR
 from application_sdk.observability.logger_adaptor import get_logger
@@ -245,3 +246,60 @@ def get_custom_ca_cert_bytes() -> bytes | None:
         len(combined_certs),
     )
     return combined_certs
+
+
+def configure_requests_ca_bundle() -> str | None:
+    """Point ``requests``-based clients at the combined default+custom CA bundle.
+
+    The SDK's own httpx/aiohttp clients trust custom CAs via
+    :func:`get_ssl_context`, and Temporal via :func:`get_custom_ca_cert_bytes`,
+    both driven by ``SSL_CERT_DIR``. But ``requests`` consults neither — it uses
+    the certifi bundle and only honours the ``REQUESTS_CA_BUNDLE`` /
+    ``CURL_CA_BUNDLE`` environment variables. Third-party vendor SDKs that
+    transport over ``requests`` (e.g. ``looker_sdk``) therefore never see a
+    mounted private CA and fail TLS verification against internal endpoints.
+
+    When ``SSL_CERT_DIR`` is configured, this writes the combined
+    default+custom bundle to a file and exports ``REQUESTS_CA_BUNDLE`` /
+    ``CURL_CA_BUNDLE`` so those clients trust both public and private CAs.
+    Because the bundle includes the system defaults, public TLS keeps working.
+
+    Call once at process startup. Idempotent, and a no-op when ``SSL_CERT_DIR``
+    is unset. An explicit operator-set ``REQUESTS_CA_BUNDLE`` is left untouched.
+
+    Returns:
+        The bundle path exported to the environment, or ``None`` when nothing
+        was configured.
+    """
+    existing = os.environ.get("REQUESTS_CA_BUNDLE")
+    if existing:
+        # Respect an explicit override (operator or a previous call).
+        return existing
+
+    ca_bytes = get_custom_ca_cert_bytes()
+    if not ca_bytes:
+        return None
+
+    bundle_dir = os.path.join(tempfile.gettempdir(), "atlan-ca")
+    bundle_path = os.path.join(bundle_dir, "combined-ca-bundle.pem")
+    try:
+        os.makedirs(bundle_dir, exist_ok=True)
+        with open(bundle_path, "wb") as f:
+            f.write(ca_bytes)
+    except OSError:
+        logger.warning(
+            "Failed to write combined CA bundle to %s; requests-based clients "
+            "will not trust custom CAs",
+            bundle_path,
+            exc_info=True,
+        )
+        return None
+
+    os.environ["REQUESTS_CA_BUNDLE"] = bundle_path
+    os.environ.setdefault("CURL_CA_BUNDLE", bundle_path)
+    logger.info(
+        "Exported REQUESTS_CA_BUNDLE for requests-based clients "
+        "(combined default+custom CA bundle): %s",
+        bundle_path,
+    )
+    return bundle_path

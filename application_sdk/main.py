@@ -1584,6 +1584,17 @@ def run_main(config: AppConfig) -> None:
 
     warn_removed_env_vars()
 
+    # Export REQUESTS_CA_BUNDLE from the combined default+custom CA bundle when
+    # SSL_CERT_DIR is configured. httpx/aiohttp/Temporal already trust custom
+    # CAs via ssl_utils, but requests-based vendor SDKs (e.g. looker_sdk) read
+    # only REQUESTS_CA_BUNDLE — without this they fail TLS against internal
+    # endpoints fronted by a private CA. No-op when SSL_CERT_DIR is unset.
+    from application_sdk.clients.ssl_utils import (  # noqa: PLC0415 — cold path: startup-only SSL env setup
+        configure_requests_ca_bundle,
+    )
+
+    configure_requests_ca_bundle()
+
     # Bootstrap the global MeterProvider once per process so any meter
     # consumer (instrumentors, interceptors, decorators, …) resolves to the
     # configured provider. Without this, handler-mode /metrics serves only
