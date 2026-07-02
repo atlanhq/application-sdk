@@ -33,6 +33,11 @@ local defaultPublishArgs = defaultManifest["dag"]["publish"]["inputs"]["args"]
 // Direct class instances for precise property-level assertions.
 local assetPublishNode = new App.PublishNode {}
 local lineagePublishNode = new App.LineagePublishNode {}
+local lineageNode = new App.LineageNode {
+  connectorName = "postgres"
+  sqlUnquotedCase = "upper"
+  ignoreAllCase = false
+}
 
 facts {
   // -----------------------------------------------------------------------
@@ -127,5 +132,20 @@ facts {
 
   ["LineagePublishNode connection_cache_enabled can be explicitly opted in"] {
     new App.LineagePublishNode { connectionCacheEnabled = true }.args["connection_cache_enabled"] == true
+  }
+
+  // Regression guard — LineageNode and LineagePublishNode must keep routing to
+  // their respective apps, not DAGNode's "automation-engine" default. This is
+  // exactly how the QueryIntelligenceNode/LineageNode appName drift happened:
+  // no fact asserted these values, so a missing override went unnoticed.
+  ["LineageNode defaults identify the lineage app"] {
+    lineageNode.appName == "lineage"
+  }
+
+  // LineagePublishNode intentionally dispatches to the general publish app
+  // (same as PublishNode), not a dedicated "lineage" app — it emits a
+  // PublishWorkflow, not a LineageWorkflow.
+  ["LineagePublishNode defaults identify the publish app"] {
+    lineagePublishNode.appName == "publish"
   }
 }
