@@ -1,8 +1,10 @@
 // Tests for the built-in run-level notification node (NotificationNode) and the
 // `notifications` app-level on/off toggle.
 //
-// Background: apps can opt in to workflow-run alerts by setting
-// `notifications = true`. The toolkit then appends a `notifications`
+// Background: notifications default ON for customer-facing data apps (`type`
+// `connector` or `miner`) and OFF for everything else (internal/infra apps); any
+// app can override with an explicit `notifications = true`/`false`. When on, the
+// toolkit appends a `notifications`
 // finalizer node that depends on the reserved run-level `workflow_complete` tag
 // (a node-less DependencyCondition) so Automation Engine runs it once per run on
 // any terminal state (success or failure), carrying the real status, and
@@ -17,6 +19,8 @@ import "pkl:json"
 import "../examples/full/app.pkl" as enabledApp
 import "fixtures/default_pipeline.pkl" as defaultApp
 import "fixtures/notify_disabled.pkl" as disabledApp
+import "fixtures/notify_utility_default.pkl" as utilityApp
+import "fixtures/notify_miner_default.pkl" as minerApp
 import "../src/App.pkl" as App
 
 // App that retargets the notify node via extraNodes (replaces the default).
@@ -47,11 +51,24 @@ local overrideApp = (App) {
   }
 }
 
-// Default app (no pipeline block, notifications defaults false).
+// Default app (no pipeline block, no explicit `notifications`). Its `type`
+// inherits the toolkit default `connector`, so notifications are ON by default.
 local defaultManifest = new json.Parser { useMapping = true }.parse(
   defaultApp.output.files["app/generated/manifest.json"].text
 )
 local defaultDag = defaultManifest["dag"]
+
+// Internal (utility) app, no explicit `notifications` → OFF by default.
+local utilityManifest = new json.Parser { useMapping = true }.parse(
+  utilityApp.output.files["app/generated/manifest.json"].text
+)
+local utilityDag = utilityManifest["dag"]
+
+// Miner app, no explicit `notifications` → ON by default (like a connector).
+local minerManifest = new json.Parser { useMapping = true }.parse(
+  minerApp.output.files["app/generated/manifest.json"].text
+)
+local minerDag = minerManifest["dag"]
 
 // Existing full example opts in (notifications = true).
 local enabledManifest = new json.Parser { useMapping = true }.parse(
@@ -74,11 +91,19 @@ local overrideNode = overrideManifest["dag"]["notifications"]
 
 facts {
   // -----------------------------------------------------------------------
-  // Default: the node is absent unless the app opts in.
+  // Default is gated on app `type`: connector/miner ON, everything else OFF.
   // -----------------------------------------------------------------------
 
-  ["App with no pipeline declaration does not get a notifications node by default"] {
-    !defaultDag.containsKey("notifications")
+  ["Connector app gets a notifications node by default (no explicit opt-in)"] {
+    defaultDag.containsKey("notifications")
+  }
+
+  ["Miner app gets a notifications node by default"] {
+    minerDag.containsKey("notifications")
+  }
+
+  ["Internal (utility) app has no notifications node by default"] {
+    !utilityDag.containsKey("notifications")
   }
 
   ["App with notifications=true gets a notifications node"] {

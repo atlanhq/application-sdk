@@ -1,0 +1,23 @@
+/// Fixture: an internal (`utility`) app that does NOT set `notifications`.
+///
+/// Exercises the connector/miner-gated default: internal/infra app types get
+/// no notification node unless they explicitly opt in with `notifications = true`.
+amends "../../src/App.pkl"
+
+name = "notify-utility-default"
+displayName = "Notify Utility Default"
+icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
+hasCredentialConfig = false
+type = "utility"
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["connection"] = new ConnectionCreator {
+          placeholderText = "Connection Name"
+        }
+      }
+    }
+  }
+}

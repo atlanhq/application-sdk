@@ -305,17 +305,22 @@ extraNodes: Mapping<String, DAGNode> = new Mapping {}
 /// When `true`, appends a run-level notification node (`NotificationNode`, key
 /// `notifications`) that fires once when the workflow run reaches any
 /// terminal state (success or failure) and dispatches the notification app to
-/// fan alerts out to the tenant's enabled integrations (Teams, etc.). The
+/// fan alerts out to the tenant's enabled integrations (Teams, Slack, etc.). The
 /// notification app decides delivery per integration via its
 /// `alertsWorkflowChannel.failureOnly` config (failure-only vs. all runs) — so
 /// this flag is purely the broad app-level switch; *which* runs and *which*
 /// channels are the customer's call.
 ///
-/// Default `false`, so apps must explicitly opt in with `notifications = true`
-/// before the generated manifest includes the notification node. Override the
-/// node by defining `extraNodes["notifications"]`, which suppresses the
-/// toolkit-generated node.
-notifications: Boolean = false
+/// Defaults ON for customer-facing data apps (`type` `connector` or `miner`) and
+/// OFF for everything else (internal/infra apps: `utility`, `system`, studios,
+/// …). This restores the pre-AE-migration behavior where connector/miner runs
+/// alerted by default, without turning notifications on for internal apps (e.g.
+/// the notification app itself, a `utility`, must not self-notify). Delivery is
+/// still fully customer-gated: no enabled integration → nothing is sent.
+///
+/// Override per app: set `notifications = true` / `false` explicitly, or define
+/// `extraNodes["notifications"]` to replace the toolkit-generated node.
+notifications: Boolean = List("connector", "miner").contains(type.toLowerCase())
 
 /// Mapping of manifest arg name → form field name for top-level extract args.
 manifestTopLevelArgs: Mapping<String, String> = new Mapping {

@@ -1,0 +1,23 @@
+/// Fixture: a `miner` app that does NOT set `notifications`.
+///
+/// Exercises the connector/miner-gated default: miner apps (like connectors)
+/// get the run-level notification node by default, no explicit opt-in needed.
+amends "../../src/App.pkl"
+
+name = "notify-miner-default"
+displayName = "Notify Miner Default"
+icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
+hasCredentialConfig = false
+type = "miner"
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["connection"] = new ConnectionCreator {
+          placeholderText = "Connection Name"
+        }
+      }
+    }
+  }
+}
