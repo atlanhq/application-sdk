@@ -429,6 +429,17 @@ def create_worker(
         all_interceptors.append(EventInterceptor())
         task_activities = [*task_activities, publish_event]
 
+    from application_sdk.constants import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+        ENABLE_INFRA_FAILURE_DIAGNOSIS,
+    )
+
+    if ENABLE_INFRA_FAILURE_DIAGNOSIS:
+        from application_sdk.execution._temporal.infra_diagnosis import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+            diagnose_infra_failure,
+        )
+
+        task_activities = [*task_activities, diagnose_infra_failure]
+
     # Build sandbox configuration
     config = SandboxConfig()
 
