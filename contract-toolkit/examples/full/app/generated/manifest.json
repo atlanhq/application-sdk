@@ -37,10 +37,10 @@
     "qi": {
       "activity_name": "execute_workflow",
       "activity_display_name": "Parse SQL Queries",
-      "app_name": "automation-engine",
+      "app_name": "query-intelligence",
       "inputs": {
         "workflow_type": "QueryIntelligenceWorkflow",
-        "app_name": "automation-engine",
+        "app_name": "query-intelligence",
         "task_queue": "atlan-query-intelligence-{deployment_name}",
         "args": {
           "connection_qualified_name": "$.extract.outputs.connection_qualified_name",
