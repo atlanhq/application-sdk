@@ -147,18 +147,21 @@ class AsyncDaprClient:
                 total=retries,
                 backoff_factor=1.0,
                 status_forcelist=[500, 502, 503, 504],
-                # Retry connection-level failures too, not just HTTP 5xx: a Dapr
-                # call issued while the sidecar is still cold raises
-                # ConnectError/ReadError (daprd not yet accepting connections),
-                # and the retry window bridges the gap until it is. Explicit so
-                # the intent survives any change to the library's defaults.
+                # Pin the retried transport errors to httpx-retries' own default
+                # set, stated explicitly so it can't silently narrow/widen if the
+                # library changes its default. These three base classes cover
+                # connect/read/WRITE/close/pool + protocol errors alike, so
+                # POST/DELETE calls (save_state/publish_event/invoke_binding/
+                # delete_state) keep the exact retry coverage they had before —
+                # listing leaf classes like ConnectError/ReadError would have
+                # narrowed it and dropped WriteError/WriteTimeout/CloseError.
+                # NOTE: these errors were already retried by default; the real
+                # change in this fix is the wider *budget* above (total 3->5,
+                # backoff 0.5->1.0, ~1.5s -> ~15s) that bridges a daprd cold start.
                 retry_on_exceptions=[
-                    httpx.ConnectError,
-                    httpx.ConnectTimeout,
-                    httpx.ReadError,
-                    httpx.ReadTimeout,
+                    httpx.TimeoutException,
+                    httpx.NetworkError,
                     httpx.RemoteProtocolError,
-                    httpx.PoolTimeout,
                 ],
             ),
         )

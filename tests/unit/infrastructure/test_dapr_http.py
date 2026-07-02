@@ -374,8 +374,15 @@ class TestRetryConfiguration:
         retry = AsyncDaprClient(
             base_url="http://localhost:3500"
         )._client._transport.retry
+        # Read errors on GET (the SDR secret-fetch codepath)...
         assert retry.is_retryable_exception(httpx.ConnectError("x")) is True
         assert retry.is_retryable_exception(httpx.ReadError("x")) is True
+        # ...AND write/close errors on POST/DELETE, so the explicit list stays at
+        # parity with httpx-retries' prior implicit default (regression guard for
+        # a narrower leaf-class list that would drop these).
+        assert retry.is_retryable_exception(httpx.WriteError("x")) is True
+        assert retry.is_retryable_exception(httpx.WriteTimeout("x")) is True
+        assert retry.is_retryable_exception(httpx.CloseError("x")) is True
         assert _DEFAULT_RETRY_TOTAL >= 5
         assert retry.backoff_factor >= 1.0
 
