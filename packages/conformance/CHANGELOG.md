@@ -2,6 +2,25 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.11.0] - 2026-07-03
+
+### Features
+
+- add SourceUnavailableError for customer-controlled source systems (#2476) ([4ba7158](https://github.com/atlanhq/application-sdk/commit/4ba7158))
+
+### Bug fixes
+
+- bootstrap contract ledger scaffold + discovery path bug (#2483) ([3240021](https://github.com/atlanhq/application-sdk/commit/3240021))
+
+### Other changes
+
+- chore(deps): lock file maintenance (#2474) ([afccf21](https://github.com/atlanhq/application-sdk/commit/afccf21))
+- chore(deps): lock file maintenance (#2472) ([55b90d5](https://github.com/atlanhq/application-sdk/commit/55b90d5))
+- chore(deps): lock file maintenance (#2465) ([82a1f3c](https://github.com/atlanhq/application-sdk/commit/82a1f3c))
+- chore(deps): lock file maintenance (#2460) ([1f8f7a6](https://github.com/atlanhq/application-sdk/commit/1f8f7a6))
+- chore(deps): lock file maintenance (#2459) ([fa95c66](https://github.com/atlanhq/application-sdk/commit/fa95c66))
+- chore(deps): lock file maintenance (#2453) ([4feedd8](https://github.com/atlanhq/application-sdk/commit/4feedd8))
+
 ## [0.10.0] - 2026-07-01
 
 ### Features
