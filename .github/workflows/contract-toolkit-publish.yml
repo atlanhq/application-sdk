@@ -78,7 +78,6 @@ jobs:
         run: cp -R .out /tmp/contract-toolkit-pkl-out
 
       - name: Publish package to GitHub Pages branch
-        id: publish
         run: |
           set -euo pipefail
           version="${{ steps.meta.outputs.version }}"
@@ -102,7 +101,6 @@ jobs:
           git add -A "${PUBLISH_DIR}" .nojekyll
           git diff --cached --quiet || git commit -m "publish ${PKG_NAME}@${version}"
           git push origin gh-pages
-          echo "gh_pages_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Trigger GitHub Pages build
         env:
@@ -110,14 +108,14 @@ jobs:
         run: |
           # The previous step leaves the working tree checked out on gh-pages
           # (which has no .github/scripts/), so restore just this one file
-          # from main rather than switching branches back — the target commit
-          # to poll for is passed in explicitly (steps.publish's gh-pages SHA)
-          # instead of read from the current checkout, so this step's own
-          # branch state never matters to it.
+          # from main rather than switching branches back.
           git checkout main -- .github/scripts/wait_for_pages_build.py
+          owner="${GITHUB_REPOSITORY%%/*}"
+          repo_name="${GITHUB_REPOSITORY##*/}"
+          url="https://${owner}.github.io/${repo_name}/${PUBLISH_DIR}/${PKG_NAME}@${{ steps.meta.outputs.version }}.zip"
           python3 .github/scripts/wait_for_pages_build.py \
             --repo "${GITHUB_REPOSITORY}" \
-            --commit "${{ steps.publish.outputs.gh_pages_sha }}"
+            --url "$url"
 
       - name: Create source tag
         run: |

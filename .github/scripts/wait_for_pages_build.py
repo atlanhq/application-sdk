@@ -1,89 +1,86 @@
 #!/usr/bin/env python3
-"""Wait for a GitHub Pages build of a given commit, triggering one if needed.
+"""Wait for a contract-toolkit package to actually be served live on Pages.
 
 Invoked by .github/workflows/contract-toolkit-publish.yml after the built
 contract-toolkit package is pushed to the gh-pages branch. Moved out of
 inlined shell per docs/standards/ci.md ("No conditional logic in inlined
-shell"): the skip-if-already-built check and the poll loop both branch on
+shell"): the skip-if-already-live check and the poll loop both branch on
 state, so they belong in a tested driver, not a workflow `run:` block.
 
-The target commit is passed in via --commit rather than read from the current
-checkout (e.g. `git rev-parse HEAD`): the calling workflow step runs after a
-prior step has switched the working tree to the gh-pages branch, and needs to
-restore just this script file from main to invoke it at all — relying on
-"whatever HEAD happens to be" at that point is fragile by construction. The
-caller captures the gh-pages commit as a step output right after pushing it.
+Polls the actual public URL rather than GitHub's internal `gh api
+.../pages/builds/*` bookkeeping. That API proved unreliable in practice
+(2026-07-03, contract-toolkit v0.17.0 publish, coinciding with a GitHub Pages
+incident the day before with the same "slow and failing deployments"
+symptom): builds got stuck in `building` for 10+ minutes with zero progress,
+or resolved to `errored` for content that was, in fact, already being served
+correctly from an earlier successful build — because each retry re-triggers
+a brand-new build attempt on top of one that may have already succeeded,
+and "latest" only ever reflects the most recent attempt, not the best one.
+The published artifact's URL is version-qualified and never reused across
+releases, so "is this exact URL returning 200" is unambiguous ground truth
+for "is this release live" — independent of how many redundant or stuck
+build attempts GitHub's queue is juggling internally.
 
-Exits 0 once the target commit's Pages build reaches "built" — including
-immediately, without triggering a redundant new build, if it is already
-built. Exits 1 if the build errors, or once the poll budget is exhausted.
-
-Each poll reads `status` and `commit` from a single `gh api
-.../pages/builds/latest` response rather than two separate calls: the
-"latest" build can change between two independent requests, which would let
-a caller read `status` from one build and `commit` from another.
+Exits 0 once the URL is live — including immediately, without triggering a
+redundant rebuild, if it already is. Exits 1 once the poll budget is
+exhausted without the URL going live.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import subprocess
 import sys
 import time
 
 
 def run(cmd: list[str]) -> subprocess.CompletedProcess:
-    """Run a subprocess and capture output. Single seam so tests can stub gh."""
+    """Run a subprocess and capture output. Single seam so tests can stub curl/gh."""
     return subprocess.run(cmd, check=False, text=True, capture_output=True)
 
 
-def latest_build(repo: str) -> dict:
-    result = run(["gh", "api", f"repos/{repo}/pages/builds/latest"])
-    return json.loads(result.stdout)
+def is_live(url: str) -> bool:
+    result = run(["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", url])
+    return result.stdout.strip() == "200"
 
 
 def trigger_build(repo: str) -> None:
     run(["gh", "api", "--method", "POST", f"repos/{repo}/pages/builds"])
 
 
-def wait_for_build(
+def wait_for_publish(
     repo: str,
-    pages_sha: str,
+    url: str,
     *,
     max_attempts: int = 300,
     sleep_seconds: int = 5,
+    heartbeat_every: int = 12,
     sleep=time.sleep,
 ) -> bool:
-    """Poll until `pages_sha`'s Pages build is `built`.
+    """Poll `url` until it's live (HTTP 200).
 
-    Returns True on success (already built, or reached `built` within the poll
-    budget), False on an `errored` build or timeout.
+    Returns True on success (already live, or went live within the poll
+    budget), False on timeout. Prints a heartbeat every `heartbeat_every`
+    attempts so a silent multi-minute wait doesn't look stuck in CI logs.
     """
-    build = latest_build(repo)
-    if build.get("commit") == pages_sha and build.get("status") == "built":
-        print(f"Pages already built for {pages_sha}; skipping rebuild trigger.")
+    if is_live(url):
+        print(f"{url} already live; skipping rebuild trigger.")
         return True
 
     trigger_build(repo)
 
-    for _ in range(max_attempts):
-        build = latest_build(repo)
-        if build.get("commit") != pages_sha:
-            sleep(sleep_seconds)
-            continue
-
-        status = build.get("status")
-        if status == "built":
+    for attempt in range(1, max_attempts + 1):
+        if is_live(url):
+            print(f"{url} is live (after {attempt} attempt(s)).")
             return True
-        if status == "errored":
-            message = (build.get("error") or {}).get("message") or "unknown error"
-            print(f"::error::GitHub Pages build failed: {message}")
-            return False
+
+        if attempt % heartbeat_every == 0:
+            elapsed = attempt * sleep_seconds
+            print(f"Still waiting for {url} to go live ({elapsed}s elapsed)...")
 
         sleep(sleep_seconds)
 
-    print(f"::error::Timed out waiting for GitHub Pages build for {pages_sha}")
+    print(f"::error::Timed out waiting for {url} to go live")
     return False
 
 
@@ -93,9 +90,7 @@ def main(argv: list[str] | None = None) -> int:
         "--repo", required=True, help="owner/repo, e.g. atlanhq/application-sdk"
     )
     parser.add_argument(
-        "--commit",
-        required=True,
-        help="gh-pages commit SHA to wait for (the commit just pushed there).",
+        "--url", required=True, help="Public URL the published package must serve from."
     )
     parser.add_argument(
         "--max-attempts",
@@ -106,9 +101,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sleep-seconds", type=int, default=5)
     args = parser.parse_args(argv)
 
-    ok = wait_for_build(
+    ok = wait_for_publish(
         args.repo,
-        args.commit,
+        args.url,
         max_attempts=args.max_attempts,
         sleep_seconds=args.sleep_seconds,
     )
