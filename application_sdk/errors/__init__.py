@@ -36,13 +36,13 @@ from application_sdk.errors.leaves import (
     CancelledError,
     DataIntegrityError,
     DependencyUnavailableError,
-    SourceUnavailableError,
     InternalError,
     InvalidInputError,
     NotFoundError,
     PreconditionError,
     RateLimitedError,
     ResourceExhaustedError,
+    SourceUnavailableError,
     UnimplementedError,
 )
 from application_sdk.errors.wire import FailureDetails

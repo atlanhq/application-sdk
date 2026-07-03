@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.19.0
-source-sha:    b8d1704887637534f8a7a9fb0e33e55f177bbbe2
-source-date:   2026-06-24T12:00:54+01:00
+sdk-version:   3.20.3
+source-sha:    16d4fa7ab83e995f65a4d8b149987ce51f55058a
+source-date:   2026-07-03T09:44:09+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -23,7 +23,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 9 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 53 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 54 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 14 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 34 |
@@ -951,7 +951,7 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 
 - **Import:** `from application_sdk.errors import DependencyUnavailableError`
 - **Signature:** `class DependencyUnavailableError(*, ...)`
-- **Summary:** Required platform service is temporarily down or degraded.
+- **Summary:** Required Atlan-internal platform service is temporarily down or degraded.
 - **Defined in:** `application_sdk/errors/leaves.py`
 
 #### `ErrorCode`
@@ -1015,6 +1015,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Import:** `from application_sdk.errors import ResourceExhaustedError`
 - **Signature:** `class ResourceExhaustedError(*, ...)`
 - **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `SourceUnavailableError`
+
+- **Import:** `from application_sdk.errors import SourceUnavailableError`
+- **Signature:** `class SourceUnavailableError(*, ...)`
+- **Summary:** Customer-controlled source system is temporarily unreachable.
 - **Defined in:** `application_sdk/errors/leaves.py`
 
 #### `UnimplementedError`
