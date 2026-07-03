@@ -81,7 +81,7 @@ email-validator==2.3.0
     #   pydantic
 fastapi==0.139.0
     # via atlan-application-sdk
-fastapi-cli==0.0.27
+fastapi-cli==0.0.28
     # via fastapi
 fastapi-cloud-cli==0.22.1
     # via fastapi-cli
