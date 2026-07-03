@@ -221,6 +221,61 @@ def test_cmd_bootstrap_does_not_modify_existing_gitignore(
     assert gi.read_text() == original
 
 
+# ---------------------------------------------------------------------------
+# contract_schema.lock.json scaffold — write-if-absent semantics
+#
+# B006 (StaleContractLedger) is a hard FAIL-tier rule active from day one:
+# without a ledger, the ledger-absent fallback loads the SDK's own bundled
+# ledger (which has none of the app's fields recorded), so any app with
+# existing entrypoint contract fields fails enforced mode on its very first
+# run. Bootstrap must seed a baseline the same way `gen-contract-ledger`
+# would, not leave the app to discover the gap after enabling enforcement.
+# ---------------------------------------------------------------------------
+
+
+def test_cmd_bootstrap_writes_contract_ledger(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    assert (tmp_path / "contract_schema.lock.json").exists()
+
+
+def test_cmd_bootstrap_contract_ledger_seeded_from_sdk_bundle(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A freshly scaffolded ledger must not be empty — it inherits the SDK's own
+    bundled contract fields (e.g. ExtractionInput) so apps that already extend
+    those base contracts don't get flagged as stale the moment enforcement
+    goes live."""
+    import json
+
+    from conformance.suite.checks.deprecation._ledger_schema import load_ledger
+
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    payload = json.loads((tmp_path / "contract_schema.lock.json").read_text())
+    bundled = load_ledger(None)
+    assert len(payload["fields"]) >= len(bundled.fields) > 0
+
+
+def test_cmd_bootstrap_contract_ledger_is_write_if_absent(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second bootstrap run must NOT overwrite an already-committed ledger —
+    the ledger is append-only and owned by `gen-contract-ledger`, not bootstrap."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    ledger_path = tmp_path / "contract_schema.lock.json"
+    ledger_path.write_text('{"version": 1, "fields": []}\n')
+    _cmd_bootstrap([])
+    assert ledger_path.read_text() == '{"version": 1, "fields": []}\n'
+
+
+def test_cmd_bootstrap_contract_ledger_not_in_managed_workflows() -> None:
+    assert "contract_schema.lock.json" not in MANAGED_WORKFLOWS
+
+
 def test_cmd_bootstrap_returns_zero(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
