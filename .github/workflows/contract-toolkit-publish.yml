@@ -96,9 +96,28 @@ jobs:
         run: |
           set -euo pipefail
           pages_sha="$(git rev-parse HEAD)"
+
+          # Skip re-triggering if this exact commit already finished building
+          # (e.g. a prior run's build completed after that run had already
+          # timed out and failed). Posting a fresh build request unconditionally
+          # on every retry restarts the clock on a brand-new build ID instead of
+          # noticing the existing one already succeeded.
+          latest_status="$(gh api "repos/${GITHUB_REPOSITORY}/pages/builds/latest" --jq '.status')"
+          latest_commit="$(gh api "repos/${GITHUB_REPOSITORY}/pages/builds/latest" --jq '.commit')"
+          if [ "$latest_commit" = "$pages_sha" ] && [ "$latest_status" = "built" ]; then
+            echo "Pages already built for ${pages_sha}; skipping rebuild trigger."
+            exit 0
+          fi
+
           gh api --method POST "repos/${GITHUB_REPOSITORY}/pages/builds"
 
-          for attempt in $(seq 1 60); do
+          # Observed build latency for this repo has run up to ~9 minutes
+          # (2026-07-03, contract-toolkit v0.17.0 publish), well past the
+          # previous 5-minute budget (60 * 5s) — every attempt timed out here
+          # even though the build went on to succeed moments later. Poll for
+          # up to 25 minutes (300 * 5s) to leave real headroom above observed
+          # latency instead of racing it.
+          for attempt in $(seq 1 300); do
             status="$(gh api "repos/${GITHUB_REPOSITORY}/pages/builds/latest" --jq '.status')"
             commit="$(gh api "repos/${GITHUB_REPOSITORY}/pages/builds/latest" --jq '.commit')"
 
