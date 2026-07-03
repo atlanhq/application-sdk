@@ -302,14 +302,14 @@ def _cmd_bootstrap(argv: list[str]) -> int:
     # with existing entrypoint contract fields fails enforced mode on its very
     # first run. Seed the baseline from current source — same output as
     # running `gen-contract-ledger` by hand.
-    from conformance.suite.checks.deprecation._ledger_schema import (
-        load_ledger,
-        serialize,
-    )
-    from conformance.tools.generate_contract_ledger import build_ledger
-
     ledger_dest = root / "contract_schema.lock.json"
     if not ledger_dest.exists():
+        from conformance.suite.checks.deprecation._ledger_schema import (
+            load_ledger,
+            serialize,
+        )
+        from conformance.tools.generate_contract_ledger import build_ledger
+
         ledger = build_ledger(root, load_ledger(None))
         ledger_dest.write_text(serialize(ledger), encoding="utf-8")
         print(f"scaffolded: {ledger_dest} ({len(ledger.fields)} fields)")
