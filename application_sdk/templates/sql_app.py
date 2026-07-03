@@ -458,6 +458,10 @@ class SqlApp(App):
             "oserror",
             "operationalerror",
             "interfaceerror",
+            # Match wrapped SDK error classnames surfaced as error_type.
+            # "dependencyunavailable" is retained for legacy wrappers that
+            # predate the SourceUnavailableError migration.
+            "sourceunavailable",
             "dependencyunavailable",
             "socketerror",
         )

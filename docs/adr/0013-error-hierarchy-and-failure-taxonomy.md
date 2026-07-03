@@ -93,7 +93,7 @@ fields (`message`, `retryable`, `cause`, `app_name`, `run_id`,
 `suggested_action`) are the base set. ClassVars (`category`,
 `default_retryable`, `code`, `audience`) carry the per-class identity.
 
-Fourteen **categorical leaves** in `application_sdk/errors/leaves.py` — one
+Fifteen **categorical leaves** in `application_sdk/errors/leaves.py` — one
 per `FailureCategory` — subclass `AppError` and fix all four ClassVars plus
 add dataclass fields for structured, per-category evidence:
 
@@ -109,6 +109,7 @@ add dataclass fields for structured, per-category evidence:
 | `InvalidInputError` | INVALID_INPUT | No | USER | `field`, `constraint`, `value_summary` |
 | `PreconditionError` | PRECONDITION | No | USER | `resource`, `expected_state`, `actual_state` |
 | `DependencyUnavailableError` | DEPENDENCY_UNAVAILABLE | **Yes** | PLATFORM | `service`, `target`, `network_error` |
+| `SourceUnavailableError` | SOURCE_UNAVAILABLE | **Yes** | USER | `source_type`, `endpoint`, `http_status`, `network_error` |
 | `ResourceExhaustedError` | RESOURCE_EXHAUSTED | **Yes** | PLATFORM | `resource`, `limit`, `observed` |
 | `DataIntegrityError` | DATA_INTEGRITY | No | APP_OWNER | `expectation`, `observed`, `location` |
 | `InternalError` | INTERNAL | No | APP_OWNER | `component`, `invariant`, `classification_pending` |

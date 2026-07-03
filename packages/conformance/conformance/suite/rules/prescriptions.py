@@ -82,7 +82,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "``FailureCategory`` is the closed, single-axis taxonomy the SDK owns —\n"
             "every value is the canonical answer to *what happened* and is consumed as\n"
             "an immutable reporting metric (dashboards, SLA gates, on-call routing).\n"
-            "The 14 categorical leaves in ``application_sdk.errors.leaves`` (and\n"
+            "The 15 categorical leaves in ``application_sdk.errors.leaves`` (and\n"
             "``AppError`` itself) are the sole defining sites: each leaf binds exactly\n"
             "one ``FailureCategory`` to its ``category`` ``ClassVar``.\n"
             "\n"

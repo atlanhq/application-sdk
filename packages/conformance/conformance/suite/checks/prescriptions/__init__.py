@@ -15,7 +15,7 @@ Currently implemented:
 * ``P001`` UnboundedContractFields — an ``Input``/``Output`` contract subclass
   declared with the ``allow_unbounded_fields=True`` class keyword.
 * ``P002`` CategoryFieldOverride — a subclass of ``AppError`` (or any of its
-  14 categorical leaves) that redeclares the ``category`` ``ClassVar`` in its
+  15 categorical leaves) that redeclares the ``category`` ``ClassVar`` in its
   own body, drifting the canonical taxonomy.  The check uses a transitive
   closure of AppError-derived class names within the file so second-generation
   overrides are caught even when the intermediate class is not in the canonical

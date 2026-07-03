@@ -1,4 +1,4 @@
-"""Fourteen categorical leaf error classes — one per FailureCategory."""
+"""Fifteen categorical leaf error classes — one per FailureCategory."""
 
 from __future__ import annotations
 
