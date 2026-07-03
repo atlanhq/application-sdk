@@ -452,7 +452,10 @@ class TestS3BehaviorKnobs:
         assert "aws_endpoint" not in config
         assert "aws_virtual_hosted_style_request" not in config
         client_options = mock_s3_cls.call_args.kwargs["client_options"]
-        assert client_options.get("timeout") == "90s"
+        # BLDX-1513: overall-request timeout is a 30m backstop; read_timeout
+        # (90s, progress-based) is the primary liveness bound plumbed to obstore.
+        assert client_options.get("timeout") == "30m"
+        assert client_options.get("read_timeout") == "90s"
         assert client_options.get("user_agent", "").startswith("atlan-application-sdk")
 
     @pytest.mark.parametrize(

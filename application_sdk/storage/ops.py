@@ -323,6 +323,103 @@ def _throughput_mbps(size_bytes: int, elapsed_ms: float) -> float | None:
     return round((size_bytes / (1024 * 1024)) / (elapsed_ms / 1000.0), 3)
 
 
+def _classify_transfer_error(error_class: str | None, store_path: str) -> str:
+    """Bucket a transfer failure into a coarse, queryable family.
+
+    Timeouts (slow egress / stalled connections), not-found, permission, and
+    everything else fail for different reasons and want different responses —
+    a timeout says "look at throughput / the network", a permission error says
+    "look at credentials". Pairing this with ``size_bytes`` on the failure event
+    also separates a *stall* (≈0 bytes before a timeout) from *slow-but-moving*
+    (many bytes before a timeout). (BLDX-1513)
+    """
+    if error_class is None:
+        return "none"
+    name = error_class.lower()
+    # obstore surfaces both the overall-request timeout and a read_timeout stall
+    # as a GenericError whose text mentions timeout; we can't split them from the
+    # class name alone, so both land in "timeout" and size_bytes disambiguates.
+    if "timeout" in name or "timedout" in name:
+        return "timeout"
+    if "notfound" in name or "not_found" in name:
+        return "not_found"
+    if "generic" in name:
+        # GenericError is obstore's catch-all; the timeout variant is by far the
+        # most common large-transfer failure, but don't assume — label it generic.
+        return "generic"
+    return "other"
+
+
+def _record_transfer_metric(
+    op: str,
+    *,
+    outcome: str,
+    elapsed_ms: float | None,
+    size_bytes: int | None,
+    throughput_mibps: float | None,
+    error_class: str | None,
+) -> None:
+    """Emit transfer metrics so throughput / failures are dashboardable + alertable.
+
+    Best-effort: a missing or misconfigured metrics backend must never break a
+    transfer. Metrics land on the same OTel / Prometheus / object-store rails as
+    the rest of the SDK. The throughput histogram is the fleet-wide signal for
+    "this tenant's egress is slow" — alert on it and a slow tenant surfaces
+    before its workflows start failing, rather than after. (BLDX-1513)
+    """
+    try:
+        from application_sdk.observability.metrics_adaptor import (  # noqa: PLC0415 — lazy: avoid import-time cycle observability<->storage
+            MetricType,
+            get_metrics,
+        )
+
+        metrics = get_metrics()
+        family = _classify_transfer_error(error_class, "")
+        labels: dict[str, str | int | float | bool] = {
+            "storage_op": op,
+            "outcome": outcome,
+            "error_family": family,
+        }
+        metrics.record_metric(
+            name="storage_transfer_total",
+            value=1,
+            metric_type=MetricType.COUNTER,
+            labels=labels,
+            description="Object-store transfers by op/outcome/error family",
+            unit="count",
+        )
+        if size_bytes is not None and size_bytes >= 0:
+            metrics.record_metric(
+                name="storage_transfer_bytes",
+                value=size_bytes,
+                metric_type=MetricType.COUNTER,
+                labels={"storage_op": op, "outcome": outcome},
+                description="Bytes transferred to/from object store",
+                unit="By",
+            )
+        if elapsed_ms is not None and elapsed_ms >= 0:
+            metrics.record_metric(
+                name="storage_transfer_duration_ms",
+                value=round(elapsed_ms, 3),
+                metric_type=MetricType.HISTOGRAM,
+                labels={"storage_op": op, "outcome": outcome},
+                description="Object-store transfer wall-clock duration",
+                unit="ms",
+            )
+        if throughput_mibps is not None:
+            metrics.record_metric(
+                name="storage_transfer_throughput_mibps",
+                value=throughput_mibps,
+                metric_type=MetricType.HISTOGRAM,
+                labels={"storage_op": op, "outcome": outcome},
+                description="Object-store transfer throughput (MiB/s) — alert when p50 is abnormally low",
+                unit="MiBy/s",
+            )
+    # conformance: ignore[E004] metrics are best-effort telemetry; a backend failure must never break a transfer — logged at debug and swallowed
+    except Exception:
+        logger.debug("Failed to record transfer metric (best-effort)", exc_info=True)
+
+
 def _log_storage_event(
     level: int,
     op: str,
@@ -344,6 +441,7 @@ def _log_storage_event(
         "store_path": store_path,
         "outcome": outcome,
     }
+    tput: float | None = None
     if elapsed_ms is not None:
         extra["elapsed_ms"] = round(elapsed_ms, 3)
     if size_bytes is not None:
@@ -358,6 +456,53 @@ def _log_storage_event(
     # Keys are bound into loguru record["extra"] and promoted to OTLP indexed
     # attributes by _build_extra_dict in logger_adaptor (all are in _KNOWN_EXTRA_KEYS).
     logger.log(level, msg, **extra)
+
+    # Mirror the terminal event to metrics so throughput / failure rate are
+    # dashboardable + alertable across the fleet (only for actual transfers).
+    if op in ("download", "upload"):
+        _record_transfer_metric(
+            op,
+            outcome=outcome,
+            elapsed_ms=elapsed_ms,
+            size_bytes=size_bytes,
+            throughput_mibps=tput,
+            error_class=error_class,
+        )
+
+
+def _log_transfer_progress(
+    op: str,
+    store_path: str,
+    *,
+    bytes_so_far: int,
+    elapsed_ms: float,
+    total_bytes: int | None = None,
+) -> None:
+    """Emit an in-progress heartbeat for a long-running upload / download.
+
+    Answers "is this transfer stuck or just slow?" while it is still running —
+    the per-attempt success/failure event only lands at the end. Only keys in
+    ``_KNOWN_EXTRA_KEYS`` are placed on ``extra`` (so they promote to OTLP
+    attributes); the human-readable total / percentage stays in the message
+    text. (BLDX-1513)
+    """
+    extra: dict[str, object] = {
+        "storage_op": op,
+        "store_path": store_path,
+        "outcome": "in_progress",
+        "size_bytes": bytes_so_far,
+        "elapsed_ms": round(elapsed_ms, 3),
+    }
+    tput = _throughput_mbps(bytes_so_far, elapsed_ms)
+    if tput is not None:
+        extra["throughput_mibps"] = tput
+    if total_bytes:
+        pct = 100.0 * bytes_so_far / total_bytes
+        progress = f"{bytes_so_far}/{total_bytes} bytes ({pct:.0f}%)"
+    else:
+        progress = f"{bytes_so_far} bytes"
+    msg = f"storage.{op} in_progress path={store_path} {progress}"
+    logger.log(logging.INFO, msg, **extra)
 
 
 async def _list_items(
@@ -493,6 +638,12 @@ async def upload_file(
 
     h = hashlib.sha256() if compute_hash else None
     started = time.monotonic()
+    from application_sdk.constants import (  # noqa: PLC0415
+        STORAGE_PROGRESS_LOG_INTERVAL_SECONDS as _progress_interval,
+    )
+
+    last_progress = started
+    bytes_sent = 0
     try:
         async with obstore.open_writer_async(
             resolved, key, buffer_size=effective_chunk, attributes=put_attributes
@@ -505,6 +656,18 @@ async def upload_file(
                     if h is not None:
                         h.update(chunk)
                     await writer.write(chunk)
+                    bytes_sent += len(chunk)
+                    if _progress_interval > 0:
+                        now = time.monotonic()
+                        if now - last_progress >= _progress_interval:
+                            _log_transfer_progress(
+                                "upload",
+                                key,
+                                bytes_so_far=bytes_sent,
+                                elapsed_ms=(now - started) * 1000.0,
+                                total_bytes=file_size,
+                            )
+                            last_progress = now
     # conformance: ignore[E004] upload error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
     except BaseException as exc:
         # BaseException is the umbrella for Exception and its siblings
@@ -649,6 +812,11 @@ async def download_file(
         # them private. Mirrors the chunked pre-allocation path. (Mode applies
         # only when the file is newly created; pre-existing perms are untouched.)
         fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        from application_sdk.constants import (  # noqa: PLC0415
+            STORAGE_PROGRESS_LOG_INTERVAL_SECONDS as _progress_interval,
+        )
+
+        last_progress = started
         with os.fdopen(fd, "wb") as fh:
             async for chunk in result.stream(min_chunk_size=min_chunk_size):
                 raw = bytes(chunk)
@@ -656,6 +824,16 @@ async def download_file(
                 bytes_written += len(raw)
                 if h is not None:
                     h.update(raw)
+                if _progress_interval > 0:
+                    now = time.monotonic()
+                    if now - last_progress >= _progress_interval:
+                        _log_transfer_progress(
+                            "download",
+                            key,
+                            bytes_so_far=bytes_written,
+                            elapsed_ms=(now - started) * 1000.0,
+                        )
+                        last_progress = now
     # conformance: ignore[E004] file-write error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
     except Exception as exc:
         elapsed_ms = (time.monotonic() - started) * 1000.0
@@ -737,6 +915,7 @@ async def download_file_chunked(
     max_concurrent_chunks: int = 4,
     compute_hash: bool = True,
     normalize: bool = True,
+    file_size: int | None = None,
 ) -> str | None:
     """Download *key* using parallel range GETs, writing chunks at fixed offsets.
 
@@ -760,6 +939,11 @@ async def download_file_chunked(
         compute_hash: When ``True`` (default), compute and return a SHA-256
             digest over the completed file.
         normalize: When ``True`` (default), normalise *key* before use.
+        file_size: Pre-known object size in bytes. When supplied (e.g. from a
+            prior listing that already carried sizes), the internal HEAD is
+            skipped — this avoids a per-file HEAD when fanning out over a prefix
+            whose sizes are already known. When ``None`` (default) a HEAD is
+            issued, which also serves as the existence check.
 
     Returns:
         Hex-encoded SHA-256 digest if *compute_hash* is ``True``, else ``None``.
@@ -777,25 +961,30 @@ async def download_file_chunked(
     path = Path(local_path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    # HEAD to get exact size before allocating; also serves as the existence check.
-    try:
-        meta = await obstore.head_async(resolved, key)
-        file_size = int(meta["size"])
-    # conformance: ignore[E004] not-found and errors both re-raised via StorageError chain; no silent swallow
-    except Exception as exc:
-        if _is_not_found(exc):
+    # HEAD to get exact size before allocating; also serves as the existence
+    # check. Skipped when the caller already knows the size (file_size), e.g. a
+    # prefix download whose listing carried per-object sizes.
+    if file_size is None:
+        try:
+            meta = await obstore.head_async(resolved, key)
+            file_size = int(meta["size"])
+        # conformance: ignore[E004] not-found and errors both re-raised via StorageError chain; no silent swallow
+        except Exception as exc:
+            if _is_not_found(exc):
+                from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+                    StorageNotFoundError,
+                )
+
+                raise StorageNotFoundError(
+                    f"Key not found in store: {key}", key=key
+                ) from exc
             from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-                StorageNotFoundError,
+                StorageError,
             )
 
-            raise StorageNotFoundError(
-                f"Key not found in store: {key}", key=key
+            raise StorageError(
+                f"Failed to head key '{key}'", key=key, cause=exc
             ) from exc
-        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-            StorageError,
-        )
-
-        raise StorageError(f"Failed to head key '{key}'", key=key, cause=exc) from exc
 
     # Small files: delegate to the single-stream path so they still use the
     # streaming GET (avoids allocating the whole body in memory via get_range_async).
@@ -817,7 +1006,16 @@ async def download_file_chunked(
 
     sem = asyncio.Semaphore(max_concurrent_chunks)
 
+    from application_sdk.constants import (  # noqa: PLC0415
+        STORAGE_PROGRESS_LOG_INTERVAL_SECONDS as _progress_interval,
+    )
+
+    started = time.monotonic()
+    last_progress = started
+    completed_bytes = 0
+
     async def _fetch_chunk(offset: int) -> None:
+        nonlocal completed_bytes, last_progress
         length = min(chunk_size_bytes, file_size - offset)
         async with sem:
             raw = bytes(
@@ -834,15 +1032,42 @@ async def download_file_chunked(
             # Use os.pwrite (or a per-thread fd) instead if that happens.
             os.lseek(fd, offset, os.SEEK_SET)
             os.write(fd, raw)
+            # Progress heartbeat: read-modify-write of the shared counters is
+            # race-free because asyncio is single-threaded and there is no await
+            # between here and the next chunk's update.
+            completed_bytes += len(raw)
+            if _progress_interval > 0:
+                now = time.monotonic()
+                if now - last_progress >= _progress_interval:
+                    _log_transfer_progress(
+                        "download",
+                        key,
+                        bytes_so_far=completed_bytes,
+                        elapsed_ms=(now - started) * 1000.0,
+                        total_bytes=file_size,
+                    )
+                    last_progress = now
 
     try:
         await asyncio.gather(
             *(_fetch_chunk(off) for off in range(0, file_size, chunk_size_bytes))
         )
-    # conformance: ignore[E004] chunked-download error handler; closes fd and cleans up file, then re-raises via StorageError chain
+    # conformance: ignore[E004] chunked-download error handler; closes fd, cleans up, emits the terminal event/metric, then re-raises via StorageError chain
     except Exception as exc:
         os.close(fd)
         path.unlink(missing_ok=True)
+        # Chunked downloads previously emitted no terminal event — unify them
+        # with the single-stream path so their failures are logged + metered
+        # (throughput, error family) like every other transfer. (BLDX-1513)
+        _log_storage_event(
+            logging.WARNING,
+            "download",
+            key,
+            outcome="failure",
+            elapsed_ms=(time.monotonic() - started) * 1000.0,
+            size_bytes=completed_bytes,
+            error_class=_exc_class_name(exc),
+        )
         if _is_not_found(exc):
             from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
                 StorageNotFoundError,
@@ -860,6 +1085,14 @@ async def download_file_chunked(
         ) from exc
 
     os.close(fd)
+    _log_storage_event(
+        logging.DEBUG,
+        "download",
+        key,
+        outcome="success",
+        elapsed_ms=(time.monotonic() - started) * 1000.0,
+        size_bytes=completed_bytes,
+    )
 
     if not compute_hash:
         return None

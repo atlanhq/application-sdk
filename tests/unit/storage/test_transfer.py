@@ -395,9 +395,9 @@ class TestDownloadDirectory:
     async def test_path_traversal_in_listed_key_rejected(self, store, tmp_path) -> None:
         """A listed key containing ``..`` must not write outside dest_dir.
 
-        obstore rejects ``..`` keys on put, so we patch ``list_keys`` to plant
-        a hostile listing and assert the containment guard fires before any
-        write happens (issue #1694).
+        obstore rejects ``..`` keys on put, so we patch ``list_keys_with_sizes``
+        to plant a hostile listing and assert the containment guard fires before
+        any write happens (issue #1694).
         """
         from unittest.mock import AsyncMock, patch
 
@@ -409,8 +409,8 @@ class TestDownloadDirectory:
         # mode, so only the prefix listing is consulted.
         with (
             patch(
-                "application_sdk.storage.batch.list_keys",
-                new=AsyncMock(return_value=["p/safe/../../canary.txt"]),
+                "application_sdk.storage.batch.list_keys_with_sizes",
+                new=AsyncMock(return_value=[("p/safe/../../canary.txt", 10)]),
             ),
             pytest.raises(StorageError, match="Path traversal"),
         ):

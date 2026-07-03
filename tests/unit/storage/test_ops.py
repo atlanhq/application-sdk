@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import orjson
@@ -621,6 +623,202 @@ class TestGetFileSize:
             pytest.raises(StorageError),
         ):
             await get_file_size("k", store, normalize=False)
+
+
+# ---------------------------------------------------------------------------
+# BLDX-1513: download_file_chunked file_size (skip-HEAD) + prefix chunking
+# ---------------------------------------------------------------------------
+
+
+class TestChunkedFileSizeSkipsHead:
+    """When the caller already knows the size, the chunked path must not HEAD —
+    that's what lets a prefix download chunk large files without a per-file HEAD.
+    """
+
+    async def test_file_size_provided_skips_head_and_round_trips(
+        self, store, tmp_path
+    ) -> None:
+        content = b"0123456789" * 5  # 50 bytes → 7 chunks at chunk_size=8
+        await _put("big/f.bin", content, store, normalize=False)
+        out = tmp_path / "f.bin"
+
+        # HEAD blows up: the download must succeed anyway, proving file_size
+        # short-circuited the HEAD.
+        with patch(
+            "application_sdk.storage.ops.obstore.head_async",
+            new=AsyncMock(side_effect=AssertionError("HEAD must not be called")),
+        ):
+            digest = await download_file_chunked(
+                "big/f.bin",
+                out,
+                store,
+                chunk_size_bytes=8,
+                compute_hash=True,
+                normalize=False,
+                file_size=len(content),
+            )
+
+        assert out.read_bytes() == content
+        assert digest == hashlib.sha256(content).hexdigest()
+
+    async def test_head_still_used_when_file_size_omitted(
+        self, store, tmp_path
+    ) -> None:
+        content = b"z" * 40
+        await _put("big/g.bin", content, store, normalize=False)
+        out = tmp_path / "g.bin"
+        # No file_size → the HEAD path runs; a broken HEAD surfaces as an error.
+        with (
+            patch(
+                "application_sdk.storage.ops.obstore.head_async",
+                new=AsyncMock(side_effect=RuntimeError("permission denied")),
+            ),
+            pytest.raises(StorageError),
+        ):
+            await download_file_chunked(
+                "big/g.bin", out, store, chunk_size_bytes=8, normalize=False
+            )
+
+
+class TestTransferMetrics:
+    """Transfers emit metrics via the SDK metrics rail (BLDX-1513)."""
+
+    async def test_download_success_records_throughput_and_bytes(
+        self, store, tmp_path
+    ) -> None:
+        await _put("m/data.bin", b"x" * 4096, store, normalize=False)
+        mock_metrics = MagicMock()
+        with patch(
+            "application_sdk.observability.metrics_adaptor.get_metrics",
+            return_value=mock_metrics,
+        ):
+            await download_file(
+                "m/data.bin", tmp_path / "out.bin", store, normalize=False
+            )
+        names = {c.kwargs["name"] for c in mock_metrics.record_metric.call_args_list}
+        assert "storage_transfer_total" in names
+        assert "storage_transfer_bytes" in names
+        assert "storage_transfer_duration_ms" in names
+        # outcome=success on the total counter
+        total = next(
+            c
+            for c in mock_metrics.record_metric.call_args_list
+            if c.kwargs["name"] == "storage_transfer_total"
+        )
+        assert total.kwargs["labels"]["outcome"] == "success"
+        assert total.kwargs["labels"]["storage_op"] == "download"
+
+    async def test_failure_records_error_family(self, tmp_path) -> None:
+        mock_metrics = MagicMock()
+        with (
+            patch(
+                "application_sdk.observability.metrics_adaptor.get_metrics",
+                return_value=mock_metrics,
+            ),
+            patch(
+                "application_sdk.storage.ops.obstore.get_async",
+                new=AsyncMock(side_effect=RuntimeError("permission denied")),
+            ),
+            pytest.raises(StorageError),
+        ):
+            await download_file("k", tmp_path / "o.bin", MagicMock(), normalize=False)
+        total = next(
+            c
+            for c in mock_metrics.record_metric.call_args_list
+            if c.kwargs["name"] == "storage_transfer_total"
+        )
+        assert total.kwargs["labels"]["outcome"] == "failure"
+        assert total.kwargs["labels"]["error_family"] == "other"
+
+    async def test_metric_backend_failure_does_not_break_transfer(
+        self, store, tmp_path
+    ) -> None:
+        await _put("m/ok.bin", b"payload", store, normalize=False)
+        with patch(
+            "application_sdk.observability.metrics_adaptor.get_metrics",
+            side_effect=RuntimeError("metrics backend down"),
+        ):
+            # Transfer must still succeed despite the metrics backend blowing up.
+            out = tmp_path / "ok.bin"
+            await download_file("m/ok.bin", out, store, normalize=False)
+        assert out.read_bytes() == b"payload"
+
+    async def test_chunked_download_emits_terminal_metric(
+        self, store, tmp_path
+    ) -> None:
+        content = b"c" * 50
+        await _put("m/chunked.bin", content, store, normalize=False)
+        mock_metrics = MagicMock()
+        with patch(
+            "application_sdk.observability.metrics_adaptor.get_metrics",
+            return_value=mock_metrics,
+        ):
+            # chunk_size=8 forces the range-GET path (not the small-file delegate).
+            await download_file_chunked(
+                "m/chunked.bin",
+                tmp_path / "c.bin",
+                store,
+                chunk_size_bytes=8,
+                compute_hash=False,
+                normalize=False,
+                file_size=len(content),
+            )
+        names = {c.kwargs["name"] for c in mock_metrics.record_metric.call_args_list}
+        assert "storage_transfer_total" in names
+
+
+class TestTransferProgressHeartbeat:
+    def test_emits_info_with_structured_fields(self) -> None:
+        from application_sdk.storage.ops import _log_transfer_progress
+
+        with patch("application_sdk.storage.ops.logger") as mock_logger:
+            _log_transfer_progress(
+                "download",
+                "big/f.bin",
+                bytes_so_far=50 * 1024 * 1024,
+                elapsed_ms=50_000.0,
+                total_bytes=100 * 1024 * 1024,
+            )
+        mock_logger.log.assert_called_once()
+        args, kwargs = mock_logger.log.call_args
+        # Logged at INFO with an "in_progress" human message carrying the percentage.
+        assert args[0] == 20  # logging.INFO
+        assert "in_progress" in args[1]
+        assert "50%" in args[1]
+        # Structured fields promote to OTLP attributes (all in _KNOWN_EXTRA_KEYS).
+        assert kwargs["storage_op"] == "download"
+        assert kwargs["outcome"] == "in_progress"
+        assert kwargs["size_bytes"] == 50 * 1024 * 1024
+        assert kwargs["throughput_mibps"] == pytest.approx(1.0, rel=0.05)
+
+    def test_no_total_omits_percentage(self) -> None:
+        from application_sdk.storage.ops import _log_transfer_progress
+
+        with patch("application_sdk.storage.ops.logger") as mock_logger:
+            _log_transfer_progress("upload", "k", bytes_so_far=10, elapsed_ms=1000.0)
+        args, _ = mock_logger.log.call_args
+        assert "%" not in args[1]
+
+
+class TestDownloadPrefixChunking:
+    async def test_prefix_download_does_not_head_per_file(
+        self, store, tmp_path
+    ) -> None:
+        # Sizes come from the listing, so a prefix download must never issue a
+        # per-file HEAD (BLDX-1513).
+        await _put("pre/a.txt", b"aaa", store, normalize=False)
+        await _put("pre/b.txt", b"bbbb", store, normalize=False)
+
+        with patch(
+            "application_sdk.storage.ops.obstore.head_async",
+            new=AsyncMock(
+                side_effect=AssertionError("prefix download must not HEAD per file")
+            ),
+        ):
+            dests = await download_prefix("pre/", tmp_path, store, normalize=False)
+
+        got = {Path(d).read_bytes() for d in dests}
+        assert got == {b"aaa", b"bbbb"}
 
 
 # ---------------------------------------------------------------------------

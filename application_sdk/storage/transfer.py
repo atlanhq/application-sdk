@@ -156,7 +156,7 @@ async def _upload_from_store(
     Returns ``(transferred, reason)``.
     """
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        download_file,
+        download_file_chunked,
         upload_file,
     )
 
@@ -169,7 +169,11 @@ async def _upload_from_store(
     os.close(fd)
     tmp = Path(tmp_path_str)
     try:
-        await download_file(source_key, tmp, source_store, normalize=False)
+        # Chunk large source objects (bounded range GETs) so a big deployment-store
+        # file survives slow egress on the cross-store copy path. (BLDX-1513)
+        await download_file_chunked(
+            source_key, tmp, source_store, compute_hash=False, normalize=False
+        )
         sha256 = await upload_file(target_key, tmp, target_store, normalize=False)
         await _put_remote_sha256(target_store, target_key, sha256)
         return True, "uploaded"
@@ -183,10 +187,16 @@ async def _download_one(
     local_file: Path,
     *,
     skip_if_exists: bool,
+    file_size: int | None = None,
 ) -> tuple[bool, str]:
-    """Download a single file.  Returns ``(transferred, reason)``."""
+    """Download a single file.  Returns ``(transferred, reason)``.
+
+    *file_size* (when known from a prior listing) is threaded to the chunked
+    path so large objects fetch via bounded range GETs without a per-file HEAD;
+    ``None`` lets the chunked path HEAD once (single-file case). (BLDX-1513)
+    """
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        download_file,
+        download_file_chunked,
     )
 
     if skip_if_exists and local_file.exists():
@@ -197,7 +207,14 @@ async def _download_one(
                 return False, "skipped:hash_match"
 
     local_file.parent.mkdir(parents=True, exist_ok=True)
-    await download_file(store_key, local_file, store, normalize=False)
+    await download_file_chunked(
+        store_key,
+        local_file,
+        store,
+        compute_hash=False,
+        normalize=False,
+        file_size=file_size,
+    )
     return True, "downloaded"
 
 
@@ -668,6 +685,7 @@ async def download(
     )
     from application_sdk.storage.batch import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         list_keys,
+        list_keys_with_sizes,
     )
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         _resolve_store,
@@ -728,9 +746,11 @@ async def download(
     else:
         # ── Directory / prefix ─────────────────────────────────────────────
         prefix = norm_path.rstrip("/") + "/"
-        all_keys = await list_keys(prefix, resolved, normalize=False)
+        # Listing carries per-object sizes, so large files chunk without a
+        # per-file HEAD (BLDX-1513).
+        all_items = await list_keys_with_sizes(prefix, resolved, normalize=False)
         # Exclude SHA-256 sidecars from the listing.
-        data_keys = [k for k in all_keys if not _is_sidecar(k)]
+        data_items = [(k, s) for k, s in all_items if not _is_sidecar(k)]
 
         if local_path is not None:
             dest_dir = Path(local_path)
@@ -741,12 +761,12 @@ async def download(
         strip = prefix
 
         transferred_count = 0
-        for key in data_keys:
+        for key, size in data_items:
             rel = key.removeprefix(strip)
             # Reject keys whose resolved path escapes dest_dir (e.g. via ".." segments).
             local_file = _safe_join_under(dest_dir, rel)
             ok, _ = await _download_one(
-                resolved, key, local_file, skip_if_exists=skip_if_exists
+                resolved, key, local_file, skip_if_exists=skip_if_exists, file_size=size
             )
             if ok:
                 transferred_count += 1
@@ -756,6 +776,6 @@ async def download(
             local_path=str(dest_dir),
             storage_path=prefix,
             is_durable=True,
-            file_count=len(data_keys),
+            file_count=len(data_items),
         )
         return DownloadOutput(ref=ref, synced=transferred_count > 0, reason=reason)

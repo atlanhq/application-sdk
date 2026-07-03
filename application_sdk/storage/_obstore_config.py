@@ -19,7 +19,18 @@ Environment variables
 
 Client options (passed via ``S3Store(client_options=…)``):
 
-* ``ATLAN_OBSTORE_TIMEOUT`` — per-request timeout (default ``"90s"``).
+* ``ATLAN_OBSTORE_READ_TIMEOUT`` — **progress-based** read timeout (default
+  ``"90s"``). This is the primary liveness bound for large transfers: obstore
+  resets it after every successful read, so a slow-but-*progressing* GB-class
+  download stays alive indefinitely and only fails when no bytes arrive for
+  the window. This is what keeps large downloads alive instead of relying on a
+  bigger overall cap (BLDX-1513).
+* ``ATLAN_OBSTORE_TIMEOUT`` — **overall-request** timeout (default ``"30m"``).
+  This is the total wall-clock cap from connect to last byte, so it scales with
+  file size, not throughput. It is now a generous *backstop* — ``read_timeout``
+  above does the real stall detection. A prior default of ``"90s"`` killed
+  ~250 MB connection-cache downloads on a slow-egress tenant even while bytes
+  were still flowing (~1 MiB/s); bump this env for multi-GB single objects.
 * ``ATLAN_OBSTORE_CONNECT_TIMEOUT`` — connect-phase timeout (default ``"30s"``).
 * ``ATLAN_OBSTORE_POOL_IDLE_TIMEOUT`` — pool idle timeout (default ``"90s"``).
 * ``ATLAN_OBSTORE_POOL_MAX_IDLE_PER_HOST`` — pool size per host (unset by
@@ -57,7 +68,15 @@ from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
-_DEFAULT_TIMEOUT = "90s"
+# Overall-request cap: from connect to last byte, so it scales with file size,
+# not throughput. Kept generous — ``read_timeout`` below is the real liveness
+# bound. See BLDX-1513: a 90s value here killed slow-but-progressing GB-class
+# downloads even while bytes were flowing.
+_DEFAULT_TIMEOUT = "30m"
+# Progress-based read timeout: resets after every successful read, so it detects
+# a genuinely *stalled* connection (no bytes for the window) without penalising a
+# transfer that is merely slow. This is what keeps large downloads alive.
+_DEFAULT_READ_TIMEOUT = "90s"
 _DEFAULT_CONNECT_TIMEOUT = "30s"
 _DEFAULT_POOL_IDLE_TIMEOUT = "90s"
 _DEFAULT_HTTP2_KEEP_ALIVE_TIMEOUT = "30s"
@@ -102,6 +121,7 @@ def obstore_client_options() -> ClientConfig:
     """
     opts: ClientConfig = {
         "timeout": os.getenv("ATLAN_OBSTORE_TIMEOUT", _DEFAULT_TIMEOUT),
+        "read_timeout": os.getenv("ATLAN_OBSTORE_READ_TIMEOUT", _DEFAULT_READ_TIMEOUT),
         "connect_timeout": os.getenv(
             "ATLAN_OBSTORE_CONNECT_TIMEOUT", _DEFAULT_CONNECT_TIMEOUT
         ),
