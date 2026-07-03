@@ -278,6 +278,32 @@ def test_format_generated_covers_all_py_not_just_input(tmp_path, monkeypatch):
     }
 
 
+def test_format_generated_check_defers_to_consumer_ruff_config(tmp_path, monkeypatch):
+    """`ruff check --fix` must run with no --select restriction, so ruff
+    auto-discovers and applies whatever the *consumer* repo's own
+    pyproject.toml configures (e.g. import-sort rules some apps enable and
+    others don't) — fleet ruff configs are not uniform, so hardcoding a rule
+    subset here (previously just F401) would drift from whatever that repo's
+    own pre-commit actually enforces."""
+    gen = tmp_path / "app" / "generated"
+    gen.mkdir(parents=True)
+    (gen / "_input.py").write_text("import os\n")
+
+    check_calls: list[list[str]] = []
+
+    def spy_run(cmd, *, check=False):
+        if cmd[:2] == ["uvx", "ruff"] and cmd[2] == "check":
+            check_calls.append(cmd)
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(mod, "run", spy_run)
+    mod._format_generated(tmp_path)
+
+    assert len(check_calls) == 1
+    assert "--select" not in check_calls[0]
+    assert "F401" not in check_calls[0]
+
+
 def test_resolve_failure_is_fatal(repo, monkeypatch):
     def fake_run(cmd, *, check=False):
         if cmd[0] == "pkl" and cmd[1:3] == ["project", "resolve"]:

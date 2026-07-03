@@ -132,12 +132,21 @@ def _format_generated(out_dir: Path) -> None:
     consumer's pre-commit reformats it on the renovate PR and fails CI. This
     sync commit bypasses pre-commit, so we format here. Best-effort: a ruff
     hiccup must not fail the sync (many apps exclude app/generated from lint
-    entirely)."""
+    entirely).
+
+    `ruff check --fix` runs with no --select: fleet ruff configs are not
+    uniform (e.g. atlan-hello-world-app selects "I" for import sorting;
+    application-sdk's own config and the app-template scaffold do not), so
+    hardcoding a rule subset here (previously just F401) drifts from
+    whatever the *consumer* repo's own pyproject.toml actually enforces —
+    ruff auto-discovers that config from cwd, which is the consumer's
+    checkout when this runs. Letting ruff apply the consumer's own rules is
+    the only way this reliably matches what its pre-commit would do."""
     inputs = sorted((out_dir / "app" / "generated").rglob("*.py"))
     if not inputs:
         return
     paths = [str(p) for p in inputs]
-    run(["uvx", "ruff", "check", "--fix", "--select", "F401", "--quiet", *paths])
+    run(["uvx", "ruff", "check", "--fix", "--quiet", *paths])
     run(["uvx", "ruff", "format", *paths])
 
 
