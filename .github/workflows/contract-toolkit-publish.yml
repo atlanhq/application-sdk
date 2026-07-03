@@ -109,11 +109,11 @@ jobs:
           # The previous step leaves the working tree checked out on gh-pages
           # (which has no .github/scripts/), so restore just this one file
           # from main rather than switching branches back.
-          git checkout main -- .github/scripts/wait_for_pages_build.py
+          git checkout main -- .github/scripts/wait_for_pages_publish.py
           owner="${GITHUB_REPOSITORY%%/*}"
           repo_name="${GITHUB_REPOSITORY##*/}"
           url="https://${owner}.github.io/${repo_name}/${PUBLISH_DIR}/${PKG_NAME}@${{ steps.meta.outputs.version }}.zip"
-          python3 .github/scripts/wait_for_pages_build.py \
+          python3 .github/scripts/wait_for_pages_publish.py \
             --repo "${GITHUB_REPOSITORY}" \
             --url "$url"
 

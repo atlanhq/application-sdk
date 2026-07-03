@@ -1,4 +1,4 @@
-"""Tests for .github/scripts/wait_for_pages_build.py.
+"""Tests for .github/scripts/wait_for_pages_publish.py.
 
 Covers the driver's conditional logic — the part that used to be inlined shell
 in contract-toolkit-publish.yml:
@@ -20,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import wait_for_pages_build as mod
+import wait_for_pages_publish as mod
 
 REPO = "atlanhq/application-sdk"
 URL = "https://atlanhq.github.io/application-sdk/contracts/app-contract-toolkit@0.17.0.zip"

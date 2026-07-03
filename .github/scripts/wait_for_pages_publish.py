@@ -40,7 +40,13 @@ def run(cmd: list[str]) -> subprocess.CompletedProcess:
 
 
 def is_live(url: str) -> bool:
-    result = run(["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", url])
+    # --max-time bounds a stalled network request to one poll interval's worth
+    # of time, so a hung connection can't block the step indefinitely and
+    # bypass max_attempts/heartbeat — the exact failure mode this script
+    # exists to avoid.
+    result = run(
+        ["curl", "-s", "--max-time", "15", "-o", "/dev/null", "-w", "%{http_code}", url]
+    )
     return result.stdout.strip() == "200"
 
 
