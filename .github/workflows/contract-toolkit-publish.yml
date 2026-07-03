@@ -94,35 +94,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
-          pages_sha="$(git rev-parse HEAD)"
-          gh api --method POST "repos/${GITHUB_REPOSITORY}/pages/builds"
-
-          for attempt in $(seq 1 60); do
-            status="$(gh api "repos/${GITHUB_REPOSITORY}/pages/builds/latest" --jq '.status')"
-            commit="$(gh api "repos/${GITHUB_REPOSITORY}/pages/builds/latest" --jq '.commit')"
-
-            if [ "$commit" != "$pages_sha" ]; then
-              sleep 5
-              continue
-            fi
-
-            case "$status" in
-              built)
-                exit 0
-                ;;
-              errored)
-                message="$(gh api "repos/${GITHUB_REPOSITORY}/pages/builds/latest" --jq '.error.message // "unknown error"')"
-                echo "::error::GitHub Pages build failed: ${message}"
-                exit 1
-                ;;
-            esac
-
-            sleep 5
-          done
-
-          echo "::error::Timed out waiting for GitHub Pages build for ${pages_sha}"
-          exit 1
+          python3 .github/scripts/wait_for_pages_build.py --repo "${GITHUB_REPOSITORY}"
 
       - name: Create source tag
         run: |
