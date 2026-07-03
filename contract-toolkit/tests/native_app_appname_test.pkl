@@ -1,0 +1,58 @@
+// Regression guards for per-node `appName` on the legacy NativeApp module.
+//
+// NativeApp.pkl is frozen reference material, but ~all pre-App.pkl connector
+// apps still `amends "@app-contract-toolkit/NativeApp.pkl"` (or NativeAppBundle),
+// and it is the path on which most QueryIntelligenceNode / LineageNode routing
+// actually runs. `app_name` in the generated AE manifest drives failure
+// attribution in observability (ClickHouse `failure_app`); `taskQueue` — not
+// `appName` — governs dispatch, so these specialised nodes must override the
+// `DAGNode` default of "automation-engine" with their own app identity.
+//
+// No fact asserted these values before, which is exactly how QI and Lineage
+// silently drifted to "automation-engine" and masked their failures behind the
+// wrong app. These guards catch any future silent revert to the base default.
+
+amends "pkl:test"
+
+import "../src/NativeApp.pkl" as NativeApp
+
+local qiNode = new NativeApp.QueryIntelligenceNode {
+  vendorName = "athena"
+  sqlKey = "QUERY_TEXT"
+}
+
+local lineageNode = new NativeApp.LineageNode {
+  connectorName = "postgres"
+  sqlUnquotedCase = "upper"
+  ignoreAllCase = false
+}
+
+local publishNode = new NativeApp.PublishNode {}
+local lineagePublishNode = new NativeApp.LineagePublishNode {}
+local popularityNode = new NativeApp.PopularityNode {}
+
+facts {
+  ["QueryIntelligenceNode identifies the query-intelligence app"] {
+    qiNode.appName == "query-intelligence"
+  }
+
+  ["LineageNode identifies the lineage app"] {
+    lineageNode.appName == "lineage"
+  }
+
+  // Nodes that were already correct — guard them so they cannot silently drift
+  // to the DAGNode "automation-engine" default the way QI and Lineage did.
+  ["PublishNode identifies the publish app"] {
+    publishNode.appName == "publish"
+  }
+
+  // LineagePublishNode dispatches to the general publish app (it emits a
+  // PublishWorkflow, not a LineageWorkflow), not a dedicated "lineage" app.
+  ["LineagePublishNode identifies the publish app"] {
+    lineagePublishNode.appName == "publish"
+  }
+
+  ["PopularityNode identifies the popularity app"] {
+    popularityNode.appName == "popularity"
+  }
+}
