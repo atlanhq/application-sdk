@@ -52,6 +52,7 @@ LEAF_CLASSES: frozenset[str] = frozenset(
         "InvalidInputError",
         "PreconditionError",
         "DependencyUnavailableError",
+        "SourceUnavailableError",
         "ResourceExhaustedError",
         "DataIntegrityError",
         "InternalError",

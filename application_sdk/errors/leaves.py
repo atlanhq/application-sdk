@@ -145,10 +145,13 @@ class PreconditionError(AppError):
 
 @dataclass(kw_only=True)
 class DependencyUnavailableError(AppError):
-    """Required platform service is temporarily down or degraded.
+    """Required Atlan-internal platform service is temporarily down or degraded.
 
-    Covers Dapr, Temporal, object store, and source databases.  Retrying
-    the same call is expected to succeed once the dependency recovers.
+    Covers Dapr, Temporal, and object store.  Retrying the same call is
+    expected to succeed once the dependency recovers.
+
+    For customer-controlled source systems (databases, SaaS APIs), use
+    SourceUnavailableError instead — those route to USER, not PLATFORM.
 
     Litmus test vs PRECONDITION: if system state must change before the call
     can succeed, use PreconditionError.  If the same call would work on retry,
@@ -163,6 +166,31 @@ class DependencyUnavailableError(AppError):
     default_retryable: ClassVar[bool] = True
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE"
     audience: ClassVar[Audience] = Audience.PLATFORM
+
+
+@dataclass(kw_only=True)
+class SourceUnavailableError(AppError):
+    """Customer-controlled source system is temporarily unreachable.
+
+    Use when a connector cannot reach the source (database, SaaS API, on-prem
+    endpoint) due to a transient network or server-side condition.  Retrying
+    is expected to succeed once the source recovers.
+
+    Litmus test vs DependencyUnavailableError: SourceUnavailableError is for
+    systems the *customer* owns and operates (their Snowflake account, their
+    on-prem SQL Server, a third-party SaaS API); DependencyUnavailableError is
+    for Atlan-internal platform services (Dapr, Temporal, object store).
+    """
+
+    source_type: str | None = None
+    endpoint: str | None = None
+    http_status: int | None = None
+    network_error: str | None = None
+
+    category: ClassVar[FailureCategory] = FailureCategory.SOURCE_UNAVAILABLE
+    default_retryable: ClassVar[bool] = True
+    code: ClassVar[str] = "SOURCE_UNAVAILABLE"
+    audience: ClassVar[Audience] = Audience.USER
 
 
 # Temporal wire type string for worker-pod eviction. Set as

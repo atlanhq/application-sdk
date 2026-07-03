@@ -12,7 +12,8 @@ Canonical API (v3.x+)::
         NotFoundError, AlreadyExistsError,
         InvalidInputError, PreconditionError,
         RateLimitedError, UnimplementedError,
-        DependencyUnavailableError, ResourceExhaustedError,
+        DependencyUnavailableError, SourceUnavailableError,
+        ResourceExhaustedError,
         DataIntegrityError, CancelledError, InternalError,
     )
 
@@ -35,6 +36,7 @@ from application_sdk.errors.leaves import (
     CancelledError,
     DataIntegrityError,
     DependencyUnavailableError,
+    SourceUnavailableError,
     InternalError,
     InvalidInputError,
     NotFoundError,
@@ -131,6 +133,7 @@ __all__ = [
     "CancelledError",
     "DataIntegrityError",
     "DependencyUnavailableError",
+    "SourceUnavailableError",
     "InternalError",
     "InvalidInputError",
     "NotFoundError",
