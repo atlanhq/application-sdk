@@ -47,12 +47,16 @@ def discover(root: Path) -> list[Path]:
     """
     paths: list[Path] = []
     for path in root.rglob("*.py"):
+        # Exclusion checks must use path components *relative to root*, not the
+        # full (often absolute) path — otherwise a repo checked out under a
+        # directory that happens to match an excluded name (e.g. a worktree at
+        # `.../test/`, `.../build/`, or `.../conformance/`) has every file
+        # under it silently dropped from AST-based scanning.
+        rel_parts = path.relative_to(root).parts
         # Exclude named infra / virtualenv dirs
-        parts = set(path.parts)
-        if parts & EXCLUDE_DIRS:
+        if set(rel_parts) & EXCLUDE_DIRS:
             continue
         # Exclude any dot-prefixed directory component (.github, .claude, …)
-        rel_parts = path.relative_to(root).parts
         if any(p.startswith(".") for p in rel_parts[:-1]):
             continue
         # Exclude test files by name convention
