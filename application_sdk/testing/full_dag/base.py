@@ -54,6 +54,8 @@ import time
 from dataclasses import dataclass, field
 from typing import ClassVar
 
+import requests
+
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.full_dag._errors import (
     HarnessMethodNotImplementedError,
@@ -199,6 +201,32 @@ class BaseFullDAGE2ETest:
     # hand-crafted seed produced by :func:`build_seed_dag` — useful
     # for connectors that don't ship a manifest yet.
     manifest_path: ClassVar[str] = "app/generated/manifest.json"
+
+    # BLDX-1493 — mimic LM's install-time DAG upgrade. When True (default), the
+    # harness builds the seed DAG from the manifest the *running app* serves
+    # (rendered through :meth:`_seed_dag_from_manifest`) rather than the committed
+    # file, so a Contract Toolkit change (app- or SDK-level) is validated through
+    # the current contract + toolkit — the same way LM rebuilds the AE DAG from
+    # the app's fresh manifest. Best-effort: any fetch failure falls back to the
+    # committed manifest (prior behaviour) with a WARNING — never a silent pass.
+    use_live_manifest: ClassVar[bool] = True
+
+    # Base URL at which the *running connector app* is reachable from the pytest
+    # host, used to fetch ``GET {url}/workflows/v1/manifest``. Defaults to the
+    # port the connector image exposes (``app.yaml app_port: 8000``), mapped to
+    # the host by the SDR/full-DAG compose stack — the same URL the SDR
+    # IntegrationTestClient uses. NOTE: this is the *host-reachable* URL, not the
+    # in-cluster ``app_service_url`` (…svc.cluster.local) that AE uses in DIRECT
+    # mode. Override if the compose stack maps the app to a different host port.
+    app_manifest_base_url: ClassVar[str] = "http://localhost:8000"
+
+    # Entrypoint to request from a multi-entrypoint app's manifest endpoint
+    # (``?entrypoint=<name>``). Empty = the app's default/root manifest.
+    app_entrypoint: ClassVar[str] = ""
+
+    # Timeout (s) for the live-manifest fetch. Generous: the app may still be
+    # warming up when the seed DAG is built.
+    app_manifest_timeout_seconds: ClassVar[int] = 120
 
     # Tenant-side ``{deployment_name}`` value substituted into the
     # task queues of the qi / publish / lineage / lineage-publish
@@ -364,13 +392,18 @@ class BaseFullDAGE2ETest:
     # Seed DAG — loaded from the connector's manifest.json
     # ------------------------------------------------------------------
 
-    def _seed_dag_from_manifest(self, extract_task_queue: str) -> dict:
-        """Load the connector's manifest.json and use it as the seed DAG.
+    def _seed_dag_from_manifest(
+        self, extract_task_queue: str, manifest: dict | None = None
+    ) -> dict:
+        """Build the seed DAG from a manifest and use it as the AE version.
 
-        Reads ``self.manifest_path`` (relative to the test's cwd —
-        typically the connector repo root), parses out the ``dag``
-        block, and substitutes the placeholders the configurator
-        normally fills at deployment time.
+        When ``manifest`` is given (e.g. the manifest the running app serves at
+        ``/workflows/v1/manifest`` — see
+        :meth:`_seed_dag_from_live_or_committed_manifest`), it is used directly.
+        Otherwise the connector's committed ``self.manifest_path`` is read from
+        disk (relative to the test's cwd — typically the connector repo root).
+        Either way the ``dag`` block is parsed out and the placeholders the
+        configurator normally fills at deployment time are substituted.
 
         Two substitution passes:
 
@@ -398,26 +431,32 @@ class BaseFullDAGE2ETest:
         """
         import json  # noqa: PLC0415 — cold path: only at bootstrap
         from pathlib import Path  # noqa: PLC0415 — cold path: only at bootstrap
+        from typing import Any  # noqa: PLC0415 — cold path: only at bootstrap
 
-        path = Path(self.manifest_path)
-        if not path.is_absolute():
-            path = Path.cwd() / path
-        if not path.is_file():
-            raise ManifestFileNotFoundError(
-                message=(
-                    f"Manifest file not found at {path} — set `manifest_path` on "
-                    "the test class to the location of the connector's "
-                    "manifest.json, or set it to '' to fall back to the "
-                    "hand-crafted seed DAG."
-                ),
-                resource_identifier=str(path),
-            )
-        manifest = json.loads(path.read_text())
-        dag = manifest.get("dag")
+        if manifest is not None:
+            manifest_obj: Any = manifest
+            source = "the running app's live /manifest"
+        else:
+            path = Path(self.manifest_path)
+            if not path.is_absolute():
+                path = Path.cwd() / path
+            if not path.is_file():
+                raise ManifestFileNotFoundError(
+                    message=(
+                        f"Manifest file not found at {path} — set `manifest_path` "
+                        "on the test class to the location of the connector's "
+                        "manifest.json, or set it to '' to fall back to the "
+                        "hand-crafted seed DAG."
+                    ),
+                    resource_identifier=str(path),
+                )
+            manifest_obj = json.loads(path.read_text())
+            source = str(path)
+        dag = manifest_obj.get("dag")
         if not isinstance(dag, dict) or not dag:
             raise ManifestDagMissingError(
-                message=f"Manifest at {path} has no top-level `dag` object — can't use as a seed DAG.",
-                location=str(path),
+                message=f"Manifest ({source}) has no top-level `dag` object — can't use as a seed DAG.",
+                location=source,
             )
 
         def _sub_queue(node_name: str, raw: str) -> str:
@@ -461,7 +500,7 @@ class BaseFullDAGE2ETest:
 
         logger.info(
             "Loaded seed DAG from %s (%d nodes: %s)",
-            path,
+            source,
             len(dag),
             ", ".join(sorted(dag.keys())),
         )
@@ -588,12 +627,17 @@ class BaseFullDAGE2ETest:
             extract_queue = f"atlan-{self.connector_short_name}-default"
 
         if self.manifest_path:
-            # DRY: load the connector's manifest.json as the seed DAG
-            # so the test stays in lockstep with whatever the connector
-            # actually ships. Falls back to the hand-crafted seed only
-            # if the manifest is missing or the caller explicitly cleared
-            # `manifest_path`.
-            seed_dag = self._seed_dag_from_manifest(extract_queue)
+            # BLDX-1493 — mimic LM's install-time manifest upgrade. LM fetches the
+            # manifest the *running app* serves and rebuilds the AE DAG from it, so
+            # a Contract Toolkit change (app- or SDK-level; Part A regenerated it
+            # into the image) actually takes effect. We do the same: build the seed
+            # from the app's live `/manifest`, rendering the per-run identities the
+            # harness owns (connection, agent_json, filters, `{{credentialGuid}}`)
+            # through the SAME substitution used for the committed file. Falls back
+            # to the committed manifest on the disk when the endpoint is
+            # unreachable (prior behaviour) — always with a WARNING so a skipped
+            # live check is never mistaken for a pass.
+            seed_dag = self._seed_dag_from_live_or_committed_manifest(extract_queue)
         else:
             logger.info(
                 "manifest_path empty — falling back to hand-crafted build_seed_dag"
@@ -614,6 +658,7 @@ class BaseFullDAGE2ETest:
                 agent=agent,
                 database=self.database_spec(),
             )
+
         version = self.client.create_version(
             slug,
             {"version": int(time.time()), "dag": seed_dag},
@@ -622,6 +667,114 @@ class BaseFullDAGE2ETest:
 
         self.client.publish_version(slug, version)
         return slug
+
+    # ------------------------------------------------------------------
+    # Live-manifest seed (BLDX-1493) — mimic LM's install-time upgrade
+    # ------------------------------------------------------------------
+
+    def _seed_dag_from_live_or_committed_manifest(self, extract_queue: str) -> dict:
+        """Build the seed DAG from the app's live ``/manifest``, else the file.
+
+        This is how the harness mimics LM's install-time upgrade: LM rebuilds the
+        AE DAG from the manifest the running app serves, so a Contract Toolkit
+        change takes effect. Here the same live manifest is rendered through
+        :meth:`_seed_dag_from_manifest` (the harness owns the per-run values, so
+        it fills them directly — the faithful analog of LM recovering them from a
+        stored DAG, and it preserves the ``{{credentialGuid}}`` submit-time
+        placeholder by construction).
+
+        Best-effort: on an unreachable/unusable endpoint, falls back to the
+        committed ``manifest_path`` file (prior behaviour) with a WARNING, so a
+        skipped live check is never mistaken for a pass.
+        """
+        if self.use_live_manifest:
+            manifest = self._fetch_live_manifest()
+            if manifest is not None:
+                try:
+                    seed = self._seed_dag_from_manifest(
+                        extract_queue, manifest=manifest
+                    )
+                    logger.info(
+                        "Built seed DAG from the running app's live /manifest "
+                        "(BLDX-1493) — reflects the app's current contract + "
+                        "toolkit."
+                    )
+                    return seed
+                except ManifestDagMissingError:
+                    if self._require_live_manifest():
+                        raise
+                    logger.warning(
+                        "Live /manifest has no usable `dag` — falling back to the "
+                        "committed manifest file at %s.",
+                        self.manifest_path,
+                    )
+            elif self._require_live_manifest():
+                raise ManifestFileNotFoundError(
+                    message=(
+                        "ATLAN_E2E_REQUIRE_LIVE_MANIFEST is set (SDK-level cross-repo "
+                        f"run) but the app's /manifest at {self.app_manifest_base_url} "
+                        "was unreachable. Refusing to fall back to the committed "
+                        "manifest — it was generated with the OLD toolkit and would "
+                        "give a false green for the Contract Toolkit change under test "
+                        "(BLDX-1493)."
+                    ),
+                    resource_identifier=self.app_manifest_base_url,
+                )
+            else:
+                logger.warning(
+                    "Live /manifest unreachable — falling back to the committed "
+                    "manifest file at %s (a Contract Toolkit change may go "
+                    "untested this run).",
+                    self.manifest_path,
+                )
+        return self._seed_dag_from_manifest(extract_queue)
+
+    @staticmethod
+    def _require_live_manifest() -> bool:
+        """True when a live-manifest miss must FAIL the run rather than fall back.
+
+        Set by the CI actions on **SDK-level** cross-repo dispatch
+        (``application-sdk-ref`` present): there the committed manifest was
+        generated with the *old* toolkit, so silently reading it would give a
+        false green for the toolkit change under test (BLDX-1493). App-level runs
+        leave this unset — their committed manifest is the fresh one, so a
+        fallback is harmless.
+        """
+        return os.environ.get("ATLAN_E2E_REQUIRE_LIVE_MANIFEST", "").lower() == "true"
+
+    def _fetch_live_manifest(self) -> dict | None:
+        """GET ``{app_manifest_base_url}/workflows/v1/manifest`` → dict or None.
+
+        Returns None (caller falls back to the committed seed) on connection
+        error, non-200, or non-JSON — mirrors LM's ``fetch_manifest`` "None means
+        this run can't upgrade" contract.
+        """
+        base = self.app_manifest_base_url.rstrip("/")
+        url = f"{base}/workflows/v1/manifest"
+        params = {"entrypoint": self.app_entrypoint} if self.app_entrypoint else None
+        try:
+            resp = requests.get(
+                url, params=params, timeout=self.app_manifest_timeout_seconds
+            )
+        except requests.RequestException as exc:
+            logger.warning("Could not reach live manifest at %s: %s", url, exc)
+            return None
+        if resp.status_code != 200:
+            logger.warning("Live manifest %s returned HTTP %d", url, resp.status_code)
+            return None
+        try:
+            manifest = resp.json()
+        except ValueError as exc:
+            logger.warning("Live manifest %s did not return JSON: %s", url, exc)
+            return None
+        if not isinstance(manifest, dict):
+            logger.warning(
+                "Live manifest %s returned a %s, expected an object",
+                url,
+                type(manifest).__name__,
+            )
+            return None
+        return manifest
 
     def run_full_dag(self) -> FullDAGOutcome:
         """Submit, poll AE, poll Atlas, return the combined outcome.

@@ -134,16 +134,45 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
                 args["workflow_type"] = self.workflow_type
         return args
 
-    def _manifest_extract_inputs(self) -> dict[str, Any]:
-        """Load the connector's manifest and return its extract node's ``args``.
+    def _load_manifest(self) -> dict[str, Any]:
+        """Return the manifest to derive SDR workflow input from.
 
-        Raises if the manifest is missing or has no ``dag.extract.inputs.args``
-        — a manifest-driven SDR test with no usable extract node is a config
-        error, not something to silently fall back on.
+        Prefers the manifest the *running app* serves at
+        ``GET /workflows/v1/manifest`` (BLDX-1493) — the same source
+        Heracles / the Local Marketplace app use in production, so a Contract
+        Toolkit change (app- or SDK-level) is actually exercised. Falls back to
+        the committed ``manifest_path`` file when the endpoint is unreachable
+        (logged at WARNING so a fallback is never mistaken for a live check).
 
-        Note: the sibling ``inputs.workflow_type`` (the AE workflow-type slug) is
-        deliberately NOT read — see :meth:`_workflow_args_from_manifest`.
+        Raises if neither source yields a manifest — a manifest-driven SDR test
+        with no usable manifest is a config error, not something to silently
+        fall back on.
         """
+        client = getattr(self, "client", None)
+        if client is not None and hasattr(client, "get_manifest"):
+            live = client.get_manifest(entrypoint=self.workflow_type or None)
+            if live is not None:
+                logger.info(
+                    "Using the live manifest served by the running app (BLDX-1493)."
+                )
+                return live
+            if os.environ.get("ATLAN_E2E_REQUIRE_LIVE_MANIFEST", "").lower() == "true":
+                # SDK-level cross-repo run: the committed manifest was generated
+                # with the OLD toolkit, so falling back to it would give a false
+                # green for the toolkit change under test. Fail loudly instead.
+                raise RuntimeError(
+                    "ATLAN_E2E_REQUIRE_LIVE_MANIFEST is set but the app's /manifest "
+                    "was unreachable; refusing to fall back to the committed "
+                    "manifest (it was generated with the old toolkit and would give "
+                    "a false green — BLDX-1493)."
+                )
+            logger.warning(
+                "Live /manifest unreachable — falling back to the committed "
+                "manifest file at %s (a Contract Toolkit change may go "
+                "untested).",
+                self.manifest_path,
+            )
+
         path = Path(self.manifest_path)
         if not path.is_absolute():
             path = Path.cwd() / path
@@ -152,11 +181,23 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
                 f"SDR manifest not found at {path} — set `manifest_path` to the "
                 "connector's manifest.json, or '' to use agent_spec_template."
             )
-        manifest = orjson.loads(path.read_bytes())
+        return orjson.loads(path.read_bytes())
+
+    def _manifest_extract_inputs(self) -> dict[str, Any]:
+        """Load the connector's manifest and return its extract node's ``args``.
+
+        Raises if the manifest has no ``dag.extract.inputs.args`` — a
+        manifest-driven SDR test with no usable extract node is a config error,
+        not something to silently fall back on.
+
+        Note: the sibling ``inputs.workflow_type`` (the AE workflow-type slug) is
+        deliberately NOT read — see :meth:`_workflow_args_from_manifest`.
+        """
+        manifest = self._load_manifest()
         inputs = ((manifest.get("dag") or {}).get("extract") or {}).get("inputs") or {}
         if not isinstance(inputs.get("args"), dict):
             raise ValueError(
-                f"Manifest at {path} has no `dag.extract.inputs.args` object — "
+                "Manifest has no `dag.extract.inputs.args` object — "
                 "cannot derive the workflow input from it."
             )
         return inputs["args"]

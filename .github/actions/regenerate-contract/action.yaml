@@ -1,0 +1,113 @@
+name: Regenerate contract artifacts
+description: |
+  Regenerate an app's contract artifacts (app/generated/** — manifest.json,
+  configmaps, typed _input.py — plus atlan.yaml / app.yaml) from
+  contract/app.pkl BEFORE tests run, so the manifest the tests AND the worker
+  container consume reflects current contract + toolkit source instead of a
+  possibly-stale committed file. See BLDX-1493.
+
+  Runs in the CALLER's (connector's) workspace. Self-skips when there is no
+  contract/app.pkl (non-standard layouts), so it is safe to wire into shared
+  reusable workflows unconditionally.
+
+  When `application-sdk-ref` is set (apps-sdk cross-repo dispatch), shallow-
+  clones the SDK at that ref and overrides the @app-contract-toolkit dependency
+  to the PR's contract-toolkit/src — so a toolkit change in the SDK PR is
+  exercised against the real connector contract end-to-end. Otherwise it
+  regenerates from the app's own pinned toolkit version and (warn-only) flags a
+  stale committed app/generated/.
+
+  All conditional logic lives in the unit-tested .github/scripts/
+  regenerate_contract.py (per docs/standards/ci.md); the steps here only
+  install pkl, fetch the SDK toolkit source when needed, and invoke the script.
+
+inputs:
+  contract-dir:
+    required: false
+    default: contract
+    description: Directory containing PklProject and app.pkl (relative to the caller repo root).
+  application-sdk-ref:
+    required: false
+    default: ""
+    description: |
+      Branch/SHA of atlanhq/application-sdk. When non-empty, the
+      @app-contract-toolkit dependency is overridden to that ref's
+      contract-toolkit/src so SDK-level toolkit changes are tested. Empty =
+      app-level (the app's pinned toolkit).
+  check-drift:
+    required: false
+    default: "true"
+    description: |
+      'true' (default) to warn — never fail — when committed app/generated/
+      drifts from freshly-generated output. Set 'false' on pre-build
+      invocations where uv (hence ruff formatting) is not yet available.
+      Ignored when application-sdk-ref is set (drift is expected).
+  pkl-version:
+    required: false
+    default: "0.27.2"
+    description: pkl runtime version to download. Matches the contract-toolkit-* workflows.
+
+runs:
+  using: composite
+  steps:
+    # hashFiles returns '' when the glob matches nothing, so this resolves to
+    # 'true'/'false' with no inlined conditional shell.
+    - name: Detect contract
+      id: guard
+      shell: bash
+      run: echo "present=${{ hashFiles(format('{0}/app.pkl', inputs.contract-dir)) != '' }}" >> "$GITHUB_OUTPUT"
+
+    - name: Install pkl
+      if: steps.guard.outputs.present == 'true'
+      shell: bash
+      env:
+        PKL_VERSION: ${{ inputs.pkl-version }}
+      run: |
+        set -euo pipefail
+        # with-retry wraps the download: this step is on the always-on
+        # integration job (and the merge-queue gate), so a transient
+        # github.com hiccup must not fail the job over a flaky fetch.
+        "${{ github.action_path }}/../../scripts/with-retry.sh" \
+          curl -fsSL -o /tmp/pkl "https://github.com/apple/pkl/releases/download/${PKL_VERSION}/pkl-linux-amd64"
+        chmod +x /tmp/pkl
+        sudo mv /tmp/pkl /usr/local/bin/pkl
+        pkl --version
+
+    # SDK-level only: fetch just the toolkit source at the dispatched ref. A
+    # sparse, blobless clone keeps this to a few hundred KB rather than the full
+    # SDK history. The script overrides the connector's @app-contract-toolkit
+    # dependency to this path.
+    #
+    # No token: atlanhq/application-sdk is public, so the clone works on every
+    # path — including the pre-setup-deps invocation in sdr-e2e (where no
+    # actions/checkout http.extraheader is configured) and the merge-queue gate.
+    - name: Fetch SDK contract-toolkit at dispatched ref
+      id: sdk
+      if: steps.guard.outputs.present == 'true' && inputs.application-sdk-ref != ''
+      shell: bash
+      env:
+        SDK_REF: ${{ inputs.application-sdk-ref }}
+      run: |
+        set -euo pipefail
+        SDK_DIR="$(mktemp -d)/application-sdk"
+        "${{ github.action_path }}/../../scripts/with-retry.sh" \
+          git clone --quiet --filter=blob:none --no-checkout https://github.com/atlanhq/application-sdk "$SDK_DIR"
+        git -C "$SDK_DIR" sparse-checkout init --cone
+        git -C "$SDK_DIR" sparse-checkout set contract-toolkit/src
+        git -C "$SDK_DIR" checkout --quiet "$SDK_REF"
+        echo "toolkit-src=${SDK_DIR}/contract-toolkit/src" >> "$GITHUB_OUTPUT"
+        echo "Using SDK contract-toolkit/src from ${SDK_REF}"
+
+    - name: Regenerate contract artifacts
+      if: steps.guard.outputs.present == 'true'
+      shell: bash
+      env:
+        CONTRACT_DIR: ${{ inputs.contract-dir }}
+        CHECK_DRIFT: ${{ inputs.check-drift }}
+        SDK_TOOLKIT_SRC: ${{ steps.sdk.outputs.toolkit-src }}
+      run: |
+        set -euo pipefail
+        python3 "${{ github.action_path }}/../../scripts/regenerate_contract.py" \
+          --contract-dir "${CONTRACT_DIR}" \
+          --check-drift "${CHECK_DRIFT}" \
+          --sdk-toolkit-src "${SDK_TOOLKIT_SRC:-}"
