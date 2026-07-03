@@ -78,3 +78,4 @@ Have you discovered a vulnerability or have concerns about the SDK? Please read 
 
 - This project is licensed under the Apache License 2.0 - see the [LICENSE](https://github.com/atlanhq/application-sdk/blob/main/LICENSE) file for details.
 - This project includes dependencies with various open-source licenses. See the [NOTICE](https://github.com/atlanhq/application-sdk/blob/main/NOTICE) file for third-party attributions.
+
