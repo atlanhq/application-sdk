@@ -2625,10 +2625,15 @@ local function generateExtractNode(): Mapping<String, Any> =
   new Mapping {
     ["activity_name"] = "execute_workflow"
     ["activity_display_name"] = extractActivityDisplayName ?? "Extract \(displayName) Metadata"
-    ["app_name"] = "{app_name}"
+    // Log identity: bake the contract `name` directly. This is the value the
+    // AE DAG (and Pulse) attributes failures to, and it must match the app's
+    // ATLAN_APPLICATION_NAME so failure logs correlate (HYP-1678 / HYP-1954).
+    // The SDK no longer substitutes a `{app_name}` placeholder at serve time
+    // (#2271); bake it here as App.pkl does, or it stays literal in the DAG.
+    ["app_name"] = name
     ["inputs"] = new Mapping {
       ["workflow_type"] = workflowTypeResolved
-      ["app_name"] = "{app_name}"
+      ["app_name"] = name
       ["app_id"] = ""
       ["argo_workflow_slug"] = ""
       ["task_queue"] = "\(taskQueuePrefix)-{deployment_name}"
