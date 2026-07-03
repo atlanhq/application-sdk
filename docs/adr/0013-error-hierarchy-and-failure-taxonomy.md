@@ -39,7 +39,7 @@ that keeps legacy `except Domain:` catch sites alive.
 
 | Axis | Type | Owner | Closed? |
 |---|---|---|---|
-| `FailureCategory` — *what happened* | Enum (14 values) | SDK | Yes |
+| `FailureCategory` — *what happened* | Enum (15 values) | SDK | Yes |
 | `Audience` — *who must act* | Enum (3 values) | SDK | Yes |
 | `suggested_action` — *what to do* | `str \| None` | App | No |
 

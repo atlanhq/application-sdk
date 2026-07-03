@@ -29,6 +29,7 @@ LEAF_PREFIX_MAP: dict[str, str] = {
     "InvalidInputError": "INVALID_INPUT",
     "PreconditionError": "PRECONDITION",
     "DependencyUnavailableError": "DEPENDENCY_UNAVAILABLE",
+    "SourceUnavailableError": "SOURCE_UNAVAILABLE",
     "ResourceExhaustedError": "RESOURCE_EXHAUSTED",
     "DataIntegrityError": "DATA_INTEGRITY",
     "InternalError": "INTERNAL",
@@ -147,7 +148,7 @@ def resolve_leaf_prefix(
 ) -> str | None:
     """Walk the (transitive) base chain of *name* and return the leaf prefix.
 
-    Returns ``None`` if *name* is not derived from one of the 14 leaves.
+    Returns ``None`` if *name* is not derived from one of the 15 leaves.
     Cycle-safe via ``visiting``; results memoised in ``cache``.
     """
     if name in LEAF_PREFIX_MAP:
