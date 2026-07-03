@@ -5,6 +5,17 @@ on:
   merge_group: {}
   push:
     branches: [main]
+  # Force-refresh: re-run the full suite against the latest published rules
+  # every 6h, independent of whether Renovate's conformance-package lock bump
+  # has been merged. Timed 30 min ahead of connector-pulse's fleet ingest
+  # (refresh-conformance-dashboard.yml polls k.atlan.dev at :47 past every
+  # 6th hour UTC) so this run, plus the dashboard publish it triggers, land
+  # before that pull.
+  schedule:
+    - cron: "17 */6 * * *"
+  # Lets a human force an out-of-band refresh right after a conformance
+  # release lands, without waiting for the next cron tick.
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -15,4 +26,9 @@ jobs:
     uses: atlanhq/application-sdk/.github/workflows/conformance-reusable.yaml@main
     with:
       event_name: ${{ github.event_name }}
-      exit-zero: << exit_zero >>
+      # Scheduled/manual force-refresh runs have no PR base to diff against
+      # and nothing to block — always run every series, and never fail the
+      # run itself. The SARIF still records the real result, so the
+      # dashboard/Security tab reflect the true drift.
+      force-all: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+      exit-zero: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || << exit_zero >> }}

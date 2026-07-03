@@ -119,7 +119,7 @@ jobs:
       # possibly hard-fail, which would skip every area and turn the always()
       # gate falsely green). For pull_request the filter diffs against the PR
       # base automatically; for merge_group against the queued merge ref.
-      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4
+      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4
         id: filter
         if: steps.force.outputs.force_all != 'true'
         with:
