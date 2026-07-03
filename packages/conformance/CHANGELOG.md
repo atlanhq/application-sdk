@@ -2,6 +2,26 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.10.0] - 2026-07-01
+
+### Features
+
+- schedule force-refresh runs of the conformance suite (#2451) ([ec43c58](https://github.com/atlanhq/application-sdk/commit/ec43c58))
+- add generated-artifact freshness CI gate (BLDX-1414) (#2440) ([2944741](https://github.com/atlanhq/application-sdk/commit/2944741))
+- add S-series secret-hygiene rules S001/S002 (BLDX-1419) (#2436) ([c75dc75](https://github.com/atlanhq/application-sdk/commit/c75dc75))
+- add K003/K004/K005 generated-artifact freshness rules (BLDX-1414) (#2439) ([eb6d142](https://github.com/atlanhq/application-sdk/commit/eb6d142))
+- T004 DevEntrypointRequiresAppModule (BLDX-1520) (#2448) ([766b4ce](https://github.com/atlanhq/application-sdk/commit/766b4ce))
+
+### Bug fixes
+
+- vendor run-conformance-detect action + arg-builder script into consumer repos (#2445) ([ce42367](https://github.com/atlanhq/application-sdk/commit/ce42367))
+
+### Other changes
+
+- chore(deps): lock file maintenance (#2452) ([d5026de](https://github.com/atlanhq/application-sdk/commit/d5026de))
+- chore(deps): lock file maintenance (#2449) ([1f6fa90](https://github.com/atlanhq/application-sdk/commit/1f6fa90))
+- ci(conformance): fix age_days test date arithmetic across month boundary (#2443) ([781cb78](https://github.com/atlanhq/application-sdk/commit/781cb78))
+
 ## [0.9.0] - 2026-06-30
 
 ### Features
