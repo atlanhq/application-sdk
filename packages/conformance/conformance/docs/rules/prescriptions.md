@@ -94,7 +94,7 @@ across two buckets), corrupting the reporting layer for every downstream consume
 
 `FailureCategory` is the closed, single-axis taxonomy the SDK owns — every value is the
 canonical answer to *what happened* and is consumed as an immutable reporting metric
-(dashboards, SLA gates, on-call routing). The 14 categorical leaves in
+(dashboards, SLA gates, on-call routing). The 15 categorical leaves in
 `application_sdk.errors.leaves` (and `AppError` itself) are the sole defining sites:
 each leaf binds exactly one `FailureCategory` to its `category` `ClassVar`.
 

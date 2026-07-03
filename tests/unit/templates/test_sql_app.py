@@ -2123,18 +2123,20 @@ class TestPrimeSqlAuth:
             ),
         ],
     )
-    async def test_prime_network_failure_raises_dependency_unavailable(
+    async def test_prime_network_failure_raises_source_unavailable(
         self, error_type, error_message
     ):
         """Probe failures that look like network / DNS / TLS /
-        connection-refused must surface as
-        ``DependencyUnavailableError``. The on-call guidance must NOT
-        suggest a credentials check (the credentials path was never
-        exercised) and must NOT suggest ACCOUNT UNLOCK (no failed
-        login attempts were made). Pinned by application-sdk#1835
-        mothership comment-3287630230 (HIGH).
+        connection-refused must surface as ``SourceUnavailableError``
+        (audience=USER) — the customer owns the source, so the failure
+        routes to the connector owner, not Atlan infra ops. The on-call
+        guidance must NOT suggest a credentials check (the credentials
+        path was never exercised) and must NOT suggest ACCOUNT UNLOCK
+        (no failed login attempts were made). Pinned by
+        application-sdk#1835 mothership comment-3287630230 (HIGH).
         """
-        from application_sdk.errors.leaves import DependencyUnavailableError
+        from application_sdk.errors.categories import Audience
+        from application_sdk.errors.leaves import SourceUnavailableError
 
         app = SqlApp.__new__(SqlApp)
         app._app_name = "test-app"
@@ -2158,11 +2160,13 @@ class TestPrimeSqlAuth:
             patch.object(SqlApp, "extract_tables", new=AsyncMock()),
             patch.object(SqlApp, "extract_columns", new=AsyncMock()),
         ):
-            with pytest.raises(DependencyUnavailableError) as exc_info:
+            with pytest.raises(SourceUnavailableError) as exc_info:
                 await app.run(ExtractionInput(output_path="/tmp/test"))
 
         err = exc_info.value
-        assert err.service == "sql_source"
+        # Routes to the customer/connector owner, not Atlan infra ops.
+        assert err.audience is Audience.USER
+        assert err.source_type == "sql"
         assert err.network_error == error_message
         # Must steer the operator toward network/DNS investigation, and
         # explicitly NOT toward auth-lockout work. The classifier's
