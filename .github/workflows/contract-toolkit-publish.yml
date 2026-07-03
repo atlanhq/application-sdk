@@ -7,11 +7,21 @@ name: Publish Contract Toolkit
 # branch, and creates the contract-toolkit-v<version> annotated tag.
 # No GitHub Release is created — that would interleave contract-toolkit
 # versions with SDK v* releases on the repo releases page.
+#
+# Also runnable manually (workflow_dispatch) to retry a publish that failed
+# or timed out without a new release PR — every step is idempotent (gh-pages
+# commit/push, Pages build trigger, and tag creation all no-op if the target
+# is already up to date), so re-running against an unchanged
+# contract-toolkit/src/PklProject version is always safe. workflow_dispatch
+# always builds off `main`, matching the pull_request path — the ref you
+# launch it from is irrelevant, only the explicit `ref: main` checkout below
+# matters.
 
 on:
   pull_request:
     types: [closed]
     branches: [main]
+  workflow_dispatch: {}
 
 permissions:
   contents: write
@@ -28,8 +38,9 @@ jobs:
     name: Publish contract toolkit package
     runs-on: ubuntu-latest
     if: >-
-      github.event.pull_request.merged == true &&
-      contains(github.event.pull_request.labels.*.name, 'release:contract-toolkit')
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true &&
+       contains(github.event.pull_request.labels.*.name, 'release:contract-toolkit'))
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
