@@ -173,7 +173,7 @@ class TestDownloadPrefix:
         with (
             patch(
                 "application_sdk.storage.batch.list_keys_with_sizes",
-                new=AsyncMock(return_value=[("safe/../../canary.txt", 10)]),
+                new=AsyncMock(return_value=[("safe/../../canary.txt", 10, None)]),
             ),
             pytest.raises(StorageError, match="Path traversal"),
         ):

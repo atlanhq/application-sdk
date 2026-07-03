@@ -273,7 +273,7 @@ class CloudStore:
 
         sem = asyncio.Semaphore(max_concurrency)
 
-        async def _dl(obj_key: str, size: int) -> Path:
+        async def _dl(obj_key: str, size: int, etag: str | None) -> Path:
             async with sem:
                 rel = (
                     obj_key[len(list_prefix) :]
@@ -282,8 +282,9 @@ class CloudStore:
                 )
                 # Reject keys whose resolved path escapes output (e.g. via ".." segments).
                 local_path = _safe_join_under(output, rel)
-                # Pass the listing's size so large objects chunk and small ones
-                # stream — with no per-file HEAD (size already known). (BLDX-1513)
+                # Pass the listing's size + etag so large objects chunk (with
+                # version-pinned range GETs) and small ones stream — no per-file
+                # HEAD (metadata already known). (BLDX-1513 / BLDX-1523)
                 await download_file_chunked(
                     obj_key,
                     local_path,
@@ -291,10 +292,11 @@ class CloudStore:
                     compute_hash=False,
                     normalize=False,
                     file_size=size,
+                    etag=etag,
                 )
                 return local_path
 
-        results = await asyncio.gather(*[_dl(k, s) for k, s in items])
+        results = await asyncio.gather(*[_dl(k, s, e) for k, s, e in items])
         downloaded = list(results)
         _log().info("Downloaded %d files from prefix=%s", len(downloaded), list_prefix)
         return downloaded
@@ -308,7 +310,7 @@ class CloudStore:
             items = await _list_items(self._store, list_prefix or None)
             return sorted(
                 path
-                for path, _ in items
+                for path, _, _ in items
                 if not lfilter or any(path.lower().endswith(s) for s in lfilter)
             )
         # conformance: ignore[E004] re-raise only; wraps obstore listing failure into StorageError
@@ -319,15 +321,16 @@ class CloudStore:
 
     async def _list_keys_with_sizes(
         self, list_prefix: str, suffix_filter: set[str] | None = None
-    ) -> list[tuple[str, int]]:
-        """Like :meth:`_list_keys` but return ``(key, size_bytes)`` tuples so a
-        prefix download can decide per-file whether to chunk without a HEAD."""
+    ) -> list[tuple[str, int, str | None]]:
+        """Like :meth:`_list_keys` but return ``(key, size_bytes, e_tag)``
+        tuples so a prefix download can decide per-file whether to chunk —
+        and version-pin the range GETs — without a HEAD."""
         lfilter = {s.lower() for s in suffix_filter} if suffix_filter else None
         try:
             items = await _list_items(self._store, list_prefix or None)
             return sorted(
-                (path, size)
-                for path, size in items
+                (path, size, etag)
+                for path, size, etag in items
                 if not lfilter or any(path.lower().endswith(s) for s in lfilter)
             )
         # conformance: ignore[E004] re-raise only; wraps obstore listing failure into StorageError

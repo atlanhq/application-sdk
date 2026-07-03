@@ -387,7 +387,7 @@ class TestMaterializeFileReference:
         with (
             patch(
                 "application_sdk.storage.batch.list_keys_with_sizes",
-                new=AsyncMock(return_value=[("dirkey/../../canary.txt", 10)]),
+                new=AsyncMock(return_value=[("dirkey/../../canary.txt", 10, None)]),
             ),
             pytest.raises(StorageError, match="Path traversal"),
         ):

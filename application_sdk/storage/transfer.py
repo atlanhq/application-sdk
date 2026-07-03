@@ -188,12 +188,14 @@ async def _download_one(
     *,
     skip_if_exists: bool,
     file_size: int | None = None,
+    etag: str | None = None,
 ) -> tuple[bool, str]:
     """Download a single file.  Returns ``(transferred, reason)``.
 
-    *file_size* (when known from a prior listing) is threaded to the chunked
-    path so large objects fetch via bounded range GETs without a per-file HEAD;
-    ``None`` lets the chunked path HEAD once (single-file case). (BLDX-1513)
+    *file_size* / *etag* (when known from a prior listing) are threaded to the
+    chunked path so large objects fetch via bounded, version-pinned range GETs
+    without a per-file HEAD; ``None`` lets the chunked path HEAD once
+    (single-file case). (BLDX-1513 / BLDX-1523)
     """
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         download_file_chunked,
@@ -214,6 +216,7 @@ async def _download_one(
         compute_hash=False,
         normalize=False,
         file_size=file_size,
+        etag=etag,
     )
     return True, "downloaded"
 
@@ -750,7 +753,7 @@ async def download(
         # per-file HEAD (BLDX-1513).
         all_items = await list_keys_with_sizes(prefix, resolved, normalize=False)
         # Exclude SHA-256 sidecars from the listing.
-        data_items = [(k, s) for k, s in all_items if not _is_sidecar(k)]
+        data_items = [(k, s, e) for k, s, e in all_items if not _is_sidecar(k)]
 
         if local_path is not None:
             dest_dir = Path(local_path)
@@ -761,12 +764,17 @@ async def download(
         strip = prefix
 
         transferred_count = 0
-        for key, size in data_items:
+        for key, size, etag in data_items:
             rel = key.removeprefix(strip)
             # Reject keys whose resolved path escapes dest_dir (e.g. via ".." segments).
             local_file = _safe_join_under(dest_dir, rel)
             ok, _ = await _download_one(
-                resolved, key, local_file, skip_if_exists=skip_if_exists, file_size=size
+                resolved,
+                key,
+                local_file,
+                skip_if_exists=skip_if_exists,
+                file_size=size,
+                etag=etag,
             )
             if ok:
                 transferred_count += 1

@@ -680,6 +680,218 @@ class TestChunkedFileSizeSkipsHead:
             )
 
 
+class TestResumableChunkedDownload:
+    """Resume + etag version pinning for chunked downloads (BLDX-1523).
+
+    Uses a real MemoryStore (which supports ``If-Match`` preconditions) with
+    ``chunk_size_bytes=8`` so multi-chunk behaviour is exercised with tiny
+    payloads. ``max_concurrent_chunks=1`` where determinism matters.
+    """
+
+    CONTENT = bytes(range(38))  # 5 chunks at chunk_size=8 (last chunk 6 bytes)
+
+    def _state_path(self, out: Path) -> Path:
+        return Path(str(out) + ".transfer-state")
+
+    async def test_fresh_download_pins_etag_and_removes_state(
+        self, store, tmp_path
+    ) -> None:
+        await _put("res/f.bin", self.CONTENT, store, normalize=False)
+        out = tmp_path / "f.bin"
+
+        real_get = __import__("obstore").get_async
+        seen_options: list[dict] = []
+
+        async def counting_get(st, key, **kw):
+            seen_options.append(kw.get("options") or {})
+            return await real_get(st, key, **kw)
+
+        with patch("application_sdk.storage.ops.obstore.get_async", new=counting_get):
+            digest = await download_file_chunked(
+                "res/f.bin", out, store, chunk_size_bytes=8, normalize=False
+            )
+
+        assert out.read_bytes() == self.CONTENT
+        assert digest == hashlib.sha256(self.CONTENT).hexdigest()
+        # every range GET carried the etag pin from the internal HEAD
+        assert len(seen_options) == 5
+        assert all(o.get("if_match") for o in seen_options)
+        # checkpoint removed on success — file is observably complete
+        assert not self._state_path(out).exists()
+
+    async def test_interrupted_download_keeps_partial_then_resumes(
+        self, store, tmp_path
+    ) -> None:
+        await _put("res/g.bin", self.CONTENT, store, normalize=False)
+        out = tmp_path / "g.bin"
+        real_get = __import__("obstore").get_async
+
+        async def failing_get(st, key, **kw):
+            rng = (kw.get("options") or {}).get("range")
+            if rng and rng[0] == 16:  # chunk index 2
+                raise RuntimeError("simulated network drop")
+            return await real_get(st, key, **kw)
+
+        with (
+            patch("application_sdk.storage.ops.obstore.get_async", new=failing_get),
+            pytest.raises(StorageError),
+        ):
+            await download_file_chunked(
+                "res/g.bin",
+                out,
+                store,
+                chunk_size_bytes=8,
+                max_concurrent_chunks=1,
+                normalize=False,
+            )
+
+        # Partial file + checkpoint survive the failure (chunks 0,1 done).
+        assert out.exists()
+        state = orjson.loads(self._state_path(out).read_bytes())
+        assert state["done"] == [0, 1]
+
+        # Retry fetches ONLY the missing chunks (2,3,4).
+        fetched_ranges: list[tuple] = []
+
+        async def counting_get(st, key, **kw):
+            fetched_ranges.append((kw.get("options") or {}).get("range"))
+            return await real_get(st, key, **kw)
+
+        with patch("application_sdk.storage.ops.obstore.get_async", new=counting_get):
+            digest = await download_file_chunked(
+                "res/g.bin",
+                out,
+                store,
+                chunk_size_bytes=8,
+                max_concurrent_chunks=1,
+                normalize=False,
+            )
+
+        assert sorted(r[0] for r in fetched_ranges) == [16, 24, 32]
+        assert out.read_bytes() == self.CONTENT
+        assert digest == hashlib.sha256(self.CONTENT).hexdigest()
+        assert not self._state_path(out).exists()
+
+    async def test_object_rewritten_mid_download_restarts_fresh_once(
+        self, store, tmp_path
+    ) -> None:
+        await _put("res/h.bin", self.CONTENT, store, normalize=False)
+        out = tmp_path / "h.bin"
+        # Force a stale etag: every pinned GET 412s, the restart re-HEADs and
+        # succeeds against the current generation.
+        digest = await download_file_chunked(
+            "res/h.bin",
+            out,
+            store,
+            chunk_size_bytes=8,
+            normalize=False,
+            file_size=len(self.CONTENT),
+            etag='"stale-etag"',
+        )
+        assert out.read_bytes() == self.CONTENT
+        assert digest == hashlib.sha256(self.CONTENT).hexdigest()
+        assert not self._state_path(out).exists()
+
+    async def test_persistent_precondition_failure_raises(
+        self, store, tmp_path
+    ) -> None:
+        from obstore.exceptions import PreconditionError
+
+        await _put("res/i.bin", self.CONTENT, store, normalize=False)
+        out = tmp_path / "i.bin"
+
+        async def always_412(st, key, **kw):
+            raise PreconditionError("simulated: object keeps changing")
+
+        with (
+            patch("application_sdk.storage.ops.obstore.get_async", new=always_412),
+            pytest.raises(StorageError, match="kept changing"),
+        ):
+            await download_file_chunked(
+                "res/i.bin", out, store, chunk_size_bytes=8, normalize=False
+            )
+        # Mixed-generation partials are never left behind.
+        assert not out.exists()
+        assert not self._state_path(out).exists()
+
+    async def test_checkpoint_from_other_generation_is_discarded(
+        self, store, tmp_path
+    ) -> None:
+        await _put("res/j.bin", self.CONTENT, store, normalize=False)
+        out = tmp_path / "j.bin"
+        # Plant a full-size file of zeros plus a checkpoint claiming all chunks
+        # done — but for a DIFFERENT etag. The download must not trust it.
+        out.write_bytes(b"\x00" * len(self.CONTENT))
+        self._state_path(out).write_bytes(
+            orjson.dumps(
+                {
+                    "key": "res/j.bin",
+                    "file_size": len(self.CONTENT),
+                    "chunk_size": 8,
+                    "etag": "some-old-generation",
+                    "done": [0, 1, 2, 3, 4],
+                }
+            )
+        )
+        digest = await download_file_chunked(
+            "res/j.bin", out, store, chunk_size_bytes=8, normalize=False
+        )
+        assert out.read_bytes() == self.CONTENT  # zeros were NOT trusted
+        assert digest == hashlib.sha256(self.CONTENT).hexdigest()
+
+    async def test_corrupt_checkpoint_falls_back_to_fresh(
+        self, store, tmp_path
+    ) -> None:
+        await _put("res/k.bin", self.CONTENT, store, normalize=False)
+        out = tmp_path / "k.bin"
+        self._state_path(out).write_bytes(b"not json at all {{{")
+        digest = await download_file_chunked(
+            "res/k.bin", out, store, chunk_size_bytes=8, normalize=False
+        )
+        assert out.read_bytes() == self.CONTENT
+        assert digest == hashlib.sha256(self.CONTENT).hexdigest()
+        assert not self._state_path(out).exists()
+
+    async def test_resume_disabled_deletes_partial_on_failure(
+        self, store, tmp_path
+    ) -> None:
+        await _put("res/l.bin", self.CONTENT, store, normalize=False)
+        out = tmp_path / "l.bin"
+        real_get = __import__("obstore").get_async
+
+        async def failing_get(st, key, **kw):
+            rng = (kw.get("options") or {}).get("range")
+            if rng and rng[0] == 16:
+                raise RuntimeError("boom")
+            return await real_get(st, key, **kw)
+
+        with (
+            patch("application_sdk.storage.ops.obstore.get_async", new=failing_get),
+            pytest.raises(StorageError),
+        ):
+            await download_file_chunked(
+                "res/l.bin",
+                out,
+                store,
+                chunk_size_bytes=8,
+                max_concurrent_chunks=1,
+                normalize=False,
+                resume=False,
+            )
+        # Legacy behaviour: nothing left behind.
+        assert not out.exists()
+        assert not self._state_path(out).exists()
+
+    async def test_small_file_leaves_no_checkpoint(self, store, tmp_path) -> None:
+        await _put("res/small.bin", b"tiny", store, normalize=False)
+        out = tmp_path / "small.bin"
+        await download_file_chunked(
+            "res/small.bin", out, store, chunk_size_bytes=8, normalize=False
+        )
+        assert out.read_bytes() == b"tiny"
+        assert not self._state_path(out).exists()
+
+
 class TestTransferMetrics:
     """Transfers emit metrics via the SDK metrics rail (BLDX-1513)."""
 
@@ -920,27 +1132,30 @@ class TestDownloadFileChunked:
         assert result == hashlib.sha256(content).hexdigest()
 
     async def test_partial_file_cleaned_up_on_error(self, store, tmp_path) -> None:
-        """If a chunk fails mid-download, the partial output file is deleted."""
+        """With resume disabled, a chunk failure deletes the partial output file.
+
+        (With resume enabled — the default since BLDX-1523 — the partial file
+        and its checkpoint sidecar are intentionally KEPT; see
+        TestResumableChunkedDownload for that contract.) Chunk fetches are
+        version-pinned via ``get_async`` when the store provides an etag, so
+        the failure is injected there.
+        """
         content = b"ABCDEFGHIJ"
         await _put("chunked/boom.bin", content, store, normalize=False)
         dest = tmp_path / "out.bin"
 
-        import application_sdk.storage.ops as ops_mod
-
-        real_get_range = ops_mod.obstore.get_range_async
+        real_get = __import__("obstore").get_async
         call_count = 0
 
-        async def flaky_get_range(st, key, *, start, length):
+        async def flaky_get(st, key, **kw):
             nonlocal call_count
             call_count += 1
             if call_count == 2:
                 raise RuntimeError("transient chunk failure")
-            return await real_get_range(st, key, start=start, length=length)
+            return await real_get(st, key, **kw)
 
         with (
-            patch.object(
-                ops_mod.obstore, "get_range_async", side_effect=flaky_get_range
-            ),
+            patch("application_sdk.storage.ops.obstore.get_async", new=flaky_get),
             pytest.raises((StorageError, RuntimeError)),
         ):
             await download_file_chunked(
@@ -949,6 +1164,7 @@ class TestDownloadFileChunked:
                 store,
                 chunk_size_bytes=3,
                 normalize=False,
+                resume=False,
             )
 
         assert not dest.exists(), "partial file must be cleaned up after chunk failure"

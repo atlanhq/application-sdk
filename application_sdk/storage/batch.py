@@ -95,7 +95,9 @@ async def list_keys(
         )
         lsuffix = suffix.lower() if suffix else ""
         return sorted(
-            path for path, _ in items if not lsuffix or path.lower().endswith(lsuffix)
+            path
+            for path, _, _ in items
+            if not lsuffix or path.lower().endswith(lsuffix)
         )
     # conformance: ignore[E004] always re-raises as StorageError; no logging needed at this layer
     except Exception as exc:
@@ -114,13 +116,16 @@ async def list_keys_with_sizes(
     *,
     suffix: str = "",
     normalize: bool = True,
-) -> list[tuple[str, int]]:
-    """Like :func:`list_keys`, but return ``(key, size_bytes)`` tuples.
+) -> list[tuple[str, int, str | None]]:
+    """Like :func:`list_keys`, but return ``(key, size_bytes, e_tag)`` tuples.
 
-    The listing already carries each object's size, so callers that need to
-    decide *per file* whether to chunk a download (large object) or stream it
-    (small object) can do so without a follow-up HEAD per key. Directory-marker
-    filtering, suffix filtering, and sort order match :func:`list_keys`.
+    The listing already carries each object's size and etag, so callers that
+    need to decide *per file* whether to chunk a download (large object) or
+    stream it (small object) — and to version-pin the chunked range GETs —
+    can do so without a follow-up HEAD per key (BLDX-1513 / BLDX-1523).
+    ``e_tag`` may be ``None`` on stores that don't provide one.
+    Directory-marker filtering, suffix filtering, and sort order match
+    :func:`list_keys`.
 
     Raises:
         StorageError: If the listing fails.
@@ -133,8 +138,8 @@ async def list_keys_with_sizes(
         items = await _list_items(resolved, prefix or None)
         lsuffix = suffix.lower() if suffix else ""
         return sorted(
-            (path, size)
-            for path, size in items
+            (path, size, etag)
+            for path, size, etag in items
             if not lsuffix or path.lower().endswith(lsuffix)
         )
     # conformance: ignore[E004] always re-raises as StorageError; no logging needed at this layer
@@ -199,7 +204,7 @@ async def delete_prefix(
             f"Failed to list keys with prefix '{prefix}'", cause=exc
         ) from exc
 
-    paths = [path for path, _ in items]
+    paths = [path for path, _, _ in items]
 
     # Also delete the directory marker at the prefix root itself (e.g. the GCS
     # object "artifacts/run" when prefix = "artifacts/run/").  obstore strips
@@ -280,22 +285,29 @@ async def download_prefix(
     )
     local = Path(local_dir)
     # Reject keys whose resolved path escapes local_dir (e.g. via ".." segments).
-    destinations = [str(_safe_join_under(local, key)) for key, _ in items]
+    destinations = [str(_safe_join_under(local, key)) for key, _, _ in items]
 
     sem = asyncio.Semaphore(max_concurrency)
 
-    async def _download_one(key: str, dest: str, size: int) -> None:
+    async def _download_one(key: str, dest: str, size: int, etag: str | None) -> None:
         async with sem:
-            # Pass the listing's size so a large object is fetched via bounded
-            # parallel range GETs (each with its own timeout / retry budget)
-            # while small objects still stream in a single GET — and no per-file
-            # HEAD is issued, since the size is already known. (BLDX-1513)
+            # Pass the listing's size + etag so a large object is fetched via
+            # bounded parallel range GETs (each with its own timeout / retry
+            # budget, version-pinned via If-Match) while small objects still
+            # stream in a single GET — and no per-file HEAD is issued, since
+            # the metadata is already known. (BLDX-1513 / BLDX-1523)
             await download_file_chunked(
-                key, dest, store, compute_hash=False, normalize=False, file_size=size
+                key,
+                dest,
+                store,
+                compute_hash=False,
+                normalize=False,
+                file_size=size,
+                etag=etag,
             )
 
     await asyncio.gather(
-        *[_download_one(k, d, s) for (k, s), d in zip(items, destinations)]
+        *[_download_one(k, d, s, e) for (k, s, e), d in zip(items, destinations)]
     )
     return destinations
 

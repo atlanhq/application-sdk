@@ -386,7 +386,7 @@ async def materialize_file_reference(
         _safe_join_under,
         download_file,
         download_file_chunked,
-        get_file_size,
+        get_file_meta,
     )
 
     if not ref.is_durable or ref.storage_path is None:
@@ -396,8 +396,8 @@ async def materialize_file_reference(
     # Sizes come back with the listing so the directory branch can chunk large
     # files without a per-file HEAD (BLDX-1513).
     all_items = await list_keys_with_sizes(ref.storage_path, store)
-    data_items = [(k, s) for k, s in all_items if not k.endswith(".sha256")]
-    data_keys = [k for k, _ in data_items]
+    data_items = [(k, s, e) for k, s, e in all_items if not k.endswith(".sha256")]
+    data_keys = [k for k, _, _ in data_items]
 
     # Structured kwargs in the logger calls below are intentional: every key used
     # (storage_path, local_path, file_size_bytes, bytes_downloaded,
@@ -450,7 +450,10 @@ async def materialize_file_reference(
         # lists empty here, AND some stores (notably GCS with conditional
         # IAM) silently return an empty listing when the caller lacks
         # permission.
-        remote_size = await get_file_size(ref.storage_path, store, normalize=False)
+        remote_meta = await get_file_meta(ref.storage_path, store, normalize=False)
+        remote_size, remote_etag = (
+            remote_meta if remote_meta is not None else (None, None)
+        )
         if remote_size is None:
             raise StorageNotFoundError(
                 f"FileReference path '{ref.storage_path}' resolved to no "
@@ -492,9 +495,11 @@ async def materialize_file_reference(
                     max_concurrent_chunks=FILE_REF_CHUNK_CONCURRENCY,
                     compute_hash=True,
                     normalize=False,
-                    # remote_size already fetched via get_file_size (HEAD) above;
-                    # reuse it so the chunked path doesn't HEAD a second time.
+                    # remote_size/etag already fetched via get_file_meta (HEAD)
+                    # above; reuse both so the chunked path doesn't HEAD a
+                    # second time and its range GETs are version-pinned.
                     file_size=remote_size,
+                    etag=remote_etag,
                 )
             else:
                 sha256 = await download_file(
@@ -571,7 +576,7 @@ async def materialize_file_reference(
 
         prefix = ref.storage_path.rstrip("/") + "/"
 
-        async def _download_one(key: str, size: int) -> bool:
+        async def _download_one(key: str, size: int, etag: str | None) -> bool:
             """Download one file from the prefix. Returns True if skipped (cache hit)."""
             rel = key.removeprefix(prefix)
             # Reject keys whose resolved path escapes local_directory.
@@ -621,6 +626,7 @@ async def materialize_file_reference(
                 compute_hash=True,
                 normalize=False,
                 file_size=size,
+                etag=etag,
             )
             if sha256 is not None:
                 _write_local_sidecar(dest, sha256)
@@ -636,7 +642,7 @@ async def materialize_file_reference(
 
             sem = asyncio.Semaphore(MAX_CONCURRENT_STORAGE_TRANSFERS)
             results = await _gather_with_semaphore(
-                [_download_one(k, s) for k, s in data_items], sem
+                [_download_one(k, s, e) for k, s, e in data_items], sem
             )
             skipped = sum(results)
         except Exception as exc:
