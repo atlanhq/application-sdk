@@ -249,6 +249,7 @@ def test_format_generated_covers_all_py_not_just_input(tmp_path, monkeypatch):
     (the bug this guards against). `uvx` is stubbed in the other tests as a
     no-op, so without this assertion the _input.py-only regression is invisible.
     """
+    monkeypatch.chdir(tmp_path)
     gen = tmp_path / "app" / "generated"
     nested = gen / "crawler"  # bundle layout: rglob must recurse
     nested.mkdir(parents=True)
@@ -266,7 +267,7 @@ def test_format_generated_covers_all_py_not_just_input(tmp_path, monkeypatch):
         return types.SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(mod, "run", spy_run)
-    mod._format_generated(tmp_path)
+    mod._format_generated()
 
     formatted_names = {Path(p).name for p in formatted}
     assert formatted_names == {
@@ -285,6 +286,7 @@ def test_format_generated_check_defers_to_consumer_ruff_config(tmp_path, monkeyp
     others don't) — fleet ruff configs are not uniform, so hardcoding a rule
     subset here (previously just F401) would drift from whatever that repo's
     own pre-commit actually enforces."""
+    monkeypatch.chdir(tmp_path)
     gen = tmp_path / "app" / "generated"
     gen.mkdir(parents=True)
     (gen / "_input.py").write_text("import os\n")
@@ -297,11 +299,39 @@ def test_format_generated_check_defers_to_consumer_ruff_config(tmp_path, monkeyp
         return types.SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(mod, "run", spy_run)
-    mod._format_generated(tmp_path)
+    mod._format_generated()
 
     assert len(check_calls) == 1
     assert "--select" not in check_calls[0]
     assert "F401" not in check_calls[0]
+
+
+def test_format_generated_lints_real_path_not_temp_dir(tmp_path, monkeypatch):
+    """Regression guard for the temp-dir path-resolution bug: `_format_generated`
+    must lint files at their real `app/generated/**` path relative to cwd, not
+    an absolute temp-dir path. `per-file-ignores`/`exclude` patterns a consumer
+    scopes to `app/generated/**` only match a real relative path — an absolute
+    path under a disconnected temp dir silently fails to match, over-applying
+    rules the consumer explicitly exempted for generated code."""
+    monkeypatch.chdir(tmp_path)
+    gen = tmp_path / "app" / "generated"
+    gen.mkdir(parents=True)
+    (gen / "_input.py").write_text("import os\n")
+
+    check_calls: list[list[str]] = []
+
+    def spy_run(cmd, *, check=False):
+        if cmd[:2] == ["uvx", "ruff"] and cmd[2] == "check":
+            check_calls.append(cmd)
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(mod, "run", spy_run)
+    mod._format_generated()
+
+    assert len(check_calls) == 1
+    linted_path = check_calls[0][-1]
+    assert not Path(linted_path).is_absolute()
+    assert linted_path == str(Path("app/generated/_input.py"))
 
 
 def test_resolve_failure_is_fatal(repo, monkeypatch):
