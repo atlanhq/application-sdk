@@ -9,9 +9,10 @@ in contract-toolkit-publish.yml:
   * errored build -> fails immediately, without exhausting the poll budget
   * never reaches built -> times out after max_attempts
 
-`gh`/`git` are stubbed; each stubbed `pages/builds/latest` call returns a
-single canned response so status/commit are read together, matching the
-production code's single-call-per-poll contract.
+`gh` is stubbed; each stubbed `pages/builds/latest` call returns a single
+canned response so status/commit are read together, matching the production
+code's single-call-per-poll contract. The target commit is passed explicitly
+(--commit), not read from a checkout, matching the driver's contract.
 """
 
 from __future__ import annotations
@@ -41,15 +42,13 @@ def _build(status: str, commit: str = SHA, error_message: str | None = None) -> 
 
 
 def _make_fake_run(build_responses: list[dict]):
-    """Dispatch `git rev-parse` / `gh api .../builds/latest` / `gh api POST
-    .../builds`. Each `builds/latest` call pops the next canned response, so a
-    test can script exactly what each poll iteration sees."""
+    """Dispatch `gh api .../builds/latest` / `gh api POST .../builds`. Each
+    `builds/latest` call pops the next canned response, so a test can script
+    exactly what each poll iteration sees."""
     calls = {"trigger": 0, "polls": 0}
     remaining = list(build_responses)
 
     def fake_run(cmd: list[str]) -> subprocess.CompletedProcess:
-        if cmd[:2] == ["git", "rev-parse"]:
-            return _completed(SHA + "\n")
         if cmd[:2] == ["gh", "api"] and cmd[2] == f"repos/{REPO}/pages/builds/latest":
             calls["polls"] += 1
             build = remaining.pop(0) if len(remaining) > 1 else remaining[0]
@@ -120,10 +119,10 @@ def test_timeout_when_never_built(monkeypatch):
 def test_main_exit_codes(monkeypatch):
     fake_run, _ = _make_fake_run([_build("built")])
     monkeypatch.setattr(mod, "run", fake_run)
-    assert mod.main(["--repo", REPO]) == 0
+    assert mod.main(["--repo", REPO, "--commit", SHA]) == 0
 
     fake_run, _ = _make_fake_run(
         [_build("queued"), _build("errored", error_message="boom")]
     )
     monkeypatch.setattr(mod, "run", fake_run)
-    assert mod.main(["--repo", REPO]) == 1
+    assert mod.main(["--repo", REPO, "--commit", SHA]) == 1

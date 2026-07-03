@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
-"""Wait for a GitHub Pages build of the current commit, triggering one if needed.
+"""Wait for a GitHub Pages build of a given commit, triggering one if needed.
 
 Invoked by .github/workflows/contract-toolkit-publish.yml after the built
 contract-toolkit package is pushed to the gh-pages branch. Moved out of
 inlined shell per docs/standards/ci.md ("No conditional logic in inlined
 shell"): the skip-if-already-built check and the poll loop both branch on
 state, so they belong in a tested driver, not a workflow `run:` block.
+
+The target commit is passed in via --commit rather than read from the current
+checkout (e.g. `git rev-parse HEAD`): the calling workflow step runs after a
+prior step has switched the working tree to the gh-pages branch, and needs to
+restore just this script file from main to invoke it at all — relying on
+"whatever HEAD happens to be" at that point is fragile by construction. The
+caller captures the gh-pages commit as a step output right after pushing it.
 
 Exits 0 once the target commit's Pages build reaches "built" — including
 immediately, without triggering a redundant new build, if it is already
@@ -27,12 +34,8 @@ import time
 
 
 def run(cmd: list[str]) -> subprocess.CompletedProcess:
-    """Run a subprocess and capture output. Single seam so tests can stub gh/git."""
+    """Run a subprocess and capture output. Single seam so tests can stub gh."""
     return subprocess.run(cmd, check=False, text=True, capture_output=True)
-
-
-def current_commit() -> str:
-    return run(["git", "rev-parse", "HEAD"]).stdout.strip()
 
 
 def latest_build(repo: str) -> dict:
@@ -90,6 +93,11 @@ def main(argv: list[str] | None = None) -> int:
         "--repo", required=True, help="owner/repo, e.g. atlanhq/application-sdk"
     )
     parser.add_argument(
+        "--commit",
+        required=True,
+        help="gh-pages commit SHA to wait for (the commit just pushed there).",
+    )
+    parser.add_argument(
         "--max-attempts",
         type=int,
         default=300,
@@ -98,10 +106,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sleep-seconds", type=int, default=5)
     args = parser.parse_args(argv)
 
-    pages_sha = current_commit()
     ok = wait_for_build(
         args.repo,
-        pages_sha,
+        args.commit,
         max_attempts=args.max_attempts,
         sleep_seconds=args.sleep_seconds,
     )
