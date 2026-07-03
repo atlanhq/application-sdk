@@ -12,10 +12,11 @@ name: Publish Contract Toolkit
 # or timed out without a new release PR — every step is idempotent (gh-pages
 # commit/push, Pages build trigger, and tag creation all no-op if the target
 # is already up to date), so re-running against an unchanged
-# contract-toolkit/src/PklProject version is always safe. workflow_dispatch
-# always builds off `main`, matching the pull_request path — the ref you
-# launch it from is irrelevant, only the explicit `ref: main` checkout below
-# matters.
+# contract-toolkit/src/PklProject version is always safe. Dispatch from
+# `main` to run this workflow's current logic — as with any workflow_dispatch,
+# the ref you dispatch from determines which version of *this file* executes.
+# What's always pinned to `main` regardless of dispatch ref is the *published
+# content*: the actions/checkout step below explicitly checks out `ref: main`.
 
 on:
   pull_request:
