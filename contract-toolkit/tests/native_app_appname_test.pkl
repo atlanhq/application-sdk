@@ -14,7 +14,18 @@
 
 amends "pkl:test"
 
+import "pkl:json"
 import "../src/NativeApp.pkl" as NativeApp
+import "fixtures/native_app_pipeline.pkl" as nativeApp
+
+// The generated AE-manifest extract node for a NativeApp contract. `app_name`
+// must be baked from the contract `name` — the SDK stopped substituting a
+// runtime `{app_name}` placeholder (#2271), so a literal placeholder here
+// freezes into the DAG and strips failure attribution in Pulse (HYP-1954).
+local extractNode =
+  let (text = nativeApp.output.files["manifest.json"].text)
+  let (manifest = new json.Parser { useMapping = true }.parse(text))
+    manifest["dag"]["extract"]
 
 local qiNode = new NativeApp.QueryIntelligenceNode {
   vendorName = "athena"
@@ -54,5 +65,18 @@ facts {
 
   ["PopularityNode identifies the popularity app"] {
     popularityNode.appName == "popularity"
+  }
+
+  // Extract node bakes app_name from the contract `name` — not a literal
+  // "{app_name}" placeholder. The SDK no longer fills that placeholder at
+  // serve time (#2271); a literal here would freeze into the AE DAG and drop
+  // failure attribution in Pulse (HYP-1954). Guards the top-level and inputs
+  // copies the frozen manifests of dbt/postgres/quicksight actually carried.
+  ["extract node bakes app_name from the contract name"] {
+    extractNode["app_name"] == "native-app-pipeline"
+  }
+
+  ["extract node inputs bake app_name from the contract name"] {
+    extractNode["inputs"]["app_name"] == "native-app-pipeline"
   }
 }
