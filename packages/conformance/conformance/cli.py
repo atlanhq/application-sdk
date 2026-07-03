@@ -295,6 +295,30 @@ def _cmd_bootstrap(argv: list[str]) -> int:
             f"ok (exists): {gitignore_dest}  (edit freely; C003 warns on missing entries)"
         )
 
+    # contract_schema.lock.json — write-if-absent scaffold. B006
+    # (StaleContractLedger) is a hard FAIL-tier rule active from day one: with
+    # no ledger present, the ledger-absent fallback loads the SDK's own
+    # bundled ledger, which has none of the app's fields recorded, so any app
+    # with existing entrypoint contract fields fails enforced mode on its very
+    # first run. Seed the baseline from current source — same output as
+    # running `gen-contract-ledger` by hand.
+    from conformance.suite.checks.deprecation._ledger_schema import (
+        load_ledger,
+        serialize,
+    )
+    from conformance.tools.generate_contract_ledger import build_ledger
+
+    ledger_dest = root / "contract_schema.lock.json"
+    if not ledger_dest.exists():
+        ledger = build_ledger(root, load_ledger(None))
+        ledger_dest.write_text(serialize(ledger), encoding="utf-8")
+        print(f"scaffolded: {ledger_dest} ({len(ledger.fields)} fields)")
+    else:
+        print(
+            f"ok (exists): {ledger_dest}"
+            "  (run `gen-contract-ledger` to refresh; B005/B006 track drift)"
+        )
+
     return 0
 
 
@@ -338,8 +362,9 @@ commands:
                  .github/actions/run-conformance-detect/action.yaml and
                  .github/scripts/build_conformance_args.py that conformance-reusable.yaml
                  needs on disk in every caller repo. All of these always overwrite
-                 (re-running eradicates drift). tests.yaml and renovate.json are
-                 write-if-absent by default; pass --enforce to update them too.
+                 (re-running eradicates drift). tests.yaml, renovate.json, and
+                 contract_schema.lock.json are write-if-absent by default; pass
+                 --enforce to update renovate.json's enforcement mode too.
                    --package-name NAME         docstring-coverage package (default: app)
                    --unit-tests-workflow FILE   build-and-publish test workflow (default: tests.yaml)
                    --app-name NAME             connector app name for tests.yaml (default: from atlan.yaml, else "app")
