@@ -53,11 +53,12 @@ def discover(root: Path) -> list[Path]:
         # `.../test/`, `.../build/`, or `.../conformance/`) has every file
         # under it silently dropped from AST-based scanning.
         rel_parts = path.relative_to(root).parts
+        dir_parts = rel_parts[:-1]
         # Exclude named infra / virtualenv dirs
-        if set(rel_parts) & EXCLUDE_DIRS:
+        if set(dir_parts) & EXCLUDE_DIRS:
             continue
         # Exclude any dot-prefixed directory component (.github, .claude, …)
-        if any(p.startswith(".") for p in rel_parts[:-1]):
+        if any(p.startswith(".") for p in dir_parts):
             continue
         # Exclude test files by name convention
         name = path.name
