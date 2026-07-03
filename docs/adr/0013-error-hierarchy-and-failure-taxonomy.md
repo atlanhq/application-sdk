@@ -39,14 +39,15 @@ that keeps legacy `except Domain:` catch sites alive.
 
 | Axis | Type | Owner | Closed? |
 |---|---|---|---|
-| `FailureCategory` — *what happened* | Enum (14 values) | SDK | Yes |
+| `FailureCategory` — *what happened* | Enum (15 values) | SDK | Yes |
 | `Audience` — *who must act* | Enum (3 values) | SDK | Yes |
 | `suggested_action` — *what to do* | `str \| None` | App | No |
 
-**`FailureCategory`** is a closed, SDK-owned vocabulary of 14 values:
+**`FailureCategory`** is a closed, SDK-owned vocabulary of 15 values:
 `CANCELLED`, `TIMEOUT`, `RATE_LIMITED`, `AUTH`, `PERMISSION`, `NOT_FOUND`,
 `ALREADY_EXISTS`, `INVALID_INPUT`, `PRECONDITION`, `DEPENDENCY_UNAVAILABLE`,
-`RESOURCE_EXHAUSTED`, `DATA_INTEGRITY`, `INTERNAL`, `UNIMPLEMENTED`. It is
+`SOURCE_UNAVAILABLE`, `RESOURCE_EXHAUSTED`, `DATA_INTEGRITY`, `INTERNAL`,
+`UNIMPLEMENTED`. It is
 closed so Atlan-internal consumers (Automation Engine, SLA dashboards) can
 branch on it without a lookup table, and so semantic drift requires an SDK
 release with a documented evolution policy.
@@ -93,7 +94,7 @@ fields (`message`, `retryable`, `cause`, `app_name`, `run_id`,
 `suggested_action`) are the base set. ClassVars (`category`,
 `default_retryable`, `code`, `audience`) carry the per-class identity.
 
-Fourteen **categorical leaves** in `application_sdk/errors/leaves.py` — one
+Fifteen **categorical leaves** in `application_sdk/errors/leaves.py` — one
 per `FailureCategory` — subclass `AppError` and fix all four ClassVars plus
 add dataclass fields for structured, per-category evidence:
 
@@ -109,6 +110,7 @@ add dataclass fields for structured, per-category evidence:
 | `InvalidInputError` | INVALID_INPUT | No | USER | `field`, `constraint`, `value_summary` |
 | `PreconditionError` | PRECONDITION | No | USER | `resource`, `expected_state`, `actual_state` |
 | `DependencyUnavailableError` | DEPENDENCY_UNAVAILABLE | **Yes** | PLATFORM | `service`, `target`, `network_error` |
+| `SourceUnavailableError` | SOURCE_UNAVAILABLE | **Yes** | USER | `source_type`, `endpoint`, `http_status`, `network_error` |
 | `ResourceExhaustedError` | RESOURCE_EXHAUSTED | **Yes** | PLATFORM | `resource`, `limit`, `observed` |
 | `DataIntegrityError` | DATA_INTEGRITY | No | APP_OWNER | `expectation`, `observed`, `location` |
 | `InternalError` | INTERNAL | No | APP_OWNER | `component`, `invariant`, `classification_pending` |
@@ -246,7 +248,7 @@ also removed in v4.0.
 
 ## Industry precedents
 
-**gRPC `google.rpc.Code`** is the primary vocabulary reference. The 14
+**gRPC `google.rpc.Code`** is the primary vocabulary reference. The 15
 `FailureCategory` values align near 1-to-1:
 
 | gRPC status | FailureCategory |
