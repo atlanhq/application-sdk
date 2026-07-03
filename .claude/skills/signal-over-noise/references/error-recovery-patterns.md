@@ -410,7 +410,7 @@ Mechanical fixes per category. Apply exactly — don't over-engineer.
 the replacement **must** use a typed `AppError` subclass from
 `application_sdk.errors`. See
 [`typed-error-prescription.md`](typed-error-prescription.md) for the full
-catalogue (14 SDK leaves), litmus tests, SDK-context cookbook (§4), the
+catalogue (15 SDK leaves), litmus tests, SDK-context cookbook (§4), the
 exhaustive legacy `AtlanError` → `AppError` migration table (§5), and the
 mandatory `cause`/`from` rules (§6). **Never** propose raising bare
 `Exception` / `ValueError` / `RuntimeError`; **never** propose raising legacy

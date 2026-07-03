@@ -40,7 +40,7 @@ FailureDetails(
 
 ---
 
-## §2 — The 14 SDK leaves
+## §2 — The 15 SDK leaves
 
 All defined in `application_sdk/errors/leaves.py`. Import path:
 `from application_sdk.errors import <Leaf>`.
@@ -60,7 +60,8 @@ subclass a leaf and override `code` — never add a new category value.
 | `AlreadyExistsError` | ALREADY_EXISTS | USER | False | Entity the caller tried to create already exists (idempotent-create path) |
 | `InvalidInputError` | INVALID_INPUT | USER | False | Argument or payload malformed irrespective of system state |
 | `PreconditionError` | PRECONDITION | USER | False | Inputs syntactically valid but system state forbids the action |
-| `DependencyUnavailableError` | DEPENDENCY_UNAVAILABLE | **PLATFORM** | **True** | Required platform service down or degraded (Dapr, Temporal, object store, source DB) |
+| `DependencyUnavailableError` | DEPENDENCY_UNAVAILABLE | **PLATFORM** | **True** | Required platform service down or degraded (Dapr, Temporal, object store) |
+| `SourceUnavailableError` | SOURCE_UNAVAILABLE | USER | **True** | Customer-controlled source system unreachable (their DB, SaaS API, on-prem endpoint) |
 | `ResourceExhaustedError` | RESOURCE_EXHAUSTED | **PLATFORM** | **True** | Local resource limit hit (OOM, disk full, file handles, worker slots) |
 | `DataIntegrityError` | DATA_INTEGRITY | APP_OWNER | False | Returned data is corrupt or violates expected invariants |
 | `InternalError` | INTERNAL | APP_OWNER | False | SDK or app bug; invariant broken in our code |
@@ -75,8 +76,11 @@ a general pattern: do not use string-typed `ApplicationError` for anything else,
 and do not model new failure types on this approach.
 
 **`audience` override pattern** — when an SDK base default doesn't fit the locus,
-override `audience` on a minimal subclass. For connector apps, the source-side
-network is `audience=USER` (the customer controls it), so they override in their
+override `audience` on a minimal subclass. For an unreachable *source* system,
+prefer `SourceUnavailableError` (already `audience=USER`) over overriding
+`DependencyUnavailableError`. The override pattern still applies where no leaf
+fits the locus — e.g. a source-side read timeout is an `AppTimeoutError` whose
+default `APP_OWNER` should be overridden to `USER` in the connector's
 `failures.py`. The SDK's own code should follow the same logic.
 
 ---
@@ -347,21 +351,26 @@ available.
 
 ### Network unreachable / 5xx from source
 
+The source system is customer-owned (their database, SaaS API, on-prem
+endpoint), so its outage is the customer's to fix — raise
+`SourceUnavailableError`, which already defaults to `audience=USER`:
+
 ```python
-raise DependencyUnavailableError(
+raise SourceUnavailableError(
     message="Source database unreachable",
-    service="source_db",
-    target=host,
+    source_type="postgres",
+    endpoint=host,
     cause=exc,
 ) from exc
 ```
-Subclass code: `DEPENDENCY_UNAVAILABLE_NETWORK`. Audience: default PLATFORM.
+Subclass code: `SOURCE_UNAVAILABLE_NETWORK`. Audience: default USER; retryable by
+default. For a SaaS source returning 5xx, set `http_status=` from the response.
 `cause=exc` routes the exception detail through `cause_repr` automatically — do
-not also set `network_error=str(exc)` as that duplicates what `cause_repr` already
+not also set `network_error=str(exc)`, which duplicates what `cause_repr` already
 carries.
-**Override to USER** when the unreachable host is the customer's own source
-(their firewall / VPC). Add `audience: ClassVar[Audience] = Audience.USER`
-on a minimal subclass if doing this consistently.
+
+Reserve `DependencyUnavailableError` (audience PLATFORM) for Atlan-internal
+platform outages — see the next entry.
 
 ---
 

@@ -43,10 +43,11 @@ that keeps legacy `except Domain:` catch sites alive.
 | `Audience` — *who must act* | Enum (3 values) | SDK | Yes |
 | `suggested_action` — *what to do* | `str \| None` | App | No |
 
-**`FailureCategory`** is a closed, SDK-owned vocabulary of 14 values:
+**`FailureCategory`** is a closed, SDK-owned vocabulary of 15 values:
 `CANCELLED`, `TIMEOUT`, `RATE_LIMITED`, `AUTH`, `PERMISSION`, `NOT_FOUND`,
 `ALREADY_EXISTS`, `INVALID_INPUT`, `PRECONDITION`, `DEPENDENCY_UNAVAILABLE`,
-`RESOURCE_EXHAUSTED`, `DATA_INTEGRITY`, `INTERNAL`, `UNIMPLEMENTED`. It is
+`SOURCE_UNAVAILABLE`, `RESOURCE_EXHAUSTED`, `DATA_INTEGRITY`, `INTERNAL`,
+`UNIMPLEMENTED`. It is
 closed so Atlan-internal consumers (Automation Engine, SLA dashboards) can
 branch on it without a lookup table, and so semantic drift requires an SDK
 release with a documented evolution policy.
@@ -247,7 +248,7 @@ also removed in v4.0.
 
 ## Industry precedents
 
-**gRPC `google.rpc.Code`** is the primary vocabulary reference. The 14
+**gRPC `google.rpc.Code`** is the primary vocabulary reference. The 15
 `FailureCategory` values align near 1-to-1:
 
 | gRPC status | FailureCategory |
