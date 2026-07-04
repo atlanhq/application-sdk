@@ -110,6 +110,20 @@ def _read_atlan_yaml_name(root: pathlib.Path) -> str:
     return ""
 
 
+def _read_workflow_field(path: pathlib.Path, field: str) -> str:
+    """Return the quoted value of ``field: "<value>"`` in *path*, or ``""``."""
+    if not path.exists():
+        return ""
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            m = re.match(rf'^\s*{re.escape(field)}:\s*"([^"]+)"', line)
+            if m:
+                return m.group(1)
+    except OSError:
+        pass
+    return ""
+
+
 def _derive_app_name_from_dir(root: pathlib.Path) -> str:
     """Derive app name from the repo directory name.
 
@@ -132,8 +146,12 @@ def _parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
 
     Flags
     -----
-    --package-name NAME          docstring-coverage package (default: app)
-    --unit-tests-workflow FILE   build-and-publish test workflow (default: tests.yaml)
+    --package-name NAME          docstring-coverage package
+                                 (default: auto-detected from an existing
+                                 docstring-coverage.yaml, else "app")
+    --unit-tests-workflow FILE   build-and-publish test workflow
+                                 (default: auto-detected from an existing
+                                 build-and-publish.yaml, else "tests.yaml")
     --app-name NAME              connector app name for tests.yaml scaffold
                                  (default: auto-detected from atlan.yaml, else "app")
     --app-image-name NAME        GHCR image name for tests.yaml scaffold (default: atlan-<app-name>-app)
@@ -150,8 +168,8 @@ def _parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
                                          must merge.
     """
     result: dict[str, str] = {
-        "package_name": "app",
-        "unit_tests_workflow": "tests.yaml",
+        "package_name": "",
+        "unit_tests_workflow": "",
         "app_name": "",
         "app_image_name": "",
         "enable_e2e": "true",
@@ -207,6 +225,27 @@ def _cmd_bootstrap(argv: list[str]) -> int:
 
     kwargs = _parse_bootstrap_args(argv)
     root = pathlib.Path.cwd()
+    # Auto-detect package-name when --package-name was not supplied, from an
+    # existing docstring-coverage.yaml (so re-running bootstrap doesn't reset
+    # a customized value to the "app" default).
+    if not kwargs["package_name"]:
+        kwargs["package_name"] = (
+            _read_workflow_field(
+                root / ".github" / "workflows" / "docstring-coverage.yaml",
+                "package_name",
+            )
+            or "app"
+        )
+    # Auto-detect unit-tests-workflow when --unit-tests-workflow was not
+    # supplied, from an existing build-and-publish.yaml.
+    if not kwargs["unit_tests_workflow"]:
+        kwargs["unit_tests_workflow"] = (
+            _read_workflow_field(
+                root / ".github" / "workflows" / "build-and-publish.yaml",
+                "unit_tests_workflow_file",
+            )
+            or "tests.yaml"
+        )
     # Auto-detect app name when --app-name was not supplied:
     # 1. atlan.yaml `name:` field, 2. repo directory name, 3. "app".
     if not kwargs["app_name"]:
@@ -365,8 +404,10 @@ commands:
                  (re-running eradicates drift). tests.yaml, renovate.json, and
                  contract_schema.lock.json are write-if-absent by default; pass
                  --enforce to update renovate.json's enforcement mode too.
-                   --package-name NAME         docstring-coverage package (default: app)
-                   --unit-tests-workflow FILE   build-and-publish test workflow (default: tests.yaml)
+                   --package-name NAME         docstring-coverage package (default: auto-detected
+                                               from an existing docstring-coverage.yaml, else "app")
+                   --unit-tests-workflow FILE   build-and-publish test workflow (default: auto-detected
+                                               from an existing build-and-publish.yaml, else "tests.yaml")
                    --app-name NAME             connector app name for tests.yaml (default: from atlan.yaml, else "app")
                    --app-image-name NAME       GHCR image name for tests.yaml (default: atlan-<app-name>-app)
                    --enable-e2e true|false     enable e2e in tests.yaml (default: true, line omitted)

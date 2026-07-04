@@ -53,6 +53,24 @@ or chooses the written content — `bootstrap` renders the same deterministic
 template the C002 checker itself renders for comparison, so there is nothing
 for the model to judge or game.
 
+`bootstrap`'s actual write footprint is wider than `.github/`/`.gitignore` and
+must be accounted for whenever it is invoked as part of a C002 (or C003
+absent-file) fix:
+
+- It **always overwrites** `.claude/skills/remediate/SKILL.md` — the very
+  document driving this remediation loop — on every invocation. This is the
+  same deterministic-re-sync argument as above (the model does not author
+  SKILL.md's content, `bootstrap` renders it), but it is called out
+  explicitly here so a reviewer auditing a C002 fix isn't surprised to see
+  SKILL.md touched by a change that was nominally about a CI workflow file.
+- It **write-if-absent scaffolds** `contract_schema.lock.json` (a B-series
+  entrypoint-contract ledger baseline) whenever that file does not already
+  exist — unrelated to the C-series finding being fixed. If this invocation
+  creates that file, add a residue entry noting a new B-series baseline was
+  established and needs human review; it was not produced to satisfy any
+  C-series finding and must not be silently folded into the C002 fix's own
+  outcome.
+
 For C001 findings only, editing the `@<ref>` suffix of a single `uses:` line
 in a `.github/workflows/*.yml` or `.github/actions/**/action.yml` file is also
 permitted — and **only** that suffix: the action owner/repo/path and every

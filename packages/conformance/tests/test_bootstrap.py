@@ -65,10 +65,14 @@ def test_bootstrap_file_prints_updated_for_overwrite(
 
 
 def test_parse_bootstrap_args_defaults() -> None:
+    # "" for package_name/unit_tests_workflow means "not explicitly set" —
+    # _cmd_bootstrap auto-detects each from an existing managed workflow file,
+    # falling back to "app"/"tests.yaml" respectively (mirrors app_name and
+    # services_script below).
     result = _parse_bootstrap_args([])
     assert result == {
-        "package_name": "app",
-        "unit_tests_workflow": "tests.yaml",
+        "package_name": "",
+        "unit_tests_workflow": "",
         "app_name": "",
         "app_image_name": "",
         "enable_e2e": "true",
@@ -890,6 +894,92 @@ def test_cmd_bootstrap_explicit_services_script_overrides_autodetect(
     _cmd_bootstrap(["--services-script", ".github/test/custom-setup.sh"])
     tests = (tmp_path / ".github" / "workflows" / "tests.yaml").read_text()
     assert 'services-script: ".github/test/custom-setup.sh"' in tests
+
+
+# ---------------------------------------------------------------------------
+# Auto-detection: package-name from docstring-coverage.yaml,
+# unit-tests-workflow from build-and-publish.yaml
+# ---------------------------------------------------------------------------
+
+
+def test_cmd_bootstrap_reads_package_name_from_docstring_coverage(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """bootstrap reuses the existing package_name when --package-name is absent."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "docstring-coverage.yaml").write_text(
+        'jobs:\n  docstring-coverage:\n    with:\n      package_name: "myconnector"\n'
+    )
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    docstring = (wf_dir / "docstring-coverage.yaml").read_text()
+    assert 'package_name: "myconnector"' in docstring
+
+
+def test_cmd_bootstrap_defaults_package_name_when_absent(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without an existing docstring-coverage.yaml, package-name defaults to app."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    docstring = (
+        tmp_path / ".github" / "workflows" / "docstring-coverage.yaml"
+    ).read_text()
+    assert 'package_name: "app"' in docstring
+
+
+def test_cmd_bootstrap_explicit_package_name_overrides_autodetect(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Explicit --package-name takes priority over the auto-detected value."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "docstring-coverage.yaml").write_text('package_name: "myconnector"\n')
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--package-name", "override"])
+    docstring = (wf_dir / "docstring-coverage.yaml").read_text()
+    assert 'package_name: "override"' in docstring
+
+
+def test_cmd_bootstrap_reads_unit_tests_workflow_from_build_and_publish(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """bootstrap reuses the existing unit_tests_workflow when the flag is absent."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "build-and-publish.yaml").write_text(
+        'jobs:\n  build:\n    with:\n      unit_tests_workflow_file: "ci-tests.yaml"\n'
+    )
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    build = (wf_dir / "build-and-publish.yaml").read_text()
+    assert 'unit_tests_workflow_file: "ci-tests.yaml"' in build
+
+
+def test_cmd_bootstrap_defaults_unit_tests_workflow_when_absent(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without an existing build-and-publish.yaml, it defaults to tests.yaml."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    build = (tmp_path / ".github" / "workflows" / "build-and-publish.yaml").read_text()
+    assert 'unit_tests_workflow_file: "tests.yaml"' in build
+
+
+def test_cmd_bootstrap_explicit_unit_tests_workflow_overrides_autodetect(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Explicit --unit-tests-workflow takes priority over the auto-detected value."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "build-and-publish.yaml").write_text(
+        'unit_tests_workflow_file: "ci-tests.yaml"\n'
+    )
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--unit-tests-workflow", "override.yaml"])
+    build = (wf_dir / "build-and-publish.yaml").read_text()
+    assert 'unit_tests_workflow_file: "override.yaml"' in build
 
 
 # ---------------------------------------------------------------------------

@@ -56,8 +56,8 @@ def test_c002_is_autofixable() -> None:
     assert get_rule("C002").autofixable is True
 
 
-def test_c002_orthogonal_gate_is_none() -> None:
-    assert get_rule("C002").orthogonal_gate == "none"
+def test_c002_orthogonal_gate_is_skip() -> None:
+    assert get_rule("C002").orthogonal_gate == "skip"
 
 
 # ---------------------------------------------------------------------------

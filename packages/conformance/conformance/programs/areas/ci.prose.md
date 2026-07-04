@@ -67,44 +67,48 @@ _Read by `remediate-finding` when `finding.area == "ci"`._
 
 **C002 BootstrapWorkflowDrift** — a managed CI file (workflow shim, vendored
 action file, or scaffold) is absent or has drifted from what
-`atlan-application-sdk-conformance bootstrap` would write. `classification =
-"mechanical"` — the fix is a deterministic re-sync, not a model-authored
-edit: `bootstrap` overwrites managed files with the exact canonical rendered
-template the C002 checker itself renders for comparison, so there is nothing
-for the model to invent or judge.
+`atlan-application-sdk-conformance bootstrap` would write.
+`classification = "mechanical"` — the fix is a deterministic re-sync, not a
+model-authored edit: `bootstrap` overwrites managed files with the exact
+canonical rendered template the C002 checker itself renders for comparison,
+so there is nothing for the model to invent or judge.
 
 *Procedure* — run once per remediation pass; one invocation re-syncs every
 managed file, so it clears every other pending C002 (and C003 absent-file)
-finding in the same pass:
+finding in the same pass. Also run this same procedure directly when handling
+a standalone C003 absent-`.gitignore` finding — see that section below for why
+it isn't safe to assume a C002 finding already triggered it:
 
-1. Preserve the two per-repo customizations `bootstrap` does **not**
-   auto-detect from the repo, so re-running it doesn't reset them to
-   defaults:
-   - If `.github/workflows/docstring-coverage.yaml` exists, extract its
-     `package_name: "<value>"` and pass `--package-name <value>`.
-   - If `.github/workflows/build-and-publish.yaml` exists, extract its
-     `unit_tests_workflow_file: "<value>"` and pass
-     `--unit-tests-workflow <value>`.
-   (`--app-name` and `--services-script` need no extraction — `bootstrap`
-   auto-detects both itself, from `atlan.yaml`/the repo directory name and
-   from an existing `.github/test/setup-services.sh` respectively.)
-2. Run:
+1. Run, with no flags:
    ```
-   atlan-application-sdk-conformance bootstrap \
-     --package-name <extracted-or-default> \
-     --unit-tests-workflow <extracted-or-default>
+   atlan-application-sdk-conformance bootstrap
    ```
-3. This single command resolves, in one pass: every absent/drifted managed
+   `bootstrap` auto-detects every per-repo customization itself — `--app-name`
+   and `--package-name` from `atlan.yaml`/an existing
+   `docstring-coverage.yaml` (else the repo directory name/`"app"`),
+   `--unit-tests-workflow` from an existing `build-and-publish.yaml` (else
+   `"tests.yaml"`), and `--services-script` from an existing
+   `.github/test/setup-services.sh`. No extraction step is needed here;
+   re-running with no flags never resets a customized value to a default.
+2. This single command resolves, in one pass: every absent/drifted managed
    workflow shim, every absent/drifted vendored action file, an absent
    `.gitignore` (C003's absent-file case — see below), an absent
    `renovate.json`, and an absent `tests.yaml`.
-4. `outcome = "fix"`. `orthogonal_gate = "none"` on both C002 and C003 (set
+3. `outcome = "fix"`. `orthogonal_gate = "skip"` on both C002 and C003 (set
    on the rule definitions) — the test suite gate is skipped entirely, not
    just for this fix: a `.github/`/scaffold-only change cannot affect Python
    behaviour. `recheck-narrowest` (re-running `suite.runner --series C`) is
    the only verification that applies.
-5. Any C002 finding still present after this pass is genuinely not
+4. Any C002 finding still present after this pass is genuinely not
    bootstrap-fixable and falls into the residue cases below.
+5. `bootstrap` also always-overwrites `.claude/skills/remediate/SKILL.md` and
+   write-if-absent-scaffolds `contract_schema.lock.json` as side effects of
+   every invocation — see the write-scope note in
+   `remediate-finding.prose.md` for what to do about each. If this
+   invocation created a `contract_schema.lock.json` that did not exist
+   before, add a residue entry noting a new B-series baseline was
+   established and needs human review — it was not produced to satisfy any
+   C-series finding.
 
 *Not resolved by this procedure — route to residue:*
 
@@ -126,25 +130,32 @@ finding in the same pass:
 **C003 GitignoreMissingEntry** — two distinct cases with different
 remediability:
 
-- **`.gitignore` is absent** — `classification = "mechanical"`. Already
-  covered by the C002 `bootstrap` invocation above (step 3): it scaffolds a
-  standard `.gitignore` whenever none exists. No separate action needed; if
-  a C002 pass already ran this remediation round, this finding is already
-  cleared by the time `remediate-finding` sees it.
+- **`.gitignore` is absent** — `classification = "mechanical"`. Run the C002
+  `bootstrap` procedure above directly for this finding too: it scaffolds a
+  standard `.gitignore` whenever none exists. Do **not** assume a C002
+  finding already triggered this in the same pass — `detect-fix-recheck`
+  batches findings per file, so a repo with a missing `.gitignore` but no
+  other managed-file drift (zero C002 findings that round) would otherwise
+  have nothing invoke `bootstrap`, and `recheck-narrowest` would then find
+  `.gitignore` still absent and misroute this to residue as "recheck
+  failed" even though it's fully mechanical. `bootstrap` is idempotent, so
+  invoking it again when a C002 pass already ran earlier in the same round
+  is harmless.
 - **`.gitignore` exists but is missing a standard entry** — **not** resolved
   by `bootstrap` (it only ever writes `.gitignore` when the file is
-  entirely absent; it never edits an existing one). `classification =
-  "judgment"` — route to residue. A human should confirm the missing entry
-  is actually wanted before it's appended (e.g. a repo that deliberately
-  tracks `.env` for a documented reason).
+  entirely absent; it never edits an existing one).
+  `classification = "judgment"` — route to residue. A human should confirm
+  the missing entry is actually wanted before it's appended (e.g. a repo
+  that deliberately tracks `.env` for a documented reason).
 
 ---
 
 **C001 UnpinnedActionReference** — a `uses:` reference is pinned to a mutable
-tag or branch instead of a full 40-hex commit SHA. `classification =
-"mechanical"` (resolving a ref to its current commit is deterministic, not an
-interpretive call) but `external_influence = true` (the SHA comes from a live
-GitHub lookup, not the source file itself) — see the Write-scope constraint
+tag or branch instead of a full 40-hex commit SHA.
+`classification = "mechanical"` (resolving a ref to its current commit is
+deterministic, not an interpretive call) but `external_influence = true`
+(the SHA comes from a live GitHub lookup, not the source file itself) — see
+the Write-scope constraint
 in `remediate-finding.prose.md` for why this is the one narrow exception to
 the "no other rule may touch `.github/`" rule, and why it is nonetheless
 always escalated to residue.
@@ -156,25 +167,27 @@ always escalated to residue.
    paraphrase for the replacement — re-derive `owner/repo` and `ref` from the
    literal `uses:` line so whitespace/quoting is preserved exactly.
 2. Resolve `ref` to its full 40-hex commit SHA:
-   - Preferred (handles tags, branches, and short SHAs uniformly): `gh api
-     repos/<owner>/<repo>/commits/<ref> --jq .sha`.
+   - Preferred (handles tags, branches, and short SHAs uniformly):
+     `gh api repos/<owner>/<repo>/commits/<ref> --jq .sha`.
    - Fallback when `gh` is unavailable/unauthenticated (tags and branches
-     only — cannot expand an already-short SHA): `git ls-remote
-     https://github.com/<owner>/<repo> <ref>`. If the ref is an annotated tag,
-     `git ls-remote --tags` returns both `refs/tags/<ref>` and the peeled
-     `refs/tags/<ref>^{}` — always prefer the peeled (`^{}`) SHA, which is the
-     commit the tag points to, not the tag object itself.
+     only — cannot expand an already-short SHA):
+     `git ls-remote https://github.com/<owner>/<repo> <ref>`. If the ref is
+     an annotated tag, `git ls-remote --tags` returns both
+     `refs/tags/<ref>` and the peeled `refs/tags/<ref>^{}` — always prefer
+     the peeled (`^{}`) SHA, which is the commit the tag points to, not the
+     tag object itself.
    - If neither resolves (no network egress, ref not found, ambiguous match),
      `not_remediable = true` for this finding — do not guess a SHA.
-3. Rewrite the `uses:` line's ref suffix only:
-   `uses: <owner>/<repo>[/path]@<ref>` → `uses:
-   <owner>/<repo>[/path]@<full-sha> # <original-ref>`. The trailing `#
-   <original-ref>` comment is required, not cosmetic — it's what keeps the
-   pin human-auditable and matches the exact comment convention C002's own
-   drift check already tolerates (`_ACTION_PIN_RE` in `bootstrap_drift.py`
-   strips `@<sha> # ...` before comparing, so this never causes new C002
-   drift). Change nothing else on the line or in the file.
-4. `outcome = "fix"`. `orthogonal_gate = "none"` (set on the C001 rule
+3. Rewrite the `uses:` line's ref suffix only, from
+   `uses: <owner>/<repo>[/path]@<ref>` to
+   `uses: <owner>/<repo>[/path]@<full-sha> # <original-ref>`.
+   The trailing `# <original-ref>` comment is required, not cosmetic — it's
+   what keeps the pin human-auditable and matches the exact comment
+   convention C002's own drift check already tolerates (`_ACTION_PIN_RE` in
+   `bootstrap_drift.py` strips `@<sha> # ...` before comparing, so this
+   never causes new C002 drift). Change nothing else on the line or in the
+   file.
+4. `outcome = "fix"`. `orthogonal_gate = "skip"` (set on the C001 rule
    definition) — a `.github/` ref-pin change cannot affect Python behaviour,
    so the test suite is skipped; `recheck-narrowest` is the only gate.
 5. Regardless of `classification` (`"mechanical"`) and regardless of

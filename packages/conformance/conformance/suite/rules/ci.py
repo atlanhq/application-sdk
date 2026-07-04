@@ -18,7 +18,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="supply-chain",
         autofixable=True,
-        orthogonal_gate="none",
+        orthogonal_gate="skip",
         since="0.2.0",
         rationale=(
             "A mutable tag (@v4) can be silently re-pointed to any commit after review — "
@@ -44,7 +44,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="ci-consistency",
         autofixable=True,
-        orthogonal_gate="none",
+        orthogonal_gate="skip",
         since="0.3.0",
         rationale=(
             "Managed CI workflows enforce fleet-wide guarantees: uniform security scanning, "
@@ -71,7 +71,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="ci-consistency",
         autofixable=False,
-        orthogonal_gate="none",
+        orthogonal_gate="skip",
         since="0.4.0",
         rationale=(
             "A .gitignore that is missing standard entries risks accidentally committing "

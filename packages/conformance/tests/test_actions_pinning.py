@@ -24,8 +24,8 @@ def test_c001_rule_exists() -> None:
     assert rule.name == "UnpinnedActionReference"
 
 
-def test_c001_orthogonal_gate_is_none() -> None:
-    assert get_rule("C001").orthogonal_gate == "none"
+def test_c001_orthogonal_gate_is_skip() -> None:
+    assert get_rule("C001").orthogonal_gate == "skip"
 
 
 # ── is_violation truth table ──────────────────────────────────────────────────
