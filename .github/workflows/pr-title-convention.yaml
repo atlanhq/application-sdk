@@ -218,7 +218,7 @@ jobs:
           github.event_name == 'pull_request'
           && steps.detect.outputs.violation == 'true'
           && github.event.pull_request.head.repo.fork == false
-        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
           header: pr-title-convention
           path: pr-title-comment.md
@@ -228,7 +228,7 @@ jobs:
           github.event_name == 'pull_request'
           && steps.detect.outputs.violation == 'false'
           && github.event.pull_request.head.repo.fork == false
-        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
           header: pr-title-convention
           delete: true
