@@ -396,7 +396,7 @@ commands:
                  needs on disk in every caller repo. All of these always overwrite
                  (re-running eradicates drift). tests.yaml, renovate.json, and
                  contract_schema.lock.json are write-if-absent by default; pass
-                 --enforce to update renovate.json's enforcement mode too.
+                 --enforce true|false to also update renovate.json's enforcement mode.
                    --package-name NAME         docstring-coverage package (default: app)
                    --unit-tests-workflow FILE   build-and-publish test workflow (default: tests.yaml)
                    --app-name NAME             connector app name for tests.yaml (default: from atlan.yaml, else "app")
