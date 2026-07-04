@@ -40,11 +40,10 @@ of the finding as returned by `detect-violations`):
   `passed`, `exit_code`, and `summary` directly.
 
 - `"none"` → skip execution entirely; return `passed = true`, `exit_code = 0`,
-  `summary = "orthogonal_gate=none — fix cannot affect Python or contract
-  behaviour, skipped"`.  Used by rules whose only remediable fixes are
-  deterministic re-syncs of managed non-Python files (e.g. C002/C003's
-  bootstrap-backed fixes) — running the test suite after a `.github/` or
-  `.gitignore` change has no signal to offer.
+  and `summary = "orthogonal_gate=none — fix cannot affect Python or contract behaviour, skipped"`.
+  Used by rules whose only remediable fixes are deterministic re-syncs of
+  managed non-Python files (e.g. C001/C002/C003's fixes) — running the test
+  suite after a `.github/` or `.gitignore` change has no signal to offer.
 
 - **any other value** → fail closed: emit `passed = false`, `exit_code = -1`,
   and `summary = "Unknown orthogonal_gate value: <value> — revert the edit and

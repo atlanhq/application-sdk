@@ -83,8 +83,8 @@ finding in the same pass:
    - If `.github/workflows/docstring-coverage.yaml` exists, extract its
      `package_name: "<value>"` and pass `--package-name <value>`.
    - If `.github/workflows/build-and-publish.yaml` exists, extract its
-     `unit_tests_workflow_file: "<value>"` and pass `--unit-tests-workflow
-     <value>`.
+     `unit_tests_workflow_file: "<value>"` and pass
+     `--unit-tests-workflow <value>`.
    (`--app-name` and `--services-script` need no extraction — `bootstrap`
    auto-detects both itself, from `atlan.yaml`/the repo directory name and
    from an existing `.github/test/setup-services.sh` respectively.)
