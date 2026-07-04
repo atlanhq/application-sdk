@@ -44,6 +44,14 @@ For K-series findings, edits to `contract/*.pkl` files are also permitted.
 The `pkl-eval` orthogonal gate verifies that the edited contract still compiles
 and regenerates its artifacts correctly.
 
+For C002 findings only, invoking `atlan-application-sdk-conformance bootstrap`
+is also permitted, despite it writing under `.github/` and `.gitignore`. This
+is not a carve-out of the no-self-judging discipline: the model never authors
+or chooses the written content — `bootstrap` renders the same deterministic
+template the C002 checker itself renders for comparison, so there is nothing
+for the model to judge or game. No other rule or area may write to `.github/`,
+`tests/`, or `conformance/`.
+
 ### Dispatch by area
 
 Route on `finding.area` to the matching area file and follow its
@@ -60,6 +68,6 @@ relevant area file — this is the progressive-disclosure boundary.
 | `dockerfile` | PHASE 1 (suggest-only) | `areas/dockerfile.prose.md` |
 | `deprecation` | PHASE 1 | `areas/deprecation.prose.md` |
 | `tests` | PHASE 2 (strict-only) | `areas/tests.prose.md` |
-| `ci` | DEFERRED | `areas/ci.prose.md` — return `not_remediable = true` |
+| `ci` | PHASE 1 (partial) | `areas/ci.prose.md` — C002 (and C003's absent-file case) mechanical via `bootstrap`; everything else `not_remediable = true` |
 | `contract-toolkit` | PHASE 1 (strict-only; WARN-tier) | `areas/contract-toolkit.prose.md` |
 | `security` | PHASE 1 (suggest-only) | `areas/security.prose.md` |

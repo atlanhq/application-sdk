@@ -43,6 +43,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="ci-consistency",
         autofixable=True,
+        orthogonal_gate="none",
         since="0.3.0",
         rationale=(
             "Managed CI workflows enforce fleet-wide guarantees: uniform security scanning, "
@@ -69,6 +70,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="ci-consistency",
         autofixable=False,
+        orthogonal_gate="none",
         since="0.4.0",
         rationale=(
             "A .gitignore that is missing standard entries risks accidentally committing "

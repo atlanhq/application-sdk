@@ -62,9 +62,12 @@ class RuleDefinition(BaseModel):
     short_description: str = ""
     full_description: str = ""
     help_uri: str | None = None
-    orthogonal_gate: Literal["tests", "pkl-eval"] | None = None
+    orthogonal_gate: Literal["tests", "pkl-eval", "none"] | None = None
     """Named gate to run after a source-code fix.  ``None`` or ``"tests"`` runs
-    the repository's standard test suite; ``"pkl-eval"`` runs the pkl-eval gate.
+    the repository's standard test suite; ``"pkl-eval"`` runs the pkl-eval gate;
+    ``"none"`` skips gating entirely — for fixes that cannot affect Python or
+    contract behaviour (e.g. a deterministic re-sync of a managed CI/scaffold
+    file) so running the test suite would only add cost with no signal.
     The field is an exhaustive ``Literal`` so that a typo (e.g. ``"pkleval"``)
     is caught at rule-definition time rather than silently falling through to the
     wrong gate at remediation time."""
