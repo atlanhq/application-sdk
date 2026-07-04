@@ -37,8 +37,8 @@ before deciding the next action.
 ## Phase 0: Identify the PR
 
 ```bash
-# If an argument was given (number or URL), pass it to `gh pr view <arg>`.
-gh pr view --json number,headRefName,baseRefName,url,headRefOid,isDraft
+# ARG is the number/URL passed to /automate-pr, or empty for the current branch.
+gh pr view $ARG --json number,headRefName,baseRefName,url,headRefOid,isDraft
 gh repo view --json nameWithOwner --jq .nameWithOwner
 ```
 
@@ -58,7 +58,9 @@ gh pr checks "$PR_NUMBER" --repo "$REPO" --watch
 
 For each failing required check:
 
-1. Find the run: `gh pr checks "$PR_NUMBER" --repo "$REPO" --json name,state,link,workflow`
+1. Find the run: `gh pr checks "$PR_NUMBER" --repo "$REPO" --json name,state,link,workflow`.
+   Each failing check's `link` is a URL like `.../actions/runs/<RUN_ID>/job/<JOB_ID>`
+   — extract `RUN_ID` with `grep -oE 'runs/[0-9]+' | cut -d/ -f2`.
 2. Read the failure: `gh run view <RUN_ID> --repo "$REPO" --log-failed`
 3. Decide:
    - **In PR code, obvious fix** (pre-commit/lint, type error, missing import,
@@ -121,7 +123,9 @@ query($owner:String!, $repo:String!, $pr:Int!) {
   first comment's `author.login` matches `copilot` (case-insensitive).
 - If none remain, skip to Phase 3.
 
-For each unresolved Copilot thread:
+For each unresolved Copilot thread (`COMMENT_DATABASE_ID` = the comment's
+`databaseId`, `THREAD_ID` = the thread's `id`, both from the GraphQL query
+above):
 
 1. Read the comment body, the `diffHunk`, and the actual file at `path`
    around `line`/`originalLine`. Pull in more surrounding context/callers if
@@ -140,6 +144,15 @@ For each unresolved Copilot thread:
      before dereferencing." (no need to over-explain).
    - If dismissed: a concise rationale, e.g. "False positive: `x` is
      validated non-null by the caller in `foo.py:42`."
+4. **Resolve the thread.** Replying does not mark it resolved, so it will
+   keep reappearing on the next fetch. Use the thread's `id` (from the
+   GraphQL query, not `databaseId`) to resolve it explicitly:
+   ```bash
+   gh api graphql -f query='
+   mutation($id: ID!) {
+     resolveReviewThread(input: {threadId: $id}) { thread { isResolved } }
+   }' -f id="$THREAD_ID"
+   ```
 
 After working through all threads, if any code changed: `uv run pre-commit
 run --files <changed>`, commit, push (see **Commit conventions**).
@@ -170,14 +183,18 @@ TRIGGER_TIME=$(gh api "repos/$REPO/issues/comments/$TRIGGER_ID" --jq '.created_a
 
 Poll for a comment created after `TRIGGER_TIME`, authored by a login
 containing `mothership`, whose body contains the `<!-- SDK_REVIEW -->`
-marker:
+marker. `--jq` runs per-page under `--paginate`, so filtering *and* taking
+`last` in the same expression only gives you the last match of each page,
+not overall — filter per-page instead, then slurp all pages and take the
+last match across the whole result:
 
 ```bash
 gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
   --jq --arg after "$TRIGGER_TIME" \
-  '[.[] | select(.created_at > $after)
-        | select(.user.login | test("mothership"; "i"))
-        | select(.body | contains("<!-- SDK_REVIEW -->"))] | last'
+  '.[] | select(.created_at > $after)
+       | select(.user.login | test("mothership"; "i"))
+       | select(.body | contains("<!-- SDK_REVIEW -->"))' \
+  | jq -s 'last' > /tmp/mothership_reply.json
 ```
 
 Poll every ~30s. A review can take up to ~35 minutes on a large PR, so budget
@@ -192,9 +209,9 @@ the reply.** It must be newly created after `TRIGGER_TIME`.
 
 ### 3c. Read the verdict
 
-Read the full comment body (use `--jq '.last.body'` or fetch by id and print
-it — don't truncate with naive `head -1`/single-line jq selectors, the body
-is multiline). Extract:
+Read the full comment body from the object saved in 3b (`jq -r '.body'
+/tmp/mothership_reply.json`) — don't truncate with naive `head -1`/single-line
+jq selectors, the body is multiline. Extract:
 
 - The `<!-- VERDICT: X -->` marker.
 - The `### Findings` section — every bullet under it, grouped by file, at
