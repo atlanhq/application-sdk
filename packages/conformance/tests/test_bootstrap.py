@@ -138,21 +138,46 @@ def test_cmd_bootstrap_writes_skill_md(
     assert dest.read_text() == render("remediate.md")
 
 
-def test_cmd_bootstrap_skips_skill_md_inside_conformance_repo(
+def test_cmd_bootstrap_is_a_no_op_inside_conformance_repo(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """bootstrap never overwrites SKILL.md when run inside the SDK's own repo.
+    """bootstrap writes nothing at all when run inside the SDK's own repo.
 
     packages/conformance/ only exists in the atlan-application-sdk-conformance
     package's own source checkout, never in a consumer app repo (which
-    installs the package via pip) — its presence is the signal that SKILL.md
-    here is hand-maintained prose, not template output.
+    installs the package via pip) — its presence is the signal that every
+    file bootstrap would otherwise manage here (SKILL.md, the workflow/action
+    shims, tests.yaml, renovate.json, contract_schema.lock.json) is either
+    hand-maintained or simply doesn't apply to a library repo. A prior guard
+    covered only SKILL.md and missed MANAGED_WORKFLOWS/MANAGED_ACTION_FILES,
+    which are just as hand-authored here — this asserts the whole write phase
+    is skipped, not file-by-file.
     """
     (tmp_path / "packages" / "conformance").mkdir(parents=True)
+    # Seed one MANAGED_WORKFLOWS file with content that diverges from what
+    # bootstrap would render, mirroring this repo's real hand-authored
+    # conformance.yaml — proves it survives untouched, not just absent files.
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    custom_conformance = wf_dir / "conformance.yaml"
+    custom_conformance.write_text("# hand-authored, not bootstrap's template\n")
+
     monkeypatch.chdir(tmp_path)
-    _cmd_bootstrap([])
-    dest = tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md"
-    assert not dest.exists()
+    assert _cmd_bootstrap([]) == 0
+
+    assert not (tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md").exists()
+    assert (
+        custom_conformance.read_text() == "# hand-authored, not bootstrap's template\n"
+    )
+    for name in MANAGED_WORKFLOWS:
+        if name != "conformance.yaml":
+            assert not (wf_dir / name).exists()
+    for dest_rel, _template_name in MANAGED_ACTION_FILES:
+        assert not (tmp_path / dest_rel).exists()
+    assert not (tmp_path / ".github" / "workflows" / "tests.yaml").exists()
+    assert not (tmp_path / "contract_schema.lock.json").exists()
+    assert not (tmp_path / "renovate.json").exists()
+    assert not (tmp_path / ".gitignore").exists()
 
 
 @pytest.mark.parametrize("help_flag", ["--help", "-h"])

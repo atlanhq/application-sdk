@@ -268,8 +268,10 @@ tests.yaml, renovate.json, and contract_schema.lock.json are write-if-absent by 
 pass --enforce true|false to also update renovate.json's enforcement mode.
 
 options:
-  --package-name NAME         docstring-coverage package (default: app)
-  --unit-tests-workflow FILE  build-and-publish test workflow (default: tests.yaml)
+  --package-name NAME         docstring-coverage package; omit to auto-detect from an
+                              existing docstring-coverage.yaml (else "app")
+  --unit-tests-workflow FILE  build-and-publish test workflow; omit to auto-detect from
+                              an existing build-and-publish.yaml (else "tests.yaml")
   --app-name NAME             connector app name for tests.yaml (default: from atlan.yaml, else "app")
   --app-image-name NAME       GHCR image name for tests.yaml (default: atlan-<app-name>-app)
   --enable-e2e true|false     enable e2e in tests.yaml (default: true, line omitted)
@@ -299,6 +301,27 @@ def _cmd_bootstrap(argv: list[str]) -> int:
 
     kwargs = _parse_bootstrap_args(argv)
     root = pathlib.Path.cwd()
+
+    # bootstrap scaffolds a *consumer app* repo. Every file it would write —
+    # SKILL.md, the managed workflow/action shims, tests.yaml, renovate.json,
+    # .gitignore, contract_schema.lock.json — is either hand-maintained here
+    # or simply doesn't apply to a library repo. Detect "this repo" via
+    # packages/conformance/, a directory no consumer app has (they consume
+    # the package via pip, never as an in-tree source checkout), and no-op
+    # the entire write phase rather than special-casing each managed file
+    # individually — a per-file guard silently stops covering new managed
+    # files the moment one is added without updating it (this replaced an
+    # earlier guard that covered only SKILL.md and missed MANAGED_WORKFLOWS/
+    # MANAGED_ACTION_FILES, which are just as hand-authored in this repo).
+    if (root / "packages" / "conformance").is_dir():
+        print(
+            "skipped: bootstrap is a no-op inside the"
+            " atlan-application-sdk-conformance repo itself"
+            " (its .github/, SKILL.md, tests.yaml, and renovate.json are"
+            " hand-maintained, not bootstrap-managed)"
+        )
+        return 0
+
     # force_renovate must reflect only an *explicit* --enforce on this
     # invocation, captured before autodetection fills kwargs["enforce"] in
     # from an existing conformance.yaml -- renovate.json stays write-if-absent
@@ -315,23 +338,10 @@ def _cmd_bootstrap(argv: list[str]) -> int:
     kwargs["exit_zero"] = "true" if enforce == "false" else "false"
     kwargs["automerge"] = "false" if enforce == "false" else "true"
 
-    # .claude/skills/remediate/SKILL.md is hand-maintained prose inside the
-    # atlan-application-sdk-conformance package's own repo (this one) — not
-    # generated template output, unlike every consumer app repo. Detect "this
-    # repo" via packages/conformance/, a directory no consumer app has (they
-    # consume the package via pip, never as an in-tree source checkout), and
-    # skip the overwrite there rather than risk destroying hand-authored
-    # content with the generic shim.
-    if (root / "packages" / "conformance").is_dir():
-        print(
-            "skipped: .claude/skills/remediate/SKILL.md"
-            " (hand-maintained in the atlan-application-sdk-conformance repo)"
-        )
-    else:
-        _bootstrap_file(
-            root / ".claude" / "skills" / "remediate" / "SKILL.md",
-            render("remediate.md", **kwargs),
-        )
+    _bootstrap_file(
+        root / ".claude" / "skills" / "remediate" / "SKILL.md",
+        render("remediate.md", **kwargs),
+    )
     for name in MANAGED_WORKFLOWS:
         _bootstrap_file(
             root / ".github" / "workflows" / name,
