@@ -46,12 +46,13 @@ For K-series findings, edits to `contract/*.pkl` files are also permitted.
 The `pkl-eval` orthogonal gate verifies that the edited contract still compiles
 and regenerates its artifacts correctly.
 
-For C002 findings only, invoking `atlan-application-sdk-conformance bootstrap`
-is also permitted, despite it writing under `.github/` and `.gitignore`. This
-is not a carve-out of the no-self-judging discipline: the model never authors
-or chooses the written content — `bootstrap` renders the same deterministic
-template the C002 checker itself renders for comparison, so there is nothing
-for the model to judge or game.
+For C002 findings (and C003's absent-`.gitignore` case) only, invoking
+`atlan-application-sdk-conformance bootstrap` is also permitted, despite it
+writing under `.github/` and `.gitignore`. This is not a carve-out of the
+no-self-judging discipline: the model never authors or chooses the written
+content — `bootstrap` renders the same deterministic template the C002
+checker itself renders for comparison, so there is nothing for the model to
+judge or game.
 
 `bootstrap`'s actual write footprint is wider than `.github/`/`.gitignore` and
 must be accounted for whenever it is invoked as part of a C002 (or C003
@@ -72,9 +73,10 @@ absent-file) fix:
   outcome.
 
 For C001 findings only, editing the `@<ref>` suffix of a single `uses:` line
-in a `.github/workflows/*.yml` or `.github/actions/**/action.yml` file is also
-permitted — and **only** that suffix: the action owner/repo/path and every
-other line must be byte-for-byte unchanged. Unlike C002, the replacement
+in a `.github/workflows/*.yml`/`*.yaml` or `.github/actions/**/action.yml`/
+`action.yaml` file is also permitted — and **only** that suffix: the action
+owner/repo/path and every other line must be byte-for-byte unchanged. Unlike
+C002, the replacement
 content here *is* model-obtained (a commit SHA resolved from a live GitHub
 lookup), which is why C001's prescription always sets
 `external_influence = true` — the fix is verified by recheck like any other,

@@ -59,7 +59,7 @@ loop until violations is empty or attempts >= max_attempts:
 
       # Only run orthogonal gate for source-logic fixes; suppress = comment only.
       if result.outcome == "fix":
-        let ortho = call orthogonal-gate scope: scope
+        let ortho = call orthogonal-gate scope: scope, finding: finding
         if not ortho.passed:
           revert result.edit from finding.file
           add finding to residue with note "orthogonal gate failed after fix"

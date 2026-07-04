@@ -942,6 +942,21 @@ def test_cmd_bootstrap_explicit_package_name_overrides_autodetect(
     assert 'package_name: "override"' in docstring
 
 
+def test_cmd_bootstrap_reads_unquoted_package_name_from_docstring_coverage(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unquoted package_name: value (valid YAML) is still auto-detected."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "docstring-coverage.yaml").write_text(
+        "jobs:\n  docstring-coverage:\n    with:\n      package_name: myconnector\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    docstring = (wf_dir / "docstring-coverage.yaml").read_text()
+    assert 'package_name: "myconnector"' in docstring
+
+
 def test_cmd_bootstrap_reads_unit_tests_workflow_from_build_and_publish(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -980,6 +995,21 @@ def test_cmd_bootstrap_explicit_unit_tests_workflow_overrides_autodetect(
     _cmd_bootstrap(["--unit-tests-workflow", "override.yaml"])
     build = (wf_dir / "build-and-publish.yaml").read_text()
     assert 'unit_tests_workflow_file: "override.yaml"' in build
+
+
+def test_cmd_bootstrap_reads_unquoted_unit_tests_workflow_from_build_and_publish(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unquoted unit_tests_workflow_file: value (valid YAML) is still auto-detected."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "build-and-publish.yaml").write_text(
+        "jobs:\n  build:\n    with:\n      unit_tests_workflow_file: ci-tests.yaml\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    build = (wf_dir / "build-and-publish.yaml").read_text()
+    assert 'unit_tests_workflow_file: "ci-tests.yaml"' in build
 
 
 # ---------------------------------------------------------------------------

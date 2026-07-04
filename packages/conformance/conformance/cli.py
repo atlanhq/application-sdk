@@ -94,15 +94,18 @@ def _bootstrap_file(dest: pathlib.Path, content: str) -> None:
     print(f"{'updated' if existed else 'installed'}: {dest}")
 
 
-def _read_atlan_yaml_name(root: pathlib.Path) -> str:
-    """Return the ``name:`` value from ``atlan.yaml`` in *root*, or ``""``."""
+def _read_workflow_field(path: pathlib.Path, field: str) -> str:
+    """Return the value of ``field: <value>`` in *path*, or ``""``.
 
-    atlan_yaml = root / "atlan.yaml"
-    if not atlan_yaml.exists():
+    *value* may be bare or quoted (``field: value`` or ``field: "value"``);
+    quotes are stripped.  Matches only the first ``field:`` line, at any
+    indentation level.
+    """
+    if not path.exists():
         return ""
     try:
-        for line in atlan_yaml.read_text(encoding="utf-8").splitlines():
-            m = re.match(r"^name:\s+(\S+)", line)
+        for line in path.read_text(encoding="utf-8").splitlines():
+            m = re.match(rf"^\s*{re.escape(field)}:\s*(\S+)", line)
             if m:
                 return m.group(1).strip("\"'")
     except OSError:
@@ -110,18 +113,9 @@ def _read_atlan_yaml_name(root: pathlib.Path) -> str:
     return ""
 
 
-def _read_workflow_field(path: pathlib.Path, field: str) -> str:
-    """Return the quoted value of ``field: "<value>"`` in *path*, or ``""``."""
-    if not path.exists():
-        return ""
-    try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            m = re.match(rf'^\s*{re.escape(field)}:\s*"([^"]+)"', line)
-            if m:
-                return m.group(1)
-    except OSError:
-        pass
-    return ""
+def _read_atlan_yaml_name(root: pathlib.Path) -> str:
+    """Return the ``name:`` value from ``atlan.yaml`` in *root*, or ``""``."""
+    return _read_workflow_field(root / "atlan.yaml", "name")
 
 
 def _derive_app_name_from_dir(root: pathlib.Path) -> str:
@@ -137,6 +131,43 @@ def _derive_app_name_from_dir(root: pathlib.Path) -> str:
     if name.endswith("-app"):
         name = name[: -len("-app")]
     return name or "app"
+
+
+def _apply_bootstrap_autodetection(kwargs: dict[str, str], root: pathlib.Path) -> None:
+    """Fill in any bootstrap flag left unset (``""``) with its auto-detected value.
+
+    Each flag's auto-detection reads back an existing managed file so that
+    re-running ``bootstrap`` with no explicit flags reuses a repo's current
+    customization instead of resetting it to the hardcoded default.
+    """
+    # package-name: existing docstring-coverage.yaml, else "app".
+    if not kwargs["package_name"]:
+        kwargs["package_name"] = (
+            _read_workflow_field(
+                root / ".github" / "workflows" / "docstring-coverage.yaml",
+                "package_name",
+            )
+            or "app"
+        )
+    # unit-tests-workflow: existing build-and-publish.yaml, else "tests.yaml".
+    if not kwargs["unit_tests_workflow"]:
+        kwargs["unit_tests_workflow"] = (
+            _read_workflow_field(
+                root / ".github" / "workflows" / "build-and-publish.yaml",
+                "unit_tests_workflow_file",
+            )
+            or "tests.yaml"
+        )
+    # app-name: atlan.yaml `name:` field, else the repo directory name.
+    if not kwargs["app_name"]:
+        kwargs["app_name"] = _read_atlan_yaml_name(root) or _derive_app_name_from_dir(
+            root
+        )
+    # services-script: existing .github/test/setup-services.sh, else unset.
+    if not kwargs["services_script"]:
+        candidate = root / ".github" / "test" / "setup-services.sh"
+        if candidate.exists():
+            kwargs["services_script"] = ".github/test/setup-services.sh"
 
 
 def _parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
@@ -225,38 +256,7 @@ def _cmd_bootstrap(argv: list[str]) -> int:
 
     kwargs = _parse_bootstrap_args(argv)
     root = pathlib.Path.cwd()
-    # Auto-detect package-name when --package-name was not supplied, from an
-    # existing docstring-coverage.yaml (so re-running bootstrap doesn't reset
-    # a customized value to the "app" default).
-    if not kwargs["package_name"]:
-        kwargs["package_name"] = (
-            _read_workflow_field(
-                root / ".github" / "workflows" / "docstring-coverage.yaml",
-                "package_name",
-            )
-            or "app"
-        )
-    # Auto-detect unit-tests-workflow when --unit-tests-workflow was not
-    # supplied, from an existing build-and-publish.yaml.
-    if not kwargs["unit_tests_workflow"]:
-        kwargs["unit_tests_workflow"] = (
-            _read_workflow_field(
-                root / ".github" / "workflows" / "build-and-publish.yaml",
-                "unit_tests_workflow_file",
-            )
-            or "tests.yaml"
-        )
-    # Auto-detect app name when --app-name was not supplied:
-    # 1. atlan.yaml `name:` field, 2. repo directory name, 3. "app".
-    if not kwargs["app_name"]:
-        kwargs["app_name"] = _read_atlan_yaml_name(root) or _derive_app_name_from_dir(
-            root
-        )
-    # Auto-detect services-script when --services-script was not supplied.
-    if not kwargs["services_script"]:
-        candidate = root / ".github" / "test" / "setup-services.sh"
-        if candidate.exists():
-            kwargs["services_script"] = ".github/test/setup-services.sh"
+    _apply_bootstrap_autodetection(kwargs, root)
 
     # Derive the two render variables from --enforce.
     # enforce="" (not set) → hard defaults but no force-overwrite of scaffolds.
