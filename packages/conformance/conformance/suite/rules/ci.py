@@ -18,6 +18,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="supply-chain",
         autofixable=True,
+        orthogonal_gate="none",
         since="0.2.0",
         rationale=(
             "A mutable tag (@v4) can be silently re-pointed to any commit after review — "

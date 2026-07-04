@@ -27,7 +27,9 @@ description: >
   audit).
 - `external_influence` — boolean; true if the model consulted any content
   outside the source file itself that could be attacker-influenced.  Always
-  false for error-handling in this phase; wired for future dependency/CVE use.
+  false for error-handling in this phase.  True for C001 (the replacement SHA
+  is resolved from a live GitHub lookup); also wired for future dependency/CVE
+  use.
 - `not_remediable` — boolean; true when the area has no authored prescription
   yet (returns to residue without an edit attempt).
 
@@ -49,8 +51,19 @@ is also permitted, despite it writing under `.github/` and `.gitignore`. This
 is not a carve-out of the no-self-judging discipline: the model never authors
 or chooses the written content — `bootstrap` renders the same deterministic
 template the C002 checker itself renders for comparison, so there is nothing
-for the model to judge or game. No other rule or area may write to `.github/`,
-`tests/`, or `conformance/`.
+for the model to judge or game.
+
+For C001 findings only, editing the `@<ref>` suffix of a single `uses:` line
+in a `.github/workflows/*.yml` or `.github/actions/**/action.yml` file is also
+permitted — and **only** that suffix: the action owner/repo/path and every
+other line must be byte-for-byte unchanged. Unlike C002, the replacement
+content here *is* model-obtained (a commit SHA resolved from a live GitHub
+lookup), which is why C001's prescription always sets
+`external_influence = true` — the fix is verified by recheck like any other,
+but is unconditionally routed to residue for human sign-off before it merges,
+per the `detect-fix-recheck` loop's existing `external_influence` handling.
+
+No other rule or area may write to `.github/`, `tests/`, or `conformance/`.
 
 ### Dispatch by area
 
@@ -68,6 +81,6 @@ relevant area file — this is the progressive-disclosure boundary.
 | `dockerfile` | PHASE 1 (suggest-only) | `areas/dockerfile.prose.md` |
 | `deprecation` | PHASE 1 | `areas/deprecation.prose.md` |
 | `tests` | PHASE 2 (strict-only) | `areas/tests.prose.md` |
-| `ci` | PHASE 1 (partial) | `areas/ci.prose.md` — C002 (and C003's absent-file case) mechanical via `bootstrap`; everything else `not_remediable = true` |
+| `ci` | PHASE 1 (partial) | `areas/ci.prose.md` — C002 (and C003's absent-file case) mechanical via `bootstrap`; C001 mechanical SHA-pin, always routed to residue (`external_influence`); C003 missing-entry and drifted `tests.yaml`/`renovate.json` `not_remediable = true` |
 | `contract-toolkit` | PHASE 1 (strict-only; WARN-tier) | `areas/contract-toolkit.prose.md` |
 | `security` | PHASE 1 (suggest-only) | `areas/security.prose.md` |

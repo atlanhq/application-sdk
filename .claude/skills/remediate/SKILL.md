@@ -64,14 +64,18 @@ gates:
       Every source-logic fix is also verified by the test suite (uv run poe
       test).  If tests break, the edit is reverted.  Suppression-only edits
       skip this gate (comment-only changes cannot break tests), as do rules
-      whose orthogonal_gate is declared "none" (e.g. C002/C003 — a
-      .github/.gitignore re-sync cannot affect Python behaviour).
+      whose orthogonal_gate is declared "none" (e.g. C001/C002/C003 — a
+      .github/.gitignore change cannot affect Python behaviour).
   - no_self_judging: >
       The remediator never touches tests/, .github/, or conformance/ — the
       gates it is judged against.  This is structural: remediate-finding's
-      write scope excludes these paths, with one narrow exception: C002's fix
-      is invoking `atlan-application-sdk-conformance bootstrap`, which writes
-      deterministic template content the model never authors or chooses.
+      write scope excludes these paths, with two narrow exceptions: C002's
+      fix invokes `atlan-application-sdk-conformance bootstrap`, which writes
+      deterministic template content the model never authors or chooses; and
+      C001's fix rewrites only the `@<ref>` suffix of one `uses:` line to a
+      GitHub-resolved SHA, which is why C001 always carries
+      `external_influence = true` and is escalated to residue regardless of
+      recheck outcome.
 ---
 
 # /remediate — Conformance Remediation Loop
@@ -134,7 +138,7 @@ dispatches each finding to its area prescription.
 | dockerfile | I | ✅ Suggest-only | Findings modelled + routed to residue |
 | tests | T | ✅ Strict-only | WARNING-tier; strict mode |
 | logging | L | ✅ Implemented | Mechanical (L004, L007, L015, L017, L020) auto-fixed; judgment (L001, L002, L005, others) modelled + routed to residue |
-| ci | C | ✅ Partial | C002 (managed-file drift) mechanical via `bootstrap` re-sync; also clears C003's absent-`.gitignore` case as a side effect. C001, C003 missing-entry, and drifted `tests.yaml`/`renovate.json` → residue |
+| ci | C | ✅ Partial | C002 (managed-file drift) mechanical via `bootstrap` re-sync; also clears C003's absent-`.gitignore` case as a side effect. C001 (unpinned action) mechanical SHA-resolve + repin, always escalated to residue for sign-off (external lookup). C003 missing-entry and drifted `tests.yaml`/`renovate.json` → residue |
 | contract-toolkit | K | ✅ Strict-only | K001/K002 guided migration to App.pkl; verified by pkl-eval gate |
 
 To add a new area prescription: author `<programs-dir>/areas/<name>.prose.md`
@@ -233,7 +237,7 @@ Review each item before merging.
 
 | Discipline | Enforcement |
 |---|---|
-| No self-judging (§6.1) | Write scope excludes `tests/`, `.github/`, `conformance/` — except C002's `bootstrap` re-sync, which writes deterministic, non-model-authored template content, not a judged edit |
+| No self-judging (§6.1) | Write scope excludes `tests/`, `.github/`, `conformance/` — except C002's `bootstrap` re-sync (deterministic, non-model-authored content) and C001's ref-suffix repin (model-obtained SHA, so always escalated via `external_influence`) |
 | Orthogonal gate (§6.1) | Test suite runs after every source-logic fix; fail → revert |
 | Oscillation detection (§6.2) | Fingerprint-set identity check across rounds → freeze-and-escalate |
 | Bounded loop (§6.2) | 5-attempt cap; batch per-file fixes in one pass |
