@@ -13,6 +13,11 @@ description: >
 - `scope` (string, required) — repository root path.
 - `finding` (object, required) — the finding being gated, as returned by
   `detect-violations`.  Used to read `finding.orthogonal_gate` for dispatch.
+- `touched_files` (list of strings, optional) — every path the applied fix
+  actually wrote, as computed by the caller (`detect-fix-recheck`'s
+  `result.touched_files or [finding.file]`).  Used by the `"skip"` gate to
+  parse-check the full multi-file write, not just `finding.file`.  Falls
+  back to `[finding.file]` if not passed.
 
 ### Returns
 
@@ -49,7 +54,8 @@ of the finding as returned by `detect-violations`):
   syntax-breaking rewrite would otherwise auto-accept with nothing catching
   it before GitHub Actions itself fails to parse the file post-merge.
 
-  For each path in `finding.touched_files` (or `[finding.file]` if unset):
+  For each path in the `touched_files` parameter (or `[finding.file]` if not
+  passed):
   - `.yaml`/`.yml` → parse with a YAML loader (e.g.
     `python -c "import sys,yaml; yaml.safe_load(open(sys.argv[1]))" <path>`).
   - `.json` → parse with a JSON loader.

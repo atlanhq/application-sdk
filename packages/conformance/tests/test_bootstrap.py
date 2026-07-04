@@ -170,6 +170,20 @@ def test_parse_bootstrap_args_unknown_flag_after_valid_ones(
     assert "--bogus-flag" in capsys.readouterr().err
 
 
+def test_parse_bootstrap_args_known_flag_missing_value(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A recognized flag given as the last token with no value must be
+    reported as missing its value, not misidentified as unknown."""
+    with pytest.raises(SystemExit) as exc_info:
+        _parse_bootstrap_args(["--enforce"])
+    assert exc_info.value.code == 2
+    err = capsys.readouterr().err
+    assert "--enforce" in err
+    assert "requires a value" in err
+    assert "unknown option" not in err
+
+
 # ---------------------------------------------------------------------------
 # _cmd_bootstrap (full integration)
 # ---------------------------------------------------------------------------

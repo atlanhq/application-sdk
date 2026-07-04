@@ -236,6 +236,9 @@ def _parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
                 result[dest] = arg[len(flag) + 1 :]
                 consumed = True
                 break
+        if not consumed and arg in _FLAGS:
+            print(f"error: option {arg!r} requires a value", file=sys.stderr)
+            sys.exit(2)
         if not consumed and arg.startswith("-") and arg not in ("-h", "--help"):
             print(f"error: unknown option {arg!r}", file=sys.stderr)
             sys.exit(2)
