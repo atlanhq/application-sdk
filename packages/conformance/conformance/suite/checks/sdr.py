@@ -13,10 +13,10 @@ Cross-artifact checks that gate on ``self_deployed_runtime: true`` in
   a ``self.upload(`` call so the ``ENABLE_ATLAN_UPLOAD`` path is reachable.
   Without it extraction "passes" but no assets transfer to the Atlan tenant
   bucket in SDR deployments.  Only applies to apps that actually have a
-  publish stage: an app whose ``contract/app.pkl`` sets ``pipeline.publish =
-  null`` compiles to a ``manifest.json`` with no ``dag.publish`` node, and has
-  nowhere for ``self.upload()`` to hand extracted assets off to — P030 is
-  skipped for those apps.
+  publish stage: an app whose ``contract/app.pkl`` sets
+  ``pipeline.publish = null`` compiles to a ``manifest.json`` with no
+  ``dag.publish`` node, and has nowhere for ``self.upload()`` to hand
+  extracted assets off to — P030 is skipped for those apps.
 
 P026–P028 are reserved by a concurrent PR (GetattrOnTypedContractField,
 AppStateAsCrossTaskChannel, ManualQualifiedNameFString — PR #2417).
