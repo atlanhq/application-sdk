@@ -69,17 +69,24 @@ judge or game.
 
 `bootstrap`'s actual write footprint is wider than `.github/`/`.gitignore` and
 must be accounted for whenever it is invoked as part of a C002 (or C003
-absent-file) fix. Set `touched_files` to every path `bootstrap` printed with
-a `scaffolded:`, `installed:`, `updated:`, or `backed up:` prefix in this
-invocation's own stdout — this is deterministic (read directly off the CLI's
-own output), never model-judged, and it is what lets `detect-fix-recheck`
-revert the *entire* fix, not just `finding.file`, if the gates below reject
-it. A path printed with an `ok (...)` prefix was left unchanged and is not
-part of `touched_files`. (The `backed up:` prefix only appears if a prior
-invocation passed `--enforce` explicitly and `renovate.json` had
-non-canonical content, writing a `renovate.json.bak` — not reachable via the
-no-flags procedure below, but real if this function is ever invoked with an
-explicit `--enforce`.)
+absent-file) fix. Invoke it with `--json` and set `touched_files` to the
+`touched` array of the trailing JSON line it prints (after all of its normal
+human-readable output) — e.g.
+`atlan-application-sdk-conformance bootstrap --json`, then
+`json.loads(stdout.strip().splitlines()[-1])["touched"]`. This is genuinely
+deterministic: `touched` is built by the CLI's own Python code from each
+write's actual outcome, not by the model classifying which of the
+`scaffolded:`/`installed:`/`updated:`/`backed up:`/`ok (...)` human-readable
+lines above it means what — the same information the prefixes convey, but as
+a structured value the model reads rather than one it has to parse. It is
+what lets `detect-fix-recheck` revert the *entire* fix, not just
+`finding.file`, if the gates below reject it. A path in the JSON line's
+`unchanged` array was left alone and is not part of `touched_files`. (The
+`backed up:` write only happens if a prior invocation passed `--enforce`
+explicitly and `renovate.json` had non-canonical content, writing a
+`renovate.json.bak` that appears in `touched` alongside `renovate.json` —
+not reachable via the no-flags procedure below, but real if this function is
+ever invoked with an explicit `--enforce`.)
 
 - It **always overwrites** `.claude/skills/remediate/SKILL.md` in consumer
   app repos — the very document driving this remediation loop — on every
@@ -92,22 +99,22 @@ explicit `--enforce`.)
   (detected by `packages/conformance/pyproject.toml` naming that exact
   package — not merely a `packages/conformance/` directory existing, which a
   consumer monorepo could contain coincidentally and silently trip the
-  guard), `bootstrap` skips this write
-  entirely: `.claude/skills/remediate/SKILL.md` there is hand-maintained
-  prose (this very file's sibling), not generated template output, so
-  overwriting it would destroy human-authored content rather than re-sync a
-  deterministic template. This guard is enforced in code
-  (`main` in `conformance/bootstrap/command.py`), not just documented here.
+  guard), `bootstrap` skips this write entirely: `.claude/skills/remediate/
+  SKILL.md` there is hand-maintained prose (this very file's sibling), not
+  generated template output, so overwriting it would destroy human-authored
+  content rather than re-sync a deterministic template. This guard is
+  enforced in code (`main` in `conformance/bootstrap/command.py`), not just
+  documented here — the same invocation's JSON line reports
+  `"skipped": true` and empty `touched`/`unchanged` arrays in that case.
 - It **write-if-absent scaffolds** `contract_schema.lock.json` (a B-series
   entrypoint-contract ledger baseline) whenever that file does not already
   exist — unrelated to the C-series finding being fixed. Whether this
-  invocation created it is determined the same deterministic way: if
-  `contract_schema.lock.json` appears in this invocation's `scaffolded:`
-  lines (as opposed to not appearing at all, which means it already
-  existed), add a residue entry noting a new B-series baseline was
-  established and needs human review — it was not produced to satisfy any
-  C-series finding and must not be silently folded into the C002 fix's own
-  outcome.
+  invocation created it is determined the same structural way: if
+  `contract_schema.lock.json` appears in the JSON line's `touched` array (as
+  opposed to `unchanged` or absent entirely, which mean it already existed),
+  add a residue entry noting a new B-series baseline was established and
+  needs human review — it was not produced to satisfy any C-series finding
+  and must not be silently folded into the C002 fix's own outcome.
 
 For C001 findings only, editing the `@<ref>` suffix of a single `uses:` line
 in a `.github/workflows/*.yml`/`*.yaml` or `.github/actions/**/action.yml`/

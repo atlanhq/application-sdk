@@ -7,14 +7,26 @@ by far the largest and most actively-changed subcommand.
 
 from __future__ import annotations
 
+import json
 import pathlib
 import sys
 import tomllib
 
+from conformance.bootstrap.extract import (
+    EXIT_ZERO_RE,
+    extract_field,
+    extract_renovate_automerge,
+)
+
 _PACKAGE_NAME = "atlan-application-sdk-conformance"
 
+# Statuses that count as "this path was written" for --json's touched_files
+# manifest (see main()). Everything else (an "exists"/"unchanged" no-op) is
+# reported under `unchanged` instead.
+_TOUCHED_STATUSES = frozenset({"installed", "updated", "scaffolded", "backed_up"})
 
-def _bootstrap_file(dest: pathlib.Path, content: str) -> None:
+
+def _bootstrap_file(dest: pathlib.Path, content: str) -> str:
     """Write *content* to *dest*, creating parent directories as needed.
 
     Always-overwrite-managed — bootstrap owns these files and re-running is
@@ -27,6 +39,11 @@ def _bootstrap_file(dest: pathlib.Path, content: str) -> None:
     pass — an unconditional ``updated:`` on every re-run would make every
     bootstrap-based fix report all managed files as touched, not just the
     one(s) that actually drifted.
+
+    Returns ``"installed"``, ``"updated"``, or ``"unchanged"`` — the same
+    classification the printed prefix encodes, but structured for ``main()``
+    to fold into the ``--json`` touched-files manifest without a caller
+    having to re-derive it from stdout text.
     """
     if dest.exists():
         try:
@@ -35,29 +52,29 @@ def _bootstrap_file(dest: pathlib.Path, content: str) -> None:
             unchanged = False
         if unchanged:
             print(f"ok (up to date): {dest}")
-            return
+            return "unchanged"
         dest.write_text(content, encoding="utf-8")
         print(f"updated: {dest}")
-        return
+        return "updated"
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(content, encoding="utf-8")
     print(f"installed: {dest}")
+    return "installed"
 
 
 def _read_workflow_field(path: pathlib.Path, field: str) -> str:
     """Return the value of ``field: <value>`` in *path*, or ``""``.
 
-    Delegates to ``bootstrap_drift``'s ``_extract_field`` (the C002 checker's
-    "read a rendered param back off disk" extractor) so this autodetection
-    path and C002's drift-comparison extraction can never silently diverge
-    on how a rendered field is parsed.
+    Delegates to ``conformance.bootstrap.extract``'s ``extract_field`` (the
+    single source of truth also used by the C002 checker's "read a rendered
+    param back off disk" extraction) so this autodetection path and C002's
+    drift-comparison extraction can never silently diverge on how a rendered
+    field is parsed.
     """
     if not path.exists():
         return ""
-    from conformance.suite.checks.bootstrap_drift import _extract_field
-
     try:
-        return _extract_field(path.read_text(encoding="utf-8"), field)
+        return extract_field(path.read_text(encoding="utf-8"), field)
     except OSError:
         return ""
 
@@ -89,16 +106,14 @@ def _read_enforce_from_renovate(root: pathlib.Path) -> str:
     (see ``_read_conformance_enforce``) — ``renovate.json``'s own
     ``lockFileMaintenance`` block (soft mode) or absence thereof (hard mode)
     is a second, independent signal of the repo's actual enforcement mode,
-    read via ``_extract_renovate_automerge`` (the same structural check the
+    read via ``extract_renovate_automerge`` (the same structural check the
     C002 checker uses), so autodetection doesn't have to guess.
     """
-    from conformance.suite.checks.bootstrap_drift import _extract_renovate_automerge
-
     renovate = root / "renovate.json"
     if not renovate.exists():
         return ""
     try:
-        automerge = _extract_renovate_automerge(renovate.read_text(encoding="utf-8"))
+        automerge = extract_renovate_automerge(renovate.read_text(encoding="utf-8"))
     except OSError:
         return ""
     return "false" if automerge == "false" else "true"
@@ -116,8 +131,8 @@ def _read_conformance_enforce(path: pathlib.Path, root: pathlib.Path) -> str:
     mode (``--enforce false``); ``exit-zero: false`` is hard-gate
     (``--enforce true``).
 
-    Reuses ``_EXIT_ZERO_RE`` from ``bootstrap_drift`` (the C002 checker) as
-    the single source of truth for the pattern, rather than re-declaring an
+    Reuses ``EXIT_ZERO_RE`` from ``conformance.bootstrap.extract`` as the
+    single source of truth for the pattern, rather than re-declaring an
     identical regex here.
 
     If *path* is absent, there is nothing to detect and this returns ``""``
@@ -133,11 +148,9 @@ def _read_conformance_enforce(path: pathlib.Path, root: pathlib.Path) -> str:
     """
     if not path.exists():
         return ""
-    from conformance.suite.checks.bootstrap_drift import _EXIT_ZERO_RE
-
     try:
         for line in path.read_text(encoding="utf-8").splitlines():
-            m = _EXIT_ZERO_RE.search(line)
+            m = EXIT_ZERO_RE.search(line)
             if m:
                 return "false" if m.group(1) == "true" else "true"
     except OSError:
@@ -287,6 +300,12 @@ options:
                                       Renovate auto-merges when CI is green.
                               false — soft/observe: conformance tracks without blocking,
                                       Renovate raises PRs but humans must merge.
+  --json                       after the normal output, print one final JSON line:
+                              {"skipped": bool, "touched": [...], "unchanged": [...]}.
+                              `touched` lists every path this invocation actually wrote
+                              (scaffolded/installed/updated/backed-up); use it as the
+                              structured, non-prose source for touched_files instead of
+                              pattern-matching the prefixed stdout lines above.
   -h, --help                  show this help message and exit
 """
 
@@ -321,10 +340,15 @@ def _is_inside_conformance_repo(start: pathlib.Path) -> bool:
     return False
 
 
-def _sync_tests_yaml(root: pathlib.Path, kwargs: dict[str, str]) -> None:
+def _sync_tests_yaml(
+    root: pathlib.Path, kwargs: dict[str, str]
+) -> list[tuple[pathlib.Path, str]]:
     """tests.yaml — write-if-absent scaffold; apps customise freely.
 
     C002 tracks drift at WARN only. Delete + re-run to force-regenerate.
+
+    Returns the ``(path, status)`` pairs this call wrote or left alone, for
+    ``main()``'s ``--json`` touched-files manifest.
     """
     from conformance.bootstrap.render import render
 
@@ -333,16 +357,21 @@ def _sync_tests_yaml(root: pathlib.Path, kwargs: dict[str, str]) -> None:
         tests_dest.parent.mkdir(parents=True, exist_ok=True)
         tests_dest.write_text(render("tests.yaml", **kwargs), encoding="utf-8")
         print(f"scaffolded: {tests_dest}")
-    else:
-        print(f"ok (exists): {tests_dest}  (edit freely; C002 tracks drift at WARN)")
+        return [(tests_dest, "scaffolded")]
+    print(f"ok (exists): {tests_dest}  (edit freely; C002 tracks drift at WARN)")
+    return [(tests_dest, "exists")]
 
 
 def _sync_renovate_json(
     root: pathlib.Path, kwargs: dict[str, str], force_renovate: bool
-) -> None:
+) -> list[tuple[pathlib.Path, str]]:
     """renovate.json — write-if-absent normally; force-overwrite when
     ``--enforce`` is passed explicitly so re-running with ``--enforce true``
     upgrades a soft-mode repo without needing to delete the file first.
+
+    Returns the ``(path, status)`` pairs this call wrote or left alone —
+    possibly two entries (the ``.bak`` backup plus the updated file itself)
+    when a customised ``renovate.json`` is force-overwritten.
     """
     from conformance.bootstrap.render import render
 
@@ -350,30 +379,33 @@ def _sync_renovate_json(
     if not renovate_dest.exists():
         renovate_dest.write_text(render("renovate.json", **kwargs), encoding="utf-8")
         print(f"scaffolded: {renovate_dest}")
-    elif force_renovate:
+        return [(renovate_dest, "scaffolded")]
+    if force_renovate:
         existing = renovate_dest.read_text(encoding="utf-8")
         target = render("renovate.json", **kwargs)
         if existing == target:
             print(f"ok (up to date): {renovate_dest}")
-        else:
-            canonical_hard = render("renovate.json", automerge="true")
-            canonical_soft = render("renovate.json", automerge="false")
-            if existing not in (canonical_hard, canonical_soft):
-                bak = renovate_dest.with_suffix(".json.bak")
-                bak.write_text(existing, encoding="utf-8")
-                print(
-                    f"backed up: {bak}  (had custom content; review before committing)"
-                )
-            renovate_dest.write_text(target, encoding="utf-8")
-            print(f"updated: {renovate_dest}")
-    else:
-        print(
-            f"ok (exists): {renovate_dest}"
-            "  (edit freely; pass --enforce to update enforcement mode)"
-        )
+            return [(renovate_dest, "unchanged")]
+        results: list[tuple[pathlib.Path, str]] = []
+        canonical_hard = render("renovate.json", automerge="true")
+        canonical_soft = render("renovate.json", automerge="false")
+        if existing not in (canonical_hard, canonical_soft):
+            bak = renovate_dest.with_suffix(".json.bak")
+            bak.write_text(existing, encoding="utf-8")
+            print(f"backed up: {bak}  (had custom content; review before committing)")
+            results.append((bak, "backed_up"))
+        renovate_dest.write_text(target, encoding="utf-8")
+        print(f"updated: {renovate_dest}")
+        results.append((renovate_dest, "updated"))
+        return results
+    print(
+        f"ok (exists): {renovate_dest}"
+        "  (edit freely; pass --enforce to update enforcement mode)"
+    )
+    return [(renovate_dest, "exists")]
 
 
-def _sync_gitignore(root: pathlib.Path) -> None:
+def _sync_gitignore(root: pathlib.Path) -> list[tuple[pathlib.Path, str]]:
     """.gitignore — write-if-absent scaffold. C003 warns about missing entries."""
     from conformance.bootstrap.render import render
 
@@ -381,13 +413,14 @@ def _sync_gitignore(root: pathlib.Path) -> None:
     if not gitignore_dest.exists():
         gitignore_dest.write_text(render(".gitignore"), encoding="utf-8")
         print(f"scaffolded: {gitignore_dest}")
-    else:
-        print(
-            f"ok (exists): {gitignore_dest}  (edit freely; C003 warns on missing entries)"
-        )
+        return [(gitignore_dest, "scaffolded")]
+    print(
+        f"ok (exists): {gitignore_dest}  (edit freely; C003 warns on missing entries)"
+    )
+    return [(gitignore_dest, "exists")]
 
 
-def _sync_contract_ledger(root: pathlib.Path) -> None:
+def _sync_contract_ledger(root: pathlib.Path) -> list[tuple[pathlib.Path, str]]:
     """contract_schema.lock.json — write-if-absent scaffold.
 
     B006 (StaleContractLedger) is a hard FAIL-tier rule active from day one:
@@ -408,11 +441,12 @@ def _sync_contract_ledger(root: pathlib.Path) -> None:
         ledger = build_ledger(root, load_ledger(None))
         ledger_dest.write_text(serialize(ledger), encoding="utf-8")
         print(f"scaffolded: {ledger_dest} ({len(ledger.fields)} fields)")
-    else:
-        print(
-            f"ok (exists): {ledger_dest}"
-            "  (run `gen-contract-ledger` to refresh; B005/B006 track drift)"
-        )
+        return [(ledger_dest, "scaffolded")]
+    print(
+        f"ok (exists): {ledger_dest}"
+        "  (run `gen-contract-ledger` to refresh; B005/B006 track drift)"
+    )
+    return [(ledger_dest, "exists")]
 
 
 def main(argv: list[str]) -> int:
@@ -420,6 +454,13 @@ def main(argv: list[str]) -> int:
     if "-h" in argv or "--help" in argv:
         print(_BOOTSTRAP_USAGE)
         return 0
+
+    # --json is a plain output-mode toggle (like -h/--help), not a --flag
+    # value pair, so it's stripped before _parse_bootstrap_args ever sees it
+    # rather than being added to _FLAGS.
+    emit_json = "--json" in argv
+    if emit_json:
+        argv = [a for a in argv if a != "--json"]
 
     from conformance.bootstrap.render import (
         MANAGED_ACTION_FILES,
@@ -446,6 +487,8 @@ def main(argv: list[str]) -> int:
             " (its .github/, SKILL.md, tests.yaml, and renovate.json are"
             " hand-maintained, not bootstrap-managed)"
         )
+        if emit_json:
+            print(json.dumps({"skipped": True, "touched": [], "unchanged": []}))
         return 0
 
     # force_renovate must reflect only an *explicit* --enforce on this
@@ -464,15 +507,23 @@ def main(argv: list[str]) -> int:
     kwargs["exit_zero"] = "true" if enforce == "false" else "false"
     kwargs["automerge"] = "false" if enforce == "false" else "true"
 
-    _bootstrap_file(
-        root / ".claude" / "skills" / "remediate" / "SKILL.md",
-        render("remediate.md", **kwargs),
-    )
+    # Structured record of every path this invocation touched or left
+    # unchanged, for --json below. Populated alongside (never instead of) the
+    # human-readable prints above and in the sync helpers, so a caller that
+    # needs touched_files for a revert-scope decision (see
+    # remediate-finding.prose.md) doesn't have to re-derive it by pattern
+    # matching this command's prose stdout.
+    touched: list[str] = []
+    unchanged: list[str] = []
+
+    def _record(path: pathlib.Path, status: str) -> None:
+        (touched if status in _TOUCHED_STATUSES else unchanged).append(str(path))
+
+    skill_md = root / ".claude" / "skills" / "remediate" / "SKILL.md"
+    _record(skill_md, _bootstrap_file(skill_md, render("remediate.md", **kwargs)))
     for name in MANAGED_WORKFLOWS:
-        _bootstrap_file(
-            root / ".github" / "workflows" / name,
-            render(name, **kwargs),
-        )
+        dest = root / ".github" / "workflows" / name
+        _record(dest, _bootstrap_file(dest, render(name, **kwargs)))
 
     # Non-workflow files referenced by conformance-reusable.yaml via a local
     # `./...`-relative path, which GitHub resolves against the caller's
@@ -480,11 +531,21 @@ def main(argv: list[str]) -> int:
     # (and any other series whose paths filter matches) legs fail with
     # "Can't find action.yml". Static, always-overwrite like MANAGED_WORKFLOWS.
     for dest_rel, template_name in MANAGED_ACTION_FILES:
-        _bootstrap_file(root / dest_rel, render(template_name))
+        dest = root / dest_rel
+        _record(dest, _bootstrap_file(dest, render(template_name)))
 
-    _sync_tests_yaml(root, kwargs)
-    _sync_renovate_json(root, kwargs, force_renovate)
-    _sync_gitignore(root)
-    _sync_contract_ledger(root)
+    for path, status in _sync_tests_yaml(root, kwargs):
+        _record(path, status)
+    for path, status in _sync_renovate_json(root, kwargs, force_renovate):
+        _record(path, status)
+    for path, status in _sync_gitignore(root):
+        _record(path, status)
+    for path, status in _sync_contract_ledger(root):
+        _record(path, status)
+
+    if emit_json:
+        print(
+            json.dumps({"skipped": False, "touched": touched, "unchanged": unchanged})
+        )
 
     return 0

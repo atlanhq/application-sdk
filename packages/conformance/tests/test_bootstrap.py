@@ -7,6 +7,7 @@ tests exercise the same code path a caller would use.
 
 from __future__ import annotations
 
+import json
 import pathlib
 
 import pytest
@@ -1390,6 +1391,115 @@ def test_cmd_bootstrap_rerun_with_no_changes_reports_no_managed_file_as_updated(
         assert f"ok (up to date): {tmp_path / dest_rel}" in out
     skill_md = tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md"
     assert f"ok (up to date): {skill_md}" in out
+
+
+# ---------------------------------------------------------------------------
+# --json: structured touched-files manifest
+#
+# touched_files (remediate-finding.prose.md) must not require a caller to
+# pattern-match this command's human-readable stdout prefixes -- --json
+# emits one trailing JSON line with the same information structurally.
+# ---------------------------------------------------------------------------
+
+
+def _last_json_line(out: str):
+    """Parse the final non-empty line of *out* as JSON.
+
+    ``--json`` appends its summary as the last line after all the normal
+    human-readable output, so callers only need the tail of stdout.
+    """
+    return json.loads(out.strip().splitlines()[-1])
+
+
+def test_cmd_bootstrap_json_first_run_reports_everything_touched(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A fresh repo's first `--json` run reports every managed path as touched."""
+    monkeypatch.chdir(tmp_path)
+    exit_code = _cmd_bootstrap(["--json"])
+    assert exit_code == 0
+    manifest = _last_json_line(capsys.readouterr().out)
+    assert manifest["skipped"] is False
+    touched = set(manifest["touched"])
+    wf_dir = tmp_path / ".github" / "workflows"
+    for name in MANAGED_WORKFLOWS:
+        assert str(wf_dir / name) in touched
+    for dest_rel, _template_name in MANAGED_ACTION_FILES:
+        assert str(tmp_path / dest_rel) in touched
+    assert str(tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md") in touched
+    assert str(tmp_path / ".github" / "workflows" / "tests.yaml") in touched
+    assert str(tmp_path / "renovate.json") in touched
+    assert str(tmp_path / ".gitignore") in touched
+    assert str(tmp_path / "contract_schema.lock.json") in touched
+    assert manifest["unchanged"] == []
+
+
+def test_cmd_bootstrap_json_rerun_with_no_changes_reports_empty_touched(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A bare re-run against an already-bootstrapped, untouched repo reports
+    `touched: []` -- the whole point of the manifest is that a caller can
+    trust an empty list means nothing needs to be considered for revert."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    capsys.readouterr()  # discard first-run output
+    _cmd_bootstrap(["--json"])
+    manifest = _last_json_line(capsys.readouterr().out)
+    assert manifest["skipped"] is False
+    assert manifest["touched"] == []
+    skill_md = tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md"
+    assert str(skill_md) in manifest["unchanged"]
+
+
+def test_cmd_bootstrap_json_inside_conformance_repo_reports_skipped(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The self-detection no-op reports `skipped: true` with empty manifests,
+    not merely exit 0 with no explanation of why nothing was touched."""
+    _seed_conformance_pyproject(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    exit_code = _cmd_bootstrap(["--json"])
+    assert exit_code == 0
+    manifest = _last_json_line(capsys.readouterr().out)
+    assert manifest == {"skipped": True, "touched": [], "unchanged": []}
+
+
+def test_cmd_bootstrap_json_renovate_backup_counts_as_touched(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Forcing --enforce over a customised renovate.json backs up the old
+    content to renovate.json.bak -- that backup path must appear in touched
+    alongside renovate.json itself, so a rejected fix reverts both."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    (tmp_path / "renovate.json").write_text('{"customised": true}\n')
+    capsys.readouterr()  # discard setup output
+    _cmd_bootstrap(["--enforce", "false", "--json"])
+    manifest = _last_json_line(capsys.readouterr().out)
+    touched = set(manifest["touched"])
+    assert str(tmp_path / "renovate.json") in touched
+    assert str(tmp_path / "renovate.json.bak") in touched
+
+
+def test_cmd_bootstrap_without_json_flag_prints_no_json_line(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Omitting --json must not change default output -- no trailing JSON line."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    out = capsys.readouterr().out
+    with pytest.raises(json.JSONDecodeError):
+        _last_json_line(out)
 
 
 # ---------------------------------------------------------------------------

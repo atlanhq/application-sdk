@@ -83,9 +83,9 @@ finding in the same pass. Also run this same procedure directly when handling
 a standalone C003 absent-`.gitignore` finding — see that section below for why
 it isn't safe to assume a C002 finding already triggered it:
 
-1. Run, with no flags:
+1. Run, with no other flags, and capture stdout:
    ```
-   atlan-application-sdk-conformance bootstrap
+   atlan-application-sdk-conformance bootstrap --json
    ```
    `bootstrap` auto-detects every per-repo customization itself — `--app-name`
    and `--package-name` from `atlan.yaml`/an existing
@@ -95,36 +95,39 @@ it isn't safe to assume a C002 finding already triggered it:
    `.github/test/setup-services.sh`, and `--enforce` from an existing
    `conformance.yaml`'s `exit-zero` mode (else hard-gate). No extraction step
    is needed here; re-running with no flags never resets a customized value
-   to a default.
+   to a default. `--json` doesn't change any of that — it only appends one
+   trailing JSON line to stdout, after the normal human-readable output.
 2. This single command resolves, in one pass: every absent/drifted managed
    workflow shim, every absent/drifted vendored action file, an absent
    `.gitignore` (C003's absent-file case — see below), an absent
    `renovate.json`, and an absent `tests.yaml`.
-3. `outcome = "fix"`. `touched_files` = every path `bootstrap` printed with a
-   `scaffolded:`, `installed:`, `updated:`, or `backed up:` prefix in this
-   invocation's stdout — see the write-scope note in
-   `remediate-finding.prose.md` for why this is deterministic (read off the
-   CLI's own output, not model-judged) and how it drives
-   `detect-fix-recheck`'s revert scope if this fix is later rejected by a
-   gate. This no-flags procedure never triggers a `backed up:` line itself
-   (that only happens when `--enforce` is passed explicitly), but capture it
-   if present rather than assuming the three-prefix list from other contexts
-   is exhaustive here too. `orthogonal_gate = "skip"` on both C002 and C003
-   (set on the rule definitions) — the Python test suite is skipped entirely,
-   not just for this fix: a `.github/`/scaffold-only change cannot affect
-   Python behaviour. `recheck-narrowest` (re-running `suite.runner --series
-   C`) and the parseability check `orthogonal-gate.prose.md`'s `"skip"`
-   branch runs over every touched YAML/JSON file are the only verification
-   that applies — C002/C003 fixes are not unconditionally escalated to
-   residue the way C001's are, so that parseability check is what catches a
-   syntax-breaking rewrite before it auto-accepts.
+3. `outcome = "fix"`. Parse the invocation's last stdout line as JSON
+   (`json.loads(stdout.strip().splitlines()[-1])`) and set `touched_files` to
+   its `touched` array — see the write-scope note in
+   `remediate-finding.prose.md` for why this is genuinely deterministic (the
+   CLI's own code decides each entry, not the model reading prefixed prose
+   lines) and how it drives `detect-fix-recheck`'s revert scope if this fix
+   is later rejected by a gate. This no-flags procedure never produces a
+   `renovate.json.bak` entry itself (that only happens when `--enforce` is
+   passed explicitly), but capture it if present in `touched` rather than
+   assuming a fixed set of paths is exhaustive here too. `orthogonal_gate =
+   "skip"` on both C002 and C003 (set on the rule definitions) — the Python
+   test suite is skipped entirely, not just for this fix: a
+   `.github/`/scaffold-only change cannot affect Python behaviour.
+   `recheck-narrowest` (re-running `suite.runner --series C`) and the
+   parseability check `orthogonal-gate.prose.md`'s `"skip"` branch runs over
+   every touched YAML/JSON file are the only verification that applies —
+   C002/C003 fixes are not unconditionally escalated to residue the way
+   C001's are, so that parseability check is what catches a syntax-breaking
+   rewrite before it auto-accepts.
 4. Any C002 finding still present after this pass is genuinely not
    bootstrap-fixable and falls into the residue cases below.
 5. `bootstrap`'s write footprint is wider than `.github/`/`.gitignore` —
    see the write-scope note in `remediate-finding.prose.md` for the full
-   accounting, all captured by the same `touched_files` extraction from
-   step 3: `.claude/skills/remediate/SKILL.md` (and the SDK-repo exception to
-   overwriting it, enforced in `conformance/bootstrap/command.py`), and
+   accounting, all captured by the same `touched` array from step 3:
+   `.claude/skills/remediate/SKILL.md` (and the SDK-repo exception to
+   overwriting it, enforced in `conformance/bootstrap/command.py` and
+   reported as `"skipped": true` in the JSON line), and
    `contract_schema.lock.json`'s
    new-baseline residue note when it is created rather than already present.
 

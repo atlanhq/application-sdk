@@ -31,10 +31,14 @@ Remediation: run ``atlan-application-sdk-conformance bootstrap`` to re-sync.
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 
+from conformance.bootstrap.extract import (
+    EXIT_ZERO_RE,
+    extract_field,
+    extract_renovate_automerge,
+)
 from conformance.bootstrap.render import MANAGED_ACTION_FILES, MANAGED_WORKFLOWS, render
 from conformance.suite.schema.findings import Finding
 
@@ -80,62 +84,27 @@ def _strip_regen_override(text: str) -> str:
 
 # ---------------------------------------------------------------------------
 # Managed-shim param extractors
+#
+# The shared "read a rendered param back off an on-disk managed file"
+# primitives (``extract_field``, ``extract_renovate_automerge``,
+# ``EXIT_ZERO_RE``) live in ``conformance.bootstrap.extract`` — a leaf module
+# with no dependency on this one — so both this checker's drift-comparison
+# extractors and ``bootstrap``'s own re-run autodetection can import them at
+# module level without an import cycle.
 # ---------------------------------------------------------------------------
-
-# conformance.yaml's exit-zero mode is rendered as a GitHub Actions expression
-# (`exit-zero: ${{ ... || << exit_zero >> }}`), not a plain `key: "value"` pair
-# — the boolean is the last token before the closing `}}`. Mirrors
-# `_read_conformance_enforce` in `cli.py`, but returns the `exit_zero` render
-# param directly (not the inverted `--enforce` value that function derives).
-_EXIT_ZERO_RE = re.compile(r"exit-zero:.*\|\|\s*(true|false)\s*\}\}")
-# renovate.json's soft-mode block (rendered only when automerge == "false") is
-# a Jinja `<% if %>` block, not a substitutable value — detected structurally
-# via the `lockFileMaintenance` key that block's canonical content always adds
-# (see templates/renovate.json), not by matching the human-readable
-# `description` prose inside it, so wording edits to that prose can't
-# silently break mode detection.
-
-
-def _extract_field(text: str, field: str) -> str:
-    """Return the value of ``field: <value>`` in *text*, or ``""`` if absent.
-
-    *value* may be bare or quoted (``field: value`` or ``field: "value"``);
-    quotes are stripped. Matches the first ``field:`` line, at any
-    indentation level. This is the single source of truth for "read a
-    rendered param back off an on-disk managed file" — both this module's
-    own drift-comparison extractors and ``command.py``'s bootstrap re-run
-    autodetection (``_read_workflow_field``) call this, so a template
-    format change can't leave one caller silently out of sync with the
-    other.
-    """
-    for line in text.splitlines():
-        m = re.match(rf"^\s*{re.escape(field)}:\s*(\S+)", line)
-        if m:
-            return m.group(1).strip("\"'")
-    return ""
 
 
 def _extract_package_name(text: str) -> str:
-    return _extract_field(text, "package_name") or "app"
+    return extract_field(text, "package_name") or "app"
 
 
 def _extract_unit_tests_workflow(text: str) -> str:
-    return _extract_field(text, "unit_tests_workflow_file") or "tests.yaml"
+    return extract_field(text, "unit_tests_workflow_file") or "tests.yaml"
 
 
 def _extract_exit_zero(text: str) -> str:
-    m = _EXIT_ZERO_RE.search(text)
+    m = EXIT_ZERO_RE.search(text)
     return m.group(1) if m else "false"
-
-
-def _extract_renovate_automerge(text: str) -> str:
-    try:
-        data = json.loads(text)
-    except (json.JSONDecodeError, TypeError):
-        return "true"
-    return (
-        "false" if isinstance(data, dict) and "lockFileMaintenance" in data else "true"
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -335,7 +304,7 @@ def _scan_renovate_json(path: Path, root: Path) -> list[Finding]:
         ]
 
     on_disk = path.read_text(encoding="utf-8")
-    canonical = render(_RENOVATE_JSON, automerge=_extract_renovate_automerge(on_disk))
+    canonical = render(_RENOVATE_JSON, automerge=extract_renovate_automerge(on_disk))
 
     if _strip_action_pins(on_disk) == _strip_action_pins(canonical):
         return []
