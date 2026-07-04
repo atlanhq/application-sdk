@@ -12,7 +12,11 @@ Cross-artifact checks that gate on ``self_deployed_runtime: true`` in
 * ``P030`` — at least one Python source file (outside ``tests/``) must contain
   a ``self.upload(`` call so the ``ENABLE_ATLAN_UPLOAD`` path is reachable.
   Without it extraction "passes" but no assets transfer to the Atlan tenant
-  bucket in SDR deployments.
+  bucket in SDR deployments.  Only applies to apps that actually have a
+  publish stage: an app whose ``contract/app.pkl`` sets ``pipeline.publish =
+  null`` compiles to a ``manifest.json`` with no ``dag.publish`` node, and has
+  nowhere for ``self.upload()`` to hand extracted assets off to — P030 is
+  skipped for those apps.
 
 P026–P028 are reserved by a concurrent PR (GetattrOnTypedContractField,
 AppStateAsCrossTaskChannel, ManualQualifiedNameFString — PR #2417).
@@ -59,8 +63,8 @@ def _is_sdr_app(root: Path) -> bool:
     return m is not None and m.group(1).lower() == "true"
 
 
-def _check_p029(root: Path) -> list[Finding]:
-    """P029: every manifest.json under app/generated/ must have agent_json."""
+def _discover_manifests(root: Path) -> list[Path]:
+    """All app/generated/manifest.json files: single-entrypoint or per-entrypoint."""
     generated = root / "app" / "generated"
     if not generated.is_dir():
         return []
@@ -75,7 +79,35 @@ def _check_p029(root: Path) -> list[Finding]:
                 m = child / "manifest.json"
                 if m.is_file():
                     manifests.append(m)
+    return manifests
 
+
+def _app_has_publish_stage(manifests: list[Path]) -> bool:
+    """True unless every manifest structurally opts out of a publish stage.
+
+    ``contract/app.pkl``'s ``pipeline.publish = null`` (an app-level opt-out of
+    the publish pipeline stage) compiles to a manifest.json whose ``dag`` has
+    no ``publish`` node. An app with no publish stage has nowhere for
+    ``self.upload()`` to hand extracted assets off to, so P030 does not apply.
+
+    No manifests at all (not yet generated) or an unparseable manifest means
+    we cannot establish the opt-out, so this defaults to True (P030 still
+    applies) rather than silently exempting an app we can't actually inspect.
+    """
+    if not manifests:
+        return True
+    for manifest_path in manifests:
+        try:
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return True
+        if (data.get("dag") or {}).get("publish") is not None:
+            return True
+    return False
+
+
+def _check_p029(manifests: list[Path], root: Path) -> list[Finding]:
+    """P029: every manifest.json under app/generated/ must have agent_json."""
     findings: list[Finding] = []
     for manifest_path in manifests:
         try:
@@ -162,9 +194,12 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     if not _is_sdr_app(root):
         return []
 
+    manifests = _discover_manifests(root)
+
     findings: list[Finding] = []
-    findings.extend(_check_p029(root))
-    findings.extend(_check_p030(paths))
+    findings.extend(_check_p029(manifests, root))
+    if _app_has_publish_stage(manifests):
+        findings.extend(_check_p030(paths))
     return findings
 
 

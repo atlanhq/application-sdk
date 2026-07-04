@@ -14,7 +14,10 @@ two structural invariants before they can be considered SDR-ready:
   a ``self.upload(`` call.  Without it the ``ENABLE_ATLAN_UPLOAD`` path is
   never reached: extraction "passes" (workflow status = success) but no assets
   are transferred to the Atlan tenant bucket.  The regression slipped because
-  the SDR test pipeline validated only workflow *status*, not output.
+  the SDR test pipeline validated only workflow *status*, not output.  Does
+  not apply to apps with no publish stage (``pipeline.publish = null`` in
+  ``contract/app.pkl``, reflected as no ``dag.publish`` node in the generated
+  manifest) — there is nowhere for such an app to hand extracted assets off to.
 
 Both rules are APP-scoped (the SDK itself does not declare ``self_deployed_runtime``
 and is therefore always skipped) and gate on ``self_deployed_runtime: true``
@@ -129,6 +132,12 @@ RULES: tuple[RuleDefinition, ...] = (
             "Note: P008 flags ``self.upload()`` *inside* ``@task`` methods (the\n"
             "wrong location); P030 flags the *absence* of any upload call.  They\n"
             "are complementary: both should be clean for a correctly-wired SDR app.\n"
+            "\n"
+            "Exemption: this rule is skipped for apps whose ``contract/app.pkl``\n"
+            "sets ``pipeline.publish = null`` (no publish stage), which compiles\n"
+            "to a generated manifest with no ``dag.publish`` node.  An extract-only\n"
+            "app has nothing to hand the extracted assets off to, so the absence\n"
+            "of ``self.upload()`` is by design, not a gap.\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
