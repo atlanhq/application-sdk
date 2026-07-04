@@ -520,3 +520,73 @@ def test_all_scaffolds_clean_after_bootstrap(tmp_path: pathlib.Path) -> None:
     for path in discover(tmp_path):
         findings.extend(scan_path(path, tmp_path))
     assert findings == [], [f.message for f in findings]
+
+
+# ---------------------------------------------------------------------------
+# Soft-mode (--enforce false) repos: exit-zero/automerge must not be flagged
+# ---------------------------------------------------------------------------
+
+
+def _bootstrap_soft(root: pathlib.Path) -> None:
+    import os
+
+    old = os.getcwd()
+    os.chdir(root)
+    try:
+        _cmd_bootstrap(["--enforce", "false"])
+    finally:
+        os.chdir(old)
+
+
+def test_soft_mode_conformance_yaml_not_flagged(tmp_path: pathlib.Path) -> None:
+    """A repo bootstrapped with --enforce false must not show C002 drift on
+    conformance.yaml — its exit-zero mode is a recognised param, not drift."""
+    _bootstrap_soft(tmp_path)
+    wf = tmp_path / ".github" / "workflows" / "conformance.yaml"
+    findings = scan_path(wf, tmp_path)
+    assert findings == [], [f.message for f in findings]
+
+
+def test_soft_mode_renovate_json_not_flagged(tmp_path: pathlib.Path) -> None:
+    """A repo bootstrapped with --enforce false must not show C002 drift on
+    renovate.json — its soft-rollout block is a recognised param, not drift."""
+    _bootstrap_soft(tmp_path)
+    rj = tmp_path / "renovate.json"
+    findings = scan_path(rj, tmp_path)
+    assert findings == [], [f.message for f in findings]
+
+
+def test_soft_mode_survives_bare_rerun_without_drift(tmp_path: pathlib.Path) -> None:
+    """A bare re-run (no --enforce) after an explicit soft-mode bootstrap must
+    preserve soft mode (per the bootstrap auto-detection) *and* stay clean of
+    C002 findings for both conformance.yaml and renovate.json."""
+    _bootstrap_soft(tmp_path)
+    _bootstrap(tmp_path)  # bare re-run
+    wf = tmp_path / ".github" / "workflows" / "conformance.yaml"
+    rj = tmp_path / "renovate.json"
+    findings = scan_path(wf, tmp_path) + scan_path(rj, tmp_path)
+    assert findings == [], [f.message for f in findings]
+
+
+def test_conformance_yaml_structural_drift_still_flagged_in_soft_mode(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Extracting exit-zero must not mask a genuine structural change."""
+    _bootstrap_soft(tmp_path)
+    wf = tmp_path / ".github" / "workflows" / "conformance.yaml"
+    wf.write_text(wf.read_text() + "\n# structural drift\n")
+    findings = scan_path(wf, tmp_path)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "C002"
+
+
+def test_renovate_json_structural_drift_still_flagged_in_soft_mode(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Extracting automerge must not mask a genuine structural change."""
+    _bootstrap_soft(tmp_path)
+    rj = tmp_path / "renovate.json"
+    rj.write_text(rj.read_text().replace("platformAutomerge", "platform_automerge"))
+    findings = scan_path(rj, tmp_path)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "C002"

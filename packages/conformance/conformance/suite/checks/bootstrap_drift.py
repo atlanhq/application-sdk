@@ -81,10 +81,20 @@ def _strip_regen_override(text: str) -> str:
 # Managed-shim param extractors
 # ---------------------------------------------------------------------------
 
-# Regexes to extract the per-repo customised values from the two templated
+# Regexes to extract the per-repo customised values from the templated
 # managed-shim files so drift comparisons are structural, not literal.
 _PKG_NAME_RE = re.compile(r'package_name:\s+"([^"]+)"')
 _UNIT_TESTS_WF_RE = re.compile(r'unit_tests_workflow_file:\s+"([^"]+)"')
+# conformance.yaml's exit-zero mode is rendered as a GitHub Actions expression
+# (`exit-zero: ${{ ... || << exit_zero >> }}`), not a plain `key: "value"` pair
+# — the boolean is the last token before the closing `}}`. Mirrors
+# `_read_conformance_enforce` in `cli.py`, but returns the `exit_zero` render
+# param directly (not the inverted `--enforce` value that function derives).
+_EXIT_ZERO_RE = re.compile(r"exit-zero:.*\|\|\s*(true|false)\s*\}\}")
+# renovate.json's soft-mode block (rendered only when automerge == "false") is
+# a Jinja `<% if %>` block, not a substitutable value — detect it via the
+# unique marker string that block's canonical content always carries.
+_RENOVATE_SOFT_MARKER = "Soft rollout: Renovate raises PRs but does not auto-merge"
 
 
 def _extract_package_name(text: str) -> str:
@@ -95,6 +105,15 @@ def _extract_package_name(text: str) -> str:
 def _extract_unit_tests_workflow(text: str) -> str:
     m = _UNIT_TESTS_WF_RE.search(text)
     return m.group(1) if m else "tests.yaml"
+
+
+def _extract_exit_zero(text: str) -> str:
+    m = _EXIT_ZERO_RE.search(text)
+    return m.group(1) if m else "false"
+
+
+def _extract_renovate_automerge(text: str) -> str:
+    return "false" if _RENOVATE_SOFT_MARKER in text else "true"
 
 
 # ---------------------------------------------------------------------------
@@ -245,6 +264,8 @@ def _scan_managed_shim(path: Path, root: Path) -> list[Finding]:
         kwargs["package_name"] = _extract_package_name(on_disk)
     elif name == "build-and-publish.yaml":
         kwargs["unit_tests_workflow"] = _extract_unit_tests_workflow(on_disk)
+    elif name == "conformance.yaml":
+        kwargs["exit_zero"] = _extract_exit_zero(on_disk)
 
     canonical = render(name, **kwargs)
 
@@ -292,7 +313,7 @@ def _scan_renovate_json(path: Path, root: Path) -> list[Finding]:
         ]
 
     on_disk = path.read_text(encoding="utf-8")
-    canonical = render(_RENOVATE_JSON)
+    canonical = render(_RENOVATE_JSON, automerge=_extract_renovate_automerge(on_disk))
 
     if _strip_action_pins(on_disk) == _strip_action_pins(canonical):
         return []
