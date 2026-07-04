@@ -205,7 +205,7 @@ Write .claude/skills/remediate/SKILL.md + all standard CI workflow shims into
 and .github/scripts/build_conformance_args.py that conformance-reusable.yaml needs on
 disk in every caller repo. All of these always overwrite (re-running eradicates drift).
 tests.yaml, renovate.json, and contract_schema.lock.json are write-if-absent by default;
-pass --enforce to update renovate.json's enforcement mode too.
+pass --enforce true|false to also update renovate.json's enforcement mode.
 
 options:
   --package-name NAME         docstring-coverage package (default: app)
