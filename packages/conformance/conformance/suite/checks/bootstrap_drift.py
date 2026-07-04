@@ -31,6 +31,7 @@ Remediation: run ``atlan-application-sdk-conformance bootstrap`` to re-sync.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -92,9 +93,11 @@ _UNIT_TESTS_WF_RE = re.compile(r'unit_tests_workflow_file:\s+"([^"]+)"')
 # param directly (not the inverted `--enforce` value that function derives).
 _EXIT_ZERO_RE = re.compile(r"exit-zero:.*\|\|\s*(true|false)\s*\}\}")
 # renovate.json's soft-mode block (rendered only when automerge == "false") is
-# a Jinja `<% if %>` block, not a substitutable value — detect it via the
-# unique marker string that block's canonical content always carries.
-_RENOVATE_SOFT_MARKER = "Soft rollout: Renovate raises PRs but does not auto-merge"
+# a Jinja `<% if %>` block, not a substitutable value — detected structurally
+# via the `lockFileMaintenance` key that block's canonical content always adds
+# (see templates/renovate.json), not by matching the human-readable
+# `description` prose inside it, so wording edits to that prose can't
+# silently break mode detection.
 
 
 def _extract_package_name(text: str) -> str:
@@ -113,7 +116,13 @@ def _extract_exit_zero(text: str) -> str:
 
 
 def _extract_renovate_automerge(text: str) -> str:
-    return "false" if _RENOVATE_SOFT_MARKER in text else "true"
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return "true"
+    return (
+        "false" if isinstance(data, dict) and "lockFileMaintenance" in data else "true"
+    )
 
 
 # ---------------------------------------------------------------------------
