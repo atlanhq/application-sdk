@@ -22,10 +22,10 @@ inputs:
     description: >
       Comma-separated list of areas to remediate.  Defaults to every area the
       top-level program enables (error-handling, deprecation, dependency,
-      prescriptions, optimizations, dockerfile, tests; logging is detected but
-      routes to residue; ci is partially remediated — C002 and C003's
-      absent-file case are fixed mechanically via `bootstrap`, everything else
-      in the C-series routes to residue).  Example: --area deprecation
+      prescriptions, optimizations, dockerfile, tests, logging; ci is
+      partially remediated — C002 and C003's absent-file case are fixed
+      mechanically via `bootstrap`, everything else in the C-series routes
+      to residue).  Example: --area deprecation
     required: false
     default: "error-handling,deprecation,dependency,prescriptions,optimizations,dockerfile,tests,logging,ci,contract-toolkit"
   - name: strict
@@ -133,7 +133,7 @@ dispatches each finding to its area prescription.
 | optimizations | O | ✅ Implemented | Below-the-bar recommendations |
 | dockerfile | I | ✅ Suggest-only | Findings modelled + routed to residue |
 | tests | T | ✅ Strict-only | WARNING-tier; strict mode |
-| logging | L | 🚧 Deferred | Detection runs; all findings → residue |
+| logging | L | ✅ Implemented | Mechanical (L004, L007, L015, L017, L020) auto-fixed; judgment (L001, L002, L005, others) modelled + routed to residue |
 | ci | C | ✅ Partial | C002 (managed-file drift) mechanical via `bootstrap` re-sync; also clears C003's absent-`.gitignore` case as a side effect. C001, C003 missing-entry, and drifted `tests.yaml`/`renovate.json` → residue |
 | contract-toolkit | K | ✅ Strict-only | K001/K002 guided migration to App.pkl; verified by pkl-eval gate |
 
