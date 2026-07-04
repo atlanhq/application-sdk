@@ -8,7 +8,6 @@ by far the largest and most actively-changed subcommand.
 from __future__ import annotations
 
 import pathlib
-import re
 import sys
 import tomllib
 
@@ -18,32 +17,49 @@ _PACKAGE_NAME = "atlan-application-sdk-conformance"
 def _bootstrap_file(dest: pathlib.Path, content: str) -> None:
     """Write *content* to *dest*, creating parent directories as needed.
 
-    Always overwrites — bootstrap owns these files and re-running is how
-    drift is eradicated.
+    Always-overwrite-managed — bootstrap owns these files and re-running is
+    how drift is eradicated — but a no-op write when *content* already
+    matches what's on disk prints ``ok (up to date)`` instead of ``updated``.
+    This matters beyond cosmetics: ``touched_files`` (see
+    ``remediate-finding.prose.md``) is derived from which paths print an
+    ``installed:``/``updated:``/``backed up:`` prefix here, and only an
+    actually-changed path should count as touched by a given remediation
+    pass — an unconditional ``updated:`` on every re-run would make every
+    bootstrap-based fix report all managed files as touched, not just the
+    one(s) that actually drifted.
     """
-    existed = dest.exists()
+    if dest.exists():
+        try:
+            unchanged = dest.read_text(encoding="utf-8") == content
+        except OSError:
+            unchanged = False
+        if unchanged:
+            print(f"ok (up to date): {dest}")
+            return
+        dest.write_text(content, encoding="utf-8")
+        print(f"updated: {dest}")
+        return
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(content, encoding="utf-8")
-    print(f"{'updated' if existed else 'installed'}: {dest}")
+    print(f"installed: {dest}")
 
 
 def _read_workflow_field(path: pathlib.Path, field: str) -> str:
     """Return the value of ``field: <value>`` in *path*, or ``""``.
 
-    *value* may be bare or quoted (``field: value`` or ``field: "value"``);
-    quotes are stripped.  Matches only the first ``field:`` line, at any
-    indentation level.
+    Delegates to ``bootstrap_drift``'s ``_extract_field`` (the C002 checker's
+    "read a rendered param back off disk" extractor) so this autodetection
+    path and C002's drift-comparison extraction can never silently diverge
+    on how a rendered field is parsed.
     """
     if not path.exists():
         return ""
+    from conformance.suite.checks.bootstrap_drift import _extract_field
+
     try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            m = re.match(rf"^\s*{re.escape(field)}:\s*(\S+)", line)
-            if m:
-                return m.group(1).strip("\"'")
+        return _extract_field(path.read_text(encoding="utf-8"), field)
     except OSError:
-        pass
-    return ""
+        return ""
 
 
 def _read_atlan_yaml_name(root: pathlib.Path) -> str:
@@ -302,6 +318,100 @@ def _is_inside_conformance_repo(start: pathlib.Path) -> bool:
     return False
 
 
+def _sync_tests_yaml(root: pathlib.Path, kwargs: dict[str, str]) -> None:
+    """tests.yaml — write-if-absent scaffold; apps customise freely.
+
+    C002 tracks drift at WARN only. Delete + re-run to force-regenerate.
+    """
+    from conformance.bootstrap.render import render
+
+    tests_dest = root / ".github" / "workflows" / "tests.yaml"
+    if not tests_dest.exists():
+        tests_dest.parent.mkdir(parents=True, exist_ok=True)
+        tests_dest.write_text(render("tests.yaml", **kwargs), encoding="utf-8")
+        print(f"scaffolded: {tests_dest}")
+    else:
+        print(f"ok (exists): {tests_dest}  (edit freely; C002 tracks drift at WARN)")
+
+
+def _sync_renovate_json(
+    root: pathlib.Path, kwargs: dict[str, str], force_renovate: bool
+) -> None:
+    """renovate.json — write-if-absent normally; force-overwrite when
+    ``--enforce`` is passed explicitly so re-running with ``--enforce true``
+    upgrades a soft-mode repo without needing to delete the file first.
+    """
+    from conformance.bootstrap.render import render
+
+    renovate_dest = root / "renovate.json"
+    if not renovate_dest.exists():
+        renovate_dest.write_text(render("renovate.json", **kwargs), encoding="utf-8")
+        print(f"scaffolded: {renovate_dest}")
+    elif force_renovate:
+        existing = renovate_dest.read_text(encoding="utf-8")
+        target = render("renovate.json", **kwargs)
+        if existing == target:
+            print(f"ok (up to date): {renovate_dest}")
+        else:
+            canonical_hard = render("renovate.json", automerge="true")
+            canonical_soft = render("renovate.json", automerge="false")
+            if existing not in (canonical_hard, canonical_soft):
+                bak = renovate_dest.with_suffix(".json.bak")
+                bak.write_text(existing, encoding="utf-8")
+                print(
+                    f"backed up: {bak}  (had custom content; review before committing)"
+                )
+            renovate_dest.write_text(target, encoding="utf-8")
+            print(f"updated: {renovate_dest}")
+    else:
+        print(
+            f"ok (exists): {renovate_dest}"
+            "  (edit freely; pass --enforce to update enforcement mode)"
+        )
+
+
+def _sync_gitignore(root: pathlib.Path) -> None:
+    """.gitignore — write-if-absent scaffold. C003 warns about missing entries."""
+    from conformance.bootstrap.render import render
+
+    gitignore_dest = root / ".gitignore"
+    if not gitignore_dest.exists():
+        gitignore_dest.write_text(render(".gitignore"), encoding="utf-8")
+        print(f"scaffolded: {gitignore_dest}")
+    else:
+        print(
+            f"ok (exists): {gitignore_dest}  (edit freely; C003 warns on missing entries)"
+        )
+
+
+def _sync_contract_ledger(root: pathlib.Path) -> None:
+    """contract_schema.lock.json — write-if-absent scaffold.
+
+    B006 (StaleContractLedger) is a hard FAIL-tier rule active from day one:
+    with no ledger present, the ledger-absent fallback loads the SDK's own
+    bundled ledger, which has none of the app's fields recorded, so any app
+    with existing entrypoint contract fields fails enforced mode on its very
+    first run. Seed the baseline from current source — same output as
+    running ``gen-contract-ledger`` by hand.
+    """
+    ledger_dest = root / "contract_schema.lock.json"
+    if not ledger_dest.exists():
+        from conformance.suite.checks.deprecation._ledger_schema import (
+            load_ledger,
+            serialize,
+        )
+        from conformance.tools.generate_contract_ledger import build_ledger
+
+        ledger = build_ledger(root, load_ledger(None))
+        ledger_dest.write_text(serialize(ledger), encoding="utf-8")
+        print(f"scaffolded: {ledger_dest} ({len(ledger.fields)} fields)")
+    else:
+        print(
+            f"ok (exists): {ledger_dest}"
+            "  (run `gen-contract-ledger` to refresh; B005/B006 track drift)"
+        )
+
+
 def main(argv: list[str]) -> int:
     """Write the SKILL.md shim and standard CI workflows into the current repo."""
     if "-h" in argv or "--help" in argv:
@@ -369,77 +479,9 @@ def main(argv: list[str]) -> int:
     for dest_rel, template_name in MANAGED_ACTION_FILES:
         _bootstrap_file(root / dest_rel, render(template_name))
 
-    # tests.yaml — write-if-absent scaffold; apps customise freely.
-    # C002 tracks drift at WARN only.  Delete + re-run to force-regenerate.
-    tests_dest = root / ".github" / "workflows" / "tests.yaml"
-    if not tests_dest.exists():
-        tests_dest.parent.mkdir(parents=True, exist_ok=True)
-        tests_dest.write_text(render("tests.yaml", **kwargs), encoding="utf-8")
-        print(f"scaffolded: {tests_dest}")
-    else:
-        print(f"ok (exists): {tests_dest}  (edit freely; C002 tracks drift at WARN)")
-
-    # renovate.json — write-if-absent normally; force-overwrite when --enforce
-    # is passed explicitly so re-running with --enforce true upgrades a
-    # soft-mode repo without needing to delete the file first.
-    renovate_dest = root / "renovate.json"
-    if not renovate_dest.exists():
-        renovate_dest.write_text(render("renovate.json", **kwargs), encoding="utf-8")
-        print(f"scaffolded: {renovate_dest}")
-    elif force_renovate:
-        existing = renovate_dest.read_text(encoding="utf-8")
-        target = render("renovate.json", **kwargs)
-        if existing == target:
-            print(f"ok (up to date): {renovate_dest}")
-        else:
-            canonical_hard = render("renovate.json", automerge="true")
-            canonical_soft = render("renovate.json", automerge="false")
-            if existing not in (canonical_hard, canonical_soft):
-                bak = renovate_dest.with_suffix(".json.bak")
-                bak.write_text(existing, encoding="utf-8")
-                print(
-                    f"backed up: {bak}  (had custom content; review before committing)"
-                )
-            renovate_dest.write_text(target, encoding="utf-8")
-            print(f"updated: {renovate_dest}")
-    else:
-        print(
-            f"ok (exists): {renovate_dest}"
-            "  (edit freely; pass --enforce to update enforcement mode)"
-        )
-
-    # .gitignore — write-if-absent scaffold.  C003 warns about missing entries.
-    gitignore_dest = root / ".gitignore"
-    if not gitignore_dest.exists():
-        gitignore_dest.write_text(render(".gitignore"), encoding="utf-8")
-        print(f"scaffolded: {gitignore_dest}")
-    else:
-        print(
-            f"ok (exists): {gitignore_dest}  (edit freely; C003 warns on missing entries)"
-        )
-
-    # contract_schema.lock.json — write-if-absent scaffold. B006
-    # (StaleContractLedger) is a hard FAIL-tier rule active from day one: with
-    # no ledger present, the ledger-absent fallback loads the SDK's own
-    # bundled ledger, which has none of the app's fields recorded, so any app
-    # with existing entrypoint contract fields fails enforced mode on its very
-    # first run. Seed the baseline from current source — same output as
-    # running `gen-contract-ledger` by hand.
-    ledger_dest = root / "contract_schema.lock.json"
-    if not ledger_dest.exists():
-        from conformance.suite.checks.deprecation._ledger_schema import (
-            load_ledger,
-            serialize,
-        )
-        from conformance.tools.generate_contract_ledger import build_ledger
-
-        ledger = build_ledger(root, load_ledger(None))
-        ledger_dest.write_text(serialize(ledger), encoding="utf-8")
-        print(f"scaffolded: {ledger_dest} ({len(ledger.fields)} fields)")
-    else:
-        print(
-            f"ok (exists): {ledger_dest}"
-            "  (run `gen-contract-ledger` to refresh; B005/B006 track drift)"
-        )
+    _sync_tests_yaml(root, kwargs)
+    _sync_renovate_json(root, kwargs, force_renovate)
+    _sync_gitignore(root)
+    _sync_contract_ledger(root)
 
     return 0

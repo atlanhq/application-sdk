@@ -69,7 +69,10 @@ gates:
       test).  If tests break, the edit is reverted.  Suppression-only edits
       skip this gate (comment-only changes cannot break tests), as do rules
       whose orthogonal_gate is declared "skip" (e.g. C001/C002/C003 — a
-      .github/.gitignore change cannot affect Python behaviour).
+      .github/.gitignore change cannot affect Python behaviour) — "skip"
+      still runs a minimal YAML/JSON parseability check over every touched
+      file, so a syntax-breaking rewrite is caught and reverted rather than
+      auto-accepted (see orthogonal-gate.prose.md).
   - no_self_judging: >
       The remediator never touches tests/, .github/, or conformance/ — the
       gates it is judged against.  This is structural: remediate-finding's

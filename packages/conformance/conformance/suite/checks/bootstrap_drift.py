@@ -82,10 +82,6 @@ def _strip_regen_override(text: str) -> str:
 # Managed-shim param extractors
 # ---------------------------------------------------------------------------
 
-# Regexes to extract the per-repo customised values from the templated
-# managed-shim files so drift comparisons are structural, not literal.
-_PKG_NAME_RE = re.compile(r'package_name:\s+"([^"]+)"')
-_UNIT_TESTS_WF_RE = re.compile(r'unit_tests_workflow_file:\s+"([^"]+)"')
 # conformance.yaml's exit-zero mode is rendered as a GitHub Actions expression
 # (`exit-zero: ${{ ... || << exit_zero >> }}`), not a plain `key: "value"` pair
 # — the boolean is the last token before the closing `}}`. Mirrors
@@ -100,14 +96,31 @@ _EXIT_ZERO_RE = re.compile(r"exit-zero:.*\|\|\s*(true|false)\s*\}\}")
 # silently break mode detection.
 
 
+def _extract_field(text: str, field: str) -> str:
+    """Return the value of ``field: <value>`` in *text*, or ``""`` if absent.
+
+    *value* may be bare or quoted (``field: value`` or ``field: "value"``);
+    quotes are stripped. Matches the first ``field:`` line, at any
+    indentation level. This is the single source of truth for "read a
+    rendered param back off an on-disk managed file" — both this module's
+    own drift-comparison extractors and ``command.py``'s bootstrap re-run
+    autodetection (``_read_workflow_field``) call this, so a template
+    format change can't leave one caller silently out of sync with the
+    other.
+    """
+    for line in text.splitlines():
+        m = re.match(rf"^\s*{re.escape(field)}:\s*(\S+)", line)
+        if m:
+            return m.group(1).strip("\"'")
+    return ""
+
+
 def _extract_package_name(text: str) -> str:
-    m = _PKG_NAME_RE.search(text)
-    return m.group(1) if m else "app"
+    return _extract_field(text, "package_name") or "app"
 
 
 def _extract_unit_tests_workflow(text: str) -> str:
-    m = _UNIT_TESTS_WF_RE.search(text)
-    return m.group(1) if m else "tests.yaml"
+    return _extract_field(text, "unit_tests_workflow_file") or "tests.yaml"
 
 
 def _extract_exit_zero(text: str) -> str:

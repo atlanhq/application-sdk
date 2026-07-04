@@ -39,11 +39,31 @@ of the finding as returned by `detect-violations`):
 - `"pkl-eval"` → delegate to `pkl-eval-gate` with `scope = scope`.  Return its
   `passed`, `exit_code`, and `summary` directly.
 
-- `"skip"` → skip execution entirely; return `passed = true`, `exit_code = 0`,
-  and `summary = "orthogonal_gate=skip — fix cannot affect Python or contract behaviour, skipped"`.
-  Used by rules whose only remediable fixes are deterministic re-syncs of
-  managed non-Python files (e.g. C001/C002/C003's fixes) — running the test
-  suite after a `.github/` or `.gitignore` change has no signal to offer.
+- `"skip"` → skip the Python/contract test suite (it has no signal to offer for
+  a `.github/`/`.gitignore`-only change) but still run a minimal
+  **parseability check** over every touched non-Python file, because neither
+  this gate nor `recheck-narrowest` otherwise verifies the file is still
+  well-formed outside the one line the fix targeted — and for a rule whose
+  fix is *not* unconditionally escalated to residue (C002/C003; unlike C001,
+  which always routes to human sign-off via `external_influence`), a
+  syntax-breaking rewrite would otherwise auto-accept with nothing catching
+  it before GitHub Actions itself fails to parse the file post-merge.
+
+  For each path in `finding.touched_files` (or `[finding.file]` if unset):
+  - `.yaml`/`.yml` → parse with a YAML loader (e.g.
+    `python -c "import sys,yaml; yaml.safe_load(open(sys.argv[1]))" <path>`).
+  - `.json` → parse with a JSON loader.
+  - any other extension (e.g. `.gitignore`, `.py` scripts) → no parse check;
+    nothing to validate structurally.
+
+  If every touched file with a checkable extension parses cleanly, return
+  `passed = true`, `exit_code = 0`, `summary = "orthogonal_gate=skip —
+  fix cannot affect Python or contract behaviour; N touched file(s)
+  parse-checked"`. If any fails to parse, return `passed = false`,
+  `exit_code = 1`, and `summary` naming the file and the parser error, so the
+  loop reverts the fix and routes it to residue instead of auto-accepting a
+  broken file.
+
   Named `"skip"` rather than a bare `"none"` string so it can't be confused
   with the field's own `None` default, which means the opposite thing (run
   the standard test suite).

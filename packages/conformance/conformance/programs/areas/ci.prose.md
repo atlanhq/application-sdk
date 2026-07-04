@@ -110,17 +110,22 @@ it isn't safe to assume a C002 finding already triggered it:
    (that only happens when `--enforce` is passed explicitly), but capture it
    if present rather than assuming the three-prefix list from other contexts
    is exhaustive here too. `orthogonal_gate = "skip"` on both C002 and C003
-   (set on the rule definitions) — the test suite gate is skipped entirely,
+   (set on the rule definitions) — the Python test suite is skipped entirely,
    not just for this fix: a `.github/`/scaffold-only change cannot affect
    Python behaviour. `recheck-narrowest` (re-running `suite.runner --series
-   C`) is the only verification that applies.
+   C`) and the parseability check `orthogonal-gate.prose.md`'s `"skip"`
+   branch runs over every touched YAML/JSON file are the only verification
+   that applies — C002/C003 fixes are not unconditionally escalated to
+   residue the way C001's are, so that parseability check is what catches a
+   syntax-breaking rewrite before it auto-accepts.
 4. Any C002 finding still present after this pass is genuinely not
    bootstrap-fixable and falls into the residue cases below.
 5. `bootstrap`'s write footprint is wider than `.github/`/`.gitignore` —
    see the write-scope note in `remediate-finding.prose.md` for the full
    accounting, all captured by the same `touched_files` extraction from
    step 3: `.claude/skills/remediate/SKILL.md` (and the SDK-repo exception to
-   overwriting it, enforced in `cli.py`), and `contract_schema.lock.json`'s
+   overwriting it, enforced in `conformance/bootstrap/command.py`), and
+   `contract_schema.lock.json`'s
    new-baseline residue note when it is created rather than already present.
 
 *Not resolved by this procedure — route to residue:*
@@ -212,7 +217,12 @@ always escalated to residue.
    file.
 5. `outcome = "fix"`. `orthogonal_gate = "skip"` (set on the C001 rule
    definition) — a `.github/` ref-pin change cannot affect Python behaviour,
-   so the test suite is skipped; `recheck-narrowest` is the only gate.
+   so the test suite is skipped; `recheck-narrowest` plus the `"skip"`
+   branch's YAML parseability check (see `orthogonal-gate.prose.md`) are the
+   only gates. Belt-and-suspenders here since step 6 always routes this
+   finding to residue for human sign-off regardless of gate outcome, but the
+   parseability check still means a syntax-breaking rewrite is caught and
+   reverted automatically rather than reaching residue at all.
 6. On a passing recheck, regardless of `classification` (`"mechanical"`),
    `external_influence = true` sends this finding down
    `detect-fix-recheck`'s existing residue branch. This is intentional, not a

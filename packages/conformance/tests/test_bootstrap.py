@@ -59,6 +59,31 @@ def test_bootstrap_file_prints_updated_for_overwrite(
     assert "updated" in capsys.readouterr().out
 
 
+def test_bootstrap_file_prints_ok_up_to_date_for_unchanged_content(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Re-writing identical content must not print `updated:` -- otherwise
+    every bootstrap-based remediation would report every always-overwrite
+    managed file as touched, not just the one(s) that actually drifted (see
+    touched_files in remediate-finding.prose.md)."""
+    dest = tmp_path / "SKILL.md"
+    dest.write_text("same content")
+    _bootstrap_file(dest, "same content")
+    out = capsys.readouterr().out
+    assert "ok (up to date)" in out
+    assert "updated" not in out
+
+
+def test_bootstrap_file_does_not_rewrite_unchanged_content(
+    tmp_path: pathlib.Path,
+) -> None:
+    dest = tmp_path / "SKILL.md"
+    dest.write_text("same content")
+    mtime_before = dest.stat().st_mtime_ns
+    _bootstrap_file(dest, "same content")
+    assert dest.stat().st_mtime_ns == mtime_before
+
+
 # ---------------------------------------------------------------------------
 # _parse_bootstrap_args
 # ---------------------------------------------------------------------------
@@ -1086,6 +1111,23 @@ def test_cmd_bootstrap_defaults_package_name_when_absent(
     assert 'package_name: "app"' in docstring
 
 
+def test_cmd_bootstrap_defaults_package_name_when_file_exists_but_field_missing(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An existing docstring-coverage.yaml with no package_name: line falls back
+    to "app", the same as the file-absent case -- the presence of the file alone
+    must not be mistaken for a match."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "docstring-coverage.yaml").write_text(
+        "jobs:\n  docstring-coverage:\n    with:\n      other_field: true\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    docstring = (wf_dir / "docstring-coverage.yaml").read_text()
+    assert 'package_name: "app"' in docstring
+
+
 def test_cmd_bootstrap_explicit_package_name_overrides_autodetect(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1136,6 +1178,22 @@ def test_cmd_bootstrap_defaults_unit_tests_workflow_when_absent(
     monkeypatch.chdir(tmp_path)
     _cmd_bootstrap([])
     build = (tmp_path / ".github" / "workflows" / "build-and-publish.yaml").read_text()
+    assert 'unit_tests_workflow_file: "tests.yaml"' in build
+
+
+def test_cmd_bootstrap_defaults_unit_tests_workflow_when_file_exists_but_field_missing(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An existing build-and-publish.yaml with no unit_tests_workflow_file: line
+    falls back to "tests.yaml", the same as the file-absent case."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "build-and-publish.yaml").write_text(
+        "jobs:\n  build:\n    with:\n      other_field: true\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    build = (wf_dir / "build-and-publish.yaml").read_text()
     assert 'unit_tests_workflow_file: "tests.yaml"' in build
 
 
@@ -1261,6 +1319,63 @@ def test_cmd_bootstrap_rerun_unparseable_conformance_yaml_hard_mode_control(
     )
     _cmd_bootstrap([])
     assert _EXIT_ZERO_HARD in conformance.read_text()
+
+
+def test_cmd_bootstrap_rerun_falls_back_to_hard_gate_when_renovate_json_malformed(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """When conformance.yaml's exit-zero line is unparseable AND renovate.json
+    is malformed JSON, the fallback chain (_read_enforce_from_renovate ->
+    _extract_renovate_automerge) can't read either signal. It must default to
+    hard-gate (the same default _extract_renovate_automerge documents for
+    unparseable JSON) rather than raise or silently stay soft."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--enforce", "false"])
+    conformance = tmp_path / ".github" / "workflows" / "conformance.yaml"
+    conformance.write_text(
+        conformance.read_text().replace(
+            _EXIT_ZERO_SOFT, "exit-zero: true  # hand-edited"
+        )
+    )
+    (tmp_path / "renovate.json").write_text("not valid json")
+    capsys.readouterr()  # discard bootstrap's own setup output
+    _cmd_bootstrap([])
+    assert _EXIT_ZERO_HARD in conformance.read_text()
+    assert "falling back to renovate.json" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# touched_files accuracy: a no-op re-run must not report unchanged managed
+# files as updated (see remediate-finding.prose.md's touched_files
+# write-scope note -- an over-broad touched_files would make a remediation
+# pass revert unrelated already-accepted files on a later failure)
+# ---------------------------------------------------------------------------
+
+
+def test_cmd_bootstrap_rerun_with_no_changes_reports_no_managed_file_as_updated(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A bare re-run against an already-bootstrapped, untouched repo must not
+    print `updated:`/`installed:` for any managed workflow or action file --
+    only `ok (up to date):`."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    capsys.readouterr()  # discard first-run output (everything is genuinely new)
+    _cmd_bootstrap([])
+    out = capsys.readouterr().out
+    assert "updated:" not in out
+    assert "installed:" not in out
+    wf_dir = tmp_path / ".github" / "workflows"
+    for name in MANAGED_WORKFLOWS:
+        assert f"ok (up to date): {wf_dir / name}" in out
+    for dest_rel, _template_name in MANAGED_ACTION_FILES:
+        assert f"ok (up to date): {tmp_path / dest_rel}" in out
+    skill_md = tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md"
+    assert f"ok (up to date): {skill_md}" in out
 
 
 # ---------------------------------------------------------------------------
