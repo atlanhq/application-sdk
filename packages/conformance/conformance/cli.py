@@ -128,26 +128,9 @@ def _derive_app_name_from_dir(root: pathlib.Path) -> str:
 def _parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
     """Parse bootstrap flags from argv.
 
-    Supports both ``--flag value`` and ``--flag=value`` forms.
-
-    Flags
-    -----
-    --package-name NAME          docstring-coverage package (default: app)
-    --unit-tests-workflow FILE   build-and-publish test workflow (default: tests.yaml)
-    --app-name NAME              connector app name for tests.yaml scaffold
-                                 (default: auto-detected from atlan.yaml, else "app")
-    --app-image-name NAME        GHCR image name for tests.yaml scaffold (default: atlan-<app-name>-app)
-    --enable-e2e BOOL            enable e2e job in tests.yaml scaffold (default: true)
-    --services-script PATH       path to services setup script for tests.yaml scaffold
-                                 (default: auto-detected from .github/test/setup-services.sh)
-    --enforce BOOL               enforcement mode; omit for hard-gate defaults without
-                                 force-updating renovate.json. Pass explicitly (either
-                                 value) to also force-update renovate.json.
-                                 true  — hard gate: conformance blocks on violations,
-                                         Renovate auto-merges when CI is green.
-                                 false — soft/observe mode: conformance tracks violations
-                                         without blocking, Renovate raises PRs but humans
-                                         must merge.
+    Supports both ``--flag value`` and ``--flag=value`` forms. See
+    ``_BOOTSTRAP_USAGE`` below for the authoritative flag documentation —
+    kept in one place so it can't drift out of sync with this parser.
     """
     result: dict[str, str] = {
         "package_name": "app",
@@ -197,8 +180,40 @@ def _parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
     return result
 
 
+_BOOTSTRAP_USAGE = """\
+usage: atlan-application-sdk-conformance bootstrap [options]
+
+Write .claude/skills/remediate/SKILL.md + all standard CI workflow shims into
+.github/workflows/, plus the vendored .github/actions/run-conformance-detect/action.yaml
+and .github/scripts/build_conformance_args.py that conformance-reusable.yaml needs on
+disk in every caller repo. All of these always overwrite (re-running eradicates drift).
+tests.yaml, renovate.json, and contract_schema.lock.json are write-if-absent by default;
+pass --enforce true|false to also update renovate.json's enforcement mode.
+
+options:
+  --package-name NAME         docstring-coverage package (default: app)
+  --unit-tests-workflow FILE  build-and-publish test workflow (default: tests.yaml)
+  --app-name NAME             connector app name for tests.yaml (default: from atlan.yaml, else "app")
+  --app-image-name NAME       GHCR image name for tests.yaml (default: atlan-<app-name>-app)
+  --enable-e2e true|false     enable e2e in tests.yaml (default: true, line omitted)
+  --services-script PATH      services setup script (default: auto-detected from .github/test/setup-services.sh)
+  --enforce true|false        enforcement mode; omit for hard-gate defaults without
+                              force-updating renovate.json. Pass explicitly (either
+                              value) to also force-update renovate.json.
+                              true  — hard gate: conformance blocks on violations,
+                                      Renovate auto-merges when CI is green.
+                              false — soft/observe: conformance tracks without blocking,
+                                      Renovate raises PRs but humans must merge.
+  -h, --help                  show this help message and exit
+"""
+
+
 def _cmd_bootstrap(argv: list[str]) -> int:
     """Write the SKILL.md shim and standard CI workflows into the current repo."""
+    if "-h" in argv or "--help" in argv:
+        print(_BOOTSTRAP_USAGE)
+        return 0
+
     from conformance.bootstrap.render import (
         MANAGED_ACTION_FILES,
         MANAGED_WORKFLOWS,
@@ -363,21 +378,8 @@ commands:
                  .github/scripts/build_conformance_args.py that conformance-reusable.yaml
                  needs on disk in every caller repo. All of these always overwrite
                  (re-running eradicates drift). tests.yaml, renovate.json, and
-                 contract_schema.lock.json are write-if-absent by default; pass
-                 --enforce to update renovate.json's enforcement mode too.
-                   --package-name NAME         docstring-coverage package (default: app)
-                   --unit-tests-workflow FILE   build-and-publish test workflow (default: tests.yaml)
-                   --app-name NAME             connector app name for tests.yaml (default: from atlan.yaml, else "app")
-                   --app-image-name NAME       GHCR image name for tests.yaml (default: atlan-<app-name>-app)
-                   --enable-e2e true|false     enable e2e in tests.yaml (default: true, line omitted)
-                   --services-script PATH      services setup script (default: auto-detected from .github/test/setup-services.sh)
-                   --enforce true|false        enforcement mode; omit for hard-gate defaults without
-                                               force-updating renovate.json. Pass explicitly (either
-                                               value) to also force-update renovate.json.
-                                               true  — hard gate: conformance blocks on violations,
-                                                       Renovate auto-merges when CI is green.
-                                               false — soft/observe: conformance tracks without blocking,
-                                                       Renovate raises PRs but humans must merge.
+                 contract_schema.lock.json are write-if-absent by default.
+                 Run `bootstrap --help` for the full option list.
   renovate-scan  Build Renovate fleet dashboard JSON from gh pr list output files
 """
 
