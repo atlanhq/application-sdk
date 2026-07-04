@@ -134,6 +134,29 @@ def test_cmd_bootstrap_writes_skill_md(
     assert dest.read_text() == render("remediate.md")
 
 
+@pytest.mark.parametrize("help_flag", ["--help", "-h"])
+def test_cmd_bootstrap_help_prints_usage_and_writes_nothing(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    help_flag: str,
+) -> None:
+    """--help/-h must short-circuit before any file is written.
+
+    A hand-rolled flag parser (unlike the other subcommands' argparse-based
+    ones) silently ignores unrecognized flags, so without an explicit guard
+    `bootstrap --help` would fall through and execute the real, mutating
+    bootstrap — surprising callers who expect `--help` to be a no-op.
+    """
+    monkeypatch.chdir(tmp_path)
+    exit_code = _cmd_bootstrap([help_flag])
+    assert exit_code == 0
+    assert (
+        "usage: atlan-application-sdk-conformance bootstrap" in capsys.readouterr().out
+    )
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_cmd_bootstrap_writes_all_managed_workflows(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
