@@ -87,9 +87,11 @@ it isn't safe to assume a C002 finding already triggered it:
    and `--package-name` from `atlan.yaml`/an existing
    `docstring-coverage.yaml` (else the repo directory name/`"app"`),
    `--unit-tests-workflow` from an existing `build-and-publish.yaml` (else
-   `"tests.yaml"`), and `--services-script` from an existing
-   `.github/test/setup-services.sh`. No extraction step is needed here;
-   re-running with no flags never resets a customized value to a default.
+   `"tests.yaml"`), `--services-script` from an existing
+   `.github/test/setup-services.sh`, and `--enforce` from an existing
+   `conformance.yaml`'s `exit-zero` mode (else hard-gate). No extraction step
+   is needed here; re-running with no flags never resets a customized value
+   to a default.
 2. This single command resolves, in one pass: every absent/drifted managed
    workflow shim, every absent/drifted vendored action file, an absent
    `.gitignore` (C003's absent-file case — see below), an absent

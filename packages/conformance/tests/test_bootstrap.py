@@ -1053,6 +1053,60 @@ def test_cmd_bootstrap_reads_unquoted_unit_tests_workflow_from_build_and_publish
 
 
 # ---------------------------------------------------------------------------
+# Auto-detection: --enforce from an existing conformance.yaml's exit-zero mode
+# ---------------------------------------------------------------------------
+
+
+def test_cmd_bootstrap_rerun_no_enforce_preserves_soft_mode(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bare re-run must not reset a soft-mode repo's conformance.yaml to hard-gate."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--enforce", "false"])
+    conformance = tmp_path / ".github" / "workflows" / "conformance.yaml"
+    assert _EXIT_ZERO_SOFT in conformance.read_text()
+    _cmd_bootstrap([])
+    assert _EXIT_ZERO_SOFT in conformance.read_text()
+
+
+def test_cmd_bootstrap_rerun_no_enforce_preserves_hard_mode(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bare re-run of an already-hard-gate repo stays hard-gate (control case)."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--enforce", "true"])
+    conformance = tmp_path / ".github" / "workflows" / "conformance.yaml"
+    assert _EXIT_ZERO_HARD in conformance.read_text()
+    _cmd_bootstrap([])
+    assert _EXIT_ZERO_HARD in conformance.read_text()
+
+
+def test_cmd_bootstrap_rerun_no_enforce_does_not_force_overwrite_renovate(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Auto-detecting --enforce from conformance.yaml must not also force-overwrite
+    renovate.json -- only an *explicit* --enforce on the invocation does that."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--enforce", "false"])
+    rj = tmp_path / "renovate.json"
+    rj.write_text('{"customised": true}\n')
+    _cmd_bootstrap([])
+    assert rj.read_text() == '{"customised": true}\n'
+    assert not (tmp_path / "renovate.json.bak").exists()
+
+
+def test_cmd_bootstrap_explicit_enforce_overrides_autodetected_soft_mode(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Explicit --enforce takes priority over a soft-mode conformance.yaml on disk."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--enforce", "false"])
+    conformance = tmp_path / ".github" / "workflows" / "conformance.yaml"
+    _cmd_bootstrap(["--enforce", "true"])
+    assert _EXIT_ZERO_HARD in conformance.read_text()
+
+
+# ---------------------------------------------------------------------------
 # enable-e2e: omitted when default (true)
 # ---------------------------------------------------------------------------
 

@@ -133,6 +133,29 @@ def _derive_app_name_from_dir(root: pathlib.Path) -> str:
     return name or "app"
 
 
+def _read_conformance_enforce(path: pathlib.Path) -> str:
+    """Return the ``--enforce`` value that reproduces *path*'s existing
+    ``exit-zero`` mode, or ``""`` if absent/unparseable.
+
+    The rendered line is ``exit-zero: ${{ ... || << exit_zero >> }}`` — the
+    boolean is the last token before the closing ``}}``, not the first token
+    after ``exit-zero:`` (unlike the other managed-file fields), so this
+    can't reuse ``_read_workflow_field``. ``exit-zero: true`` is soft/observe
+    mode (``--enforce false``); ``exit-zero: false`` is hard-gate
+    (``--enforce true``).
+    """
+    if not path.exists():
+        return ""
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            m = re.search(r"exit-zero:.*\|\|\s*(true|false)\s*\}\}", line)
+            if m:
+                return "false" if m.group(1) == "true" else "true"
+    except OSError:
+        pass
+    return ""
+
+
 def _apply_bootstrap_autodetection(kwargs: dict[str, str], root: pathlib.Path) -> None:
     """Fill in any bootstrap flag left unset (``""``) with its auto-detected value.
 
@@ -168,6 +191,15 @@ def _apply_bootstrap_autodetection(kwargs: dict[str, str], root: pathlib.Path) -
         candidate = root / ".github" / "test" / "setup-services.sh"
         if candidate.exists():
             kwargs["services_script"] = ".github/test/setup-services.sh"
+    # enforce: existing conformance.yaml's exit-zero mode, else unset (falls
+    # through to the hard-gate default at derivation time). Deliberately does
+    # NOT affect force_renovate in _cmd_bootstrap -- renovate.json is only
+    # force-overwritten when --enforce was passed explicitly on this
+    # invocation, not when it was merely auto-detected.
+    if not kwargs["enforce"]:
+        kwargs["enforce"] = _read_conformance_enforce(
+            root / ".github" / "workflows" / "conformance.yaml"
+        )
 
 
 def _parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
@@ -242,8 +274,8 @@ options:
   --app-image-name NAME       GHCR image name for tests.yaml (default: atlan-<app-name>-app)
   --enable-e2e true|false     enable e2e in tests.yaml (default: true, line omitted)
   --services-script PATH      services setup script (default: auto-detected from .github/test/setup-services.sh)
-  --enforce true|false        enforcement mode; omit for hard-gate defaults without
-                              force-updating renovate.json. Pass explicitly (either
+  --enforce true|false        enforcement mode; omit to auto-detect from an existing
+                              conformance.yaml (else hard-gate). Pass explicitly (either
                               value) to also force-update renovate.json.
                               true  — hard gate: conformance blocks on violations,
                                       Renovate auto-merges when CI is green.
@@ -267,16 +299,21 @@ def _cmd_bootstrap(argv: list[str]) -> int:
 
     kwargs = _parse_bootstrap_args(argv)
     root = pathlib.Path.cwd()
+    # force_renovate must reflect only an *explicit* --enforce on this
+    # invocation, captured before autodetection fills kwargs["enforce"] in
+    # from an existing conformance.yaml -- renovate.json stays write-if-absent
+    # on a bare re-run even though conformance.yaml's enforcement mode is now
+    # auto-detected.
+    force_renovate = bool(kwargs["enforce"])
     _apply_bootstrap_autodetection(kwargs, root)
 
-    # Derive the two render variables from --enforce.
-    # enforce="" (not set) → hard defaults but no force-overwrite of scaffolds.
-    # enforce="false"      → soft/observe mode + force-overwrite renovate.json.
-    # enforce="true"       → hard mode + force-overwrite renovate.json.
+    # Derive the two render variables from --enforce (explicit or detected).
+    # enforce="" (never set, nothing to detect) → hard defaults.
+    # enforce="false" → soft/observe mode.
+    # enforce="true"  → hard mode.
     enforce = kwargs.pop("enforce")
     kwargs["exit_zero"] = "true" if enforce == "false" else "false"
     kwargs["automerge"] = "false" if enforce == "false" else "true"
-    force_renovate = enforce in ("true", "false")
 
     # .claude/skills/remediate/SKILL.md is hand-maintained prose inside the
     # atlan-application-sdk-conformance package's own repo (this one) — not
