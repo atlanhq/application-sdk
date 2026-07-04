@@ -12,8 +12,21 @@ from conformance.suite.checks.actions_pinning import (
     main,
     scan_text,
 )
+from conformance.suite.rules import get_rule
 from conformance.suite.schema import SarifReport, derive_disposition, validate_sarif
 from conformance.suite.schema.disposition import Disposition
+
+# ── Rule metadata ──────────────────────────────────────────────────────────────
+
+
+def test_c001_rule_exists() -> None:
+    rule = get_rule("C001")
+    assert rule.name == "UnpinnedActionReference"
+
+
+def test_c001_orthogonal_gate_is_none() -> None:
+    assert get_rule("C001").orthogonal_gate == "none"
+
 
 # ── is_violation truth table ──────────────────────────────────────────────────
 
