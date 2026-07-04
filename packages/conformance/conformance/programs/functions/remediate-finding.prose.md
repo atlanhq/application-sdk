@@ -85,14 +85,15 @@ printed with an `ok (...)` prefix was left unchanged and is not part of
   explicitly here so a reviewer auditing a C002 fix isn't surprised to see
   SKILL.md touched by a change that was nominally about a CI workflow file.
   **Exception: inside the `atlan-application-sdk-conformance` repo itself**
-  (detected by the presence of `packages/conformance/` in the scan root — no
-  consumer app repo has this directory, since they consume the package via
-  pip rather than as an in-tree checkout), `bootstrap` skips this write
+  (detected by `packages/conformance/pyproject.toml` naming that exact
+  package — not merely a `packages/conformance/` directory existing, which a
+  consumer monorepo could contain coincidentally and silently trip the
+  guard), `bootstrap` skips this write
   entirely: `.claude/skills/remediate/SKILL.md` there is hand-maintained
   prose (this very file's sibling), not generated template output, so
   overwriting it would destroy human-authored content rather than re-sync a
   deterministic template. This guard is enforced in code
-  (`_cmd_bootstrap` in `cli.py`), not just documented here.
+  (`main` in `conformance/bootstrap/command.py`), not just documented here.
 - It **write-if-absent scaffolds** `contract_schema.lock.json` (a B-series
   entrypoint-contract ledger baseline) whenever that file does not already
   exist — unrelated to the C-series finding being fixed. Whether this

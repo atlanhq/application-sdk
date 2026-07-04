@@ -24,9 +24,10 @@ inputs:
       top-level program enables (error-handling, deprecation, dependency,
       prescriptions, optimizations, dockerfile, tests, logging; ci is
       partially remediated — C002 and C003's absent-file case are fixed
-      mechanically via `bootstrap`; C001 is also fixed mechanically
-      (SHA-resolve + repin) but always escalated to residue for human
-      sign-off; C003's missing-entry case and drifted `tests.yaml`/
+      mechanically via `bootstrap`; C001 is mechanically pinned
+      (SHA-resolve + repin) but always escalated to residue for mandatory
+      human sign-off — assisted, not autonomous, remediation; C003's
+      missing-entry case and drifted `tests.yaml`/
       `renovate.json` still route to residue with no fix attempted).
       Example: --area deprecation
     required: false
@@ -77,8 +78,10 @@ gates:
       deterministic template content the model never authors or chooses; and
       C001's fix rewrites only the `@<ref>` suffix of one `uses:` line to a
       GitHub-resolved SHA, which is why C001 always carries
-      `external_influence = true` and is escalated to residue regardless of
-      recheck outcome.
+      `external_influence = true` and is escalated to residue for mandatory
+      human sign-off on a passing recheck (a failing recheck reverts and
+      residues as "recheck failed" like any other rule, never reaching this
+      branch).
 ---
 
 # /remediate — Conformance Remediation Loop

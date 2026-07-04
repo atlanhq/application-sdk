@@ -10,13 +10,13 @@ from __future__ import annotations
 import pathlib
 
 import pytest
-from conformance.bootstrap.render import MANAGED_ACTION_FILES, MANAGED_WORKFLOWS, render
-from conformance.cli import (
+from conformance.bootstrap.command import (
     _bootstrap_file,
-    _cmd_bootstrap,
     _derive_app_name_from_dir,
     _parse_bootstrap_args,
 )
+from conformance.bootstrap.render import MANAGED_ACTION_FILES, MANAGED_WORKFLOWS, render
+from conformance.cli import _cmd_bootstrap
 
 # ---------------------------------------------------------------------------
 # _bootstrap_file (always-overwrite semantics)
@@ -124,6 +124,27 @@ def test_parse_bootstrap_args_enable_e2e_equals_form() -> None:
     assert result["enable_e2e"] == "false"
 
 
+def test_parse_bootstrap_args_rejects_unknown_flag(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A misspelled/unrecognized flag must error, not silently fall through to
+    defaults — this parser now validates known flags' values, so an unknown
+    flag name should be held to the same standard rather than being dropped."""
+    with pytest.raises(SystemExit) as exc_info:
+        _parse_bootstrap_args(["--pakcage-name", "myapp"])
+    assert exc_info.value.code == 2
+    assert "--pakcage-name" in capsys.readouterr().err
+
+
+def test_parse_bootstrap_args_unknown_flag_after_valid_ones(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        _parse_bootstrap_args(["--app-name", "mysql", "--bogus-flag", "x"])
+    assert exc_info.value.code == 2
+    assert "--bogus-flag" in capsys.readouterr().err
+
+
 # ---------------------------------------------------------------------------
 # _cmd_bootstrap (full integration)
 # ---------------------------------------------------------------------------
@@ -138,22 +159,32 @@ def test_cmd_bootstrap_writes_skill_md(
     assert dest.read_text() == render("remediate.md")
 
 
+def _seed_conformance_pyproject(repo_root: pathlib.Path) -> None:
+    """Create a minimal packages/conformance/pyproject.toml naming this exact
+    package, matching what the real SDK monorepo checkout has on disk."""
+    conformance_dir = repo_root / "packages" / "conformance"
+    conformance_dir.mkdir(parents=True, exist_ok=True)
+    (conformance_dir / "pyproject.toml").write_text(
+        '[project]\nname = "atlan-application-sdk-conformance"\nversion = "0.0.0"\n'
+    )
+
+
 def test_cmd_bootstrap_is_a_no_op_inside_conformance_repo(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """bootstrap writes nothing at all when run inside the SDK's own repo.
 
-    packages/conformance/ only exists in the atlan-application-sdk-conformance
-    package's own source checkout, never in a consumer app repo (which
-    installs the package via pip) — its presence is the signal that every
-    file bootstrap would otherwise manage here (SKILL.md, the workflow/action
-    shims, tests.yaml, renovate.json, contract_schema.lock.json) is either
-    hand-maintained or simply doesn't apply to a library repo. A prior guard
-    covered only SKILL.md and missed MANAGED_WORKFLOWS/MANAGED_ACTION_FILES,
-    which are just as hand-authored here — this asserts the whole write phase
-    is skipped, not file-by-file.
+    packages/conformance/pyproject.toml naming this exact package only exists
+    in the atlan-application-sdk-conformance package's own source checkout,
+    never in a consumer app repo (which installs the package via pip) — its
+    presence is the signal that every file bootstrap would otherwise manage
+    here (SKILL.md, the workflow/action shims, tests.yaml, renovate.json,
+    contract_schema.lock.json) is either hand-maintained or simply doesn't
+    apply to a library repo. A prior guard covered only SKILL.md and missed
+    MANAGED_WORKFLOWS/MANAGED_ACTION_FILES, which are just as hand-authored
+    here — this asserts the whole write phase is skipped, not file-by-file.
     """
-    (tmp_path / "packages" / "conformance").mkdir(parents=True)
+    _seed_conformance_pyproject(tmp_path)
     # Seed one MANAGED_WORKFLOWS file with content that diverges from what
     # bootstrap would render, mirroring this repo's real hand-authored
     # conformance.yaml — proves it survives untouched, not just absent files.
@@ -192,8 +223,8 @@ def test_cmd_bootstrap_is_a_no_op_when_invoked_from_inside_packages_conformance(
     uv run atlan-application-sdk-conformance bootstrap`) would silently miss
     the guard and scaffold consumer-app files into this repo.
     """
+    _seed_conformance_pyproject(tmp_path)
     conformance_dir = tmp_path / "packages" / "conformance"
-    conformance_dir.mkdir(parents=True)
 
     monkeypatch.chdir(conformance_dir)
     assert _cmd_bootstrap([]) == 0
@@ -202,6 +233,43 @@ def test_cmd_bootstrap_is_a_no_op_when_invoked_from_inside_packages_conformance(
         conformance_dir / ".claude" / "skills" / "remediate" / "SKILL.md"
     ).exists()
     assert not (tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md").exists()
+
+
+def test_cmd_bootstrap_does_not_no_op_for_coincidental_packages_conformance_dir(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A consumer monorepo that happens to contain a bare packages/conformance/
+    directory (no matching pyproject.toml, or one naming a different package)
+    must NOT trip the self-detection guard and silently skip scaffolding.
+
+    Regression test for keying the guard on a bare directory-name check,
+    which would exit 0 with a "skipped" message and zero files written in
+    this scenario — a silent under-install indistinguishable from success.
+    """
+    (tmp_path / "packages" / "conformance").mkdir(parents=True)
+
+    monkeypatch.chdir(tmp_path)
+    assert _cmd_bootstrap([]) == 0
+
+    assert (tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md").exists()
+    assert (tmp_path / ".github" / "workflows" / "tests.yaml").exists()
+
+
+def test_cmd_bootstrap_does_not_no_op_when_pyproject_names_different_package(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A packages/conformance/pyproject.toml that names an unrelated package
+    must not trip the guard either — only this exact package name does."""
+    conformance_dir = tmp_path / "packages" / "conformance"
+    conformance_dir.mkdir(parents=True)
+    (conformance_dir / "pyproject.toml").write_text(
+        '[project]\nname = "some-other-package"\nversion = "0.0.0"\n'
+    )
+
+    monkeypatch.chdir(tmp_path)
+    assert _cmd_bootstrap([]) == 0
+
+    assert (tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md").exists()
 
 
 @pytest.mark.parametrize("help_flag", ["--help", "-h"])
@@ -213,10 +281,10 @@ def test_cmd_bootstrap_help_prints_usage_and_writes_nothing(
 ) -> None:
     """--help/-h must short-circuit before any file is written.
 
-    A hand-rolled flag parser (unlike the other subcommands' argparse-based
-    ones) silently ignores unrecognized flags, so without an explicit guard
-    `bootstrap --help` would fall through and execute the real, mutating
-    bootstrap — surprising callers who expect `--help` to be a no-op.
+    `main()` checks for `-h`/`--help` before `_parse_bootstrap_args` runs at
+    all — without that explicit guard, `bootstrap --help` would fall through
+    and execute the real, mutating bootstrap — surprising callers who expect
+    `--help` to be a no-op.
     """
     monkeypatch.chdir(tmp_path)
     exit_code = _cmd_bootstrap([help_flag])

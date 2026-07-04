@@ -168,12 +168,12 @@ deterministic re-resolve), but it **requires `pkl`**.
 3. Stage `contract/PklProject.deps.json` and every regenerated artifact.
 4. Set `touched_files` to the union of every path reported changed by
    `git status --porcelain -- contract/ app/generated/ atlan.yaml app.yaml`,
-   diffed before step 1 and after step 3 — this is deterministic (read off
-   `git`'s own output, never model-judged), the same determinism argument as
-   `bootstrap`'s stdout-prefix extraction for C002 (see the write-scope note
-   in `remediate-finding.prose.md`). It is what lets `detect-fix-recheck`
-   revert the lock plus every regenerated artifact, not just `finding.file`,
-   if the `pkl-eval` gate rejects this fix.
+   diffed before step 1 and after step 3 — see the write-scope note in
+   `remediate-finding.prose.md` for why this determinism argument (read off
+   a tool's own output, never model-judged) applies uniformly here and to
+   `bootstrap`'s stdout-prefix extraction for C002. It is what lets
+   `detect-fix-recheck` revert the lock plus every regenerated artifact, not
+   just `finding.file`, if the `pkl-eval` gate rejects this fix.
 
 If `pkl` is unavailable, do not hand-edit the lock JSON — route to residue with a
 note to re-resolve locally (the `renovate-pkl-sync` workflow does this
