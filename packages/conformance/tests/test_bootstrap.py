@@ -1223,6 +1223,46 @@ def test_cmd_bootstrap_explicit_enforce_overrides_autodetected_soft_mode(
     assert _EXIT_ZERO_HARD in conformance.read_text()
 
 
+def test_cmd_bootstrap_rerun_unparseable_conformance_yaml_falls_back_to_renovate(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A bare re-run must not silently flip enforcement to hard-gate just
+    because conformance.yaml's exit-zero line doesn't match the expected
+    pattern (hand-edited, or rendered by an older template) -- it should
+    fall back to renovate.json's own soft/hard signal instead, so the two
+    managed files can't end up in different enforcement modes."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--enforce", "false"])
+    conformance = tmp_path / ".github" / "workflows" / "conformance.yaml"
+    original = conformance.read_text()
+    assert _EXIT_ZERO_SOFT in original
+    corrupted = original.replace(_EXIT_ZERO_SOFT, "exit-zero: true  # hand-edited")
+    assert corrupted != original
+    conformance.write_text(corrupted)
+    capsys.readouterr()  # discard bootstrap's own setup output
+    _cmd_bootstrap([])
+    assert _EXIT_ZERO_SOFT in conformance.read_text()
+    assert "falling back to renovate.json" in capsys.readouterr().out
+
+
+def test_cmd_bootstrap_rerun_unparseable_conformance_yaml_hard_mode_control(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Control case: the renovate.json fallback also preserves hard mode."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--enforce", "true"])
+    conformance = tmp_path / ".github" / "workflows" / "conformance.yaml"
+    original = conformance.read_text()
+    assert _EXIT_ZERO_HARD in original
+    conformance.write_text(
+        original.replace(_EXIT_ZERO_HARD, "exit-zero: false  # hand-edited")
+    )
+    _cmd_bootstrap([])
+    assert _EXIT_ZERO_HARD in conformance.read_text()
+
+
 # ---------------------------------------------------------------------------
 # enable-e2e: omitted when default (true)
 # ---------------------------------------------------------------------------

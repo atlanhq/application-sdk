@@ -66,11 +66,34 @@ def _derive_app_name_from_dir(root: pathlib.Path) -> str:
     return name or "app"
 
 
-def _read_conformance_enforce(path: pathlib.Path) -> str:
-    """Return the ``--enforce`` value that reproduces *path*'s existing
-    ``exit-zero`` mode, or ``""`` if absent/unparseable.
+def _read_enforce_from_renovate(root: pathlib.Path) -> str:
+    """Fall back to *root*'s on-disk ``renovate.json`` enforcement signal.
 
-    The rendered line is ``exit-zero: ${{ ... || << exit_zero >> }}`` — the
+    Used only when ``conformance.yaml``'s ``exit-zero`` line can't be read
+    (see ``_read_conformance_enforce``) — ``renovate.json``'s own
+    ``lockFileMaintenance`` block (soft mode) or absence thereof (hard mode)
+    is a second, independent signal of the repo's actual enforcement mode,
+    read via ``_extract_renovate_automerge`` (the same structural check the
+    C002 checker uses), so autodetection doesn't have to guess.
+    """
+    from conformance.suite.checks.bootstrap_drift import _extract_renovate_automerge
+
+    renovate = root / "renovate.json"
+    if not renovate.exists():
+        return ""
+    try:
+        automerge = _extract_renovate_automerge(renovate.read_text(encoding="utf-8"))
+    except OSError:
+        return ""
+    return "false" if automerge == "false" else "true"
+
+
+def _read_conformance_enforce(path: pathlib.Path, root: pathlib.Path) -> str:
+    """Return the ``--enforce`` value that reproduces this repo's existing
+    enforcement mode, or ``""`` if there is truly nothing to detect.
+
+    Primary signal is *path*'s (``conformance.yaml``) ``exit-zero`` line. The
+    rendered line is ``exit-zero: ${{ ... || << exit_zero >> }}`` — the
     boolean is the last token before the closing ``}}``, not the first token
     after ``exit-zero:`` (unlike the other managed-file fields), so this
     can't reuse ``_read_workflow_field``. ``exit-zero: true`` is soft/observe
@@ -80,6 +103,17 @@ def _read_conformance_enforce(path: pathlib.Path) -> str:
     Reuses ``_EXIT_ZERO_RE`` from ``bootstrap_drift`` (the C002 checker) as
     the single source of truth for the pattern, rather than re-declaring an
     identical regex here.
+
+    If *path* is absent, there is nothing to detect and this returns ``""``
+    (falls through to the hard-gate default at derivation time) — that's the
+    normal first-bootstrap case. But if *path* exists and its ``exit-zero``
+    line simply doesn't match the expected pattern (hand-edited, or rendered
+    by an older bootstrap template), silently falling through to the same
+    hard-gate default would flip an intentionally soft-mode repo to hard-gate
+    on a bare re-run — while ``renovate.json`` (which a bare re-run never
+    force-overwrites) stays in its original soft-mode content, leaving the
+    two managed files in different enforcement modes. Fall back to
+    ``renovate.json``'s own on-disk signal instead of guessing hard-gate.
     """
     if not path.exists():
         return ""
@@ -91,8 +125,12 @@ def _read_conformance_enforce(path: pathlib.Path) -> str:
             if m:
                 return "false" if m.group(1) == "true" else "true"
     except OSError:
-        pass
-    return ""
+        return ""
+    print(
+        f"warning: {path} exists but its exit-zero line is unparseable"
+        " -- falling back to renovate.json's enforcement signal"
+    )
+    return _read_enforce_from_renovate(root)
 
 
 def _apply_bootstrap_autodetection(kwargs: dict[str, str], root: pathlib.Path) -> None:
@@ -137,7 +175,7 @@ def _apply_bootstrap_autodetection(kwargs: dict[str, str], root: pathlib.Path) -
     # invocation, not when it was merely auto-detected.
     if not kwargs["enforce"]:
         kwargs["enforce"] = _read_conformance_enforce(
-            root / ".github" / "workflows" / "conformance.yaml"
+            root / ".github" / "workflows" / "conformance.yaml", root
         )
 
 

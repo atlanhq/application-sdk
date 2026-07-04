@@ -70,12 +70,16 @@ judge or game.
 `bootstrap`'s actual write footprint is wider than `.github/`/`.gitignore` and
 must be accounted for whenever it is invoked as part of a C002 (or C003
 absent-file) fix. Set `touched_files` to every path `bootstrap` printed with
-a `scaffolded:`, `installed:`, or `updated:` prefix in this invocation's own
-stdout — this is deterministic (read directly off the CLI's own output),
-never model-judged, and it is what lets `detect-fix-recheck` revert the
-*entire* fix, not just `finding.file`, if the gates below reject it. A path
-printed with an `ok (...)` prefix was left unchanged and is not part of
-`touched_files`.
+a `scaffolded:`, `installed:`, `updated:`, or `backed up:` prefix in this
+invocation's own stdout — this is deterministic (read directly off the CLI's
+own output), never model-judged, and it is what lets `detect-fix-recheck`
+revert the *entire* fix, not just `finding.file`, if the gates below reject
+it. A path printed with an `ok (...)` prefix was left unchanged and is not
+part of `touched_files`. (The `backed up:` prefix only appears if a prior
+invocation passed `--enforce` explicitly and `renovate.json` had
+non-canonical content, writing a `renovate.json.bak` — not reachable via the
+no-flags procedure below, but real if this function is ever invoked with an
+explicit `--enforce`.)
 
 - It **always overwrites** `.claude/skills/remediate/SKILL.md` in consumer
   app repos — the very document driving this remediation loop — on every

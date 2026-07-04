@@ -101,11 +101,15 @@ it isn't safe to assume a C002 finding already triggered it:
    `.gitignore` (C003's absent-file case — see below), an absent
    `renovate.json`, and an absent `tests.yaml`.
 3. `outcome = "fix"`. `touched_files` = every path `bootstrap` printed with a
-   `scaffolded:`, `installed:`, or `updated:` prefix in this invocation's
-   stdout — see the write-scope note in `remediate-finding.prose.md` for why
-   this is deterministic (read off the CLI's own output, not model-judged)
-   and how it drives `detect-fix-recheck`'s revert scope if this fix is
-   later rejected by a gate. `orthogonal_gate = "skip"` on both C002 and C003
+   `scaffolded:`, `installed:`, `updated:`, or `backed up:` prefix in this
+   invocation's stdout — see the write-scope note in
+   `remediate-finding.prose.md` for why this is deterministic (read off the
+   CLI's own output, not model-judged) and how it drives
+   `detect-fix-recheck`'s revert scope if this fix is later rejected by a
+   gate. This no-flags procedure never triggers a `backed up:` line itself
+   (that only happens when `--enforce` is passed explicitly), but capture it
+   if present rather than assuming the three-prefix list from other contexts
+   is exhaustive here too. `orthogonal_gate = "skip"` on both C002 and C003
    (set on the rule definitions) — the test suite gate is skipped entirely,
    not just for this fix: a `.github/`/scaffold-only change cannot affect
    Python behaviour. `recheck-narrowest` (re-running `suite.runner --series
