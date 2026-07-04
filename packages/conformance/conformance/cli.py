@@ -287,6 +287,22 @@ options:
 """
 
 
+def _is_inside_conformance_repo(start: pathlib.Path) -> bool:
+    """Detect whether *start* is anywhere inside the atlan-application-sdk-conformance
+    package's own source checkout.
+
+    packages/conformance/ only exists in that checkout, never in a consumer
+    app repo (which installs the package via pip). Walk upward from *start*
+    rather than checking *start* itself, so the detection holds regardless of
+    which subdirectory bootstrap is invoked from — the repo root, inside
+    packages/conformance/ itself, or any other subdirectory in between.
+    """
+    for candidate in (start, *start.parents):
+        if (candidate / "packages" / "conformance").is_dir():
+            return True
+    return False
+
+
 def _cmd_bootstrap(argv: list[str]) -> int:
     """Write the SKILL.md shim and standard CI workflows into the current repo."""
     if "-h" in argv or "--help" in argv:
@@ -305,15 +321,13 @@ def _cmd_bootstrap(argv: list[str]) -> int:
     # bootstrap scaffolds a *consumer app* repo. Every file it would write —
     # SKILL.md, the managed workflow/action shims, tests.yaml, renovate.json,
     # .gitignore, contract_schema.lock.json — is either hand-maintained here
-    # or simply doesn't apply to a library repo. Detect "this repo" via
-    # packages/conformance/, a directory no consumer app has (they consume
-    # the package via pip, never as an in-tree source checkout), and no-op
-    # the entire write phase rather than special-casing each managed file
-    # individually — a per-file guard silently stops covering new managed
-    # files the moment one is added without updating it (this replaced an
-    # earlier guard that covered only SKILL.md and missed MANAGED_WORKFLOWS/
-    # MANAGED_ACTION_FILES, which are just as hand-authored in this repo).
-    if (root / "packages" / "conformance").is_dir():
+    # or simply doesn't apply to a library repo. No-op the entire write phase
+    # rather than special-casing each managed file individually — a per-file
+    # guard silently stops covering new managed files the moment one is added
+    # without updating it (this replaced an earlier guard that covered only
+    # SKILL.md and missed MANAGED_WORKFLOWS/MANAGED_ACTION_FILES, which are
+    # just as hand-authored in this repo).
+    if _is_inside_conformance_repo(root):
         print(
             "skipped: bootstrap is a no-op inside the"
             " atlan-application-sdk-conformance repo itself"

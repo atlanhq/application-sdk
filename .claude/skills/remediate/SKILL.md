@@ -24,8 +24,11 @@ inputs:
       top-level program enables (error-handling, deprecation, dependency,
       prescriptions, optimizations, dockerfile, tests, logging; ci is
       partially remediated — C002 and C003's absent-file case are fixed
-      mechanically via `bootstrap`, everything else in the C-series routes
-      to residue).  Example: --area deprecation
+      mechanically via `bootstrap`; C001 is also fixed mechanically
+      (SHA-resolve + repin) but always escalated to residue for human
+      sign-off; C003's missing-entry case and drifted `tests.yaml`/
+      `renovate.json` still route to residue with no fix attempted).
+      Example: --area deprecation
     required: false
     default: "error-handling,deprecation,dependency,prescriptions,optimizations,dockerfile,tests,logging,ci,contract-toolkit"
   - name: strict

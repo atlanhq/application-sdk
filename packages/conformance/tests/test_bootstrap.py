@@ -180,6 +180,30 @@ def test_cmd_bootstrap_is_a_no_op_inside_conformance_repo(
     assert not (tmp_path / ".gitignore").exists()
 
 
+def test_cmd_bootstrap_is_a_no_op_when_invoked_from_inside_packages_conformance(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The no-op guard must hold regardless of which subdirectory bootstrap is
+    invoked from — not just the repo root.
+
+    A cwd-relative existence check (``cwd / "packages" / "conformance"``)
+    only fires when cwd IS the repo root; invoking from inside
+    packages/conformance/ itself (e.g. a local `cd packages/conformance &&
+    uv run atlan-application-sdk-conformance bootstrap`) would silently miss
+    the guard and scaffold consumer-app files into this repo.
+    """
+    conformance_dir = tmp_path / "packages" / "conformance"
+    conformance_dir.mkdir(parents=True)
+
+    monkeypatch.chdir(conformance_dir)
+    assert _cmd_bootstrap([]) == 0
+
+    assert not (
+        conformance_dir / ".claude" / "skills" / "remediate" / "SKILL.md"
+    ).exists()
+    assert not (tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md").exists()
+
+
 @pytest.mark.parametrize("help_flag", ["--help", "-h"])
 def test_cmd_bootstrap_help_prints_usage_and_writes_nothing(
     tmp_path: pathlib.Path,

@@ -35,11 +35,12 @@ description: >
 - `touched_files` — optional list of repo-relative paths the edit actually
   wrote. Defaults to `[finding.file]` when omitted, which covers every
   single-file textual edit (the overwhelming majority of fixes). Set
-  explicitly for any fix that writes more than one file — currently only
-  C002/C003's `bootstrap` invocation (see the write-scope note below for how
-  it is populated deterministically). `detect-fix-recheck` reverts exactly
-  this file set if the fix fails its gates, so a multi-file fix that is
-  later reverted doesn't leave unrelated files mutated in the tree.
+  explicitly for any fix that writes more than one file — C002/C003's
+  `bootstrap` invocation, and K003/K004's `pkl` regeneration (see the
+  write-scope note below and `areas/contract-toolkit.prose.md`'s K003/K004
+  procedures for how each is populated deterministically). `detect-fix-recheck`
+  reverts exactly this file set if the fix fails its gates, so a multi-file fix
+  that is later reverted doesn't leave unrelated files mutated in the tree.
 
 ### Write-scope constraint
 
@@ -52,7 +53,11 @@ edits.
 
 For K-series findings, edits to `contract/*.pkl` files are also permitted.
 The `pkl-eval` orthogonal gate verifies that the edited contract still compiles
-and regenerates its artifacts correctly.
+and regenerates its artifacts correctly. K003/K004's own write footprint is
+wider than `contract/*.pkl` — `pkl project resolve`/`pkl eval` also write
+`contract/PklProject.deps.json` and every regenerated artifact under
+`app/generated/`, `atlan.yaml`, or `app.yaml`; see `areas/contract-toolkit.prose.md`
+for how `touched_files` accounts for that full set.
 
 For C002 findings (and C003's absent-`.gitignore` case) only, invoking
 `atlan-application-sdk-conformance bootstrap` is also permitted, despite it
