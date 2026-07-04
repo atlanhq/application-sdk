@@ -2,6 +2,20 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.11.1] - 2026-07-04
+
+### Bug fixes
+
+- skip P030 for apps with no publish stage (#2500) ([01e3d6c](https://github.com/atlanhq/application-sdk/commit/01e3d6c))
+- suppress T201 inline in build_conformance_args.py (#2486) ([58accfc](https://github.com/atlanhq/application-sdk/commit/58accfc))
+
+### Other changes
+
+- chore(deps): lock file maintenance (#2501) ([b21b1e4](https://github.com/atlanhq/application-sdk/commit/b21b1e4))
+- chore(deps): lock file maintenance (#2493) ([4130b08](https://github.com/atlanhq/application-sdk/commit/4130b08))
+- chore(deps): lock file maintenance (#2491) ([9756039](https://github.com/atlanhq/application-sdk/commit/9756039))
+- chore(deps): lock file maintenance (#2484) ([7c24a41](https://github.com/atlanhq/application-sdk/commit/7c24a41))
+
 ## [0.11.0] - 2026-07-03
 
 ### Features
