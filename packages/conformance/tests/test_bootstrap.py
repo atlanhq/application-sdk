@@ -138,6 +138,23 @@ def test_cmd_bootstrap_writes_skill_md(
     assert dest.read_text() == render("remediate.md")
 
 
+def test_cmd_bootstrap_skips_skill_md_inside_conformance_repo(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """bootstrap never overwrites SKILL.md when run inside the SDK's own repo.
+
+    packages/conformance/ only exists in the atlan-application-sdk-conformance
+    package's own source checkout, never in a consumer app repo (which
+    installs the package via pip) — its presence is the signal that SKILL.md
+    here is hand-maintained prose, not template output.
+    """
+    (tmp_path / "packages" / "conformance").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    dest = tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md"
+    assert not dest.exists()
+
+
 def test_cmd_bootstrap_writes_all_managed_workflows(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

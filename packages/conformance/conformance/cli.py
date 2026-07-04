@@ -267,10 +267,23 @@ def _cmd_bootstrap(argv: list[str]) -> int:
     kwargs["automerge"] = "false" if enforce == "false" else "true"
     force_renovate = enforce in ("true", "false")
 
-    _bootstrap_file(
-        root / ".claude" / "skills" / "remediate" / "SKILL.md",
-        render("remediate.md", **kwargs),
-    )
+    # .claude/skills/remediate/SKILL.md is hand-maintained prose inside the
+    # atlan-application-sdk-conformance package's own repo (this one) — not
+    # generated template output, unlike every consumer app repo. Detect "this
+    # repo" via packages/conformance/, a directory no consumer app has (they
+    # consume the package via pip, never as an in-tree source checkout), and
+    # skip the overwrite there rather than risk destroying hand-authored
+    # content with the generic shim.
+    if (root / "packages" / "conformance").is_dir():
+        print(
+            "skipped: .claude/skills/remediate/SKILL.md"
+            " (hand-maintained in the atlan-application-sdk-conformance repo)"
+        )
+    else:
+        _bootstrap_file(
+            root / ".claude" / "skills" / "remediate" / "SKILL.md",
+            render("remediate.md", **kwargs),
+        )
     for name in MANAGED_WORKFLOWS:
         _bootstrap_file(
             root / ".github" / "workflows" / name,

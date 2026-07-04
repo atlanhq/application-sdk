@@ -94,21 +94,24 @@ it isn't safe to assume a C002 finding already triggered it:
    workflow shim, every absent/drifted vendored action file, an absent
    `.gitignore` (C003's absent-file case — see below), an absent
    `renovate.json`, and an absent `tests.yaml`.
-3. `outcome = "fix"`. `orthogonal_gate = "skip"` on both C002 and C003 (set
-   on the rule definitions) — the test suite gate is skipped entirely, not
-   just for this fix: a `.github/`/scaffold-only change cannot affect Python
-   behaviour. `recheck-narrowest` (re-running `suite.runner --series C`) is
-   the only verification that applies.
+3. `outcome = "fix"`. `touched_files` = every path `bootstrap` printed with a
+   `scaffolded:`, `installed:`, or `updated:` prefix in this invocation's
+   stdout — see the write-scope note in `remediate-finding.prose.md` for why
+   this is deterministic (read off the CLI's own output, not model-judged)
+   and how it drives `detect-fix-recheck`'s revert scope if this fix is
+   later rejected by a gate. `orthogonal_gate = "skip"` on both C002 and C003
+   (set on the rule definitions) — the test suite gate is skipped entirely,
+   not just for this fix: a `.github/`/scaffold-only change cannot affect
+   Python behaviour. `recheck-narrowest` (re-running `suite.runner --series
+   C`) is the only verification that applies.
 4. Any C002 finding still present after this pass is genuinely not
    bootstrap-fixable and falls into the residue cases below.
-5. `bootstrap` also always-overwrites `.claude/skills/remediate/SKILL.md` and
-   write-if-absent-scaffolds `contract_schema.lock.json` as side effects of
-   every invocation — see the write-scope note in
-   `remediate-finding.prose.md` for what to do about each. If this
-   invocation created a `contract_schema.lock.json` that did not exist
-   before, add a residue entry noting a new B-series baseline was
-   established and needs human review — it was not produced to satisfy any
-   C-series finding.
+5. `bootstrap`'s write footprint is wider than `.github/`/`.gitignore` —
+   see the write-scope note in `remediate-finding.prose.md` for the full
+   accounting, all captured by the same `touched_files` extraction from
+   step 3: `.claude/skills/remediate/SKILL.md` (and the SDK-repo exception to
+   overwriting it, enforced in `cli.py`), and `contract_schema.lock.json`'s
+   new-baseline residue note when it is created rather than already present.
 
 *Not resolved by this procedure — route to residue:*
 

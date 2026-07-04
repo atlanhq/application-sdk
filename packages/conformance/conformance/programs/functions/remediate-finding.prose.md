@@ -32,6 +32,14 @@ description: >
   use.
 - `not_remediable` — boolean; true when the area has no authored prescription
   yet (returns to residue without an edit attempt).
+- `touched_files` — optional list of repo-relative paths the edit actually
+  wrote. Defaults to `[finding.file]` when omitted, which covers every
+  single-file textual edit (the overwhelming majority of fixes). Set
+  explicitly for any fix that writes more than one file — currently only
+  C002/C003's `bootstrap` invocation (see the write-scope note below for how
+  it is populated deterministically). `detect-fix-recheck` reverts exactly
+  this file set if the fix fails its gates, so a multi-file fix that is
+  later reverted doesn't leave unrelated files mutated in the tree.
 
 ### Write-scope constraint
 
@@ -56,19 +64,38 @@ judge or game.
 
 `bootstrap`'s actual write footprint is wider than `.github/`/`.gitignore` and
 must be accounted for whenever it is invoked as part of a C002 (or C003
-absent-file) fix:
+absent-file) fix. Set `touched_files` to every path `bootstrap` printed with
+a `scaffolded:`, `installed:`, or `updated:` prefix in this invocation's own
+stdout — this is deterministic (read directly off the CLI's own output),
+never model-judged, and it is what lets `detect-fix-recheck` revert the
+*entire* fix, not just `finding.file`, if the gates below reject it. A path
+printed with an `ok (...)` prefix was left unchanged and is not part of
+`touched_files`.
 
-- It **always overwrites** `.claude/skills/remediate/SKILL.md` — the very
-  document driving this remediation loop — on every invocation. This is the
-  same deterministic-re-sync argument as above (the model does not author
-  SKILL.md's content, `bootstrap` renders it), but it is called out
+- It **always overwrites** `.claude/skills/remediate/SKILL.md` in consumer
+  app repos — the very document driving this remediation loop — on every
+  invocation (captured in `touched_files` like any other managed file). This
+  is the same deterministic-re-sync argument as above (the model does not
+  author SKILL.md's content, `bootstrap` renders it), but it is called out
   explicitly here so a reviewer auditing a C002 fix isn't surprised to see
   SKILL.md touched by a change that was nominally about a CI workflow file.
+  **Exception: inside the `atlan-application-sdk-conformance` repo itself**
+  (detected by the presence of `packages/conformance/` in the scan root — no
+  consumer app repo has this directory, since they consume the package via
+  pip rather than as an in-tree checkout), `bootstrap` skips this write
+  entirely: `.claude/skills/remediate/SKILL.md` there is hand-maintained
+  prose (this very file's sibling), not generated template output, so
+  overwriting it would destroy human-authored content rather than re-sync a
+  deterministic template. This guard is enforced in code
+  (`_cmd_bootstrap` in `cli.py`), not just documented here.
 - It **write-if-absent scaffolds** `contract_schema.lock.json` (a B-series
   entrypoint-contract ledger baseline) whenever that file does not already
-  exist — unrelated to the C-series finding being fixed. If this invocation
-  creates that file, add a residue entry noting a new B-series baseline was
-  established and needs human review; it was not produced to satisfy any
+  exist — unrelated to the C-series finding being fixed. Whether this
+  invocation created it is determined the same deterministic way: if
+  `contract_schema.lock.json` appears in this invocation's `scaffolded:`
+  lines (as opposed to not appearing at all, which means it already
+  existed), add a residue entry noting a new B-series baseline was
+  established and needs human review — it was not produced to satisfy any
   C-series finding and must not be silently folded into the C002 fix's own
   outcome.
 
