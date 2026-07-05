@@ -57,3 +57,20 @@ def extract_renovate_automerge(text: str) -> str:
     return (
         "false" if isinstance(data, dict) and "lockFileMaintenance" in data else "true"
     )
+
+
+def resolve_renovate_fallback_exit_zero(renovate_text: str) -> str:
+    """Return the raw ``exit-zero`` fallback signal (``"true"``/``"false"``)
+    implied by *renovate_text* (an already-read ``renovate.json``'s contents).
+
+    Single source of truth for "derive exit-zero from renovate.json's
+    automerge signal when the primary ``conformance.yaml`` exit-zero line
+    can't be read" — both ``bootstrap.autodetect``'s ``--enforce``
+    autodetection and the C002 checker's exit-zero drift extraction call
+    this (each converting the result to its own required polarity), so the
+    two can't silently diverge on how the fallback is derived. Callers own
+    the "renovate.json is absent/unreadable" case themselves, since each has
+    a different sentinel for "no signal at all" (``""`` vs ``"false"``).
+    """
+    automerge = extract_renovate_automerge(renovate_text)
+    return "true" if automerge == "false" else "false"

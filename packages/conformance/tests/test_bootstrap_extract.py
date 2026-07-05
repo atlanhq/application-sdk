@@ -11,6 +11,7 @@ from conformance.bootstrap.extract import (
     EXIT_ZERO_RE,
     extract_field,
     extract_renovate_automerge,
+    resolve_renovate_fallback_exit_zero,
 )
 
 
@@ -63,3 +64,16 @@ def test_exit_zero_re_matches_rendered_expression() -> None:
 
 def test_exit_zero_re_does_not_match_plain_field() -> None:
     assert EXIT_ZERO_RE.search("exit-zero: true\n") is None
+
+
+def test_resolve_renovate_fallback_exit_zero_soft_mode() -> None:
+    text = '{"lockFileMaintenance": {"automerge": false}}'
+    assert resolve_renovate_fallback_exit_zero(text) == "true"
+
+
+def test_resolve_renovate_fallback_exit_zero_hard_mode() -> None:
+    assert resolve_renovate_fallback_exit_zero("{}") == "false"
+
+
+def test_resolve_renovate_fallback_exit_zero_unparseable_defaults_hard() -> None:
+    assert resolve_renovate_fallback_exit_zero("not json") == "false"

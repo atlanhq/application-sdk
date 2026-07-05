@@ -28,6 +28,19 @@ def test_c001_orthogonal_gate_is_skip() -> None:
     assert get_rule("C001").orthogonal_gate == "skip"
 
 
+def test_c001_forces_external_influence_is_true() -> None:
+    """C001 always resolves a live GitHub SHA -- forces human sign-off
+    regardless of whether a given remediation attempt self-reports it."""
+    assert get_rule("C001").forces_external_influence is True
+
+
+@pytest.mark.parametrize("rule_id", ["C002", "C003"])
+def test_c002_c003_do_not_force_external_influence(rule_id: str) -> None:
+    """Only C001 forces external influence -- C002/C003 fixes are a
+    deterministic local re-sync with no external lookup."""
+    assert get_rule(rule_id).forces_external_influence is False
+
+
 # ── is_violation truth table ──────────────────────────────────────────────────
 
 

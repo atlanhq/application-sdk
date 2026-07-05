@@ -14,7 +14,7 @@ import pathlib
 from conformance.bootstrap.extract import (
     EXIT_ZERO_RE,
     extract_field,
-    extract_renovate_automerge,
+    resolve_renovate_fallback_exit_zero,
 )
 
 
@@ -61,18 +61,21 @@ def _read_enforce_from_renovate(root: pathlib.Path) -> str:
     Used only when ``conformance.yaml``'s ``exit-zero`` line can't be read
     (see ``_read_conformance_enforce``) — ``renovate.json``'s own
     ``lockFileMaintenance`` block (soft mode) or absence thereof (hard mode)
-    is a second, independent signal of the repo's actual enforcement mode,
-    read via ``extract_renovate_automerge`` (the same structural check the
-    C002 checker uses), so autodetection doesn't have to guess.
+    is a second, independent signal of the repo's actual enforcement mode.
+    The automerge-to-exit-zero decision itself is
+    ``resolve_renovate_fallback_exit_zero`` (the same one the C002 checker
+    uses); this just inverts its polarity to the ``--enforce`` value this
+    function returns.
     """
     renovate = root / "renovate.json"
     if not renovate.exists():
         return ""
     try:
-        automerge = extract_renovate_automerge(renovate.read_text(encoding="utf-8"))
+        renovate_text = renovate.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return ""
-    return "false" if automerge == "false" else "true"
+    exit_zero = resolve_renovate_fallback_exit_zero(renovate_text)
+    return "false" if exit_zero == "true" else "true"
 
 
 def _read_conformance_enforce(path: pathlib.Path, root: pathlib.Path) -> str:

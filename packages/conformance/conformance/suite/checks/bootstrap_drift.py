@@ -38,6 +38,7 @@ from conformance.bootstrap.extract import (
     EXIT_ZERO_RE,
     extract_field,
     extract_renovate_automerge,
+    resolve_renovate_fallback_exit_zero,
 )
 from conformance.bootstrap.render import MANAGED_ACTION_FILES, MANAGED_WORKFLOWS, render
 from conformance.suite.schema.findings import Finding
@@ -106,12 +107,14 @@ def _extract_exit_zero(text: str, root: Path) -> str:
     """Return the on-disk ``exit-zero`` value, falling back to *root*'s
     ``renovate.json`` enforcement signal when the line is unparseable.
 
-    Mirrors ``bootstrap.autodetect._read_conformance_enforce``'s fallback so
-    this checker and ``bootstrap``'s own re-run autodetection cannot silently
-    diverge on a hand-edited/pre-template ``conformance.yaml``: without this,
-    a genuinely soft-mode repo whose exit-zero line doesn't match the pattern
-    would report a spurious C002 drift finding here while `bootstrap` itself
-    correctly preserves soft mode via the same renovate.json fallback.
+    Uses ``resolve_renovate_fallback_exit_zero`` — the same automerge-to-
+    exit-zero decision ``bootstrap.autodetect._read_conformance_enforce``
+    falls back to — so this checker and ``bootstrap``'s own re-run
+    autodetection cannot silently diverge on a hand-edited/pre-template
+    ``conformance.yaml``: without this, a genuinely soft-mode repo whose
+    exit-zero line doesn't match the pattern would report a spurious C002
+    drift finding here while `bootstrap` itself correctly preserves soft
+    mode via the same renovate.json fallback.
     """
     m = EXIT_ZERO_RE.search(text)
     if m:
@@ -120,10 +123,10 @@ def _extract_exit_zero(text: str, root: Path) -> str:
     if not renovate.exists():
         return "false"
     try:
-        automerge = extract_renovate_automerge(renovate.read_text(encoding="utf-8"))
+        renovate_text = renovate.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return "false"
-    return "true" if automerge == "false" else "false"
+    return resolve_renovate_fallback_exit_zero(renovate_text)
 
 
 # ---------------------------------------------------------------------------
