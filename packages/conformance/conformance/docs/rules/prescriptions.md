@@ -575,7 +575,7 @@ and a `run()` / `@entrypoint` method (typed `Input`/`Output`), and set
 run_dev_combined(MyApp, credentials={...}, ...)`. Workers and activities are
 auto-discovered from `AppRegistry` / `TaskRegistry` — there is nothing to wire.
 
-Files under `tests/integration/` are exempt from the construction- call and
+Files under `tests/integration/` are exempt from the construction-call and
 lifecycle-call violation classes: those harnesses need an in-process worker/client
 handle to submit workflows and tear down per test, and `run_dev_combined` blocks until
 shutdown with no handle-returning mode to substitute. The removed-v2-import class stays

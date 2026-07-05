@@ -34,11 +34,12 @@ def is_integration_test_harness(file: str) -> bool:
     handle-returning mode that supports this (BLDX-1411), so it cannot replace
     this pattern the way it can for app boot code.
 
-    Scoped to the ``tests/integration/`` path shape specifically (both segments
-    present, not just a file/dir *named* "integration") — not to test files in
-    general — so a hand-rolled worker anywhere else in the test tree, e.g. a
-    unit test wrongly reaching for ``create_worker`` instead of a mock, is
-    still caught.
+    Scoped to the ``tests/integration/`` path shape specifically — a ``tests``
+    segment *immediately followed by* an ``integration`` segment — not to any
+    path that merely contains both segments somewhere (``tests/helpers/integration/``
+    would not qualify) or to test files in general, so a hand-rolled worker
+    anywhere else in the test tree, e.g. a unit test wrongly reaching for
+    ``create_worker`` instead of a mock, is still caught.
     """
     parts = file.replace("\\", "/").split("/")
-    return "tests" in parts and "integration" in parts
+    return any(a == "tests" and b == "integration" for a, b in zip(parts, parts[1:]))

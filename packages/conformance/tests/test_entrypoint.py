@@ -253,6 +253,26 @@ class TestP017IntegrationTestHarnessExemption:
         )
         assert len(_rule(src, "P017", file="tests/unit/test_something.py")) == 1
 
+    def test_fires_when_integration_segment_not_adjacent_to_tests(self) -> None:
+        """'integration' present but not directly under 'tests' — must still fire.
+
+        Guards against a broader match (e.g. "tests" and "integration" present
+        anywhere in the path) that would also exempt unrelated trees like
+        tests/helpers/integration/.
+        """
+        src = (
+            "from application_sdk.execution import create_worker\n"
+            "worker = create_worker(client=client, task_queue='my-app')\n"
+        )
+        assert (
+            len(_rule(src, "P017", file="tests/helpers/integration/conftest.py")) == 1
+        )
+
+    def test_fires_when_tests_segment_not_adjacent_to_integration(self) -> None:
+        """'tests' present but not directly followed by 'integration' — must still fire."""
+        src = "await app.start_worker()\n"
+        assert len(_rule(src, "P017", file="integration/foo/tests/bar.py")) == 1
+
 
 class TestP017Suppression:
     def test_suppressed_inline(self) -> None:
