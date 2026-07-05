@@ -49,7 +49,14 @@ loop until violations is empty or attempts >= max_attempts:
         add finding to residue with note "not remediable in this phase"
         continue
 
-      apply result.edit to finding.file
+      apply result.edit  # single-file text edit to finding.file, or (e.g. C002/C003) a multi-file command like `bootstrap`
+
+      # touched_files defaults to [finding.file] for a normal single-file
+      # textual edit. A multi-file fix (currently only C002/C003's `bootstrap`
+      # invocation) sets it explicitly to every path it actually wrote, so a
+      # revert below undoes the whole fix instead of leaving every file but
+      # finding.file mutated in the tree.
+      let touched = result.touched_files or [finding.file]
 
       let recheck = call recheck-narrowest
         scope: scope
@@ -59,20 +66,26 @@ loop until violations is empty or attempts >= max_attempts:
 
       # Only run orthogonal gate for source-logic fixes; suppress = comment only.
       if result.outcome == "fix":
-        let ortho = call orthogonal-gate scope: scope
+        let ortho = call orthogonal-gate scope: scope, finding: finding, touched_files: touched
         if not ortho.passed:
-          revert result.edit from finding.file
+          revert result.edit from touched
           add finding to residue with note "orthogonal gate failed after fix"
           continue
 
       if not recheck.clear:
-        revert result.edit from finding.file
+        revert result.edit from touched
         add finding to residue with note "recheck failed: finding still present after edit"
         continue
 
+      # finding.forces_external_influence is the structural, rule-level
+      # guarantee (e.g. C001, always true); result.external_influence is
+      # remediate-finding's own per-invocation report. ORing both means a
+      # rule known ahead of time to always need human sign-off gets it even
+      # if a single invocation's result omits the flag.
       if result.outcome == "suppress"
         or result.classification == "judgment"
-        or result.external_influence:
+        or result.external_influence
+        or finding.forces_external_influence:
         add finding + result to residue for human review
 
   let next_violations = call detect-violations

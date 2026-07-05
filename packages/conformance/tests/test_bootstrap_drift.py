@@ -16,7 +16,11 @@ import re
 import pytest
 from conformance.bootstrap.render import MANAGED_ACTION_FILES, MANAGED_WORKFLOWS, render
 from conformance.cli import _cmd_bootstrap
-from conformance.suite.checks.bootstrap_drift import discover, scan_path
+from conformance.suite.checks.bootstrap_drift import (
+    _extract_exit_zero,
+    discover,
+    scan_path,
+)
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier
 
@@ -25,14 +29,14 @@ from conformance.suite.schema.disposition import EnforcementTier
 # ---------------------------------------------------------------------------
 
 
-def _bootstrap(root: pathlib.Path) -> None:
-    """Run bootstrap in *root* (no chdir needed — uses monkeypatch elsewhere)."""
+def _bootstrap(root: pathlib.Path, *argv: str) -> None:
+    """Run bootstrap in *root* with optional flags (e.g. ``"--enforce", "false"``)."""
     import os
 
     old = os.getcwd()
     os.chdir(root)
     try:
-        _cmd_bootstrap([])
+        _cmd_bootstrap(list(argv))
     finally:
         os.chdir(old)
 
@@ -54,6 +58,10 @@ def test_c002_tier_is_warn() -> None:
 
 def test_c002_is_autofixable() -> None:
     assert get_rule("C002").autofixable is True
+
+
+def test_c002_orthogonal_gate_is_skip() -> None:
+    assert get_rule("C002").orthogonal_gate == "skip"
 
 
 # ---------------------------------------------------------------------------
@@ -516,3 +524,122 @@ def test_all_scaffolds_clean_after_bootstrap(tmp_path: pathlib.Path) -> None:
     for path in discover(tmp_path):
         findings.extend(scan_path(path, tmp_path))
     assert findings == [], [f.message for f in findings]
+
+
+# ---------------------------------------------------------------------------
+# Soft-mode (--enforce false) repos: exit-zero/automerge must not be flagged
+# ---------------------------------------------------------------------------
+
+
+def test_soft_mode_conformance_yaml_not_flagged(tmp_path: pathlib.Path) -> None:
+    """A repo bootstrapped with --enforce false must not show C002 drift on
+    conformance.yaml — its exit-zero mode is a recognised param, not drift."""
+    _bootstrap(tmp_path, "--enforce", "false")
+    wf = tmp_path / ".github" / "workflows" / "conformance.yaml"
+    findings = scan_path(wf, tmp_path)
+    assert findings == [], [f.message for f in findings]
+
+
+def test_soft_mode_renovate_json_not_flagged(tmp_path: pathlib.Path) -> None:
+    """A repo bootstrapped with --enforce false must not show C002 drift on
+    renovate.json — its soft-rollout block is a recognised param, not drift."""
+    _bootstrap(tmp_path, "--enforce", "false")
+    rj = tmp_path / "renovate.json"
+    findings = scan_path(rj, tmp_path)
+    assert findings == [], [f.message for f in findings]
+
+
+def test_soft_mode_survives_bare_rerun_without_drift(tmp_path: pathlib.Path) -> None:
+    """A bare re-run (no --enforce) after an explicit soft-mode bootstrap must
+    preserve soft mode (per the bootstrap auto-detection) *and* stay clean of
+    C002 findings for both conformance.yaml and renovate.json."""
+    _bootstrap(tmp_path, "--enforce", "false")
+    _bootstrap(tmp_path)  # bare re-run
+    wf = tmp_path / ".github" / "workflows" / "conformance.yaml"
+    rj = tmp_path / "renovate.json"
+    findings = scan_path(wf, tmp_path) + scan_path(rj, tmp_path)
+    assert findings == [], [f.message for f in findings]
+
+
+def test_conformance_yaml_structural_drift_still_flagged_in_soft_mode(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Extracting exit-zero must not mask a genuine structural change."""
+    _bootstrap(tmp_path, "--enforce", "false")
+    wf = tmp_path / ".github" / "workflows" / "conformance.yaml"
+    wf.write_text(wf.read_text() + "\n# structural drift\n")
+    findings = scan_path(wf, tmp_path)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "C002"
+
+
+def test_renovate_json_structural_drift_still_flagged_in_soft_mode(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Extracting automerge must not mask a genuine structural change."""
+    _bootstrap(tmp_path, "--enforce", "false")
+    rj = tmp_path / "renovate.json"
+    rj.write_text(rj.read_text().replace("platformAutomerge", "platform_automerge"))
+    findings = scan_path(rj, tmp_path)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "C002"
+
+
+# ---------------------------------------------------------------------------
+# _extract_exit_zero — unparseable exit-zero line falls back to renovate.json
+#
+# Unit-tested directly (rather than through scan_path/discover) because the
+# fallback's effect is invisible at the scan_path level: conformance.yaml's
+# exit-zero line is the *only* place `exit_zero` is substituted (verified
+# against the template), so an unparseable line is always textually
+# different from any correctly-rendered canonical line regardless of which
+# exit_zero value the extractor falls back to -- scan_path always reports
+# drift for that file either way, correctly. What the fallback actually
+# fixes is `kwargs["exit_zero"]` itself matching bootstrap's own
+# `_read_conformance_enforce` autodetection (see autodetect.py) instead of
+# silently defaulting to hard-gate, so the two callers of `extract.py` can't
+# quietly disagree about a repo's inferred enforcement mode.
+# ---------------------------------------------------------------------------
+
+
+def test_extract_exit_zero_unparseable_falls_back_to_renovate_soft_mode(
+    tmp_path: pathlib.Path,
+) -> None:
+    """An unparseable exit-zero line with a soft-mode renovate.json falls back
+    to "true" (soft/observe), matching autodetect._read_conformance_enforce's
+    fallback instead of silently defaulting to hard-gate."""
+    _bootstrap(tmp_path, "--enforce", "false")  # writes a soft-mode renovate.json
+    assert _extract_exit_zero("exit-zero: not-a-recognised-expression", tmp_path) == (
+        "true"
+    )
+
+
+def test_extract_exit_zero_unparseable_falls_back_to_renovate_hard_mode(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Same, but a hard-mode (default) renovate.json falls back to "false"."""
+    _bootstrap(tmp_path)  # writes a hard-mode (default) renovate.json
+    assert _extract_exit_zero("exit-zero: not-a-recognised-expression", tmp_path) == (
+        "false"
+    )
+
+
+def test_extract_exit_zero_unparseable_defaults_false_without_renovate_json(
+    tmp_path: pathlib.Path,
+) -> None:
+    """No renovate.json at all -- nothing to fall back to, defaults to hard-gate."""
+    assert _extract_exit_zero("exit-zero: not-a-recognised-expression", tmp_path) == (
+        "false"
+    )
+
+
+def test_extract_exit_zero_matches_takes_priority_over_renovate() -> None:
+    """A parseable line wins outright -- the renovate.json fallback is only
+    consulted when the line itself doesn't match."""
+    text = (
+        "exit-zero: ${{ github.event_name == 'schedule' || "
+        "github.event_name == 'workflow_dispatch' || true }}"
+    )
+    # No root/renovate.json is ever touched in this case; a bogus path proves
+    # the match path doesn't need it.
+    assert _extract_exit_zero(text, pathlib.Path("/nonexistent")) == "true"
