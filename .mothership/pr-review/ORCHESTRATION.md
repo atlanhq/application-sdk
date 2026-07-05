@@ -700,9 +700,12 @@ Operate on the post-de-bias finding set, before locking the verdict:
 2. **Sweep the whole diff for every sibling.** For each class with >= 1
    confirmed finding, grep the *entire* diff — and the immediate module
    the fix will touch — for other occurrences of the same shape that no
-   agent flagged individually. Report each as its own finding tagged
-   `class: <name>`. A swept-in sibling inherits the class's severity (it
-   is the same defect) — do not re-run it through de-bias.
+   agent flagged individually. Report each as its own finding and note the
+   shared class in its human-visible title/body — e.g. a `class: <name>`
+   prefix. This is **prose only**: do not add a `class` field to the finding
+   payload — the Phase 3a inline-comment schema rejects unknown fields
+   (422). A swept-in sibling inherits the class's severity (it is the same
+   defect) — do not re-run it through de-bias.
    ```bash
    # e.g. a revert-scope class found in one writer → check every sibling
    rg -n "finding\.file" /tmp/DIFF.patch
@@ -717,10 +720,20 @@ Operate on the post-de-bias finding set, before locking the verdict:
    most expensive kind, because it defeats the safety net rather than
    tripping it.
 
-4. **Report the class, once.** In the summary, group findings by class
-   so the author sees "these six are one bug" and fixes the invariant,
-   not the instances. This is the single highest-leverage step for
-   holding a PR to 2-3 review rounds instead of 20+.
+4. **Report the class, once.** In the summary text, group findings by
+   class so the author sees "these six are one bug" and fixes the
+   invariant, not the instances. This is the single highest-leverage step
+   for holding a PR to 2-3 review rounds instead of 20+.
+
+**Scope — reviewer only.** This step targets the sdk-review reviewer, whose
+failure mode is *under*-generalization across serial human review rounds. Do
+not port it to the deterministic conformance remediation loop
+(`detect-fix-recheck`): that loop already fans out into independent,
+individually-gated per-finding fixes, and there per-site independence
+(fix-vs-suppress decided per site; uncorrelated model errors that recheck
+catches one at a time) is a feature, not a limitation. Clustering the *fixes*
+there would trade that robustness away for a round-count problem the
+self-iterating loop doesn't have.
 
 ### 2e. Delta Tracking (if previous review exists)
 
