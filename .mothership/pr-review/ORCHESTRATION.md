@@ -103,7 +103,7 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
     previous `<!-- SDK_REVIEW -->` summary comment exists on this
     PR, read its full body and write it to `/tmp/PRIOR_REVIEW.md`. The
     body becomes **input** to Phase 2 reasoning (not just a labeling
-    reference for §2d at the end): it tells the agents what was flagged
+    reference for §2e at the end): it tells the agents what was flagged
     before, what the author said in response, and what should be
     carried forward, downgraded, or re-checked given the current HEAD.
 
@@ -146,7 +146,7 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
    run is a **re-review**: prior findings + author replies are part of the
    input. Carry forward findings that are still present, label resolved ones
    explicitly, surface new ones, and downgrade ones the author successfully
-   addressed in inline-comment threads. See §2d for the labeling rules.
+   addressed in inline-comment threads. See §2e for the labeling rules.
 
    The review is **read-only**: it never commits or pushes to the PR branch.
 
@@ -196,7 +196,7 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
    commit, or push. CI reports its own failures, and
    `sdk-review-downgrade-on-ci-failure.yml` strips the approval if a
    non-review check fails. A real CI failure on its own → verdict
-   NEEDS_FIXES (per §2g).
+   NEEDS_FIXES (per §2h).
 
 10. Read the repo's `CLAUDE.md` for project conventions.
 
@@ -678,7 +678,51 @@ Note in review: "Cross-model adversarial: <skipped (reason) | ran | unavailable>
 
 If GPT was unavailable or skipped: keep all Opus findings >= 80%.
 
-### 2d. Delta Tracking (if previous review exists)
+### 2d. Root-Cause Clustering & Class-Completeness Sweep
+
+Findings arrive atomized — one per file/line — but bugs travel in
+**classes**. If you report only the instances the agents happened to
+land on, the author fixes them one at a time and the same defect comes
+back for another review round (and another, and another). A single
+revert-scope bug once cost this repo five review rounds because each
+round fixed the one instance reported and never the class. Kill the
+whole class in one pass.
+
+Operate on the post-de-bias finding set, before locking the verdict:
+
+1. **Cluster by root cause, not by file.** Two findings share a class
+   when the *same* underlying fix would resolve both (e.g. "a multi-file
+   writer that reverts only `finding.file`", "an auto-detect that resets
+   a customized value to its default on a bare re-run", "an
+   externally-derived value interpolated into a shell-out"). Give each
+   class a one-line name.
+
+2. **Sweep the whole diff for every sibling.** For each class with >= 1
+   confirmed finding, grep the *entire* diff — and the immediate module
+   the fix will touch — for other occurrences of the same shape that no
+   agent flagged individually. Report each as its own finding tagged
+   `class: <name>`. A swept-in sibling inherits the class's severity (it
+   is the same defect) — do not re-run it through de-bias.
+   ```bash
+   # e.g. a revert-scope class found in one writer → check every sibling
+   rg -n "finding\.file" /tmp/DIFF.patch
+   ```
+
+3. **Gate/flag classes: prove the gate isn't hollow.** When the class
+   concerns a check, gate, or flag *added in this PR*, verify it has no
+   input for which it silently passes: a gate that returns `passed=true`
+   unconditionally, a `forces_*`/escalation flag the model must remember
+   to set per-call rather than a structural rule field, a validator with
+   an early `return True`. An always-pass path is itself a finding — the
+   most expensive kind, because it defeats the safety net rather than
+   tripping it.
+
+4. **Report the class, once.** In the summary, group findings by class
+   so the author sees "these six are one bug" and fixes the invariant,
+   not the instances. This is the single highest-leverage step for
+   holding a PR to 2-3 review rounds instead of 20+.
+
+### 2e. Delta Tracking (if previous review exists)
 
 The previous review should already be loaded into context in Phase 0
 step 6b (`PRIOR_REVIEW` / `/tmp/PRIOR_REVIEW.md`) and used as input
@@ -709,11 +753,11 @@ Include the delta status in the review summary (and inline body
 where applicable) so the author sees at a glance what was fixed vs
 what remains.
 
-### 2e. Guardrails G1-G8
+### 2f. Guardrails G1-G8
 
 Check consolidated findings. Any G1/G2/G3/G5 → BLOCKED.
 
-### 2f. Holistic Path Forward (Critical + High only)
+### 2g. Holistic Path Forward (Critical + High only)
 
 For BLOCKING/CRITICAL/HIGH findings, include a `path_forward` in the
 inline comment body:
@@ -724,7 +768,7 @@ inline comment body:
 
 MEDIUM/LOW/INFO findings: one-line suggested_fix only. No path_forward.
 
-### 2g. Determine Verdict
+### 2h. Determine Verdict
 
 | Verdict | Condition | approval_recommendation |
 |---|---|---|
@@ -736,10 +780,10 @@ MEDIUM/LOW/INFO findings: one-line suggested_fix only. No path_forward.
 
 `READY_TO_MERGE` is strict: a single Important finding forces
 `NEEDS_FIXES`. Nits do not block. If you believe an Important should
-be downgraded, downgrade it explicitly in §2d with a one-line reason
+be downgraded, downgrade it explicitly in §2e with a one-line reason
 — do not silently approve over the top of it.
 
-Print: `[Phase 2 complete] <N> findings, verdict=<verdict>`
+Print: `[Phase 2 complete] <N> findings across <C> classes, verdict=<verdict>`
 
 ---
 
@@ -942,7 +986,7 @@ after `VERDICT:` MUST be one of: `READY_TO_MERGE`, `NEEDS_FIXES`,
 - If a prior summary exists → use **"SDK Re-review (mothership)"**.
   This tells the human reading the PR-comment timeline that this
   pass loaded the previous review as context and reasoned about
-  deltas (per Phase 0 §6b + §2d), not that it ignored history and
+  deltas (per Phase 0 §6b + §2e), not that it ignored history and
   reran the full review from scratch.
 - If `review_scope=contract-toolkit`, replace `SDK` in the visible
   heading with `Contract Toolkit`. Keep `<!-- SDK_REVIEW -->` unchanged
@@ -1014,7 +1058,7 @@ and continue with the rest.
 After posting the review, re-check CI via `gh pr checks "$PR_NUMBER" --repo "$REPO"`.
 The review does NOT fix CI and does NOT push. Reflect the failing checks
 in the `**CI:**` summary line and the verdict (a real CI failure →
-NEEDS_FIXES per §2g). `sdk-review-downgrade-on-ci-failure.yml` independently
+NEEDS_FIXES per §2h). `sdk-review-downgrade-on-ci-failure.yml` independently
 strips any approval if a non-review check fails, so the gate is covered
 without the reviewer mutating the branch.
 
