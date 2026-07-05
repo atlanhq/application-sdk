@@ -3,10 +3,25 @@
 from __future__ import annotations
 
 from temporalio.client import Client as _TemporalClientImpl
+from temporalio.client import WorkflowFailureError as _TemporalWorkflowFailureErrorImpl
 from temporalio.converter import DataConverter
+from temporalio.exceptions import ActivityError as _TemporalActivityErrorImpl
+from temporalio.exceptions import CancelledError as _TemporalCancelledErrorImpl
+from temporalio.exceptions import ChildWorkflowError as _TemporalChildWorkflowErrorImpl
+from temporalio.exceptions import TerminatedError as _TemporalTerminatedErrorImpl
+from temporalio.exceptions import TimeoutError as _TemporalTimeoutErrorImpl
 
 from application_sdk.contracts.base import Input, Output
-from application_sdk.execution import TemporalClient, create_data_converter_for_app
+from application_sdk.execution import (
+    TemporalActivityError,
+    TemporalCancelledError,
+    TemporalChildWorkflowError,
+    TemporalClient,
+    TemporalTerminatedError,
+    TemporalTimeoutError,
+    TemporalWorkflowFailureError,
+    create_data_converter_for_app,
+)
 from application_sdk.execution._temporal.converter import create_data_converter
 
 
@@ -25,6 +40,24 @@ class TestPublicSurface:
 
     def test_temporal_client_is_exported(self) -> None:
         assert TemporalClient is _TemporalClientImpl
+
+    def test_temporal_workflow_failure_error_is_exported(self) -> None:
+        assert TemporalWorkflowFailureError is _TemporalWorkflowFailureErrorImpl
+
+    def test_temporal_activity_error_is_exported(self) -> None:
+        assert TemporalActivityError is _TemporalActivityErrorImpl
+
+    def test_temporal_cancelled_error_is_exported(self) -> None:
+        assert TemporalCancelledError is _TemporalCancelledErrorImpl
+
+    def test_temporal_child_workflow_error_is_exported(self) -> None:
+        assert TemporalChildWorkflowError is _TemporalChildWorkflowErrorImpl
+
+    def test_temporal_terminated_error_is_exported(self) -> None:
+        assert TemporalTerminatedError is _TemporalTerminatedErrorImpl
+
+    def test_temporal_timeout_error_is_exported(self) -> None:
+        assert TemporalTimeoutError is _TemporalTimeoutErrorImpl
 
     def test_create_data_converter_for_app_is_exported(self) -> None:
         from application_sdk.execution._temporal.converter import (
