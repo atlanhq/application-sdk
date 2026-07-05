@@ -71,9 +71,16 @@ RULES: tuple[RuleDefinition, ...] = (
             "Workers and activities are auto-discovered from ``AppRegistry`` /\n"
             "``TaskRegistry`` — there is nothing to wire.\n"
             "\n"
+            "Files under ``tests/integration/`` are exempt from the construction-\n"
+            "call and lifecycle-call violation classes: those harnesses need an\n"
+            "in-process worker/client handle to submit workflows and tear down per\n"
+            "test, and ``run_dev_combined`` blocks until shutdown with no\n"
+            "handle-returning mode to substitute. The removed-v2-import class stays\n"
+            "enforced everywhere, including under ``tests/integration/``.\n"
+            "\n"
             "Land as ``WARN``: a justified inline\n"
             "``# conformance: ignore[P017] <reason>`` records any unavoidable\n"
-            "exception and stays visible in SARIF.\n"
+            "exception outside that exemption and stays visible in SARIF.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p017",
     ),

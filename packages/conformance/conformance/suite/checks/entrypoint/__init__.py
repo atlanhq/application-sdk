@@ -19,7 +19,10 @@ Discovery note
 Like the orchestration-seam rules (P004–P007), this series **includes test
 files**.  An integration harness that hand-rolls a worker instead of using
 ``run_dev_combined`` is exactly the drift to catch, and it often lives in the
-test tree.
+test tree.  The one carve-out: files under ``tests/integration/`` are exempt
+from P017's construction-call and lifecycle-call violation classes, since
+those harnesses need an in-process worker/client handle that
+``run_dev_combined`` cannot provide — see ``_worker_bootstrap.py``.
 
 Inline suppression
 ------------------
