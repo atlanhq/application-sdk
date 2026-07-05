@@ -1323,7 +1323,7 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 #### `TemporalCancelledError`
 
 - **Import:** `from application_sdk.execution import TemporalCancelledError`
-- **Signature:** `class TemporalCancelledError(message: str = 'Cancelled', *details: Any) -> None`
+- **Signature:** `class TemporalCancelledError(message: str = 'Cancelled', *details: Any)`
 - **Summary:** Error raised on workflow/activity cancellation. _(re-exported from `temporalio.exceptions.CancelledError`)_
 
 #### `TemporalChildWorkflowError`
@@ -1348,7 +1348,7 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 #### `TemporalTerminatedError`
 
 - **Import:** `from application_sdk.execution import TemporalTerminatedError`
-- **Signature:** `class TemporalTerminatedError(message: str, *details: Any) -> None`
+- **Signature:** `class TemporalTerminatedError(message: str, *details: Any)`
 - **Summary:** Error raised on workflow cancellation. _(re-exported from `temporalio.exceptions.TerminatedError`)_
 
 #### `TemporalTimeoutError`
@@ -1360,7 +1360,7 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 #### `TemporalWorkflowFailureError`
 
 - **Import:** `from application_sdk.execution import TemporalWorkflowFailureError`
-- **Signature:** `class TemporalWorkflowFailureError(*, cause: 'BaseException') -> 'None'`
+- **Signature:** `class TemporalWorkflowFailureError(*, cause: 'BaseException')`
 - **Summary:** Error that occurs when a workflow is unsuccessful. _(re-exported from `temporalio.client.WorkflowFailureError`)_
 
 ### Functions

@@ -414,9 +414,16 @@ def _external_alias_symbol(name: str, target_path: str) -> dict[str, Any] | None
     if inspect.isclass(obj):
         kind = KIND_CLASS
         try:
-            raw = str(inspect.signature(obj.__init__))
-            args = raw.removeprefix("(self, ").removeprefix("(self)")
-            args = "(" + args if not args.startswith("(") else args
+            init_sig = inspect.signature(obj.__init__).replace(
+                return_annotation=inspect.Signature.empty
+            )
+            raw = str(init_sig)
+            if raw.startswith("(self, "):
+                args = "(" + raw[len("(self, ") :]
+            elif raw.startswith("(self)"):
+                args = "()" + raw[len("(self)") :]
+            else:
+                args = raw
         except (TypeError, ValueError):
             args = "()"
         signature = _truncate_signature(f"class {name}{args}", f"class {name}", args)

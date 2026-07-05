@@ -59,6 +59,18 @@ class TestPublicSurface:
     def test_temporal_timeout_error_is_exported(self) -> None:
         assert TemporalTimeoutError is _TemporalTimeoutErrorImpl
 
+    def test_temporal_error_reexports_are_in_dunder_all(self) -> None:
+        from application_sdk import execution
+
+        assert {
+            "TemporalWorkflowFailureError",
+            "TemporalActivityError",
+            "TemporalCancelledError",
+            "TemporalChildWorkflowError",
+            "TemporalTerminatedError",
+            "TemporalTimeoutError",
+        } <= set(execution.__all__)
+
     def test_create_data_converter_for_app_is_exported(self) -> None:
         from application_sdk.execution._temporal.converter import (
             create_data_converter_for_app as _internal,

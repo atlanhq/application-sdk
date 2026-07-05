@@ -9,6 +9,11 @@ from temporalio.client import WorkflowFailureError as TemporalWorkflowFailureErr
 # `TemporalClient`) so they don't collide with unrelated SDK types of the same short
 # name, e.g. `application_sdk.common.error_codes.ActivityError` and
 # `application_sdk.errors.leaves.CancelledError`.
+#
+# These are raw temporalio exceptions for code awaiting `TemporalClient.execute_workflow(...)`
+# or a workflow handle. For SDK-classified domain failures inside `@task`/`@entrypoint` code,
+# raise/catch `application_sdk.errors.AppError` leaves (`CancelledError`, `AppTimeoutError`,
+# etc.) instead.
 from temporalio.exceptions import ActivityError as TemporalActivityError
 from temporalio.exceptions import CancelledError as TemporalCancelledError
 from temporalio.exceptions import ChildWorkflowError as TemporalChildWorkflowError
