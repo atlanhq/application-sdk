@@ -59,8 +59,14 @@ of the finding as returned by `detect-violations`):
   - `.yaml`/`.yml` → parse with a YAML loader (e.g.
     `python -c "import sys,yaml; yaml.safe_load(open(sys.argv[1]))" <path>`).
   - `.json` → parse with a JSON loader.
-  - any other extension (e.g. `.gitignore`, `.py` scripts) → no parse check;
-    nothing to validate structurally.
+  - `.py` (e.g. the vendored `.github/scripts/build_conformance_args.py`) →
+    compile-check with `python -m py_compile <path>`. This file is currently
+    always copied byte-for-byte from a template already linted upstream, so
+    this check is belt-and-suspenders today — but the gate must not assume
+    that stays true (a future templated `.py` managed file, or a corrupted
+    upstream template, would otherwise auto-accept a syntax error).
+  - any other extension (e.g. `.gitignore`) → no parse check; nothing to
+    validate structurally.
 
   If every touched file with a checkable extension parses cleanly, return
   `passed = true`, `exit_code = 0`, `summary = "orthogonal_gate=skip —

@@ -16,7 +16,11 @@ import re
 import pytest
 from conformance.bootstrap.render import MANAGED_ACTION_FILES, MANAGED_WORKFLOWS, render
 from conformance.cli import _cmd_bootstrap
-from conformance.suite.checks.bootstrap_drift import discover, scan_path
+from conformance.suite.checks.bootstrap_drift import (
+    _extract_exit_zero,
+    discover,
+    scan_path,
+)
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier
 
@@ -579,3 +583,63 @@ def test_renovate_json_structural_drift_still_flagged_in_soft_mode(
     findings = scan_path(rj, tmp_path)
     assert len(findings) == 1
     assert findings[0].rule_id == "C002"
+
+
+# ---------------------------------------------------------------------------
+# _extract_exit_zero — unparseable exit-zero line falls back to renovate.json
+#
+# Unit-tested directly (rather than through scan_path/discover) because the
+# fallback's effect is invisible at the scan_path level: conformance.yaml's
+# exit-zero line is the *only* place `exit_zero` is substituted (verified
+# against the template), so an unparseable line is always textually
+# different from any correctly-rendered canonical line regardless of which
+# exit_zero value the extractor falls back to -- scan_path always reports
+# drift for that file either way, correctly. What the fallback actually
+# fixes is `kwargs["exit_zero"]` itself matching bootstrap's own
+# `_read_conformance_enforce` autodetection (see autodetect.py) instead of
+# silently defaulting to hard-gate, so the two callers of `extract.py` can't
+# quietly disagree about a repo's inferred enforcement mode.
+# ---------------------------------------------------------------------------
+
+
+def test_extract_exit_zero_unparseable_falls_back_to_renovate_soft_mode(
+    tmp_path: pathlib.Path,
+) -> None:
+    """An unparseable exit-zero line with a soft-mode renovate.json falls back
+    to "true" (soft/observe), matching autodetect._read_conformance_enforce's
+    fallback instead of silently defaulting to hard-gate."""
+    _bootstrap(tmp_path, "--enforce", "false")  # writes a soft-mode renovate.json
+    assert _extract_exit_zero("exit-zero: not-a-recognised-expression", tmp_path) == (
+        "true"
+    )
+
+
+def test_extract_exit_zero_unparseable_falls_back_to_renovate_hard_mode(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Same, but a hard-mode (default) renovate.json falls back to "false"."""
+    _bootstrap(tmp_path)  # writes a hard-mode (default) renovate.json
+    assert _extract_exit_zero("exit-zero: not-a-recognised-expression", tmp_path) == (
+        "false"
+    )
+
+
+def test_extract_exit_zero_unparseable_defaults_false_without_renovate_json(
+    tmp_path: pathlib.Path,
+) -> None:
+    """No renovate.json at all -- nothing to fall back to, defaults to hard-gate."""
+    assert _extract_exit_zero("exit-zero: not-a-recognised-expression", tmp_path) == (
+        "false"
+    )
+
+
+def test_extract_exit_zero_matches_takes_priority_over_renovate() -> None:
+    """A parseable line wins outright -- the renovate.json fallback is only
+    consulted when the line itself doesn't match."""
+    text = (
+        "exit-zero: ${{ github.event_name == 'schedule' || "
+        "github.event_name == 'workflow_dispatch' || true }}"
+    )
+    # No root/renovate.json is ever touched in this case; a bogus path proves
+    # the match path doesn't need it.
+    assert _extract_exit_zero(text, pathlib.Path("/nonexistent")) == "true"

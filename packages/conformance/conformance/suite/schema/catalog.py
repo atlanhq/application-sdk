@@ -79,6 +79,17 @@ class RuleDefinition(BaseModel):
     Tracks the behavioural appearance, not when a specific rule ID was assigned —
     so a renumbered rule retains the original ``since`` of the behaviour it
     describes, e.g. ``"0.2.0"``."""
+    forces_external_influence: bool = False
+    """``True`` if every fix for this rule must be treated as having consulted
+    untrusted external content, regardless of what an individual remediation
+    attempt reports. Structural counterpart to a fix's own (model-reported)
+    ``external_influence`` result field: the model is trusted to set that
+    field correctly on every invocation, but a rule known ahead of time to
+    always involve an external lookup (e.g. C001's live GitHub SHA
+    resolution) should not depend on the model remembering to do so every
+    single time. ``detect-fix-recheck`` ORs this into its residue-routing
+    condition alongside the model's own ``external_influence`` report, the
+    same way ``orthogonal_gate`` is a structural (not model-reported) field."""
     rationale: str = ""
     """Why this rule exists — what risk it avoids, what loop it closes, or what
     value it adds. Surfaced as ``atlan/rationale`` in SARIF ``properties``."""
@@ -113,6 +124,7 @@ class RuleDefinition(BaseModel):
             orthogonal_gate=self.orthogonal_gate,
             since=self.since,
             rationale=self.rationale or None,
+            forces_external_influence=self.forces_external_influence,
         )
         return ReportingDescriptor(
             id=self.id,

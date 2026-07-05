@@ -12,7 +12,7 @@ description: >
 
 - `finding` (object, required) — a finding as returned by `detect-violations`:
   `rule_id`, `area`, `file`, `line`, `column`, `message`, `hint`,
-  `autofixable`, `disposition`, `fingerprint`.
+  `autofixable`, `disposition`, `fingerprint`, `forces_external_influence`.
 - `mode` (string, required) — `"default"` or `"strict"`.  The `suppress`
   outcome is only available for WARNING-tier findings when mode is `"strict"`.
 
@@ -126,6 +126,12 @@ lookup), which is why C001's prescription always sets
 `external_influence = true` — the fix is verified by recheck like any other,
 but is unconditionally routed to residue for human sign-off before it merges,
 per the `detect-fix-recheck` loop's existing `external_influence` handling.
+This is also enforced structurally, not solely by the model remembering to
+set the field: C001's `RuleDefinition.forces_external_influence = true` (see
+`suite/schema/catalog.py`) surfaces as `finding.forces_external_influence`,
+which `detect-fix-recheck` ORs into the same residue condition — so a single
+invocation that omits `external_influence` still can't skip human review for
+this rule.
 
 No other rule or area may write to `.github/`, `tests/`, or `conformance/`.
 

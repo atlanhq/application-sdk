@@ -77,9 +77,15 @@ loop until violations is empty or attempts >= max_attempts:
         add finding to residue with note "recheck failed: finding still present after edit"
         continue
 
+      # finding.forces_external_influence is the structural, rule-level
+      # guarantee (e.g. C001, always true); result.external_influence is
+      # remediate-finding's own per-invocation report. ORing both means a
+      # rule known ahead of time to always need human sign-off gets it even
+      # if a single invocation's result omits the flag.
       if result.outcome == "suppress"
         or result.classification == "judgment"
-        or result.external_influence:
+        or result.external_influence
+        or finding.forces_external_influence:
         add finding + result to residue for human review
 
   let next_violations = call detect-violations

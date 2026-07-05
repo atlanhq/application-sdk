@@ -1,22 +1,23 @@
 """``bootstrap`` command: write the SKILL.md shim and standard CI workflows.
 
 Split out of ``conformance.cli`` so that module stays a thin dispatcher (every
-other subcommand there is a 3-6 line delegator into its own module) — this is
-by far the largest and most actively-changed subcommand.
+other subcommand there is a 3-6 line delegator into its own module) — this
+was by far the largest and most actively-changed subcommand. Argv parsing
+lives in ``conformance.bootstrap.args`` and flag autodetection lives in
+``conformance.bootstrap.autodetect``; this module is the orchestrator plus
+the actual write-phase helpers (``_bootstrap_file``, the self-guard, and the
+``_sync_*`` functions for the write-if-absent scaffolds).
 """
 
 from __future__ import annotations
 
 import json
 import pathlib
-import sys
 import tomllib
 
-from conformance.bootstrap.extract import (
-    EXIT_ZERO_RE,
-    extract_field,
-    extract_renovate_automerge,
-)
+from conformance.bootstrap.args import BOOTSTRAP_USAGE, parse_bootstrap_args
+from conformance.bootstrap.autodetect import apply_bootstrap_autodetection
+from conformance.bootstrap.render import MANAGED_ACTION_FILES, MANAGED_WORKFLOWS, render
 
 _PACKAGE_NAME = "atlan-application-sdk-conformance"
 
@@ -48,7 +49,7 @@ def _bootstrap_file(dest: pathlib.Path, content: str) -> str:
     if dest.exists():
         try:
             unchanged = dest.read_text(encoding="utf-8") == content
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             unchanged = False
         if unchanged:
             print(f"ok (up to date): {dest}")
@@ -60,254 +61,6 @@ def _bootstrap_file(dest: pathlib.Path, content: str) -> str:
     dest.write_text(content, encoding="utf-8")
     print(f"installed: {dest}")
     return "installed"
-
-
-def _read_workflow_field(path: pathlib.Path, field: str) -> str:
-    """Return the value of ``field: <value>`` in *path*, or ``""``.
-
-    Delegates to ``conformance.bootstrap.extract``'s ``extract_field`` (the
-    single source of truth also used by the C002 checker's "read a rendered
-    param back off disk" extraction) so this autodetection path and C002's
-    drift-comparison extraction can never silently diverge on how a rendered
-    field is parsed.
-    """
-    if not path.exists():
-        return ""
-    try:
-        return extract_field(path.read_text(encoding="utf-8"), field)
-    except OSError:
-        return ""
-
-
-def _read_atlan_yaml_name(root: pathlib.Path) -> str:
-    """Return the ``name:`` value from ``atlan.yaml`` in *root*, or ``""``."""
-    return _read_workflow_field(root / "atlan.yaml", "name")
-
-
-def _derive_app_name_from_dir(root: pathlib.Path) -> str:
-    """Derive app name from the repo directory name.
-
-    Strips a leading ``atlan-`` prefix and a trailing ``-app`` suffix so that
-    e.g. ``atlan-openapi-app`` → ``openapi``.  Falls back to ``"app"`` if the
-    result would be empty.
-    """
-    name = root.name
-    if name.startswith("atlan-"):
-        name = name[len("atlan-") :]
-    if name.endswith("-app"):
-        name = name[: -len("-app")]
-    return name or "app"
-
-
-def _read_enforce_from_renovate(root: pathlib.Path) -> str:
-    """Fall back to *root*'s on-disk ``renovate.json`` enforcement signal.
-
-    Used only when ``conformance.yaml``'s ``exit-zero`` line can't be read
-    (see ``_read_conformance_enforce``) — ``renovate.json``'s own
-    ``lockFileMaintenance`` block (soft mode) or absence thereof (hard mode)
-    is a second, independent signal of the repo's actual enforcement mode,
-    read via ``extract_renovate_automerge`` (the same structural check the
-    C002 checker uses), so autodetection doesn't have to guess.
-    """
-    renovate = root / "renovate.json"
-    if not renovate.exists():
-        return ""
-    try:
-        automerge = extract_renovate_automerge(renovate.read_text(encoding="utf-8"))
-    except OSError:
-        return ""
-    return "false" if automerge == "false" else "true"
-
-
-def _read_conformance_enforce(path: pathlib.Path, root: pathlib.Path) -> str:
-    """Return the ``--enforce`` value that reproduces this repo's existing
-    enforcement mode, or ``""`` if there is truly nothing to detect.
-
-    Primary signal is *path*'s (``conformance.yaml``) ``exit-zero`` line. The
-    rendered line is ``exit-zero: ${{ ... || << exit_zero >> }}`` — the
-    boolean is the last token before the closing ``}}``, not the first token
-    after ``exit-zero:`` (unlike the other managed-file fields), so this
-    can't reuse ``_read_workflow_field``. ``exit-zero: true`` is soft/observe
-    mode (``--enforce false``); ``exit-zero: false`` is hard-gate
-    (``--enforce true``).
-
-    Reuses ``EXIT_ZERO_RE`` from ``conformance.bootstrap.extract`` as the
-    single source of truth for the pattern, rather than re-declaring an
-    identical regex here.
-
-    If *path* is absent, there is nothing to detect and this returns ``""``
-    (falls through to the hard-gate default at derivation time) — that's the
-    normal first-bootstrap case. But if *path* exists and its ``exit-zero``
-    line simply doesn't match the expected pattern (hand-edited, or rendered
-    by an older bootstrap template), silently falling through to the same
-    hard-gate default would flip an intentionally soft-mode repo to hard-gate
-    on a bare re-run — while ``renovate.json`` (which a bare re-run never
-    force-overwrites) stays in its original soft-mode content, leaving the
-    two managed files in different enforcement modes. Fall back to
-    ``renovate.json``'s own on-disk signal instead of guessing hard-gate.
-    """
-    if not path.exists():
-        return ""
-    try:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            m = EXIT_ZERO_RE.search(line)
-            if m:
-                return "false" if m.group(1) == "true" else "true"
-    except OSError:
-        return ""
-    print(
-        f"warning: {path} exists but its exit-zero line is unparseable"
-        " -- falling back to renovate.json's enforcement signal"
-    )
-    return _read_enforce_from_renovate(root)
-
-
-def _apply_bootstrap_autodetection(kwargs: dict[str, str], root: pathlib.Path) -> None:
-    """Fill in any bootstrap flag left unset (``""``) with its auto-detected value.
-
-    Each flag's auto-detection reads back an existing managed file so that
-    re-running ``bootstrap`` with no explicit flags reuses a repo's current
-    customization instead of resetting it to the hardcoded default.
-    """
-    # package-name: existing docstring-coverage.yaml, else "app".
-    if not kwargs["package_name"]:
-        kwargs["package_name"] = (
-            _read_workflow_field(
-                root / ".github" / "workflows" / "docstring-coverage.yaml",
-                "package_name",
-            )
-            or "app"
-        )
-    # unit-tests-workflow: existing build-and-publish.yaml, else "tests.yaml".
-    if not kwargs["unit_tests_workflow"]:
-        kwargs["unit_tests_workflow"] = (
-            _read_workflow_field(
-                root / ".github" / "workflows" / "build-and-publish.yaml",
-                "unit_tests_workflow_file",
-            )
-            or "tests.yaml"
-        )
-    # app-name: atlan.yaml `name:` field, else the repo directory name.
-    if not kwargs["app_name"]:
-        kwargs["app_name"] = _read_atlan_yaml_name(root) or _derive_app_name_from_dir(
-            root
-        )
-    # services-script: existing .github/test/setup-services.sh, else unset.
-    if not kwargs["services_script"]:
-        candidate = root / ".github" / "test" / "setup-services.sh"
-        if candidate.exists():
-            kwargs["services_script"] = ".github/test/setup-services.sh"
-    # enforce: existing conformance.yaml's exit-zero mode, else unset (falls
-    # through to the hard-gate default at derivation time). Deliberately does
-    # NOT affect force_renovate in main() -- renovate.json is only
-    # force-overwritten when --enforce was passed explicitly on this
-    # invocation, not when it was merely auto-detected.
-    if not kwargs["enforce"]:
-        kwargs["enforce"] = _read_conformance_enforce(
-            root / ".github" / "workflows" / "conformance.yaml", root
-        )
-
-
-_FLAGS = {
-    "--package-name": "package_name",
-    "--unit-tests-workflow": "unit_tests_workflow",
-    "--app-name": "app_name",
-    "--app-image-name": "app_image_name",
-    "--enable-e2e": "enable_e2e",
-    "--services-script": "services_script",
-    "--enforce": "enforce",
-}
-
-
-def _parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
-    """Parse bootstrap flags from argv.
-
-    Supports both ``--flag value`` and ``--flag=value`` forms. See
-    ``_BOOTSTRAP_USAGE`` below for the authoritative flag documentation —
-    kept in one place so it can't drift out of sync with this parser.
-    """
-    result: dict[str, str] = {
-        "package_name": "",
-        "unit_tests_workflow": "",
-        "app_name": "",
-        "app_image_name": "",
-        "enable_e2e": "true",
-        "services_script": "",
-        "enforce": "",  # "" = not explicitly set; "true"/"false" = explicit
-    }
-    i = 0
-    while i < len(argv):
-        arg = argv[i]
-        consumed = False
-        for flag, dest in _FLAGS.items():
-            if arg == flag and i + 1 < len(argv):
-                result[dest] = argv[i + 1]
-                i += 1
-                consumed = True
-                break
-            if arg.startswith(f"{flag}="):
-                result[dest] = arg[len(flag) + 1 :]
-                consumed = True
-                break
-        if not consumed and arg in _FLAGS:
-            print(f"error: option {arg!r} requires a value", file=sys.stderr)
-            sys.exit(2)
-        if not consumed and arg.startswith("-") and arg not in ("-h", "--help"):
-            print(f"error: unknown option {arg!r}", file=sys.stderr)
-            sys.exit(2)
-        i += 1
-
-    if result["enable_e2e"] not in ("true", "false"):
-        print(
-            f"error: --enable-e2e must be 'true' or 'false', got {result['enable_e2e']!r}",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-
-    if result["enforce"] not in ("", "true", "false"):
-        print(
-            f"error: --enforce must be 'true' or 'false', got {result['enforce']!r}",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-
-    return result
-
-
-_BOOTSTRAP_USAGE = """\
-usage: atlan-application-sdk-conformance bootstrap [options]
-
-Write .claude/skills/remediate/SKILL.md + all standard CI workflow shims into
-.github/workflows/, plus the vendored .github/actions/run-conformance-detect/action.yaml
-and .github/scripts/build_conformance_args.py that conformance-reusable.yaml needs on
-disk in every caller repo. All of these always overwrite (re-running eradicates drift).
-tests.yaml, renovate.json, and contract_schema.lock.json are write-if-absent by default;
-pass --enforce true|false to also update renovate.json's enforcement mode.
-
-options:
-  --package-name NAME         docstring-coverage package; omit to auto-detect from an
-                              existing docstring-coverage.yaml (else "app")
-  --unit-tests-workflow FILE  build-and-publish test workflow; omit to auto-detect from
-                              an existing build-and-publish.yaml (else "tests.yaml")
-  --app-name NAME             connector app name for tests.yaml (default: from atlan.yaml, else "app")
-  --app-image-name NAME       GHCR image name for tests.yaml (default: atlan-<app-name>-app)
-  --enable-e2e true|false     enable e2e in tests.yaml (default: true, line omitted)
-  --services-script PATH      services setup script (default: auto-detected from .github/test/setup-services.sh)
-  --enforce true|false        enforcement mode; omit to auto-detect from an existing
-                              conformance.yaml (else hard-gate). Pass explicitly (either
-                              value) to also force-update renovate.json.
-                              true  — hard gate: conformance blocks on violations,
-                                      Renovate auto-merges when CI is green.
-                              false — soft/observe: conformance tracks without blocking,
-                                      Renovate raises PRs but humans must merge.
-  --json                       after the normal output, print one final JSON line:
-                              {"skipped": bool, "touched": [...], "unchanged": [...]}.
-                              `touched` lists every path this invocation actually wrote
-                              (scaffolded/installed/updated/backed-up); use it as the
-                              structured, non-prose source for touched_files instead of
-                              pattern-matching the prefixed stdout lines above.
-  -h, --help                  show this help message and exit
-"""
 
 
 def _is_inside_conformance_repo(start: pathlib.Path) -> bool:
@@ -350,8 +103,6 @@ def _sync_tests_yaml(
     Returns the ``(path, status)`` pairs this call wrote or left alone, for
     ``main()``'s ``--json`` touched-files manifest.
     """
-    from conformance.bootstrap.render import render
-
     tests_dest = root / ".github" / "workflows" / "tests.yaml"
     if not tests_dest.exists():
         tests_dest.parent.mkdir(parents=True, exist_ok=True)
@@ -373,8 +124,6 @@ def _sync_renovate_json(
     possibly two entries (the ``.bak`` backup plus the updated file itself)
     when a customised ``renovate.json`` is force-overwritten.
     """
-    from conformance.bootstrap.render import render
-
     renovate_dest = root / "renovate.json"
     if not renovate_dest.exists():
         renovate_dest.write_text(render("renovate.json", **kwargs), encoding="utf-8")
@@ -407,8 +156,6 @@ def _sync_renovate_json(
 
 def _sync_gitignore(root: pathlib.Path) -> list[tuple[pathlib.Path, str]]:
     """.gitignore — write-if-absent scaffold. C003 warns about missing entries."""
-    from conformance.bootstrap.render import render
-
     gitignore_dest = root / ".gitignore"
     if not gitignore_dest.exists():
         gitignore_dest.write_text(render(".gitignore"), encoding="utf-8")
@@ -452,23 +199,17 @@ def _sync_contract_ledger(root: pathlib.Path) -> list[tuple[pathlib.Path, str]]:
 def main(argv: list[str]) -> int:
     """Write the SKILL.md shim and standard CI workflows into the current repo."""
     if "-h" in argv or "--help" in argv:
-        print(_BOOTSTRAP_USAGE)
+        print(BOOTSTRAP_USAGE)
         return 0
 
     # --json is a plain output-mode toggle (like -h/--help), not a --flag
-    # value pair, so it's stripped before _parse_bootstrap_args ever sees it
-    # rather than being added to _FLAGS.
+    # value pair, so it's stripped before parse_bootstrap_args ever sees it
+    # rather than being added to args.FLAGS.
     emit_json = "--json" in argv
     if emit_json:
         argv = [a for a in argv if a != "--json"]
 
-    from conformance.bootstrap.render import (
-        MANAGED_ACTION_FILES,
-        MANAGED_WORKFLOWS,
-        render,
-    )
-
-    kwargs = _parse_bootstrap_args(argv)
+    kwargs = parse_bootstrap_args(argv)
     root = pathlib.Path.cwd()
 
     # bootstrap scaffolds a *consumer app* repo. Every file it would write —
@@ -497,7 +238,7 @@ def main(argv: list[str]) -> int:
     # on a bare re-run even though conformance.yaml's enforcement mode is now
     # auto-detected.
     force_renovate = bool(kwargs["enforce"])
-    _apply_bootstrap_autodetection(kwargs, root)
+    apply_bootstrap_autodetection(kwargs, root)
 
     # Derive the two render variables from --enforce (explicit or detected).
     # enforce="" (never set, nothing to detect) → hard defaults.
@@ -512,12 +253,16 @@ def main(argv: list[str]) -> int:
     # human-readable prints above and in the sync helpers, so a caller that
     # needs touched_files for a revert-scope decision (see
     # remediate-finding.prose.md) doesn't have to re-derive it by pattern
-    # matching this command's prose stdout.
+    # matching this command's prose stdout. Reported repo-relative to match
+    # touched_files' documented convention (remediate-finding.prose.md) and
+    # the K003/K004 `git status --porcelain`-derived case, which are both
+    # naturally repo-relative already.
     touched: list[str] = []
     unchanged: list[str] = []
 
     def _record(path: pathlib.Path, status: str) -> None:
-        (touched if status in _TOUCHED_STATUSES else unchanged).append(str(path))
+        rel = str(path.relative_to(root))
+        (touched if status in _TOUCHED_STATUSES else unchanged).append(rel)
 
     skill_md = root / ".claude" / "skills" / "remediate" / "SKILL.md"
     _record(skill_md, _bootstrap_file(skill_md, render("remediate.md", **kwargs)))

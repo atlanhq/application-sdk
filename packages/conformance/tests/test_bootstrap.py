@@ -11,11 +11,9 @@ import json
 import pathlib
 
 import pytest
-from conformance.bootstrap.command import (
-    _bootstrap_file,
-    _derive_app_name_from_dir,
-    _parse_bootstrap_args,
-)
+from conformance.bootstrap.args import parse_bootstrap_args
+from conformance.bootstrap.autodetect import derive_app_name_from_dir
+from conformance.bootstrap.command import _bootstrap_file
 from conformance.bootstrap.render import MANAGED_ACTION_FILES, MANAGED_WORKFLOWS, render
 from conformance.cli import _cmd_bootstrap
 
@@ -86,7 +84,7 @@ def test_bootstrap_file_does_not_rewrite_unchanged_content(
 
 
 # ---------------------------------------------------------------------------
-# _parse_bootstrap_args
+# parse_bootstrap_args
 # ---------------------------------------------------------------------------
 
 
@@ -95,7 +93,7 @@ def test_parse_bootstrap_args_defaults() -> None:
     # _cmd_bootstrap auto-detects each from an existing managed workflow file,
     # falling back to "app"/"tests.yaml" respectively (mirrors app_name and
     # services_script below).
-    result = _parse_bootstrap_args([])
+    result = parse_bootstrap_args([])
     assert result == {
         "package_name": "",
         "unit_tests_workflow": "",
@@ -108,17 +106,17 @@ def test_parse_bootstrap_args_defaults() -> None:
 
 
 def test_parse_bootstrap_args_space_separated() -> None:
-    result = _parse_bootstrap_args(["--package-name", "myapp"])
+    result = parse_bootstrap_args(["--package-name", "myapp"])
     assert result["package_name"] == "myapp"
 
 
 def test_parse_bootstrap_args_equals_form() -> None:
-    result = _parse_bootstrap_args(["--unit-tests-workflow=custom.yaml"])
+    result = parse_bootstrap_args(["--unit-tests-workflow=custom.yaml"])
     assert result["unit_tests_workflow"] == "custom.yaml"
 
 
 def test_parse_bootstrap_args_both_flags() -> None:
-    result = _parse_bootstrap_args(
+    result = parse_bootstrap_args(
         ["--package-name", "connector", "--unit-tests-workflow", "ci.yaml"]
     )
     assert result["package_name"] == "connector"
@@ -126,27 +124,27 @@ def test_parse_bootstrap_args_both_flags() -> None:
 
 
 def test_parse_bootstrap_args_app_name() -> None:
-    result = _parse_bootstrap_args(["--app-name", "mysql"])
+    result = parse_bootstrap_args(["--app-name", "mysql"])
     assert result["app_name"] == "mysql"
 
 
 def test_parse_bootstrap_args_app_name_equals_form() -> None:
-    result = _parse_bootstrap_args(["--app-name=openapi"])
+    result = parse_bootstrap_args(["--app-name=openapi"])
     assert result["app_name"] == "openapi"
 
 
 def test_parse_bootstrap_args_app_image_name() -> None:
-    result = _parse_bootstrap_args(["--app-image-name", "atlan-mysql-app"])
+    result = parse_bootstrap_args(["--app-image-name", "atlan-mysql-app"])
     assert result["app_image_name"] == "atlan-mysql-app"
 
 
 def test_parse_bootstrap_args_enable_e2e_false() -> None:
-    result = _parse_bootstrap_args(["--enable-e2e", "false"])
+    result = parse_bootstrap_args(["--enable-e2e", "false"])
     assert result["enable_e2e"] == "false"
 
 
 def test_parse_bootstrap_args_enable_e2e_equals_form() -> None:
-    result = _parse_bootstrap_args(["--enable-e2e=false"])
+    result = parse_bootstrap_args(["--enable-e2e=false"])
     assert result["enable_e2e"] == "false"
 
 
@@ -157,7 +155,7 @@ def test_parse_bootstrap_args_rejects_unknown_flag(
     defaults — this parser now validates known flags' values, so an unknown
     flag name should be held to the same standard rather than being dropped."""
     with pytest.raises(SystemExit) as exc_info:
-        _parse_bootstrap_args(["--pakcage-name", "myapp"])
+        parse_bootstrap_args(["--pakcage-name", "myapp"])
     assert exc_info.value.code == 2
     assert "--pakcage-name" in capsys.readouterr().err
 
@@ -166,7 +164,7 @@ def test_parse_bootstrap_args_unknown_flag_after_valid_ones(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     with pytest.raises(SystemExit) as exc_info:
-        _parse_bootstrap_args(["--app-name", "mysql", "--bogus-flag", "x"])
+        parse_bootstrap_args(["--app-name", "mysql", "--bogus-flag", "x"])
     assert exc_info.value.code == 2
     assert "--bogus-flag" in capsys.readouterr().err
 
@@ -177,7 +175,7 @@ def test_parse_bootstrap_args_known_flag_missing_value(
     """A recognized flag given as the last token with no value must be
     reported as missing its value, not misidentified as unknown."""
     with pytest.raises(SystemExit) as exc_info:
-        _parse_bootstrap_args(["--enforce"])
+        parse_bootstrap_args(["--enforce"])
     assert exc_info.value.code == 2
     err = capsys.readouterr().err
     assert "--enforce" in err
@@ -312,6 +310,23 @@ def test_cmd_bootstrap_does_not_no_op_when_pyproject_names_different_package(
     assert (tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md").exists()
 
 
+def test_cmd_bootstrap_does_not_no_op_when_pyproject_is_malformed_toml(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A packages/conformance/pyproject.toml that exists but fails to parse as
+    TOML must not trip the guard either -- it can't be confirmed to name this
+    exact package, so bootstrap must proceed normally rather than silently
+    no-op the entire write phase on an unreadable file."""
+    conformance_dir = tmp_path / "packages" / "conformance"
+    conformance_dir.mkdir(parents=True)
+    (conformance_dir / "pyproject.toml").write_text("not valid toml [[[")
+
+    monkeypatch.chdir(tmp_path)
+    assert _cmd_bootstrap([]) == 0
+
+    assert (tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md").exists()
+
+
 @pytest.mark.parametrize("help_flag", ["--help", "-h"])
 def test_cmd_bootstrap_help_prints_usage_and_writes_nothing(
     tmp_path: pathlib.Path,
@@ -321,7 +336,7 @@ def test_cmd_bootstrap_help_prints_usage_and_writes_nothing(
 ) -> None:
     """--help/-h must short-circuit before any file is written.
 
-    `main()` checks for `-h`/`--help` before `_parse_bootstrap_args` runs at
+    `main()` checks for `-h`/`--help` before `parse_bootstrap_args` runs at
     all — without that explicit guard, `bootstrap --help` would fall through
     and execute the real, mutating bootstrap — surprising callers who expect
     `--help` to be a no-op.
@@ -490,17 +505,17 @@ def test_cmd_bootstrap_returns_zero(
 
 
 def test_parse_bootstrap_args_enforce_false() -> None:
-    result = _parse_bootstrap_args(["--enforce", "false"])
+    result = parse_bootstrap_args(["--enforce", "false"])
     assert result["enforce"] == "false"
 
 
 def test_parse_bootstrap_args_enforce_true() -> None:
-    result = _parse_bootstrap_args(["--enforce", "true"])
+    result = parse_bootstrap_args(["--enforce", "true"])
     assert result["enforce"] == "true"
 
 
 def test_parse_bootstrap_args_enforce_equals_form() -> None:
-    result = _parse_bootstrap_args(["--enforce=false"])
+    result = parse_bootstrap_args(["--enforce=false"])
     assert result["enforce"] == "false"
 
 
@@ -508,7 +523,7 @@ def test_parse_bootstrap_args_enforce_invalid(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     with pytest.raises(SystemExit) as exc_info:
-        _parse_bootstrap_args(["--enforce", "maybe"])
+        parse_bootstrap_args(["--enforce", "maybe"])
     assert exc_info.value.code == 2
     assert "--enforce" in capsys.readouterr().err
 
@@ -1423,16 +1438,16 @@ def test_cmd_bootstrap_json_first_run_reports_everything_touched(
     manifest = _last_json_line(capsys.readouterr().out)
     assert manifest["skipped"] is False
     touched = set(manifest["touched"])
-    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir = pathlib.Path(".github", "workflows")
     for name in MANAGED_WORKFLOWS:
         assert str(wf_dir / name) in touched
     for dest_rel, _template_name in MANAGED_ACTION_FILES:
-        assert str(tmp_path / dest_rel) in touched
-    assert str(tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md") in touched
-    assert str(tmp_path / ".github" / "workflows" / "tests.yaml") in touched
-    assert str(tmp_path / "renovate.json") in touched
-    assert str(tmp_path / ".gitignore") in touched
-    assert str(tmp_path / "contract_schema.lock.json") in touched
+        assert dest_rel in touched
+    assert str(pathlib.Path(".claude", "skills", "remediate", "SKILL.md")) in touched
+    assert str(pathlib.Path(".github", "workflows", "tests.yaml")) in touched
+    assert "renovate.json" in touched
+    assert ".gitignore" in touched
+    assert "contract_schema.lock.json" in touched
     assert manifest["unchanged"] == []
 
 
@@ -1451,7 +1466,7 @@ def test_cmd_bootstrap_json_rerun_with_no_changes_reports_empty_touched(
     manifest = _last_json_line(capsys.readouterr().out)
     assert manifest["skipped"] is False
     assert manifest["touched"] == []
-    skill_md = tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md"
+    skill_md = pathlib.Path(".claude", "skills", "remediate", "SKILL.md")
     assert str(skill_md) in manifest["unchanged"]
 
 
@@ -1485,8 +1500,8 @@ def test_cmd_bootstrap_json_renovate_backup_counts_as_touched(
     _cmd_bootstrap(["--enforce", "false", "--json"])
     manifest = _last_json_line(capsys.readouterr().out)
     touched = set(manifest["touched"])
-    assert str(tmp_path / "renovate.json") in touched
-    assert str(tmp_path / "renovate.json.bak") in touched
+    assert "renovate.json" in touched
+    assert "renovate.json.bak" in touched
 
 
 def test_cmd_bootstrap_without_json_flag_prints_no_json_line(
@@ -1520,30 +1535,28 @@ def test_tests_yaml_enable_e2e_present_when_false() -> None:
 
 
 # ---------------------------------------------------------------------------
-# _derive_app_name_from_dir unit tests
+# derive_app_name_from_dir unit tests
 # ---------------------------------------------------------------------------
 
 
 def test_derive_strips_atlan_prefix_and_app_suffix(tmp_path: pathlib.Path) -> None:
-    assert _derive_app_name_from_dir(tmp_path / "atlan-openapi-app") == "openapi"
+    assert derive_app_name_from_dir(tmp_path / "atlan-openapi-app") == "openapi"
 
 
 def test_derive_strips_only_prefix(tmp_path: pathlib.Path) -> None:
-    assert _derive_app_name_from_dir(tmp_path / "atlan-openapi") == "openapi"
+    assert derive_app_name_from_dir(tmp_path / "atlan-openapi") == "openapi"
 
 
 def test_derive_strips_only_suffix(tmp_path: pathlib.Path) -> None:
-    assert _derive_app_name_from_dir(tmp_path / "my-connector-app") == "my-connector"
+    assert derive_app_name_from_dir(tmp_path / "my-connector-app") == "my-connector"
 
 
 def test_derive_no_affixes(tmp_path: pathlib.Path) -> None:
-    assert _derive_app_name_from_dir(tmp_path / "postgres") == "postgres"
+    assert derive_app_name_from_dir(tmp_path / "postgres") == "postgres"
 
 
 def test_derive_hello_world(tmp_path: pathlib.Path) -> None:
-    assert (
-        _derive_app_name_from_dir(tmp_path / "atlan-hello-world-app") == "hello-world"
-    )
+    assert derive_app_name_from_dir(tmp_path / "atlan-hello-world-app") == "hello-world"
 
 
 # ---------------------------------------------------------------------------
@@ -1576,4 +1589,4 @@ def test_managed_action_template_matches_canonical_source(
 
 def test_derive_falls_back_to_app_for_bare_atlan(tmp_path: pathlib.Path) -> None:
     # "atlan-app" → strip prefix → "app" → strip suffix ("app" doesn't end with "-app") → "app"
-    assert _derive_app_name_from_dir(tmp_path / "atlan-app") == "app"
+    assert derive_app_name_from_dir(tmp_path / "atlan-app") == "app"

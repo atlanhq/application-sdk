@@ -997,10 +997,9 @@ Note: P008 flags `self.upload()` *inside* `@task` methods (the wrong location); 
 flags the *absence* of any upload call.  They are complementary: both should be clean
 for a correctly-wired SDR app.
 
-Exemption: this rule is skipped for apps whose `contract/app.pkl` sets
-`pipeline.publish = null` (no publish stage), which compiles to a generated
-manifest with no `dag.publish` node.  An extract-only app has nothing to hand
-the extracted assets off to, so the absence of `self.upload()` is by design,
-not a gap.
+Exemption: this rule is skipped for apps whose `contract/app.pkl` sets `pipeline.publish
+= null` (no publish stage), which compiles to a generated manifest with no `dag.publish`
+node.  An extract-only app has nothing to hand the extracted assets off to, so the
+absence of `self.upload()` is by design, not a gap.
 
 ---

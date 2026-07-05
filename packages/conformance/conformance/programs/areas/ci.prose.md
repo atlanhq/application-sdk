@@ -202,8 +202,12 @@ always escalated to residue.
      `gh api repos/<owner>/<repo>/commits/<ref> --jq .sha`.
    - Fallback when `gh` is unavailable/unauthenticated (tags and branches
      only — cannot expand an already-short SHA):
-     `git ls-remote https://github.com/<owner>/<repo> <ref>`. If the ref is
-     an annotated tag, `git ls-remote --tags` returns both
+     `git ls-remote https://github.com/<owner>/<repo> -- <ref>`. The `--`
+     separator is required, not optional — `ref`'s validated charset in
+     step 2 still permits a leading `-` (e.g. `--tags`), which without `--`
+     `git` would parse as an option rather than a ref pattern instead of
+     failing closed. If the ref is an annotated tag, `git ls-remote --tags`
+     returns both
      `refs/tags/<ref>` and the peeled `refs/tags/<ref>^{}` — always prefer
      the peeled (`^{}`) SHA, which is the commit the tag points to, not the
      tag object itself.

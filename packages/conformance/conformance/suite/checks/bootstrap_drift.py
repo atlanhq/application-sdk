@@ -102,9 +102,28 @@ def _extract_unit_tests_workflow(text: str) -> str:
     return extract_field(text, "unit_tests_workflow_file") or "tests.yaml"
 
 
-def _extract_exit_zero(text: str) -> str:
+def _extract_exit_zero(text: str, root: Path) -> str:
+    """Return the on-disk ``exit-zero`` value, falling back to *root*'s
+    ``renovate.json`` enforcement signal when the line is unparseable.
+
+    Mirrors ``bootstrap.autodetect._read_conformance_enforce``'s fallback so
+    this checker and ``bootstrap``'s own re-run autodetection cannot silently
+    diverge on a hand-edited/pre-template ``conformance.yaml``: without this,
+    a genuinely soft-mode repo whose exit-zero line doesn't match the pattern
+    would report a spurious C002 drift finding here while `bootstrap` itself
+    correctly preserves soft mode via the same renovate.json fallback.
+    """
     m = EXIT_ZERO_RE.search(text)
-    return m.group(1) if m else "false"
+    if m:
+        return m.group(1)
+    renovate = root / _RENOVATE_JSON
+    if not renovate.exists():
+        return "false"
+    try:
+        automerge = extract_renovate_automerge(renovate.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return "false"
+    return "true" if automerge == "false" else "false"
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +275,7 @@ def _scan_managed_shim(path: Path, root: Path) -> list[Finding]:
     elif name == "build-and-publish.yaml":
         kwargs["unit_tests_workflow"] = _extract_unit_tests_workflow(on_disk)
     elif name == "conformance.yaml":
-        kwargs["exit_zero"] = _extract_exit_zero(on_disk)
+        kwargs["exit_zero"] = _extract_exit_zero(on_disk, root)
 
     canonical = render(name, **kwargs)
 
