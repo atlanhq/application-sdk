@@ -436,6 +436,45 @@ policy = RetryPolicy().with_max_attempts(5).with_non_retryable(ValueError)
 
 ---
 
+## Catching Client-Side Workflow Failures
+
+Code that calls `TemporalClient.execute_workflow(...)` or waits on a workflow handle
+(test harnesses, admin tooling, anything outside `run()`/`@task`) can catch the
+Temporal failure/cause exception family directly from `application_sdk.execution` —
+no need to import `temporalio` yourself:
+
+```python
+from application_sdk.execution import (
+    TemporalActivityError,
+    TemporalCancelledError,
+    TemporalWorkflowFailureError,
+)
+
+try:
+    await temporal_client.execute_workflow(MyConnector.run, input, id=run_id, task_queue=queue)
+except TemporalWorkflowFailureError as e:
+    match e.cause:
+        case TemporalActivityError():
+            ...  # an @task raised
+        case TemporalCancelledError():
+            ...  # the workflow was cancelled
+```
+
+`TemporalWorkflowFailureError` wraps the terminal-state cause on `.cause` — one of
+`TemporalActivityError`, `TemporalCancelledError`, `TemporalChildWorkflowError`,
+`TemporalTerminatedError`, or `TemporalTimeoutError`. These are re-exported (not
+wrapped) with a `Temporal` prefix so they don't collide with unrelated SDK types
+of the same short name, e.g. `application_sdk.common.error_codes.ActivityError`
+and `application_sdk.errors.leaves.CancelledError`.
+
+This is distinct from error handling *inside* `run()`/`@task` code: there, raise
+and catch `application_sdk.errors.AppError` leaves (`CancelledError`,
+`AppTimeoutError`, etc.) instead — those carry the SDK's classified failure
+metadata (category, code, retryable). The `Temporal*Error` types above are raw
+client-side signals for code observing a workflow from the outside.
+
+---
+
 ## Atlan Client Mixin
 
 Mix in `AtlanClientMixin` when your App needs to call the Atlan API. It provides `get_or_create_async_atlan_client()`, which caches the `AsyncAtlanClient` per execution.
