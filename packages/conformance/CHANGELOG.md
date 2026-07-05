@@ -2,6 +2,17 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.11.2] - 2026-07-05
+
+### Bug fixes
+
+- mechanically remediate C001/C002 CI findings (#2504) ([f386ed9](https://github.com/atlanhq/application-sdk/commit/f386ed9))
+- honor --help/-h on bootstrap without side effects (#2506) ([0fb6287](https://github.com/atlanhq/application-sdk/commit/0fb6287))
+
+### Other changes
+
+- chore(deps): lock file maintenance (#2502) ([edf7ef2](https://github.com/atlanhq/application-sdk/commit/edf7ef2))
+
 ## [0.11.1] - 2026-07-04
 
 ### Bug fixes
