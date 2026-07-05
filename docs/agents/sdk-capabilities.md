@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.20.3
-source-sha:    fe5f52ee89b415f43f84c27e42bd46f52ce70075
-source-date:   2026-07-03T12:27:18+05:30
+source-sha:    d5218d299841507797f9be166b74c2af64e9a25a
+source-date:   2026-07-05T12:41:35+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -24,7 +24,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 54 |
-| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 14 |
+| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 16 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 34 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
@@ -1372,9 +1372,19 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Summary:** Decorator to mark activities that require distributed locking.
 - **Defined in:** `application_sdk/execution/decorators.py`
 
+#### `TemporalActivityError`
+
+- **Import:** `from application_sdk.execution import TemporalActivityError`
+- **Summary:** _(no docstring)_
+
 #### `TemporalClient`
 
 - **Import:** `from application_sdk.execution import TemporalClient`
+- **Summary:** _(no docstring)_
+
+#### `TemporalWorkflowFailureError`
+
+- **Import:** `from application_sdk.execution import TemporalWorkflowFailureError`
 - **Summary:** _(no docstring)_
 
 ## `application_sdk.handler`
