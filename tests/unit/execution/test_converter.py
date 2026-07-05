@@ -71,6 +71,57 @@ class TestPublicSurface:
             "TemporalTimeoutError",
         } <= set(execution.__all__)
 
+    def test_workflow_failure_error_cause_dispatches_via_match_case(self) -> None:
+        """Pins the docs/concepts/apps.md example -- `match e.cause: case
+        TemporalActivityError(): ...` must actually dispatch on the re-exported
+        types via structural pattern matching, not just type-check in isolation."""
+        activity_error = TemporalActivityError(
+            "activity failed",
+            scheduled_event_id=1,
+            started_event_id=2,
+            identity="test-worker",
+            activity_type="my_activity",
+            activity_id="1",
+            retry_state=None,
+        )
+        failure = TemporalWorkflowFailureError(cause=activity_error)
+
+        match failure.cause:
+            case TemporalActivityError():
+                matched = "activity"
+            case TemporalCancelledError():
+                matched = "cancelled"
+            case _:
+                matched = "other"
+
+        assert matched == "activity"
+
+    def test_workflow_failure_error_cause_falls_through_to_catch_all_for_unrecognized_cause(
+        self,
+    ) -> None:
+        """A cause outside the re-exported family -- e.g.
+        temporalio.exceptions.ApplicationError, which is what surfaces when
+        run()/@entrypoint itself raises directly rather than an activity -- must
+        still be reachable via the documented `case _:` catch-all, not silently
+        dropped by a `match` with no fallback branch."""
+        from temporalio.exceptions import (
+            ApplicationError as _TemporalApplicationErrorImpl,
+        )
+
+        failure = TemporalWorkflowFailureError(
+            cause=_TemporalApplicationErrorImpl("boom")
+        )
+
+        match failure.cause:
+            case TemporalActivityError():
+                matched = "activity"
+            case TemporalCancelledError():
+                matched = "cancelled"
+            case _:
+                matched = "other"
+
+        assert matched == "other"
+
     def test_create_data_converter_for_app_is_exported(self) -> None:
         from application_sdk.execution._temporal.converter import (
             create_data_converter_for_app as _internal,

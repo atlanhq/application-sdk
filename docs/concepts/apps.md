@@ -458,14 +458,20 @@ except TemporalWorkflowFailureError as e:
             ...  # an @task raised
         case TemporalCancelledError():
             ...  # the workflow was cancelled
+        case _:
+            ...  # e.g. temporalio.exceptions.ApplicationError when run()/@entrypoint
+            # itself raised directly — still log/handle it, don't ignore silently
 ```
 
-`TemporalWorkflowFailureError` wraps the terminal-state cause on `.cause` — one of
-`TemporalActivityError`, `TemporalCancelledError`, `TemporalChildWorkflowError`,
-`TemporalTerminatedError`, or `TemporalTimeoutError`. These are re-exported (not
-wrapped) with a `Temporal` prefix so they don't collide with unrelated SDK types
-of the same short name, e.g. `application_sdk.common.error_codes.ActivityError`
-and `application_sdk.errors.leaves.CancelledError`.
+`TemporalWorkflowFailureError` wraps the terminal-state cause on `.cause` — commonly
+one of `TemporalActivityError`, `TemporalCancelledError`, `TemporalChildWorkflowError`,
+`TemporalTerminatedError`, or `TemporalTimeoutError`, but not limited to those (e.g. a
+direct raise from `run()`/`@entrypoint` surfaces as the unexported
+`temporalio.exceptions.ApplicationError` — always include a catch-all case). These
+five are re-exported (not wrapped) with a `Temporal` prefix so they don't collide with
+unrelated SDK types of the same short name, e.g.
+`application_sdk.common.error_codes.ActivityError` and
+`application_sdk.errors.leaves.CancelledError`.
 
 This is distinct from error handling *inside* `run()`/`@task` code: there, raise
 and catch `application_sdk.errors.AppError` leaves (`CancelledError`,

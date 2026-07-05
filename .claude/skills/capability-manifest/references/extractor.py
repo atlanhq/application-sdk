@@ -376,7 +376,7 @@ def _import_external_target(target_path: str) -> Any:
 _MEMORY_ADDRESS_RE = re.compile(r" at 0x[0-9a-fA-F]+")
 
 
-def _truncate_signature(full: str, prefix: str, args: str) -> str:
+def _truncate_signature(full: str, prefix: str, sig: inspect.Signature | None) -> str:
     """Shorten an ``inspect``-derived signature to a deterministic, readable form.
 
     Two independent reasons to truncate: the existing 120-char convention shared with
@@ -384,13 +384,19 @@ def _truncate_signature(full: str, prefix: str, args: str) -> str:
     *repr* of mutable default values — which can contain a live memory address (e.g. a
     ``DataConverter(...)`` instance default). That address changes every run, which
     would make this generated, diffed file non-deterministic.
+
+    Takes the actual ``inspect.Signature`` (not a pre-rendered string) so the first
+    parameter can be pulled out structurally — string-splitting on the first comma
+    would cut a generic annotation like ``Dict[str, Any]`` in half.
     """
     if len(full) <= 120 and not _MEMORY_ADDRESS_RE.search(full):
         return full
-    first_arg = args.lstrip("(").split(",")[0].split(")")[0].strip()
-    if not first_arg or _MEMORY_ADDRESS_RE.search(first_arg):
+    if sig is None or not sig.parameters:
         return prefix + "(...)"
-    return prefix + "(" + first_arg + ", ...)"
+    first_param = str(next(iter(sig.parameters.values())))
+    if _MEMORY_ADDRESS_RE.search(first_param):
+        return prefix + "(...)"
+    return prefix + "(" + first_param + ", ...)"
 
 
 def _external_alias_symbol(name: str, target_path: str) -> dict[str, Any] | None:
@@ -414,26 +420,24 @@ def _external_alias_symbol(name: str, target_path: str) -> dict[str, Any] | None
     if inspect.isclass(obj):
         kind = KIND_CLASS
         try:
-            init_sig = inspect.signature(obj.__init__).replace(
+            # inspect.signature() on the class itself (not obj.__init__) already
+            # drops `self` and correctly returns an empty signature when the class
+            # has no custom __init__ — no manual prefix-stripping needed.
+            sig: inspect.Signature | None = inspect.signature(obj).replace(
                 return_annotation=inspect.Signature.empty
             )
-            raw = str(init_sig)
-            if raw.startswith("(self, "):
-                args = "(" + raw[len("(self, ") :]
-            elif raw.startswith("(self)"):
-                args = "()" + raw[len("(self)") :]
-            else:
-                args = raw
         except (TypeError, ValueError):
-            args = "()"
-        signature = _truncate_signature(f"class {name}{args}", f"class {name}", args)
+            sig = None
+        args = str(sig) if sig is not None else "()"
+        signature = _truncate_signature(f"class {name}{args}", f"class {name}", sig)
     elif inspect.isroutine(obj):
         kind = KIND_FUNCTION
         try:
-            args = str(inspect.signature(obj))
+            sig = inspect.signature(obj)
         except (TypeError, ValueError):
-            args = "(...)"
-        signature = _truncate_signature(name + args, name, args)
+            sig = None
+        args = str(sig) if sig is not None else "(...)"
+        signature = _truncate_signature(name + args, name, sig)
     else:
         kind = KIND_CONSTANT
         signature = name
@@ -444,6 +448,58 @@ def _external_alias_symbol(name: str, target_path: str) -> dict[str, Any] | None
         "signature": signature,
         "summary": summary,
         "filepath": "",
+    }
+
+
+def _symbol_for(name: str, griffe_obj: Any) -> dict[str, Any]:
+    """Build one manifest symbol entry for an exported name.
+
+    Tries runtime introspection first for aliases pointing outside
+    ``application_sdk`` (see ``_external_alias_target``); falls back to the
+    griffe-based path for everything else, including an alias whose target
+    turned out to be unimportable.
+    """
+    external_target = _external_alias_target(griffe_obj)
+    if external_target is not None:
+        external_symbol = _external_alias_symbol(name, external_target)
+        if external_symbol is not None:
+            return external_symbol
+        # Import failed (e.g. optional dependency not installed) — fall through
+        # to the normal griffe-based path, which will emit "no docstring".
+
+    resolved = _resolve_actual_obj(name, griffe_obj)
+    kind = _classify_symbol(name, griffe_obj)
+
+    if kind == KIND_CLASS:
+        sig = (
+            _render_class_signature(resolved)
+            if resolved is not None
+            else ("class " + name)
+        )
+    elif kind in (KIND_FUNCTION, KIND_DECORATOR):
+        sig = _render_signature(resolved) if resolved is not None else (name + "(...)")
+    else:
+        # constant/enum
+        ann = (
+            _render_annotation(resolved.annotation)
+            if resolved is not None and hasattr(resolved, "annotation")
+            else ""
+        )
+        sig = name + (": " + ann if ann else "")
+
+    summary = (
+        _docstring_summary(resolved) if resolved is not None else "_(no docstring)_"
+    )
+    if summary == "_(no docstring)_" and resolved is not None and kind == KIND_CONSTANT:
+        summary = _constant_fallback_summary(resolved)
+    filepath = _relative_filepath(resolved) if resolved is not None else ""
+
+    return {
+        "name": name,
+        "kind": kind,
+        "signature": sig,
+        "summary": summary,
+        "filepath": filepath,
     }
 
 
@@ -491,65 +547,9 @@ def cmd_dump() -> None:
 
         eprint(f"  {subpkg_name}: {len(all_names)} exports")
 
-        symbols: list[dict[str, Any]] = []
-        for name in all_names:
-            griffe_obj = griffe_subpkg.members.get(name)
-
-            external_target = _external_alias_target(griffe_obj)
-            if external_target is not None:
-                external_symbol = _external_alias_symbol(name, external_target)
-                if external_symbol is not None:
-                    symbols.append(external_symbol)
-                    continue
-                # Import failed (e.g. optional dependency not installed) — fall through
-                # to the normal griffe-based path, which will emit "no docstring".
-
-            resolved = _resolve_actual_obj(name, griffe_obj)
-            kind = _classify_symbol(name, griffe_obj)
-
-            if kind == KIND_CLASS:
-                sig = (
-                    _render_class_signature(resolved)
-                    if resolved is not None
-                    else ("class " + name)
-                )
-            elif kind in (KIND_FUNCTION, KIND_DECORATOR):
-                sig = (
-                    _render_signature(resolved)
-                    if resolved is not None
-                    else (name + "(...)")
-                )
-            else:
-                # constant/enum
-                ann = (
-                    _render_annotation(resolved.annotation)
-                    if resolved is not None and hasattr(resolved, "annotation")
-                    else ""
-                )
-                sig = name + (": " + ann if ann else "")
-
-            summary = (
-                _docstring_summary(resolved)
-                if resolved is not None
-                else "_(no docstring)_"
-            )
-            if (
-                summary == "_(no docstring)_"
-                and resolved is not None
-                and kind == KIND_CONSTANT
-            ):
-                summary = _constant_fallback_summary(resolved)
-            filepath = _relative_filepath(resolved) if resolved is not None else ""
-
-            symbols.append(
-                {
-                    "name": name,
-                    "kind": kind,
-                    "signature": sig,
-                    "summary": summary,
-                    "filepath": filepath,
-                }
-            )
+        symbols: list[dict[str, Any]] = [
+            _symbol_for(name, griffe_subpkg.members.get(name)) for name in all_names
+        ]
 
         output["subpackages"][subpkg_name] = {
             "all": all_names,

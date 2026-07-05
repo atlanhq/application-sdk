@@ -12,8 +12,10 @@ file path (same pattern used for .github/scripts/*.py in
 .github/scripts/tests/).
 """
 
+import inspect
 import sys
 from pathlib import Path
+from typing import Any, Dict
 
 sys.path.insert(
     0,
@@ -50,6 +52,24 @@ class _SampleZeroArgClass:
         pass
 
 
+class _SampleClassWithNoCustomInit:
+    """A sample class that doesn't define its own __init__ at all."""
+
+
+class _SampleClassWithGenericFirstArg:
+    """A sample class whose first constructor arg has a comma inside its annotation."""
+
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        timeout_seconds: float = 1.0,
+        retries: int = 3,
+        label: str = "default",
+        extra_flag: bool = False,
+    ) -> None:
+        self.config = config
+
+
 def _sample_function(x: int, y: int = 2) -> int:
     """A sample function."""
     return x + y
@@ -76,10 +96,14 @@ class _FakeGriffeAlias:
         is_alias: bool,
         target_path: str | None = None,
         raise_on_access: bool = False,
+        kind: str = "ATTRIBUTE",
     ) -> None:
         self.is_alias = is_alias
         self._target_path = target_path
         self._raise_on_access = raise_on_access
+        # Only consulted by the griffe-based fallback path (_resolve_actual_obj /
+        # _classify_symbol) when an alias's target turns out to be unimportable.
+        self.kind = kind
 
     @property
     def target_path(self) -> str | None:
@@ -158,42 +182,94 @@ def test_import_external_target_none_for_missing_attribute() -> None:
 
 # ---------------------------------------------------------------------------
 # _truncate_signature
+#
+# Takes a real inspect.Signature (not a pre-rendered string) so the first
+# parameter can be pulled out structurally instead of by splitting on the
+# first comma -- a generic annotation like Dict[str, Any] has a comma inside
+# it, which a naive string split cuts in half (see the two regression tests
+# in the _external_alias_symbol section below for that failure mode fixed).
 # ---------------------------------------------------------------------------
 
 
+def _sig_of(fn: object) -> inspect.Signature:
+    return inspect.signature(fn)  # type: ignore[arg-type]
+
+
 def test_truncate_signature_returns_short_signature_unchanged() -> None:
+    def foo(x: int) -> None: ...
+
     full = "def foo(x: int) -> int"
-    assert extractor._truncate_signature(full, "def foo", "(x: int)") == full
+    assert extractor._truncate_signature(full, "def foo", _sig_of(foo)) == full
+
+
+def test_truncate_signature_ignores_sig_when_full_is_already_short() -> None:
+    # The short-circuit only looks at `full`'s length/content -- a mismatched or
+    # missing `sig` must not matter when no truncation is needed.
+    full = "def foo(x: int) -> int"
+    assert extractor._truncate_signature(full, "def foo", None) == full
 
 
 def test_truncate_signature_truncates_long_signature_to_first_arg() -> None:
-    args = "(a: int, b: str, c: float)"
-    full = "prefix" + args + " # " + "x" * 100  # force well over the 120-char threshold
+    def fn(a: int, b: str, c: float) -> None: ...
+
+    sig = _sig_of(fn)
+    full = "prefix" + str(sig) + " # " + "x" * 100  # force well over 120 chars
     assert len(full) > 120
-    assert extractor._truncate_signature(full, "prefix", args) == "prefix(a: int, ...)"
+    assert extractor._truncate_signature(full, "prefix", sig) == "prefix(a: int, ...)"
+
+
+def test_truncate_signature_preserves_comma_bearing_generic_first_arg() -> None:
+    """Regression: a naive split(",")[0] on the rendered string would cut
+    `Dict[str, Any]` in half, producing an unbalanced-bracket signature."""
+
+    def fn(config: Dict[str, Any], b: str, c: float, d: int) -> None: ...
+
+    sig = _sig_of(fn)
+    full = "prefix" + str(sig) + " # " + "x" * 100  # force well over 120 chars
+    assert len(full) > 120
+    assert (
+        extractor._truncate_signature(full, "prefix", sig)
+        == "prefix(config: Dict[str, Any], ...)"
+    )
 
 
 def test_truncate_signature_truncates_on_embedded_memory_address_even_if_short() -> (
     None
 ):
-    args = "(count: int, obj=<Baz object at 0x7f0000000000>)"
-    full = "prefix" + args
-    assert len(full) <= 120
+    sentinel = object()  # repr is "<object object at 0x...>" -- a real live address
+
+    def fn(count: int, obj: object = sentinel) -> None: ...
+
+    sig = _sig_of(fn)
+    full = "prefix" + str(sig)
+    assert extractor._MEMORY_ADDRESS_RE.search(full)
     assert (
-        extractor._truncate_signature(full, "prefix", args) == "prefix(count: int, ...)"
+        extractor._truncate_signature(full, "prefix", sig) == "prefix(count: int, ...)"
     )
 
 
 def test_truncate_signature_falls_back_to_ellipsis_when_first_arg_has_address() -> None:
-    args = "(obj=<Baz object at 0x7f0000000000>)"
-    full = "prefix" + args
-    assert extractor._truncate_signature(full, "prefix", args) == "prefix(...)"
+    sentinel = object()
+
+    def fn(obj: object = sentinel) -> None: ...
+
+    sig = _sig_of(fn)
+    full = "prefix" + str(sig)
+    assert extractor._truncate_signature(full, "prefix", sig) == "prefix(...)"
 
 
 def test_truncate_signature_falls_back_to_ellipsis_when_no_args() -> None:
+    def fn() -> None: ...
+
+    sig = _sig_of(fn)
     full = "prefix() # " + "x" * 150  # force well over the 120-char threshold
     assert len(full) > 120
-    assert extractor._truncate_signature(full, "prefix", "()") == "prefix(...)"
+    assert extractor._truncate_signature(full, "prefix", sig) == "prefix(...)"
+
+
+def test_truncate_signature_falls_back_to_ellipsis_when_sig_is_none() -> None:
+    full = "prefix() # " + "x" * 150
+    assert extractor._truncate_signature(full, "prefix", None) == "prefix(...)"
 
 
 # ---------------------------------------------------------------------------
@@ -219,6 +295,30 @@ def test_external_alias_symbol_zero_arg_class() -> None:
     assert result is not None
     assert result["kind"] == extractor.KIND_CLASS
     assert result["signature"] == "class AliasedZeroArg()"
+
+
+def test_external_alias_symbol_class_with_no_custom_init() -> None:
+    """Regression: manually stripping a hardcoded "(self, "/"(self)" prefix off
+    obj.__init__'s signature mis-rendered any class with no custom __init__ (it
+    inherits object.__init__'s "(self, /, *args, **kwargs)" slot-wrapper signature,
+    which doesn't match either hardcoded prefix) as "(/, *args, **kwargs)". Calling
+    inspect.signature() on the class itself avoids the issue entirely."""
+    path = _dotted(_SampleClassWithNoCustomInit)
+    result = extractor._external_alias_symbol("AliasedNoInit", path)
+    assert result is not None
+    assert result["kind"] == extractor.KIND_CLASS
+    assert result["signature"] == "class AliasedNoInit()"
+
+
+def test_external_alias_symbol_class_with_generic_first_arg() -> None:
+    """Regression: a first arg annotated Dict[str, Any] has a comma inside the
+    annotation itself -- naive string-splitting on the first comma used to render
+    this as the unbalanced "AliasedGeneric(config: Dict[str, ...)"."""
+    path = _dotted(_SampleClassWithGenericFirstArg)
+    result = extractor._external_alias_symbol("AliasedGeneric", path)
+    assert result is not None
+    assert result["kind"] == extractor.KIND_CLASS
+    assert result["signature"] == "class AliasedGeneric(config: Dict[str, Any], ...)"
 
 
 def test_external_alias_symbol_function() -> None:
@@ -257,3 +357,43 @@ def test_external_alias_symbol_none_when_target_unimportable() -> None:
         extractor._external_alias_symbol("Ghost", "nonexistent_pkg_xyz.Something")
         is None
     )
+
+
+# ---------------------------------------------------------------------------
+# _symbol_for -- the per-symbol branch cmd_dump() delegates to. Exercises the
+# two branches this PR adds: taking the external-alias fast path, and falling
+# back to the pre-existing griffe-based path when the alias target can't be
+# imported (e.g. an optional dependency isn't installed).
+# ---------------------------------------------------------------------------
+
+
+def test_symbol_for_uses_external_alias_fast_path_when_importable() -> None:
+    path = _dotted(_sample_function)
+    griffe_obj = _FakeGriffeAlias(is_alias=True, target_path=path)
+    assert extractor._symbol_for(
+        "aliased_fn", griffe_obj
+    ) == extractor._external_alias_symbol("aliased_fn", path)
+
+
+def test_symbol_for_falls_back_to_griffe_path_when_alias_unimportable() -> None:
+    # is_alias=True + an unimportable target_path takes _external_alias_symbol's
+    # None branch, which must fall through to the griffe-based path (kind=
+    # "ATTRIBUTE" here) rather than raise or silently drop the symbol.
+    griffe_obj = _FakeGriffeAlias(
+        is_alias=True, target_path="nonexistent_pkg_xyz.Something", kind="ATTRIBUTE"
+    )
+    result = extractor._symbol_for("ghost_symbol", griffe_obj)
+    assert result == {
+        "name": "ghost_symbol",
+        "kind": extractor.KIND_CONSTANT,
+        "signature": "ghost_symbol",
+        "summary": "_(no docstring)_",
+        "filepath": "",
+    }
+
+
+def test_symbol_for_uses_griffe_path_directly_when_not_an_alias() -> None:
+    griffe_obj = _FakeGriffeAlias(is_alias=False, kind="ATTRIBUTE")
+    result = extractor._symbol_for("plain_symbol", griffe_obj)
+    assert result["name"] == "plain_symbol"
+    assert result["kind"] == extractor.KIND_CONSTANT
