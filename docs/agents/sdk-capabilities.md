@@ -1300,6 +1300,12 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Summary:** Configuration for retry behavior.
 - **Defined in:** `application_sdk/execution/retry.py`
 
+#### `TemporalActivityError`
+
+- **Import:** `from application_sdk.execution import TemporalActivityError`
+- **Signature:** `class TemporalActivityError(message: str, ...)`
+- **Summary:** Error raised on activity failure. _(re-exported from `temporalio.exceptions.ActivityError`)_
+
 #### `TemporalAuthConfig`
 
 - **Import:** `from application_sdk.execution import TemporalAuthConfig`
@@ -1314,12 +1320,48 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Summary:** Manages OAuth token lifecycle for Temporal client connections.
 - **Defined in:** `application_sdk/execution/_temporal/auth.py`
 
+#### `TemporalCancelledError`
+
+- **Import:** `from application_sdk.execution import TemporalCancelledError`
+- **Signature:** `class TemporalCancelledError(message: str = 'Cancelled', *details: Any) -> None`
+- **Summary:** Error raised on workflow/activity cancellation. _(re-exported from `temporalio.exceptions.CancelledError`)_
+
+#### `TemporalChildWorkflowError`
+
+- **Import:** `from application_sdk.execution import TemporalChildWorkflowError`
+- **Signature:** `class TemporalChildWorkflowError(message: str, ...)`
+- **Summary:** Error raised on child workflow failure. _(re-exported from `temporalio.exceptions.ChildWorkflowError`)_
+
+#### `TemporalClient`
+
+- **Import:** `from application_sdk.execution import TemporalClient`
+- **Signature:** `class TemporalClient(service_client: 'temporalio.service.ServiceClient', ...)`
+- **Summary:** Client for accessing Temporal. _(re-exported from `temporalio.client.Client`)_
+
 #### `TemporalExecutorBackend`
 
 - **Import:** `from application_sdk.execution import TemporalExecutorBackend`
 - **Signature:** `class TemporalExecutorBackend(client: Client, task_queue: str = 'application-sdk')`
 - **Summary:** Temporal-based executor backend for running Apps as workflows.
 - **Defined in:** `application_sdk/execution/_temporal/backend.py`
+
+#### `TemporalTerminatedError`
+
+- **Import:** `from application_sdk.execution import TemporalTerminatedError`
+- **Signature:** `class TemporalTerminatedError(message: str, *details: Any) -> None`
+- **Summary:** Error raised on workflow cancellation. _(re-exported from `temporalio.exceptions.TerminatedError`)_
+
+#### `TemporalTimeoutError`
+
+- **Import:** `from application_sdk.execution import TemporalTimeoutError`
+- **Signature:** `class TemporalTimeoutError(message: str, ...)`
+- **Summary:** Error raised on workflow/activity timeout. _(re-exported from `temporalio.exceptions.TimeoutError`)_
+
+#### `TemporalWorkflowFailureError`
+
+- **Import:** `from application_sdk.execution import TemporalWorkflowFailureError`
+- **Signature:** `class TemporalWorkflowFailureError(*, cause: 'BaseException') -> 'None'`
+- **Summary:** Error that occurs when a workflow is unsuccessful. _(re-exported from `temporalio.client.WorkflowFailureError`)_
 
 ### Functions
 
@@ -1371,41 +1413,6 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Signature:** `needs_lock(max_locks: int = 5, lock_name: Optional[str] = None)`
 - **Summary:** Decorator to mark activities that require distributed locking.
 - **Defined in:** `application_sdk/execution/decorators.py`
-
-#### `TemporalActivityError`
-
-- **Import:** `from application_sdk.execution import TemporalActivityError`
-- **Summary:** _(no docstring)_
-
-#### `TemporalCancelledError`
-
-- **Import:** `from application_sdk.execution import TemporalCancelledError`
-- **Summary:** _(no docstring)_
-
-#### `TemporalChildWorkflowError`
-
-- **Import:** `from application_sdk.execution import TemporalChildWorkflowError`
-- **Summary:** _(no docstring)_
-
-#### `TemporalClient`
-
-- **Import:** `from application_sdk.execution import TemporalClient`
-- **Summary:** _(no docstring)_
-
-#### `TemporalTerminatedError`
-
-- **Import:** `from application_sdk.execution import TemporalTerminatedError`
-- **Summary:** _(no docstring)_
-
-#### `TemporalTimeoutError`
-
-- **Import:** `from application_sdk.execution import TemporalTimeoutError`
-- **Summary:** _(no docstring)_
-
-#### `TemporalWorkflowFailureError`
-
-- **Import:** `from application_sdk.execution import TemporalWorkflowFailureError`
-- **Summary:** _(no docstring)_
 
 ## `application_sdk.handler`
 

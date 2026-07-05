@@ -15,7 +15,10 @@ Usage (from repo root):
 from __future__ import annotations
 
 import ast
+import importlib
+import inspect
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -327,6 +330,116 @@ def _resolve_actual_obj(name: str, griffe_obj: Any) -> Any:
     return griffe_obj
 
 
+def _external_alias_target(griffe_obj: Any) -> str | None:
+    """Return the dotted target path if *griffe_obj* is a re-export of a symbol from
+    outside ``application_sdk`` (e.g. ``temporalio.exceptions.ActivityError``), else None.
+
+    Griffe only loads the ``application_sdk`` package (see ``cmd_dump``), so an alias
+    pointing at a third-party module is never resolved through griffe's static graph —
+    accessing ``.docstring``/``.final_target`` on it raises ``AliasResolutionError``.
+    Detecting this case lets the caller fall back to runtime introspection instead of
+    emitting a blanket "no docstring".
+    """
+    if not getattr(griffe_obj, "is_alias", False):
+        return None
+    try:
+        target_path = griffe_obj.target_path
+    except Exception:
+        return None
+    if not target_path or target_path.startswith("application_sdk"):
+        return None
+    return target_path
+
+
+def _import_external_target(target_path: str) -> Any:
+    """Best-effort runtime import of a dotted path like ``temporalio.exceptions.ActivityError``.
+
+    Tries progressively shorter module prefixes (a dotted path can't be split into
+    module/attribute without knowing where the module ends and class attributes begin).
+    """
+    parts = target_path.split(".")
+    for split in range(len(parts) - 1, 0, -1):
+        module_name = ".".join(parts[:split])
+        try:
+            obj = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        try:
+            for attr in parts[split:]:
+                obj = getattr(obj, attr)
+            return obj
+        except AttributeError:
+            continue
+    return None
+
+
+_MEMORY_ADDRESS_RE = re.compile(r" at 0x[0-9a-fA-F]+")
+
+
+def _truncate_signature(full: str, prefix: str, args: str) -> str:
+    """Shorten an ``inspect``-derived signature to a deterministic, readable form.
+
+    Two independent reasons to truncate: the existing 120-char convention shared with
+    the griffe-based renderers, and the fact that ``inspect.signature`` embeds the
+    *repr* of mutable default values — which can contain a live memory address (e.g. a
+    ``DataConverter(...)`` instance default). That address changes every run, which
+    would make this generated, diffed file non-deterministic.
+    """
+    if len(full) <= 120 and not _MEMORY_ADDRESS_RE.search(full):
+        return full
+    first_arg = args.lstrip("(").split(",")[0].split(")")[0].strip()
+    if not first_arg or _MEMORY_ADDRESS_RE.search(first_arg):
+        return prefix + "(...)"
+    return prefix + "(" + first_arg + ", ...)"
+
+
+def _external_alias_symbol(name: str, target_path: str) -> dict[str, Any] | None:
+    """Build a manifest symbol entry for an external re-export via runtime introspection.
+
+    Returns None if the target can't be imported (e.g. an optional dependency isn't
+    installed) — the caller falls back to the normal griffe-based path in that case.
+    """
+    obj = _import_external_target(target_path)
+    if obj is None:
+        return None
+
+    doc = inspect.getdoc(obj)
+    first_line = doc.strip().split("\n")[0].strip() if doc and doc.strip() else None
+    summary = (
+        f"{first_line} _(re-exported from `{target_path}`)_"
+        if first_line
+        else f"_(re-exported from `{target_path}`, no docstring)_"
+    )
+
+    if inspect.isclass(obj):
+        kind = KIND_CLASS
+        try:
+            raw = str(inspect.signature(obj.__init__))
+            args = raw.removeprefix("(self, ").removeprefix("(self)")
+            args = "(" + args if not args.startswith("(") else args
+        except (TypeError, ValueError):
+            args = "()"
+        signature = _truncate_signature(f"class {name}{args}", f"class {name}", args)
+    elif inspect.isroutine(obj):
+        kind = KIND_FUNCTION
+        try:
+            args = str(inspect.signature(obj))
+        except (TypeError, ValueError):
+            args = "(...)"
+        signature = _truncate_signature(name + args, name, args)
+    else:
+        kind = KIND_CONSTANT
+        signature = name
+
+    return {
+        "name": name,
+        "kind": kind,
+        "signature": signature,
+        "summary": summary,
+        "filepath": "",
+    }
+
+
 # ---------------------------------------------------------------------------
 # DUMP subcommand
 # ---------------------------------------------------------------------------
@@ -374,6 +487,16 @@ def cmd_dump() -> None:
         symbols: list[dict[str, Any]] = []
         for name in all_names:
             griffe_obj = griffe_subpkg.members.get(name)
+
+            external_target = _external_alias_target(griffe_obj)
+            if external_target is not None:
+                external_symbol = _external_alias_symbol(name, external_target)
+                if external_symbol is not None:
+                    symbols.append(external_symbol)
+                    continue
+                # Import failed (e.g. optional dependency not installed) — fall through
+                # to the normal griffe-based path, which will emit "no docstring".
+
             resolved = _resolve_actual_obj(name, griffe_obj)
             kind = _classify_symbol(name, griffe_obj)
 
