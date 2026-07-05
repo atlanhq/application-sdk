@@ -104,12 +104,49 @@ loop until violations is empty or attempts >= max_attempts:
 if violations is not empty:
   escalate "max attempts reached with %d violations remaining" % len(violations)
 
-emit residue as structured report
-  for each item in residue:
-    - rule_id, file, line, fingerprint
-    - proposed edit (if any)
-    - classification and outcome
-    - reason the item is in residue (judgment / suppression / recheck-failed / not-remediable)
+# Group residue by root cause before emitting. The cluster key is rule_id:
+# every finding of a rule shares one prescription and one rule rationale, so
+# grouping co-locates them — the reviewer reads that shared context once
+# instead of per row, and sees sibling sites side by side.
+#
+# Grouping does NOT collapse the group into one decision. Residue is where
+# the *judgment* findings land, and same rule does not mean same disposition:
+# an exception swallow may be correct as best-effort at one site and a latent
+# bug at another; a stacktrace may be safe to log at one site and leak
+# sensitive data at another. Each item stays an independent decision. What
+# grouping buys is that an inconsistent call across similar sites becomes
+# visible — so the reviewer can apply the same fix where it fits and
+# consciously justify the exceptions, rather than silently diverge (or
+# force-align sites that legitimately differ).
+#
+# The partition itself is purely mechanical (a group-by on an existing
+# field): no model judgment, nothing to game, stable across runs.
+#
+# This is REPORT-only grouping. It deliberately does not touch how fixes are
+# decided: each finding is still remediated on its own merits, in its own
+# small context, and gated on its own (see the per-finding loop above). A
+# cluster-*fix* pre-pass — one agent deciding a single edit for many sites at
+# once — is intentionally NOT pursued here, and this grouping is not a step
+# toward one. Per-site independence is a feature, not a limitation: it keeps
+# fix-vs-suppress a per-site call (the right answer at one E013 site can be
+# the opposite of another's), keeps each context small, and keeps model
+# errors uncorrelated so recheck catches them one finding at a time. One
+# large context deciding all N sites would instead risk a single
+# wrong-but-fingerprint-clearing edit passing for the whole group — a
+# correlated false-negative the gate can't catch. Do not read "grouped by
+# root cause" as license to merge the decisions.
+emit residue as structured report, grouped by root cause
+  for each cluster in group(residue by rule_id), ordered by rule_id:
+    - class header: rule_id, area, count of items in this cluster
+    - the shared prescription and rule rationale, stated once (from the area
+      prescription) — a starting point for each site, not a verdict for the group
+    - for each item in cluster, ordered by file then line:
+      - file, line, fingerprint
+      - proposed edit (if any)
+      - classification and outcome
+      - reason this item is in residue (judgment / suppression / recheck-failed
+        / not-remediable) — items in one cluster may differ here, and each is
+        decided on its own merits
 ```
 
 ### Notes

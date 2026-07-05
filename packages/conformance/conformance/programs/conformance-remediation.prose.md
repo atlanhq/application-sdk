@@ -52,6 +52,17 @@ the reason each was routed here:
 - `oscillation` — the loop detected a repeating violation-set and froze.
 - `max-attempts` — the cap was reached with violations remaining.
 
+The report is **grouped by root cause** (keyed on `rule_id`) so findings of
+the same rule are co-located: the shared prescription and rule rationale are
+stated once, and sibling sites sit side by side. Grouping organises the
+report and surfaces cross-site inconsistencies — it does **not** collapse a
+group into one decision. Residue is judgment territory, and same rule need
+not mean same disposition (a swallow that is correct as best-effort at one
+site may be a bug at another; a stacktrace safe to log at one site may leak
+at another), so each item stays an independent call — the group is context
+for that call, not a substitute for it. The partition itself is a purely
+mechanical group-by on an existing field — no model judgment.
+
 ### Requires
 
 - `violations-error-handling` from `error-handling-area`
@@ -114,6 +125,8 @@ parallel:
     scope: scope
     mode: mode
 
-# Collect residue from all areas and emit the unified report.
-emit violations-summary and residue
+# Collect residue from all areas and emit the unified report, grouped by
+# root cause (rule_id) so each class of leftover findings reads as one
+# decision — see the residue facet above and detect-fix-recheck's emit step.
+emit violations-summary and residue grouped by root cause
 ```

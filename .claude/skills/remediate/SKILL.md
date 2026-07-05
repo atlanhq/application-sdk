@@ -234,13 +234,24 @@ equal to the escalated residue count — never silently passed).  In strict mode
 ### Phase 4: Residue report
 
 All residue items (judgment fixes, suppressions, recheck-failures,
-oscillations) are written to `remediation/runs/residue.md` with:
+oscillations) are written to `remediation/runs/residue.md`, **grouped by
+root cause** — keyed on `rule_id`. Findings of the same rule are co-located
+so the shared prescription and rule rationale are stated once and sibling
+sites sit side by side:
 - rule_id, file, line, fingerprint
 - proposed edit (if any)
 - classification and outcome
 - reason the item is in residue
 
-Review each item before merging.
+Grouping organises the report and makes cross-site inconsistencies visible —
+it does **not** mean one fix for the whole group. Residue is where judgment
+findings land, and same rule does not mean same disposition: an exception
+swallow that is correct as best-effort at one site may be a bug at another;
+a stacktrace may be safe to log at one site and leak sensitive data at
+another. Review each item as its own decision, using the group to apply the
+same call where it fits and to consciously justify the exceptions. The
+grouping itself is a mechanical partition on `rule_id`, so it adds no
+judgment and is stable across runs.
 
 ## Anti-gaming disciplines (design §6)
 
