@@ -53,6 +53,11 @@
 # skipping) keeps the conclusion "success" so this can be a REQUIRED check
 # without leaving the merge queue permanently pending — the same pattern this
 # repo uses for capability-manifest-check.
+#
+# The classification + title-validation decision logic lives in
+# .github/scripts/pr_title_convention.py (unit-tested in
+# .github/scripts/tests/test_pr_title_convention.py), per docs/standards/ci.md:
+# a workflow `run:` block must not itself contain branching shell.
 
 name: PR Title Convention
 
@@ -76,6 +81,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Checkout
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
       - name: Validate PR title against changed files
         id: detect
         if: github.event_name == 'pull_request'
@@ -87,163 +99,13 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-
           echo "PR #${PR_NUMBER} (${HEAD_REF}): ${PR_TITLE}"
-
-          violation=false
-          expected=""
-
-          # --- Rule 0: ignore version-bump / release automation ---------------
-          release_re='^chore(\([^)]*\))?: release '
-          bump_re='^Bump version to '
-          if [[ "${HEAD_REF}" == bump-version* ]] || [[ "${PR_TITLE}" =~ $release_re ]] || [[ "${PR_TITLE}" =~ $bump_re ]]; then
-            echo "Version-bump / release PR — ignored by this guard."
-          else
-            # Up to the first 100 files; ample for the PRs this guard targets.
-            files=()
-            while IFS= read -r path; do
-              [ -n "$path" ] && files+=("$path")
-            done < <(gh pr view "${PR_NUMBER}" --repo "${REPO}" --json files --jq '.files[].path')
-
-            if [ "${#files[@]}" -eq 0 ]; then
-              echo "No changed files reported; nothing to validate."
-            else
-              # Classify changed paths into zones.
-              sdk=false        # application_sdk/**  (highest precedence)
-              docker_img=false # files baked into the published Docker image
-              ct_core=false    # contract-toolkit/** excluding its docs/examples/scripts/tests/.github
-              cf_core=false    # packages/conformance/** excluding its tests/
-              for f in "${files[@]}"; do
-                case "$f" in
-                  application_sdk/*) sdk=true ;;
-                  Dockerfile|entrypoint.sh) docker_img=true ;;
-                  contract-toolkit/docs/*|contract-toolkit/examples/*|contract-toolkit/scripts/*|contract-toolkit/tests/*|contract-toolkit/.github/*) : ;;
-                  contract-toolkit/*) ct_core=true ;;
-                  packages/conformance/tests/*) : ;;
-                  packages/conformance/uv.lock) : ;;
-                  packages/conformance/*/package-lock.json) : ;;
-                  packages/conformance/*/yarn.lock) : ;;
-                  packages/conformance/*) cf_core=true ;;
-                  *) : ;;
-                esac
-              done
-
-              if [ "$sdk" = true ]; then
-                echo "application_sdk/ touched — title type unrestricted. ✅"
-              elif [ "$docker_img" = true ]; then
-                # Rule 2: files shipped inside the Docker image require feat/fix.
-                docker_re='^(feat|fix)(\([^)]*\))?!?:'
-                if [[ "${PR_TITLE}" =~ $docker_re ]]; then
-                  echo "Docker image file change with a valid feat/fix title. ✅"
-                else
-                  violation=true
-                  expected="docker-img"
-                  echo "Violation: Docker image file change (Dockerfile/entrypoint.sh) must use feat: or fix:."
-                fi
-              elif [ "$ct_core" = true ]; then
-                # Rule 3: contract-toolkit core requires the contract-toolkit scope.
-                ct_re='^(feat|fix)\(contract-toolkit\)!?:'
-                if [[ "${PR_TITLE}" =~ $ct_re ]]; then
-                  echo "contract-toolkit core change with a valid scoped title. ✅"
-                else
-                  violation=true
-                  expected="ct-core"
-                  echo "Violation: contract-toolkit core change must use feat(contract-toolkit): or fix(contract-toolkit):."
-                fi
-              elif [ "$cf_core" = true ]; then
-                # Rule 4: conformance core requires the conformance scope.
-                cf_re='^(feat|fix)\(conformance\)!?:'
-                if [[ "${PR_TITLE}" =~ $cf_re ]]; then
-                  echo "packages/conformance core change with a valid scoped title. ✅"
-                else
-                  violation=true
-                  expected="cf-core"
-                  echo "Violation: conformance core change must use feat(conformance): or fix(conformance):."
-                fi
-              else
-                # Rule 5: everything else must be chore or ci.
-                chore_re='^(chore|ci)(\([^)]*\))?!?:'
-                if [[ "${PR_TITLE}" =~ $chore_re ]]; then
-                  echo "Non-source change with a chore/ci title. ✅"
-                else
-                  violation=true
-                  expected="chore-ci"
-                  echo "Violation: non-source change must use chore: or ci:."
-                fi
-              fi
-            fi
-          fi
-
-          {
-            echo "violation=${violation}"
-            echo "expected=${expected}"
-          } >> "$GITHUB_OUTPUT"
-
-          # Build the sticky-comment body for the violating case.
-          if [ "$violation" = true ]; then
-            if [ "$expected" = "docker-img" ]; then
-              cat > pr-title-comment.md <<'EOF'
-          ### 🏷️ Docker image changes need a `feat`/`fix` title
-
-          This PR changes a file baked into the published Docker image
-          (`Dockerfile` and/or `entrypoint.sh`), so it's user-facing runtime
-          behavior and its title must be:
-
-          - `feat: …` / `feat(scope): …`
-          - `fix: …` / `fix(scope): …`
-
-          Editing the PR title re-runs this check and clears this comment automatically.
-          EOF
-            elif [ "$expected" = "ct-core" ]; then
-              cat > pr-title-comment.md <<'EOF'
-          ### 🏷️ contract-toolkit changes need a scoped `feat`/`fix` title
-
-          This PR changes `contract-toolkit/` source, so its title must use the
-          `contract-toolkit` scope:
-
-          - `feat(contract-toolkit): …`
-          - `fix(contract-toolkit): …`
-
-          (Changes confined to `contract-toolkit/{docs,examples,scripts,tests,.github}/`
-          should instead be `chore:`/`ci:`.)
-
-          Editing the PR title re-runs this check and clears this comment automatically.
-          EOF
-            elif [ "$expected" = "cf-core" ]; then
-              cat > pr-title-comment.md <<'EOF'
-          ### 🏷️ conformance package changes need a scoped `feat`/`fix` title
-
-          This PR changes `packages/conformance/` source, so its title must use the
-          `conformance` scope:
-
-          - `feat(conformance): …`
-          - `fix(conformance): …`
-
-          (Changes confined to `packages/conformance/tests/` or lock files
-          such as `uv.lock`/`package-lock.json` should instead be `chore:`/`ci:`.)
-
-          Editing the PR title re-runs this check and clears this comment automatically.
-          EOF
-            else
-              cat > pr-title-comment.md <<'EOF'
-          ### 🏷️ Non-source PR shouldn't use a `feat`/`fix` title
-
-          This PR does not change shipped source (`application_sdk/`, the
-          Docker image inputs `Dockerfile`/`entrypoint.sh`, `contract-toolkit/`
-          core, or `packages/conformance/` core), so a `feat:`/`fix:` title
-          would add it to the user-facing SDK changelog as a real feature/fix
-          — exactly the noise this check prevents.
-
-          **Use a non-surfacing conventional type instead:**
-          - `ci:` / `ci(scope):` — changes to CI configuration and scripts
-          - `chore:` / `chore(scope):` — everything else not touching shipped source
-
-          _Example:_ `ci(publish): use crane to copy large images GHCR → Docker Hub`
-
-          Editing the PR title re-runs this check and clears this comment automatically.
-          EOF
-            fi
-          fi
+          gh pr view "${PR_NUMBER}" --repo "${REPO}" --json files --jq '.files[].path' > changed_files.txt
+          python3 .github/scripts/pr_title_convention.py \
+            --pr-title "${PR_TITLE}" \
+            --head-ref "${HEAD_REF}" \
+            --changed-files changed_files.txt \
+            --comment-out pr-title-comment.md
 
       - name: Post sticky comment on violation
         if: >-
@@ -268,17 +130,9 @@ jobs:
       - name: Fail on invalid PR title
         if: steps.detect.outputs.violation == 'true'
         env:
-          EXPECTED: ${{ steps.detect.outputs.expected }}
+          ERROR_MESSAGE: ${{ steps.detect.outputs.error_message }}
         run: |
-          if [ "${EXPECTED}" = "docker-img" ]; then
-            echo "::error title=Invalid PR title::Docker image changes (Dockerfile/entrypoint.sh) must use 'feat:' or 'fix:'."
-          elif [ "${EXPECTED}" = "ct-core" ]; then
-            echo "::error title=Invalid PR title::contract-toolkit core changes must use 'feat(contract-toolkit):' or 'fix(contract-toolkit):'."
-          elif [ "${EXPECTED}" = "cf-core" ]; then
-            echo "::error title=Invalid PR title::conformance core changes must use 'feat(conformance):' or 'fix(conformance):'."
-          else
-            echo "::error title=Invalid PR title::Non-source changes must use 'chore:' or 'ci:' (feat:/fix: are reserved for application_sdk/, Dockerfile/entrypoint.sh, contract-toolkit core, and packages/conformance core)."
-          fi
+          echo "::error title=Invalid PR title::${ERROR_MESSAGE}"
           exit 1
 
       - name: Merge queue no-op
