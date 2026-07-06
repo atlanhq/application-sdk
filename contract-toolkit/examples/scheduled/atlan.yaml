@@ -13,19 +13,5 @@ entrypoints:
   display_name: Scheduled Background Job Example
   icon_url: https://assets.atlan.com/assets/fullscreen-exit.svg
   type: connector
-deploy:
-  execution_mode: native
-  splitDeploymentEnabled: true
-  dapr:
-    objectstore: false
-    secretstore: false
-    statestore: false
-    eventstore: false
-    subscription: false
-    configurationstore: false
-    lock: false
-  keda:
-    enabled: true
-    minReplicaCount: 0
-    temporal:
-      targetQueueSize: 5
+  package_id: '@atlan/scheduled'
+  marketplace_card: true
