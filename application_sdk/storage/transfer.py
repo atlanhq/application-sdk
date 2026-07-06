@@ -43,6 +43,7 @@ from typing import TYPE_CHECKING
 from application_sdk.common._listing import safe_list_directory
 from application_sdk.constants import MAX_CONCURRENT_STORAGE_TRANSFERS
 from application_sdk.contracts.types import FileReference, StorageTier
+from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 
 _logger = get_logger(__name__)
@@ -492,8 +493,9 @@ async def upload(
             normalize_key,
             append_leaf=False,
         )
-        # to_thread keeps the blocking fsync + scandir off the event loop.
-        files = await asyncio.to_thread(safe_list_directory, src)
+        # run_in_thread keeps the blocking fsync + scandir off the event loop,
+        # using the dedicated pool rather than asyncio's default executor.
+        files = await run_in_thread(safe_list_directory, src)
         if raise_on_empty and not files:
             from application_sdk.storage.errors import (  # noqa: PLC0415
                 StorageEmptyUploadError,

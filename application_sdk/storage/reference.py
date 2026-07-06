@@ -49,6 +49,7 @@ from typing import TYPE_CHECKING
 
 from application_sdk.common._listing import safe_list_directory
 from application_sdk.contracts.types import FileReference
+from application_sdk.execution.heartbeat import run_in_thread
 
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
@@ -112,10 +113,12 @@ async def _sha256_hex_file_async(path: Path) -> str:
     calling it directly on the event loop blocks the loop for the full
     read+hash. A blocked loop cannot run the SDK's auto-heartbeat coroutine, so
     activities that verify many/large files heartbeat-time-out even while making
-    progress. Offloading to a thread keeps the loop responsive — the same reason
-    directory listing is wrapped in ``asyncio.to_thread`` in ``persist``.
+    progress. Uses ``run_in_thread`` (dedicated pool) rather than
+    ``asyncio.to_thread`` (asyncio's default executor) so this doesn't
+    contend with Temporal's own use of the default executor — same reason
+    directory listing is offloaded this way in ``persist``.
     """
-    return await asyncio.to_thread(_sha256_hex_file, path)
+    return await run_in_thread(_sha256_hex_file, path)
 
 
 async def _get_stored_sidecar(storage_path: str, store: ObjectStore) -> str | None:
@@ -218,8 +221,9 @@ async def persist_file_reference(
     if local.is_dir():
         # ── Directory upload ───────────────────────────────────────────────
         prefix = _make_storage_prefix(ref, output_path=output_path)
-        # to_thread keeps the blocking fsync + scandir off the event loop.
-        files = await asyncio.to_thread(safe_list_directory, local)
+        # run_in_thread keeps the blocking fsync + scandir off the event loop,
+        # using the dedicated pool rather than asyncio's default executor.
+        files = await run_in_thread(safe_list_directory, local)
         _t0 = time.monotonic()
         logger.info(
             "file_ref.persist.start",
