@@ -170,9 +170,17 @@ class DependencyUnavailableError(AppError):
 
 class ColdStartRaceError(DependencyUnavailableError):
     """Marker for a :class:`DependencyUnavailableError` that specifically means
-    "this Dapr-backed dependency is not yet reachable" (a transport failure,
-    or a 5xx that survived the transport's own retries) — as opposed to the
+    "this Dapr-backed dependency is not yet reachable" — as opposed to the
     dependency answering and definitively rejecting the request.
+
+    What counts as "not yet reachable" is domain-specific and decided by
+    each concrete subtype's classifier, not by this marker: a transport
+    failure always qualifies, but a bare 5xx status does NOT necessarily —
+    e.g. the Dapr *secrets* API also returns 500 for a genuinely-missing
+    key (see
+    :func:`~application_sdk.infrastructure._dapr.client.classify_secret_fetch_error`),
+    so that classifier additionally inspects the error body before
+    concluding "not yet reachable".
 
     Deliberately independent of ``retryable``/``effective_retryable``: that
     field is a general Temporal/wire-level retry hint (a plain, unclassified
@@ -181,7 +189,7 @@ class ColdStartRaceError(DependencyUnavailableError):
     the activity level"). This marker answers a narrower, unrelated
     question — "is this specific failure a cold-start race right now" — so a
     generic dependency helper (e.g.
-    :func:`~application_sdk.infrastructure._dapr.http.retry_past_dapr_cold_start`)
+    :func:`~application_sdk.infrastructure.retry_past_dapr_cold_start`)
     can retry any current or future subtype across domains (secret store,
     state store, pub/sub, ...) by catching this one marker, without a new
     per-domain exception type or check for each. Not meant to be raised

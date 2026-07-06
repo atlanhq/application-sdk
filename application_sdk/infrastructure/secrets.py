@@ -127,16 +127,18 @@ class SecretStoreError(DependencyUnavailableError):
 class SecretStoreUnavailableError(SecretStoreError, ColdStartRaceError):
     """The secret store / Dapr sidecar was *unreachable* — a transport failure
     (connection refused, reset mid-handshake, read/write/close error, timeout)
-    or a 5xx from a still-initialising component — as opposed to the store
-    answering and rejecting the request (bad auth / binding / path, which is a
-    plain :class:`SecretStoreError`).
+    or the Dapr secrets-API ``ERR_SECRET_STORES_NOT_CONFIGURED`` response (no
+    secret store component registered yet) — as opposed to the store
+    answering and rejecting the request (bad auth / binding / path, *or a
+    genuinely-missing key* — Dapr returns the same 500/``ERR_SECRET_GET``
+    shape for both, which is a plain :class:`SecretStoreError`, not this).
 
     Classified at the infrastructure layer (``_dapr/client.py``), where the
-    httpx exception family is visible, so callers can retry a cold-start race
-    against a not-yet-ready sidecar without duck-typing exception text. Remains
-    a ``SecretStoreError`` so ``except SecretStoreError`` still catches it, and
-    a :class:`ColdStartRaceError` so
-    :func:`~application_sdk.infrastructure._dapr.http.retry_past_dapr_cold_start`
+    httpx exception family and the Dapr error body are visible, so callers
+    can retry a cold-start race against a not-yet-ready sidecar without
+    duck-typing exception text. Remains a ``SecretStoreError`` so ``except
+    SecretStoreError`` still catches it, and a :class:`ColdStartRaceError` so
+    :func:`~application_sdk.infrastructure.retry_past_dapr_cold_start`
     retries it.
     """
 

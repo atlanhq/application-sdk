@@ -155,12 +155,58 @@ class TestDaprSecretStore:
         with pytest.raises(SecretStoreUnavailableError):
             await self.store.get("x")
 
-    async def test_5xx_status_raises_unavailable(self):
-        """A 5xx that survived the transport's own retries is still cold-start-shaped."""
+    async def test_5xx_without_not_configured_code_is_not_unavailable(self):
+        """A bare 5xx is NOT enough to infer "cold sidecar": verified against a
+        live Dapr sidecar, a *genuinely missing* secret key also returns 500
+        with errorCode=ERR_SECRET_GET — identical to a still-cold component.
+        Treating this as retryable would retry a permanently-missing secret
+        for the full cold-start budget and then misreport it as a platform
+        outage instead of not-found."""
+        req = httpx.Request("GET", "http://localhost/secret")
+        resp = httpx.Response(
+            500,
+            request=req,
+            json={
+                "errorCode": "ERR_SECRET_GET",
+                "message": "failed getting secret with key x from secret store "
+                "mysecrets: secret x not found",
+            },
+        )
+        self.client.get_secret.side_effect = httpx.HTTPStatusError(
+            "internal error", request=req, response=resp
+        )
+        with pytest.raises(SecretStoreError) as exc:
+            await self.store.get("x")
+        assert not isinstance(exc.value, SecretStoreUnavailableError)
+        assert exc.value.effective_retryable is False
+
+    async def test_5xx_without_json_body_is_not_unavailable(self):
+        """No parseable error body → unknown errorCode → treated the same as
+        a definitive rejection, not optimistically as a cold start."""
         req = httpx.Request("GET", "http://localhost/secret")
         resp = httpx.Response(503, request=req)
         self.client.get_secret.side_effect = httpx.HTTPStatusError(
             "service unavailable", request=req, response=resp
+        )
+        with pytest.raises(SecretStoreError) as exc:
+            await self.store.get("x")
+        assert not isinstance(exc.value, SecretStoreUnavailableError)
+
+    async def test_5xx_store_not_configured_raises_unavailable(self):
+        """The one Dapr secrets-API error code that unambiguously means "not
+        ready yet" (no secret store component registered at all) — still
+        cold-start-shaped, still retried."""
+        req = httpx.Request("GET", "http://localhost/secret")
+        resp = httpx.Response(
+            500,
+            request=req,
+            json={
+                "errorCode": "ERR_SECRET_STORES_NOT_CONFIGURED",
+                "message": "secret store is not configured",
+            },
+        )
+        self.client.get_secret.side_effect = httpx.HTTPStatusError(
+            "internal error", request=req, response=resp
         )
         with pytest.raises(SecretStoreUnavailableError):
             await self.store.get("x")
