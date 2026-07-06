@@ -2,6 +2,23 @@
 
 # Re-export the temporalio Client as TemporalClient for app-side type annotations.
 from temporalio.client import Client as TemporalClient
+from temporalio.client import WorkflowFailureError as TemporalWorkflowFailureError
+
+# Re-export the client-side failure types apps need to catch around
+# `TemporalClient.execute_workflow(...)`. Renamed with a `Temporal` prefix (matching
+# `TemporalClient`) so they don't collide with unrelated SDK types of the same short
+# name, e.g. `application_sdk.common.error_codes.ActivityError` and
+# `application_sdk.errors.leaves.CancelledError`.
+#
+# These are raw temporalio exceptions for code awaiting `TemporalClient.execute_workflow(...)`
+# or a workflow handle. For SDK-classified domain failures inside `@task`/`@entrypoint` code,
+# raise/catch `application_sdk.errors.AppError` leaves (`CancelledError`, `AppTimeoutError`,
+# etc.) instead.
+from temporalio.exceptions import ActivityError as TemporalActivityError
+from temporalio.exceptions import CancelledError as TemporalCancelledError
+from temporalio.exceptions import ChildWorkflowError as TemporalChildWorkflowError
+from temporalio.exceptions import TerminatedError as TemporalTerminatedError
+from temporalio.exceptions import TimeoutError as TemporalTimeoutError
 
 from application_sdk.execution._temporal.activity_utils import (
     build_output_path,
@@ -28,10 +45,16 @@ __all__ = [
     "AppWorker",
     "ApplicationError",
     "RetryPolicy",
+    "TemporalActivityError",
     "TemporalAuthConfig",
     "TemporalAuthManager",
+    "TemporalCancelledError",
+    "TemporalChildWorkflowError",
     "TemporalClient",
     "TemporalExecutorBackend",
+    "TemporalTerminatedError",
+    "TemporalTimeoutError",
+    "TemporalWorkflowFailureError",
     "build_output_path",
     "create_data_converter",
     "create_data_converter_for_app",
