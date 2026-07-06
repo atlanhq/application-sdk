@@ -447,6 +447,30 @@ class TestFetchCredentialConfigColdStartRetry:
 
         assert isinstance(exc_info.value.cause, ColdStartRaceError)
 
+    async def test_5xx_transient_failure_tags_cold_start_cause(
+        self, deterministic_dapr_cold_start_deadline
+    ) -> None:
+        """A bare 5xx on the *binding* fetch is unambiguously cold-start-shaped
+        (unlike the secrets API, a missing config blob is a successful
+        response with empty data, not a 5xx — see is_dapr_transport_unavailable's
+        docstring) — it must be retried and tagged ColdStartRaceError via
+        is_dapr_transport_unavailable, exactly like a bare ConnectError."""
+        req = httpx.Request("POST", "http://localhost/bindings/upstream-objectstore")
+        resp = httpx.Response(503, request=req)
+        mock_client = _make_mock_dapr_client(config_bytes=b"{}", secret_data={})
+        mock_client.invoke_binding = AsyncMock(
+            side_effect=httpx.HTTPStatusError(
+                "service unavailable", request=req, response=resp
+            )
+        )
+
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+            vault = self._make_vault(mock_client)
+            with pytest.raises(CredentialVaultError) as exc_info:
+                await vault.get_credentials("my-guid")
+
+        assert isinstance(exc_info.value.cause, ColdStartRaceError)
+
     async def test_4xx_rejection_is_not_retried(self, monkeypatch) -> None:
         monkeypatch.setattr(
             "application_sdk.infrastructure._dapr.http.DAPR_COLD_START_MAX_WAIT_SECONDS",

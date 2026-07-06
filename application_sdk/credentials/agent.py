@@ -45,6 +45,7 @@ import hashlib
 import re
 import traceback
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 
 import orjson
 
@@ -55,7 +56,7 @@ from application_sdk.credentials.errors import (
     CredentialParseError,
 )
 from application_sdk.errors import redact_secrets
-from application_sdk.infrastructure import retry_past_dapr_cold_start
+from application_sdk.infrastructure._dapr.http import retry_past_dapr_cold_start
 from application_sdk.infrastructure.secrets import SecretNotFoundError
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -266,11 +267,19 @@ async def _fetch_per_key_bundle(
             # a short key like "DB" would corrupt "DB_CONNECTION"; the
             # lookarounds treat word chars and hyphens as identifier-continuation
             # so only whole-token occurrences are scrubbed.
-            safe_traceback = re.sub(
-                rf"(?<![\w-]){re.escape(value)}(?![\w-])",
-                f"sha256:{value_hash}",
-                redact_secrets("".join(traceback.format_exception(exc))),
-            )
+            #
+            # Also scrub the percent-encoded form: the chained httpx exception's
+            # str() can embed the request URL, which encodes the ref-key via
+            # quote(key, safe="") (see infrastructure/_dapr/http.py's
+            # AsyncDaprClient.get_secret) — a ref-key with URL-unsafe characters
+            # (space, "/", "=") would otherwise survive un-scrubbed in that form.
+            safe_traceback = redact_secrets("".join(traceback.format_exception(exc)))
+            for candidate in {value, quote(value, safe="")}:
+                safe_traceback = re.sub(
+                    rf"(?<![\w-]){re.escape(candidate)}(?![\w-])",
+                    f"sha256:{value_hash}",
+                    safe_traceback,
+                )
             logger.warning(  # conformance: ignore[E005,L004] exc_info would bypass the secret-redacted traceback built above; safe_traceback included inline
                 "single-key probe failed for ref-key sha256:%s — store error, "
                 "treating as non-secret. If this was a real credential "

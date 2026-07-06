@@ -15,10 +15,7 @@ from application_sdk.infrastructure._dapr import (
     DaprSecretStore,
     DaprStateStore,
 )
-from application_sdk.infrastructure._dapr.http import (
-    AsyncDaprClient,
-    retry_past_dapr_cold_start,
-)
+from application_sdk.infrastructure._dapr.http import AsyncDaprClient
 from application_sdk.infrastructure.bindings import (
     Binding,
     BindingError,
@@ -95,6 +92,5 @@ __all__ = [
     "get_capacity_pool",
     "get_deployment_secret",
     "get_infrastructure",
-    "retry_past_dapr_cold_start",
     "set_infrastructure",
 ]

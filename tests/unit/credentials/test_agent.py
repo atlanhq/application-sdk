@@ -14,7 +14,9 @@ import hashlib
 import json
 from typing import Any
 from unittest.mock import AsyncMock
+from urllib.parse import quote
 
+import httpx
 import pytest
 
 from application_sdk.common.transforms import expand_dotted_keys
@@ -838,6 +840,58 @@ class TestSingleKeyMode:
         # (3) ... and the store-failure diagnosis still survives.
         assert "Traceback" in logged
         assert "PermissionError" in logged
+
+    async def test_url_encoded_ref_key_does_not_leak_in_logs(self) -> None:
+        """A ref-key with a URL-unsafe character (``/``, common in
+        Vault/AWS-Secrets-Manager-style path keys) must also be scrubbed in
+        its percent-encoded form. ``response.raise_for_status()`` — the real
+        production call site, see ``AsyncDaprClient.get_secret`` — builds its
+        message as ``"... for url '<request.url>'"``, and the request URL
+        was built via ``quote(key, safe="")`` (mirroring
+        ``AsyncDaprClient.get_secret``'s own encoding), so the raw-value
+        regex alone would miss the encoded form embedded there.
+        """
+        from unittest.mock import patch
+
+        ref_key = "snowflake/prod/password"
+        encoded_key = quote(ref_key, safe="")
+        expected_hash = hashlib.sha256(ref_key.encode()).hexdigest()[:8]
+
+        class OutageStore:
+            async def get_optional(self, name: str) -> str | None:
+                req = httpx.Request(
+                    "GET",
+                    f"http://localhost:3500/v1.0/secrets/secretstore/{quote(name, safe='')}",
+                )
+                resp = httpx.Response(403, request=req)
+                try:
+                    resp.raise_for_status()
+                except httpx.HTTPStatusError as http_exc:
+                    raise SecretStoreError(
+                        f"Failed to get secret: {http_exc}",
+                        secret_name=name,
+                        cause=http_exc,
+                    ) from http_exc
+                raise AssertionError("unreachable")
+
+        agent_json = json.dumps(
+            {
+                "agent-name": "test-agent",
+                "key-type": "single-key",
+                "auth-type": "basic",
+                "basic.password": ref_key,
+            }
+        )
+
+        with patch("application_sdk.credentials.agent.logger") as mock_logger:
+            resolved = await resolve_agent_json(agent_json, OutageStore())  # type: ignore[arg-type]
+
+        assert resolved["password"] == ref_key
+        mock_logger.warning.assert_called_once()
+        logged = " ".join(str(arg) for arg in mock_logger.warning.call_args.args)
+        assert ref_key not in logged
+        assert encoded_key not in logged
+        assert f"sha256:{expected_hash}" in logged
 
     async def test_short_ref_key_does_not_corrupt_unrelated_tokens(self) -> None:
         """The ref-key scrub is token-bounded: a short key like ``DB`` must

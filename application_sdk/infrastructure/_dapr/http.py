@@ -78,13 +78,24 @@ def _dapr_base_url() -> str:
 
 
 #: Set once this worker process has confirmed the Dapr sidecar is
-#: reachable — either :func:`wait_for_dapr_sidecar` got a 204, or
-#: :func:`retry_past_dapr_cold_start` got a definitive answer (success or a
-#: non-transient rejection) from a wrapped call. Shared by both so a worker
-#: that already confirmed readiness at startup doesn't pay a second,
-#: uninformed cold-start wait on its first real Dapr call — and so a worker
-#: whose startup probe timed out ("proceeding anyway") still gets a real
-#: retry budget on that first call instead of being falsely told it's ready.
+#: reachable — either :func:`wait_for_dapr_sidecar` got a 204 (Dapr only
+#: returns this once *every* component has finished initializing, so this
+#: path is a genuinely holistic signal), or :func:`retry_past_dapr_cold_start`
+#: got a definitive answer (success or a non-transient rejection) from a
+#: wrapped call. Shared by both so a worker that already confirmed readiness
+#: at startup doesn't pay a second, uninformed cold-start wait on its first
+#: real Dapr call — and so a worker whose startup probe timed out
+#: ("proceeding anyway") still gets a real retry budget on that first call
+#: instead of being falsely told it's ready.
+#:
+#: Caveat: the :func:`retry_past_dapr_cold_start` arming path is *not*
+#: per-component — a definitive answer from one component (e.g. the
+#: credential-vault's object-store binding) arms this for every other
+#: component too (e.g. the secret store), even if that other component is
+#: still cold. In practice this only matters when the startup probe above
+#: already timed out (the common case, a 204, is holistic); if components
+#: are ever observed to become ready at meaningfully different times within
+#: that window, this would need to become per-component-type.
 _dapr_sidecar_confirmed_ready: bool = False
 
 
@@ -189,7 +200,9 @@ async def retry_past_dapr_cold_start(
     Shared across every call site that opts in (the agent secret-bundle
     fetch, single-key probes, the named-credential resolver path, the
     GUID/vault credential path and its config-fetch step) — they all race
-    the same sidecar, so one confirming readiness arms it for the rest.
+    the same sidecar process, so one confirming readiness arms it for the
+    rest. Not per-component, though: see the caveat on
+    :data:`_dapr_sidecar_confirmed_ready`.
 
     Args:
         call: Zero-arg async callable to retry, e.g. ``lambda:
