@@ -14,7 +14,7 @@
 /// Connector constants are accessible as `Connectors.*`.
 ///
 /// **Single-entrypoint apps** (the common case): set `uiConfig`, `pipeline`,
-/// and optionally `deploy`, then run:
+/// and optionally `pools`, then run:
 ///
 ///   `pkl eval -m . contract/app.pkl`
 ///
@@ -29,6 +29,7 @@
 open module com.atlan.app.contract.App
 
 import "Connectors.pkl"
+import "Deployment.pkl" as DeploymentPkg
 import "Widgets.pkl"
 
 // ── WIDGET TYPE RE-EXPORTS ────────────────────────────────────────────────────
@@ -84,6 +85,17 @@ typealias Condition = Widgets.Condition
 typealias InputRepeater = Widgets.InputRepeater
 typealias Schedule = Widgets.Schedule
 typealias CustomWidget = Widgets.CustomWidget
+
+// ── DEPLOYMENT TYPE RE-EXPORTS ────────────────────────────────────────────────
+// Typealiases so amending contracts write `new DeployConfig { }`, `new KedaConfig { }`, etc.
+// without needing a supplemental `import "@app-contract-toolkit/Deployment.pkl"`.
+
+typealias DaprComponents = DeploymentPkg.DaprComponents
+typealias KedaTemporalConfig = DeploymentPkg.KedaTemporalConfig
+typealias KedaConfig = DeploymentPkg.KedaConfig
+typealias ResourceConfig = DeploymentPkg.ResourceConfig
+typealias DeployConfig = DeploymentPkg.DeployConfig
+typealias Pool = DeploymentPkg.Pool
 
 // ── CONSTRAINED TYPES ────────────────────────────────────────────────────────
 
@@ -171,6 +183,18 @@ longDescription: String = ""
 /// no key in the rendered yaml (the `when` guard suppresses emission).
 tags: Listing<String> = new Listing {}
 
+/// Whether this app appears as a card in the marketplace (LM/GM).
+///
+/// Default: `true`. Single-entrypoint apps auto-derive `package_id: "@atlan/{name}"`
+/// and emit `marketplace_card: true` in `atlan.yaml` from this default.
+/// Set to `false` for purely behind-the-scenes apps that should never surface
+/// in the marketplace UI — the entrypoints block is still emitted for routing,
+/// but no `package_id` or `marketplace_card` key appears.
+///
+/// For multi-entrypoint apps this flag has no effect; control card presence
+/// per-entrypoint via `Entrypoint.packageId` instead.
+marketplaceCard: Boolean = true
+
 /// Extra top-level metadata fields for atlan.yaml.
 metadata: Mapping<String, Any> = new Mapping {}
 
@@ -180,7 +204,12 @@ atlanYamlOverrides: Mapping<String, Any> = new Mapping {}
 /// Whether to emit `atlan.yaml` in the output.
 emitAtlanYaml: Boolean = true
 
-/// Whether to emit the `entrypoints:` block into `atlan.yaml`.
+/// @Deprecated — use the `entrypoints` listing with `packageId` set on those that should
+/// render as marketplace cards, rather than toggling the entire block.
+/// Will be removed in the next minor version.
+///
+/// When `true` (default), all entrypoints are emitted into the `entrypoints:` block
+/// of `atlan.yaml`. When `false`, the block is suppressed entirely.
 emitEntrypoints: Boolean = true
 
 /// Whether to emit `app.yaml` in the output.
@@ -363,13 +392,30 @@ pipeline: Pipeline = new Pipeline {}
 
 // ── DEPLOY CONFIG ─────────────────────────────────────────────────────────────
 
-/// Typed deployment configuration rendered into `atlan.yaml`'s `deploy:` block.
-deploy: DeployConfig = new DeployConfig {}
-
-/// Deep-merged on top of the rendered `deploy` block last.
-/// Use this for marketplace keys the toolkit does not yet model (VPA, canary,
-/// extraVolumes, securityContext, appExternalResources, etc.).
-deployOverrides: Mapping<String, Any> = new Mapping {}
+/// Deployment configuration. Leave unset (null, the default) to let Heracles
+/// apply platform defaults. Set to configure the `deploy:` block in `atlan.yaml`.
+///
+/// Singleton fields (`executionMode`, `splitDeployment`, `dapr`) apply to the
+/// whole deployment. Per-pool KEDA, resources, and env go inside `pools`.
+///
+/// Example (two pools — hot always-on + cold scale-to-zero):
+///
+/// ```pkl
+/// deploy = new DeployConfig {
+///   pools {
+///     ["hot"] = new Pool {
+///       keda { minReplicaCount = 1; cooldownPeriod = 300 }
+///     }
+///     ["cold"] = new Pool {
+///       keda { minReplicaCount = 0; cooldownPeriod = 30 }
+///     }
+///   }
+/// }
+/// ```
+///
+/// For the single-pool case, use the key `"default"`. See `examples/deploy/` for
+/// a full example with Dapr, KEDA, resources, env, and overrides.
+deploy: DeployConfig? = null
 
 // ── ENTRYPOINTS ──────────────────────────────────────────────────────────────
 
@@ -1413,56 +1459,9 @@ class Pipeline {
   publish: PublishStep? = new PublishStep {}
 }
 
-// ── Deploy config classes ─────────────────────────────────────────────────────
-
-/// Dapr component flags. Each boolean controls whether the component sidecar
-/// is wired into the app deployment.
-class DaprComponents {
-  objectstore: Boolean = false
-  secretstore: Boolean = false
-  statestore: Boolean = false
-  eventstore: Boolean = false
-  subscription: Boolean = false
-  configurationstore: Boolean = false
-  lock: Boolean = false
-  /// Full-spec Dapr components that can't be expressed as boolean flags
-  /// (e.g. pubsub.kafka with custom metadata).
-  customComponents: Mapping<String, Any> = new Mapping {}
-}
-
-class KedaTemporalConfig {
-  /// Only `targetQueueSize` is read by the Helm chart — NOT the top-level
-  /// `keda.targetQueueSize`. Always set via this nested path.
-  targetQueueSize: Int = 5
-}
-
-class KedaConfig {
-  enabled: Boolean = true
-  minReplicaCount: Int = 0
-  temporal: KedaTemporalConfig = new KedaTemporalConfig {}
-}
-
-class ResourceConfig {
-  requests: Mapping<String, String> = new Mapping {}
-  limits: Mapping<String, String> = new Mapping {}
-}
-
-/// Typed deployment configuration rendered into `atlan.yaml`'s `deploy:` block.
-class DeployConfig {
-  executionMode: String = "native"
-  splitDeployment: Boolean = true
-  /// Ignored when keda.enabled = true (KEDA manages replica count).
-  replicaCount: Int? = null
-  dapr: DaprComponents = new DaprComponents {}
-  keda: KedaConfig = new KedaConfig {}
-  resources: ResourceConfig? = null
-  env: Mapping<String, String> = new Mapping {}
-  envOverrides: Mapping<String, Mapping<String, String>> = new Mapping {}
-}
-
 // ── Entrypoint class ──────────────────────────────────────────────────────────
 
-/// One marketplace card / SDK entrypoint under the deployed app.
+/// One SDK routing endpoint and (optionally) marketplace UI card under the deployed app.
 open class Entrypoint {
   name: String
 
@@ -1485,6 +1484,17 @@ open class Entrypoint {
   docsUrl: String?
 
   metadata: Mapping<String, Any> = new Mapping {}
+
+  /// Stable marketplace package ID for this entrypoint (e.g. `"@atlan/qlik-sense"`).
+  /// When set, emits `package_id:` and `marketplace_card: true` in `atlan.yaml`,
+  /// making this entrypoint a user-facing marketplace card.
+  /// Required for multi-entrypoint apps to preserve backward compat with legacy
+  /// Argo workflows that reference the app by its stable card ID; without it the
+  /// marketplace derives a card ID from the GMP name and entrypoint name, which
+  /// will not match old `app_id` values and breaks existing connection references.
+  /// Entrypoints without a `packageId` are always routable via `?entrypoint=` but
+  /// do not appear as marketplace cards.
+  packageId: String?
 
   /// Optional imported contract for this entrypoint.
   /// When set and `emitGeneratedArtifacts` is true, all files from
@@ -3159,43 +3169,80 @@ local function renderEntrypoint(e: Entrypoint): Mapping<String, Any> = new Mappi
   when (e.sourceCategory != null) { ["source_category"] = e.sourceCategory }
   when (!e.categories.isEmpty) { ["categories"] = e.categories }
   when (e.docsUrl != null || docsUrl != "") { ["docs_url"] = e.docsUrl ?? docsUrl }
+  when (e.packageId != null) {
+    ["package_id"] = e.packageId
+    ["marketplace_card"] = true
+  }
   ...e.metadata
 }
 
-local function renderDeployConfig(d: DeployConfig): Mapping<String, Any> = new Mapping {
-  ["execution_mode"] = d.executionMode
-  ["splitDeploymentEnabled"] = d.splitDeployment
-  when (d.replicaCount != null) { ["replicaCount"] = d.replicaCount }
-  ["dapr"] = new Mapping {
-    ["objectstore"] = d.dapr.objectstore
-    ["secretstore"] = d.dapr.secretstore
-    ["statestore"] = d.dapr.statestore
-    ["eventstore"] = d.dapr.eventstore
-    ["subscription"] = d.dapr.subscription
-    ["configurationstore"] = d.dapr.configurationstore
-    ["lock"] = d.dapr.lock
-    for (k, v in d.dapr.customComponents) {
-      [k] = v
+local function renderKedaConfig(k: KedaConfig): Mapping<String, Any> = new Mapping {
+  ["enabled"] = k.enabled
+  when (k.enabled) {
+    ["minReplicaCount"] = k.minReplicaCount
+    when (k.cooldownPeriod != null) { ["cooldownPeriod"] = k.cooldownPeriod }
+    ["temporal"] = new Mapping {
+      ["targetQueueSize"] = k.temporal.targetQueueSize
     }
   }
-  ["keda"] = new Mapping {
-    ["enabled"] = d.keda.enabled
-    when (d.keda.enabled) {
-      ["minReplicaCount"] = d.keda.minReplicaCount
-      ["temporal"] = new Mapping {
-        ["targetQueueSize"] = d.keda.temporal.targetQueueSize
-      }
-    }
-  }
-  when (d.resources != null) {
-    ["resources"] = new Mapping {
-      when (!d.resources!!.requests.isEmpty) { ["requests"] = d.resources!!.requests }
-      when (!d.resources!!.limits.isEmpty) { ["limits"] = d.resources!!.limits }
-    }
-  }
-  when (!d.env.isEmpty) { ["env"] = d.env }
-  when (!d.envOverrides.isEmpty) { ["envOverrides"] = d.envOverrides }
 }
+
+local function renderPool(p: Pool): Mapping<String, Any> = new Mapping {
+  when (p.replicaCount != null) { ["replicaCount"] = p.replicaCount }
+  ["keda"] = renderKedaConfig(p.keda)
+  when (p.resources != null) {
+    ["resources"] = new Mapping {
+      when (!p.resources!!.requests.isEmpty) { ["requests"] = p.resources!!.requests }
+      when (!p.resources!!.limits.isEmpty) { ["limits"] = p.resources!!.limits }
+    }
+  }
+  when (!p.env.isEmpty) { ["env"] = p.env }
+  when (!p.envOverrides.isEmpty) { ["envOverrides"] = p.envOverrides }
+}
+
+local function renderDapr(d: DaprComponents): Mapping<String, Any> = new Mapping {
+  ["objectstore"] = d.objectstore
+  ["secretstore"] = d.secretstore
+  ["statestore"] = d.statestore
+  ["eventstore"] = d.eventstore
+  ["subscription"] = d.subscription
+  ["configurationstore"] = d.configurationstore
+  ["lock"] = d.lock
+  for (k, v in d.customComponents) {
+    [k] = v
+  }
+}
+
+local function renderDeployYaml(d: DeployConfig): Mapping<String, Any> =
+  let (hasDapr = d.dapr.objectstore || d.dapr.secretstore || d.dapr.statestore ||
+        d.dapr.eventstore || d.dapr.subscription || d.dapr.configurationstore ||
+        d.dapr.lock || !d.dapr.customComponents.isEmpty)
+  let (globalFields: Mapping<String, Any> = new Mapping {
+    ["execution_mode"] = d.executionMode
+    ["splitDeploymentEnabled"] = d.splitDeployment
+    when (hasDapr) { ["dapr"] = renderDapr(d.dapr) }
+  })
+  if (d.pools.isEmpty)
+    deepMergeMapping(globalFields, d.overrides)
+  else
+    let (firstPool: Pool = (new Listing<Pool> { for (_, p in d.pools) { p } }).first)
+    let (poolFields: Mapping<String, Any> = new Mapping {
+      when (firstPool.replicaCount != null) { ["replicaCount"] = firstPool.replicaCount }
+      ["keda"] = renderKedaConfig(firstPool.keda)
+      when (firstPool.resources != null) {
+        ["resources"] = new Mapping {
+          when (!firstPool.resources!!.requests.isEmpty) { ["requests"] = firstPool.resources!!.requests }
+          when (!firstPool.resources!!.limits.isEmpty) { ["limits"] = firstPool.resources!!.limits }
+        }
+      }
+      when (!firstPool.env.isEmpty) { ["env"] = firstPool.env }
+      when (!firstPool.envOverrides.isEmpty) { ["envOverrides"] = firstPool.envOverrides }
+    })
+    deepMergeMapping(
+      deepMergeMapping(globalFields, poolFields),
+      deepMergeMapping(d.overrides, firstPool.overrides)
+    )
+
 
 local effectiveEntrypoints: Listing<Entrypoint> =
   if (!entrypoints.isEmpty) entrypoints
@@ -3204,12 +3251,14 @@ local effectiveEntrypoints: Listing<Entrypoint> =
     let (_displayName = displayName)
     let (_iconUrl = iconUrl)
     let (_type = type)
+    let (_pkgId = if (marketplaceCard) "@atlan/\(_name)" else null)
     new Listing {
       new Entrypoint {
         name = _name
         displayName = _displayName
         iconUrl = _iconUrl
         type = _type
+        packageId = _pkgId
       }
     }
 
@@ -3222,7 +3271,7 @@ local generatedAtlanYamlData: Mapping<String, Any> = new Mapping {
   when (docsUrl != "") { ["docs_url"] = docsUrl }
   when (creatorOrg != null) { ["creator_org"] = creatorOrg }
   ["type"] = type
-  ["execution_mode"] = deploy.executionMode
+  ["execution_mode"] = "native"
   when (iconUrl != null) { ["icon_url"] = iconUrl }
   ["visibility"] = visibility
   when (!argoPackageNames.isEmpty) { ["argo_package_names"] = argoPackageNames }
@@ -3236,7 +3285,16 @@ local generatedAtlanYamlData: Mapping<String, Any> = new Mapping {
       }
     }
   }
-  ["deploy"] = deepMergeMapping(renderDeployConfig(deploy), deployOverrides)
+  when (deploy != null) {
+    ["deploy"] = renderDeployYaml(deploy!!)
+    when (!deploy!!.pools.isEmpty) {
+      ["pools"] = new Mapping {
+        for (poolName, pool in deploy!!.pools) {
+          [poolName] = deepMergeMapping(renderPool(pool), pool.overrides)
+        }
+      }
+    }
+  }
 }
 
 local atlanYamlData: Mapping<String, Any> =

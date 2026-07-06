@@ -2,6 +2,18 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.11.3] - 2026-07-06
+
+### Bug fixes
+
+- exempt tests/integration/ from P017 construction/lifecycle checks (#2515) ([3b5e7ff](https://github.com/atlanhq/application-sdk/commit/3b5e7ff))
+
+### Other changes
+
+- chore(deps): lock file maintenance (#2522) ([5b48681](https://github.com/atlanhq/application-sdk/commit/5b48681))
+- chore(deps): lock file maintenance (#2519) ([573bc5b](https://github.com/atlanhq/application-sdk/commit/573bc5b))
+- chore(deps): lock file maintenance (#2509) ([d1e2263](https://github.com/atlanhq/application-sdk/commit/d1e2263))
+
 ## [0.11.2] - 2026-07-05
 
 ### Bug fixes
