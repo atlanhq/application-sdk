@@ -463,7 +463,7 @@ SDK's hermetic test paths, marked so the unit job deselects it (see T001).
 **Exemption:** for a scaffold/minimal app with no external source to integrate against
 yet, add to the app's `pyproject.toml`:
 
-```python
+```toml
 [tool.conformance]
 exempt_test_tiers = ["integration"]
 ```
@@ -503,7 +503,7 @@ pattern.
 **Exemption:** for a scaffold/minimal app with no system-app integration to exercise
 yet, add to the app's `pyproject.toml`:
 
-```python
+```toml
 [tool.conformance]
 exempt_test_tiers = ["e2e"]
 ```
@@ -563,13 +563,19 @@ initial adoption PR.
 
 `[tool.coverage.report]` exists in `pyproject.toml` — the repo has opted into coverage
 measurement — but `fail_under` is either absent (defaults to 0) or explicitly set to
-`0`. Coverage is measured and reported (e.g. as a PR comment via the
-`connector-unit-tests` composite action) but can never cause a run to fail, regardless
-of how low it drops.
+`0`, *and* no CI workflow declares an overriding floor. Coverage is measured and
+reported (e.g. as a PR comment via the `connector-unit-tests` composite action) but can
+never cause a run to fail, regardless of how low it drops.
+
+coverage.py's CLI flag always overrides `pyproject.toml`, so this rule also checks the
+repo's own `.github/workflows/*.yml` for a `connector-unit-tests` `fail-under:` input or
+a `--cov-fail-under=N` flag embedded in a `tests-reusable.yaml` `pytest-args` override.
+Either one, if non-zero, is treated as the effective floor — the finding only fires when
+neither source enforces anything.
 
 **Remediation:** set a real, ratcheting floor:
 
-```python
+```toml
 [tool.coverage.report]
 fail_under = 60
 ```
@@ -609,14 +615,14 @@ artifacts; `**/test_*.py`/`**/conftest.py` — test infra that happens to live u
 test infra — and let real product modules contribute to (and be held to) the coverage
 floor. Before:
 
-```python
+```toml
 [tool.coverage.run]
 omit = ["app/handlers/*", "app/clients/*"]
 ```
 
 After:
 
-```python
+```toml
 [tool.coverage.run]
 omit = ["app/generated/*"]
 ```

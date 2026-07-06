@@ -214,10 +214,10 @@ to residue):
   for import references to the old filename (rare, since test modules are
   not usually imported by name) before renaming.
 
-  `classification` is `"mechanical"` when the new name is unambiguous (the
-  file already lives in the correct tier directory and only its name is
-  wrong); route to residue only if renaming would collide with an existing
-  file of the target name.
+  `classification` is always `"judgment"` — even when the new name is
+  unambiguous, the fix renames a file under `tests/`, which is outside the
+  remediator's write-scope (see `remediate-finding.prose.md`); route to
+  residue with the suggested rename for a human to apply.
 
 - **T009 UnconditionalModuleSkip** — a module-level
   `pytest.skip(..., allow_module_level=True)` is not guarded by an `if`/`try`,
@@ -281,9 +281,12 @@ to residue):
   collection glob (rare), suppress with
   `# conformance: ignore[T013] <reason>` instead of moving it.
 
-  `classification` is `"mechanical"` when the correct tier is unambiguous
-  from the test's imports/fixtures (e.g. it uses a `testcontainers` fixture
-  → integration); route to residue when the tier is genuinely ambiguous.
+  `classification` is always `"judgment"` — even when the correct tier is
+  unambiguous from the test's imports/fixtures (e.g. it uses a
+  `testcontainers` fixture → integration), the fix moves a file under
+  `tests/`, which is outside the remediator's write-scope (see
+  `remediate-finding.prose.md`); route to residue with the suggested
+  destination for a human to apply.
 
 - **T014 CoverageGateDisabled** — `[tool.coverage]` is configured but
   `[tool.coverage.report].fail_under` is absent or `0`. Run the test suite's

@@ -38,9 +38,24 @@ a bare ``assert``; ``with pytest.raises/warns/deprecated_call(...)``; a call
 whose attribute name starts with ``assert`` (``self.assertEqual``,
 ``mock.assert_called_once``, ``pandas.testing.assert_frame_equal``, a
 project-local ``_assert_*`` helper) or is exactly ``fail``
-(``pytest.fail``/``self.fail``); or one of the SDK integration-test scenario
+(``pytest.fail``/``self.fail``); one of the SDK integration-test scenario
 helpers (``.equals``/``.contains``/``.exists``/``.is_dict``/``.is_string``/
-``.is_true``/``.is_list``).
+``.is_true``/``.is_list``); or an explicit ``# should not raise`` /
+``# must not raise`` comment anywhere in the test body (case-insensitive).
+
+The last form covers "the call completing without raising *is* the
+assertion" tests — a real, common pattern for best-effort/swallow-errors
+code paths (``# Should not raise\nawait collector.collect()``) and
+``hypothesis`` ``@given`` properties that assert an input space always
+validates (``validate_payload_safety(cls)  # must not raise``). It is
+deliberately comment-gated rather than inferred from a bare trailing call
+with no assertion — that shape is indistinguishable from a genuinely
+forgotten assertion, so recognising it unconditionally would reintroduce
+false negatives the rest of this vocabulary is designed to avoid. The
+marker makes the "no assertion is the assertion" intent explicit, matching
+the same design principle as ``pytest.raises`` requiring an explicit
+context manager rather than being inferred from a bare exception-adjacent
+call.
 
 Discovery
 ---------
@@ -69,6 +84,7 @@ Known coverage limits (intentional — see module docstring of
 from __future__ import annotations
 
 import ast
+import re
 import sys
 from pathlib import Path
 
@@ -96,6 +112,11 @@ _ASSERT_CONTEXT_MANAGERS: frozenset[str] = frozenset(
 _SCENARIO_HELPER_ATTRS: frozenset[str] = frozenset(
     {"equals", "contains", "exists", "is_dict", "is_string", "is_true", "is_list"}
 )
+
+# Explicit "the assertion is: this does not raise" marker — see the module
+# docstring's "Assertion vocabulary" section for why this is comment-gated
+# rather than inferred from a bare call.
+_NO_RAISE_MARKER_RE = re.compile(r"#\s*(?:should|must)\s+not\s+raise\b", re.IGNORECASE)
 
 __all__ = ["SERIES", "discover", "main", "scan_path", "scan_text"]
 
@@ -218,19 +239,33 @@ def _withitem_is_assertion_cm(item: ast.withitem) -> bool:
     return name in _ASSERT_CONTEXT_MANAGERS
 
 
+def _has_no_raise_marker(
+    lines: list[str], node: ast.FunctionDef | ast.AsyncFunctionDef
+) -> bool:
+    """True when a ``# should/must not raise`` comment appears in *node*'s body.
+
+    Scanned over the node's full line span (``lineno``..``end_lineno``) since
+    the marker may trail the call it documents or sit on the line above it.
+    """
+    end = node.end_lineno or node.lineno
+    return any(
+        _NO_RAISE_MARKER_RE.search(line) for line in lines[node.lineno - 1 : end]
+    )
+
+
 def _assertion_signals(
-    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    node: ast.FunctionDef | ast.AsyncFunctionDef, lines: list[str]
 ) -> tuple[bool, bool]:
     """Return ``(has_any_assertion, only_vacuous_plain_asserts)`` for *node*.
 
     ``only_vacuous_plain_asserts`` is meaningful only when ``has_any_assertion``
     is ``True``: it is set when every ``assert`` statement found is a constant-
     true literal and no other assertion form (context-manager, ``assert_*``
-    call, scenario helper) is present.
+    call, scenario helper, no-raise marker) is present.
     """
     has_assert_stmt = False
     has_nonvacuous_assert_stmt = False
-    has_other_assertion = False
+    has_other_assertion = _has_no_raise_marker(lines, node)
     for sub in ast.walk(node):
         if isinstance(sub, ast.Assert):
             has_assert_stmt = True
@@ -281,8 +316,10 @@ def _is_unconditional_skip_stmt(stmt: ast.stmt) -> bool:
 
 _T005_HINT = (
     "Add an assertion on the outcome you care about (e.g. `assert result.count == "
-    "3`), a `pytest.raises(...)` block, or a scenario-helper call — see T005 in "
-    "docs/rules/tests.md for the full recognised vocabulary."
+    "3`), a `pytest.raises(...)` block, or a scenario-helper call. If the test's "
+    "assertion is genuinely 'this does not raise', add a `# should not raise` "
+    "comment on the call — see T005 in docs/rules/tests.md for the full "
+    "recognised vocabulary."
 )
 _T006_HINT = (
     "Implement the test, remove it, or mark it `@pytest.mark.skip(reason=...)`."
@@ -338,17 +375,17 @@ def scan_text(text: str, file: str) -> list[Finding]:
     except SyntaxError:
         return []
     directives = _parse_directives(text)
+    lines = text.splitlines()
     collected = _collect_tests(tree)
 
     if not is_collectable_test_file(Path(file).name):
         if not collected:
             return []
-        anchor = collected[0][0]
         return [
             make_finding(
                 filename=file,
                 rule_id=RULE_T008,
-                node=anchor,
+                node=tree,
                 message=_t008_message(file),
                 directives=directives,
             )
@@ -367,7 +404,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
                 )
             )
             continue
-        has_any, only_vacuous = _assertion_signals(node)
+        has_any, only_vacuous = _assertion_signals(node, lines)
         if not has_any:
             findings.append(
                 make_finding(

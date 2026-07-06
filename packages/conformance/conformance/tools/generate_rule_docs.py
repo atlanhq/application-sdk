@@ -234,17 +234,24 @@ def _rst_to_md(text: str) -> str:
     return re.sub(r"``([^`]+)``", r"`\1`", text)
 
 
-_CODE_BLOCK_DIRECTIVE_RE = re.compile(r"^\.\.\s+code-block::")
+_CODE_BLOCK_DIRECTIVE_RE = re.compile(r"^\.\.\s+code-block::\s*(\S*)")
+
+_DEFAULT_CODE_BLOCK_LANG = "python"
 
 
-def _split_literal_blocks(text: str) -> list[tuple[str, bool]]:
-    """Split RST-ish *text* into ``(chunk, is_code)`` segments.
+def _split_literal_blocks(text: str) -> list[tuple[str, bool, str]]:
+    """Split RST-ish *text* into ``(chunk, is_code, lang)`` segments.
 
     A literal block is opened either by a ``.. code-block:: <lang>`` directive
     or by a line ending in ``::`` (the RST "expository text::" convention), and
     extends through every immediately-following blank or indented line, ending
     at the first non-indented, non-blank line (or EOF).  Blank lines bordering
     the block are trimmed.  Everything else is prose.
+
+    ``lang`` is the language named by an explicit ``.. code-block:: <lang>``
+    directive, or ``_DEFAULT_CODE_BLOCK_LANG`` for the bare ``::`` convention
+    (which carries no language of its own). ``lang`` is ``""`` for prose
+    segments (``is_code`` is ``False``).
 
     This exists because a naive "split on blank lines, then ``textwrap.fill``
     every paragraph" pass (the previous behaviour) reflows literal blocks
@@ -254,7 +261,7 @@ def _split_literal_blocks(text: str) -> list[tuple[str, bool]]:
     else to the existing paragraph-fill logic.
     """
     lines = text.split("\n")
-    segments: list[tuple[str, bool]] = []
+    segments: list[tuple[str, bool, str]] = []
     prose_buf: list[str] = []
 
     def flush_prose() -> None:
@@ -262,7 +269,7 @@ def _split_literal_blocks(text: str) -> list[tuple[str, bool]]:
             return
         para = "\n".join(prose_buf)
         if para.strip():
-            segments.append((para, False))
+            segments.append((para, False, ""))
         prose_buf.clear()
 
     i = 0
@@ -270,9 +277,8 @@ def _split_literal_blocks(text: str) -> list[tuple[str, bool]]:
     while i < n:
         line = lines[i]
         stripped = line.rstrip()
-        opens_block = _CODE_BLOCK_DIRECTIVE_RE.match(stripped) or (
-            stripped.endswith("::") and stripped != "::"
-        )
+        directive_match = _CODE_BLOCK_DIRECTIVE_RE.match(stripped)
+        opens_block = directive_match or (stripped.endswith("::") and stripped != "::")
         if not opens_block:
             prose_buf.append(line)
             i += 1
@@ -297,10 +303,17 @@ def _split_literal_blocks(text: str) -> list[tuple[str, bool]]:
         # A bare "::"-ending line becomes ":" in the surrounding prose; a
         # ".. code-block::" directive line is dropped entirely (the fenced
         # block below replaces it).
-        if not _CODE_BLOCK_DIRECTIVE_RE.match(stripped):
+        if not directive_match:
             prose_buf.append(stripped[:-1])
         flush_prose()
-        segments.append((textwrap.dedent("\n".join(block_lines)), True))
+        lang = directive_match.group(1) if directive_match else ""
+        segments.append(
+            (
+                textwrap.dedent("\n".join(block_lines)),
+                True,
+                lang or _DEFAULT_CODE_BLOCK_LANG,
+            )
+        )
         i = j
 
     flush_prose()
@@ -405,9 +418,9 @@ def _render_series(meta: SeriesMeta, rules: list[RuleDefinition]) -> str:
         # and render literal blocks verbatim as fenced code (not reflowed).
         if rule.full_description:
             desc = _rst_to_md(rule.full_description.strip())
-            for chunk, is_code in _split_literal_blocks(desc):
+            for chunk, is_code, lang in _split_literal_blocks(desc):
                 if is_code:
-                    lines.append(f"```python\n{chunk}\n```")
+                    lines.append(f"```{lang}\n{chunk}\n```")
                     lines.append("")
                     continue
                 # Rewrap each prose paragraph individually to 88 chars for clean diff

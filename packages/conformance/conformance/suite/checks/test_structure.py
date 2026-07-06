@@ -30,6 +30,11 @@ T001's marker derivation — ``pyproject.toml``::
     [tool.conformance]
     exempt_test_tiers = ["integration", "e2e"]
 
+``[tool.conformance]`` is the suite's canonical config-based exemption
+surface for rules that detect something missing repo-wide (no single
+offending line to suppress inline) — see ``docs/schema-contract.md`` §6.4
+for the cross-rule convention this key follows.
+
 Discovery
 ---------
 Walks the entire ``tests/`` tree (same shape as ``test_quality.discover``) so

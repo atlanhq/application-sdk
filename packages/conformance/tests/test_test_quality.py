@@ -119,6 +119,54 @@ def test_t005_silent_on_scenario_helper() -> None:
     assert findings == []
 
 
+def test_t005_silent_on_trailing_no_raise_marker() -> None:
+    findings = scan_text(
+        "def test_foo():\n    compute()  # should not raise\n",
+        "tests/unit/test_foo.py",
+    )
+    assert findings == []
+
+
+def test_t005_silent_on_no_raise_marker_line_above() -> None:
+    findings = scan_text(
+        "def test_foo():\n    # Must not raise\n    compute()\n",
+        "tests/unit/test_foo.py",
+    )
+    assert findings == []
+
+
+def test_t005_silent_on_hypothesis_property_with_no_raise_marker() -> None:
+    """A hypothesis @given property whose only check is 'does not raise'."""
+    findings = scan_text(
+        "from hypothesis import given\n"
+        "from hypothesis import strategies as st\n"
+        "@given(x=st.integers())\n"
+        "def test_always_validates(x):\n"
+        "    validate(x)  # must not raise\n",
+        "tests/unit/test_foo.py",
+    )
+    assert findings == []
+
+
+def test_t005_still_fires_without_no_raise_marker() -> None:
+    """A bare call with no marker and no assertion is still flagged — the
+    marker must be explicit, not inferred from the call shape alone."""
+    findings = scan_text(
+        "def test_foo():\n    compute()  # this does something\n",
+        "tests/unit/test_foo.py",
+    )
+    assert [f.rule_id for f in findings] == ["T005"]
+
+
+def test_t007_silent_when_no_raise_marker_present_with_vacuous_assert() -> None:
+    """A no-raise marker counts as a real assertion form for T007 too."""
+    findings = scan_text(
+        "def test_foo():\n    assert True  # placeholder\n    compute()  # must not raise\n",
+        "tests/unit/test_foo.py",
+    )
+    assert not any(f.rule_id == "T007" for f in findings)
+
+
 def test_t005_suppressed_with_directive() -> None:
     """The suppression anchors on the `def` line — T005's finding location."""
     findings = scan_text(

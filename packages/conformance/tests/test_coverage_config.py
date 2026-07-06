@@ -8,7 +8,13 @@ inflate the reported percentage by excluding real product code under
 
 from __future__ import annotations
 
-from conformance.suite.checks.coverage_config import scan_text
+from pathlib import Path
+
+from conformance.suite.checks.coverage_config import (
+    _ci_declared_fail_under,
+    scan_path,
+    scan_text,
+)
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
 
@@ -78,6 +84,81 @@ def test_t014_suppressed_with_directive_above_key() -> None:
     t014 = [f for f in findings if f.rule_id == "T014"]
     assert len(t014) == 1
     assert t014[0].suppressed is True
+
+
+# ── T014: CI-declared fail-under cross-check ────────────────────────────────
+
+
+def test_t014_silent_when_ci_fail_under_passed_directly() -> None:
+    """pyproject has no fail_under, but the caller found a CI-declared floor."""
+    findings = scan_text(
+        "[tool.coverage.run]\nsource = ['app']\n",
+        "pyproject.toml",
+        ci_fail_under=60.0,
+    )
+    assert not any(f.rule_id == "T014" for f in findings)
+
+
+def test_t014_fires_when_ci_fail_under_is_zero() -> None:
+    """A workflow that explicitly declares a zero floor is still disabled."""
+    findings = scan_text(
+        "[tool.coverage.run]\nsource = ['app']\n\n"
+        "[tool.coverage.report]\nfail_under = 85\n",
+        "pyproject.toml",
+        ci_fail_under=0.0,
+    )
+    assert "T014" in [f.rule_id for f in findings]
+
+
+def test_ci_declared_fail_under_reads_connector_unit_tests_input(
+    tmp_path: Path,
+) -> None:
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "tests.yaml").write_text(
+        "jobs:\n"
+        "  unit:\n"
+        "    uses: atlanhq/application-sdk/.github/actions/connector-unit-tests@main\n"
+        "    with:\n"
+        '      fail-under: "60"\n',
+        encoding="utf-8",
+    )
+    assert _ci_declared_fail_under(tmp_path) == 60.0
+
+
+def test_ci_declared_fail_under_reads_cov_fail_under_flag(tmp_path: Path) -> None:
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "tests.yaml").write_text(
+        "jobs:\n"
+        "  tests:\n"
+        "    uses: atlanhq/application-sdk/.github/workflows/tests-reusable.yaml@main\n"
+        "    with:\n"
+        "      pytest-args: >-\n"
+        "        -n auto --cov=app --cov-report=xml --cov-fail-under=60\n",
+        encoding="utf-8",
+    )
+    assert _ci_declared_fail_under(tmp_path) == 60.0
+
+
+def test_ci_declared_fail_under_none_when_no_workflows(tmp_path: Path) -> None:
+    assert _ci_declared_fail_under(tmp_path) is None
+
+
+def test_scan_path_end_to_end_uses_ci_declared_floor(tmp_path: Path) -> None:
+    """The gate a connector app actually enforces via tests-reusable.yaml
+    (`--cov-fail-under=60`) suppresses T014 even with no pyproject fail_under."""
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.coverage.run]\nsource = ['app']\n", encoding="utf-8"
+    )
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "tests.yaml").write_text(
+        "jobs:\n  tests:\n    with:\n      pytest-args: --cov-fail-under=60\n",
+        encoding="utf-8",
+    )
+    findings = scan_path(tmp_path / "pyproject.toml", tmp_path)
+    assert not any(f.rule_id == "T014" for f in findings)
 
 
 # ── T015: omit/source excludes product code ──────────────────────────────────

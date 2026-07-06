@@ -189,6 +189,43 @@ Promote a rule from `warn` to `block` when:
 A wrong rule promoted prematurely is caught by the fast yank path: a rule-tier override
 in the catalog does not require an SDK rollback (§6.3 of the design doc).
 
+### 6.4 Config-based tier exemption (`[tool.conformance]`)
+
+Inline suppression (§6.2) assumes the violation has a concrete line to annotate. Some
+rules instead check for the **absence** of something repo-wide — no test under
+`tests/integration/`, no `tests/e2e/` suite at all — where there is no single offending
+line, only a missing one. For those, the canonical exemption surface is a
+`[tool.conformance]` table in the repo's own `pyproject.toml`:
+
+```toml
+[tool.conformance]
+exempt_test_tiers = ["integration", "e2e"]
+```
+
+This is a **durable, repo-wide** exemption — it says "this rule does not apply to this
+repo at all right now," as opposed to inline suppression's **single-instance, ad hoc**
+scope ("this one violation, here, for this reason"). Use `[tool.conformance]` when:
+
+* The rule detects a missing file/directory/suite, so there is no line to suppress on.
+* `atlan.yaml` — the file that would otherwise be the natural home for a per-app
+  toggle — is generated from the Pkl contract and must not be hand-edited.
+* The exemption should survive as long as the underlying condition holds (e.g. "this
+  scaffold app has no external source to integrate against yet"), not just until the
+  next edit near a specific line.
+
+Prefer inline suppression (§6.2) whenever a concrete line exists — it is more visible in
+code review and self-documents at the violation site. Reach for `[tool.conformance]`
+only for the repo-wide-absence case above.
+
+Each `[tool.conformance]` key is namespaced per rule family (`exempt_test_tiers` is
+T010–T012's key; a future rule needing the same durable-exemption shape should add its
+own key here rather than overloading an existing one) and is read directly by the
+check module that owns it — there is no central registry, matching how each rule owns
+its own inline-suppression parsing. Document the specific keys a rule module reads in
+that module's own docstring (see `suite/checks/test_structure.py`) and in its
+`docs/rules/*.md` entry; this section is the cross-rule convention reference, not a key
+inventory.
+
 ---
 
 ## 7. Evolution rules

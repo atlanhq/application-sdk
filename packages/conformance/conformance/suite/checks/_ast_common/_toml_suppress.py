@@ -4,9 +4,8 @@ The AST-based ``_directives`` parser tokenizes *Python* source, so it can't be
 reused as-is for TOML files (``tomllib`` discards comments entirely, and
 Python's tokenizer rejects TOML syntax). TOML uses ``#`` for comments too, so
 the same ``# conformance: ignore[...]`` directive grammar applies — this
-module re-implements just the line-scanning half for TOML text, following the
-precedent already established in ``dependency_conformance`` (D-series) for
-its own pyproject.toml-anchored findings.
+module implements the line-scanning half for TOML text, shared by every
+series with pyproject.toml-anchored findings (D-series, T010-T012/T014-T015).
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ import re
 
 from conformance.suite.schema.findings import Finding
 
-__all__ = ["make_toml_finding", "parse_toml_suppressions"]
+__all__ = ["_is_suppressed", "make_toml_finding", "parse_toml_suppressions"]
 
 # Identical grammar to the AST-series ``_directives._SUPPRESS_RE`` — kept as a
 # separate constant because it is matched against a raw comment substring

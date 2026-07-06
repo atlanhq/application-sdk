@@ -167,10 +167,9 @@ def test_partial_exemption_still_fires_for_non_exempt_tier(tmp_path: Path) -> No
         {
             "pyproject.toml": '[tool.conformance]\nexempt_test_tiers = ["e2e"]\n',
             "tests/unit/test_foo.py": _ONE_TEST,
-            "tests/integration/test_bar.py": _ONE_TEST,
         },
     )
-    assert _run(tmp_path) == []
+    assert _ids(_run(tmp_path)) == ["T011"]
 
 
 def test_tier_dir_present_but_empty_still_fires(tmp_path: Path) -> None:
