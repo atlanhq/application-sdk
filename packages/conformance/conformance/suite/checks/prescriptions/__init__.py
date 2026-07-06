@@ -15,7 +15,7 @@ Currently implemented:
 * ``P001`` UnboundedContractFields — an ``Input``/``Output`` contract subclass
   declared with the ``allow_unbounded_fields=True`` class keyword.
 * ``P002`` CategoryFieldOverride — a subclass of ``AppError`` (or any of its
-  14 categorical leaves) that redeclares the ``category`` ``ClassVar`` in its
+  15 categorical leaves) that redeclares the ``category`` ``ClassVar`` in its
   own body, drifting the canonical taxonomy.  The check uses a transitive
   closure of AppError-derived class names within the file so second-generation
   overrides are caught even when the intermediate class is not in the canonical
@@ -178,13 +178,13 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     Store each parsed tree for the P013/P014 and P027 cross-file passes.
 
     Pass 2 — for each registered class, walk its (transitive) base chain to
-    find the deepest ancestor that names one of the 14 leaves in
+    find the deepest ancestor that names one of the 15 leaves in
     ``LEAF_PREFIX_MAP``.  Cycle-safe via a per-resolution ``visiting`` set;
     results memoised.
 
     Pass 3 — emit P003 for every class that derives from a leaf and either
     omits its own ``code`` declaration or declares one that does not start
-    with the leaf's category prefix + ``_``.  The 14 leaves themselves are
+    with the leaf's category prefix + ``_``.  The 15 leaves themselves are
     exempt (their bare codes are the prefix definitions).
 
     Pass 4 — emit P013/P014 using the pre-built ``by_name`` class registry and

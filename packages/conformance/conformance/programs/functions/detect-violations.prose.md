@@ -42,6 +42,13 @@ description: >
   - `mechanism` — `"static"` or `"test"` (from `atlan/mechanism`).
   - `autofixable` — boolean (from `atlan/autofixable`).
   - `orthogonal_gate` — string or null (from `atlan/orthogonalGate`).
+  - `forces_external_influence` — boolean (from `atlan/forcesExternalInfluence`,
+    default `false`). Structural, rule-level flag — `true` for a rule whose
+    fix always consults untrusted external content (currently only C001),
+    independent of whatever `remediate-finding`'s own per-invocation
+    `external_influence` result reports. `detect-fix-recheck` ORs the two
+    together so residue-routing for such a rule doesn't depend on the model
+    remembering to set its own flag on every single call.
   - `hint` — string or null (from `atlan/hint`).
   - `message` — human-readable violation message from the runner.
 
@@ -95,7 +102,8 @@ Tag each result's area by reading the first letter of `result.rule_id`:
 `O` → `optimizations`, `D` → `dependency`, `B` → `deprecation`,
 `K` → `contract-toolkit`, `S` → `security`.
 
-Extract `atlan/mechanism`, `atlan/autofixable`, `atlan/orthogonalGate` from
+Extract `atlan/mechanism`, `atlan/autofixable`, `atlan/orthogonalGate`,
+`atlan/forcesExternalInfluence` (default `false` if absent) from
 `run.tool.driver.rules[result.rule_index].properties`, and `atlan/hint` from
 `result.properties`.  Return `sarif_path` and the structured `findings` list.
 

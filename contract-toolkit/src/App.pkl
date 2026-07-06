@@ -859,7 +859,7 @@ open class QueryIntelligenceNode extends DAGNode {
 
   displayName = "Parse SQL Queries"
   workflowType = "QueryIntelligenceWorkflow"
-  appName = "automation-engine"
+  appName = "query-intelligence"
   taskQueue = "atlan-query-intelligence-{deployment_name}"
   args {
     ["connection_qualified_name"] = connectionQualifiedName
@@ -1144,7 +1144,7 @@ open class LineageNode extends DAGNode {
 
   displayName = "Build Lineage Entities"
   workflowType = "LineageWorkflow"
-  appName = "automation-engine"
+  appName = "lineage"
   taskQueue = "atlan-lineage-{deployment_name}"
   args {
     ["connection_qualified_name"] = connectionQualifiedName

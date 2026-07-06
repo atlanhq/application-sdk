@@ -89,6 +89,7 @@ Results that are SUPPRESSED or WARNING never fail the gate.
 | `atlan/autofixable` | `bool` | yes | Whether the remediation layer can produce a mechanical fix |
 | `atlan/orthogonalGate` | `string` | no | Gate a fix PR must not edit (e.g. `"tests"`) |
 | `atlan/since` | `string` | no | SDK version the rule was introduced |
+| `atlan/forcesExternalInfluence` | `bool` | no | Structural, rule-level guarantee that every fix for this rule counts as having used untrusted external content (e.g. C001), independent of the per-result `atlan/externalInfluence` below |
 
 ### 4.2 Result properties (`result.properties`)
 

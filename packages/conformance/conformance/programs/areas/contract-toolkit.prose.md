@@ -166,6 +166,14 @@ deterministic re-resolve), but it **requires `pkl`**.
 2. Run `pkl eval -m . contract/app.pkl` (or `uv run poe generate` where defined)
    so the regenerated artifacts reflect the newly-locked toolkit version.
 3. Stage `contract/PklProject.deps.json` and every regenerated artifact.
+4. Set `touched_files` to the union of every path reported changed by
+   `git status --porcelain -- contract/ app/generated/ atlan.yaml app.yaml`,
+   diffed before step 1 and after step 3 — see the write-scope note in
+   `remediate-finding.prose.md` for why this determinism argument (read off
+   a tool's own output, never model-judged) applies uniformly here and to
+   `bootstrap`'s stdout-prefix extraction for C002. It is what lets
+   `detect-fix-recheck` revert the lock plus every regenerated artifact, not
+   just `finding.file`, if the `pkl-eval` gate rejects this fix.
 
 If `pkl` is unavailable, do not hand-edit the lock JSON — route to residue with a
 note to re-resolve locally (the `renovate-pkl-sync` workflow does this
@@ -181,7 +189,12 @@ is absent.  `classification = "mechanical"`; **requires `pkl`**.
 
 1. Run `pkl eval -m . contract/app.pkl` (or `uv run poe generate`) to regenerate
    all outputs, then stage the newly-produced files.
-2. If an output is legitimately not produced for this app (e.g. a utility app
+2. Set `touched_files` the same deterministic way as K003 step 4 — the union
+   of paths `git status --porcelain -- contract/ app/generated/ atlan.yaml
+   app.yaml` reports changed, diffed before step 1 and after staging — so a
+   `pkl-eval` gate rejection reverts every regenerated artifact this
+   invocation produced, not just `finding.file`.
+3. If an output is legitimately not produced for this app (e.g. a utility app
    that emits no manifest), the finding is `classification = "judgment"` —
    suppress with `// conformance: ignore[K004] <reason>` on the `amends` line of
    `contract/app.pkl` and route to residue.

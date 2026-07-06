@@ -70,6 +70,21 @@ _MANIFEST_NO_INPUTS = json.dumps(
     indent=2,
 )
 
+_MANIFEST_NO_PUBLISH = json.dumps(
+    {"dag": {"extract": {"inputs": {"args": {"agent_json": "{{agent-json}}"}}}}},
+    indent=2,
+)
+
+_MANIFEST_WITH_PUBLISH = json.dumps(
+    {
+        "dag": {
+            "extract": {"inputs": {"args": {"agent_json": "{{agent-json}}"}}},
+            "publish": {"activity_name": "publish_assets"},
+        }
+    },
+    indent=2,
+)
+
 
 def _write(tmp_path: Path, files: dict[str, str]) -> None:
     for name, content in files.items():
@@ -343,6 +358,92 @@ def test_p030_fires_when_source_dir_empty(tmp_path: Path) -> None:
     _write(tmp_path, {"atlan.yaml": _SDR_ATLAN_YAML})
     findings = _run(tmp_path)
     assert any(f.rule_id == "P030" for f in findings)
+
+
+# ── P030: publish-stage opt-out exemption ───────────────────────────────────
+
+
+def test_p030_silent_when_manifest_has_no_publish_stage(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/generated/manifest.json": _MANIFEST_NO_PUBLISH,
+            "app/connector.py": "class Connector:\n    async def run(self):\n        pass\n",
+        },
+    )
+    # contract/app.pkl's `pipeline.publish = null` compiles to a manifest
+    # with no dag.publish node — nowhere for self.upload() to hand off to.
+    findings = _run(tmp_path)
+    assert not any(f.rule_id == "P030" for f in findings)
+
+
+def test_p030_fires_when_manifest_has_publish_stage(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/generated/manifest.json": _MANIFEST_WITH_PUBLISH,
+            "app/connector.py": "class Connector:\n    async def run(self):\n        pass\n",
+        },
+    )
+    findings = _run(tmp_path)
+    assert any(f.rule_id == "P030" for f in findings)
+
+
+def test_p030_fires_when_no_manifest_at_all(tmp_path: Path) -> None:
+    # No manifest means we cannot establish the opt-out — default to firing
+    # rather than silently exempting an app we can't actually inspect.
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": "class Connector:\n    async def run(self):\n        pass\n",
+        },
+    )
+    findings = _run(tmp_path)
+    assert any(f.rule_id == "P030" for f in findings)
+
+
+def test_p030_fires_when_manifest_unparseable(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/generated/manifest.json": "not json {{{",
+            "app/connector.py": "class Connector:\n    async def run(self):\n        pass\n",
+        },
+    )
+    findings = _run(tmp_path)
+    assert any(f.rule_id == "P030" for f in findings)
+
+
+def test_p030_multi_ep_fires_if_any_manifest_has_publish(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/generated/extract/manifest.json": _MANIFEST_NO_PUBLISH,
+            "app/generated/profile/manifest.json": _MANIFEST_WITH_PUBLISH,
+            "app/connector.py": "class Connector:\n    async def run(self):\n        pass\n",
+        },
+    )
+    findings = _run(tmp_path)
+    assert any(f.rule_id == "P030" for f in findings)
+
+
+def test_p030_multi_ep_silent_when_no_manifest_has_publish(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/generated/extract/manifest.json": _MANIFEST_NO_PUBLISH,
+            "app/generated/profile/manifest.json": _MANIFEST_NO_PUBLISH,
+            "app/connector.py": "class Connector:\n    async def run(self):\n        pass\n",
+        },
+    )
+    findings = _run(tmp_path)
+    assert not any(f.rule_id == "P030" for f in findings)
 
 
 # ── scan_path no-op ──────────────────────────────────────────────────────────
