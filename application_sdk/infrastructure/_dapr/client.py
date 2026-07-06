@@ -119,34 +119,43 @@ class DaprStateStore:
         raise DaprListKeysUnsupportedError()
 
 
+def is_dapr_transport_unavailable(exc: BaseException) -> bool:
+    """True if *exc* is cold-start-shaped: a transport failure (connection
+    refused, reset mid-handshake, read/write/close error, timeout) or a 5xx
+    that survived the transport's own retries — as opposed to a 4xx or any
+    other definitive, answered-and-rejected failure.
+
+    Single source of truth for "unreachable" vs "answered-and-rejected"
+    classification across every ``_dapr/`` call site — the httpx exception
+    family is only visible here (callers outside ``_dapr/`` can't import
+    httpx — the same layering rule that gates dapr/redis imports). Shared by
+    :func:`classify_secret_fetch_error` (Dapr secret-store fetches) and
+    :meth:`~application_sdk.infrastructure._dapr.credential_vault.DaprCredentialVault._fetch_credential_config`
+    (Dapr binding/object-store fetches) so a future change to the
+    classification rule only needs to happen once.
+    """
+    if isinstance(exc, httpx.TransportError):
+        return True
+    return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code >= 500
+
+
 def classify_secret_fetch_error(name: str, exc: Exception) -> SecretStoreError:
     """Classify a raw Dapr secret-fetch exception as unreachable vs. rejected.
 
-    Classify "unreachable" vs "answered-and-rejected" HERE, where the httpx
-    exception family is visible (callers outside ``_dapr/`` can't import
-    httpx — the same layering rule that gates dapr/redis imports). A
-    transport error (cold start, connection refused, reset mid-handshake,
-    timeout) or a 5xx that survived the transport's own retries is
-    cold-start-shaped and retryable; a 4xx / anything else is a definitive
-    rejection. Raising a distinct type lets callers retry a startup race
-    without duck-typing text.
-
-    Shared by every ``_dapr/`` call site that fetches a secret directly via
-    :class:`AsyncDaprClient` (:meth:`DaprSecretStore.get`,
-    :meth:`~application_sdk.infrastructure._dapr.credential_vault.DaprCredentialVault._get_secret`)
-    so a future change to the classification rule only needs to happen once.
+    Raising a distinct type for the unreachable case lets callers retry a
+    cold-start race without duck-typing exception text — see
+    :func:`is_dapr_transport_unavailable` for the classification rule.
     """
-    if isinstance(exc, httpx.TransportError):
+    if is_dapr_transport_unavailable(exc):
         return SecretStoreUnavailableError(name, cause=exc)
     if isinstance(exc, httpx.HTTPStatusError):
-        if exc.response.status_code >= 500:
-            return SecretStoreUnavailableError(name, cause=exc)
         # A 4xx is a definitive rejection (bad auth/binding/path) — retrying
         # the identical request would fail identically every time, so mark
         # it explicitly non-retryable rather than inheriting the optimistic
         # DependencyUnavailableError default. This is a *wire-level* retry
-        # hint (Temporal/observability), independent of retry_past_cold_start
-        # — which dispatches on ColdStartRaceError type, not this flag.
+        # hint (Temporal/observability), independent of
+        # retry_past_dapr_cold_start — which dispatches on ColdStartRaceError
+        # type, not this flag.
         return SecretStoreError(
             f"Failed to get secret: {exc}",
             secret_name=name,

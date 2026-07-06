@@ -45,10 +45,12 @@ def _no_bundle_fetch_retry(monkeypatch):
     tests fail fast. The dedicated retry tests re-enable it.
 
     The process-level cold-start gate itself (shared across every
-    ``retry_past_cold_start`` caller, in ``infrastructure.secrets``) is reset
-    by the session-wide ``tests/unit/conftest.py`` fixture, not here."""
+    ``retry_past_dapr_cold_start`` caller, in ``infrastructure._dapr.http``)
+    is reset by the session-wide ``tests/unit/conftest.py`` fixture, not
+    here."""
     monkeypatch.setattr(
-        "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_WAIT_SECONDS", 0.0
+        "application_sdk.infrastructure._dapr.http.DAPR_COLD_START_MAX_WAIT_SECONDS",
+        0.0,
     )
 
 
@@ -454,17 +456,9 @@ class TestBundleFetchReadinessRetry:
         }
     )
 
-    async def test_retries_transient_failure_then_succeeds(self, monkeypatch) -> None:
-        monkeypatch.setattr(
-            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_WAIT_SECONDS", 30.0
-        )
-        monkeypatch.setattr(
-            "application_sdk.infrastructure.secrets.SECRET_FETCH_BASE_DELAY_SECONDS",
-            0.0,
-        )
-        monkeypatch.setattr(
-            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_DELAY_SECONDS", 0.0
-        )
+    async def test_retries_transient_failure_then_succeeds(
+        self, fast_dapr_cold_start_retry
+    ) -> None:
         calls = {"n": 0}
 
         class ColdThenReady:
@@ -482,7 +476,8 @@ class TestBundleFetchReadinessRetry:
         # A generous window would let a retry loop run — but a genuine missing
         # secret must fail fast, on the first attempt.
         monkeypatch.setattr(
-            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_WAIT_SECONDS", 30.0
+            "application_sdk.infrastructure._dapr.http.DAPR_COLD_START_MAX_WAIT_SECONDS",
+            30.0,
         )
         calls = {"n": 0}
 
@@ -495,27 +490,9 @@ class TestBundleFetchReadinessRetry:
             await resolve_agent_json(self._AGENT_JSON, AlwaysMissing())  # type: ignore[arg-type]
         assert calls["n"] == 1  # not retried
 
-    async def test_persistent_transient_failure_gives_up(self, monkeypatch) -> None:
-        # Deterministic fake clock + no-op sleep: each attempt advances the
-        # clock past half the deadline, so this gives up after exactly 2
-        # attempts regardless of real wall-clock scheduling delays under
-        # load — a real-time-based loose ">= 2" assertion would flake on a
-        # contended runner.
-        monkeypatch.setattr(
-            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_WAIT_SECONDS", 10.0
-        )
-        monkeypatch.setattr(
-            "application_sdk.infrastructure.secrets.asyncio.sleep", AsyncMock()
-        )
-        fake_now = {"t": 0.0}
-
-        def fake_monotonic() -> float:
-            fake_now["t"] += 6.0
-            return fake_now["t"]
-
-        monkeypatch.setattr(
-            "application_sdk.infrastructure.secrets.time.monotonic", fake_monotonic
-        )
+    async def test_persistent_transient_failure_gives_up(
+        self, deterministic_dapr_cold_start_deadline
+    ) -> None:
         calls = {"n": 0}
 
         class AlwaysDown:
@@ -532,7 +509,8 @@ class TestBundleFetchReadinessRetry:
         # NOT be retried — it fails on the first attempt even with a generous
         # window, so a real misconfiguration doesn't block for the whole budget.
         monkeypatch.setattr(
-            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_WAIT_SECONDS", 30.0
+            "application_sdk.infrastructure._dapr.http.DAPR_COLD_START_MAX_WAIT_SECONDS",
+            30.0,
         )
         calls = {"n": 0}
 
@@ -553,7 +531,8 @@ class TestBundleFetchReadinessRetry:
         # SecretStoreUnavailableError (raised by the infra layer for a real
         # transport failure) is transient.
         monkeypatch.setattr(
-            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_WAIT_SECONDS", 30.0
+            "application_sdk.infrastructure._dapr.http.DAPR_COLD_START_MAX_WAIT_SECONDS",
+            30.0,
         )
         calls = {"n": 0}
 
@@ -575,7 +554,8 @@ class TestBundleFetchReadinessRetry:
         # cold-start wait is NOT re-armed — a later outage fails fast (single
         # attempt) rather than being masked for the whole 120s budget.
         monkeypatch.setattr(
-            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_WAIT_SECONDS", 30.0
+            "application_sdk.infrastructure._dapr.http.DAPR_COLD_START_MAX_WAIT_SECONDS",
+            30.0,
         )
         calls = {"n": 0}
 
@@ -603,7 +583,7 @@ class TestBundleFetchReadinessRetry:
         # success — it must arm the gate too, so a later outage in the same
         # worker process fails fast instead of re-entering the retry window.
         monkeypatch.setattr(
-            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_WAIT_SECONDS",
+            "application_sdk.infrastructure._dapr.http.DAPR_COLD_START_MAX_WAIT_SECONDS",
             30.0,
         )
         calls = {"n": 0}
@@ -747,24 +727,12 @@ class TestSingleKeyMode:
         assert resolved["password"] == "BOOM"
 
     async def test_transient_probe_failure_is_retried_not_misclassified(
-        self, monkeypatch
+        self, fast_dapr_cold_start_retry
     ) -> None:
         """A cold-start SecretStoreUnavailableError during a single-key probe
         must be retried, not silently treated as "key not in store" — that
         would misclassify a transient infra outage as a definitive absence.
         """
-        monkeypatch.setattr(
-            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_WAIT_SECONDS",
-            30.0,
-        )
-        monkeypatch.setattr(
-            "application_sdk.infrastructure.secrets.SECRET_FETCH_BASE_DELAY_SECONDS",
-            0.0,
-        )
-        monkeypatch.setattr(
-            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_DELAY_SECONDS",
-            0.0,
-        )
         calls = {"n": 0}
 
         class ColdThenReady:
@@ -787,6 +755,43 @@ class TestSingleKeyMode:
 
         assert resolved["username"] == "real_user"
         assert calls["n"] == 3  # rode out the two cold failures, not skipped
+
+    async def test_persistent_transient_failure_falls_back_to_ref_key(
+        self, deterministic_dapr_cold_start_deadline
+    ) -> None:
+        """Unlike every other retry_past_dapr_cold_start call site (bundle
+        fetch, named-credential fetch, GUID/vault fetch — all of which raise
+        once their retry deadline is exhausted), the single-key probe
+        intentionally swallows an exhausted cold-start outage and leaves the
+        field as its literal ref-key placeholder instead of raising — see
+        the WARNING-log comment in _fetch_per_key_bundle._try_fetch. Pin
+        this asymmetry as an intentional, tested contract so a future
+        "simplify the except clauses" refactor can't silently regress it
+        into raising (or into misclassifying the outage as a normal
+        not-found) without a test failing.
+        """
+        calls = {"n": 0}
+
+        class AlwaysDown:
+            async def get_optional(self, name: str) -> str | None:
+                calls["n"] += 1
+                raise SecretStoreUnavailableError(name)
+
+        agent_json = json.dumps(
+            {
+                "agent-name": "test-agent",
+                "key-type": "single-key",
+                "auth-type": "basic",
+                "basic.username": "ATLAN_USER",
+            }
+        )
+
+        resolved = await resolve_agent_json(agent_json, AlwaysDown())  # type: ignore[arg-type]
+
+        # Retried once, then gave up at the deadline — same budget as every
+        # other call site — but the field falls back rather than raising.
+        assert calls["n"] == 2
+        assert resolved["username"] == "ATLAN_USER"
 
     async def test_store_outage_does_not_leak_ref_key_in_logs(self) -> None:
         """On a store outage during a single-key probe, the WARNING must not
@@ -1297,7 +1302,7 @@ class TestCredentialResolverAgentBranch:
         """Legacy GUID refs resolve via DaprCredentialVault — agent branch
         is additive, not a replacement.
         """
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import MagicMock, patch
 
         from application_sdk.credentials.ref import CredentialRef
         from application_sdk.credentials.resolver import CredentialResolver

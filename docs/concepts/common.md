@@ -71,13 +71,27 @@ AppError  (base — application_sdk.errors)
     │   ├── StoragePermissionError(AppPermissionDeniedError, StorageError)
     │   └── StorageConfigError(InvalidInputError, StorageError)
     └── SecretStoreError(DependencyUnavailableError)
-        └── SecretNotFoundError(NotFoundError, SecretStoreError)
+        ├── SecretNotFoundError(NotFoundError, SecretStoreError)
+        └── SecretStoreUnavailableError(SecretStoreError, ColdStartRaceError)
 ```
 
 The **categorical leaf** (listed first in the MRO) drives `category`, `audience`, and
 `default_retryable` on the wire. The **domain umbrella** (listed second) keeps legacy
 `except StorageError:` / `except CredentialError:` catch sites alive. A single exception
 instance satisfies both hierarchies simultaneously.
+
+### ColdStartRaceError — the cross-domain transient marker
+
+`ColdStartRaceError(DependencyUnavailableError)` is not a domain umbrella itself — it's a
+marker mixed into a domain leaf's transient subtype to answer one narrow question: "is this
+specific failure a not-yet-reachable dependency right now" (a transport failure, or a 5xx that
+survived the transport's own retries), independent of the general `retryable` wire hint. A
+generic helper — `application_sdk.infrastructure._dapr.http.retry_past_dapr_cold_start` —
+retries any current or future subtype across domains (secret store today; state store,
+pub/sub, or credential-vault config fetches tomorrow) just by catching this one marker, with
+no new per-domain check needed. `SecretStoreUnavailableError` above is the first concrete
+example: it multiply-inherits `SecretStoreError` (so `except SecretStoreError:` still catches
+it) and `ColdStartRaceError` (so the retry helper does too).
 
 ### Raise by failure shape
 

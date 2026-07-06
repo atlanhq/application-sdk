@@ -55,10 +55,8 @@ from application_sdk.credentials.errors import (
     CredentialParseError,
 )
 from application_sdk.errors import redact_secrets
-from application_sdk.infrastructure.secrets import (
-    SecretNotFoundError,
-    retry_past_cold_start,
-)
+from application_sdk.infrastructure._dapr.http import retry_past_dapr_cold_start
+from application_sdk.infrastructure.secrets import SecretNotFoundError
 from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
@@ -174,12 +172,12 @@ async def _fetch_bundle(secret_store: SecretStore, secret_path: str) -> dict[str
     makes, and on SDR runs it can race a sidecar still finishing its cold
     start. Retry mechanics (transient classification, capped backoff, the
     one-shot cold-start gate) live in
-    :func:`~application_sdk.infrastructure.secrets.retry_past_cold_start` —
+    :func:`~application_sdk.infrastructure._dapr.http.retry_past_dapr_cold_start` —
     shared with the other credential-resolution paths that race the same
     sidecar. See that function's docstring for the full contract.
     """
     try:
-        raw = await retry_past_cold_start(
+        raw = await retry_past_dapr_cold_start(
             lambda: secret_store.get(secret_path),
             description=f"Agent secret-bundle fetch at '{secret_path}'",
         )
@@ -230,7 +228,7 @@ async def _fetch_per_key_bundle(
     by downstream connect errors).
 
     A transient cold-start outage on a probe is retried via
-    :func:`~application_sdk.infrastructure.secrets.retry_past_cold_start`
+    :func:`~application_sdk.infrastructure._dapr.http.retry_past_dapr_cold_start`
     (shared with :func:`_fetch_bundle` — both race the same sidecar); only
     a genuine, non-transient store error or an outage that exhausts the
     retry budget falls through to the silent-skip path below.
@@ -244,7 +242,7 @@ async def _fetch_per_key_bundle(
         seen.add(value)
         value_hash = hashlib.sha256(value.encode()).hexdigest()[:8]
         try:
-            secret = await retry_past_cold_start(
+            secret = await retry_past_dapr_cold_start(
                 lambda: secret_store.get_optional(value),
                 description=f"single-key probe for sha256:{value_hash}",
             )

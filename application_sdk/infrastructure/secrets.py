@@ -1,11 +1,8 @@
 """Secrets management abstraction."""
 
-import asyncio
 import os
-import time
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, ClassVar, Protocol, TypeVar
+from typing import Any, ClassVar, Protocol
 
 from application_sdk.errors import SECRET_NOT_FOUND, SECRET_STORE_ERROR, ErrorCode
 from application_sdk.errors.categories import Audience
@@ -18,8 +15,6 @@ from application_sdk.infrastructure._secret_utils import process_secret_data
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
-
-_T = TypeVar("_T")
 
 
 async def get_deployment_secret(key: str) -> Any:
@@ -140,7 +135,9 @@ class SecretStoreUnavailableError(SecretStoreError, ColdStartRaceError):
     httpx exception family is visible, so callers can retry a cold-start race
     against a not-yet-ready sidecar without duck-typing exception text. Remains
     a ``SecretStoreError`` so ``except SecretStoreError`` still catches it, and
-    a :class:`ColdStartRaceError` so :func:`retry_past_cold_start` retries it.
+    a :class:`ColdStartRaceError` so
+    :func:`~application_sdk.infrastructure._dapr.http.retry_past_dapr_cold_start`
+    retries it.
     """
 
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_SECRET_STORE_UNREACHABLE"
@@ -151,155 +148,6 @@ class SecretStoreUnavailableError(SecretStoreError, ColdStartRaceError):
             secret_name=secret_name,
             cause=cause,
         )
-
-
-#: How long an idempotent Dapr-backed call may retry a transient
-#: :class:`DependencyUnavailableError` before giving up. The agent
-#: secret-bundle fetch is typically the first Dapr call a workflow makes and
-#: can race a cold sidecar (daprd component init has been observed up to
-#: ~75s on fresh CI runners); every :func:`retry_past_cold_start` caller
-#: shares this one budget, since they all race the same sidecar. This is a
-#: floor, not a hard ceiling: each retried ``call()`` can itself burn up to
-#: the transport's own internal retry budget (~15s, see
-#: ``infrastructure/_dapr/http.py``) before raising, so the worst-case total
-#: wait before final failure can exceed this value by up to one attempt's
-#: duration. Env-overridable for pathological runners.
-SECRET_FETCH_MAX_WAIT_SECONDS: float = 120.0
-_raw_max_wait = os.environ.get("ATLAN_SECRET_FETCH_MAX_WAIT_SECONDS")
-if _raw_max_wait is not None:
-    try:
-        _parsed_max_wait = float(_raw_max_wait)
-        if _parsed_max_wait > 0:
-            SECRET_FETCH_MAX_WAIT_SECONDS = _parsed_max_wait
-        else:
-            logger.warning(
-                "ATLAN_SECRET_FETCH_MAX_WAIT_SECONDS=%r is non-positive; using default %.0f s",
-                _raw_max_wait,
-                SECRET_FETCH_MAX_WAIT_SECONDS,
-            )
-    except ValueError:
-        logger.warning(
-            "ATLAN_SECRET_FETCH_MAX_WAIT_SECONDS=%r is not a valid number; using default %.0f s",
-            _raw_max_wait,
-            SECRET_FETCH_MAX_WAIT_SECONDS,
-            exc_info=True,
-        )
-del _raw_max_wait
-SECRET_FETCH_BASE_DELAY_SECONDS: float = 2.0
-SECRET_FETCH_MAX_DELAY_SECONDS: float = 10.0
-
-#: Process-level cold-start gate, shared by every call site that opts into
-#: cold-start retry via :func:`retry_past_cold_start` — they all race the
-#: same Dapr sidecar, so confirming readiness via one arms it for all. Set
-#: the first time any such call gets a definitive answer (success, or a
-#: non-transient failure) from the store in this worker process; a later
-#: failure is then a steady-state outage, left to surface via the backend's
-#: own (shorter) retry budget rather than being retried again here.
-_secret_store_confirmed_ready: bool = False
-
-
-async def retry_past_cold_start(
-    call: Callable[[], Awaitable[_T]],
-    *,
-    description: str,
-) -> _T:
-    """Retry an idempotent Dapr-backed call past a cold sidecar.
-
-    Retries a :class:`ColdStartRaceError` (a structurally transient
-    failure — e.g. :class:`SecretStoreUnavailableError`) with capped
-    exponential backoff until :data:`SECRET_FETCH_MAX_WAIT_SECONDS` elapses.
-    Branching on that marker rather than a single concrete exception type
-    means any current or future :class:`DependencyUnavailableError` subtype
-    (state store, pub/sub, object store) can opt into cold-start retry just
-    by also inheriting :class:`ColdStartRaceError` for its transient case —
-    no new call site-specific check needed here. This is deliberately
-    independent of ``retryable``/``effective_retryable``, which is a
-    separate, general Temporal/wire-level retry hint — see
-    :class:`ColdStartRaceError`'s docstring for why the two must not be
-    conflated.
-
-    Any other exception (a definitive rejection, e.g.
-    :class:`SecretNotFoundError` or a 4xx :class:`SecretStoreError`, or an
-    exception outside the ``ColdStartRaceError`` family entirely) is proof
-    the dependency is reachable: it arms the process-level cold-start gate
-    and is re-raised immediately, never retried.
-
-    Scoped to cold start: once any caller using this helper has seen the
-    dependency answer definitively in this worker process, later calls skip
-    the wait entirely and call through once — a later outage is then a
-    steady-state failure, left to surface via the backend's own (shorter)
-    retry budget instead of being masked for the full deadline on every
-    subsequent call.
-
-    Shared across every call site that opts in (the agent secret-bundle
-    fetch, single-key probes, the named-credential resolver path, the
-    GUID/vault credential path) — they all race the same sidecar, so one
-    confirming readiness arms it for the rest.
-
-    Args:
-        call: Zero-arg async callable to retry, e.g. ``lambda:
-            secret_store.get(name)``. Must be idempotent — it may be invoked
-            more than once.
-        description: Human-readable label for the retry-warning log line,
-            e.g. ``"Agent secret-bundle fetch at 'foo'"``. Only ``description``
-            and the failing exception's *type name* are logged on each
-            retried attempt — never the exception's message/traceback, since
-            a :class:`SecretStoreError`'s ``str()`` embeds ``secret=<name>``
-            and some callers pass a hashed/redacted ``description``
-            specifically to keep the raw secret/ref-key out of logs. Callers
-            that need full diagnostics on terminal failure should log them
-            at their own boundary, with whatever redaction they require.
-    """
-    global _secret_store_confirmed_ready
-
-    if _secret_store_confirmed_ready:
-        return await call()
-
-    deadline = time.monotonic() + SECRET_FETCH_MAX_WAIT_SECONDS
-    attempt = 0
-    while True:
-        attempt += 1
-        try:
-            result = await call()
-        except ColdStartRaceError as exc:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                # Gave up waiting, but the dependency never actually
-                # answered — do NOT arm the gate, a later call should still
-                # wait out the cold start rather than assume steady-state
-                # readiness.
-                raise
-            # Cap the backoff to the remaining budget so the total wait can't
-            # overshoot SECRET_FETCH_MAX_WAIT_SECONDS by a full delay, and cap
-            # the exponent so a very large max-wait override can't overflow.
-            delay = min(
-                SECRET_FETCH_MAX_DELAY_SECONDS,
-                SECRET_FETCH_BASE_DELAY_SECONDS * (2 ** min(attempt - 1, 10)),
-                remaining,
-            )
-            # Log the exception TYPE only, never its str()/traceback: some
-            # callers (e.g. credentials/agent.py's single-key probe) pass a
-            # pre-redacted `description` specifically because the underlying
-            # SecretStoreError's message/`secret=<name>` embeds the raw
-            # secret/ref-key — interpolating `exc` or using `exc_info=True`
-            # here would leak it right back in on every retried attempt,
-            # regardless of what the caller redacted.
-            logger.warning(
-                "%s failed (attempt %d, %s); the dependency is not yet "
-                "reachable — retrying in %.1fs",
-                description,
-                attempt,
-                type(exc).__name__,
-                delay,
-            )
-            await asyncio.sleep(delay)
-        # conformance: ignore[E004] proof the dependency answered (definitively) — arms the cold-start gate and re-raises unchanged
-        except Exception:
-            _secret_store_confirmed_ready = True
-            raise
-        else:
-            _secret_store_confirmed_ready = True
-            return result
 
 
 @dataclass(kw_only=True)

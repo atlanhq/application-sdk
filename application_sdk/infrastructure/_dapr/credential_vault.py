@@ -10,13 +10,18 @@ import re
 from enum import Enum
 from typing import Any
 
-from application_sdk.infrastructure._dapr.client import classify_secret_fetch_error
-from application_sdk.infrastructure._dapr.http import AsyncDaprClient
-from application_sdk.infrastructure._secret_utils import process_secret_data
-from application_sdk.infrastructure.secrets import (
-    SecretNotFoundError,
-    retry_past_cold_start,
+from application_sdk.errors.leaves import ColdStartRaceError
+from application_sdk.infrastructure._dapr.client import (
+    classify_secret_fetch_error,
+    is_dapr_transport_unavailable,
 )
+from application_sdk.infrastructure._dapr.http import (
+    AsyncDaprClient,
+    retry_past_dapr_cold_start,
+)
+from application_sdk.infrastructure._secret_utils import process_secret_data
+from application_sdk.infrastructure.bindings import BindingError
+from application_sdk.infrastructure.secrets import SecretNotFoundError
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -193,6 +198,18 @@ class DaprCredentialVault:
     async def _fetch_credential_config(self, credential_guid: str) -> dict[str, Any]:
         """Fetch the credential config JSON from the upstream object store.
 
+        Retries a cold-start race via :func:`retry_past_dapr_cold_start`,
+        same as :meth:`_get_secret` — this is typically the *first* Dapr
+        call ``get_credentials()`` makes (before the secret-store fetch), so
+        it races the identical cold sidecar. A transport/5xx failure here is
+        reclassified as a :class:`ColdStartRaceError` (via
+        :func:`~application_sdk.infrastructure._dapr.client.is_dapr_transport_unavailable`,
+        the same predicate :func:`~application_sdk.infrastructure._dapr.client.classify_secret_fetch_error`
+        uses) so :meth:`get_credentials`'s caller can tell a transient outage
+        apart from a genuinely-missing config — without this, a cold-start
+        race here would be indistinguishable from "no config" and get
+        collapsed into a non-retryable ``CredentialNotFoundError``.
+
         Raises:
             CredentialVaultError: If the GUID contains unsafe characters or no
                 config is found in the upstream store.
@@ -204,6 +221,9 @@ class DaprCredentialVault:
             APPLICATION_NAME,
             STATE_STORE_PATH_TEMPLATE,
             TEMPORARY_PATH,
+        )
+        from application_sdk.infrastructure.bindings import (  # noqa: PLC0415 — circular: infrastructure/__init__.py loads sibling modules
+            BindingResponse,
         )
         from application_sdk.infrastructure.credential_vault import (  # noqa: PLC0415 — circular: infrastructure/__init__.py loads sibling modules
             CredentialVaultError,
@@ -237,7 +257,21 @@ class DaprCredentialVault:
             "blobName": normalized_key,
         }
 
-        response = await self._upstream.invoke("get", data=data, metadata=metadata)
+        async def _fetch() -> BindingResponse:
+            try:
+                return await self._upstream.invoke("get", data=data, metadata=metadata)
+            except BindingError as exc:
+                if exc.cause is not None and is_dapr_transport_unavailable(exc.cause):
+                    raise ColdStartRaceError(
+                        message=f"Upstream credential-config store unreachable: {exc.cause}",
+                        cause=exc.cause,
+                    ) from exc
+                raise
+
+        response = await retry_past_dapr_cold_start(
+            _fetch,
+            description=f"Credential-vault config fetch for '{credential_guid}'",
+        )
 
         if response.data is None:
             raise CredentialVaultError(
@@ -253,7 +287,7 @@ class DaprCredentialVault:
     ) -> dict[str, Any]:
         """Fetch and process a secret from the Dapr secret store.
 
-        Retries a cold-start race via :func:`retry_past_cold_start` and
+        Retries a cold-start race via :func:`retry_past_dapr_cold_start` and
         classifies failures via the shared
         :func:`~application_sdk.infrastructure._dapr.client.classify_secret_fetch_error`
         (transport/5xx = unreachable, retried; 4xx = definitive rejection,
@@ -288,7 +322,7 @@ class DaprCredentialVault:
             return result
 
         try:
-            result = await retry_past_cold_start(
+            result = await retry_past_dapr_cold_start(
                 _fetch,
                 description=f"Credential-vault secret fetch for '{secret_key}'",
             )

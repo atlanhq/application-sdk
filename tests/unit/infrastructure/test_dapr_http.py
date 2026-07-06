@@ -17,7 +17,12 @@ from application_sdk.infrastructure._dapr.http import (
     AsyncDaprClient,
     BindingResult,
     get_dapr_component_types,
+    retry_past_dapr_cold_start,
     wait_for_dapr_sidecar,
+)
+from application_sdk.infrastructure.secrets import (
+    SecretNotFoundError,
+    SecretStoreUnavailableError,
 )
 
 
@@ -492,6 +497,123 @@ class TestWaitForDaprSidecar:
             )
             mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
             await wait_for_dapr_sidecar(timeout=0.05, interval=0.01)
+
+    async def test_ready_arms_shared_cold_start_gate(self, monkeypatch):
+        """A successful health probe arms the same gate
+        retry_past_dapr_cold_start consults — a worker that already confirmed
+        readiness at startup shouldn't pay a second, uninformed wait on its
+        first real Dapr call."""
+        monkeypatch.setattr(
+            "application_sdk.infrastructure._dapr.http._dapr_sidecar_confirmed_ready",
+            False,
+        )
+        mock_response = MagicMock()
+        mock_response.status_code = 204
+        mock_get = AsyncMock(return_value=mock_response)
+        with (
+            self._DEPLOYED,
+            patch(
+                "application_sdk.infrastructure._dapr.http.httpx.AsyncClient"
+            ) as mock_cls,
+        ):
+            mock_cls.return_value.__aenter__ = AsyncMock(
+                return_value=MagicMock(get=mock_get)
+            )
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            await wait_for_dapr_sidecar(timeout=5.0, interval=0.01)
+
+        import application_sdk.infrastructure._dapr.http as http_mod
+
+        assert http_mod._dapr_sidecar_confirmed_ready is True
+
+    async def test_timeout_does_not_arm_shared_cold_start_gate(self, monkeypatch):
+        """Giving up on the health probe must NOT arm the shared gate — a
+        later real Dapr call still needs its own retry budget in case the
+        sidecar needed a little longer than the startup probe waited."""
+        monkeypatch.setattr(
+            "application_sdk.infrastructure._dapr.http._dapr_sidecar_confirmed_ready",
+            False,
+        )
+        not_ready = MagicMock()
+        not_ready.status_code = 503
+        mock_get = AsyncMock(return_value=not_ready)
+        with (
+            self._DEPLOYED,
+            patch(
+                "application_sdk.infrastructure._dapr.http.httpx.AsyncClient"
+            ) as mock_cls,
+            patch("application_sdk.infrastructure._dapr.http.logger"),
+        ):
+            mock_cls.return_value.__aenter__ = AsyncMock(
+                return_value=MagicMock(get=mock_get)
+            )
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            await wait_for_dapr_sidecar(timeout=0.05, interval=0.01)
+
+        import application_sdk.infrastructure._dapr.http as http_mod
+
+        assert http_mod._dapr_sidecar_confirmed_ready is False
+
+
+class TestRetryPastDaprColdStart:
+    """Tests for retry_past_dapr_cold_start — the shared cold-start retry
+    engine used by every Dapr-backed call site that opts in (secret fetch,
+    credential-vault config fetch, named-credential resolver path)."""
+
+    async def test_retries_transient_failure_then_succeeds(
+        self, fast_dapr_cold_start_retry
+    ) -> None:
+        calls = {"n": 0}
+
+        async def call() -> str:
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise SecretStoreUnavailableError("p")
+            return "value"
+
+        result = await retry_past_dapr_cold_start(call, description="test call")
+
+        assert result == "value"
+        assert calls["n"] == 3
+
+    async def test_non_transient_exception_arms_gate_and_fails_fast(
+        self, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(
+            "application_sdk.infrastructure._dapr.http.DAPR_COLD_START_MAX_WAIT_SECONDS",
+            30.0,
+        )
+        calls = {"n": 0}
+
+        async def call() -> str:
+            calls["n"] += 1
+            raise SecretNotFoundError("p")
+
+        with pytest.raises(SecretNotFoundError):
+            await retry_past_dapr_cold_start(call, description="test call")
+        assert calls["n"] == 1
+
+        # The gate is now armed — a later transient failure is not retried.
+        async def transient_call() -> str:
+            calls["n"] += 1
+            raise SecretStoreUnavailableError("p")
+
+        with pytest.raises(SecretStoreUnavailableError):
+            await retry_past_dapr_cold_start(transient_call, description="test call")
+        assert calls["n"] == 2
+
+    async def test_gives_up_at_deadline(
+        self, deterministic_dapr_cold_start_deadline
+    ) -> None:
+        calls = {"n": 0}
+
+        async def call() -> str:
+            calls["n"] += 1
+            raise SecretStoreUnavailableError("p")
+
+        with pytest.raises(SecretStoreUnavailableError):
+            await retry_past_dapr_cold_start(call, description="test call")
+        assert calls["n"] == 2
 
 
 class TestGetDaprComponentTypes:

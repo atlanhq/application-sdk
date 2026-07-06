@@ -92,19 +92,9 @@ class TestNamedPathColdStartRetry:
     """The named-path fetch (``_fetch_raw_json``) races the same cold Dapr
     sidecar the agent bundle fetch does, and shares its retry engine."""
 
-    async def test_retries_transient_failure_then_succeeds(self, monkeypatch) -> None:
-        monkeypatch.setattr(
-            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_WAIT_SECONDS",
-            30.0,
-        )
-        monkeypatch.setattr(
-            "application_sdk.infrastructure.secrets.SECRET_FETCH_BASE_DELAY_SECONDS",
-            0.0,
-        )
-        monkeypatch.setattr(
-            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_DELAY_SECONDS",
-            0.0,
-        )
+    async def test_retries_transient_failure_then_succeeds(
+        self, fast_dapr_cold_start_retry
+    ) -> None:
         calls = {"n": 0}
 
         class ColdThenReady:
@@ -123,31 +113,13 @@ class TestNamedPathColdStartRetry:
         assert calls["n"] == 3  # rode out the two cold failures
 
     async def test_persistent_transient_failure_wraps_in_credential_error(
-        self, monkeypatch
+        self, deterministic_dapr_cold_start_deadline
     ) -> None:
         from application_sdk.credentials.errors import CredentialError
 
-        # Deterministic fake clock + no-op sleep: each attempt advances the
-        # clock past half the deadline, so this gives up after exactly 2
-        # attempts. Also asserts the call count, so this test can't pass
-        # merely because _fetch_raw_json wraps any exception into
-        # CredentialError — it must actually have retried first.
-        monkeypatch.setattr(
-            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_WAIT_SECONDS",
-            10.0,
-        )
-        monkeypatch.setattr(
-            "application_sdk.infrastructure.secrets.asyncio.sleep", AsyncMock()
-        )
-        fake_now = {"t": 0.0}
-
-        def fake_monotonic() -> float:
-            fake_now["t"] += 6.0
-            return fake_now["t"]
-
-        monkeypatch.setattr(
-            "application_sdk.infrastructure.secrets.time.monotonic", fake_monotonic
-        )
+        # Also asserts the call count, so this test can't pass merely
+        # because _fetch_raw_json wraps any exception into CredentialError —
+        # it must actually have retried first.
         calls = {"n": 0}
 
         class AlwaysDown:
@@ -168,7 +140,7 @@ def _make_vault_patches(vault_return=None, vault_side_effect=None):
     DaprCredentialVault and DaprClient are lazy-imported inside _resolve_by_guid,
     so they must be patched at their source modules, not on the resolver module.
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import MagicMock, patch
 
     mock_vault = MagicMock()
     if vault_side_effect is not None:
@@ -211,7 +183,7 @@ class TestGuidResolutionPath:
 
     async def test_get_credentials_receives_string_not_dict(self, store, resolver):
         """Regression: resolver must pass the GUID as a plain string, not a dict."""
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import MagicMock, patch
 
         captured: list = []
         expected_creds = {"host": "db.example.com", "port": 1025}
@@ -296,7 +268,7 @@ class TestGuidResolutionPath:
 
         Mirrors how DaprCredentialVault.get_credentials() actually produces
         this: its catch-all wraps the surviving ColdStartRaceError (e.g.
-        SecretStoreUnavailableError, from an exhausted retry_past_cold_start
+        SecretStoreUnavailableError, from an exhausted retry_past_dapr_cold_start
         budget) as `cause` on a generic CredentialVaultError — the resolver
         must key off that `cause`, not just the CredentialVaultError type
         itself (see the sibling "genuinely missing config" test below).
@@ -355,7 +327,7 @@ class TestEndToEndCredentialResolution:
         → resolve_raw returns merged dict with all fields.
         """
         import os
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import MagicMock, patch
 
         guid = "e2e-test-guid-abc123"
 
