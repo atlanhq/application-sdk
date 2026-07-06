@@ -164,9 +164,27 @@ class SecretStoreUnavailableError(SecretStoreError, ColdStartRaceError):
 #: ``infrastructure/_dapr/http.py``) before raising, so the worst-case total
 #: wait before final failure can exceed this value by up to one attempt's
 #: duration. Env-overridable for pathological runners.
-SECRET_FETCH_MAX_WAIT_SECONDS: float = float(
-    os.environ.get("ATLAN_SECRET_FETCH_MAX_WAIT_SECONDS", "120")
-)
+SECRET_FETCH_MAX_WAIT_SECONDS: float = 120.0
+_raw_max_wait = os.environ.get("ATLAN_SECRET_FETCH_MAX_WAIT_SECONDS")
+if _raw_max_wait is not None:
+    try:
+        _parsed_max_wait = float(_raw_max_wait)
+        if _parsed_max_wait > 0:
+            SECRET_FETCH_MAX_WAIT_SECONDS = _parsed_max_wait
+        else:
+            logger.warning(
+                "ATLAN_SECRET_FETCH_MAX_WAIT_SECONDS=%r is non-positive; using default %.0f s",
+                _raw_max_wait,
+                SECRET_FETCH_MAX_WAIT_SECONDS,
+            )
+    except ValueError:
+        logger.warning(
+            "ATLAN_SECRET_FETCH_MAX_WAIT_SECONDS=%r is not a valid number; using default %.0f s",
+            _raw_max_wait,
+            SECRET_FETCH_MAX_WAIT_SECONDS,
+            exc_info=True,
+        )
+del _raw_max_wait
 SECRET_FETCH_BASE_DELAY_SECONDS: float = 2.0
 SECRET_FETCH_MAX_DELAY_SECONDS: float = 10.0
 
@@ -223,7 +241,14 @@ async def retry_past_cold_start(
             secret_store.get(name)``. Must be idempotent — it may be invoked
             more than once.
         description: Human-readable label for the retry-warning log line,
-            e.g. ``"Agent secret-bundle fetch at 'foo'"``.
+            e.g. ``"Agent secret-bundle fetch at 'foo'"``. Only ``description``
+            and the failing exception's *type name* are logged on each
+            retried attempt — never the exception's message/traceback, since
+            a :class:`SecretStoreError`'s ``str()`` embeds ``secret=<name>``
+            and some callers pass a hashed/redacted ``description``
+            specifically to keep the raw secret/ref-key out of logs. Callers
+            that need full diagnostics on terminal failure should log them
+            at their own boundary, with whatever redaction they require.
     """
     global _secret_store_confirmed_ready
 
@@ -252,14 +277,20 @@ async def retry_past_cold_start(
                 SECRET_FETCH_BASE_DELAY_SECONDS * (2 ** min(attempt - 1, 10)),
                 remaining,
             )
+            # Log the exception TYPE only, never its str()/traceback: some
+            # callers (e.g. credentials/agent.py's single-key probe) pass a
+            # pre-redacted `description` specifically because the underlying
+            # SecretStoreError's message/`secret=<name>` embeds the raw
+            # secret/ref-key — interpolating `exc` or using `exc_info=True`
+            # here would leak it right back in on every retried attempt,
+            # regardless of what the caller redacted.
             logger.warning(
-                "%s failed (attempt %d); the dependency is not yet "
-                "reachable — retrying in %.1fs: %s",
+                "%s failed (attempt %d, %s); the dependency is not yet "
+                "reachable — retrying in %.1fs",
                 description,
                 attempt,
+                type(exc).__name__,
                 delay,
-                exc,
-                exc_info=True,
             )
             await asyncio.sleep(delay)
         # conformance: ignore[E004] proof the dependency answered (definitively) — arms the cold-start gate and re-raises unchanged

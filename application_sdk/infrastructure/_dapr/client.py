@@ -119,6 +119,43 @@ class DaprStateStore:
         raise DaprListKeysUnsupportedError()
 
 
+def classify_secret_fetch_error(name: str, exc: Exception) -> SecretStoreError:
+    """Classify a raw Dapr secret-fetch exception as unreachable vs. rejected.
+
+    Classify "unreachable" vs "answered-and-rejected" HERE, where the httpx
+    exception family is visible (callers outside ``_dapr/`` can't import
+    httpx — the same layering rule that gates dapr/redis imports). A
+    transport error (cold start, connection refused, reset mid-handshake,
+    timeout) or a 5xx that survived the transport's own retries is
+    cold-start-shaped and retryable; a 4xx / anything else is a definitive
+    rejection. Raising a distinct type lets callers retry a startup race
+    without duck-typing text.
+
+    Shared by every ``_dapr/`` call site that fetches a secret directly via
+    :class:`AsyncDaprClient` (:meth:`DaprSecretStore.get`,
+    :meth:`~application_sdk.infrastructure._dapr.credential_vault.DaprCredentialVault._get_secret`)
+    so a future change to the classification rule only needs to happen once.
+    """
+    if isinstance(exc, httpx.TransportError):
+        return SecretStoreUnavailableError(name, cause=exc)
+    if isinstance(exc, httpx.HTTPStatusError):
+        if exc.response.status_code >= 500:
+            return SecretStoreUnavailableError(name, cause=exc)
+        # A 4xx is a definitive rejection (bad auth/binding/path) — retrying
+        # the identical request would fail identically every time, so mark
+        # it explicitly non-retryable rather than inheriting the optimistic
+        # DependencyUnavailableError default. This is a *wire-level* retry
+        # hint (Temporal/observability), independent of retry_past_cold_start
+        # — which dispatches on ColdStartRaceError type, not this flag.
+        return SecretStoreError(
+            f"Failed to get secret: {exc}",
+            secret_name=name,
+            cause=exc,
+            retryable=False,
+        )
+    return SecretStoreError(f"Failed to get secret: {exc}", secret_name=name, cause=exc)
+
+
 class DaprSecretStore:
     """Dapr-backed secret store implementation."""
 
@@ -167,39 +204,9 @@ class DaprSecretStore:
             return orjson.dumps(result).decode()
         except SecretNotFoundError:
             raise
-        # Classify "unreachable" vs "answered-and-rejected" HERE, where the httpx
-        # exception family is visible (agent.py, being outside _dapr/, can't import
-        # httpx — the same layering rule that gates dapr/redis imports). A transport
-        # error (cold start, connection refused, reset mid-handshake, timeout) or a
-        # 5xx that survived the transport's own retries is cold-start-shaped and
-        # retryable; a 4xx / anything else is a definitive rejection. Raising a
-        # distinct type lets callers retry a startup race without duck-typing text.
-        # conformance: ignore[E004] re-raises as typed SecretStore(Unavailable)Error with cause chain; traceback preserved
-        except httpx.TransportError as e:
-            raise SecretStoreUnavailableError(name, cause=e) from e
-        # conformance: ignore[E004] re-raises as typed SecretStore(Unavailable)Error with cause chain; traceback preserved
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code >= 500:
-                raise SecretStoreUnavailableError(name, cause=e) from e
-            # A 4xx is a definitive rejection (bad auth/binding/path) — retrying
-            # the identical request would fail identically every time, so mark
-            # it explicitly non-retryable rather than inheriting the optimistic
-            # DependencyUnavailableError default. This is a *wire-level* retry
-            # hint (Temporal/observability), independent of retry_past_cold_start
-            # — which dispatches on ColdStartRaceError type, not this flag.
-            raise SecretStoreError(
-                f"Failed to get secret: {e}",
-                secret_name=name,
-                cause=e,
-                retryable=False,
-            ) from e
-        # conformance: ignore[E004] re-raises as typed SecretStoreError with cause chain; traceback preserved
+        # conformance: ignore[E004] re-raises as typed SecretStore(Unavailable)Error via the shared classifier; cause chain preserved
         except Exception as e:
-            raise SecretStoreError(
-                f"Failed to get secret: {e}",
-                secret_name=name,
-                cause=e,
-            ) from e
+            raise classify_secret_fetch_error(name, e) from e
 
     async def get_optional(self, name: str) -> str | None:
         """Get a secret via Dapr, returning None if not found."""

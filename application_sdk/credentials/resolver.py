@@ -206,9 +206,15 @@ class CredentialResolver:
         from application_sdk.errors import (  # noqa: PLC0415 — circular: errors imports observability which loads credentials transitively
             DependencyUnavailableError,
         )
+        from application_sdk.errors.leaves import (  # noqa: PLC0415 — circular: errors imports observability which loads credentials transitively
+            ColdStartRaceError,
+        )
         from application_sdk.infrastructure import (  # noqa: PLC0415 — optional dep: dapr (DaprCredentialVault is Dapr-only)
             AsyncDaprClient,
             DaprCredentialVault,
+        )
+        from application_sdk.infrastructure.credential_vault import (  # noqa: PLC0415 — optional dep: dapr (DaprCredentialVault is Dapr-only)
+            CredentialVaultError,
         )
 
         dapr_client = AsyncDaprClient()
@@ -218,10 +224,27 @@ class CredentialResolver:
             return result
         except CredentialNotFoundError:
             raise
-        # A genuine dependency-unavailable failure (e.g. CredentialVaultError
-        # after retry_past_cold_start exhausts its budget) must not collapse
-        # into "not found" — that would misreport a retryable platform outage
-        # as a non-retryable, user-facing "credential not found".
+        except CredentialVaultError as exc:
+            # CredentialVaultError is DaprCredentialVault's single umbrella
+            # error: raised directly (with no `cause`) for a definitively
+            # missing/invalid credential config, AND used to wrap a genuine
+            # platform outage that exhausted retry_past_cold_start's budget
+            # (`cause` is the surviving ColdStartRaceError, e.g.
+            # SecretStoreUnavailableError). Only the latter must bypass the
+            # not-found collapse below — collapsing a real outage into "not
+            # found" would misreport a retryable platform issue as a
+            # non-retryable, user-facing "credential not found". A genuinely
+            # absent config IS a not-found and should collapse like every
+            # other failure here, not be swept up by the broader
+            # DependencyUnavailableError check just because this deprecated
+            # umbrella type happens to subclass it.
+            if isinstance(exc.cause, ColdStartRaceError):
+                raise
+            raise CredentialNotFoundError(ref.credential_guid) from exc
+        # A genuine dependency-unavailable failure that didn't come through
+        # CredentialVaultError (e.g. a future CredentialVault implementation
+        # raising DependencyUnavailableError directly) must not collapse
+        # into "not found" either — same reasoning as above.
         except DependencyUnavailableError:
             raise
         # conformance: ignore[E004] re-raise only; wraps any unexpected vault error into typed CredentialNotFoundError and re-raises

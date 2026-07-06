@@ -10,14 +10,11 @@ import re
 from enum import Enum
 from typing import Any
 
-import httpx
-
+from application_sdk.infrastructure._dapr.client import classify_secret_fetch_error
 from application_sdk.infrastructure._dapr.http import AsyncDaprClient
 from application_sdk.infrastructure._secret_utils import process_secret_data
 from application_sdk.infrastructure.secrets import (
     SecretNotFoundError,
-    SecretStoreError,
-    SecretStoreUnavailableError,
     retry_past_cold_start,
 )
 from application_sdk.observability.logger_adaptor import get_logger
@@ -257,7 +254,8 @@ class DaprCredentialVault:
         """Fetch and process a secret from the Dapr secret store.
 
         Retries a cold-start race via :func:`retry_past_cold_start` and
-        classifies failures the same way :meth:`DaprSecretStore.get` does
+        classifies failures via the shared
+        :func:`~application_sdk.infrastructure._dapr.client.classify_secret_fetch_error`
         (transport/5xx = unreachable, retried; 4xx = definitive rejection,
         not retried) instead of collapsing every failure into a single
         non-retryable ``SecretFetchError`` the way this used to — that made
@@ -282,24 +280,9 @@ class DaprCredentialVault:
         async def _fetch() -> dict[str, str]:
             try:
                 result = await self._client.get_secret(store_name=store, key=secret_key)
-            except httpx.TransportError as e:
-                raise SecretStoreUnavailableError(secret_key, cause=e) from e
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code >= 500:
-                    raise SecretStoreUnavailableError(secret_key, cause=e) from e
-                raise SecretStoreError(
-                    f"Failed to get secret: {e}",
-                    secret_name=secret_key,
-                    cause=e,
-                    retryable=False,
-                ) from e
-            # conformance: ignore[E004] re-raises as typed SecretStoreError with cause chain; traceback preserved
+            # conformance: ignore[E004] re-raises as typed SecretStore(Unavailable)Error via the shared classifier; cause chain preserved
             except Exception as e:
-                raise SecretStoreError(
-                    f"Failed to get secret: {e}",
-                    secret_name=secret_key,
-                    cause=e,
-                ) from e
+                raise classify_secret_fetch_error(secret_key, e) from e
             if not result:
                 raise SecretNotFoundError(secret_key)
             return result
