@@ -181,16 +181,50 @@ async def resolve_agent_json(
     return await resolve_agent_credential(spec, secret_store)
 
 
+def _is_transient_store_error(exc: BaseException) -> bool:
+    """Whether a bundle-fetch failure looks like the secret store / Dapr sidecar
+    being *not yet reachable* (worth waiting on) vs. a *genuine* store error
+    (bad auth, wrong path/binding — should fail fast).
+
+    Type alone can't distinguish them — a cold sidecar and a misconfigured
+    binding both surface as ``SecretStoreError`` — so this walks the
+    cause/context chain and matches connection-class exceptions plus the
+    canonical connection-failure text. It deliberately errs toward NOT retrying
+    an unrecognised error, so a real misconfiguration still fails in
+    milliseconds instead of blocking for the whole retry window.
+    """
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        # ConnectionError / TimeoutError (+ subclasses like ConnectionRefused)
+        # are unambiguously transport-level. NB: OSError is intentionally NOT
+        # matched — PermissionError etc. are OSError subclasses and must fail
+        # fast.
+        if isinstance(cur, (ConnectionError, TimeoutError)):
+            return True
+        # Backend-agnostic: httpx.ConnectError/ConnectTimeout/ReadTimeout/
+        # TransportError etc. (the Dapr HTTP client) by class-name token, so we
+        # don't hard-depend on httpx here.
+        type_name = type(cur).__name__.lower()
+        if any(tok in type_name for tok in ("connect", "timeout", "transport")):
+            return True
+        text = str(cur).lower()
+        if "all connection attempts failed" in text or "connection refused" in text:
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
+
+
 async def _get_bundle_raw(secret_store: SecretStore, secret_path: str) -> Any:
     """``secret_store.get`` with a readiness retry for a cold Dapr sidecar.
 
-    A genuine missing secret (``SecretNotFoundError``) is re-raised immediately —
-    retrying it is pointless. Any other failure is treated as transient (the
-    sidecar/secret store not yet reachable — e.g. daprd still initialising, which
-    surfaces as "All connection attempts failed") and retried with capped
-    exponential backoff until ``_BUNDLE_FETCH_MAX_WAIT_SECONDS`` elapses, then the
-    last error is re-raised. Pure retry wrapper — no behaviour change once the
-    store responds.
+    A genuine missing secret (``SecretNotFoundError``) is re-raised immediately.
+    Other failures are retried **only if they look transient** (see
+    :func:`_is_transient_store_error` — a not-yet-reachable sidecar/store), with
+    capped exponential backoff until ``_BUNDLE_FETCH_MAX_WAIT_SECONDS`` elapses;
+    a genuine store error (auth, bad binding/path) is re-raised at once. Pure
+    retry wrapper — no behaviour change once the store responds.
     """
     deadline = time.monotonic() + _BUNDLE_FETCH_MAX_WAIT_SECONDS
     attempt = 0
@@ -200,13 +234,19 @@ async def _get_bundle_raw(secret_store: SecretStore, secret_path: str) -> Any:
             return await secret_store.get(secret_path)
         except SecretNotFoundError:
             raise
-        # conformance: ignore[E004] transient-fetch retry; re-raises the last error once the deadline passes
+        # conformance: ignore[E004] transient-fetch retry; re-raises non-transient errors and the last error once the deadline passes
         except Exception as exc:
-            if time.monotonic() >= deadline:
+            remaining = deadline - time.monotonic()
+            # Fail fast on a genuine (non-transient) store error, or once the
+            # budget is spent.
+            if remaining <= 0 or not _is_transient_store_error(exc):
                 raise
+            # Cap the backoff to the remaining budget so the total wait can't
+            # overshoot _BUNDLE_FETCH_MAX_WAIT_SECONDS by a full delay.
             delay = min(
                 _BUNDLE_FETCH_MAX_DELAY_SECONDS,
                 _BUNDLE_FETCH_BASE_DELAY_SECONDS * (2 ** (attempt - 1)),
+                remaining,
             )
             logger.warning(
                 "Agent secret-bundle fetch at '%s' failed (attempt %d); the Dapr "

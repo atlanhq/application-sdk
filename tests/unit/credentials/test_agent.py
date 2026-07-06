@@ -511,6 +511,53 @@ class TestBundleFetchReadinessRetry:
             await resolve_agent_json(self._AGENT_JSON, AlwaysDown())  # type: ignore[arg-type]
         assert calls["n"] >= 2  # retried before giving up at the deadline
 
+    async def test_non_transient_error_fails_fast(self, monkeypatch) -> None:
+        # A genuine, non-connection store error (bad auth / binding / path) must
+        # NOT be retried — it fails on the first attempt even with a generous
+        # window, so a real misconfiguration doesn't block for the whole budget.
+        monkeypatch.setattr(
+            "application_sdk.credentials.agent._BUNDLE_FETCH_MAX_WAIT_SECONDS", 30.0
+        )
+        calls = {"n": 0}
+
+        class BadBinding:
+            async def get(self, name: str) -> str:
+                calls["n"] += 1
+                raise SecretStoreError("Failed to get secret: access denied")
+
+        with pytest.raises(CredentialError):
+            await resolve_agent_json(self._AGENT_JSON, BadBinding())  # type: ignore[arg-type]
+        assert calls["n"] == 1  # not retried — not a transient/connection error
+
+    async def test_connection_class_cause_is_treated_transient(
+        self, monkeypatch
+    ) -> None:
+        # A store error whose *message* isn't obviously connection-y is still
+        # retried when its cause chain is a connection-class exception.
+        monkeypatch.setattr(
+            "application_sdk.credentials.agent._BUNDLE_FETCH_MAX_WAIT_SECONDS", 30.0
+        )
+        monkeypatch.setattr(
+            "application_sdk.credentials.agent._BUNDLE_FETCH_BASE_DELAY_SECONDS", 0.0
+        )
+        monkeypatch.setattr(
+            "application_sdk.credentials.agent._BUNDLE_FETCH_MAX_DELAY_SECONDS", 0.0
+        )
+        calls = {"n": 0}
+
+        class ColdViaCause:
+            async def get(self, name: str) -> str:
+                calls["n"] += 1
+                if calls["n"] < 2:
+                    raise SecretStoreError("sidecar unavailable") from ConnectionError(
+                        "connect call failed"
+                    )
+                return _bundle(user="real")
+
+        result = await resolve_agent_json(self._AGENT_JSON, ColdViaCause())  # type: ignore[arg-type]
+        assert calls["n"] == 2  # retried via the connection-class cause
+        assert result["agent-name"] == "t"
+
 
 class TestSingleKeyMode:
     """``key-type: single-key`` — per-field lookups against the secret store.
