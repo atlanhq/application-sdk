@@ -10,7 +10,9 @@ from application_sdk.infrastructure.secrets import (
     EnvironmentSecretStore,
     SecretNotFoundError,
     SecretStoreError,
+    SecretStoreUnavailableError,
     get_deployment_secret,
+    retry_past_cold_start,
 )
 from application_sdk.testing.mocks import MockSecretStore
 
@@ -255,6 +257,119 @@ class TestSecretStoreError:
         """Test that secret_name is included in string representation."""
         err = SecretStoreError("failed", secret_name="MY_VAR")
         assert "MY_VAR" in str(err)
+
+    def test_secret_store_error_defaults_retryable(self) -> None:
+        """Unset retryable falls back to DependencyUnavailableError's default (True)."""
+        err = SecretStoreError("failed")
+        assert err.effective_retryable is True
+        assert err.to_failure_details().retryable is True
+
+    def test_secret_store_error_retryable_override(self) -> None:
+        """A definitive rejection (e.g. a 4xx) can be marked non-retryable
+        explicitly — retrying it would fail identically every time."""
+        err = SecretStoreError("forbidden", secret_name="MY_VAR", retryable=False)
+        assert err.effective_retryable is False
+        assert err.to_failure_details().retryable is False
+
+
+class TestSecretStoreUnavailableError:
+    """Tests for SecretStoreUnavailableError — the structurally-transient
+    "store unreachable" subtype callers retry a cold-start race against."""
+
+    def test_is_a_secret_store_error(self) -> None:
+        err = SecretStoreUnavailableError("db_pass", cause=RuntimeError("boom"))
+        assert isinstance(err, SecretStoreError)
+
+    def test_includes_code_and_secret_name(self) -> None:
+        err = SecretStoreUnavailableError("db_pass")
+        assert err.code == "DEPENDENCY_UNAVAILABLE_SECRET_STORE_UNREACHABLE"
+        assert "db_pass" in str(err)
+
+    def test_defaults_retryable_true(self) -> None:
+        """Unlike a definitive rejection, an unreachable store is retryable
+        by default — it inherits DependencyUnavailableError's default."""
+        err = SecretStoreUnavailableError("db_pass")
+        assert err.effective_retryable is True
+
+
+class TestRetryPastColdStart:
+    """Tests for retry_past_cold_start — the shared cold-start retry engine
+    used by every SecretStore-backed call site that opts in."""
+
+    async def test_retries_transient_failure_then_succeeds(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_WAIT_SECONDS",
+            30.0,
+        )
+        monkeypatch.setattr(
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_BASE_DELAY_SECONDS",
+            0.0,
+        )
+        monkeypatch.setattr(
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_DELAY_SECONDS",
+            0.0,
+        )
+        calls = {"n": 0}
+
+        async def call() -> str:
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise SecretStoreUnavailableError("p")
+            return "value"
+
+        result = await retry_past_cold_start(call, description="test call")
+
+        assert result == "value"
+        assert calls["n"] == 3
+
+    async def test_non_transient_exception_arms_gate_and_fails_fast(
+        self, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_WAIT_SECONDS",
+            30.0,
+        )
+        calls = {"n": 0}
+
+        async def call() -> str:
+            calls["n"] += 1
+            raise SecretNotFoundError("p")
+
+        with pytest.raises(SecretNotFoundError):
+            await retry_past_cold_start(call, description="test call")
+        assert calls["n"] == 1
+
+        # The gate is now armed — a later transient failure is not retried.
+        async def transient_call() -> str:
+            calls["n"] += 1
+            raise SecretStoreUnavailableError("p")
+
+        with pytest.raises(SecretStoreUnavailableError):
+            await retry_past_cold_start(transient_call, description="test call")
+        assert calls["n"] == 2
+
+    async def test_gives_up_at_deadline(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_WAIT_SECONDS",
+            0.05,
+        )
+        monkeypatch.setattr(
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_BASE_DELAY_SECONDS",
+            0.01,
+        )
+        monkeypatch.setattr(
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_DELAY_SECONDS",
+            0.01,
+        )
+        calls = {"n": 0}
+
+        async def call() -> str:
+            calls["n"] += 1
+            raise SecretStoreUnavailableError("p")
+
+        with pytest.raises(SecretStoreUnavailableError):
+            await retry_past_cold_start(call, description="test call")
+        assert calls["n"] >= 2
 
 
 class TestGetDeploymentSecret:

@@ -47,6 +47,22 @@ def _safe_patch(target, side_effect=None, mock_obj=None):
 
 
 @pytest.fixture(autouse=True)
+def _reset_secret_store_cold_start_gate(monkeypatch):
+    """Reset the process-level cold-start gate before every unit test.
+
+    ``application_sdk.infrastructure.secrets._secret_store_confirmed_ready``
+    is a module global shared by every ``retry_past_cold_start`` caller
+    (agent bundle fetch, single-key probes, the named-credential resolver
+    path). Without a reset, a successful resolve in one test would leave it
+    set for the rest of the session, silently skipping the cold-start retry
+    loop under test in a later, order-dependent test.
+    """
+    monkeypatch.setattr(
+        "application_sdk.infrastructure.secrets._secret_store_confirmed_ready", False
+    )
+
+
+@pytest.fixture(autouse=True)
 def mock_secret_store():
     """Automatically mock get_deployment_secret for all unit tests."""
     ctx = _safe_patch(

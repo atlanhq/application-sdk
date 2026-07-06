@@ -1,8 +1,11 @@
 """Secrets management abstraction."""
 
+import asyncio
 import os
+import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, ClassVar, Protocol
+from typing import Any, ClassVar, Protocol, TypeVar
 
 from application_sdk.errors import SECRET_NOT_FOUND, SECRET_STORE_ERROR, ErrorCode
 from application_sdk.errors.categories import Audience
@@ -11,6 +14,8 @@ from application_sdk.infrastructure._secret_utils import process_secret_data
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+_T = TypeVar("_T")
 
 
 async def get_deployment_secret(key: str) -> Any:
@@ -95,8 +100,11 @@ class SecretStoreError(DependencyUnavailableError):
         secret_name: str | None = None,
         cause: Exception | None = None,
         error_code: ErrorCode | None = None,
+        retryable: bool | None = None,
     ) -> None:
-        DependencyUnavailableError.__init__(self, message=message, cause=cause)
+        DependencyUnavailableError.__init__(
+            self, message=message, cause=cause, retryable=retryable
+        )
         self.secret_name = secret_name
         self._error_code = error_code
 
@@ -138,6 +146,104 @@ class SecretStoreUnavailableError(SecretStoreError):
             secret_name=secret_name,
             cause=cause,
         )
+
+
+#: How long an idempotent SecretStore call may retry a transient
+#: :class:`SecretStoreUnavailableError` before giving up. The agent
+#: secret-bundle fetch is typically the first Dapr call a workflow makes and
+#: can race a cold sidecar (daprd component init has been observed up to
+#: ~75s on fresh CI runners); every :func:`retry_past_cold_start` caller
+#: shares this one budget, since they all race the same sidecar.
+#: Env-overridable for pathological runners.
+SECRET_FETCH_MAX_WAIT_SECONDS: float = float(
+    os.environ.get("ATLAN_AGENT_SECRET_FETCH_MAX_WAIT_SECONDS", "120")
+)
+SECRET_FETCH_BASE_DELAY_SECONDS: float = 2.0
+SECRET_FETCH_MAX_DELAY_SECONDS: float = 10.0
+
+#: Process-level cold-start gate, shared by every call site that opts into
+#: cold-start retry via :func:`retry_past_cold_start` — they all race the
+#: same Dapr sidecar, so confirming readiness via one arms it for all. Set
+#: the first time any such call gets a definitive answer (success, or a
+#: non-transient failure) from the store in this worker process; a later
+#: failure is then a steady-state outage, left to surface via the backend's
+#: own (shorter) retry budget rather than being retried again here.
+_secret_store_confirmed_ready: bool = False
+
+
+async def retry_past_cold_start(
+    call: Callable[[], Awaitable[_T]],
+    *,
+    description: str,
+) -> _T:
+    """Retry an idempotent ``SecretStore`` call past a cold Dapr sidecar.
+
+    Retries only :class:`SecretStoreUnavailableError` (a structurally
+    transient failure — see its docstring) with capped exponential backoff
+    until :data:`SECRET_FETCH_MAX_WAIT_SECONDS` elapses. Any other exception
+    (a genuine rejection, or :class:`SecretNotFoundError`) is proof the store
+    is reachable: it arms the process-level cold-start gate and is
+    re-raised immediately, never retried.
+
+    Scoped to cold start: once any caller using this helper has seen the
+    store answer definitively in this worker process, later calls skip the
+    wait entirely and call through once — a later outage is then a
+    steady-state failure, left to surface via the backend's own (shorter)
+    retry budget instead of being masked for the full deadline on every
+    subsequent call.
+
+    Shared across every ``SecretStore``-backed call site that opts in
+    (the agent secret-bundle fetch, single-key probes, the named-credential
+    resolver path) — they all race the same sidecar, so one confirming
+    readiness arms it for the rest.
+
+    Args:
+        call: Zero-arg async callable to retry, e.g. ``lambda:
+            secret_store.get(name)``. Must be idempotent — it may be invoked
+            more than once.
+        description: Human-readable label for the retry-warning log line,
+            e.g. ``"Agent secret-bundle fetch at 'foo'"``.
+    """
+    global _secret_store_confirmed_ready
+
+    if _secret_store_confirmed_ready:
+        return await call()
+
+    deadline = time.monotonic() + SECRET_FETCH_MAX_WAIT_SECONDS
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            result = await call()
+        except SecretStoreUnavailableError as exc:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            # Cap the backoff to the remaining budget so the total wait can't
+            # overshoot SECRET_FETCH_MAX_WAIT_SECONDS by a full delay, and cap
+            # the exponent so a very large max-wait override can't overflow.
+            delay = min(
+                SECRET_FETCH_MAX_DELAY_SECONDS,
+                SECRET_FETCH_BASE_DELAY_SECONDS * (2 ** min(attempt - 1, 10)),
+                remaining,
+            )
+            logger.warning(
+                "%s failed (attempt %d); the secret store is not yet "
+                "reachable — retrying in %.1fs: %s",
+                description,
+                attempt,
+                delay,
+                exc,
+                exc_info=True,
+            )
+            await asyncio.sleep(delay)
+        # conformance: ignore[E004] proof the store answered (definitively) — arms the cold-start gate and re-raises unchanged
+        except Exception:
+            _secret_store_confirmed_ready = True
+            raise
+        else:
+            _secret_store_confirmed_ready = True
+            return result
 
 
 @dataclass(kw_only=True)

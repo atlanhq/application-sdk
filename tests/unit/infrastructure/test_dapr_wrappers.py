@@ -175,6 +175,9 @@ class TestDaprSecretStore:
         with pytest.raises(SecretStoreError) as exc:
             await self.store.get("x")
         assert not isinstance(exc.value, SecretStoreUnavailableError)
+        # A 4xx would fail identically on every retry — marked explicitly
+        # non-retryable rather than inheriting the optimistic default.
+        assert exc.value.effective_retryable is False
 
     async def test_get_optional_returns_value(self):
         self.client.get_secret.return_value = {"token": "abc"}

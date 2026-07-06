@@ -52,6 +52,7 @@ from application_sdk.infrastructure.secrets import (
     SecretNotFoundError,
     SecretStore,
     SecretStoreError,
+    SecretStoreUnavailableError,
     get_deployment_secret,
 )
 from application_sdk.infrastructure.state import StateStore, StateStoreError
@@ -82,6 +83,7 @@ __all__ = [
     "SecretNotFoundError",
     "SecretStore",
     "SecretStoreError",
+    "SecretStoreUnavailableError",
     "StateStore",
     "StateStoreError",
     "Subscription",

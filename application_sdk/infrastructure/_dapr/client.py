@@ -181,8 +181,15 @@ class DaprSecretStore:
         except httpx.HTTPStatusError as e:
             if e.response.status_code >= 500:
                 raise SecretStoreUnavailableError(name, cause=e) from e
+            # A 4xx is a definitive rejection (bad auth/binding/path) — retrying
+            # the identical request would fail identically every time, so mark
+            # it explicitly non-retryable rather than inheriting the optimistic
+            # DependencyUnavailableError default.
             raise SecretStoreError(
-                f"Failed to get secret: {e}", secret_name=name, cause=e
+                f"Failed to get secret: {e}",
+                secret_name=name,
+                cause=e,
+                retryable=False,
             ) from e
         # conformance: ignore[E004] re-raises as typed SecretStoreError with cause chain; traceback preserved
         except Exception as e:

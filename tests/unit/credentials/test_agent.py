@@ -40,17 +40,14 @@ from application_sdk.testing.mocks import MockSecretStore
 
 @pytest.fixture(autouse=True)
 def _no_bundle_fetch_retry(monkeypatch):
-    """Disable the cold-sidecar bundle-fetch retry window by default so
-    store-failure tests fail fast. The dedicated retry tests re-enable it.
+    """Disable the cold-sidecar retry window by default so store-failure
+    tests fail fast. The dedicated retry tests re-enable it.
 
-    Also reset the process-level cold-start gate before each test — it's a
-    module global that a successful resolve elsewhere would otherwise leave set,
-    which would make later tests skip the readiness loop under test."""
+    The process-level cold-start gate itself (shared across every
+    ``retry_past_cold_start`` caller, in ``infrastructure.secrets``) is reset
+    by the session-wide ``tests/unit/conftest.py`` fixture, not here."""
     monkeypatch.setattr(
-        "application_sdk.credentials.agent._BUNDLE_FETCH_MAX_WAIT_SECONDS", 0.0
-    )
-    monkeypatch.setattr(
-        "application_sdk.credentials.agent._sidecar_confirmed_ready", False
+        "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_WAIT_SECONDS", 0.0
     )
 
 
@@ -458,13 +455,14 @@ class TestBundleFetchReadinessRetry:
 
     async def test_retries_transient_failure_then_succeeds(self, monkeypatch) -> None:
         monkeypatch.setattr(
-            "application_sdk.credentials.agent._BUNDLE_FETCH_MAX_WAIT_SECONDS", 30.0
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_WAIT_SECONDS", 30.0
         )
         monkeypatch.setattr(
-            "application_sdk.credentials.agent._BUNDLE_FETCH_BASE_DELAY_SECONDS", 0.0
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_BASE_DELAY_SECONDS",
+            0.0,
         )
         monkeypatch.setattr(
-            "application_sdk.credentials.agent._BUNDLE_FETCH_MAX_DELAY_SECONDS", 0.0
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_DELAY_SECONDS", 0.0
         )
         calls = {"n": 0}
 
@@ -483,7 +481,7 @@ class TestBundleFetchReadinessRetry:
         # A generous window would let a retry loop run — but a genuine missing
         # secret must fail fast, on the first attempt.
         monkeypatch.setattr(
-            "application_sdk.credentials.agent._BUNDLE_FETCH_MAX_WAIT_SECONDS", 30.0
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_WAIT_SECONDS", 30.0
         )
         calls = {"n": 0}
 
@@ -498,13 +496,15 @@ class TestBundleFetchReadinessRetry:
 
     async def test_persistent_transient_failure_gives_up(self, monkeypatch) -> None:
         monkeypatch.setattr(
-            "application_sdk.credentials.agent._BUNDLE_FETCH_MAX_WAIT_SECONDS", 0.05
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_WAIT_SECONDS", 0.05
         )
         monkeypatch.setattr(
-            "application_sdk.credentials.agent._BUNDLE_FETCH_BASE_DELAY_SECONDS", 0.01
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_BASE_DELAY_SECONDS",
+            0.01,
         )
         monkeypatch.setattr(
-            "application_sdk.credentials.agent._BUNDLE_FETCH_MAX_DELAY_SECONDS", 0.01
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_DELAY_SECONDS",
+            0.01,
         )
         calls = {"n": 0}
 
@@ -522,7 +522,7 @@ class TestBundleFetchReadinessRetry:
         # NOT be retried — it fails on the first attempt even with a generous
         # window, so a real misconfiguration doesn't block for the whole budget.
         monkeypatch.setattr(
-            "application_sdk.credentials.agent._BUNDLE_FETCH_MAX_WAIT_SECONDS", 30.0
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_WAIT_SECONDS", 30.0
         )
         calls = {"n": 0}
 
@@ -543,7 +543,7 @@ class TestBundleFetchReadinessRetry:
         # SecretStoreUnavailableError (raised by the infra layer for a real
         # transport failure) is transient.
         monkeypatch.setattr(
-            "application_sdk.credentials.agent._BUNDLE_FETCH_MAX_WAIT_SECONDS", 30.0
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_WAIT_SECONDS", 30.0
         )
         calls = {"n": 0}
 
@@ -565,7 +565,7 @@ class TestBundleFetchReadinessRetry:
         # cold-start wait is NOT re-armed — a later outage fails fast (single
         # attempt) rather than being masked for the whole 120s budget.
         monkeypatch.setattr(
-            "application_sdk.credentials.agent._BUNDLE_FETCH_MAX_WAIT_SECONDS", 30.0
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_WAIT_SECONDS", 30.0
         )
         calls = {"n": 0}
 
@@ -585,6 +585,39 @@ class TestBundleFetchReadinessRetry:
         with pytest.raises(CredentialError):
             await resolve_agent_json(self._AGENT_JSON, ReadyThenDown())  # type: ignore[arg-type]
         assert calls["n"] == 2
+
+    async def test_cold_start_wait_not_rearmed_after_not_found(
+        self, monkeypatch
+    ) -> None:
+        # A definitive "not found" is proof the sidecar is up, just like a
+        # success — it must arm the gate too, so a later outage in the same
+        # worker process fails fast instead of re-entering the retry window.
+        monkeypatch.setattr(
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_WAIT_SECONDS",
+            30.0,
+        )
+        calls = {"n": 0}
+
+        class ReadyButMissingThenDown:
+            async def get(self, name: str) -> str:
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    raise SecretNotFoundError("p")  # confirms readiness
+                raise SecretStoreUnavailableError("p")  # later steady-state outage
+
+        with pytest.raises(CredentialNotFoundError):
+            await resolve_agent_json(
+                self._AGENT_JSON,
+                ReadyButMissingThenDown(),  # type: ignore[arg-type]
+            )
+        assert calls["n"] == 1
+
+        with pytest.raises(CredentialError):
+            await resolve_agent_json(
+                self._AGENT_JSON,
+                ReadyButMissingThenDown(),  # type: ignore[arg-type]
+            )
+        assert calls["n"] == 2  # not retried — the gate was already armed
 
 
 class TestSingleKeyMode:
@@ -702,6 +735,48 @@ class TestSingleKeyMode:
         assert resolved["username"] == "real_user"
         # Lookup error on BOOM was swallowed; placeholder retained.
         assert resolved["password"] == "BOOM"
+
+    async def test_transient_probe_failure_is_retried_not_misclassified(
+        self, monkeypatch
+    ) -> None:
+        """A cold-start SecretStoreUnavailableError during a single-key probe
+        must be retried, not silently treated as "key not in store" — that
+        would misclassify a transient infra outage as a definitive absence.
+        """
+        monkeypatch.setattr(
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_WAIT_SECONDS",
+            30.0,
+        )
+        monkeypatch.setattr(
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_BASE_DELAY_SECONDS",
+            0.0,
+        )
+        monkeypatch.setattr(
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_DELAY_SECONDS",
+            0.0,
+        )
+        calls = {"n": 0}
+
+        class ColdThenReady:
+            async def get_optional(self, name: str) -> str | None:
+                calls["n"] += 1
+                if calls["n"] < 3:
+                    raise SecretStoreUnavailableError(name)
+                return "real_user" if name == "ATLAN_USER" else None
+
+        agent_json = json.dumps(
+            {
+                "agent-name": "test-agent",
+                "key-type": "single-key",
+                "auth-type": "basic",
+                "basic.username": "ATLAN_USER",
+            }
+        )
+
+        resolved = await resolve_agent_json(agent_json, ColdThenReady())  # type: ignore[arg-type]
+
+        assert resolved["username"] == "real_user"
+        assert calls["n"] == 3  # rode out the two cold failures, not skipped
 
     async def test_store_outage_does_not_leak_ref_key_in_logs(self) -> None:
         """On a store outage during a single-key probe, the WARNING must not

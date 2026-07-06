@@ -41,11 +41,8 @@ consumable by any SQL, REST, NoSQL, or cloud-storage client whose
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
-import os
 import re
-import time
 import traceback
 from typing import TYPE_CHECKING, Any
 
@@ -60,7 +57,7 @@ from application_sdk.credentials.errors import (
 from application_sdk.errors import redact_secrets
 from application_sdk.infrastructure.secrets import (
     SecretNotFoundError,
-    SecretStoreUnavailableError,
+    retry_past_cold_start,
 )
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -69,27 +66,6 @@ if TYPE_CHECKING:
     from application_sdk.infrastructure.secrets import SecretStore
 
 logger = get_logger(__name__)
-
-#: The agent secret-bundle fetch is the FIRST Dapr call a workflow makes (during
-#: preflight credential resolution). On SDR/agent runs it can race a Dapr sidecar
-#: that is still finishing its cold start — daprd component init has been observed
-#: up to ~75s on fresh CI runners, past the app's startup readiness gate —
-#: surfacing as a transport failure ("All connection attempts failed"). The
-#: secret store raises ``SecretStoreUnavailableError`` for that case; retry it
-#: until the store responds, bounded by this deadline so a truly-broken store
-#: still fails rather than hanging. Env-overridable for pathological runners.
-_BUNDLE_FETCH_MAX_WAIT_SECONDS: float = float(
-    os.environ.get("ATLAN_AGENT_SECRET_FETCH_MAX_WAIT_SECONDS", "120")
-)
-_BUNDLE_FETCH_BASE_DELAY_SECONDS: float = 2.0
-_BUNDLE_FETCH_MAX_DELAY_SECONDS: float = 10.0
-
-#: Process-level cold-start gate. Set once the secret store answers (a success or
-#: a definitive not-found) in this worker; thereafter the long readiness wait
-#: above is NOT re-armed — a later failure is a steady-state outage that should
-#: surface fast via the transport's own (~15s) retry budget, not be masked for the
-#: full deadline on every subsequent agent-mode credential resolution.
-_sidecar_confirmed_ready: bool = False
 
 #: Root-level keys whose values are always literals, never ref-keys
 #: into the secret bundle. Mirrors the contract the Atlan platform
@@ -194,70 +170,18 @@ async def resolve_agent_json(
 async def _get_bundle_raw(secret_store: SecretStore, secret_path: str) -> Any:
     """``secret_store.get`` with a cold-start readiness retry for the Dapr sidecar.
 
-    The agent secret-bundle fetch is the first Dapr call a workflow makes, and on
-    SDR runs it can race a sidecar still finishing its cold start. The secret
-    store classifies an unreachable sidecar/store as
-    :class:`SecretStoreUnavailableError` (a transport failure, or a 5xx from a
-    still-initialising component) — distinct from a definitive rejection (bad
-    auth/binding/path → plain ``SecretStoreError``) or a missing secret
-    (``SecretNotFoundError``). Only the *unavailable* case is retried, with
-    capped exponential backoff, until ``_BUNDLE_FETCH_MAX_WAIT_SECONDS`` elapses;
-    everything else fails fast on the first attempt. No exception-text/class-name
-    duck-typing — the transient/genuine split is decided structurally at the
-    infrastructure layer (``_dapr/client.py``), so the two can't drift apart.
-
-    Scoped to cold start: once the store has answered at least once in this
-    worker process (``_sidecar_confirmed_ready``), the long wait is not re-armed
-    — a later failure is a genuine steady-state outage, left to surface via the
-    transport's own (~15s) retry budget rather than being masked for the full
-    deadline on every subsequent agent-mode credential resolution.
-
-    The long wait lives here rather than in the transport on purpose: it is
-    scoped to the *idempotent* secret GET. Widening the transport's own retry
-    budget would apply the same wait to the non-idempotent POSTs (save_state /
-    publish_event / invoke_binding / delete_state) that share the client.
+    The agent secret-bundle fetch is typically the first Dapr call a workflow
+    makes, and on SDR runs it can race a sidecar still finishing its cold
+    start. Retry mechanics (transient classification, capped backoff, the
+    one-shot cold-start gate) live in
+    :func:`~application_sdk.infrastructure.secrets.retry_past_cold_start` —
+    shared with the other credential-resolution paths that race the same
+    sidecar. See that function's docstring for the full contract.
     """
-    global _sidecar_confirmed_ready
-
-    # Steady state: the sidecar has already answered this process, so skip the
-    # cold-start wait and let a genuine outage fail fast via the transport budget.
-    if _sidecar_confirmed_ready:
-        return await secret_store.get(secret_path)
-
-    deadline = time.monotonic() + _BUNDLE_FETCH_MAX_WAIT_SECONDS
-    attempt = 0
-    while True:
-        attempt += 1
-        try:
-            result = await secret_store.get(secret_path)
-        except SecretNotFoundError:
-            # The store answered (the key just isn't there) → the sidecar is up.
-            _sidecar_confirmed_ready = True
-            raise
-        except SecretStoreUnavailableError as exc:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise
-            # Cap the backoff to the remaining budget so the total wait can't
-            # overshoot _BUNDLE_FETCH_MAX_WAIT_SECONDS by a full delay.
-            delay = min(
-                _BUNDLE_FETCH_MAX_DELAY_SECONDS,
-                _BUNDLE_FETCH_BASE_DELAY_SECONDS * (2 ** (attempt - 1)),
-                remaining,
-            )
-            logger.warning(
-                "Agent secret-bundle fetch at '%s' failed (attempt %d); the Dapr "
-                "sidecar / secret store is not yet reachable — retrying in %.1fs: %s",
-                secret_path,
-                attempt,
-                delay,
-                exc,
-                exc_info=True,
-            )
-            await asyncio.sleep(delay)
-        else:
-            _sidecar_confirmed_ready = True
-            return result
+    return await retry_past_cold_start(
+        lambda: secret_store.get(secret_path),
+        description=f"Agent secret-bundle fetch at '{secret_path}'",
+    )
 
 
 async def _fetch_bundle(secret_store: SecretStore, secret_path: str) -> dict[str, Any]:
@@ -309,6 +233,12 @@ async def _fetch_per_key_bundle(
     a hostname) won't fail the resolution. Unmatched ref-keys then take
     the v2-parity fallthrough in :func:`_substitute` (left as-is, surfaced
     by downstream connect errors).
+
+    A transient cold-start outage on a probe is retried via
+    :func:`~application_sdk.infrastructure.secrets.retry_past_cold_start`
+    (shared with :func:`_get_bundle_raw` — both race the same sidecar); only
+    a genuine, non-transient store error or an outage that exhausts the
+    retry budget falls through to the silent-skip path below.
     """
     bundle: dict[str, Any] = {}
     seen: set[str] = set()
@@ -317,18 +247,22 @@ async def _fetch_per_key_bundle(
         if not value or value in seen:
             return
         seen.add(value)
+        value_hash = hashlib.sha256(value.encode()).hexdigest()[:8]
         try:
-            secret = await secret_store.get_optional(value)
+            secret = await retry_past_cold_start(
+                lambda: secret_store.get_optional(value),
+                description=f"single-key probe for sha256:{value_hash}",
+            )
         # conformance: ignore[E004] logger.warning with redacted traceback is emitted below; exc_info omitted intentionally to prevent secret ref-key leaking through stdlib traceback formatting
         except Exception as exc:
-            # Store-side error — distinct from "key not in store" (silent
-            # below). A transient outage here on a real secret field
-            # would otherwise auth-fail with the ref-key as the literal
-            # username, so surface at WARNING with the stack trace.
+            # Genuine, non-transient store error (or a cold-start outage that
+            # exhausted the retry budget) — distinct from "key not in store"
+            # (silent below). A real secret field hitting this would
+            # otherwise auth-fail with the ref-key as the literal username,
+            # so surface at WARNING with the stack trace.
             # Log a hash, not the ref-key itself: ref-key names encode secret
             # store topology (purpose, environment) and enable enumeration if
             # logs leak.
-            value_hash = hashlib.sha256(value.encode()).hexdigest()[:8]
             # NOT exc_info=True: SecretStoreError.__str__ renders `secret=<ref-key>`
             # and its message embeds the backend cause, which can echo the raw
             # ref-key — that would undo the hashing above in the same log record.
@@ -358,7 +292,7 @@ async def _fetch_per_key_bundle(
             # in single-key mode (host, port, region literals).
             logger.debug(
                 "single-key probe: sha256:%s not found in store (non-secret field)",
-                hashlib.sha256(value.encode()).hexdigest()[:8],
+                value_hash,
             )
             return
         bundle[value] = secret

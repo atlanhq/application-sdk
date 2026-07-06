@@ -20,6 +20,7 @@ from application_sdk.credentials.types import (
     BasicCredential,
     RawCredential,
 )
+from application_sdk.infrastructure.secrets import SecretStoreUnavailableError
 from application_sdk.testing.mocks import MockSecretStore
 
 
@@ -84,6 +85,68 @@ class TestNewPath:
         raw = await resolver.resolve_raw(ref)
         assert isinstance(raw, dict)
         assert raw["api_key"] == "secret"
+
+
+class TestNamedPathColdStartRetry:
+    """The named-path fetch (``_fetch_raw_json``) races the same cold Dapr
+    sidecar the agent bundle fetch does, and shares its retry engine."""
+
+    async def test_retries_transient_failure_then_succeeds(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_WAIT_SECONDS",
+            30.0,
+        )
+        monkeypatch.setattr(
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_BASE_DELAY_SECONDS",
+            0.0,
+        )
+        monkeypatch.setattr(
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_DELAY_SECONDS",
+            0.0,
+        )
+        calls = {"n": 0}
+
+        class ColdThenReady:
+            async def get(self, name: str) -> str:
+                calls["n"] += 1
+                if calls["n"] < 3:  # sidecar still cold on the first two tries
+                    raise SecretStoreUnavailableError(name)
+                return json.dumps({"type": "api_key", "api_key": "secret123"})
+
+        resolver = CredentialResolver(ColdThenReady())  # type: ignore[arg-type]
+
+        cred = await resolver.resolve(api_key_ref("prod-key"))
+
+        assert isinstance(cred, ApiKeyCredential)
+        assert cred.api_key == "secret123"
+        assert calls["n"] == 3  # rode out the two cold failures
+
+    async def test_persistent_transient_failure_wraps_in_credential_error(
+        self, monkeypatch
+    ) -> None:
+        from application_sdk.credentials.errors import CredentialError
+
+        monkeypatch.setattr(
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_WAIT_SECONDS",
+            0.05,
+        )
+        monkeypatch.setattr(
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_BASE_DELAY_SECONDS",
+            0.01,
+        )
+        monkeypatch.setattr(
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_DELAY_SECONDS",
+            0.01,
+        )
+
+        class AlwaysDown:
+            async def get(self, name: str) -> str:
+                raise SecretStoreUnavailableError(name)
+
+        resolver = CredentialResolver(AlwaysDown())  # type: ignore[arg-type]
+
+        with pytest.raises(CredentialError):
+            await resolver.resolve(api_key_ref("prod-key"))
 
 
 def _make_vault_patches(vault_return=None, vault_side_effect=None):

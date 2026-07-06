@@ -146,10 +146,18 @@ class CredentialResolver:
         )
         from application_sdk.infrastructure.secrets import (  # noqa: PLC0415 — circular: infrastructure.secrets imports observability which loads credentials transitively
             SecretNotFoundError,
+            retry_past_cold_start,
         )
 
         try:
-            raw = await self._secret_store.get(ref.name)
+            # Named-path fetch races the same cold Dapr sidecar the agent
+            # bundle fetch does (application_sdk.credentials.agent) — share
+            # its retry/one-shot-gate mechanics rather than failing fast on
+            # a startup race this store call has no special handling for.
+            raw = await retry_past_cold_start(
+                lambda: self._secret_store.get(ref.name),
+                description=f"Named credential fetch for '{ref.name}'",
+            )
         except SecretNotFoundError as exc:
             raise CredentialNotFoundError(ref.name) from exc
         # conformance: ignore[E004] re-raise only; wraps any unexpected fetch error into typed CredentialError and re-raises
