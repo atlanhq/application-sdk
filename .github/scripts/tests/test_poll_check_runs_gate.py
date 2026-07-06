@@ -51,6 +51,21 @@ def test_gh_api_conditional_304_has_no_body_and_keeps_prior_etag(monkeypatch):
     assert body is None
 
 
+def test_gh_api_conditional_raises_with_stderr_on_gh_failure(monkeypatch):
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(
+            args=[], returncode=1, stdout="", stderr="API rate limit exceeded"
+        )
+
+    monkeypatch.setattr(mod, "run", fake_run)
+
+    try:
+        mod.gh_api_conditional("some/path")
+        assert False, "expected SystemExit"
+    except SystemExit as e:
+        assert "API rate limit exceeded" in str(e)
+
+
 def test_wait_for_checks_succeeds_immediately_when_all_pass(monkeypatch):
     def fake_run(cmd, **kwargs):
         runs = [
@@ -128,6 +143,33 @@ def test_wait_for_checks_times_out_when_never_complete(monkeypatch):
         REPO, SHA, NAMES, interval_seconds=1, timeout_seconds=3, sleep=lambda s: None
     )
     assert ok is False
+
+
+def test_wait_for_checks_ceiling_divides_timeout_into_attempts(monkeypatch):
+    # timeout=31s / interval=30s must allow 2 attempts, not floor-truncate
+    # to 1 — the second attempt is what completes here, so this fails under
+    # floor division (which would give up after the first).
+    calls = {"n": 0}
+
+    def fake_run(cmd, **kwargs):
+        calls["n"] += 1
+        if calls["n"] < 2:
+            runs = [{"name": NAMES[0], "status": "in_progress"}]
+        else:
+            runs = [{"name": NAMES[0], "status": "completed", "conclusion": "success"}]
+        return _http_response(200, '"v1"', _check_runs_body(runs))
+
+    monkeypatch.setattr(mod, "run", fake_run)
+    ok = mod.wait_for_checks(
+        REPO,
+        SHA,
+        [NAMES[0]],
+        interval_seconds=30,
+        timeout_seconds=31,
+        sleep=lambda s: None,
+    )
+    assert ok is True
+    assert calls["n"] == 2
 
 
 def test_main_exit_codes(monkeypatch):

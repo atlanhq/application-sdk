@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import subprocess
 import sys
 import time
@@ -45,6 +46,8 @@ def gh_api_conditional(path: str, *, etag: str | None = None):
     if etag:
         cmd += ["-H", f"If-None-Match: {etag}"]
     result = run(cmd, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise SystemExit(f"::error::gh api failed for {path}: {result.stderr}")
     raw = result.stdout.replace("\r\n", "\n")
     if "\n\n" not in raw:
         raise SystemExit(
@@ -82,7 +85,11 @@ def wait_for_checks(
     path = f"repos/{repo}/commits/{sha}/check-runs?per_page=100"
     etag: str | None = None
     latest: dict[str, dict] = {}
-    max_attempts = max(1, timeout_seconds // interval_seconds)
+    # Ceiling division: a timeout that isn't an exact multiple of the
+    # interval (e.g. 31s timeout / 30s interval) must still get its full
+    # attempt within budget, not be truncated to fewer attempts than the
+    # timeout actually allows.
+    max_attempts = max(1, math.ceil(timeout_seconds / interval_seconds))
 
     for attempt in range(1, max_attempts + 1):
         status_code, etag, body = gh_api_conditional(path, etag=etag)

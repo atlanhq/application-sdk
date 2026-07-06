@@ -388,6 +388,8 @@ jobs:
       contents: read
       checks: read
     steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
       # connector-tests now only dispatches (e2e-apps wait-mode: callback) —
       # its own success means "dispatch succeeded", not "tests passed". The
       # actual pass/fail lands later via the Connector E2E / <repo> check
@@ -402,40 +404,11 @@ jobs:
           BASE_IMAGE_RESULT: ${{ needs.build-sdk-base-image.result }}
           CONNECTOR_RESULT: ${{ needs.connector-tests.result }}
         run: |
-          set -euo pipefail
-          # Detection / matrix build have no path-skip — anything other than
-          # success means we cannot trust whether the connector legs ran. A
-          # connector-tests skip downstream of these would then be an
-          # upstream-failure skip, not the docs-only skip. Fail closed.
-          if [[ "$CHANGES_RESULT" != "success" ]]; then
-            echo "::error::Detect Changes did not succeed ($CHANGES_RESULT) — failing the gate closed."
-            exit 1
-          fi
-          if [[ "$MATRIX_RESULT" != "success" ]]; then
-            echo "::error::Build Test Matrix did not succeed ($MATRIX_RESULT) — failing the gate closed."
-            exit 1
-          fi
-          # build-sdk-base-image is legitimately skipped on merge_group and on
-          # non-e2e PRs; only a genuine build FAILURE must block (a base that
-          # won't build is the signal, per the connector-tests if: comment).
-          if [[ "$BASE_IMAGE_RESULT" != "success" && "$BASE_IMAGE_RESULT" != "skipped" ]]; then
-            echo "::error::Build SDK base image did not succeed ($BASE_IMAGE_RESULT) — failing the gate closed."
-            exit 1
-          fi
-          if [[ "$CONNECTOR_RESULT" != "success" && "$CONNECTOR_RESULT" != "skipped" ]]; then
-            echo "::error::Connector Tests dispatch did not succeed ($CONNECTOR_RESULT) — failing the gate."
-            exit 1
-          fi
-          # With upstream proven healthy, a skipped connector-tests is the
-          # genuine docs-only skip (sdk==false && container==false) → pass
-          # with nothing to wait on. dispatched=true only when check runs
-          # actually exist to poll.
-          if [[ "$CONNECTOR_RESULT" == "success" ]]; then
-            echo "dispatched=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "dispatched=false" >> "$GITHUB_OUTPUT"
-            echo "✓ Connector Tests skipped (docs-only) — nothing to wait on."
-          fi
+          python3 .github/scripts/verify_connector_gate_upstream.py \
+            --changes-result "$CHANGES_RESULT" \
+            --matrix-result "$MATRIX_RESULT" \
+            --base-image-result "$BASE_IMAGE_RESULT" \
+            --connector-result "$CONNECTOR_RESULT"
 
       # Rolls up every 'Connector E2E / <repo>' check run in ONE endpoint
       # call per poll (not one busy-poll per matrix leg), using conditional
