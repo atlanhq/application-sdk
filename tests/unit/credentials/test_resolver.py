@@ -1,6 +1,7 @@
 """Unit tests for CredentialResolver."""
 
 import json
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -126,27 +127,39 @@ class TestNamedPathColdStartRetry:
     ) -> None:
         from application_sdk.credentials.errors import CredentialError
 
+        # Deterministic fake clock + no-op sleep: each attempt advances the
+        # clock past half the deadline, so this gives up after exactly 2
+        # attempts. Also asserts the call count, so this test can't pass
+        # merely because _fetch_raw_json wraps any exception into
+        # CredentialError — it must actually have retried first.
         monkeypatch.setattr(
             "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_WAIT_SECONDS",
-            0.05,
+            10.0,
         )
         monkeypatch.setattr(
-            "application_sdk.infrastructure.secrets.SECRET_FETCH_BASE_DELAY_SECONDS",
-            0.01,
+            "application_sdk.infrastructure.secrets.asyncio.sleep", AsyncMock()
         )
+        fake_now = {"t": 0.0}
+
+        def fake_monotonic() -> float:
+            fake_now["t"] += 6.0
+            return fake_now["t"]
+
         monkeypatch.setattr(
-            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_DELAY_SECONDS",
-            0.01,
+            "application_sdk.infrastructure.secrets.time.monotonic", fake_monotonic
         )
+        calls = {"n": 0}
 
         class AlwaysDown:
             async def get(self, name: str) -> str:
+                calls["n"] += 1
                 raise SecretStoreUnavailableError(name)
 
         resolver = CredentialResolver(AlwaysDown())  # type: ignore[arg-type]
 
         with pytest.raises(CredentialError):
             await resolver.resolve(api_key_ref("prod-key"))
+        assert calls["n"] == 2
 
 
 def _make_vault_patches(vault_return=None, vault_side_effect=None):

@@ -10,8 +10,16 @@ import re
 from enum import Enum
 from typing import Any
 
+import httpx
+
 from application_sdk.infrastructure._dapr.http import AsyncDaprClient
 from application_sdk.infrastructure._secret_utils import process_secret_data
+from application_sdk.infrastructure.secrets import (
+    SecretNotFoundError,
+    SecretStoreError,
+    SecretStoreUnavailableError,
+    retry_past_cold_start,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -158,15 +166,14 @@ class DaprCredentialVault:
                     if credential_source == _CredentialSource.AGENT
                     else credential_guid
                 )
-                try:
-                    logger.debug("Fetching multi-key secret: %s", key_to_fetch)
-                    secret_data = await self._get_secret(key_to_fetch)
-                except Exception:
-                    logger.warning(
-                        "Failed to fetch secret bundle: %s",
-                        key_to_fetch,
-                        exc_info=True,
-                    )
+                logger.debug("Fetching multi-key secret: %s", key_to_fetch)
+                # No local swallow: _get_secret already treats a definitively
+                # absent bundle as {} (expected — not every credential has
+                # one); anything else (a cold-start race, a genuine store
+                # rejection) propagates to the except Exception below and
+                # becomes a typed CredentialVaultError, rather than being
+                # silently downgraded to "no secrets" the way it used to be.
+                secret_data = await self._get_secret(key_to_fetch)
             else:
                 secret_data = await self._fetch_single_key_secrets(credential_config)
 
@@ -249,7 +256,17 @@ class DaprCredentialVault:
     ) -> dict[str, Any]:
         """Fetch and process a secret from the Dapr secret store.
 
-        Returns ``{}`` in local-environment deployments to avoid secret store
+        Retries a cold-start race via :func:`retry_past_cold_start` and
+        classifies failures the same way :meth:`DaprSecretStore.get` does
+        (transport/5xx = unreachable, retried; 4xx = definitive rejection,
+        not retried) instead of collapsing every failure into a single
+        non-retryable ``SecretFetchError`` the way this used to — that made
+        a transient sidecar race here indistinguishable from "no secret",
+        so callers had no way to retry it and silently proceeded with an
+        incomplete credential instead.
+
+        Returns ``{}`` when the key is definitively absent from the store,
+        or in local-environment deployments to avoid secret store
         dependency during development.
         """
         from application_sdk.constants import (  # noqa: PLC0415 — cold path: only on credential resolution
@@ -261,16 +278,40 @@ class DaprCredentialVault:
             return self._get_local_secret(secret_key)
 
         store = component_name or self._secret_store_name
-        try:
-            result = await self._client.get_secret(store_name=store, key=secret_key)
-            return process_secret_data(result)
-        # conformance: ignore[E004] re-raises as typed SecretFetchError; caller logs or propagates the typed error
-        except Exception as e:
-            from application_sdk.infrastructure._dapr._dapr_errors import (  # noqa: PLC0415
-                SecretFetchError,
-            )
 
-            raise SecretFetchError(component=store, cause=e) from e
+        async def _fetch() -> dict[str, str]:
+            try:
+                result = await self._client.get_secret(store_name=store, key=secret_key)
+            except httpx.TransportError as e:
+                raise SecretStoreUnavailableError(secret_key, cause=e) from e
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code >= 500:
+                    raise SecretStoreUnavailableError(secret_key, cause=e) from e
+                raise SecretStoreError(
+                    f"Failed to get secret: {e}",
+                    secret_name=secret_key,
+                    cause=e,
+                    retryable=False,
+                ) from e
+            # conformance: ignore[E004] re-raises as typed SecretStoreError with cause chain; traceback preserved
+            except Exception as e:
+                raise SecretStoreError(
+                    f"Failed to get secret: {e}",
+                    secret_name=secret_key,
+                    cause=e,
+                ) from e
+            if not result:
+                raise SecretNotFoundError(secret_key)
+            return result
+
+        try:
+            result = await retry_past_cold_start(
+                _fetch,
+                description=f"Credential-vault secret fetch for '{secret_key}'",
+            )
+        except SecretNotFoundError:
+            return {}
+        return process_secret_data(result)
 
     def _get_local_secret(self, secret_key: str) -> dict[str, Any]:
         """Read secret from the local secrets file for development.

@@ -184,7 +184,9 @@ class DaprSecretStore:
             # A 4xx is a definitive rejection (bad auth/binding/path) — retrying
             # the identical request would fail identically every time, so mark
             # it explicitly non-retryable rather than inheriting the optimistic
-            # DependencyUnavailableError default.
+            # DependencyUnavailableError default. This is a *wire-level* retry
+            # hint (Temporal/observability), independent of retry_past_cold_start
+            # — which dispatches on ColdStartRaceError type, not this flag.
             raise SecretStoreError(
                 f"Failed to get secret: {e}",
                 secret_name=name,

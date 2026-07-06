@@ -349,17 +349,26 @@ class TestRetryPastColdStart:
         assert calls["n"] == 2
 
     async def test_gives_up_at_deadline(self, monkeypatch) -> None:
+        # Deterministic fake clock + no-op sleep: each attempt advances the
+        # clock past half the deadline, so this gives up after exactly 2
+        # attempts regardless of real wall-clock scheduling delays under
+        # load — a real-time-based loose ">= 2" assertion would flake on a
+        # contended runner.
         monkeypatch.setattr(
             "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_WAIT_SECONDS",
-            0.05,
+            10.0,
         )
         monkeypatch.setattr(
-            "application_sdk.infrastructure.secrets.SECRET_FETCH_BASE_DELAY_SECONDS",
-            0.01,
+            "application_sdk.infrastructure.secrets.asyncio.sleep", AsyncMock()
         )
+        fake_now = {"t": 0.0}
+
+        def fake_monotonic() -> float:
+            fake_now["t"] += 6.0
+            return fake_now["t"]
+
         monkeypatch.setattr(
-            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_DELAY_SECONDS",
-            0.01,
+            "application_sdk.infrastructure.secrets.time.monotonic", fake_monotonic
         )
         calls = {"n": 0}
 
@@ -369,7 +378,7 @@ class TestRetryPastColdStart:
 
         with pytest.raises(SecretStoreUnavailableError):
             await retry_past_cold_start(call, description="test call")
-        assert calls["n"] >= 2
+        assert calls["n"] == 2
 
 
 class TestGetDeploymentSecret:

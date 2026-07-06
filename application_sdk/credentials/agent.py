@@ -167,8 +167,8 @@ async def resolve_agent_json(
     return await resolve_agent_credential(spec, secret_store)
 
 
-async def _get_bundle_raw(secret_store: SecretStore, secret_path: str) -> Any:
-    """``secret_store.get`` with a cold-start readiness retry for the Dapr sidecar.
+async def _fetch_bundle(secret_store: SecretStore, secret_path: str) -> dict[str, Any]:
+    """Fetch and JSON-parse the secret bundle at ``secret-path``.
 
     The agent secret-bundle fetch is typically the first Dapr call a workflow
     makes, and on SDR runs it can race a sidecar still finishing its cold
@@ -178,16 +178,11 @@ async def _get_bundle_raw(secret_store: SecretStore, secret_path: str) -> Any:
     shared with the other credential-resolution paths that race the same
     sidecar. See that function's docstring for the full contract.
     """
-    return await retry_past_cold_start(
-        lambda: secret_store.get(secret_path),
-        description=f"Agent secret-bundle fetch at '{secret_path}'",
-    )
-
-
-async def _fetch_bundle(secret_store: SecretStore, secret_path: str) -> dict[str, Any]:
-    """Fetch and JSON-parse the secret bundle at ``secret-path``."""
     try:
-        raw = await _get_bundle_raw(secret_store, secret_path)
+        raw = await retry_past_cold_start(
+            lambda: secret_store.get(secret_path),
+            description=f"Agent secret-bundle fetch at '{secret_path}'",
+        )
     except SecretNotFoundError as exc:
         raise CredentialNotFoundError(secret_path) from exc
     # conformance: ignore[E004] re-raises immediately as typed CredentialError with chained cause; logging deferred to caller boundary
@@ -236,7 +231,7 @@ async def _fetch_per_key_bundle(
 
     A transient cold-start outage on a probe is retried via
     :func:`~application_sdk.infrastructure.secrets.retry_past_cold_start`
-    (shared with :func:`_get_bundle_raw` — both race the same sidecar); only
+    (shared with :func:`_fetch_bundle` — both race the same sidecar); only
     a genuine, non-transient store error or an outage that exhausts the
     retry budget falls through to the silent-skip path below.
     """

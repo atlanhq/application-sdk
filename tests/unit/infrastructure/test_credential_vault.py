@@ -6,6 +6,7 @@ import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from application_sdk.infrastructure._dapr.credential_vault import (
@@ -267,6 +268,142 @@ class TestDaprCredentialVaultGetCredentials:
             await vault.get_credentials("valid-prefix/injected")
 
         mock_client.invoke_binding.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# DaprCredentialVault._get_secret cold-start retry / classification
+# ---------------------------------------------------------------------------
+
+
+class TestDaprCredentialVaultColdStartRetry:
+    """The GUID/vault path races the same cold Dapr sidecar the bundle/named
+    paths do, and must retry a transient failure rather than silently
+    treating it as an absent bundle (a cold-start race here used to look
+    identical to "no secret", degrading to an incomplete credential)."""
+
+    def _make_vault(self, mock_client: MagicMock) -> DaprCredentialVault:
+        return DaprCredentialVault(
+            mock_client,
+            upstream_binding_name="upstream-objectstore",
+            secret_store_name="secretstore",
+        )
+
+    async def test_transient_failure_is_retried_then_succeeds(
+        self, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_WAIT_SECONDS",
+            30.0,
+        )
+        monkeypatch.setattr(
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_BASE_DELAY_SECONDS",
+            0.0,
+        )
+        monkeypatch.setattr(
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_DELAY_SECONDS",
+            0.0,
+        )
+        config = {"credentialSource": "direct", "host": "db.example.com"}
+        calls = {"n": 0}
+
+        async def _cold_then_ready(*, store_name: str, key: str) -> dict[str, str]:
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise httpx.ConnectError("all connection attempts failed")
+            return {"password": "secret_pass"}
+
+        mock_client = _make_mock_dapr_client(
+            config_bytes=json.dumps(config).encode(), secret_data={}
+        )
+        mock_client.get_secret = AsyncMock(side_effect=_cold_then_ready)
+
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+            vault = self._make_vault(mock_client)
+            result = await vault.get_credentials("my-guid")
+
+        assert result["password"] == "secret_pass"
+        assert calls["n"] == 3
+
+    async def test_persistent_transient_failure_raises_not_silently_swallowed(
+        self, monkeypatch
+    ) -> None:
+        # Deterministic fake clock + no-op sleep — see the equivalent test in
+        # tests/unit/infrastructure/test_secrets.py for why this avoids a
+        # real-time-based flake.
+        monkeypatch.setattr(
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_WAIT_SECONDS",
+            10.0,
+        )
+        monkeypatch.setattr(
+            "application_sdk.infrastructure.secrets.asyncio.sleep", AsyncMock()
+        )
+        fake_now = {"t": 0.0}
+
+        def fake_monotonic() -> float:
+            fake_now["t"] += 6.0
+            return fake_now["t"]
+
+        monkeypatch.setattr(
+            "application_sdk.infrastructure.secrets.time.monotonic", fake_monotonic
+        )
+        config = {"credentialSource": "direct", "host": "db.example.com"}
+        mock_client = _make_mock_dapr_client(
+            config_bytes=json.dumps(config).encode(), secret_data={}
+        )
+        mock_client.get_secret = AsyncMock(
+            side_effect=httpx.ConnectError("all connection attempts failed")
+        )
+
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+            vault = self._make_vault(mock_client)
+            # Prior behavior: this silently proceeded with secret_data={}.
+            # A persistent cold-start-shaped failure must surface as a real
+            # error instead of degrading to an incomplete credential.
+            with pytest.raises(CredentialVaultError):
+                await vault.get_credentials("my-guid")
+
+    async def test_4xx_rejection_is_not_retried(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_WAIT_SECONDS",
+            30.0,
+        )
+        config = {"credentialSource": "direct", "host": "db.example.com"}
+        req = httpx.Request("GET", "http://localhost/secret")
+        resp = httpx.Response(403, request=req)
+        calls = {"n": 0}
+
+        async def _forbidden(*, store_name: str, key: str) -> dict[str, str]:
+            calls["n"] += 1
+            raise httpx.HTTPStatusError("forbidden", request=req, response=resp)
+
+        mock_client = _make_mock_dapr_client(
+            config_bytes=json.dumps(config).encode(), secret_data={}
+        )
+        mock_client.get_secret = AsyncMock(side_effect=_forbidden)
+
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+            vault = self._make_vault(mock_client)
+            with pytest.raises(CredentialVaultError):
+                await vault.get_credentials("my-guid")
+
+        # A definitive rejection fails fast — never retried.
+        assert calls["n"] == 1
+
+    async def test_definitively_absent_bundle_proceeds_with_empty_secrets(
+        self,
+    ) -> None:
+        """An empty-but-200 response is a genuine "no secret" — not an error."""
+        config = {"credentialSource": "direct", "host": "db.example.com"}
+        mock_client = _make_mock_dapr_client(
+            config_bytes=json.dumps(config).encode(), secret_data={}
+        )
+
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+            vault = self._make_vault(mock_client)
+            result = await vault.get_credentials("my-guid")
+
+        assert result["host"] == "db.example.com"
+        assert "password" not in result
 
 
 # ---------------------------------------------------------------------------

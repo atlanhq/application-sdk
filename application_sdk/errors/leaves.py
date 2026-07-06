@@ -168,6 +168,28 @@ class DependencyUnavailableError(AppError):
     audience: ClassVar[Audience] = Audience.PLATFORM
 
 
+class ColdStartRaceError(DependencyUnavailableError):
+    """Marker for a :class:`DependencyUnavailableError` that specifically means
+    "this Dapr-backed dependency is not yet reachable" (a transport failure,
+    or a 5xx that survived the transport's own retries) — as opposed to the
+    dependency answering and definitively rejecting the request.
+
+    Deliberately independent of ``retryable``/``effective_retryable``: that
+    field is a general Temporal/wire-level retry hint (a plain, unclassified
+    ``DependencyUnavailableError`` subtype legitimately defaults it to
+    ``True`` — "this category of failure is generically worth retrying at
+    the activity level"). This marker answers a narrower, unrelated
+    question — "is this specific failure a cold-start race right now" — so a
+    generic dependency helper (e.g.
+    :func:`~application_sdk.infrastructure.secrets.retry_past_cold_start`)
+    can retry any current or future subtype across domains (secret store,
+    state store, pub/sub, ...) by catching this one marker, without a new
+    per-domain exception type or check for each. Not meant to be raised
+    directly — concrete subtypes (e.g. ``SecretStoreUnavailableError``)
+    multiply-inherit it alongside their domain's own error type.
+    """
+
+
 @dataclass(kw_only=True)
 class SourceUnavailableError(AppError):
     """Customer-controlled source system is temporarily unreachable.

@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -495,16 +496,25 @@ class TestBundleFetchReadinessRetry:
         assert calls["n"] == 1  # not retried
 
     async def test_persistent_transient_failure_gives_up(self, monkeypatch) -> None:
+        # Deterministic fake clock + no-op sleep: each attempt advances the
+        # clock past half the deadline, so this gives up after exactly 2
+        # attempts regardless of real wall-clock scheduling delays under
+        # load — a real-time-based loose ">= 2" assertion would flake on a
+        # contended runner.
         monkeypatch.setattr(
-            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_WAIT_SECONDS", 0.05
+            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_WAIT_SECONDS", 10.0
         )
         monkeypatch.setattr(
-            "application_sdk.infrastructure.secrets.SECRET_FETCH_BASE_DELAY_SECONDS",
-            0.01,
+            "application_sdk.infrastructure.secrets.asyncio.sleep", AsyncMock()
         )
+        fake_now = {"t": 0.0}
+
+        def fake_monotonic() -> float:
+            fake_now["t"] += 6.0
+            return fake_now["t"]
+
         monkeypatch.setattr(
-            "application_sdk.infrastructure.secrets.SECRET_FETCH_MAX_DELAY_SECONDS",
-            0.01,
+            "application_sdk.infrastructure.secrets.time.monotonic", fake_monotonic
         )
         calls = {"n": 0}
 
@@ -515,7 +525,7 @@ class TestBundleFetchReadinessRetry:
 
         with pytest.raises(CredentialError):
             await resolve_agent_json(self._AGENT_JSON, AlwaysDown())  # type: ignore[arg-type]
-        assert calls["n"] >= 2  # retried before giving up at the deadline
+        assert calls["n"] == 2  # retried once, then gave up at the deadline
 
     async def test_non_transient_error_fails_fast(self, monkeypatch) -> None:
         # A genuine, non-connection store error (bad auth / binding / path) must
