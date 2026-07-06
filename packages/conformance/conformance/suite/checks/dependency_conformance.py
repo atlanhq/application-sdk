@@ -74,7 +74,8 @@ PYRIGHT_WEAK_MODES = frozenset({"off", "basic"})
 # limits under CI concurrency, and a hardcoded ref drifts from whatever SDK
 # version is actually locked in the app's uv.lock.
 _REMOTE_COMPONENT_FETCH_RE = re.compile(
-    r"(?:raw\.githubusercontent\.com|api\.github\.com)[^\s\"'\\]*/atlanhq/application-sdk\b",
+    r"(?:raw\.githubusercontent\.com|api\.github\.com)[^\s\"'\\]*"
+    r"/atlanhq/application-sdk(?![\w-])",
     re.IGNORECASE,
 )
 
@@ -891,44 +892,42 @@ def scan_text(
         )
 
     # ── D009 (pure-text) ────────────────────────────────────────────────────
+    # Structural check (via `data`) just decides whether any poe task fetches
+    # components remotely; the actual findings are anchored by a single
+    # line-based scan of the raw text so a violation is never mis-attributed
+    # to the wrong task name when more than one task matches.
     tasks = _poe_tasks(data)
-    if tasks is not None:
-        reported_lines: set[int] = set()
-        for task_name, task_def in tasks.items():
-            if not any(
-                _REMOTE_COMPONENT_FETCH_RE.search(s) for s in _iter_strings(task_def)
-            ):
+    if tasks is not None and any(
+        _REMOTE_COMPONENT_FETCH_RE.search(s)
+        for task_def in tasks.values()
+        for s in _iter_strings(task_def)
+    ):
+        for ln, line in enumerate(text.splitlines(), start=1):
+            if not _REMOTE_COMPONENT_FETCH_RE.search(line):
                 continue
-            for ln, line in enumerate(text.splitlines(), start=1):
-                if ln in reported_lines or not _REMOTE_COMPONENT_FETCH_RE.search(line):
-                    continue
-                reported_lines.add(ln)
-                findings.append(
-                    _make_finding(
-                        rule_id=RULE_D009,
-                        file=file,
-                        line=ln,
-                        column=1,
-                        message=(
-                            f"poe task '{task_name}' fetches Dapr component "
-                            f"YAMLs from GitHub over the network instead of "
-                            f"reading them from the installed "
-                            f"'{SDK_PACKAGE}' wheel, which bundles them at "
-                            f"application_sdk/components/. Unauthenticated "
-                            f"GitHub requests hit rate limits under CI "
-                            f"concurrency, and a hardcoded ref drifts from "
-                            f"whatever SDK version is actually locked in "
-                            f"uv.lock. Copy from the installed package "
-                            f'instead, e.g. `python -c "import '
-                            f"application_sdk, pathlib, shutil; "
-                            f"shutil.copytree(pathlib.Path("
-                            f"application_sdk.__file__).parent / "
-                            f"'components', 'components', "
-                            f'dirs_exist_ok=True)"`.'
-                        ),
-                        suppressions=suppressions,
-                    )
+            findings.append(
+                _make_finding(
+                    rule_id=RULE_D009,
+                    file=file,
+                    line=ln,
+                    column=1,
+                    message=(
+                        "A poe task fetches Dapr component YAMLs from GitHub "
+                        f"over the network instead of reading them from the "
+                        f"installed '{SDK_PACKAGE}' wheel, which bundles them "
+                        f"at application_sdk/components/. Unauthenticated "
+                        f"GitHub requests hit rate limits under CI "
+                        f"concurrency, and a hardcoded ref drifts from "
+                        f"whatever SDK version is actually locked in "
+                        f"uv.lock. Copy from the installed package instead, "
+                        f'e.g. `python -c "import application_sdk, pathlib, '
+                        f"shutil; shutil.copytree(pathlib.Path("
+                        f"application_sdk.__file__).parent / 'components', "
+                        f"'components', dirs_exist_ok=True)\"`."
+                    ),
+                    suppressions=suppressions,
                 )
+            )
 
     # ── D002 / D004: redeclaration of SDK-managed core deps (metadata) ──────
     if sdk_managed_packages is None:

@@ -133,11 +133,13 @@ fix.  The re-detection gate is authoritative for this area — see
   `"standard"` (leave `"strict"` untouched; only `"off"`/`"basic"` are flagged).
   Replace only the mode value.
 
-- **D009 RemoteDaprComponentFetch** — the named `[tool.poe.tasks.*]` entry
-  fetches Dapr component YAMLs from `raw.githubusercontent.com` or the GitHub
-  contents API for `atlanhq/application-sdk`. Replace the task's body
-  (whichever form it's written in — `task.shell = "..."` shorthand or a full
-  `[tool.poe.tasks.task]` table) with a local copy from the installed wheel:
+- **D009 RemoteDaprComponentFetch** — `finding.line` points at the offending
+  URL; find the enclosing `[tool.poe.tasks.*]` entry (whichever form it's
+  written in — `task.shell = "..."` shorthand or a full
+  `[tool.poe.tasks.task]` table) — it fetches Dapr component YAMLs from
+  `raw.githubusercontent.com` or the GitHub contents API for
+  `atlanhq/application-sdk`. Replace that task's body with a local copy from
+  the installed wheel, preserving the task's name:
 
   ```toml
   [tool.poe.tasks]

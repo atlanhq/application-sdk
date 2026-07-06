@@ -778,6 +778,64 @@ def test_d009_suppressed_inline_directive_above() -> None:
     assert findings[0].suppressed is True
 
 
+def test_d009_does_not_match_similarly_prefixed_repo_name() -> None:
+    """A repo merely starting with 'application-sdk' must not false-positive."""
+    task = (
+        "[tool.poe.tasks]\n"
+        "download-components.shell = "
+        '"curl -O https://raw.githubusercontent.com/atlanhq/application-sdk-extra/'
+        'v1.0.0/components/statestore.yaml"\n'
+    )
+    findings = scan_text(
+        _poe_pyproject(task),
+        "pyproject.toml",
+        sdk_managed_packages=set(),
+        sdk_published_extras=set(),
+    )
+    assert findings == []
+
+
+def test_d009_matches_bare_repo_reference_with_no_trailing_path() -> None:
+    task = (
+        "[tool.poe.tasks]\n"
+        "download-components.shell = "
+        '"echo https://api.github.com/repos/atlanhq/application-sdk"\n'
+    )
+    findings = scan_text(
+        _poe_pyproject(task),
+        "pyproject.toml",
+        sdk_managed_packages=set(),
+        sdk_published_extras=set(),
+    )
+    assert [f.rule_id for f in findings] == ["D009"]
+
+
+def test_d009_multiple_tasks_one_violating_reports_once_at_correct_line() -> None:
+    """A finding must anchor to the actual offending line, not misattribute
+    across tasks when only one of several poe tasks violates the rule."""
+    task = (
+        "[tool.poe.tasks]\n"
+        'start-dapr = "dapr run --app-id app"\n'
+        "download-components.shell = "
+        '"curl -O https://raw.githubusercontent.com/atlanhq/application-sdk/'
+        'v3.14.0/components/statestore.yaml"\n'
+    )
+    text = _poe_pyproject(task)
+    findings = scan_text(
+        text,
+        "pyproject.toml",
+        sdk_managed_packages=set(),
+        sdk_published_extras=set(),
+    )
+    assert len(findings) == 1
+    expected_line = next(
+        ln
+        for ln, line in enumerate(text.splitlines(), start=1)
+        if "raw.githubusercontent.com" in line
+    )
+    assert findings[0].line == expected_line
+
+
 def test_inline_duplicate_entries_get_distinct_columns() -> None:
     # A repeated requirement on one inline line must not alias to the first
     # match's column (the raw_line.index → offset-cursor fix).
