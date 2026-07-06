@@ -94,7 +94,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p /tmp/renovate-input/open /tmp/renovate-input/merged
-          echo "$REPOS" > /tmp/renovate-known-repos.json
+          printf '%s' "$REPOS" > /tmp/renovate-known-repos.json
 
           # 30-day merged window — GNU date on the runner, BSD date as fallback.
           SINCE=$(date -d '30 days ago' +%Y-%m-%d 2>/dev/null || date -v-30d +%Y-%m-%d)
@@ -103,9 +103,11 @@ jobs:
           # single repo) at once, replacing what used to be two `gh pr list` REST calls
           # per discovered repo — that O(repos) loop was a major contributor to hitting
           # GitHub's rate limits at fleet scale. See renovate_fleet_scan.py.
+          # --repo is always passed (empty string in full-fleet mode); resolve_scope()
+          # in the script treats an empty value as "no repo" and falls back to --org.
           python3 .github/scripts/renovate_fleet_scan.py \
             --org atlanhq \
-            ${SINGLE_REPO:+--repo "$SINGLE_REPO"} \
+            --repo "$SINGLE_REPO" \
             --since "$SINCE" \
             --open-dir /tmp/renovate-input/open \
             --merged-dir /tmp/renovate-input/merged \

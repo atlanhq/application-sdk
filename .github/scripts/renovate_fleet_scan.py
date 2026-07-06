@@ -100,6 +100,7 @@ def build_graphql_payload(search_query: str, fields: str, after: Optional[str]) 
     query = f"""
     query {{
       search(query: {json.dumps(search_query)}, type: ISSUE, first: {PAGE_SIZE}{after_arg}) {{
+        issueCount
         pageInfo {{ hasNextPage endCursor }}
         nodes {{
           ... on PullRequest {{
@@ -139,8 +140,10 @@ def fetch_all_prs(
     fields: str,
     post: PostFn = _post_graphql,
 ) -> list[dict]:
-    """Paginate a GraphQL PR search to completion. Raises on a GraphQL 'errors' response."""
+    """Paginate a GraphQL PR search to completion. Raises on a GraphQL 'errors' response,
+    or if the result was silently truncated by the search API's ~1000-item hard cap."""
     nodes: list[dict] = []
+    issue_count: Optional[int] = None
     after: Optional[str] = None
     for _ in range(MAX_PAGES):
         payload = build_graphql_payload(search_query, fields, after)
@@ -150,6 +153,8 @@ def fetch_all_prs(
                 f"GraphQL errors for query {search_query!r}: {data['errors']}"
             )
         search = data["data"]["search"]
+        if issue_count is None:
+            issue_count = search["issueCount"]
         nodes.extend(search["nodes"])
         page_info = search["pageInfo"]
         if not page_info["hasNextPage"]:
@@ -159,6 +164,14 @@ def fetch_all_prs(
         raise RuntimeError(
             f"exceeded {MAX_PAGES} pages for query {search_query!r} "
             "— fleet larger than the safety backstop expects"
+        )
+
+    if issue_count is not None and len(nodes) < issue_count:
+        raise RuntimeError(
+            f"query {search_query!r} matched {issue_count} results but only "
+            f"{len(nodes)} were returned — the search API's result cap likely "
+            "truncated this query. Narrow it (e.g. split by date range) rather "
+            "than silently reporting incomplete dashboard data."
         )
     return nodes
 
@@ -287,7 +300,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument(
         "--repo",
         default=None,
-        help="single repo to scan instead of the whole org, e.g. 'atlanhq/atlan-mysql-app'",
+        help=(
+            "single repo to scan instead of the whole org, e.g. 'atlanhq/atlan-mysql-app'. "
+            "Safe to always pass (even as an empty string) — resolve_scope() falls back to "
+            "--org whenever this is empty/unset."
+        ),
     )
     parser.add_argument(
         "--since",

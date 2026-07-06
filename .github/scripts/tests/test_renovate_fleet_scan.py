@@ -67,10 +67,11 @@ def test_build_graphql_payload_escapes_quotes_in_query_string():
 # ---------------------------------------------------------------------------
 
 
-def _page(nodes, has_next, cursor=None):
+def _page(nodes, has_next, cursor=None, issue_count=None):
     return {
         "data": {
             "search": {
+                "issueCount": len(nodes) if issue_count is None else issue_count,
                 "pageInfo": {"hasNextPage": has_next, "endCursor": cursor},
                 "nodes": nodes,
             }
@@ -92,9 +93,9 @@ def test_fetch_all_prs_single_page():
 
 def test_fetch_all_prs_paginates_until_exhausted():
     pages = [
-        _page([{"number": 1}], has_next=True, cursor="c1"),
-        _page([{"number": 2}], has_next=True, cursor="c2"),
-        _page([{"number": 3}], has_next=False),
+        _page([{"number": 1}], has_next=True, cursor="c1", issue_count=3),
+        _page([{"number": 2}], has_next=True, cursor="c2", issue_count=3),
+        _page([{"number": 3}], has_next=False, issue_count=3),
     ]
 
     def fake_post(token, payload):
@@ -124,6 +125,29 @@ def test_fetch_all_prs_trips_safety_backstop():
         assert False, "expected RuntimeError"
     except RuntimeError as exc:
         assert "safety backstop" in str(exc)
+
+
+def test_fetch_all_prs_raises_when_search_api_cap_truncates_results():
+    # The search API caps total matches (commonly ~1000) — pageInfo can report
+    # hasNextPage=False while issueCount still exceeds what was actually returned.
+    # This must fail loudly rather than silently reporting an incomplete dashboard.
+    def fake_post(token, payload):
+        return _page([{"number": 1}], has_next=False, issue_count=1500)
+
+    try:
+        rfs.fetch_all_prs("tok", "org:atlanhq is:pr", "number", post=fake_post)
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "1500" in str(exc)
+        assert "cap" in str(exc).lower()
+
+
+def test_fetch_all_prs_no_error_when_issue_count_matches_returned_nodes():
+    def fake_post(token, payload):
+        return _page([{"number": 1}, {"number": 2}], has_next=False, issue_count=2)
+
+    result = rfs.fetch_all_prs("tok", "org:atlanhq is:pr", "number", post=fake_post)
+    assert len(result) == 2
 
 
 # ---------------------------------------------------------------------------
