@@ -1265,7 +1265,12 @@ jobs:
   app-deployment-dispatcher:
     name: Dispatch App Deployment
     needs: [prepare, merge, security-scan, certify]
-    if: ${{ !failure() && !cancelled() && needs.merge.result == 'success' && needs.security-scan.result == 'success' && needs.certify.result == 'success' && github.ref == 'refs/heads/main' && needs.prepare.outputs.enable_sdr == 'true' }}
+    # certify may be SKIPPED here: it runs only on publish=true, but the
+    # dispatcher fires on any main push for SDR apps (some, e.g. mysql, publish
+    # only on release). Block on a real certify FAILURE, not on skipped — else
+    # deploy-on-merge SDR apps would stop deploying. (publish uses == 'success'
+    # safely because it also requires inputs.publish, so certify always ran.)
+    if: ${{ !failure() && !cancelled() && needs.merge.result == 'success' && needs.security-scan.result == 'success' && needs.certify.result != 'failure' && github.ref == 'refs/heads/main' && needs.prepare.outputs.enable_sdr == 'true' }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
