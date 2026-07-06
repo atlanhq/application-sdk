@@ -1,0 +1,45 @@
+/// Card-split example — demonstrates a multi-entrypoint app where only one
+/// entrypoint is a marketplace UI card.
+///
+/// The primary entrypoint (`extract`) carries a `packageId`, which marks it as
+/// a marketplace card and pins its stable card ID. The secondary entrypoint
+/// (`extract-lineage`) has no `packageId` — it is routable via
+/// `?entrypoint=extract-lineage` but does not appear as a marketplace card.
+///
+/// This is the "Case B" pattern: routable ≠ card.
+amends "../../src/App.pkl"
+
+name = "card-split"
+displayName = "Card Split Example"
+icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
+hasCredentialConfig = false
+
+entrypoints {
+  new Entrypoint {
+    name = "extract"
+    displayName = "Extract"
+    packageId = "@atlan/card-split"
+  }
+  new Entrypoint {
+    name = "extract-lineage"
+    displayName = "Extract Lineage"
+  }
+}
+
+pipeline {
+  publish = null
+}
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["target"] = new TextInput {
+          title = "Target"
+          placeholderText = "my-target"
+          helpText = "What to extract."
+        }
+      }
+    }
+  }
+}

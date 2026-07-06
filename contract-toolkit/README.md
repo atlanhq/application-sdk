@@ -97,7 +97,10 @@ The `examples/` directory contains executable contracts that teach stable toolki
 - [`examples/minimal/`](examples/minimal/) — smallest possible contract; uses all defaults. Start here.
 - [`examples/full/`](examples/full/) — every overridable feature: JDBC URL auth, all pipeline steps, diverse widgets, UIRules, extraNodes.
 - [`examples/bundle/`](examples/bundle/) — multi-entrypoint app (crawler + miner); shared credential configmap; per-entrypoint artifact subfolders.
-- [`examples/deploy/`](examples/deploy/) — typed `deploy` block: KEDA, Dapr, resources, env, `deployOverrides`.
+- [`examples/card-split/`](examples/card-split/) — two entrypoints where only one is a marketplace UI card (`packageId` on the card entrypoint; route-only entrypoint has none).
+- [`examples/behind-the-scenes/`](examples/behind-the-scenes/) — single-entrypoint app with `marketplaceCard = false`; routable but no marketplace card or `package_id` emitted.
+- [`examples/deploy/`](examples/deploy/) — single-pool deployment: KEDA, resources, env, and per-pool `overrides` under `deploy.pools["default"]`.
+- [`examples/pools/`](examples/pools/) — `pools` map (preferred): named hot/cold worker pools with per-pool KEDA `cooldownPeriod` and resources.
 - [`examples/connection-ref/`](examples/connection-ref/) — `ConnectionRefInput` widget, `pipeline.publish = null`.
 - [`examples/publish-controls/`](examples/publish-controls/) — publish toggles, `includeInputFields`, `errorHandling`.
 - [`examples/fanin/`](examples/fanin/) — multi-parent fan-in via `dependsOn`, explicit `DependencyCondition`.
@@ -107,7 +110,7 @@ The `examples/` directory contains executable contracts that teach stable toolki
 
 ### `atlan.yaml` (repo root)
 
-Marketplace deployment manifest. Contains app identity (`name`, `display_name`, `icon_url`), marketplace metadata (`short_description`, `long_description`, `docs_url`, `tags`), entrypoints list, and the typed `deploy` block (KEDA, Dapr, resources, env, and any `deployOverrides`). Emitted with a DO-NOT-EDIT header — edit `contract/app.pkl` instead.
+Marketplace deployment manifest. Contains app identity, marketplace metadata (`short_description`, `long_description`, `docs_url`, `tags`), the `entrypoints` list, and (when `deploy` is configured) a typed `deploy:` block — app-level `dapr` and `overrides` plus a `pools:` map carrying per-pool keda/resources/env/overrides. The top-level `deploy:` block is synthesised from the first pool for backward compatibility. Emitted with a DO-NOT-EDIT header — edit `contract/app.pkl` instead.
 
 ### `app.yaml` (repo root)
 
@@ -165,9 +168,9 @@ The single entry point for all new native app contracts. Amend this module and d
 - Credential config: `credentialCommonFields`, `credentialAuthOptions`, `credentialConnectorType`
 - Workflow config: `uiConfig` (form steps and fields using `Widgets.*` types)
 - Pipeline: typed `pipeline` block (extract → parseQueries → popularity → lineage → publish)
-- Deployment: typed `deploy` block (KEDA, Dapr, resources, env)
+- Deployment: `deploy` (typed `DeployConfig?` — app-level `dapr` / `overrides` plus a named `pools` map; pool keys must match `@task(pool="…")` strings) — see `Deployment.pkl`
 
-All domain classes (`FieldSpec`, `AuthOption`, `UIConfig`, `UIRule`, `Entrypoint`, pipeline step classes, `DeployConfig`, `DaprComponents`, `KedaConfig`, `ResourceConfig`, `ErrorHandlingConfig`, `DependencyCondition`, `DAGNode`, etc.) are defined in `App.pkl` and available directly in amending modules without additional imports.
+All domain classes (`FieldSpec`, `AuthOption`, `UIConfig`, `UIRule`, `Entrypoint`, pipeline step classes, `Pool`, `DeployConfig`, `DaprComponents`, `KedaConfig`, `ResourceConfig`, `ErrorHandlingConfig`, `DependencyCondition`, `DAGNode`, etc.) are available directly in amending modules without additional imports. Deployment classes (`Pool`, `DeployConfig`, `DaprComponents`, `KedaConfig`, `KedaTemporalConfig`, `ResourceConfig`) are defined in `Deployment.pkl` and re-exported by `App.pkl`.
 
 Widget types are re-exported via `Widgets` (itself re-exported from `App.pkl`). Amending modules use `Widgets.TextInput`, `Widgets.SqlTree`, etc.
 
@@ -287,48 +290,43 @@ To replace the generated node, define `extraNodes["notifications"]`.
 
 `extraNodes` is still available as an escape hatch for nodes that fall outside the canonical pipeline (e.g. custom fan-in steps).
 
-## Deploy Block
+## Pools Map
 
-The typed `deploy` block replaces the legacy free-form mapping. The common 80% is typed; anything unmodeled goes in `deployOverrides` (deep-merged last).
+The `pools` map declares named worker pools. It is **fully optional and explicit-overrides-only** — an empty map (the default) emits nothing. Declare named pools to configure per-pool KEDA, resources, or env.
+
+The pool key must exactly match the string passed to `@task(pool="…")` in Python. Order matters: the first key in insertion order drives the synthesised top-level `deploy:` block — put the primary always-on pool first.
 
 ```pkl
-deploy {
-  keda {
-    // enabled = true and minReplicaCount = 0 (scale-to-zero) by default.
-    // Set minReplicaCount = 1 to keep at least one replica running at all times.
-    minReplicaCount = 1
-    temporal { targetQueueSize = 10 }  // Note: must be set here, NOT on keda.targetQueueSize
-  }
-
-  dapr {
-    objectstore = true
-    secretstore = true
-    // statestore, eventstore, subscription, configurationstore, lock default to false
-  }
-
-  resources = new ResourceConfig {
-    requests { ["cpu"] = "500m"; ["memory"] = "1Gi" }
-    limits   { ["cpu"] = "2";   ["memory"] = "4Gi" }
-  }
-
-  env {
-    ["LOG_LEVEL"] = "INFO"
-    ["MAX_WORKERS"] = "4"
-  }
-}
-
-// Deep-merged on top of deploy section — for unmodeled marketplace keys:
-deployOverrides {
-  ["verticalPodAutoscaler"] = new Mapping {
-    ["enabled"] = true
-    ["updateMode"] = "Auto"
+deploy = new DeployConfig {
+  pools {
+    ["hot"] = new Pool {
+      keda {
+        minReplicaCount = 1        // always-on
+        cooldownPeriod = 300       // lenient cooldown — don't kill warm workers between bursts
+        temporal { targetQueueSize = 10 }
+      }
+    }
+    ["cold"] = new Pool {
+      keda {
+        minReplicaCount = 0        // scale-to-zero
+        cooldownPeriod = 30        // aggressive cooldown — reclaim resources fast
+      }
+    }
   }
 }
 ```
 
+For the single-pool case, use the key `"default"`. See `examples/pools/` for a full two-pool example.
+
+> **Migrating from v0.16.x?** The old `deploy { keda/resources/env }` flat fields and `deployOverrides` escape hatch are removed. See `docs/reference.md` § Migration Notes → v0.17.0.
+
 ## Multi-Entrypoint Bundle
 
 Multi-entrypoint apps set `entrypoints` at the root `app.pkl` and keep per-entrypoint contracts as separate files that each `amend App.pkl`.
+
+All entrypoints are always routable via `?entrypoint=`. Set `packageId` on entrypoints that should appear as user-facing marketplace cards; entrypoints without a `packageId` are routable but invisible in the marketplace (e.g. a lineage workflow invoked downstream by a DAG node rather than directly by a user).
+
+For multi-entrypoint apps, `packageId` also pins the stable card ID (e.g. `"@atlan/qlik-sense"`) so legacy Argo workflows that reference the app by their old `app_id` continue to resolve correctly, and existing connection references in the UI do not go blank after migration.
 
 ```pkl
 // app.pkl

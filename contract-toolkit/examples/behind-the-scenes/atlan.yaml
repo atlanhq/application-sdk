@@ -1,7 +1,7 @@
 # AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY.
 # To regenerate: pkl eval -m . contract/app.pkl
-name: agent-e2e
-display_name: Agent E2E Example
+name: behind-the-scenes
+display_name: Behind the Scenes Example
 type: connector
 execution_mode: native
 icon_url: https://assets.atlan.com/assets/fullscreen-exit.svg
@@ -9,9 +9,7 @@ visibility: public
 build_tag: v1
 self_deployed_runtime: true
 entrypoints:
-- name: agent-e2e
-  display_name: Agent E2E Example
+- name: behind-the-scenes
+  display_name: Behind the Scenes Example
   icon_url: https://assets.atlan.com/assets/fullscreen-exit.svg
   type: connector
-  package_id: '@atlan/agent-e2e'
-  marketplace_card: true

@@ -1,7 +1,7 @@
 # AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY.
 # To regenerate: pkl eval -m . contract/app.pkl
-name: deploy
-display_name: Deploy Config Example
+name: pools-example
+display_name: Pools Map Example
 type: connector
 execution_mode: native
 icon_url: https://assets.atlan.com/assets/fullscreen-open.svg
@@ -9,18 +9,19 @@ visibility: public
 build_tag: v1
 self_deployed_runtime: true
 entrypoints:
-- name: deploy
-  display_name: Deploy Config Example
+- name: pools-example
+  display_name: Pools Map Example
   icon_url: https://assets.atlan.com/assets/fullscreen-open.svg
   type: connector
-  package_id: '@atlan/deploy'
+  package_id: '@atlan/pools-example'
   marketplace_card: true
 deploy:
   execution_mode: native
   splitDeploymentEnabled: true
   keda:
     enabled: true
-    minReplicaCount: 0
+    minReplicaCount: 1
+    cooldownPeriod: 300
     temporal:
       targetQueueSize: 10
   resources:
@@ -31,16 +32,13 @@ deploy:
       cpu: '2'
       memory: 4Gi
   env:
-    LOG_LEVEL: INFO
-    MAX_WORKERS: '4'
-  verticalPodAutoscaler:
-    enabled: true
-    updateMode: Auto
+    WORKER_TYPE: hot
 pools:
-  default:
+  hot:
     keda:
       enabled: true
-      minReplicaCount: 0
+      minReplicaCount: 1
+      cooldownPeriod: 300
       temporal:
         targetQueueSize: 10
     resources:
@@ -51,8 +49,17 @@ pools:
         cpu: '2'
         memory: 4Gi
     env:
-      LOG_LEVEL: INFO
-      MAX_WORKERS: '4'
-    verticalPodAutoscaler:
+      WORKER_TYPE: hot
+  cold:
+    keda:
       enabled: true
-      updateMode: Auto
+      minReplicaCount: 0
+      cooldownPeriod: 30
+      temporal:
+        targetQueueSize: 5
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+    env:
+      WORKER_TYPE: cold
