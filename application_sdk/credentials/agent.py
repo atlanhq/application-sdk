@@ -271,6 +271,7 @@ async def _get_bundle_raw(secret_store: SecretStore, secret_path: str) -> Any:
                 attempt,
                 delay,
                 exc,
+                exc_info=True,
             )
             await asyncio.sleep(delay)
 

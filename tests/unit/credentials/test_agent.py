@@ -30,10 +30,7 @@ from application_sdk.credentials.errors import (
     CredentialRoutingError,
 )
 from application_sdk.credentials.spec import AgentCredentialSpec
-from application_sdk.infrastructure.secrets import (
-    SecretNotFoundError,
-    SecretStoreError,
-)
+from application_sdk.infrastructure.secrets import SecretNotFoundError, SecretStoreError
 from application_sdk.testing.mocks import MockSecretStore
 
 
