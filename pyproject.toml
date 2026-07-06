@@ -223,6 +223,12 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["application_sdk"]
 
+# Ship the Dapr component YAMLs inside the wheel so consumer apps get them
+# for free from their existing application-sdk dependency instead of
+# downloading them over the network (see docs/standards/build-security.md).
+[tool.hatch.build.targets.wheel.force-include]
+"components" = "application_sdk/components"
+
 [tool.pyright]
 venvPath = "."
 venv = ".venv"

@@ -1,4 +1,4 @@
-"""Tests for the D-series (D001/D002/D003/D004/D005/D006/D007/D008) dependency_conformance check."""
+"""Tests for the D-series (D001-D009) dependency_conformance check."""
 
 from __future__ import annotations
 
@@ -676,6 +676,106 @@ def test_d008_line_anchors_in_pyright_section_not_decoy() -> None:
         if ln.strip() == 'typeCheckingMode = "basic"'
     )
     assert findings[0].line == expected
+
+
+# ── D009: remote Dapr component fetch ────────────────────────────────────────
+
+
+def _poe_pyproject(task_toml: str) -> str:
+    return (
+        '[project]\nname = "demo-app"\nversion = "0.1.0"\ndependencies = [\n'
+        '    "atlan-application-sdk>=3.17,<4.0.0",\n]\n\n'
+        f"{task_toml}\n"
+    )
+
+
+def test_d009_fires_on_github_contents_api_fetch() -> None:
+    task = (
+        "[tool.poe.tasks.download-components]\n"
+        'interpreter = "python"\n'
+        'env = { SDK_VERSION = "v3.14.0" }\n'
+        'shell = """\n'
+        "import requests\n"
+        'api_url = "https://api.github.com/repos/atlanhq/application-sdk/contents/components"\n'
+        'requests.get(api_url, params={"ref": "v3.14.0"})\n'
+        '"""\n'
+    )
+    findings = scan_text(
+        _poe_pyproject(task),
+        "pyproject.toml",
+        sdk_managed_packages=set(),
+        sdk_published_extras=set(),
+    )
+    assert [f.rule_id for f in findings] == ["D009"]
+
+
+def test_d009_fires_on_raw_githubusercontent_fetch() -> None:
+    task = (
+        "[tool.poe.tasks]\n"
+        "download-components.shell = "
+        '"curl -O https://raw.githubusercontent.com/atlanhq/application-sdk/'
+        'v3.14.0/components/statestore.yaml"\n'
+    )
+    findings = scan_text(
+        _poe_pyproject(task),
+        "pyproject.toml",
+        sdk_managed_packages=set(),
+        sdk_published_extras=set(),
+    )
+    assert [f.rule_id for f in findings] == ["D009"]
+
+
+def test_d009_passes_for_local_copy_from_installed_wheel() -> None:
+    task = (
+        "[tool.poe.tasks]\n"
+        'download-components.shell = "python -c \\"import application_sdk\\""\n'
+    )
+    findings = scan_text(
+        _poe_pyproject(task),
+        "pyproject.toml",
+        sdk_managed_packages=set(),
+        sdk_published_extras=set(),
+    )
+    assert findings == []
+
+
+def test_d009_no_poe_tasks_no_finding() -> None:
+    findings = scan_text(
+        _poe_pyproject(""),
+        "pyproject.toml",
+        sdk_managed_packages=set(),
+        sdk_published_extras=set(),
+    )
+    assert findings == []
+
+
+def test_d009_unrelated_poe_task_no_finding() -> None:
+    task = '[tool.poe.tasks]\nstart-dapr = "dapr run --app-id app"\n'
+    findings = scan_text(
+        _poe_pyproject(task),
+        "pyproject.toml",
+        sdk_managed_packages=set(),
+        sdk_published_extras=set(),
+    )
+    assert findings == []
+
+
+def test_d009_suppressed_inline_directive_above() -> None:
+    task = (
+        "[tool.poe.tasks]\n"
+        "# conformance: ignore[D009] migration tracked separately\n"
+        "download-components.shell = "
+        '"curl -O https://raw.githubusercontent.com/atlanhq/application-sdk/'
+        'v3.14.0/components/statestore.yaml"\n'
+    )
+    findings = scan_text(
+        _poe_pyproject(task),
+        "pyproject.toml",
+        sdk_managed_packages=set(),
+        sdk_published_extras=set(),
+    )
+    assert len(findings) == 1
+    assert findings[0].suppressed is True
 
 
 def test_inline_duplicate_entries_get_distinct_columns() -> None:

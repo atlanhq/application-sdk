@@ -19,8 +19,12 @@ Rules in this check module:
   Hatchling.
 * **D008 WeakenedTypeChecking** — ``[tool.pyright].typeCheckingMode`` must not
   be weaker than the SDK baseline ``standard``.
+* **D009 RemoteDaprComponentFetch** — no ``[tool.poe.tasks.*]`` entry may fetch
+  Dapr component YAMLs from ``raw.githubusercontent.com`` or the GitHub
+  contents API for ``atlanhq/application-sdk``; the installed SDK wheel
+  bundles them at ``application_sdk/components/``.
 
-D004/D005 are metadata-based (need the SDK importable) like D002; D006/D007/D008
+D004/D005 are metadata-based (need the SDK importable) like D002; D006/D007/D008/D009
 are pure-text.
 
 Self-check exemption: any pyproject whose ``[project].name`` starts with
@@ -53,6 +57,7 @@ RULE_D005 = "D005"
 RULE_D006 = "D006"
 RULE_D007 = "D007"
 RULE_D008 = "D008"
+RULE_D009 = "D009"
 
 SDK_PACKAGE = "atlan-application-sdk"
 
@@ -61,6 +66,17 @@ HATCHLING_BACKEND = "hatchling.build"
 
 # pyright type-checking modes weaker than the SDK baseline ``standard`` (D008).
 PYRIGHT_WEAK_MODES = frozenset({"off", "basic"})
+
+# Matches a poe task fetching Dapr component YAMLs straight from GitHub
+# (raw.githubusercontent.com or the contents API) for atlanhq/application-sdk,
+# instead of copying them from the installed wheel, which bundles them at
+# application_sdk/components/ (D009). Unauthenticated GitHub requests hit rate
+# limits under CI concurrency, and a hardcoded ref drifts from whatever SDK
+# version is actually locked in the app's uv.lock.
+_REMOTE_COMPONENT_FETCH_RE = re.compile(
+    r"(?:raw\.githubusercontent\.com|api\.github\.com)[^\s\"'\\]*/atlanhq/application-sdk\b",
+    re.IGNORECASE,
+)
 
 # The SDK's own ``[project].requires-python`` lower bound, as ``(major, minor)``.
 # Hardcoded (not read from metadata) so D006 stays a pure-text check that works
@@ -689,6 +705,31 @@ def _pyright_mode(
     return mode, _line_of(text, "typeCheckingMode", section="tool.pyright")
 
 
+def _poe_tasks(data: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """Return ``[tool.poe.tasks]`` as a mapping, or ``None`` when absent."""
+    tool = data.get("tool")
+    poe = tool.get("poe") if isinstance(tool, dict) else None
+    tasks = poe.get("tasks") if isinstance(poe, dict) else None
+    return tasks if isinstance(tasks, dict) else None
+
+
+def _iter_strings(value: Any) -> Iterator[str]:
+    """Recursively yield every string leaf under a poe task definition.
+
+    A task may be a bare string, a ``{shell = "..."}``/``{cmd = "..."}``/
+    ``{interpreter = "python", shell = "..."}`` table, or a sequence-task list
+    of steps — this walks all of those shapes uniformly.
+    """
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for v in value.values():
+            yield from _iter_strings(v)
+    elif isinstance(value, list):
+        for v in value:
+            yield from _iter_strings(v)
+
+
 def _is_self_check(name: str | None) -> bool:
     """Return True for the SDK and its sibling packages (exempt from D-series).
 
@@ -848,6 +889,46 @@ def scan_text(
                 suppressions=suppressions,
             )
         )
+
+    # ── D009 (pure-text) ────────────────────────────────────────────────────
+    tasks = _poe_tasks(data)
+    if tasks is not None:
+        reported_lines: set[int] = set()
+        for task_name, task_def in tasks.items():
+            if not any(
+                _REMOTE_COMPONENT_FETCH_RE.search(s) for s in _iter_strings(task_def)
+            ):
+                continue
+            for ln, line in enumerate(text.splitlines(), start=1):
+                if ln in reported_lines or not _REMOTE_COMPONENT_FETCH_RE.search(line):
+                    continue
+                reported_lines.add(ln)
+                findings.append(
+                    _make_finding(
+                        rule_id=RULE_D009,
+                        file=file,
+                        line=ln,
+                        column=1,
+                        message=(
+                            f"poe task '{task_name}' fetches Dapr component "
+                            f"YAMLs from GitHub over the network instead of "
+                            f"reading them from the installed "
+                            f"'{SDK_PACKAGE}' wheel, which bundles them at "
+                            f"application_sdk/components/. Unauthenticated "
+                            f"GitHub requests hit rate limits under CI "
+                            f"concurrency, and a hardcoded ref drifts from "
+                            f"whatever SDK version is actually locked in "
+                            f"uv.lock. Copy from the installed package "
+                            f'instead, e.g. `python -c "import '
+                            f"application_sdk, pathlib, shutil; "
+                            f"shutil.copytree(pathlib.Path("
+                            f"application_sdk.__file__).parent / "
+                            f"'components', 'components', "
+                            f'dirs_exist_ok=True)"`.'
+                        ),
+                        suppressions=suppressions,
+                    )
+                )
 
     # ── D002 / D004: redeclaration of SDK-managed core deps (metadata) ──────
     if sdk_managed_packages is None:

@@ -18,8 +18,8 @@ findings in the working tree, as reported by `suite.runner --series D`.
 
 The fingerprint-set of all unsuppressed FAILING D-series results.  Extends to
 include WARNING results in strict mode — D002/D003/D004/D005/D006/D007/D008 are
-WARN-tier, so they are processed in strict mode; D001 is BLOCK-tier and
-processed in both modes.
+WARN-tier, so they are processed in strict mode; D001 and D009 are BLOCK-tier
+and processed in both modes.
 
 This facet's fingerprint moves when any D-series finding is resolved (fixed or
 suppressed with justification) or when new ones appear.  An unchanged
@@ -133,6 +133,26 @@ fix.  The re-detection gate is authoritative for this area — see
   `"standard"` (leave `"strict"` untouched; only `"off"`/`"basic"` are flagged).
   Replace only the mode value.
 
+- **D009 RemoteDaprComponentFetch** — the named `[tool.poe.tasks.*]` entry
+  fetches Dapr component YAMLs from `raw.githubusercontent.com` or the GitHub
+  contents API for `atlanhq/application-sdk`. Replace the task's body
+  (whichever form it's written in — `task.shell = "..."` shorthand or a full
+  `[tool.poe.tasks.task]` table) with a local copy from the installed wheel:
+
+  ```toml
+  [tool.poe.tasks]
+  download-components.shell = """
+  python -c "
+  import application_sdk, pathlib, shutil
+  src = pathlib.Path(application_sdk.__file__).parent / 'components'
+  shutil.copytree(src, 'components', dirs_exist_ok=True)
+  "
+  """
+  ```
+
+  Preserve the task's existing name; only its body changes. This is BLOCK-tier
+  and has no suppress path in default mode, same as D001.
+
 **Advisory rules** (`autofixable = false`, `classification = "judgment"`;
 WARN-tier — route to residue for human decision):
 
@@ -189,4 +209,5 @@ justified exception for this app.  Applicable rules and notes:
 
 The justification must describe *why* the deviation is acceptable here, not
 merely that the rule is being suppressed.  Route every suppression to residue
-for human audit.  D001 is BLOCK-tier and has no suppress path in default mode.
+for human audit.  D001 and D009 are BLOCK-tier and have no suppress path in
+default mode.
