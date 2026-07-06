@@ -38,15 +38,6 @@ services:
       # Disable observability upload — the CI atlan-objectstore S3 config
       # is not set up for external access and will crash the container on startup.
       - ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK=false
-      # Wait out slow CI cold-starts before proceeding. On fresh runners daprd's
-      # component init has been observed at ~75s (and 25s on faster ones); the
-      # SDK's 60s default readiness gate then "proceeds anyway" and the first
-      # Dapr call (agent secret-bundle fetch during preflight) races the not-yet-
-      # ready sidecar → "ConnectError: All connection attempts failed" and a
-      # flaky e2e failure (seen on openapi). This is a give-up ceiling only — the
-      # gate returns the instant daprd reports ready, so a healthy ~75s start
-      # still returns at ~75s; 300s just guarantees we never race it in CI.
-      - ATLAN_DAPR_SIDECAR_WAIT_TIMEOUT=300
       # Bridge: configurator → main.py (TLS)
       - ATLAN_TEMPORAL_TLS_ENABLED=true
       # Bridge: ATLAN_BASE_URL → production SDK names
