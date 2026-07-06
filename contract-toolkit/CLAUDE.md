@@ -24,6 +24,7 @@ Contracts generate — from one `pkl eval -m . contract/app.pkl` at repo root:
 
 - `src/App.pkl`: **canonical template** for all new native app contracts.
 - `src/Widgets.pkl`: widget catalog re-exported from `App.pkl`.
+- `src/Deployment.pkl`: deployment classes (`DeployConfig`, `Pool`, `KedaConfig`, `DaprComponents`, `ResourceConfig`) re-exported from `App.pkl`.
 - `src/Connectors.pkl`: connector type registry (still imported explicitly by consumers).
 - Legacy modules (reference only, not for new apps):
   - `src/NativeApp.pkl`, `src/NativeAppBundle.pkl`, `src/AgentConfig.pkl`
@@ -56,7 +57,8 @@ demonstrates distinct feature surface, verified by `tests/*.pkl`.
   diverse widgets, UIRules, extraNodes.
 - `bundle`: multi-entrypoint app (crawler + miner); shared credential configmap;
   per-entrypoint artifact subfolders.
-- `deploy`: typed `deploy` block — KEDA, Dapr, resources, env, `deployOverrides`.
+- `deploy`: single-pool migration example — KEDA, resources, env, pool-level `overrides`; shows v0.16.x → v0.17.0 migration path.
+- `pools`: `pools` map (preferred) — named hot/cold worker pools with per-pool `cooldownPeriod` and resources.
 - `connection-ref`: `ConnectionRefInput` widget, `pipeline.publish = null`.
 - `publish-controls`: publish toggles, `includeInputFields`, `errorHandling`.
 - `fanin`: multi-parent fan-in via `dependsOn`, explicit `DependencyCondition`.
