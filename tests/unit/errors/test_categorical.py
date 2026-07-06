@@ -17,6 +17,7 @@ from application_sdk.errors.leaves import (
     PreconditionError,
     RateLimitedError,
     ResourceExhaustedError,
+    SourceUnavailableError,
     UnimplementedError,
 )
 
@@ -100,6 +101,14 @@ _LEAVES = [
         "DEPENDENCY_UNAVAILABLE",
         Audience.PLATFORM,
         ["service", "target", "network_error"],
+    ),
+    (
+        SourceUnavailableError,
+        FailureCategory.SOURCE_UNAVAILABLE,
+        True,
+        "SOURCE_UNAVAILABLE",
+        Audience.USER,
+        ["source_type", "endpoint", "http_status", "network_error"],
     ),
     (
         ResourceExhaustedError,

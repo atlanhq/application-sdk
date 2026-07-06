@@ -34,6 +34,12 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from conformance.bootstrap.extract import (
+    EXIT_ZERO_RE,
+    extract_field,
+    extract_renovate_automerge,
+    resolve_renovate_fallback_exit_zero,
+)
 from conformance.bootstrap.render import MANAGED_ACTION_FILES, MANAGED_WORKFLOWS, render
 from conformance.suite.schema.findings import Finding
 
@@ -79,22 +85,48 @@ def _strip_regen_override(text: str) -> str:
 
 # ---------------------------------------------------------------------------
 # Managed-shim param extractors
+#
+# The shared "read a rendered param back off an on-disk managed file"
+# primitives (``extract_field``, ``extract_renovate_automerge``,
+# ``EXIT_ZERO_RE``) live in ``conformance.bootstrap.extract`` — a leaf module
+# with no dependency on this one — so both this checker's drift-comparison
+# extractors and ``bootstrap``'s own re-run autodetection can import them at
+# module level without an import cycle.
 # ---------------------------------------------------------------------------
-
-# Regexes to extract the per-repo customised values from the two templated
-# managed-shim files so drift comparisons are structural, not literal.
-_PKG_NAME_RE = re.compile(r'package_name:\s+"([^"]+)"')
-_UNIT_TESTS_WF_RE = re.compile(r'unit_tests_workflow_file:\s+"([^"]+)"')
 
 
 def _extract_package_name(text: str) -> str:
-    m = _PKG_NAME_RE.search(text)
-    return m.group(1) if m else "app"
+    return extract_field(text, "package_name") or "app"
 
 
 def _extract_unit_tests_workflow(text: str) -> str:
-    m = _UNIT_TESTS_WF_RE.search(text)
-    return m.group(1) if m else "tests.yaml"
+    return extract_field(text, "unit_tests_workflow_file") or "tests.yaml"
+
+
+def _extract_exit_zero(text: str, root: Path) -> str:
+    """Return the on-disk ``exit-zero`` value, falling back to *root*'s
+    ``renovate.json`` enforcement signal when the line is unparseable.
+
+    Uses ``resolve_renovate_fallback_exit_zero`` — the same automerge-to-
+    exit-zero decision ``bootstrap.autodetect._read_conformance_enforce``
+    falls back to — so this checker and ``bootstrap``'s own re-run
+    autodetection cannot silently diverge on a hand-edited/pre-template
+    ``conformance.yaml``: without this, a genuinely soft-mode repo whose
+    exit-zero line doesn't match the pattern would report a spurious C002
+    drift finding here while `bootstrap` itself correctly preserves soft
+    mode via the same renovate.json fallback.
+    """
+    m = EXIT_ZERO_RE.search(text)
+    if m:
+        return m.group(1)
+    renovate = root / _RENOVATE_JSON
+    if not renovate.exists():
+        return "false"
+    try:
+        renovate_text = renovate.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return "false"
+    return resolve_renovate_fallback_exit_zero(renovate_text)
 
 
 # ---------------------------------------------------------------------------
@@ -245,6 +277,8 @@ def _scan_managed_shim(path: Path, root: Path) -> list[Finding]:
         kwargs["package_name"] = _extract_package_name(on_disk)
     elif name == "build-and-publish.yaml":
         kwargs["unit_tests_workflow"] = _extract_unit_tests_workflow(on_disk)
+    elif name == "conformance.yaml":
+        kwargs["exit_zero"] = _extract_exit_zero(on_disk, root)
 
     canonical = render(name, **kwargs)
 
@@ -292,7 +326,7 @@ def _scan_renovate_json(path: Path, root: Path) -> list[Finding]:
         ]
 
     on_disk = path.read_text(encoding="utf-8")
-    canonical = render(_RENOVATE_JSON)
+    canonical = render(_RENOVATE_JSON, automerge=extract_renovate_automerge(on_disk))
 
     if _strip_action_pins(on_disk) == _strip_action_pins(canonical):
         return []

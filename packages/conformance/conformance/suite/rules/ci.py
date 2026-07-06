@@ -18,6 +18,8 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="supply-chain",
         autofixable=True,
+        orthogonal_gate="skip",
+        forces_external_influence=True,
         since="0.2.0",
         rationale=(
             "A mutable tag (@v4) can be silently re-pointed to any commit after review — "
@@ -43,6 +45,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="ci-consistency",
         autofixable=True,
+        orthogonal_gate="skip",
         since="0.3.0",
         rationale=(
             "Managed CI workflows enforce fleet-wide guarantees: uniform security scanning, "
@@ -68,7 +71,16 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="ci-consistency",
+        # False rather than a per-finding-shape split: this ID covers two
+        # cases with different remediability (see full_description) — the
+        # absent-file case is mechanically fixed by `bootstrap`, but the
+        # far more common missing-entry case is judgment-only and routes to
+        # residue. `autofixable` is a single per-rule bool (no schema
+        # support for "some findings under this ID are, some aren't"), so
+        # it's set to the conservative/majority-case value rather than a
+        # value that would overstate what most C003 findings actually get.
         autofixable=False,
+        orthogonal_gate="skip",
         since="0.4.0",
         rationale=(
             "A .gitignore that is missing standard entries risks accidentally committing "
@@ -85,7 +97,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "Equivalences are respected: `.venv` covers `.venv/`, and "
             "`**/node_modules/**` covers `node_modules/`. "
             "Both absent-file and missing-entry findings are WARN only — the file is "
-            "app-editable and must never block CI."
+            "app-editable and must never block CI. "
+            "Note on autofixable: only the absent-`.gitignore` case is mechanically "
+            "fixed (via the same `bootstrap` re-sync as C002); a missing-entry finding "
+            "on an existing `.gitignore` always requires human judgment and is not "
+            "autofixed, which is why this rule's `autofixable` is false overall."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/ci.md#c003",
     ),

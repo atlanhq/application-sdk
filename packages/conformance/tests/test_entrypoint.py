@@ -203,6 +203,77 @@ class TestP017LifecycleMethods:
         assert _rule(src, "P017") == []
 
 
+class TestP017IntegrationTestHarnessExemption:
+    """Files under tests/integration/ are exempt from classes (b) and (c)."""
+
+    def test_silent_on_create_worker_under_tests_integration(self) -> None:
+        src = (
+            "from application_sdk.execution import create_worker\n"
+            "worker = create_worker(client=client, task_queue='my-app')\n"
+        )
+        assert _rule(src, "P017", file="tests/integration/conftest.py") == []
+
+    def test_silent_on_appworker_under_tests_integration(self) -> None:
+        src = (
+            "from application_sdk.execution import AppWorker\n"
+            "w = AppWorker(client=client, task_queue='my-app')\n"
+        )
+        assert _rule(src, "P017", file="tests/integration/conftest.py") == []
+
+    def test_silent_on_lifecycle_call_under_tests_integration(self) -> None:
+        src = "await app.start_worker()\n"
+        assert _rule(src, "P017", file="tests/integration/conftest.py") == []
+
+    def test_silent_on_nested_tests_integration_path(self) -> None:
+        """A subdirectory under tests/integration/ is still exempt."""
+        src = (
+            "from application_sdk.execution import create_worker\n"
+            "worker = create_worker(client=client, task_queue='my-app')\n"
+        )
+        assert _rule(src, "P017", file="tests/integration/fixtures/worker.py") == []
+
+    def test_v2_import_still_fires_under_tests_integration(self) -> None:
+        """The dead-code class (a) is never legitimate, exemption or not."""
+        src = "from application_sdk.worker import Worker\n"
+        assert len(_rule(src, "P017", file="tests/integration/conftest.py")) == 1
+
+    def test_fires_on_create_worker_under_plain_tests_dir(self) -> None:
+        """Not under tests/integration/ (no "integration" segment) — still fires."""
+        src = (
+            "from application_sdk.execution import create_worker\n"
+            "worker = create_worker(client=client, task_queue='my-app')\n"
+        )
+        assert len(_rule(src, "P017", file="tests/test_integration.py")) == 1
+
+    def test_fires_on_create_worker_under_unit_tests(self) -> None:
+        """A unit test hand-rolling a worker instead of mocking is still caught."""
+        src = (
+            "from application_sdk.execution import create_worker\n"
+            "worker = create_worker(client=client, task_queue='my-app')\n"
+        )
+        assert len(_rule(src, "P017", file="tests/unit/test_something.py")) == 1
+
+    def test_fires_when_integration_segment_not_adjacent_to_tests(self) -> None:
+        """'integration' present but not directly under 'tests' — must still fire.
+
+        Guards against a broader match (e.g. "tests" and "integration" present
+        anywhere in the path) that would also exempt unrelated trees like
+        tests/helpers/integration/.
+        """
+        src = (
+            "from application_sdk.execution import create_worker\n"
+            "worker = create_worker(client=client, task_queue='my-app')\n"
+        )
+        assert (
+            len(_rule(src, "P017", file="tests/helpers/integration/conftest.py")) == 1
+        )
+
+    def test_fires_when_tests_segment_not_adjacent_to_integration(self) -> None:
+        """'tests' present but not directly followed by 'integration' — must still fire."""
+        src = "await app.start_worker()\n"
+        assert len(_rule(src, "P017", file="integration/foo/tests/bar.py")) == 1
+
+
 class TestP017Suppression:
     def test_suppressed_inline(self) -> None:
         src = (

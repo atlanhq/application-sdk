@@ -94,7 +94,7 @@ across two buckets), corrupting the reporting layer for every downstream consume
 
 `FailureCategory` is the closed, single-axis taxonomy the SDK owns — every value is the
 canonical answer to *what happened* and is consumed as an immutable reporting metric
-(dashboards, SLA gates, on-call routing). The 14 categorical leaves in
+(dashboards, SLA gates, on-call routing). The 15 categorical leaves in
 `application_sdk.errors.leaves` (and `AppError` itself) are the sole defining sites:
 each leaf binds exactly one `FailureCategory` to its `category` `ClassVar`.
 
@@ -575,8 +575,14 @@ and a `run()` / `@entrypoint` method (typed `Input`/`Output`), and set
 run_dev_combined(MyApp, credentials={...}, ...)`. Workers and activities are
 auto-discovered from `AppRegistry` / `TaskRegistry` — there is nothing to wire.
 
+Files under `tests/integration/` are exempt from the construction-call and
+lifecycle-call violation classes: those harnesses need an in-process worker/client
+handle to submit workflows and tear down per test, and `run_dev_combined` blocks until
+shutdown with no handle-returning mode to substitute. The removed-v2-import class stays
+enforced everywhere, including under `tests/integration/`.
+
 Land as `WARN`: a justified inline `# conformance: ignore[P017] <reason>` records any
-unavoidable exception and stays visible in SARIF.
+unavoidable exception outside that exemption and stays visible in SARIF.
 
 ---
 
@@ -996,5 +1002,10 @@ self.upload(...)` to the `run()` method or the relevant `@entrypoint` method.
 Note: P008 flags `self.upload()` *inside* `@task` methods (the wrong location); P030
 flags the *absence* of any upload call.  They are complementary: both should be clean
 for a correctly-wired SDR app.
+
+Exemption: this rule is skipped for apps whose `contract/app.pkl` sets `pipeline.publish
+= null` (no publish stage), which compiles to a generated manifest with no `dag.publish`
+node.  An extract-only app has nothing to hand the extracted assets off to, so the
+absence of `self.upload()` is by design, not a gap.
 
 ---
