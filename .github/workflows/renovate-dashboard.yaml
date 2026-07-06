@@ -1,9 +1,11 @@
 # Update Renovate Dashboard — standalone scheduled workflow.
 #
-# Discovers every atlan-application-sdk consumer repo, gathers each repo's open
-# and recently-merged Renovate PRs via `gh pr list`, classifies them with the
-# conformance `renovate-scan` CLI, and deploys per-repo + fleet dashboard data
-# to Kryptonite (k.atlan.dev/renovate-dashboard/).
+# Discovers every atlan-application-sdk consumer repo, gathers open and
+# recently-merged Renovate PRs across the scanned scope via a handful of paginated
+# GraphQL search queries (renovate_fleet_scan.py — not a per-repo `gh pr list` loop,
+# which used to be the dominant contributor to fleet-wide rate-limit pressure),
+# classifies them with the conformance `renovate-scan` CLI, and deploys per-repo +
+# fleet dashboard data to Kryptonite (k.atlan.dev/renovate-dashboard/).
 #
 # Mirrors the conformance dashboard job in update-dashboard.yaml for the S3
 # deployment pattern, and reusable-renovate-dispatch.yaml for fleet discovery.
@@ -88,34 +90,26 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
           REPOS: ${{ steps.discover.outputs.repos }}
+          SINGLE_REPO: ${{ inputs.repo }}
         run: |
           set -euo pipefail
           mkdir -p /tmp/renovate-input/open /tmp/renovate-input/merged
+          echo "$REPOS" > /tmp/renovate-known-repos.json
 
           # 30-day merged window — GNU date on the runner, BSD date as fallback.
           SINCE=$(date -d '30 days ago' +%Y-%m-%d 2>/dev/null || date -v-30d +%Y-%m-%d)
 
-          # Iterate the discovered fleet. gh calls are fast, so a serial loop is
-          # simpler than a matrix and keeps all data in one workspace for the scan.
-          echo "$REPOS" | jq -r '.[]' | while read -r repo; do
-            [ -z "$repo" ] && continue
-            slug=$(echo "$repo" | tr '/' '_')
-            echo "Gathering Renovate PRs for $repo"
-
-            # Open PRs. gh returns [] for repos with no matching PRs — scan.py
-            # handles empty arrays, so a repo with no Renovate PRs is fine.
-            gh pr list --repo "$repo" --author 'app/renovate' --state open --limit 100 \
-              --json number,title,headRefName,labels,mergeable,reviewDecision,statusCheckRollup,files,createdAt,updatedAt,url,isDraft,body \
-              > "/tmp/renovate-input/open/${slug}.json" 2>/dev/null \
-              || echo "[]" > "/tmp/renovate-input/open/${slug}.json"
-
-            # Merged PRs over the trailing 30-day window.
-            gh pr list --repo "$repo" --author 'app/renovate' --state merged --limit 100 \
-              --search "merged:>=${SINCE}" \
-              --json number,title,headRefName,labels,createdAt,mergedAt,url,reviews \
-              > "/tmp/renovate-input/merged/${slug}.json" 2>/dev/null \
-              || echo "[]" > "/tmp/renovate-input/merged/${slug}.json"
-          done
+          # A handful of paginated GraphQL search calls covers the whole scope (org or
+          # single repo) at once, replacing what used to be two `gh pr list` REST calls
+          # per discovered repo — that O(repos) loop was a major contributor to hitting
+          # GitHub's rate limits at fleet scale. See renovate_fleet_scan.py.
+          python3 .github/scripts/renovate_fleet_scan.py \
+            --org atlanhq \
+            ${SINGLE_REPO:+--repo "$SINGLE_REPO"} \
+            --since "$SINCE" \
+            --open-dir /tmp/renovate-input/open \
+            --merged-dir /tmp/renovate-input/merged \
+            --known-repos-file /tmp/renovate-known-repos.json
 
           echo "Open PR files:   $(ls /tmp/renovate-input/open   | wc -l)"
           echo "Merged PR files: $(ls /tmp/renovate-input/merged | wc -l)"
