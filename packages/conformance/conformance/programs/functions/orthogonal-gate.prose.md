@@ -13,6 +13,11 @@ description: >
 - `scope` (string, required) — repository root path.
 - `finding` (object, required) — the finding being gated, as returned by
   `detect-violations`.  Used to read `finding.orthogonal_gate` for dispatch.
+- `touched_files` (list of strings, optional) — every path the applied fix
+  actually wrote, as computed by the caller (`detect-fix-recheck`'s
+  `result.touched_files or [finding.file]`).  Used by the `"skip"` gate to
+  parse-check the full multi-file write, not just `finding.file`.  Falls
+  back to `[finding.file]` if not passed.
 
 ### Returns
 
@@ -38,6 +43,42 @@ of the finding as returned by `detect-violations`):
 
 - `"pkl-eval"` → delegate to `pkl-eval-gate` with `scope = scope`.  Return its
   `passed`, `exit_code`, and `summary` directly.
+
+- `"skip"` → skip the Python/contract test suite (it has no signal to offer for
+  a `.github/`/`.gitignore`-only change) but still run a minimal
+  **parseability check** over every touched non-Python file, because neither
+  this gate nor `recheck-narrowest` otherwise verifies the file is still
+  well-formed outside the one line the fix targeted — and for a rule whose
+  fix is *not* unconditionally escalated to residue (C002/C003; unlike C001,
+  which always routes to human sign-off via `external_influence`), a
+  syntax-breaking rewrite would otherwise auto-accept with nothing catching
+  it before GitHub Actions itself fails to parse the file post-merge.
+
+  For each path in the `touched_files` parameter (or `[finding.file]` if not
+  passed):
+  - `.yaml`/`.yml` → parse with a YAML loader (e.g.
+    `python -c "import sys,yaml; yaml.safe_load(open(sys.argv[1]))" <path>`).
+  - `.json` → parse with a JSON loader.
+  - `.py` (e.g. the vendored `.github/scripts/build_conformance_args.py`) →
+    compile-check with `python -m py_compile <path>`. This file is currently
+    always copied byte-for-byte from a template already linted upstream, so
+    this check is belt-and-suspenders today — but the gate must not assume
+    that stays true (a future templated `.py` managed file, or a corrupted
+    upstream template, would otherwise auto-accept a syntax error).
+  - any other extension (e.g. `.gitignore`) → no parse check; nothing to
+    validate structurally.
+
+  If every touched file with a checkable extension parses cleanly, return
+  `passed = true`, `exit_code = 0`, `summary = "orthogonal_gate=skip —
+  fix cannot affect Python or contract behaviour; N touched file(s)
+  parse-checked"`. If any fails to parse, return `passed = false`,
+  `exit_code = 1`, and `summary` naming the file and the parser error, so the
+  loop reverts the fix and routes it to residue instead of auto-accepting a
+  broken file.
+
+  Named `"skip"` rather than a bare `"none"` string so it can't be confused
+  with the field's own `None` default, which means the opposite thing (run
+  the standard test suite).
 
 - **any other value** → fail closed: emit `passed = false`, `exit_code = -1`,
   and `summary = "Unknown orthogonal_gate value: <value> — revert the edit and

@@ -75,6 +75,12 @@ class AtlanRuleProperties(BaseModel):
     """Why this rule exists — what risk it avoids, what loop it closes, or what
     value it adds.  Surfaced as ``atlan/rationale`` in the ``properties`` bag."""
 
+    forces_external_influence: bool = False
+    """``True`` if every fix for this rule must be routed to human review
+    regardless of what an individual remediation attempt reports — the
+    structural counterpart to the per-result ``atlan/externalInfluence``
+    property below, which is set by the remediation layer per-invocation."""
+
     def to_properties(self) -> dict[str, Any]:
         """Return a ``properties`` dict ready to merge into a SARIF node."""
         out: dict[str, Any] = {
@@ -90,6 +96,8 @@ class AtlanRuleProperties(BaseModel):
             out["atlan/since"] = self.since
         if self.rationale is not None:
             out["atlan/rationale"] = self.rationale
+        if self.forces_external_influence:
+            out["atlan/forcesExternalInfluence"] = True
         return out
 
     @classmethod
@@ -104,6 +112,9 @@ class AtlanRuleProperties(BaseModel):
             orthogonal_gate=props.get("atlan/orthogonalGate"),
             since=props.get("atlan/since"),
             rationale=props.get("atlan/rationale"),
+            forces_external_influence=bool(
+                props.get("atlan/forcesExternalInfluence", False)
+            ),
         )
 
 

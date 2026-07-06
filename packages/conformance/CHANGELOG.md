@@ -2,6 +2,70 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.11.2] - 2026-07-05
+
+### Bug fixes
+
+- mechanically remediate C001/C002 CI findings (#2504) ([f386ed9](https://github.com/atlanhq/application-sdk/commit/f386ed9))
+- honor --help/-h on bootstrap without side effects (#2506) ([0fb6287](https://github.com/atlanhq/application-sdk/commit/0fb6287))
+
+### Other changes
+
+- chore(deps): lock file maintenance (#2502) ([edf7ef2](https://github.com/atlanhq/application-sdk/commit/edf7ef2))
+
+## [0.11.1] - 2026-07-04
+
+### Bug fixes
+
+- skip P030 for apps with no publish stage (#2500) ([01e3d6c](https://github.com/atlanhq/application-sdk/commit/01e3d6c))
+- suppress T201 inline in build_conformance_args.py (#2486) ([58accfc](https://github.com/atlanhq/application-sdk/commit/58accfc))
+
+### Other changes
+
+- chore(deps): lock file maintenance (#2501) ([b21b1e4](https://github.com/atlanhq/application-sdk/commit/b21b1e4))
+- chore(deps): lock file maintenance (#2493) ([4130b08](https://github.com/atlanhq/application-sdk/commit/4130b08))
+- chore(deps): lock file maintenance (#2491) ([9756039](https://github.com/atlanhq/application-sdk/commit/9756039))
+- chore(deps): lock file maintenance (#2484) ([7c24a41](https://github.com/atlanhq/application-sdk/commit/7c24a41))
+
+## [0.11.0] - 2026-07-03
+
+### Features
+
+- add SourceUnavailableError for customer-controlled source systems (#2476) ([4ba7158](https://github.com/atlanhq/application-sdk/commit/4ba7158))
+
+### Bug fixes
+
+- bootstrap contract ledger scaffold + discovery path bug (#2483) ([3240021](https://github.com/atlanhq/application-sdk/commit/3240021))
+
+### Other changes
+
+- chore(deps): lock file maintenance (#2474) ([afccf21](https://github.com/atlanhq/application-sdk/commit/afccf21))
+- chore(deps): lock file maintenance (#2472) ([55b90d5](https://github.com/atlanhq/application-sdk/commit/55b90d5))
+- chore(deps): lock file maintenance (#2465) ([82a1f3c](https://github.com/atlanhq/application-sdk/commit/82a1f3c))
+- chore(deps): lock file maintenance (#2460) ([1f8f7a6](https://github.com/atlanhq/application-sdk/commit/1f8f7a6))
+- chore(deps): lock file maintenance (#2459) ([fa95c66](https://github.com/atlanhq/application-sdk/commit/fa95c66))
+- chore(deps): lock file maintenance (#2453) ([4feedd8](https://github.com/atlanhq/application-sdk/commit/4feedd8))
+
+## [0.10.0] - 2026-07-01
+
+### Features
+
+- schedule force-refresh runs of the conformance suite (#2451) ([ec43c58](https://github.com/atlanhq/application-sdk/commit/ec43c58))
+- add generated-artifact freshness CI gate (BLDX-1414) (#2440) ([2944741](https://github.com/atlanhq/application-sdk/commit/2944741))
+- add S-series secret-hygiene rules S001/S002 (BLDX-1419) (#2436) ([c75dc75](https://github.com/atlanhq/application-sdk/commit/c75dc75))
+- add K003/K004/K005 generated-artifact freshness rules (BLDX-1414) (#2439) ([eb6d142](https://github.com/atlanhq/application-sdk/commit/eb6d142))
+- T004 DevEntrypointRequiresAppModule (BLDX-1520) (#2448) ([766b4ce](https://github.com/atlanhq/application-sdk/commit/766b4ce))
+
+### Bug fixes
+
+- vendor run-conformance-detect action + arg-builder script into consumer repos (#2445) ([ce42367](https://github.com/atlanhq/application-sdk/commit/ce42367))
+
+### Other changes
+
+- chore(deps): lock file maintenance (#2452) ([d5026de](https://github.com/atlanhq/application-sdk/commit/d5026de))
+- chore(deps): lock file maintenance (#2449) ([1f6fa90](https://github.com/atlanhq/application-sdk/commit/1f6fa90))
+- ci(conformance): fix age_days test date arithmetic across month boundary (#2443) ([781cb78](https://github.com/atlanhq/application-sdk/commit/781cb78))
+
 ## [0.9.0] - 2026-06-30
 
 ### Features

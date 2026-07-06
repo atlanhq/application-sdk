@@ -62,9 +62,15 @@ class RuleDefinition(BaseModel):
     short_description: str = ""
     full_description: str = ""
     help_uri: str | None = None
-    orthogonal_gate: Literal["tests", "pkl-eval"] | None = None
+    orthogonal_gate: Literal["tests", "pkl-eval", "skip"] | None = None
     """Named gate to run after a source-code fix.  ``None`` or ``"tests"`` runs
-    the repository's standard test suite; ``"pkl-eval"`` runs the pkl-eval gate.
+    the repository's standard test suite; ``"pkl-eval"`` runs the pkl-eval gate;
+    ``"skip"`` skips gating entirely — for fixes that cannot affect Python or
+    contract behaviour (e.g. a deterministic re-sync of a managed CI/scaffold
+    file) so running the test suite would only add cost with no signal.
+    Named ``"skip"`` rather than a bare ``"none"`` string so it cannot be
+    confused with this field's own ``None`` default, which means the opposite
+    thing (run the standard test suite).
     The field is an exhaustive ``Literal`` so that a typo (e.g. ``"pkleval"``)
     is caught at rule-definition time rather than silently falling through to the
     wrong gate at remediation time."""
@@ -73,6 +79,17 @@ class RuleDefinition(BaseModel):
     Tracks the behavioural appearance, not when a specific rule ID was assigned —
     so a renumbered rule retains the original ``since`` of the behaviour it
     describes, e.g. ``"0.2.0"``."""
+    forces_external_influence: bool = False
+    """``True`` if every fix for this rule must be treated as having consulted
+    untrusted external content, regardless of what an individual remediation
+    attempt reports. Structural counterpart to a fix's own (model-reported)
+    ``external_influence`` result field: the model is trusted to set that
+    field correctly on every invocation, but a rule known ahead of time to
+    always involve an external lookup (e.g. C001's live GitHub SHA
+    resolution) should not depend on the model remembering to do so every
+    single time. ``detect-fix-recheck`` ORs this into its residue-routing
+    condition alongside the model's own ``external_influence`` report, the
+    same way ``orthogonal_gate`` is a structural (not model-reported) field."""
     rationale: str = ""
     """Why this rule exists — what risk it avoids, what loop it closes, or what
     value it adds. Surfaced as ``atlan/rationale`` in SARIF ``properties``."""
@@ -107,6 +124,7 @@ class RuleDefinition(BaseModel):
             orthogonal_gate=self.orthogonal_gate,
             since=self.since,
             rationale=self.rationale or None,
+            forces_external_influence=self.forces_external_influence,
         )
         return ReportingDescriptor(
             id=self.id,

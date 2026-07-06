@@ -7,16 +7,15 @@ tests exercise the same code path a caller would use.
 
 from __future__ import annotations
 
+import json
 import pathlib
 
 import pytest
+from conformance.bootstrap.args import parse_bootstrap_args
+from conformance.bootstrap.autodetect import derive_app_name_from_dir
+from conformance.bootstrap.command import _bootstrap_file
 from conformance.bootstrap.render import MANAGED_ACTION_FILES, MANAGED_WORKFLOWS, render
-from conformance.cli import (
-    _bootstrap_file,
-    _cmd_bootstrap,
-    _derive_app_name_from_dir,
-    _parse_bootstrap_args,
-)
+from conformance.cli import _cmd_bootstrap
 
 # ---------------------------------------------------------------------------
 # _bootstrap_file (always-overwrite semantics)
@@ -59,16 +58,45 @@ def test_bootstrap_file_prints_updated_for_overwrite(
     assert "updated" in capsys.readouterr().out
 
 
+def test_bootstrap_file_prints_ok_up_to_date_for_unchanged_content(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Re-writing identical content must not print `updated:` -- otherwise
+    every bootstrap-based remediation would report every always-overwrite
+    managed file as touched, not just the one(s) that actually drifted (see
+    touched_files in remediate-finding.prose.md)."""
+    dest = tmp_path / "SKILL.md"
+    dest.write_text("same content")
+    _bootstrap_file(dest, "same content")
+    out = capsys.readouterr().out
+    assert "ok (up to date)" in out
+    assert "updated" not in out
+
+
+def test_bootstrap_file_does_not_rewrite_unchanged_content(
+    tmp_path: pathlib.Path,
+) -> None:
+    dest = tmp_path / "SKILL.md"
+    dest.write_text("same content")
+    mtime_before = dest.stat().st_mtime_ns
+    _bootstrap_file(dest, "same content")
+    assert dest.stat().st_mtime_ns == mtime_before
+
+
 # ---------------------------------------------------------------------------
-# _parse_bootstrap_args
+# parse_bootstrap_args
 # ---------------------------------------------------------------------------
 
 
 def test_parse_bootstrap_args_defaults() -> None:
-    result = _parse_bootstrap_args([])
+    # "" for package_name/unit_tests_workflow means "not explicitly set" —
+    # _cmd_bootstrap auto-detects each from an existing managed workflow file,
+    # falling back to "app"/"tests.yaml" respectively (mirrors app_name and
+    # services_script below).
+    result = parse_bootstrap_args([])
     assert result == {
-        "package_name": "app",
-        "unit_tests_workflow": "tests.yaml",
+        "package_name": "",
+        "unit_tests_workflow": "",
         "app_name": "",
         "app_image_name": "",
         "enable_e2e": "true",
@@ -78,17 +106,17 @@ def test_parse_bootstrap_args_defaults() -> None:
 
 
 def test_parse_bootstrap_args_space_separated() -> None:
-    result = _parse_bootstrap_args(["--package-name", "myapp"])
+    result = parse_bootstrap_args(["--package-name", "myapp"])
     assert result["package_name"] == "myapp"
 
 
 def test_parse_bootstrap_args_equals_form() -> None:
-    result = _parse_bootstrap_args(["--unit-tests-workflow=custom.yaml"])
+    result = parse_bootstrap_args(["--unit-tests-workflow=custom.yaml"])
     assert result["unit_tests_workflow"] == "custom.yaml"
 
 
 def test_parse_bootstrap_args_both_flags() -> None:
-    result = _parse_bootstrap_args(
+    result = parse_bootstrap_args(
         ["--package-name", "connector", "--unit-tests-workflow", "ci.yaml"]
     )
     assert result["package_name"] == "connector"
@@ -96,28 +124,63 @@ def test_parse_bootstrap_args_both_flags() -> None:
 
 
 def test_parse_bootstrap_args_app_name() -> None:
-    result = _parse_bootstrap_args(["--app-name", "mysql"])
+    result = parse_bootstrap_args(["--app-name", "mysql"])
     assert result["app_name"] == "mysql"
 
 
 def test_parse_bootstrap_args_app_name_equals_form() -> None:
-    result = _parse_bootstrap_args(["--app-name=openapi"])
+    result = parse_bootstrap_args(["--app-name=openapi"])
     assert result["app_name"] == "openapi"
 
 
 def test_parse_bootstrap_args_app_image_name() -> None:
-    result = _parse_bootstrap_args(["--app-image-name", "atlan-mysql-app"])
+    result = parse_bootstrap_args(["--app-image-name", "atlan-mysql-app"])
     assert result["app_image_name"] == "atlan-mysql-app"
 
 
 def test_parse_bootstrap_args_enable_e2e_false() -> None:
-    result = _parse_bootstrap_args(["--enable-e2e", "false"])
+    result = parse_bootstrap_args(["--enable-e2e", "false"])
     assert result["enable_e2e"] == "false"
 
 
 def test_parse_bootstrap_args_enable_e2e_equals_form() -> None:
-    result = _parse_bootstrap_args(["--enable-e2e=false"])
+    result = parse_bootstrap_args(["--enable-e2e=false"])
     assert result["enable_e2e"] == "false"
+
+
+def test_parse_bootstrap_args_rejects_unknown_flag(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A misspelled/unrecognized flag must error, not silently fall through to
+    defaults — this parser now validates known flags' values, so an unknown
+    flag name should be held to the same standard rather than being dropped."""
+    with pytest.raises(SystemExit) as exc_info:
+        parse_bootstrap_args(["--pakcage-name", "myapp"])
+    assert exc_info.value.code == 2
+    assert "--pakcage-name" in capsys.readouterr().err
+
+
+def test_parse_bootstrap_args_unknown_flag_after_valid_ones(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        parse_bootstrap_args(["--app-name", "mysql", "--bogus-flag", "x"])
+    assert exc_info.value.code == 2
+    assert "--bogus-flag" in capsys.readouterr().err
+
+
+def test_parse_bootstrap_args_known_flag_missing_value(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A recognized flag given as the last token with no value must be
+    reported as missing its value, not misidentified as unknown."""
+    with pytest.raises(SystemExit) as exc_info:
+        parse_bootstrap_args(["--enforce"])
+    assert exc_info.value.code == 2
+    err = capsys.readouterr().err
+    assert "--enforce" in err
+    assert "requires a value" in err
+    assert "unknown option" not in err
 
 
 # ---------------------------------------------------------------------------
@@ -132,6 +195,159 @@ def test_cmd_bootstrap_writes_skill_md(
     _cmd_bootstrap([])
     dest = tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md"
     assert dest.read_text() == render("remediate.md")
+
+
+def _seed_conformance_pyproject(repo_root: pathlib.Path) -> None:
+    """Create a minimal packages/conformance/pyproject.toml naming this exact
+    package, matching what the real SDK monorepo checkout has on disk."""
+    conformance_dir = repo_root / "packages" / "conformance"
+    conformance_dir.mkdir(parents=True, exist_ok=True)
+    (conformance_dir / "pyproject.toml").write_text(
+        '[project]\nname = "atlan-application-sdk-conformance"\nversion = "0.0.0"\n'
+    )
+
+
+def test_cmd_bootstrap_is_a_no_op_inside_conformance_repo(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """bootstrap writes nothing at all when run inside the SDK's own repo.
+
+    packages/conformance/pyproject.toml naming this exact package only exists
+    in the atlan-application-sdk-conformance package's own source checkout,
+    never in a consumer app repo (which installs the package via pip) — its
+    presence is the signal that every file bootstrap would otherwise manage
+    here (SKILL.md, the workflow/action shims, tests.yaml, renovate.json,
+    contract_schema.lock.json) is either hand-maintained or simply doesn't
+    apply to a library repo. A prior guard covered only SKILL.md and missed
+    MANAGED_WORKFLOWS/MANAGED_ACTION_FILES, which are just as hand-authored
+    here — this asserts the whole write phase is skipped, not file-by-file.
+    """
+    _seed_conformance_pyproject(tmp_path)
+    # Seed one MANAGED_WORKFLOWS file with content that diverges from what
+    # bootstrap would render, mirroring this repo's real hand-authored
+    # conformance.yaml — proves it survives untouched, not just absent files.
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    custom_conformance = wf_dir / "conformance.yaml"
+    custom_conformance.write_text("# hand-authored, not bootstrap's template\n")
+
+    monkeypatch.chdir(tmp_path)
+    assert _cmd_bootstrap([]) == 0
+
+    assert not (tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md").exists()
+    assert (
+        custom_conformance.read_text() == "# hand-authored, not bootstrap's template\n"
+    )
+    for name in MANAGED_WORKFLOWS:
+        if name != "conformance.yaml":
+            assert not (wf_dir / name).exists()
+    for dest_rel, _template_name in MANAGED_ACTION_FILES:
+        assert not (tmp_path / dest_rel).exists()
+    assert not (tmp_path / ".github" / "workflows" / "tests.yaml").exists()
+    assert not (tmp_path / "contract_schema.lock.json").exists()
+    assert not (tmp_path / "renovate.json").exists()
+    assert not (tmp_path / ".gitignore").exists()
+
+
+def test_cmd_bootstrap_is_a_no_op_when_invoked_from_inside_packages_conformance(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The no-op guard must hold regardless of which subdirectory bootstrap is
+    invoked from — not just the repo root.
+
+    A cwd-relative existence check (``cwd / "packages" / "conformance"``)
+    only fires when cwd IS the repo root; invoking from inside
+    packages/conformance/ itself (e.g. a local `cd packages/conformance &&
+    uv run atlan-application-sdk-conformance bootstrap`) would silently miss
+    the guard and scaffold consumer-app files into this repo.
+    """
+    _seed_conformance_pyproject(tmp_path)
+    conformance_dir = tmp_path / "packages" / "conformance"
+
+    monkeypatch.chdir(conformance_dir)
+    assert _cmd_bootstrap([]) == 0
+
+    assert not (
+        conformance_dir / ".claude" / "skills" / "remediate" / "SKILL.md"
+    ).exists()
+    assert not (tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md").exists()
+
+
+def test_cmd_bootstrap_does_not_no_op_for_coincidental_packages_conformance_dir(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A consumer monorepo that happens to contain a bare packages/conformance/
+    directory (no matching pyproject.toml, or one naming a different package)
+    must NOT trip the self-detection guard and silently skip scaffolding.
+
+    Regression test for keying the guard on a bare directory-name check,
+    which would exit 0 with a "skipped" message and zero files written in
+    this scenario — a silent under-install indistinguishable from success.
+    """
+    (tmp_path / "packages" / "conformance").mkdir(parents=True)
+
+    monkeypatch.chdir(tmp_path)
+    assert _cmd_bootstrap([]) == 0
+
+    assert (tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md").exists()
+    assert (tmp_path / ".github" / "workflows" / "tests.yaml").exists()
+
+
+def test_cmd_bootstrap_does_not_no_op_when_pyproject_names_different_package(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A packages/conformance/pyproject.toml that names an unrelated package
+    must not trip the guard either — only this exact package name does."""
+    conformance_dir = tmp_path / "packages" / "conformance"
+    conformance_dir.mkdir(parents=True)
+    (conformance_dir / "pyproject.toml").write_text(
+        '[project]\nname = "some-other-package"\nversion = "0.0.0"\n'
+    )
+
+    monkeypatch.chdir(tmp_path)
+    assert _cmd_bootstrap([]) == 0
+
+    assert (tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md").exists()
+
+
+def test_cmd_bootstrap_does_not_no_op_when_pyproject_is_malformed_toml(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A packages/conformance/pyproject.toml that exists but fails to parse as
+    TOML must not trip the guard either -- it can't be confirmed to name this
+    exact package, so bootstrap must proceed normally rather than silently
+    no-op the entire write phase on an unreadable file."""
+    conformance_dir = tmp_path / "packages" / "conformance"
+    conformance_dir.mkdir(parents=True)
+    (conformance_dir / "pyproject.toml").write_text("not valid toml [[[")
+
+    monkeypatch.chdir(tmp_path)
+    assert _cmd_bootstrap([]) == 0
+
+    assert (tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md").exists()
+
+
+@pytest.mark.parametrize("help_flag", ["--help", "-h"])
+def test_cmd_bootstrap_help_prints_usage_and_writes_nothing(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    help_flag: str,
+) -> None:
+    """--help/-h must short-circuit before any file is written.
+
+    `main()` checks for `-h`/`--help` before `parse_bootstrap_args` runs at
+    all — without that explicit guard, `bootstrap --help` would fall through
+    and execute the real, mutating bootstrap — surprising callers who expect
+    `--help` to be a no-op.
+    """
+    monkeypatch.chdir(tmp_path)
+    exit_code = _cmd_bootstrap([help_flag])
+    assert exit_code == 0
+    assert (
+        "usage: atlan-application-sdk-conformance bootstrap" in capsys.readouterr().out
+    )
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_cmd_bootstrap_writes_all_managed_workflows(
@@ -221,6 +437,61 @@ def test_cmd_bootstrap_does_not_modify_existing_gitignore(
     assert gi.read_text() == original
 
 
+# ---------------------------------------------------------------------------
+# contract_schema.lock.json scaffold — write-if-absent semantics
+#
+# B006 (StaleContractLedger) is a hard FAIL-tier rule active from day one:
+# without a ledger, the ledger-absent fallback loads the SDK's own bundled
+# ledger (which has none of the app's fields recorded), so any app with
+# existing entrypoint contract fields fails enforced mode on its very first
+# run. Bootstrap must seed a baseline the same way `gen-contract-ledger`
+# would, not leave the app to discover the gap after enabling enforcement.
+# ---------------------------------------------------------------------------
+
+
+def test_cmd_bootstrap_writes_contract_ledger(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    assert (tmp_path / "contract_schema.lock.json").exists()
+
+
+def test_cmd_bootstrap_contract_ledger_seeded_from_sdk_bundle(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A freshly scaffolded ledger must not be empty — it inherits the SDK's own
+    bundled contract fields (e.g. ExtractionInput) so apps that already extend
+    those base contracts don't get flagged as stale the moment enforcement
+    goes live."""
+    import json
+
+    from conformance.suite.checks.deprecation._ledger_schema import load_ledger
+
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    payload = json.loads((tmp_path / "contract_schema.lock.json").read_text())
+    bundled = load_ledger(None)
+    assert len(payload["fields"]) >= len(bundled.fields) > 0
+
+
+def test_cmd_bootstrap_contract_ledger_is_write_if_absent(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second bootstrap run must NOT overwrite an already-committed ledger —
+    the ledger is append-only and owned by `gen-contract-ledger`, not bootstrap."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    ledger_path = tmp_path / "contract_schema.lock.json"
+    ledger_path.write_text('{"version": 1, "fields": []}\n')
+    _cmd_bootstrap([])
+    assert ledger_path.read_text() == '{"version": 1, "fields": []}\n'
+
+
+def test_cmd_bootstrap_contract_ledger_not_in_managed_workflows() -> None:
+    assert "contract_schema.lock.json" not in MANAGED_WORKFLOWS
+
+
 def test_cmd_bootstrap_returns_zero(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -234,17 +505,17 @@ def test_cmd_bootstrap_returns_zero(
 
 
 def test_parse_bootstrap_args_enforce_false() -> None:
-    result = _parse_bootstrap_args(["--enforce", "false"])
+    result = parse_bootstrap_args(["--enforce", "false"])
     assert result["enforce"] == "false"
 
 
 def test_parse_bootstrap_args_enforce_true() -> None:
-    result = _parse_bootstrap_args(["--enforce", "true"])
+    result = parse_bootstrap_args(["--enforce", "true"])
     assert result["enforce"] == "true"
 
 
 def test_parse_bootstrap_args_enforce_equals_form() -> None:
-    result = _parse_bootstrap_args(["--enforce=false"])
+    result = parse_bootstrap_args(["--enforce=false"])
     assert result["enforce"] == "false"
 
 
@@ -252,51 +523,72 @@ def test_parse_bootstrap_args_enforce_invalid(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     with pytest.raises(SystemExit) as exc_info:
-        _parse_bootstrap_args(["--enforce", "maybe"])
+        parse_bootstrap_args(["--enforce", "maybe"])
     assert exc_info.value.code == 2
     assert "--enforce" in capsys.readouterr().err
 
 
+_EXIT_ZERO_SCHEDULE_PREFIX = (
+    "exit-zero: ${{ github.event_name == 'schedule' "
+    "|| github.event_name == 'workflow_dispatch' || "
+)
+_EXIT_ZERO_HARD = _EXIT_ZERO_SCHEDULE_PREFIX + "false }}"
+_EXIT_ZERO_SOFT = _EXIT_ZERO_SCHEDULE_PREFIX + "true }}"
+_FORCE_ALL_SCHEDULE = (
+    "force-all: ${{ github.event_name == 'schedule' "
+    "|| github.event_name == 'workflow_dispatch' }}"
+)
+_SCHEDULE_BLOCK = 'schedule:\n    - cron: "17 */6 * * *"'
+
+
 def test_conformance_yaml_default_exit_zero_false() -> None:
-    """Default bootstrap renders exit-zero: false (hard gate)."""
+    """Default bootstrap renders the full hard-gate expression (schedule/dispatch still exit-zero)."""
     content = render("conformance.yaml")
-    assert "exit-zero: false" in content
+    assert _EXIT_ZERO_HARD in content
 
 
 def test_conformance_yaml_exit_zero_true() -> None:
-    """render() with exit_zero='true' renders exit-zero: true for soft mode."""
+    """render() with exit_zero='true' renders the full soft-mode expression."""
     content = render("conformance.yaml", exit_zero="true")
-    assert "exit-zero: true" in content
+    assert _EXIT_ZERO_SOFT in content
 
 
 def test_cmd_bootstrap_enforce_false_writes_soft_mode(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """--enforce false writes exit-zero: true into conformance.yaml."""
+    """--enforce false writes the full soft-mode expression into conformance.yaml."""
     monkeypatch.chdir(tmp_path)
     _cmd_bootstrap(["--enforce", "false"])
     conformance = (tmp_path / ".github" / "workflows" / "conformance.yaml").read_text()
-    assert "exit-zero: true" in conformance
+    assert _EXIT_ZERO_SOFT in conformance
 
 
 def test_cmd_bootstrap_enforce_true_writes_hard_mode(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """--enforce true writes exit-zero: false into conformance.yaml."""
+    """--enforce true writes the full hard-gate expression into conformance.yaml."""
     monkeypatch.chdir(tmp_path)
     _cmd_bootstrap(["--enforce", "true"])
     conformance = (tmp_path / ".github" / "workflows" / "conformance.yaml").read_text()
-    assert "exit-zero: false" in conformance
+    assert _EXIT_ZERO_HARD in conformance
 
 
 def test_cmd_bootstrap_no_enforce_defaults_hard_mode(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Without --enforce, bootstrap defaults to hard mode (exit-zero: false)."""
+    """Without --enforce, bootstrap defaults to the full hard-gate expression."""
     monkeypatch.chdir(tmp_path)
     _cmd_bootstrap([])
     conformance = (tmp_path / ".github" / "workflows" / "conformance.yaml").read_text()
-    assert "exit-zero: false" in conformance
+    assert _EXIT_ZERO_HARD in conformance
+
+
+def test_conformance_yaml_schedule_force_refresh_trigger() -> None:
+    """Bootstrap wires the force-refresh schedule/dispatch trigger and force-all override."""
+    content = render("conformance.yaml")
+    assert _SCHEDULE_BLOCK in content
+    assert "workflow_dispatch: {}" in content
+    assert _FORCE_ALL_SCHEDULE in content
 
 
 def test_conformance_workflow_contains_event_name() -> None:
@@ -817,6 +1109,415 @@ def test_cmd_bootstrap_explicit_services_script_overrides_autodetect(
 
 
 # ---------------------------------------------------------------------------
+# Auto-detection: package-name from docstring-coverage.yaml,
+# unit-tests-workflow from build-and-publish.yaml
+# ---------------------------------------------------------------------------
+
+
+def test_cmd_bootstrap_reads_package_name_from_docstring_coverage(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """bootstrap reuses the existing package_name when --package-name is absent."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "docstring-coverage.yaml").write_text(
+        'jobs:\n  docstring-coverage:\n    with:\n      package_name: "myconnector"\n'
+    )
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    docstring = (wf_dir / "docstring-coverage.yaml").read_text()
+    assert 'package_name: "myconnector"' in docstring
+
+
+def test_cmd_bootstrap_defaults_package_name_when_absent(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without an existing docstring-coverage.yaml, package-name defaults to app."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    docstring = (
+        tmp_path / ".github" / "workflows" / "docstring-coverage.yaml"
+    ).read_text()
+    assert 'package_name: "app"' in docstring
+
+
+def test_cmd_bootstrap_defaults_package_name_when_file_exists_but_field_missing(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An existing docstring-coverage.yaml with no package_name: line falls back
+    to "app", the same as the file-absent case -- the presence of the file alone
+    must not be mistaken for a match."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "docstring-coverage.yaml").write_text(
+        "jobs:\n  docstring-coverage:\n    with:\n      other_field: true\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    docstring = (wf_dir / "docstring-coverage.yaml").read_text()
+    assert 'package_name: "app"' in docstring
+
+
+def test_cmd_bootstrap_explicit_package_name_overrides_autodetect(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Explicit --package-name takes priority over the auto-detected value."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "docstring-coverage.yaml").write_text('package_name: "myconnector"\n')
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--package-name", "override"])
+    docstring = (wf_dir / "docstring-coverage.yaml").read_text()
+    assert 'package_name: "override"' in docstring
+
+
+def test_cmd_bootstrap_reads_unquoted_package_name_from_docstring_coverage(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unquoted package_name: value (valid YAML) is still auto-detected."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "docstring-coverage.yaml").write_text(
+        "jobs:\n  docstring-coverage:\n    with:\n      package_name: myconnector\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    docstring = (wf_dir / "docstring-coverage.yaml").read_text()
+    assert 'package_name: "myconnector"' in docstring
+
+
+def test_cmd_bootstrap_reads_unit_tests_workflow_from_build_and_publish(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """bootstrap reuses the existing unit_tests_workflow when the flag is absent."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "build-and-publish.yaml").write_text(
+        'jobs:\n  build:\n    with:\n      unit_tests_workflow_file: "ci-tests.yaml"\n'
+    )
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    build = (wf_dir / "build-and-publish.yaml").read_text()
+    assert 'unit_tests_workflow_file: "ci-tests.yaml"' in build
+
+
+def test_cmd_bootstrap_defaults_unit_tests_workflow_when_absent(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without an existing build-and-publish.yaml, it defaults to tests.yaml."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    build = (tmp_path / ".github" / "workflows" / "build-and-publish.yaml").read_text()
+    assert 'unit_tests_workflow_file: "tests.yaml"' in build
+
+
+def test_cmd_bootstrap_defaults_unit_tests_workflow_when_file_exists_but_field_missing(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An existing build-and-publish.yaml with no unit_tests_workflow_file: line
+    falls back to "tests.yaml", the same as the file-absent case."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "build-and-publish.yaml").write_text(
+        "jobs:\n  build:\n    with:\n      other_field: true\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    build = (wf_dir / "build-and-publish.yaml").read_text()
+    assert 'unit_tests_workflow_file: "tests.yaml"' in build
+
+
+def test_cmd_bootstrap_explicit_unit_tests_workflow_overrides_autodetect(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Explicit --unit-tests-workflow takes priority over the auto-detected value."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "build-and-publish.yaml").write_text(
+        'unit_tests_workflow_file: "ci-tests.yaml"\n'
+    )
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--unit-tests-workflow", "override.yaml"])
+    build = (wf_dir / "build-and-publish.yaml").read_text()
+    assert 'unit_tests_workflow_file: "override.yaml"' in build
+
+
+def test_cmd_bootstrap_reads_unquoted_unit_tests_workflow_from_build_and_publish(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unquoted unit_tests_workflow_file: value (valid YAML) is still auto-detected."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "build-and-publish.yaml").write_text(
+        "jobs:\n  build:\n    with:\n      unit_tests_workflow_file: ci-tests.yaml\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    build = (wf_dir / "build-and-publish.yaml").read_text()
+    assert 'unit_tests_workflow_file: "ci-tests.yaml"' in build
+
+
+# ---------------------------------------------------------------------------
+# Auto-detection: --enforce from an existing conformance.yaml's exit-zero mode
+# ---------------------------------------------------------------------------
+
+
+def test_cmd_bootstrap_rerun_no_enforce_preserves_soft_mode(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bare re-run must not reset a soft-mode repo's conformance.yaml to hard-gate."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--enforce", "false"])
+    conformance = tmp_path / ".github" / "workflows" / "conformance.yaml"
+    assert _EXIT_ZERO_SOFT in conformance.read_text()
+    _cmd_bootstrap([])
+    assert _EXIT_ZERO_SOFT in conformance.read_text()
+
+
+def test_cmd_bootstrap_rerun_no_enforce_preserves_hard_mode(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bare re-run of an already-hard-gate repo stays hard-gate (control case)."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--enforce", "true"])
+    conformance = tmp_path / ".github" / "workflows" / "conformance.yaml"
+    assert _EXIT_ZERO_HARD in conformance.read_text()
+    _cmd_bootstrap([])
+    assert _EXIT_ZERO_HARD in conformance.read_text()
+
+
+def test_cmd_bootstrap_rerun_no_enforce_does_not_force_overwrite_renovate(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Auto-detecting --enforce from conformance.yaml must not also force-overwrite
+    renovate.json -- only an *explicit* --enforce on the invocation does that."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--enforce", "false"])
+    rj = tmp_path / "renovate.json"
+    rj.write_text('{"customised": true}\n')
+    _cmd_bootstrap([])
+    assert rj.read_text() == '{"customised": true}\n'
+    assert not (tmp_path / "renovate.json.bak").exists()
+
+
+def test_cmd_bootstrap_explicit_enforce_overrides_autodetected_soft_mode(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Explicit --enforce takes priority over a soft-mode conformance.yaml on disk."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--enforce", "false"])
+    conformance = tmp_path / ".github" / "workflows" / "conformance.yaml"
+    _cmd_bootstrap(["--enforce", "true"])
+    assert _EXIT_ZERO_HARD in conformance.read_text()
+
+
+def test_cmd_bootstrap_rerun_unparseable_conformance_yaml_falls_back_to_renovate(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A bare re-run must not silently flip enforcement to hard-gate just
+    because conformance.yaml's exit-zero line doesn't match the expected
+    pattern (hand-edited, or rendered by an older template) -- it should
+    fall back to renovate.json's own soft/hard signal instead, so the two
+    managed files can't end up in different enforcement modes."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--enforce", "false"])
+    conformance = tmp_path / ".github" / "workflows" / "conformance.yaml"
+    original = conformance.read_text()
+    assert _EXIT_ZERO_SOFT in original
+    corrupted = original.replace(_EXIT_ZERO_SOFT, "exit-zero: true  # hand-edited")
+    assert corrupted != original
+    conformance.write_text(corrupted)
+    capsys.readouterr()  # discard bootstrap's own setup output
+    _cmd_bootstrap([])
+    assert _EXIT_ZERO_SOFT in conformance.read_text()
+    assert "falling back to renovate.json" in capsys.readouterr().out
+
+
+def test_cmd_bootstrap_rerun_unparseable_conformance_yaml_hard_mode_control(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Control case: the renovate.json fallback also preserves hard mode."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--enforce", "true"])
+    conformance = tmp_path / ".github" / "workflows" / "conformance.yaml"
+    original = conformance.read_text()
+    assert _EXIT_ZERO_HARD in original
+    conformance.write_text(
+        original.replace(_EXIT_ZERO_HARD, "exit-zero: false  # hand-edited")
+    )
+    _cmd_bootstrap([])
+    assert _EXIT_ZERO_HARD in conformance.read_text()
+
+
+def test_cmd_bootstrap_rerun_falls_back_to_hard_gate_when_renovate_json_malformed(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """When conformance.yaml's exit-zero line is unparseable AND renovate.json
+    is malformed JSON, the fallback chain (_read_enforce_from_renovate ->
+    _extract_renovate_automerge) can't read either signal. It must default to
+    hard-gate (the same default _extract_renovate_automerge documents for
+    unparseable JSON) rather than raise or silently stay soft."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--enforce", "false"])
+    conformance = tmp_path / ".github" / "workflows" / "conformance.yaml"
+    conformance.write_text(
+        conformance.read_text().replace(
+            _EXIT_ZERO_SOFT, "exit-zero: true  # hand-edited"
+        )
+    )
+    (tmp_path / "renovate.json").write_text("not valid json")
+    capsys.readouterr()  # discard bootstrap's own setup output
+    _cmd_bootstrap([])
+    assert _EXIT_ZERO_HARD in conformance.read_text()
+    assert "falling back to renovate.json" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# touched_files accuracy: a no-op re-run must not report unchanged managed
+# files as updated (see remediate-finding.prose.md's touched_files
+# write-scope note -- an over-broad touched_files would make a remediation
+# pass revert unrelated already-accepted files on a later failure)
+# ---------------------------------------------------------------------------
+
+
+def test_cmd_bootstrap_rerun_with_no_changes_reports_no_managed_file_as_updated(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A bare re-run against an already-bootstrapped, untouched repo must not
+    print `updated:`/`installed:` for any managed workflow or action file --
+    only `ok (up to date):`."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    capsys.readouterr()  # discard first-run output (everything is genuinely new)
+    _cmd_bootstrap([])
+    out = capsys.readouterr().out
+    assert "updated:" not in out
+    assert "installed:" not in out
+    wf_dir = tmp_path / ".github" / "workflows"
+    for name in MANAGED_WORKFLOWS:
+        assert f"ok (up to date): {wf_dir / name}" in out
+    for dest_rel, _template_name in MANAGED_ACTION_FILES:
+        assert f"ok (up to date): {tmp_path / dest_rel}" in out
+    skill_md = tmp_path / ".claude" / "skills" / "remediate" / "SKILL.md"
+    assert f"ok (up to date): {skill_md}" in out
+
+
+# ---------------------------------------------------------------------------
+# --json: structured touched-files manifest
+#
+# touched_files (remediate-finding.prose.md) must not require a caller to
+# pattern-match this command's human-readable stdout prefixes -- --json
+# emits one trailing JSON line with the same information structurally.
+# ---------------------------------------------------------------------------
+
+
+def _last_json_line(out: str):
+    """Parse the final non-empty line of *out* as JSON.
+
+    ``--json`` appends its summary as the last line after all the normal
+    human-readable output, so callers only need the tail of stdout.
+    """
+    return json.loads(out.strip().splitlines()[-1])
+
+
+def test_cmd_bootstrap_json_first_run_reports_everything_touched(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A fresh repo's first `--json` run reports every managed path as touched."""
+    monkeypatch.chdir(tmp_path)
+    exit_code = _cmd_bootstrap(["--json"])
+    assert exit_code == 0
+    manifest = _last_json_line(capsys.readouterr().out)
+    assert manifest["skipped"] is False
+    touched = set(manifest["touched"])
+    wf_dir = pathlib.Path(".github", "workflows")
+    for name in MANAGED_WORKFLOWS:
+        assert str(wf_dir / name) in touched
+    for dest_rel, _template_name in MANAGED_ACTION_FILES:
+        assert dest_rel in touched
+    assert str(pathlib.Path(".claude", "skills", "remediate", "SKILL.md")) in touched
+    assert str(pathlib.Path(".github", "workflows", "tests.yaml")) in touched
+    assert "renovate.json" in touched
+    assert ".gitignore" in touched
+    assert "contract_schema.lock.json" in touched
+    assert manifest["unchanged"] == []
+
+
+def test_cmd_bootstrap_json_rerun_with_no_changes_reports_empty_touched(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A bare re-run against an already-bootstrapped, untouched repo reports
+    `touched: []` -- the whole point of the manifest is that a caller can
+    trust an empty list means nothing needs to be considered for revert."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    capsys.readouterr()  # discard first-run output
+    _cmd_bootstrap(["--json"])
+    manifest = _last_json_line(capsys.readouterr().out)
+    assert manifest["skipped"] is False
+    assert manifest["touched"] == []
+    skill_md = pathlib.Path(".claude", "skills", "remediate", "SKILL.md")
+    assert str(skill_md) in manifest["unchanged"]
+
+
+def test_cmd_bootstrap_json_inside_conformance_repo_reports_skipped(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The self-detection no-op reports `skipped: true` with empty manifests,
+    not merely exit 0 with no explanation of why nothing was touched."""
+    _seed_conformance_pyproject(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    exit_code = _cmd_bootstrap(["--json"])
+    assert exit_code == 0
+    manifest = _last_json_line(capsys.readouterr().out)
+    assert manifest == {"skipped": True, "touched": [], "unchanged": []}
+
+
+def test_cmd_bootstrap_json_renovate_backup_counts_as_touched(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Forcing --enforce over a customised renovate.json backs up the old
+    content to renovate.json.bak -- that backup path must appear in touched
+    alongside renovate.json itself, so a rejected fix reverts both."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    (tmp_path / "renovate.json").write_text('{"customised": true}\n')
+    capsys.readouterr()  # discard setup output
+    _cmd_bootstrap(["--enforce", "false", "--json"])
+    manifest = _last_json_line(capsys.readouterr().out)
+    touched = set(manifest["touched"])
+    assert "renovate.json" in touched
+    assert "renovate.json.bak" in touched
+
+
+def test_cmd_bootstrap_without_json_flag_prints_no_json_line(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Omitting --json must not change default output -- no trailing JSON line."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    out = capsys.readouterr().out
+    with pytest.raises(json.JSONDecodeError):
+        _last_json_line(out)
+
+
+# ---------------------------------------------------------------------------
 # enable-e2e: omitted when default (true)
 # ---------------------------------------------------------------------------
 
@@ -834,30 +1535,28 @@ def test_tests_yaml_enable_e2e_present_when_false() -> None:
 
 
 # ---------------------------------------------------------------------------
-# _derive_app_name_from_dir unit tests
+# derive_app_name_from_dir unit tests
 # ---------------------------------------------------------------------------
 
 
 def test_derive_strips_atlan_prefix_and_app_suffix(tmp_path: pathlib.Path) -> None:
-    assert _derive_app_name_from_dir(tmp_path / "atlan-openapi-app") == "openapi"
+    assert derive_app_name_from_dir(tmp_path / "atlan-openapi-app") == "openapi"
 
 
 def test_derive_strips_only_prefix(tmp_path: pathlib.Path) -> None:
-    assert _derive_app_name_from_dir(tmp_path / "atlan-openapi") == "openapi"
+    assert derive_app_name_from_dir(tmp_path / "atlan-openapi") == "openapi"
 
 
 def test_derive_strips_only_suffix(tmp_path: pathlib.Path) -> None:
-    assert _derive_app_name_from_dir(tmp_path / "my-connector-app") == "my-connector"
+    assert derive_app_name_from_dir(tmp_path / "my-connector-app") == "my-connector"
 
 
 def test_derive_no_affixes(tmp_path: pathlib.Path) -> None:
-    assert _derive_app_name_from_dir(tmp_path / "postgres") == "postgres"
+    assert derive_app_name_from_dir(tmp_path / "postgres") == "postgres"
 
 
 def test_derive_hello_world(tmp_path: pathlib.Path) -> None:
-    assert (
-        _derive_app_name_from_dir(tmp_path / "atlan-hello-world-app") == "hello-world"
-    )
+    assert derive_app_name_from_dir(tmp_path / "atlan-hello-world-app") == "hello-world"
 
 
 # ---------------------------------------------------------------------------
@@ -890,4 +1589,4 @@ def test_managed_action_template_matches_canonical_source(
 
 def test_derive_falls_back_to_app_for_bare_atlan(tmp_path: pathlib.Path) -> None:
     # "atlan-app" → strip prefix → "app" → strip suffix ("app" doesn't end with "-app") → "app"
-    assert _derive_app_name_from_dir(tmp_path / "atlan-app") == "app"
+    assert derive_app_name_from_dir(tmp_path / "atlan-app") == "app"

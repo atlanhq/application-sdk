@@ -1,0 +1,40 @@
+/// Minimal contract amending the legacy `NativeApp.pkl` template.
+///
+/// Exists so `native_app_appname_test.pkl` can assert the generated AE
+/// manifest extract node bakes `app_name` from the contract `name` (the
+/// HYP-1954 fix), the same guard the App.pkl fixtures give for App.pkl.
+amends "../../src/NativeApp.pkl"
+
+import "../../src/Connectors.pkl"
+import "../../src/Config.pkl"
+
+name = "native-app-pipeline"
+connector = Connectors.POSTGRES
+icon = "https://assets.atlan.com/assets/postgres.svg"
+workflowType = "PostgresWorkflow"
+
+credentialCommonFields {
+  new FieldSpec { name = "host"; displayName = "Host"; width = 6 }
+}
+
+credentialAuthOptions {
+  ["basic"] = new AuthOption {
+    label = "Basic"
+    fields {
+      new FieldSpec { name = "username"; displayName = "Username"; width = 4 }
+      new FieldSpec { name = "password"; sensitive = true; displayName = "Password"; width = 4 }
+    }
+  }
+}
+
+uiConfig = new Config.UIConfig {
+  tasks {
+    ["Credential"] {
+      inputs {
+        ["credential-guid"] = new Config.CredentialInput {
+          credType = "atlan-connectors-native-app-pipeline"
+        }
+      }
+    }
+  }
+}
