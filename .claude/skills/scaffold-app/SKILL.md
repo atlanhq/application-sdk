@@ -76,6 +76,7 @@ version = "1.0.0"
 requires-python = ">=3.11"
 dependencies = [
     "atlan-application-sdk>=3.0.0",
+    "poethepoet>=0.34.0",
 ]
 
 [project.optional-dependencies]
@@ -101,7 +102,7 @@ shutil.copytree(src, 'components', dirs_exist_ok=True)
 """
 ```
 
-`download-components` copies the Dapr component YAMLs out of the installed `atlan-application-sdk` wheel — never curl them from `raw.githubusercontent.com` or the GitHub API; that pattern is blocked by conformance rule D009 (see `docs/standards/build-security.md`). Run it after `uv sync` and before starting `daprd` locally or in the Docker build.
+`download-components` copies the Dapr component YAMLs out of the installed `atlan-application-sdk` wheel — never curl them from `raw.githubusercontent.com` or the GitHub API; that pattern is blocked by conformance rule D009 (see `docs/standards/build-security.md`). Run it after `uv sync` and before starting `daprd` locally or in the Docker build. `poethepoet` (which provides the `poe` CLI) must be a main dependency, not a `dev`-only one — the Dockerfile's `uv sync --no-dev` would otherwise leave `poe` unavailable during the build.
 
 ### 3. Generate `atlan.yaml`
 

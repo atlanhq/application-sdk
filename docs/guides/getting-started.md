@@ -119,7 +119,13 @@ The embedded runtime above is the recommended local-dev path. If you want to mir
 The component YAMLs ship inside the `atlan-application-sdk` wheel — copy them out of your
 installed dependency rather than downloading from GitHub (unauthenticated GitHub requests hit
 rate limits under CI concurrency and can drift from the SDK version actually locked in your
-`uv.lock`). Add a `download-components` poe task to `pyproject.toml`:
+`uv.lock`). This uses `poe` from the `poethepoet` package, so add it as a dependency first:
+
+```bash
+uv add poethepoet
+```
+
+Then add a `download-components` poe task to `pyproject.toml`:
 
 ```toml
 [tool.poe.tasks]

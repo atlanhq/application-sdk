@@ -229,8 +229,14 @@ asyncio.run(
 
 Copy the Dapr component definitions into your project. They ship inside the
 `atlan-application-sdk` wheel — don't curl them from GitHub (that hits rate limits under CI
-concurrency and can drift from the SDK version locked in your `uv.lock`). Add a
-`download-components` poe task to `pyproject.toml`:
+concurrency and can drift from the SDK version locked in your `uv.lock`). This uses `poe` from
+the `poethepoet` package, so add it as a dependency first:
+
+```bash
+uv add poethepoet
+```
+
+Then add a `download-components` poe task to `pyproject.toml`:
 
 ```toml
 [tool.poe.tasks]
