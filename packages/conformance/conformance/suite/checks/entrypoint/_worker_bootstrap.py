@@ -12,18 +12,33 @@ Three violation classes are flagged:
    and module-attribute calls (``ex.create_worker(...)`` after
    ``import application_sdk.execution as ex``) are detected.  Importing those
    symbols is fine (P004/P005 sanction the public seam); *calling* the constructor
-   is the boot path the SDK launcher owns.
+   is the boot path the SDK launcher owns.  Exempt under ``tests/integration/``
+   (see below).
 
 2. **Legacy v2 boot imports** — any import from the removed v2 surface:
    ``application_sdk.worker``, ``application_sdk.application`` (and submodules),
    ``application_sdk.clients.temporal``.  These modules were deleted in v3; their
-   presence signals an unmigrated boot path.
+   presence signals an unmigrated boot path.  Not exempt anywhere — these
+   modules don't exist in v3, so there's no legitimate reason to import them
+   in a test either.
 
 3. **Lifecycle method calls** — a call to ``.setup_workflow(...)``,
    ``.start_workflow(...)``, or ``.start_worker(...)`` on a plausibly-Atlan-App
    receiver (``self``, ``app``, or a name imported from ``application_sdk``).
    Receiver restriction avoids false positives on ``client.start_workflow(...)``
-   (Temporal Python SDK API) and similar generic names.
+   (Temporal Python SDK API) and similar generic names.  Exempt under
+   ``tests/integration/`` (see below).
+
+``tests/integration/`` exemption
+---------------------------------
+Integration-test harnesses (conftest fixtures that build a worker + client
+in-process to submit workflows and assert on results) legitimately need
+violation classes 1 and 3 — ``run_dev_combined`` blocks until shutdown and
+returns no handle, so it cannot serve as their substitute (BLDX-1411). Rather
+than one inline ``# conformance: ignore[P017]`` per call site, files under a
+``tests/integration/`` tree are exempted from classes 1 and 3 by
+``is_integration_test_harness`` in ``_bootstrap_common.py``. Class 2 (dead v2
+imports) stays fully enforced everywhere.
 """
 
 from __future__ import annotations
@@ -36,6 +51,7 @@ from conformance.suite.schema.findings import Finding
 from ._bootstrap_common import (
     collect_import_origins,
     is_app_receiver,
+    is_integration_test_harness,
     qualify_chained_attr_call,
 )
 
@@ -91,9 +107,14 @@ def check_p017(
     filename: str,
     directives: dict[int, _IgnoreDirective],
 ) -> list[Finding]:
-    """Emit P017 findings for manual worker/client bootstrap patterns."""
+    """Emit P017 findings for manual worker/client bootstrap patterns.
+
+    Violation classes 1 (construction calls) and 3 (lifecycle calls) are
+    skipped under ``tests/integration/`` — see the module docstring.
+    """
     findings: list[Finding] = []
     origins = collect_import_origins(tree)
+    exempt = is_integration_test_harness(filename)
 
     for node in ast.walk(tree):
         # (a) Legacy v2 boot imports
@@ -149,7 +170,7 @@ def check_p017(
             # (b) Worker construction calls via direct name (e.g. create_worker(...))
             if isinstance(func, ast.Name):
                 origin = origins.get(func.id, "")
-                if origin in _WORKER_CONSTRUCTION_ORIGINS:
+                if origin in _WORKER_CONSTRUCTION_ORIGINS and not exempt:
                     findings.append(
                         make_finding(
                             filename=filename,
@@ -175,7 +196,10 @@ def check_p017(
                     module_origin = origins.get(func.value.id, "")
 
                     # (b cont'd) module-attribute construction (e.g. ex.create_worker(...))
-                    if f"{module_origin}.{func.attr}" in _WORKER_CONSTRUCTION_ORIGINS:
+                    if (
+                        f"{module_origin}.{func.attr}" in _WORKER_CONSTRUCTION_ORIGINS
+                        and not exempt
+                    ):
                         findings.append(
                             make_finding(
                                 filename=filename,
@@ -197,8 +221,10 @@ def check_p017(
                         )
 
                     # (c) Lifecycle method calls on app-receiver only
-                    elif func.attr in _WORKER_LIFECYCLE_METHODS and is_app_receiver(
-                        func.value.id, module_origin
+                    elif (
+                        func.attr in _WORKER_LIFECYCLE_METHODS
+                        and not exempt
+                        and is_app_receiver(func.value.id, module_origin)
                     ):
                         findings.append(
                             make_finding(
@@ -226,6 +252,7 @@ def check_p017(
                     if (
                         qualified is not None
                         and qualified in _WORKER_CONSTRUCTION_ORIGINS
+                        and not exempt
                     ):
                         findings.append(
                             make_finding(

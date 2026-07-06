@@ -30,11 +30,15 @@ re-resolve:
   * Non-fatal: a failed ``pkl eval`` logs a warning and degrades to a lock-only
     sync rather than failing the job.
   * Commit-gated: eval writes into a temp dir and is swapped into the working
-    tree only after eval (and formatting) succeed; the commit only happens
-    after the swap returns. So a failed/killed run commits nothing and never
+    tree only after eval succeeds; the commit only happens after this
+    function returns. So a failed/killed eval commits nothing and never
     publishes a half-regenerated tree. The swap itself (rmtree + copytree) is
     best-effort, not crash-safe — a SIGKILL mid-swap could leave the *local*
     tree half-populated, but that run commits nothing, so the branch is safe.
+    Formatting runs *after* the swap, on the real in-place files (see
+    ``_format_generated``) — it's best-effort and never gates the swap; a
+    ruff hiccup leaves valid-but-unformatted generated output rather than
+    blocking the commit.
 
 Scope: assumes the standard repo-root layout (``contract/PklProject``,
 ``contract/app.pkl``, output at the repo root). Non-standard layouts
@@ -116,28 +120,41 @@ def regenerate(contract_dir: str) -> bool:
             )
             return False
 
-        _format_generated(tmp)
         _swap_outputs(tmp)
+        _format_generated()
         print("Regenerated contract artifacts.")
         return True
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def _format_generated(out_dir: Path) -> None:
-    """ruff-fix + format every generated *.py, mirroring
-    contract-toolkit/scripts/regenerate-all.sh. The contract emits more than
-    _input.py (e.g. _e2e_base.py, _e2e_credential.py, _e2e_substitutions.py);
-    every one must match what pre-commit's ruff-format would produce, or the
-    consumer's pre-commit reformats it on the renovate PR and fails CI. This
-    sync commit bypasses pre-commit, so we format here. Best-effort: a ruff
-    hiccup must not fail the sync (many apps exclude app/generated from lint
-    entirely)."""
-    inputs = sorted((out_dir / "app" / "generated").rglob("*.py"))
+def _format_generated() -> None:
+    """ruff-fix + format every generated *.py in the working tree (post-swap),
+    mirroring contract-toolkit/scripts/regenerate-all.sh. The contract emits
+    more than _input.py (e.g. _e2e_base.py, _e2e_credential.py,
+    _e2e_substitutions.py); every one must match what pre-commit's ruff would
+    produce, or the consumer's pre-commit reformats it on the renovate PR and
+    fails CI. This sync commit bypasses pre-commit, so we format here.
+    Best-effort: a ruff hiccup must not fail the sync (many apps exclude
+    app/generated from lint entirely).
+
+    Runs after `_swap_outputs`, on the real `app/generated/**` path relative
+    to cwd (the consumer repo root) — not the temp eval output dir. `ruff
+    check --fix` also runs with no --select, so it applies whatever the
+    consumer's own pyproject.toml configures (fleet configs aren't uniform:
+    e.g. atlan-hello-world-app selects "I" for import sorting; application-sdk's
+    own config and the app-template scaffold do not). Both of these depend on
+    linting the files at their real repo-relative path: `select`/`extend-select`
+    resolve via cwd regardless, but path-scoped `per-file-ignores`/`exclude`
+    patterns (e.g. an app that exempts `app/generated/**` from a rule) only
+    match a real relative path — they silently fail to match an absolute
+    temp-dir path, which would make this over-apply rules relative to what
+    pre-commit actually enforces."""
+    inputs = sorted(Path("app/generated").rglob("*.py"))
     if not inputs:
         return
     paths = [str(p) for p in inputs]
-    run(["uvx", "ruff", "check", "--fix", "--select", "F401", "--quiet", *paths])
+    run(["uvx", "ruff", "check", "--fix", "--quiet", *paths])
     run(["uvx", "ruff", "format", *paths])
 
 

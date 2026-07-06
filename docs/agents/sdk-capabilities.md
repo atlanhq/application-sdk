@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.20.1
-source-sha:    fd43e4b87098fa6c9d17b37209b6274db0cf2a5a
-source-date:   2026-06-26T22:18:12+05:30
+sdk-version:   3.20.3
+source-sha:    ace322e5d02463733736b4b11984b32a57943d9e
+source-date:   2026-07-05T13:26:56+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -23,8 +23,8 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 9 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 53 |
-| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 14 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 54 |
+| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 20 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 34 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
@@ -951,7 +951,7 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 
 - **Import:** `from application_sdk.errors import DependencyUnavailableError`
 - **Signature:** `class DependencyUnavailableError(*, ...)`
-- **Summary:** Required platform service is temporarily down or degraded.
+- **Summary:** Required Atlan-internal platform service is temporarily down or degraded.
 - **Defined in:** `application_sdk/errors/leaves.py`
 
 #### `ErrorCode`
@@ -1015,6 +1015,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Import:** `from application_sdk.errors import ResourceExhaustedError`
 - **Signature:** `class ResourceExhaustedError(*, ...)`
 - **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `SourceUnavailableError`
+
+- **Import:** `from application_sdk.errors import SourceUnavailableError`
+- **Signature:** `class SourceUnavailableError(*, ...)`
+- **Summary:** Customer-controlled source system is temporarily unreachable.
 - **Defined in:** `application_sdk/errors/leaves.py`
 
 #### `UnimplementedError`
@@ -1293,6 +1300,12 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Summary:** Configuration for retry behavior.
 - **Defined in:** `application_sdk/execution/retry.py`
 
+#### `TemporalActivityError`
+
+- **Import:** `from application_sdk.execution import TemporalActivityError`
+- **Signature:** `class TemporalActivityError(message: str, ...)`
+- **Summary:** Error raised on activity failure. _(re-exported from `temporalio.exceptions.ActivityError`)_
+
 #### `TemporalAuthConfig`
 
 - **Import:** `from application_sdk.execution import TemporalAuthConfig`
@@ -1307,12 +1320,48 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Summary:** Manages OAuth token lifecycle for Temporal client connections.
 - **Defined in:** `application_sdk/execution/_temporal/auth.py`
 
+#### `TemporalCancelledError`
+
+- **Import:** `from application_sdk.execution import TemporalCancelledError`
+- **Signature:** `class TemporalCancelledError(message: str = 'Cancelled', *details: Any)`
+- **Summary:** Error raised on workflow/activity cancellation. _(re-exported from `temporalio.exceptions.CancelledError`)_
+
+#### `TemporalChildWorkflowError`
+
+- **Import:** `from application_sdk.execution import TemporalChildWorkflowError`
+- **Signature:** `class TemporalChildWorkflowError(message: str, ...)`
+- **Summary:** Error raised on child workflow failure. _(re-exported from `temporalio.exceptions.ChildWorkflowError`)_
+
+#### `TemporalClient`
+
+- **Import:** `from application_sdk.execution import TemporalClient`
+- **Signature:** `class TemporalClient(service_client: 'temporalio.service.ServiceClient', ...)`
+- **Summary:** Client for accessing Temporal. _(re-exported from `temporalio.client.Client`)_
+
 #### `TemporalExecutorBackend`
 
 - **Import:** `from application_sdk.execution import TemporalExecutorBackend`
 - **Signature:** `class TemporalExecutorBackend(client: Client, task_queue: str = 'application-sdk')`
 - **Summary:** Temporal-based executor backend for running Apps as workflows.
 - **Defined in:** `application_sdk/execution/_temporal/backend.py`
+
+#### `TemporalTerminatedError`
+
+- **Import:** `from application_sdk.execution import TemporalTerminatedError`
+- **Signature:** `class TemporalTerminatedError(message: str, *details: Any)`
+- **Summary:** Error raised on workflow cancellation. _(re-exported from `temporalio.exceptions.TerminatedError`)_
+
+#### `TemporalTimeoutError`
+
+- **Import:** `from application_sdk.execution import TemporalTimeoutError`
+- **Signature:** `class TemporalTimeoutError(message: str, ...)`
+- **Summary:** Error raised on workflow/activity timeout. _(re-exported from `temporalio.exceptions.TimeoutError`)_
+
+#### `TemporalWorkflowFailureError`
+
+- **Import:** `from application_sdk.execution import TemporalWorkflowFailureError`
+- **Signature:** `class TemporalWorkflowFailureError(*, cause: 'BaseException')`
+- **Summary:** Error that occurs when a workflow is unsuccessful. _(re-exported from `temporalio.client.WorkflowFailureError`)_
 
 ### Functions
 
@@ -1364,11 +1413,6 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Signature:** `needs_lock(max_locks: int = 5, lock_name: Optional[str] = None)`
 - **Summary:** Decorator to mark activities that require distributed locking.
 - **Defined in:** `application_sdk/execution/decorators.py`
-
-#### `TemporalClient`
-
-- **Import:** `from application_sdk.execution import TemporalClient`
-- **Summary:** _(no docstring)_
 
 ## `application_sdk.handler`
 
@@ -1499,7 +1543,7 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 
 - **Import:** `from application_sdk.handler import PreflightStatus`
 - **Signature:** `class PreflightStatus`
-- **Summary:** Advisory result of a preflight check — for display/diagnostics only.
+- **Summary:** Overall result of a preflight check.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `SqlMetadataObject`
@@ -2430,25 +2474,6 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 
 ### `application_sdk.handler.contracts`
 
-#### `AgentCredentialSpec`
-
-- **Import:** `from application_sdk.handler.contracts import AgentCredentialSpec`
-- **Summary:** Typed envelope for an agent-shape credential payload.
-- **Fields:**
-  - `agent_name: str` `= Field(default='', alias='agent-name')` — Name of the Secure Agent instance. Used by ``is_populated()`` to
-  - `secret_manager: str` `= Field(default='', alias='secret-manager')` — Secret store backend: ``awssecretmanager``, ``azurekeyvault``,
-  - `secret_path: str` `= Field(default='', alias='secret-path')` — Path / ARN / name of the secret in the external secret manager.
-  - `auth_type: str` `= Field(default='', alias='auth-type')` — Authentication strategy: ``basic``, ``noauth``, ``gcp-wif``,
-  - `host: str` `= ''` — Database / service hostname. Required for JDBC connectors.
-  - `port: int` `= 0` — Database / service port.
-  - `connect_by: str` `= Field(default='', alias='connectBy')` — Connection method hint (``host``, ``url``, etc.).
-  - `agent_type: str` `= Field(default='', alias='agent-type')` — Agent framework version. ``new-app-framework`` for SA 2.0 agents.
-  - `key_type: str` `= Field(default='', alias='key-type')` — Secret key layout: ``multi-key``, ``single-key``, etc.
-  - `aws_region: str` `= Field(default='', alias='aws-region')` — AWS region for the secret manager.
-  - `aws_auth_method: str` `= Field(default='', alias='aws-auth-method')` — AWS auth method: ``iam``, ``iam-assume-role``, ``access-key``.
-  - `azure_auth_method: str` `= Field(default='', alias='azure-auth-method')` — Azure auth method: ``managed_identity``, ``service_principal``.
-- **Defined in:** `application_sdk/credentials/spec.py`
-
 #### `ApiMetadataObject`
 
 - **Import:** `from application_sdk.handler.contracts import ApiMetadataObject`
@@ -2506,18 +2531,6 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `data: dict[str, Any]`
   - `datacontenttype: str` `= 'application/json'`
 - **Defined in:** `application_sdk/handler/contracts.py`
-
-#### `CredentialRef`
-
-- **Import:** `from application_sdk.handler.contracts import CredentialRef`
-- **Summary:** A reference to a credential in the secret store.
-- **Fields:**
-  - `name: str` `= ''` — Secret store key or human-readable name for this credential.
-  - `credential_type: str` `= ''` — Type identifier used to look up the parser in the registry
-  - `store_name: str` `= 'default'` — Which secret store to use (for multi-store setups).
-  - `credential_guid: str` `= ''` — Platform-issued credential GUID — non-empty triggers GUID resolution path.
-  - `agent_spec: AgentCredentialSpec | None` — Typed agent credential spec — non-None triggers v3 agent resolution.
-- **Defined in:** `application_sdk/credentials/ref.py`
 
 #### `EventFilterRule`
 
@@ -2600,22 +2613,8 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Fields:**
   - `name: str` `= Field(..., min_length=1)` — Check name (e.g., 'connectivity', 'permissions').
   - `passed: bool` `= False` — Whether the check passed.
-  - `blocking: bool` `= False` — Whether failing this check must stop the run before extraction.
   - `message: str` `= ''` — Details about the check result.
   - `duration_ms: float` `= 0.0` — How long the check took in milliseconds.
-- **Defined in:** `application_sdk/handler/contracts.py`
-
-#### `PreflightGateInput`
-
-- **Import:** `from application_sdk.handler.contracts import PreflightGateInput`
-- **Summary:** Credential-routing fields the injected preflight gate threads from the
-- **Fields:**
-  - `extraction_method: str` `= ''` — Credential routing mode (e.g. ``agent`` / ``direct``).
-  - `credential_guid: str` `= ''` — Platform credential GUID for direct (vault) resolution.
-  - `agent_json: AgentCredentialSpec | None` — Agent-shape credential spec for inline (secret-manager) resolution.
-  - `credential_ref: CredentialRef | None` — Pre-built reference, when the extraction input already carries one.
-  - `entrypoint: str` `= ''` — Bare entry-point name of the gated workflow (for per-entrypoint checks).
-  - `metadata: BaseMetadataConfig` `= Field(default_factory=BaseMetadataConfig)` — Form-level metadata forwarded to the handler, mirroring the HTTP path.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `PreflightInput`
@@ -2637,11 +2636,10 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.handler.contracts import PreflightOutput`
 - **Summary:** Output from the preflight_check handler operation.
 - **Fields:**
-  - `status: PreflightStatus` — Advisory result for display (Sage UI / connector-pulse / AE event).
-  - `checks: list[PreflightCheck]` `= []` — Individual check results. A check's :attr:`PreflightCheck.blocking` flag
+  - `status: PreflightStatus` — Overall preflight result.
+  - `checks: list[PreflightCheck]` `= []` — Individual check results.
   - `message: str` `= ''` — Human-readable summary.
   - `total_duration_ms: float` `= 0.0` — Total time for all checks in milliseconds.
-  - `should_block: bool` — Whether the gate must abort the run (a blocking check failed).
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `SqlMetadataObject`

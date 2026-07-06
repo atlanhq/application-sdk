@@ -117,6 +117,49 @@ if ! echo "$ERR_MSG" | grep -q "Type constraint"; then
 fi
 
 # --------------------------------------------------------------------------
+# 7. schedules: duplicate ScheduleSpec.name within an entrypoint must throw.
+#    `name` is the reconcile identity key downstream (Local Marketplace keys AE
+#    triggers on it); duplicates would collapse to one trigger (last wins), so the
+#    Listing has an isDistinct constraint that must fire at eval time.
+# --------------------------------------------------------------------------
+echo ":: Checking schedules duplicate-name invariant..."
+BAD_CONTRACT="$(mktemp "$REPO_ROOT/test-dup-sched-XXXXXX.pkl")"
+OUT_DIR="$(mktemp -d "$REPO_ROOT/test-dup-sched-out-XXXXXX")"
+cat > "$BAD_CONTRACT" << 'PKLEOF'
+amends "src/App.pkl"
+
+name = "dup-sched-app"
+displayName = "Dup Sched App"
+icon = "https://example.com/icon.svg"
+hasCredentialConfig = false
+pipeline { publish = null }
+
+// A uiConfig makes the toolkit emit manifest.json, whose triggers.schedules render
+// reads `schedules` — pkl is lazy, so the constraint only fires once schedules is
+// evaluated (which every real app does when it generates a manifest).
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs { ["target"] = new TextInput { title = "Target"; placeholderText = "x" } }
+    }
+  }
+}
+
+schedules {
+  new ScheduleSpec { name = "dup"; cronExpression = "0 0 * * *" }
+  new ScheduleSpec { name = "dup"; cronExpression = "0 6 * * *" }
+}
+PKLEOF
+ERR_MSG="$(pkl eval -m "$OUT_DIR" "$BAD_CONTRACT" 2>&1 || true)"
+rm -f "$BAD_CONTRACT"
+rm -rf "$OUT_DIR"
+if ! echo "$ERR_MSG" | grep -q "isDistinct"; then
+  echo "FAIL: duplicate schedule-name invariant did not fire (expected an isDistinct constraint violation)"
+  echo "  Got: $ERR_MSG"
+  fail=1
+fi
+
+# --------------------------------------------------------------------------
 # Done
 # --------------------------------------------------------------------------
 if [ "$fail" -ne 0 ]; then

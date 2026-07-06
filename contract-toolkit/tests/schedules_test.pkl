@@ -1,0 +1,149 @@
+// Tests for background-job schedules (DISTR-815).
+//
+// When an app declares `schedules`, the toolkit renders a `triggers.schedules`
+// block into `manifest.json` (AE ScheduleTrigger shape). The feature lives in
+// BOTH schemas (App.pkl and NativeApp.pkl) while the toolkit migrates from
+// NativeApp.pkl to App.pkl. When `schedules` is empty, no `triggers` key is
+// emitted.
+
+amends "pkl:test"
+
+import "pkl:json"
+import "../src/App.pkl" as App
+import "../src/NativeApp.pkl" as NativeApp
+import "../src/Connectors.pkl"
+
+local parser = new json.Parser { useMapping = true }
+
+// ── App.pkl ───────────────────────────────────────────────────────────────
+
+local appUiConfig = new App.UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["target"] = new App.TextInput {
+          title = "Target"
+          placeholderText = "my-target"
+        }
+      }
+    }
+  }
+}
+
+local appWithSchedules = (App) {
+  name = "app-with-schedules"
+  displayName = "App With Schedules"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  uiConfig = appUiConfig
+
+  pipeline {
+    publish = null
+  }
+
+  schedules {
+    new App.ScheduleSpec {
+      name = "policy-eval-daily"
+      cronExpression = "0 0 * * *"
+    }
+    new App.ScheduleSpec {
+      name = "dp-score-refresh-6h"
+      cronExpression = "0 */6 * * *"
+      timezone = "America/New_York"
+      status = "PAUSED"
+    }
+  }
+}
+
+local appNoSchedules = (App) {
+  name = "app-no-schedules"
+  displayName = "App No Schedules"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  uiConfig = appUiConfig
+  pipeline {
+    publish = null
+  }
+}
+
+local appManifest = parser.parse(
+  appWithSchedules.output.files["app/generated/manifest.json"].text
+)
+local appNoSchedManifest = parser.parse(
+  appNoSchedules.output.files["app/generated/manifest.json"].text
+)
+
+// ── NativeApp.pkl ───────────────────────────────────────────────────────────
+
+local nativeWithSchedules = (NativeApp) {
+  name = "native-with-schedules"
+  displayName = "Native With Schedules"
+  connector = Connectors.API
+  icon = "https://example.com/icon.svg"
+  workflowType = "NativeWithSchedulesWorkflow"
+  hasPublishStep = false
+  hasPublishInputFields = false
+
+  schedules {
+    new NativeApp.ScheduleSpec {
+      name = "policy-eval-daily"
+      cronExpression = "0 0 * * *"
+    }
+  }
+}
+
+local nativeNoSchedules = (NativeApp) {
+  name = "native-no-schedules"
+  displayName = "Native No Schedules"
+  connector = Connectors.API
+  icon = "https://example.com/icon.svg"
+  workflowType = "NativeNoSchedulesWorkflow"
+  hasPublishStep = false
+  hasPublishInputFields = false
+}
+
+local nativeManifest = parser.parse(
+  nativeWithSchedules.output.files["manifest.json"].text
+)
+local nativeNoSchedManifest = parser.parse(
+  nativeNoSchedules.output.files["manifest.json"].text
+)
+
+facts {
+  // ── App.pkl ───────────────────────────────────────────────────────────────
+  ["App renders triggers.schedules from declared schedules"] {
+    appManifest["triggers"]["schedules"].length == 2
+    appManifest["triggers"]["schedules"][0]["name"] == "policy-eval-daily"
+    appManifest["triggers"]["schedules"][0]["cron_expression"] == "0 0 * * *"
+  }
+
+  ["App schedule defaults are UTC + ACTIVE"] {
+    appManifest["triggers"]["schedules"][0]["timezone"] == "UTC"
+    appManifest["triggers"]["schedules"][0]["status"] == "ACTIVE"
+  }
+
+  ["App schedule honours timezone + PAUSED overrides"] {
+    appManifest["triggers"]["schedules"][1]["timezone"] == "America/New_York"
+    appManifest["triggers"]["schedules"][1]["status"] == "PAUSED"
+  }
+
+  ["App omits triggers when no schedules are declared"] {
+    !appNoSchedManifest.containsKey("triggers")
+  }
+
+  // ── NativeApp.pkl ───────────────────────────────────────────────────────────
+  ["NativeApp renders triggers.schedules from declared schedules"] {
+    nativeManifest["triggers"]["schedules"].length == 1
+    nativeManifest["triggers"]["schedules"][0]["name"] == "policy-eval-daily"
+    nativeManifest["triggers"]["schedules"][0]["cron_expression"] == "0 0 * * *"
+  }
+
+  ["NativeApp schedule defaults are UTC + ACTIVE"] {
+    nativeManifest["triggers"]["schedules"][0]["timezone"] == "UTC"
+    nativeManifest["triggers"]["schedules"][0]["status"] == "ACTIVE"
+  }
+
+  ["NativeApp omits triggers when no schedules are declared"] {
+    !nativeNoSchedManifest.containsKey("triggers")
+  }
+}

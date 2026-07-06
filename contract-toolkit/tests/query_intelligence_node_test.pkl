@@ -46,6 +46,13 @@ local templatedNode = new App.QueryIntelligenceNode {
 }
 
 facts {
+  // Class-level default: precise per-type assertion without manifest noise.
+  // Regression guard — QueryIntelligenceNode must route to the query-intelligence
+  // app, not DAGNode's "automation-engine" default.
+  ["QueryIntelligenceNode defaults identify the query-intelligence app"] {
+    defaultQueryIntelligenceNode.appName == "query-intelligence"
+  }
+
   ["QueryIntelligenceNode emits mandatory QI args"] {
     defaultQueryIntelligenceNode.args["connection_qualified_name"] == "$.extract.outputs.connection_qualified_name"
     defaultQueryIntelligenceNode.args["input_prefix"] == "$.extract.outputs.qi_input_prefix"

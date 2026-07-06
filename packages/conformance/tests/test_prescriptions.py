@@ -227,7 +227,7 @@ def test_p003_fires_on_bare_leaf_prefix_without_underscore(tmp_path: Path) -> No
 
 
 def test_p003_silent_on_leaf_class_itself(tmp_path: Path) -> None:
-    """The 14 leaves themselves declare ``code = "<PREFIX>"`` — that's the
+    """The 15 leaves themselves declare ``code = "<PREFIX>"`` — that's the
     canonical source, not a violation."""
     src = (
         "from typing import ClassVar\n"
@@ -717,7 +717,7 @@ def test_p002_fires_on_appbase_subclass_redeclaring_category() -> None:
 
 
 def test_p002_silent_on_canonical_leaves_themselves() -> None:
-    # The 14 canonical leaves are the *defining sites* — they MUST set category.
+    # The 15 canonical leaves are the *defining sites* — they MUST set category.
     for leaf, cat in (
         ("CancelledError", "CANCELLED"),
         ("AppTimeoutError", "TIMEOUT"),
@@ -729,6 +729,7 @@ def test_p002_silent_on_canonical_leaves_themselves() -> None:
         ("InvalidInputError", "INVALID_INPUT"),
         ("PreconditionError", "PRECONDITION"),
         ("DependencyUnavailableError", "DEPENDENCY_UNAVAILABLE"),
+        ("SourceUnavailableError", "SOURCE_UNAVAILABLE"),
         ("ResourceExhaustedError", "RESOURCE_EXHAUSTED"),
         ("DataIntegrityError", "DATA_INTEGRITY"),
         ("InternalError", "INTERNAL"),

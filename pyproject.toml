@@ -136,7 +136,7 @@ dev = [
     "pre-commit>=4.2.0,<5.0.0",
     "isort>=8.0.1,<8.1.0",
     "boto3-stubs>=1.38.6,<2.0.0",
-    "poethepoet>=0.47.0,<0.48.0",
+    "poethepoet>=0.48.0,<0.49.0",
     "libcst>=1.4.0,<2.0.0",
 ]
 test = [
@@ -222,6 +222,12 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["application_sdk"]
+
+# Ship the Dapr component YAMLs inside the wheel so consumer apps get them
+# for free from their existing application-sdk dependency instead of
+# downloading them over the network (see docs/standards/build-security.md).
+[tool.hatch.build.targets.wheel.force-include]
+"components" = "application_sdk/components"
 
 [tool.pyright]
 venvPath = "."

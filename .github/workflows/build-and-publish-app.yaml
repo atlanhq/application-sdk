@@ -409,7 +409,7 @@ jobs:
           token: ${{ secrets.ORG_PAT_GITHUB }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        uses: astral-sh/setup-uv@d31148d669074a8d0a63714ba94f3201e7020bc3 # v8.3.0
         with:
           version: "0.11.26"
 
@@ -843,7 +843,11 @@ jobs:
 
   # ── Job 1: Read atlan.yaml, validate secrets, compute all image tags ──────────
   prepare:
-    needs: [validate-channel, unit-tests-gate, certify, leak-scan]
+    # Build runs CONCURRENTLY with certify (not after it): certify no longer
+    # gates prepare/build, it gates the terminal side-effecting jobs instead:
+    # publish AND app-deployment-dispatcher (see their needs/if). leak-scan +
+    # validate-channel stay as pre-build gates.
+    needs: [validate-channel, unit-tests-gate, leak-scan]
     # `needs: [...]` only enforces ordering when those jobs run. When
     # publish=false, all of them are skipped via their `if:` — which by default
     # would propagate "skipped" to dependents. The condition below explicitly
@@ -1084,7 +1088,7 @@ jobs:
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
 
       - name: Log in to GHCR
-        uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -1134,7 +1138,7 @@ jobs:
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: Log in to GHCR
-        uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -1142,7 +1146,7 @@ jobs:
 
       - name: Log in to Docker Hub
         if: needs.prepare.outputs.enable_sdr == 'true'
-        uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
         with:
           registry: docker.io
           username: atlanhq
@@ -1260,8 +1264,13 @@ jobs:
   # ── Job 5: Dispatch deployment to atlan-apps-deployment (main only) ───────────
   app-deployment-dispatcher:
     name: Dispatch App Deployment
-    needs: [prepare, merge, security-scan]
-    if: ${{ !failure() && !cancelled() && needs.merge.result == 'success' && needs.security-scan.result == 'success' && github.ref == 'refs/heads/main' && needs.prepare.outputs.enable_sdr == 'true' }}
+    needs: [prepare, merge, security-scan, certify]
+    # certify may be SKIPPED here: it runs only on publish=true, but the
+    # dispatcher fires on any main push for SDR apps (some, e.g. mysql, publish
+    # only on release). Block on a real certify FAILURE, not on skipped — else
+    # deploy-on-merge SDR apps would stop deploying. (publish uses == 'success'
+    # safely because it also requires inputs.publish, so certify always ran.)
+    if: ${{ !failure() && !cancelled() && needs.merge.result == 'success' && needs.security-scan.result == 'success' && needs.certify.result != 'failure' && github.ref == 'refs/heads/main' && needs.prepare.outputs.enable_sdr == 'true' }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -1282,8 +1291,8 @@ jobs:
   # ── Job 7: Publish to Global Marketplace ────────────────────────────────────
   publish:
     name: Publish to Marketplace
-    needs: [prepare, merge, security-scan]
-    if: ${{ !failure() && !cancelled() && needs.prepare.result == 'success' && needs.merge.result == 'success' && needs.security-scan.result == 'success' && inputs.publish }}
+    needs: [prepare, merge, security-scan, certify]
+    if: ${{ !failure() && !cancelled() && needs.prepare.result == 'success' && needs.merge.result == 'success' && needs.security-scan.result == 'success' && needs.certify.result == 'success' && inputs.publish }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 

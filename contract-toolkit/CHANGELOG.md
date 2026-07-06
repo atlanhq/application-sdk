@@ -6,6 +6,34 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.18.0] - 2026-07-06
+
+### Features
+
+- render triggers.schedules into manifest.json (DISTR-815) (#2381) ([47de99b](https://github.com/atlanhq/application-sdk/commit/47de99b))
+- route/card split, pools map, pool task routing (BLDX-1342, BLDX-1375, BLDX-1382) (#2351) ([b0c780b](https://github.com/atlanhq/application-sdk/commit/b0c780b))
+
+### Other changes
+
+- ci(contract-toolkit): stop hardcoding ruff --select F401 in generated-file cleanup (#2497) ([dfb5b4c](https://github.com/atlanhq/application-sdk/commit/dfb5b4c))
+
+## [0.17.0] - 2026-07-03
+
+### Features
+
+- emit marketplace metadata from app.pkl into atlan.yaml (BLDX-1451) (#2401) ([8a0b1ff](https://github.com/atlanhq/application-sdk/commit/8a0b1ff))
+- additive-only contract gate B005/B006 (BLDX-1425) (#2350) ([225c8ed](https://github.com/atlanhq/application-sdk/commit/225c8ed))
+
+### Bug fixes
+
+- bake NativeApp manifest app_name from contract name (#2478) ([1bac756](https://github.com/atlanhq/application-sdk/commit/1bac756))
+- correct appName for QueryIntelligenceNode and LineageNode (#2461) ([4904e7e](https://github.com/atlanhq/application-sdk/commit/4904e7e))
+- include agent-json in app's manifest.json (#2312) ([7dd679c](https://github.com/atlanhq/application-sdk/commit/7dd679c))
+
+### Other changes
+
+- ci(renovate-pkl-sync): format all generated *.py, not just _input.py (#2346) ([a4e474d](https://github.com/atlanhq/application-sdk/commit/a4e474d))
+
 ## [0.16.0] - 2026-06-25
 
 ### Features

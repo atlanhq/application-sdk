@@ -86,8 +86,8 @@ from application_sdk.errors import redact_secrets
 from application_sdk.errors.leaves import (
     AppTimeoutError,
     AuthError,
-    DependencyUnavailableError,
     InternalError,
+    SourceUnavailableError,
 )
 from application_sdk.execution import build_output_path, get_object_store_prefix
 from application_sdk.infrastructure.context import get_infrastructure
@@ -290,7 +290,7 @@ class SqlApp(App):
             ``success=False`` + ``error_type`` + ``error_message`` on the
             returned ``PrimeAuthOutput``, and lets ``run()`` short-circuit
             the workflow with a typed error (``AuthError``,
-            ``AppTimeoutError`` or ``DependencyUnavailableError``
+            ``AppTimeoutError`` or ``SourceUnavailableError``
             depending on ``error_type``).
 
             Why return failure instead of raising and letting Temporal
@@ -377,9 +377,10 @@ class SqlApp(App):
           ``AuthenticationError`` class names).
         - ``AppTimeoutError`` for probe timeouts (``TimeoutError`` /
           ``asyncio.TimeoutError`` / message contains ``timed out``).
-        - ``DependencyUnavailableError`` for network / DNS / TLS /
-          connection-refused failures — the source is presumed
-          reachable but didn't respond cleanly.
+        - ``SourceUnavailableError`` for network / DNS / TLS /
+          connection-refused failures — the customer-owned source is
+          presumed reachable but didn't respond cleanly, so the failure
+          routes to the connector owner (USER), not Atlan infra ops.
         - ``InternalError`` as the last-resort fallback so we never
           return ``None`` and never accidentally swallow an unknown
           driver exception class.
@@ -445,9 +446,10 @@ class SqlApp(App):
             )
 
         # Network / DNS / TLS / connection-refused / generic
-        # OperationalError without an auth-keyword message. Default to
-        # DependencyUnavailableError — actionable guidance is "fix the
-        # network path, the source itself may be fine."
+        # OperationalError without an auth-keyword message. Classify as
+        # SourceUnavailableError (audience=USER) — the customer owns the
+        # source system, and the actionable guidance is "fix the network
+        # path, the source itself may be fine."
         network_class_hints = (
             "connectionerror",
             "connectionrefused",
@@ -456,16 +458,20 @@ class SqlApp(App):
             "oserror",
             "operationalerror",
             "interfaceerror",
+            # Match wrapped SDK error classnames surfaced as error_type.
+            # "dependencyunavailable" is retained for legacy wrappers that
+            # predate the SourceUnavailableError migration.
+            "sourceunavailable",
             "dependencyunavailable",
             "socketerror",
         )
         if any(h in error_type.lower() for h in network_class_hints):
-            return DependencyUnavailableError(
+            return SourceUnavailableError(
                 message=(
                     "SQL auth-cache prime could not reach the source before "
                     f"parallel extract burst ({error_type})."
                 ),
-                service="sql_source",
+                source_type="sql",
                 network_error=error_message,
                 suggested_action=(
                     "Check DNS resolution, NAT/firewall rules, TLS "

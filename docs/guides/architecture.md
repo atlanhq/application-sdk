@@ -378,7 +378,7 @@ application_sdk/
 │   └── integration/        # Integration test runner and fixtures
 │
 ├── discovery.py            # Auto-discovery helpers for apps and handlers
-├── errors/                 # Categorical error hierarchy: AppError, FailureCategory, Audience, 14 leaf classes
+├── errors/                 # Categorical error hierarchy: AppError, FailureCategory, Audience, 15 leaf classes
 │   │                       # Legacy errors.py shim kept for back-compat (AAF-{COMPONENT}-{ID} constants)
 ├── constants.py            # Import-time configuration (env vars, path templates)
 ├── version.py              # Package version (__version__)

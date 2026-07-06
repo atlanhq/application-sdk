@@ -109,6 +109,61 @@ The single entry point for all new native app contracts. Supersedes `NativeApp.p
 | `workflowType` | String? | null | Workflow type emitted verbatim into `manifest.json` as `workflow_type`. When unset (the default), the toolkit kebab-cases `name` to derive the value. Set explicitly only when the runtime keys on a string that must not be transformed (e.g. `"NetSuiteMetadataExtractionWorkflow"` or `"teradata-app:crawler"`). |
 | `taskQueuePrefix` | String | `"atlan-{name}"` | Task queue prefix. Override for multi-entrypoint apps sharing a deployment. |
 
+### Schedules (background jobs)
+
+For **cron-scheduled background jobs**, declare `schedules` on the entrypoint's
+contract. When non-empty, the toolkit renders a `triggers.schedules` block into the
+generated `manifest.json` (Automation Engine `ScheduleTrigger` shape). A reconciler
+(Local Marketplace) reads it from the served `/manifest` and creates the AE workflow
++ native Temporal schedule(s) — **the app never calls AE directly**. Default is empty
+(no `triggers` key emitted), so existing apps are unaffected. Only background/cron
+entrypoints set this; UI/event-triggered workflows leave it empty.
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `schedules` | `Listing<ScheduleSpec>` | `new Listing {}` | Cron schedules for this entrypoint. Rendered into `manifest.json` `triggers.schedules` when non-empty. `name`s must be **unique within the entrypoint** (enforced at eval time — duplicates would collapse to one AE trigger). |
+
+**`ScheduleSpec`:**
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `name` | String | — | Stable reconcile identity key → AE `trigger_id`. Never rename/reuse (a rename is a delete + recreate downstream); must be unique within the entrypoint. |
+| `cronExpression` | String | — | Standard 5-field cron, e.g. `"0 0 * * *"`. |
+| `timezone` | String (IANA, format-validated) | `"UTC"` | e.g. `"America/New_York"`. Validated for format at eval time. |
+| `status` | `"ACTIVE"\|"PAUSED"` | `"ACTIVE"` | Closed set. Ship a disabled job as `"PAUSED"` (don't omit it) — a free-string typo would otherwise silently pause a schedule downstream. |
+
+```pkl
+schedules {
+  new ScheduleSpec {
+    name = "daily-midnight"
+    cronExpression = "0 0 * * *"          // timezone defaults to UTC, status to ACTIVE
+  }
+  new ScheduleSpec {
+    name = "six-hourly-disabled"
+    cronExpression = "0 */6 * * *"
+    status = "PAUSED"
+  }
+}
+```
+→ generated `manifest.json`:
+```jsonc
+"triggers": {
+  "schedules": [
+    { "name": "daily-midnight",       "cron_expression": "0 0 * * *",   "timezone": "UTC", "status": "ACTIVE" },
+    { "name": "six-hourly-disabled",  "cron_expression": "0 */6 * * *", "timezone": "UTC", "status": "PAUSED" }
+  ]
+}
+```
+
+**Placement:** `schedules` is a single-entrypoint manifest-shaping property, exactly
+like `pipeline` / `uiConfig` / `extraNodes` — for a single-entrypoint app it feeds
+that app's manifest. For a **multi-entrypoint** app, declare `schedules` on each
+[entrypoint's `contract`](#multi-entrypoint-bundle) (per-entrypoint), since each
+entrypoint renders its own manifest.
+
+See [`examples/scheduled/`](../examples/scheduled/) for a full worked example.
+(Same field/behaviour exists on the legacy `NativeApp.pkl`.)
+
 ### E2E Test Harness
 
 These fields are emitted into `app/generated/_e2e_base.py` and are required by `BaseE2ETest` / `SQLAppE2ETest`. The defaults are derived from `name`; 95% of connectors never need to override them.
@@ -237,20 +292,40 @@ The auth-type radio's `ui.hidden` is auto-derived from `credentialAuthOptions.le
 |---|---|---|
 | `uiConfig` | UIConfig | Setup form definition with tasks, rules. |
 
-### Deploy Block
+### Deploy Configuration
 
-The typed `deploy` block replaces the legacy free-form mapping.
+`deploy: DeployConfig? = null` — leave unset (null, the default) to let Heracles apply platform defaults. Set to `new DeployConfig { … }` to emit a `deploy:` block (and `pools:` when pools are configured) in `atlan.yaml`.
+
+Singleton fields (`executionMode`, `splitDeployment`, `dapr`) apply to the whole deployment. Per-pool scaling (KEDA, resources, env) goes inside `deploy.pools`.
+
+All deployment classes (`DeployConfig`, `Pool`, `DaprComponents`, `KedaConfig`, `KedaTemporalConfig`, `ResourceConfig`) are defined in `Deployment.pkl` and re-exported by `App.pkl` — amending contracts do not need a supplemental import.
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `deploy.executionMode` | String | `"native"` | Execution mode. |
+| `deploy` | DeployConfig? | null | Deployment configuration. Null = Heracles defaults. Set to emit `deploy:` in `atlan.yaml`. |
+
+**DeployConfig class:**
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `deploy.executionMode` | String | `"native"` | Emitted as `execution_mode`. |
 | `deploy.splitDeployment` | Boolean | `true` | Emitted as `splitDeploymentEnabled`. |
-| `deploy.replicaCount` | Int? | null | Honoured only when `keda.enabled = false`. |
-| `deploy.dapr` | DaprComponents | `new DaprComponents {}` | Dapr sidecar toggles. |
-| `deploy.keda` | KedaConfig | `new KedaConfig {}` | KEDA autoscaling config. |
-| `deploy.resources` | ResourceConfig? | null | Kubernetes resource requests/limits. |
-| `deploy.env` | Mapping<String, String> | `{}` | Static container environment variables. |
-| `deployOverrides` | Mapping<String, Any> | `{}` | Deep-merged on top of the rendered deploy section (VPA, extraVolumes, securityContext, etc.). |
+| `deploy.dapr` | DaprComponents | `new DaprComponents {}` | Dapr sidecar toggles — app-wide, not per-pool. Emitted under `dapr:` when any component is enabled. |
+| `deploy.overrides` | Mapping<String, Any> | `{}` | Global escape hatch. Deep-merged on top of the rendered `deploy:` block after first-pool `overrides`. |
+| `deploy.pools` | Mapping<KebabCase, Pool> | `{}` | Named worker-pool map. Pool keys must be lowercase kebab-case and match `@task(pool="…")` in Python. When non-empty, emits `deploy:` (synthesised from the first pool's keda/resources/env) and `pools:`. |
+
+**Pool class:**
+
+```pkl
+class Pool {
+  replicaCount: Int? = null     // static replica count (ignored when keda.enabled = true)
+  keda: KedaConfig = new KedaConfig {}
+  resources: ResourceConfig? = null
+  env: Mapping<String, String> = new Mapping {}
+  envOverrides: Mapping<String, Mapping<String, String>> = new Mapping {}
+  overrides: Mapping<String, Any> = new Mapping {}  // deep-merged last (escape hatch)
+}
+```
 
 **DaprComponents:**
 
@@ -263,6 +338,7 @@ class DaprComponents {
   subscription: Boolean = false
   configurationstore: Boolean = false
   lock: Boolean = false
+  customComponents: Mapping<String, Any> = new Mapping {}
 }
 ```
 
@@ -272,12 +348,13 @@ class DaprComponents {
 class KedaConfig {
   enabled: Boolean = true
   minReplicaCount: Int = 0
+  cooldownPeriod: Int? = null  // seconds to wait after queue drains before scaling to zero
   temporal: KedaTemporalConfig = new { targetQueueSize = 5 }
 }
 class KedaTemporalConfig { targetQueueSize: Int }
 ```
 
-Note: `targetQueueSize` must be set via `keda.temporal.targetQueueSize`, not `keda.targetQueueSize`.
+`targetQueueSize` must be set via `keda.temporal.targetQueueSize`. `cooldownPeriod` is omitted from the rendered output when not set (Helm chart default applies).
 
 **ResourceConfig:**
 
@@ -288,15 +365,54 @@ class ResourceConfig {
 }
 ```
 
+Example — two pools, hot always-on + cold scale-to-zero:
+
+```pkl
+deploy = new DeployConfig {
+  pools {
+    ["hot"] = new Pool {
+      keda { minReplicaCount = 1; cooldownPeriod = 300 }
+    }
+    ["cold"] = new Pool {
+      keda { minReplicaCount = 0; cooldownPeriod = 30 }
+    }
+  }
+}
+```
+
+Example — single pool with Dapr sidecars and a VPA override:
+
+```pkl
+deploy = new DeployConfig {
+  dapr { objectstore = true; secretstore = true }
+  pools {
+    ["default"] = new Pool {
+      keda { enabled = true; minReplicaCount = 1; temporal { targetQueueSize = 10 } }
+      resources = new ResourceConfig {
+        requests { ["cpu"] = "500m"; ["memory"] = "1Gi" }
+        limits { ["cpu"] = "2"; ["memory"] = "4Gi" }
+      }
+      env { ["LOG_LEVEL"] = "INFO" }
+      overrides {
+        ["verticalPodAutoscaler"] = new Mapping { ["enabled"] = true; ["updateMode"] = "Auto" }
+      }
+    }
+  }
+}
+```
+
+For the single-pool case use key `"default"`. See `examples/deploy/` for the full single-pool example and `examples/pools/` for the two-pool example.
+
 ### Multi-Entrypoint Bundle
 
 Set `entrypoints` to serve multiple marketplace tiles from one deployment. Per-entrypoint contracts are separate files that each `amend App.pkl`.
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `entrypoints` | Listing<Entrypoint> | `[]` | Marketplace card / SDK entrypoint definitions. When non-empty, enables bundle mode. |
+| `entrypoints` | Listing<Entrypoint> | `[]` | SDK routing endpoints and (optionally) marketplace card definitions. When non-empty, enables bundle mode. All entrypoints are routable via `?entrypoint=`; only those with `packageId` set render as marketplace cards. |
+| `marketplaceCard` | Boolean | `true` | Whether this app appears in the marketplace. Single-entrypoint apps auto-derive `package_id: "@atlan/{name}"` from this default. Set to `false` for purely behind-the-scenes apps with no marketplace presence. Has no effect on multi-entrypoint apps; use `Entrypoint.packageId` per-entrypoint instead. |
 | `emitAtlanYaml` | Boolean | `true` | Emit `atlan.yaml`. |
-| `emitEntrypoints` | Boolean | `true` | Emit the `entrypoints:` block. |
+| `emitEntrypoints` | Boolean | `true` | **Deprecated** — use `Entrypoint.packageId` to control card presence. Emit the `entrypoints:` block. Will be removed in the next minor version. |
 | `emitGeneratedArtifacts` | Boolean | `true` | Re-export entrypoint contract files. |
 
 **Entrypoint class:**
@@ -312,6 +428,7 @@ Set `entrypoints` to serve multiple marketplace tiles from one deployment. Per-e
 | `sourceCategory` | String? | null | Source category. |
 | `categories` | Listing\<String\> | `[]` | Marketplace category tags for this entrypoint. |
 | `docsUrl` | String? | null | Documentation URL. Falls back to the app-level `docsUrl` when null. |
+| `packageId` | String? | null | Stable marketplace package ID (e.g. `"@atlan/qlik-sense"`). When set, emits `package_id:` and `marketplace_card: true` in `atlan.yaml`. Required for multi-entrypoint apps to preserve backward compat with legacy Argo workflows that reference the app by its stable card ID. Entrypoints without a `packageId` are routable but do not appear as marketplace cards. |
 | `contract` | Typed? | null | The entrypoint's `App.pkl` contract whose `output.files` are emitted. |
 
 Bundle output layout:
@@ -2669,6 +2786,101 @@ class AppInputContract(ExtractionInput):
   `{"catalog": {"db": {}}}` to the existing filter map shape
   `{"catalog": ["db"]}` before validation.
 - Publish fields simplified: `publish_dry_run` replaces the loader-specific fields
+
+---
+
+## Migration Notes
+
+### v0.17.0 — nested `deploy`/`pools` API; `deployOverrides` renamed to `overrides`
+
+**What changed:** The v0.16.x `deploy` and `deployOverrides` properties are **removed**.
+In v0.16.x, `deploy: DeployConfig` was always non-null and unconditionally emitted the
+`deploy:` block in `atlan.yaml`; `keda`, `resources`, `env`, and `envOverrides` were flat
+fields directly on `DeployConfig`. Deployment is now configured via a single nullable
+`deploy: DeployConfig? = null` — leaving it unset (the default) means no `deploy:` block
+is emitted and Heracles applies platform defaults. Per-pool scaling (`keda`, `resources`,
+`env`) now lives inside `deploy.pools`. The `deploy:` block is synthesised automatically
+from the first pool when `pools` is non-empty.
+
+The app-level `deployOverrides` escape hatch is renamed to `overrides` and is available
+at both the `DeployConfig` level and the per-`Pool` level.
+
+**Who is affected:** apps that set `deploy { ... }` or `deployOverrides { ... }` in their
+contract.
+
+**Migration — keda/resources/env → `deploy.pools`:**
+
+```pkl
+// Before (v0.16.x — keda/resources/env were flat fields on DeployConfig):
+deploy {
+  keda { enabled = true; minReplicaCount = 0 }
+  resources = new ResourceConfig {
+    requests { ["cpu"] = "500m"; ["memory"] = "1Gi" }
+  }
+  env { ["LOG_LEVEL"] = "INFO" }
+}
+
+// After (v0.17.0+ — per-pool config nested under deploy):
+deploy = new DeployConfig {
+  pools {
+    ["default"] = new Pool {
+      keda { enabled = true; minReplicaCount = 0 }
+      resources = new ResourceConfig {
+        requests { ["cpu"] = "500m"; ["memory"] = "1Gi" }
+      }
+      env { ["LOG_LEVEL"] = "INFO" }
+    }
+  }
+}
+```
+
+The `deploy:` YAML block is synthesised from the first pool. Apps with no deployment
+configuration at all are unaffected.
+
+**Migration — Dapr:**
+
+`dapr` was already a typed field on `DeployConfig` in v0.16.x — the syntax is unchanged.
+The key difference is that `deploy` is now nullable: omit it entirely when no Dapr
+components are needed and Heracles will apply platform defaults. Set it only when you
+need to enable specific components.
+
+```pkl
+// Before (v0.16.x — deploy always non-null; dapr set inline):
+deploy {
+  dapr { objectstore = true; secretstore = true }
+  keda { enabled = true }
+}
+
+// After (v0.17.0+ — dapr on DeployConfig, keda/resources/env moved to pools):
+deploy = new DeployConfig {
+  dapr { objectstore = true; secretstore = true }
+  pools {
+    ["default"] = new Pool {
+      keda { enabled = true }
+    }
+  }
+}
+```
+
+**Migration — `deployOverrides` → `overrides`:**
+
+```pkl
+// Before (v0.16.x — app-level deployOverrides escape hatch):
+deployOverrides {
+  ["verticalPodAutoscaler"] = new Mapping { ["enabled"] = true; ["updateMode"] = "Auto" }
+}
+
+// After (v0.17.0+ — per-pool overrides on Pool, or deploy-level overrides on DeployConfig):
+deploy = new DeployConfig {
+  pools {
+    ["default"] = new Pool {
+      overrides {
+        ["verticalPodAutoscaler"] = new Mapping { ["enabled"] = true; ["updateMode"] = "Auto" }
+      }
+    }
+  }
+}
+```
 
 ---
 

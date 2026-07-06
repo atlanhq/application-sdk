@@ -37,7 +37,7 @@ from application_sdk.app.context import (
     _is_atlan_logger,
 )
 from application_sdk.app.entrypoint import EntryPointMetadata
-from application_sdk.app.registry import AppMetadata
+from application_sdk.app.registry import AppMetadata, resolve_pool_queue
 from application_sdk.app.task import get_task_metadata, is_task, task
 from application_sdk.constants import LOCAL_WORKFLOW_ID
 from application_sdk.contracts.base import HeartbeatDetails, Input, Output
@@ -1904,6 +1904,7 @@ def _wrap_instance_tasks(app_instance: Any, context_data: dict[str, Any]) -> Non
                     task_meta.heartbeat_timeout_seconds,
                     task_meta.auto_heartbeat_seconds,
                     task_meta.retry_policy,
+                    pool=task_meta.pool,
                 )
                 setattr(app_instance, attr_name, wrapper)
 
@@ -1919,6 +1920,8 @@ def _create_task_activity_wrapper(
     heartbeat_timeout_seconds: int | None = 60,
     auto_heartbeat_seconds: int | None = 10,
     retry_policy: Any = None,
+    *,
+    pool: str | None = None,
 ) -> Any:
     """Create a wrapper that executes a task as a Temporal activity.
 
@@ -1933,10 +1936,22 @@ def _create_task_activity_wrapper(
         heartbeat_timeout_seconds: Heartbeat timeout. None disables.
         auto_heartbeat_seconds: Auto-heartbeat interval. None disables.
         retry_policy: Full retry policy (overrides max_attempts/interval if set).
+        pool: Logical worker-pool name. When set, the activity is routed
+            to a dedicated task queue. Queue name resolution order:
+            1. ``ATLAN_POOL_<POOL>_QUEUE`` env var (explicit override).
+            2. ``{ATLAN_TASK_QUEUE}-{pool}`` derived from the app's base queue
+               (default — ensures different apps with the same pool name get
+               different Temporal queues automatically).
 
     Returns:
         Async function that executes the task as an activity.
     """
+    # Resolve pool → task queue at construction time. Env vars are fixed for
+    # the process lifetime, so capturing the result in the closure is safe.
+    # Resolution order: explicit ATLAN_POOL_<POOL>_QUEUE override first, then
+    # derive from ATLAN_TASK_QUEUE so two apps sharing a pool name (e.g.
+    # "heavy") never collide on the same Temporal queue.
+    pool_queue: str | None = resolve_pool_queue(pool) if pool else None
     from application_sdk.execution.retry import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
         RetryPolicy as _RP,
     )
@@ -1987,6 +2002,8 @@ def _create_task_activity_wrapper(
         # Execute as activity, routed through the SDK eviction-retry loop so
         # worker pod evictions (SIGTERM mid-activity) re-dispatch as fresh
         # attempts without burning the application-error retry budget.
+        # When a pool_queue is set the activity is dispatched to the task
+        # queue for that pool; otherwise it runs on the workflow's own queue.
         result: Output = await execute_activity_with_eviction_retry(
             f"{app_name}:{task_name}",
             args=[task_context, input_data],
@@ -1995,6 +2012,7 @@ def _create_task_activity_wrapper(
             retry_policy=temporal_retry_policy,
             result_type=output_type,
             summary=summary,
+            **({"task_queue": pool_queue} if pool_queue else {}),
         )
 
         return result

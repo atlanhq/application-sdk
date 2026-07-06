@@ -94,7 +94,7 @@ across two buckets), corrupting the reporting layer for every downstream consume
 
 `FailureCategory` is the closed, single-axis taxonomy the SDK owns — every value is the
 canonical answer to *what happened* and is consumed as an immutable reporting metric
-(dashboards, SLA gates, on-call routing). The 14 categorical leaves in
+(dashboards, SLA gates, on-call routing). The 15 categorical leaves in
 `application_sdk.errors.leaves` (and `AppError` itself) are the sole defining sites:
 each leaf binds exactly one `FailureCategory` to its `category` `ClassVar`.
 
@@ -575,8 +575,14 @@ and a `run()` / `@entrypoint` method (typed `Input`/`Output`), and set
 run_dev_combined(MyApp, credentials={...}, ...)`. Workers and activities are
 auto-discovered from `AppRegistry` / `TaskRegistry` — there is nothing to wire.
 
+Files under `tests/integration/` are exempt from the construction-call and
+lifecycle-call violation classes: those harnesses need an in-process worker/client
+handle to submit workflows and tear down per test, and `run_dev_combined` blocks until
+shutdown with no handle-returning mode to substitute. The removed-v2-import class stays
+enforced everywhere, including under `tests/integration/`.
+
 Land as `WARN`: a justified inline `# conformance: ignore[P017] <reason>` records any
-unavoidable exception and stays visible in SARIF.
+unavoidable exception outside that exemption and stays visible in SARIF.
 
 ---
 
@@ -933,34 +939,42 @@ ignore[P028] <reason>` where a raw qualifiedName string is genuinely required.
 
 **Tier:** `block` · **Scope:** `app` · **Category:** `sdr-readiness` · **Autofixable:** — · **Since:** 0.9.0
 
-> SDR app manifest.json is missing agent_json in dag.extract.inputs.args
+> SDR agent manifest must surface agent_json + extraction_method at the top level of dag.extract.inputs.args
 
-**Rationale:** In SDR (agent) mode the platform routes credentials through the agent_json field in
-dag.extract.inputs.args of the connector manifest. A manifest that omits this field
-causes the SDR worker to start and the workflow to complete with status 'success', but
-the extraction agent receives no credentials and produces zero assets — a silent failure
-invisible to status-only test pipelines. This was the root cause of the MSSQL connector
-regression (atlan-mssql-app#177, DISTR-752).
+**Rationale:** In SDR (agent) mode the platform (Heracles/AE) derives the customer agent task queue and
+fills the credential-routing spec from agent_json + extraction_method at the TOP LEVEL
+of dag.extract.inputs.args. If an agent manifest nests them only under args.metadata,
+the platform can't see them and strands the agent extraction on the cloud queue
+(atlan-tableau-app / atlan-snowflake-app); if it omits them entirely the agent receives
+no credentials and produces zero assets — the MSSQL silent-failure regression
+(atlan-mssql-app#177, DISTR-752). Either way the workflow reports 'success', invisible
+to status-only test pipelines.
 
-For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, every `manifest.json`
-under `app/generated/` must contain an `agent_json` key inside
-`dag.extract.inputs.args`.
+For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, every *agent
+extraction* `manifest.json` under `app/generated/` must surface both `agent_json` and
+`extraction_method` at the TOP LEVEL of `dag.extract.inputs.args`. An agent extraction
+is any node whose args carry the `{{agent-json}}` routing placeholder; a miner/QI or
+`clean` entrypoint that carries none is exempt.
 
-In SDR (agent) mode the platform (Heracles/AE) fills `agent_json` at dispatch time with
-the credential-routing spec that tells the extraction worker how to resolve credentials
-from the customer's secret store.  A manifest that does not declare this slot cannot
-receive the value — the workflow starts, runs to completion, and reports success while
-the extraction agent silently operates with no credentials and writes zero assets.
+In SDR (agent) mode the platform (Heracles/AE) derives the agent task queue
+(`atlan-<agent-name>`) and fills the credential-routing spec from these top-level fields
+at dispatch. Two failure modes:
 
-The MSSQL regression (atlan-mssql-app#177) was caused by exactly this: the manifest had
-no `agent_json` slot, the hand-written SDR test supplied the value directly (bypassing
-the manifest), so the test passed while production runs failed silently.  Adopting
-`BaseSDRIntegrationTest.manifest_path` (T003) closes the test gap; this rule closes the
-static gap.
+* **Misplaced / partial** — the fields are nested only under   `args.metadata` (or
+`extraction_method` is omitted). The platform   can't derive the queue, so the
+extraction strands on the cloud queue   `atlan-<app>-<deployment>` — which the
+customer's firewalled source   can't reach — and never progresses (atlan-tableau-app,
+atlan-snowflake-app). * **Missing entirely** — no manifest declares agent routing at
+all; the   agent receives no credentials and writes zero assets while the   workflow
+reports success (atlan-mssql-app#177). The hand-written SDR   test supplied the value
+directly, bypassing the manifest, so it   passed; adopting
+`BaseSDRIntegrationTest.manifest_path` (T003)   closes the test gap, this rule closes
+the static gap.
 
-**Remediation:** add the `agent_json` slot to the app's `contract/app.pkl` extract
-inputs and re-run `pkl eval` to regenerate `app/generated/<name>/manifest.json`.  Do not
-hand-edit the generated manifest — C002 tracks drift.
+**Remediation:** surface `agent_json` + `extraction_method` at the extract-args top
+level in the app's `contract/app.pkl` (keep them under `metadata` too if the connector
+reads there) and re-run `pkl eval` to regenerate `app/generated/<name>/manifest.json`.
+Do not hand-edit the generated manifest — C002 tracks drift.
 
 ---
 
@@ -996,5 +1010,10 @@ self.upload(...)` to the `run()` method or the relevant `@entrypoint` method.
 Note: P008 flags `self.upload()` *inside* `@task` methods (the wrong location); P030
 flags the *absence* of any upload call.  They are complementary: both should be clean
 for a correctly-wired SDR app.
+
+Exemption: this rule is skipped for apps whose `contract/app.pkl` sets `pipeline.publish
+= null` (no publish stage), which compiles to a generated manifest with no `dag.publish`
+node.  An extract-only app has nothing to hand the extracted assets off to, so the
+absence of `self.upload()` is by design, not a gap.
 
 ---

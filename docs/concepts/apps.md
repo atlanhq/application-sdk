@@ -413,6 +413,47 @@ class IncrementalExtractor(App):
 
 ---
 
+## Worker Pools
+
+By default every task runs on the app's primary Temporal task queue. Use `pool=` on `@task` to route a task to a dedicated worker pool — useful for activities that need different resource profiles (CPU-heavy crawls, memory-intensive exports, etc.).
+
+```python
+from application_sdk.app import App, task
+
+class MyConnector(App):
+
+    @task(pool="heavy")
+    async def bulk_export(self, input: ExportInput) -> ExportOutput: ...
+
+    @task  # runs on the default queue
+    async def fetch_schema(self, input: SchemaInput) -> SchemaOutput: ...
+```
+
+**Pool name rules:** pool names must be lowercase kebab-case (e.g. `"heavy"`, `"cold-tier"`). The `@task` decorator enforces this at decoration time.
+
+**Queue resolution** (evaluated at workflow-run time):
+
+1. `ATLAN_POOL_<POOL>_QUEUE` — explicit override. Hyphens in the pool name are normalised to underscores: `pool="cold-tier"` looks up `ATLAN_POOL_COLD_TIER_QUEUE`.
+2. `${ATLAN_TASK_QUEUE}-<pool>` — derived from the app's base queue when the explicit env var is absent.
+3. If neither is set, a warning is emitted at startup and the activity falls back to the default queue.
+
+**Pkl contract:** every pool used in `@task` must be declared in the app contract so the contract-toolkit can generate the correct deployment manifest:
+
+```pkl
+pools {
+  ["heavy"] = new Pool {
+    keda { minReplicaCount = 2 }
+  }
+  ["cold-tier"] = new Pool {
+    keda { minReplicaCount = 0; cooldownPeriod = 600 }
+  }
+}
+```
+
+See [ADR-0016](../adr/0016-multi-pool-worker-routing.md) for the full design including rollout-drain requirements.
+
+---
+
 ## Retry Policies
 
 Pass a `RetryPolicy` to `@task` via `retry_policy` to override the default (3 attempts, exponential backoff: initial 1s, coefficient 2.0, capped at 5 minutes):
@@ -433,6 +474,51 @@ class MyConnector(App):
 ```python
 policy = RetryPolicy().with_max_attempts(5).with_non_retryable(ValueError)
 ```
+
+---
+
+## Catching Client-Side Workflow Failures
+
+Code that calls `TemporalClient.execute_workflow(...)` or waits on a workflow handle
+(test harnesses, admin tooling, anything outside `run()`/`@task`) can catch the
+Temporal failure/cause exception family directly from `application_sdk.execution` —
+no need to import `temporalio` yourself:
+
+```python
+from application_sdk.execution import (
+    TemporalActivityError,
+    TemporalCancelledError,
+    TemporalWorkflowFailureError,
+)
+
+try:
+    await temporal_client.execute_workflow(MyConnector.run, input, id=run_id, task_queue=queue)
+except TemporalWorkflowFailureError as e:
+    match e.cause:
+        case TemporalActivityError():
+            ...  # an @task raised
+        case TemporalCancelledError():
+            ...  # the workflow was cancelled
+        case _:
+            ...  # e.g. temporalio.exceptions.ApplicationError when run()/@entrypoint
+            # itself raised directly — still log/handle it, don't ignore silently
+```
+
+`TemporalWorkflowFailureError` wraps the terminal-state cause on `.cause` — commonly
+one of `TemporalActivityError`, `TemporalCancelledError`, `TemporalChildWorkflowError`,
+`TemporalTerminatedError`, or `TemporalTimeoutError`, but not limited to those (e.g. a
+direct raise from `run()`/`@entrypoint` surfaces as the unexported
+`temporalio.exceptions.ApplicationError` — always include a catch-all case). These
+five are re-exported (not wrapped) with a `Temporal` prefix so they don't collide with
+unrelated SDK types of the same short name, e.g.
+`application_sdk.common.error_codes.ActivityError` and
+`application_sdk.errors.leaves.CancelledError`.
+
+This is distinct from error handling *inside* `run()`/`@task` code: there, raise
+and catch `application_sdk.errors.AppError` leaves (`CancelledError`,
+`AppTimeoutError`, etc.) instead — those carry the SDK's classified failure
+metadata (category, code, retryable). The `Temporal*Error` types above are raw
+client-side signals for code observing a workflow from the outside.
 
 ---
 

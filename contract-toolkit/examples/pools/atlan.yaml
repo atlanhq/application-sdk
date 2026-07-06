@@ -1,0 +1,65 @@
+# AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY.
+# To regenerate: pkl eval -m . contract/app.pkl
+name: pools-example
+display_name: Pools Map Example
+type: connector
+execution_mode: native
+icon_url: https://assets.atlan.com/assets/fullscreen-open.svg
+visibility: public
+build_tag: v1
+self_deployed_runtime: true
+entrypoints:
+- name: pools-example
+  display_name: Pools Map Example
+  icon_url: https://assets.atlan.com/assets/fullscreen-open.svg
+  type: connector
+  package_id: '@atlan/pools-example'
+  marketplace_card: true
+deploy:
+  execution_mode: native
+  splitDeploymentEnabled: true
+  keda:
+    enabled: true
+    minReplicaCount: 1
+    cooldownPeriod: 300
+    temporal:
+      targetQueueSize: 10
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: '2'
+      memory: 4Gi
+  env:
+    WORKER_TYPE: hot
+pools:
+  hot:
+    keda:
+      enabled: true
+      minReplicaCount: 1
+      cooldownPeriod: 300
+      temporal:
+        targetQueueSize: 10
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: '2'
+        memory: 4Gi
+    env:
+      WORKER_TYPE: hot
+  cold:
+    keda:
+      enabled: true
+      minReplicaCount: 0
+      cooldownPeriod: 30
+      temporal:
+        targetQueueSize: 5
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+    env:
+      WORKER_TYPE: cold
