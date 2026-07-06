@@ -843,7 +843,10 @@ jobs:
 
   # ── Job 1: Read atlan.yaml, validate secrets, compute all image tags ──────────
   prepare:
-    needs: [validate-channel, unit-tests-gate, certify, leak-scan]
+    # Build runs CONCURRENTLY with certify (not after it): certify no longer
+    # gates prepare/build, it gates the terminal publish job instead (see publish
+    # needs/if). leak-scan + validate-channel stay as pre-build gates.
+    needs: [validate-channel, unit-tests-gate, leak-scan]
     # `needs: [...]` only enforces ordering when those jobs run. When
     # publish=false, all of them are skipped via their `if:` — which by default
     # would propagate "skipped" to dependents. The condition below explicitly
@@ -1282,8 +1285,8 @@ jobs:
   # ── Job 7: Publish to Global Marketplace ────────────────────────────────────
   publish:
     name: Publish to Marketplace
-    needs: [prepare, merge, security-scan]
-    if: ${{ !failure() && !cancelled() && needs.prepare.result == 'success' && needs.merge.result == 'success' && needs.security-scan.result == 'success' && inputs.publish }}
+    needs: [prepare, merge, security-scan, certify]
+    if: ${{ !failure() && !cancelled() && needs.prepare.result == 'success' && needs.merge.result == 'success' && needs.security-scan.result == 'success' && needs.certify.result == 'success' && inputs.publish }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
