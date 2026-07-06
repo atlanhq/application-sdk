@@ -17,6 +17,7 @@ from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.ops import _get_bytes, _put
 from application_sdk.storage.reference import (
     _sha256_hex_file,
+    _sha256_hex_file_async,
     _write_local_sidecar,
     materialize_file_reference,
     persist_file_reference,
@@ -59,14 +60,13 @@ class TestSha256HelperAsync:
     Hashing a file on the event loop blocks it for the full read+digest. A
     blocked loop cannot run the SDK's auto-heartbeat coroutine, so long-running
     activities heartbeat-time-out even while making progress. This was the root
-    cause of the newday1 ``dbt:process`` failures: the extract-output
+    cause of a production RCA: dbt:process pipelines hit repeated
+    heartbeat-timeout failures because the extract-output
     ``materialize_file_reference`` verified thousands of files with the sync
     ``_sha256_hex_file`` on the loop, blocking it ~104s and starving heartbeats.
     """
 
     async def test_async_digest_matches_sync(self, tmp_path) -> None:
-        from application_sdk.storage.reference import _sha256_hex_file_async
-
         f = tmp_path / "data.bin"
         content = b"some bytes here" * 1024
         f.write_bytes(content)
@@ -108,6 +108,27 @@ class TestSha256HelperAsync:
 
         release.set()
         assert await task == "deadbeef"
+
+    async def test_uses_run_in_thread_pool(self, tmp_path) -> None:
+        """Pins the pool choice: must go through ``run_in_thread``, not
+        ``asyncio.to_thread``.
+
+        ``run_in_thread`` dispatches to the SDK's dedicated ``sdk-blocking-*``
+        pool rather than asyncio's shared default executor, which Temporal's
+        own SDK also uses for internal scheduling — sharing that pool risks
+        exhausting it. This fails if a future edit reverts to
+        ``asyncio.to_thread``.
+        """
+        f = tmp_path / "data.bin"
+        f.write_bytes(b"payload")
+
+        with patch.object(
+            reference_mod, "run_in_thread", wraps=reference_mod.run_in_thread
+        ) as mock_run_in_thread:
+            digest = await _sha256_hex_file_async(f)
+
+        mock_run_in_thread.assert_awaited_once_with(_sha256_hex_file, f)
+        assert digest == _hash_bytes(b"payload")
 
 
 class TestWriteLocalSidecar:
