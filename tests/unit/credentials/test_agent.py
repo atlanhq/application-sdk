@@ -14,6 +14,8 @@ import hashlib
 import json
 from typing import Any
 
+import pytest
+
 from application_sdk.common.transforms import expand_dotted_keys
 from application_sdk.credentials.agent import (
     _fetch_per_key_bundle,
@@ -28,8 +30,21 @@ from application_sdk.credentials.errors import (
     CredentialRoutingError,
 )
 from application_sdk.credentials.spec import AgentCredentialSpec
-from application_sdk.infrastructure.secrets import SecretStoreError
+from application_sdk.infrastructure.secrets import (
+    SecretNotFoundError,
+    SecretStoreError,
+)
 from application_sdk.testing.mocks import MockSecretStore
+
+
+@pytest.fixture(autouse=True)
+def _no_bundle_fetch_retry(monkeypatch):
+    """Disable the cold-sidecar bundle-fetch retry window by default so
+    store-failure tests fail fast. The dedicated retry tests re-enable it."""
+    monkeypatch.setattr(
+        "application_sdk.credentials.agent._BUNDLE_FETCH_MAX_WAIT_SECONDS", 0.0
+    )
+
 
 # ---------------------------------------------------------------------------
 # Fixtures — based on the real cloudsql-postgres agent payload from dbbi-331
@@ -418,6 +433,83 @@ class TestResolveAgentJsonErrorPaths:
 # ---------------------------------------------------------------------------
 # resolve_agent_credential — single-key (per-field secret lookup) mode
 # ---------------------------------------------------------------------------
+
+
+class TestBundleFetchReadinessRetry:
+    """The agent bundle fetch rides out a cold Dapr sidecar (transient fetch
+    failures) but never retries a genuine missing secret."""
+
+    _AGENT_JSON = json.dumps(
+        {
+            "agent-name": "t",
+            "auth-type": "basic",
+            "secret-path": "p",
+            "basic.username": "u",
+        }
+    )
+
+    async def test_retries_transient_failure_then_succeeds(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "application_sdk.credentials.agent._BUNDLE_FETCH_MAX_WAIT_SECONDS", 30.0
+        )
+        monkeypatch.setattr(
+            "application_sdk.credentials.agent._BUNDLE_FETCH_BASE_DELAY_SECONDS", 0.0
+        )
+        monkeypatch.setattr(
+            "application_sdk.credentials.agent._BUNDLE_FETCH_MAX_DELAY_SECONDS", 0.0
+        )
+        calls = {"n": 0}
+
+        class ColdThenReady:
+            async def get(self, name: str) -> str:
+                calls["n"] += 1
+                if calls["n"] < 3:  # sidecar still cold on the first two tries
+                    raise SecretStoreError(
+                        "Failed to get secret: All connection attempts failed"
+                    )
+                return _bundle(user="real")
+
+        result = await resolve_agent_json(self._AGENT_JSON, ColdThenReady())  # type: ignore[arg-type]
+        assert calls["n"] == 3  # rode out the two cold failures
+        assert result["agent-name"] == "t"
+
+    async def test_missing_secret_is_not_retried(self, monkeypatch) -> None:
+        # A generous window would let a retry loop run — but a genuine missing
+        # secret must fail fast, on the first attempt.
+        monkeypatch.setattr(
+            "application_sdk.credentials.agent._BUNDLE_FETCH_MAX_WAIT_SECONDS", 30.0
+        )
+        calls = {"n": 0}
+
+        class AlwaysMissing:
+            async def get(self, name: str) -> str:
+                calls["n"] += 1
+                raise SecretNotFoundError("p")
+
+        with pytest.raises(CredentialNotFoundError):
+            await resolve_agent_json(self._AGENT_JSON, AlwaysMissing())  # type: ignore[arg-type]
+        assert calls["n"] == 1  # not retried
+
+    async def test_persistent_transient_failure_gives_up(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "application_sdk.credentials.agent._BUNDLE_FETCH_MAX_WAIT_SECONDS", 0.05
+        )
+        monkeypatch.setattr(
+            "application_sdk.credentials.agent._BUNDLE_FETCH_BASE_DELAY_SECONDS", 0.01
+        )
+        monkeypatch.setattr(
+            "application_sdk.credentials.agent._BUNDLE_FETCH_MAX_DELAY_SECONDS", 0.01
+        )
+        calls = {"n": 0}
+
+        class AlwaysDown:
+            async def get(self, name: str) -> str:
+                calls["n"] += 1
+                raise SecretStoreError("All connection attempts failed")
+
+        with pytest.raises(CredentialError):
+            await resolve_agent_json(self._AGENT_JSON, AlwaysDown())  # type: ignore[arg-type]
+        assert calls["n"] >= 2  # retried before giving up at the deadline
 
 
 class TestSingleKeyMode:

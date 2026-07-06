@@ -41,8 +41,11 @@ consumable by any SQL, REST, NoSQL, or cloud-storage client whose
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import os
 import re
+import time
 import traceback
 from typing import TYPE_CHECKING, Any
 
@@ -63,6 +66,20 @@ if TYPE_CHECKING:
     from application_sdk.infrastructure.secrets import SecretStore
 
 logger = get_logger(__name__)
+
+#: The agent secret-bundle fetch is the FIRST Dapr call a workflow makes (during
+#: preflight credential resolution). On SDR/agent runs it can race a Dapr sidecar
+#: that is still finishing its cold start — daprd component init has been observed
+#: up to ~75s on fresh CI runners, past the app's startup readiness gate —
+#: surfacing as "SecretStoreError: Failed to get secret: All connection attempts
+#: failed". Retry the fetch (any transient error EXCEPT a genuine missing secret)
+#: until the store responds, bounded by this deadline so a truly-broken store
+#: still fails rather than hanging. Env-overridable for pathological runners.
+_BUNDLE_FETCH_MAX_WAIT_SECONDS: float = float(
+    os.environ.get("ATLAN_AGENT_SECRET_FETCH_MAX_WAIT_SECONDS", "120")
+)
+_BUNDLE_FETCH_BASE_DELAY_SECONDS: float = 2.0
+_BUNDLE_FETCH_MAX_DELAY_SECONDS: float = 10.0
 
 #: Root-level keys whose values are always literals, never ref-keys
 #: into the secret bundle. Mirrors the contract the Atlan platform
@@ -164,10 +181,48 @@ async def resolve_agent_json(
     return await resolve_agent_credential(spec, secret_store)
 
 
+async def _get_bundle_raw(secret_store: SecretStore, secret_path: str) -> Any:
+    """``secret_store.get`` with a readiness retry for a cold Dapr sidecar.
+
+    A genuine missing secret (``SecretNotFoundError``) is re-raised immediately —
+    retrying it is pointless. Any other failure is treated as transient (the
+    sidecar/secret store not yet reachable — e.g. daprd still initialising, which
+    surfaces as "All connection attempts failed") and retried with capped
+    exponential backoff until ``_BUNDLE_FETCH_MAX_WAIT_SECONDS`` elapses, then the
+    last error is re-raised. Pure retry wrapper — no behaviour change once the
+    store responds.
+    """
+    deadline = time.monotonic() + _BUNDLE_FETCH_MAX_WAIT_SECONDS
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            return await secret_store.get(secret_path)
+        except SecretNotFoundError:
+            raise
+        # conformance: ignore[E004] transient-fetch retry; re-raises the last error once the deadline passes
+        except Exception as exc:
+            if time.monotonic() >= deadline:
+                raise
+            delay = min(
+                _BUNDLE_FETCH_MAX_DELAY_SECONDS,
+                _BUNDLE_FETCH_BASE_DELAY_SECONDS * (2 ** (attempt - 1)),
+            )
+            logger.warning(
+                "Agent secret-bundle fetch at '%s' failed (attempt %d); the Dapr "
+                "sidecar / secret store may still be starting — retrying in %.1fs: %s",
+                secret_path,
+                attempt,
+                delay,
+                exc,
+            )
+            await asyncio.sleep(delay)
+
+
 async def _fetch_bundle(secret_store: SecretStore, secret_path: str) -> dict[str, Any]:
     """Fetch and JSON-parse the secret bundle at ``secret-path``."""
     try:
-        raw = await secret_store.get(secret_path)
+        raw = await _get_bundle_raw(secret_store, secret_path)
     except SecretNotFoundError as exc:
         raise CredentialNotFoundError(secret_path) from exc
     # conformance: ignore[E004] re-raises immediately as typed CredentialError with chained cause; logging deferred to caller boundary
