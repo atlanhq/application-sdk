@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.20.3
-source-sha:    ace322e5d02463733736b4b11984b32a57943d9e
-source-date:   2026-07-05T13:26:56+01:00
+source-sha:    f8dad8d24a3da7eadc3f20ca872ba5c6b6cfedd9
+source-date:   2026-07-06T18:19:11+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -26,7 +26,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 54 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 20 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
-| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 34 |
+| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 35 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
@@ -1748,6 +1748,13 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 - **Import:** `from application_sdk.infrastructure import SecretStoreError`
 - **Signature:** `class SecretStoreError(message: str, ...)`
 - **Summary:** Generic secret-store failure (category=DEPENDENCY_UNAVAILABLE).
+- **Defined in:** `application_sdk/infrastructure/secrets.py`
+
+#### `SecretStoreUnavailableError`
+
+- **Import:** `from application_sdk.infrastructure import SecretStoreUnavailableError`
+- **Signature:** `class SecretStoreUnavailableError(secret_name: str, *, cause: Exception | None = None)`
+- **Summary:** The secret store / Dapr sidecar was *unreachable* — a transport failure
 - **Defined in:** `application_sdk/infrastructure/secrets.py`
 
 #### `StateStore`
