@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from conformance.suite.checks.dependency_conformance import (
+    _REMOTE_COMPONENT_FETCH_RE,
     SDK_PYTHON_FLOOR,
     _is_bounded_specifier,
     _iter_dep_entries,
@@ -831,7 +832,7 @@ def test_d009_multiple_tasks_one_violating_reports_once_at_correct_line() -> Non
     expected_line = next(
         ln
         for ln, line in enumerate(text.splitlines(), start=1)
-        if "raw.githubusercontent.com" in line
+        if _REMOTE_COMPONENT_FETCH_RE.search(line)
     )
     assert findings[0].line == expected_line
 
