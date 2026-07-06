@@ -192,6 +192,12 @@ def _is_transient_store_error(exc: BaseException) -> bool:
     canonical connection-failure text. It deliberately errs toward NOT retrying
     an unrecognised error, so a real misconfiguration still fails in
     milliseconds instead of blocking for the whole retry window.
+
+    Transport-coupled: the class-name-token and text branches are tuned to the
+    httpx-backed Dapr client (``_dapr/http.py``). If that transport is ever
+    swapped (e.g. gRPC, whose connect failure is ``AioRpcError`` / "failed to
+    connect to all addresses" — no connect/timeout/transport token), extend the
+    token/text set below or this quietly stops retrying the cold-sidecar case.
     """
     seen: set[int] = set()
     cur: BaseException | None = exc
@@ -225,6 +231,16 @@ async def _get_bundle_raw(secret_store: SecretStore, secret_path: str) -> Any:
     capped exponential backoff until ``_BUNDLE_FETCH_MAX_WAIT_SECONDS`` elapses;
     a genuine store error (auth, bad binding/path) is re-raised at once. Pure
     retry wrapper — no behaviour change once the store responds.
+
+    Deliberately layered on top of the transport's own retry: the Dapr HTTP
+    client (``_dapr/http.py``) already wraps calls in a ``RetryTransport`` that
+    retries the same connect/network errors on a short (~15s) budget — so each
+    ``secret_store.get`` here spends that budget internally before this loop
+    backs off. The long readiness wait lives here, at the agent layer, on
+    purpose: it is scoped to the *idempotent* secret GET. Widening the transport
+    budget instead would apply the same 120s wait to the non-idempotent POSTs
+    (save_state / publish_event / invoke_binding / delete_state) that share the
+    client — which we don't want. Keep both layers.
     """
     deadline = time.monotonic() + _BUNDLE_FETCH_MAX_WAIT_SECONDS
     attempt = 0
