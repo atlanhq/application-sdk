@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.20.3
-source-sha:    7cb9e01d732cf790f5975d0f77bd9bc338d10441
-source-date:   2026-07-07T00:02:50+01:00
+source-sha:    938b4a96bb472bff3752d49b227ee7c2925f6e6b
+source-date:   2026-07-07T00:45:19+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -26,7 +26,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 54 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 20 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
-| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 36 |
+| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 35 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
@@ -1814,13 +1814,6 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 - **Signature:** `get_infrastructure()`
 - **Summary:** Get the current infrastructure context.
 - **Defined in:** `application_sdk/infrastructure/context.py`
-
-#### `retry_past_dapr_cold_start`
-
-- **Import:** `from application_sdk.infrastructure import retry_past_dapr_cold_start`
-- **Signature:** `retry_past_dapr_cold_start(call: Callable[[], Awaitable[_T]], *, description: str)`
-- **Summary:** Retry an idempotent Dapr-backed call past a cold sidecar.
-- **Defined in:** `application_sdk/infrastructure/_dapr/http.py`
 
 #### `set_infrastructure`
 
