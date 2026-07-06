@@ -179,6 +179,86 @@ jobs:
       distinct-id: ${{ inputs.distinct-id }}
     secrets: inherit
 
+  # ── Callback: report the result back to the application-sdk PR/commit ────
+  # that dispatched this run. application-sdk's e2e-apps composite
+  # (wait-mode: callback) creates an in_progress check run on its own SHA
+  # before dispatching, then exits without polling; this job is the push
+  # that completes it the instant this run finishes — no polling on either
+  # side. Only fires on the cross-repo dispatch path: application-sdk-ref is
+  # empty on the connector's own same-repo pull_request/push runs.
+  report-to-sdk:
+    name: Report to application-sdk
+    needs: [tests, e2e]
+    if: |
+      always() &&
+      github.event_name == 'workflow_dispatch' &&
+      inputs.application-sdk-ref != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout application-sdk callback script
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: atlanhq/application-sdk
+          ref: main
+          token: ${{ secrets.ORG_PAT_GITHUB }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          path: application-sdk-scripts
+
+      - name: Download connector e2e results
+        if: needs.e2e.result != 'skipped'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        continue-on-error: true
+        with:
+          name: sdr-integration-tests-${{ inputs.app-name }}-results
+          path: connector-results
+
+      - name: Determine conclusion + build summary
+        id: report
+        shell: bash
+        env:
+          TESTS_RESULT: ${{ needs.tests.result }}
+          E2E_RESULT: ${{ needs.e2e.result }}
+          TESTS_SUMMARY: ${{ needs.tests.outputs.summary }}
+        run: |
+          if [ "$TESTS_RESULT" = "success" ] && { [ "$E2E_RESULT" = "success" ] || [ "$E2E_RESULT" = "skipped" ]; }; then
+            echo "conclusion=success" >> "$GITHUB_OUTPUT"
+          else
+            echo "conclusion=failure" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Prefer the e2e leg's already-rendered report (asset/lineage
+          # tables etc.); fall back to a plain summary when e2e was
+          # skipped or its artifact didn't materialise.
+          if [ -f connector-results/pr-comment-body.md ]; then
+            echo "summary_file=connector-results/pr-comment-body.md" >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "## Tests Summary"
+              echo ""
+              echo "**tests:** ${TESTS_RESULT} (${TESTS_SUMMARY:-no summary})"
+              echo "**e2e:** ${E2E_RESULT}"
+            } > fallback-summary.md
+            echo "summary_file=fallback-summary.md" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Complete the check run on application-sdk
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          SHA: ${{ inputs.application-sdk-ref }}
+          REPO_SHORT: ${{ github.event.repository.name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 application-sdk-scripts/.github/scripts/complete_check_run.py \
+            --repo atlanhq/application-sdk \
+            --sha "$SHA" \
+            --name "Connector E2E / ${REPO_SHORT}" \
+            --conclusion "${{ steps.report.outputs.conclusion }}" \
+            --summary-file "${{ steps.report.outputs.summary_file }}" \
+            --details-url "$RUN_URL"
+
   # ── Aggregator gate (single required check for branch protection) ────────
   tests-passed:
     name: Tests Gate
