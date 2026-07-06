@@ -93,9 +93,20 @@ echo "[entrypoint]   graceful-shutdown-seconds: ${DAPR_GRACEFUL_SHUTDOWN_SECONDS
 DAPR_LOG_FORWARDER=""
 DAPR_LOG_FORMAT_FLAG=""
 if [ "$(echo "${ENABLE_ATLAN_UPLOAD:-false}" | tr '[:upper:]' '[:lower:]')" = "true" ]; then
-    echo "[entrypoint] SDR mode (ENABLE_ATLAN_UPLOAD=true) — forwarding daprd logs through the SDK observability pipeline"
-    DAPR_LOG_FORWARDER="uv run --no-sync python -m application_sdk.observability.dapr_log_forwarder --"
-    DAPR_LOG_FORMAT_FLAG="--log-as-json"
+    # Fail-soft on a version skew. The forwarder is daprd's PARENT process
+    # (`forwarder -- daprd ...`), so if `python -m ...dapr_log_forwarder` can't
+    # start, daprd never starts either — the sidecar is lost and the app can't
+    # reach Dapr at all. This happens when the entrypoint (shipped in the base
+    # image) is newer than the app's pinned SDK, which may not have the
+    # forwarder module. Probe the import first; if it's missing, run daprd
+    # directly so we lose daprd log forwarding, not the sidecar.
+    if uv run --no-sync python -c 'import application_sdk.observability.dapr_log_forwarder' >/dev/null 2>&1; then
+        echo "[entrypoint] SDR mode (ENABLE_ATLAN_UPLOAD=true) — forwarding daprd logs through the SDK observability pipeline"
+        DAPR_LOG_FORWARDER="uv run --no-sync python -m application_sdk.observability.dapr_log_forwarder --"
+        DAPR_LOG_FORMAT_FLAG="--log-as-json"
+    else
+        echo "[entrypoint] WARN: application_sdk.observability.dapr_log_forwarder is not importable in the installed SDK — running daprd directly without log forwarding. The base image entrypoint is likely newer than the app's pinned application-sdk; align them to restore daprd log forwarding."
+    fi
 fi
 
 # Intentional unquoted expansion: the forwarder prefix is empty (no-op) when the
