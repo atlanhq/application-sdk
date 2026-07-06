@@ -171,6 +171,14 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # seam (EnvironmentSecretStore legitimately reads os.environ), so the rule that
     # steers apps onto that seam is meaningless on the SDK itself (BLDX-1419). S001
     # (hardcoded credentials) stays 'both'.
+    # T010/T011/T012: missing unit/integration/e2e test suite — these encode the
+    # agreed per-connector testing-tier architecture (unit+integration required,
+    # e2e recommended); the SDK's own tests/ layout is graded by its own coverage
+    # gate (fail_under=85), not this per-app tiering policy (BLDX-1400).
+    # T014/T015: coverage-config integrity (disabled fail_under gate, omit/source
+    # hiding app/ product code) — only connector apps have an app/ product-code
+    # tree with a ratcheting coverage floor; the SDK's own coverage config is a
+    # different, already-enforced policy (BLDX-1400).
     assert app_scoped == {
         "B001",
         "C002",
@@ -210,6 +218,11 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "T002",
         "T003",
         "T004",
+        "T010",
+        "T011",
+        "T012",
+        "T014",
+        "T015",
         "O002",
         "O003",
         "O004",
@@ -404,7 +417,7 @@ def test_catalog_t_series_present() -> None:
     """The T-series test-quality rules are all present."""
     rules = load_catalog()
     t_ids = {r.id for r in rules if r.id.startswith("T")}
-    expected = {"T001", "T002", "T003", "T004"}
+    expected = {f"T{n:03d}" for n in range(1, 16)}
     missing = expected - t_ids
     assert not missing, f"Missing T-series rules: {missing}"
 

@@ -14,7 +14,13 @@ from ._directives import _IgnoreDirective, _parse_directives, parse_ignore_direc
 from ._discovery import EXCLUDE_DIRS, discover
 from ._findings import make_finding
 from ._imports import collect_import_origins, qualify_chained_attr_call
+from ._pytest_collection import (
+    is_collectable_test_file,
+    is_test_class,
+    is_test_function,
+)
 from ._scope import SDK_PACKAGE_PREFIX, detect_scope, is_sdk_package_name
+from ._toml_suppress import make_toml_finding, parse_toml_suppressions
 
 __all__ = [
     "EXCLUDE_DIRS",
@@ -25,9 +31,14 @@ __all__ = [
     "collect_import_origins",
     "detect_scope",
     "discover",
+    "is_collectable_test_file",
     "is_sdk_package_name",
+    "is_test_class",
+    "is_test_function",
     "make_cli_main",
     "make_finding",
+    "make_toml_finding",
     "parse_ignore_directive",
+    "parse_toml_suppressions",
     "qualify_chained_attr_call",
 ]
