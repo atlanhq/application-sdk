@@ -118,6 +118,17 @@ hasPublishStep: Boolean = true
 /// control through these generated fields.
 hasPublishInputFields: Boolean = true
 
+/// Background-job schedules (DISTR-815). When non-empty, the toolkit renders a
+/// `triggers.schedules` block into `manifest.json` (AE ScheduleTrigger shape) so a
+/// reconciler (Local Marketplace) can create the workflow's Temporal schedule(s)
+/// straight from the manifest. Only scheduled (cron) entrypoints set this; leave
+/// empty for UI/event-triggered entrypoints.
+///
+/// `name` is the reconcile identity key downstream, so names must be unique within
+/// an entrypoint — duplicates would collapse to one AE trigger. The constraint
+/// fails such a contract at eval time.
+schedules: Listing<ScheduleSpec>(this.toList().map((s) -> s.name).isDistinct) = new Listing {}
+
 /// Value for the default publish node's executor_enabled argument.
 /// Use a Boolean literal or an exact template placeholder string such as
 /// "{{load-to-atlan}}". Defaults to true for the existing always-publish path.
@@ -2413,6 +2424,34 @@ local function generateCredentialConfig(): Mapping<String, Any> =
 local manifestData: Mapping<String, Any> = new Mapping {
   ["execution_mode"] = "automation-engine"
   ["dag"] = generateDAG()
+  // DISTR-815: emit triggers.schedules when the entrypoint declares schedules,
+  // so the cron lives in the manifest itself (not a separate file).
+  when (schedules.length > 0) {
+    ["triggers"] = new Mapping {
+      ["schedules"] = new Listing {
+        for (s in schedules) {
+          new Mapping {
+            ["name"] = s.name
+            ["cron_expression"] = s.cronExpression
+            ["timezone"] = s.timezone
+            ["status"] = s.status
+          }
+        }
+      }
+    }
+  }
+}
+
+/// One background-job schedule rendered into `manifest.json`'s `triggers.schedules`
+/// (AE ScheduleTrigger shape). `name` is the stable trigger id — never rename/reuse
+/// (a rename is a delete+recreate downstream); names must be unique within an
+/// entrypoint. `timezone` is an IANA zone (format-validated at eval time). `status`
+/// is a closed set — a typo would otherwise silently pause a schedule downstream.
+class ScheduleSpec {
+  name: String
+  cronExpression: String
+  timezone: String(matches(Regex("[A-Za-z_]+(/[A-Za-z0-9_+-]+)*"))) = "UTC"
+  status: "ACTIVE"|"PAUSED" = "ACTIVE"
 }
 
 local function generateDAG(): Mapping<String, Any> = new Mapping {

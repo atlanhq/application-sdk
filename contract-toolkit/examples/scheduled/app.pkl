@@ -1,0 +1,56 @@
+/// Scheduled background-job example — demonstrates `schedules`.
+///
+/// A cron-scheduled background job: no credentials, publish opted out. Declaring
+/// `schedules` renders a `triggers.schedules` block into the generated
+/// `manifest.json` (AE ScheduleTrigger shape). A reconciler (Local Marketplace)
+/// reads it from the served manifest and creates the AE workflow + native Temporal
+/// schedule(s) — the app never calls AE directly.
+///
+/// This example exercises every `ScheduleSpec` variation: multiple schedules on one
+/// entrypoint, a non-UTC timezone, and a schedule shipped disabled (`PAUSED`).
+amends "../../src/App.pkl"
+
+name = "scheduled"
+displayName = "Scheduled Background Job Example"
+icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
+hasCredentialConfig = false
+
+pipeline {
+  publish = null
+}
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["target"] = new TextInput {
+          title = "Target"
+          helpText = "What to process."
+          placeholderText = "my-target"
+        }
+      }
+    }
+  }
+}
+
+// Two schedules on one entrypoint → one AE workflow, two Temporal schedules,
+// reconciled independently by `name`. `name` must be unique within the entrypoint
+// (enforced at eval time). `status` is a closed set (`ACTIVE`|`PAUSED`); disable a
+// job by shipping it `PAUSED` rather than removing it.
+schedules {
+  new ScheduleSpec {
+    name = "daily-midnight"
+    cronExpression = "0 0 * * *"
+    // timezone defaults to "UTC"
+  }
+  new ScheduleSpec {
+    name = "weekday-noon-et"
+    cronExpression = "0 12 * * 1-5"
+    timezone = "America/New_York"
+  }
+  new ScheduleSpec {
+    name = "six-hourly-disabled"
+    cronExpression = "0 */6 * * *"
+    status = "PAUSED"
+  }
+}
