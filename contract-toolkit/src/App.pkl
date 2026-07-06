@@ -305,7 +305,11 @@ extraNodes: Mapping<String, DAGNode> = new Mapping {}
 /// reconciler (Local Marketplace) can create the workflow's Temporal schedule(s)
 /// straight from the manifest. Only scheduled (cron) entrypoints set this; leave
 /// empty for UI/event-triggered entrypoints.
-schedules: Listing<ScheduleSpec> = new Listing {}
+///
+/// `name` is the reconcile identity key downstream, so names must be unique within
+/// an entrypoint — duplicates would collapse to one AE trigger. The constraint
+/// fails such a contract at eval time.
+schedules: Listing<ScheduleSpec>(this.toList().map((s) -> s.name).isDistinct) = new Listing {}
 
 /// Top-level on/off for app notifications.
 ///
@@ -2128,15 +2132,16 @@ local _publishTagPipelineEnabled: Boolean|String? =
 local _publishTagAttachmentsPrefix: String? =
   if (_publishTagPipelineEnabled != null) "$.extract.outputs.tag_attachments_prefix" else null
 
-/// One background-job schedule rendered into `manifest.json`'s
-/// `triggers.schedules` (AE ScheduleTrigger shape). `name` is the stable trigger
-/// id — never rename/reuse. `status` is "ACTIVE" or "PAUSED" (a disabled schedule
-/// ships as "PAUSED").
+/// One background-job schedule rendered into `manifest.json`'s `triggers.schedules`
+/// (AE ScheduleTrigger shape). `name` is the stable trigger id — never rename/reuse
+/// (a rename is a delete+recreate downstream); names must be unique within an
+/// entrypoint. `timezone` is an IANA zone (format-validated at eval time). `status`
+/// is a closed set — a typo would otherwise silently pause a schedule downstream.
 class ScheduleSpec {
   name: String
   cronExpression: String
-  timezone: String = "UTC"
-  status: String = "ACTIVE"
+  timezone: String(matches(Regex("[A-Za-z_]+(/[A-Za-z0-9_+-]+)*"))) = "UTC"
+  status: "ACTIVE"|"PAUSED" = "ACTIVE"
 }
 
 local manifestData: Mapping<String, Any> = new Mapping {

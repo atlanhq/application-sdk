@@ -109,6 +109,61 @@ The single entry point for all new native app contracts. Supersedes `NativeApp.p
 | `workflowType` | String? | null | Workflow type emitted verbatim into `manifest.json` as `workflow_type`. When unset (the default), the toolkit kebab-cases `name` to derive the value. Set explicitly only when the runtime keys on a string that must not be transformed (e.g. `"NetSuiteMetadataExtractionWorkflow"` or `"teradata-app:crawler"`). |
 | `taskQueuePrefix` | String | `"atlan-{name}"` | Task queue prefix. Override for multi-entrypoint apps sharing a deployment. |
 
+### Schedules (background jobs)
+
+For **cron-scheduled background jobs**, declare `schedules` on the entrypoint's
+contract. When non-empty, the toolkit renders a `triggers.schedules` block into the
+generated `manifest.json` (Automation Engine `ScheduleTrigger` shape). A reconciler
+(Local Marketplace) reads it from the served `/manifest` and creates the AE workflow
++ native Temporal schedule(s) — **the app never calls AE directly**. Default is empty
+(no `triggers` key emitted), so existing apps are unaffected. Only background/cron
+entrypoints set this; UI/event-triggered workflows leave it empty.
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `schedules` | `Listing<ScheduleSpec>` | `new Listing {}` | Cron schedules for this entrypoint. Rendered into `manifest.json` `triggers.schedules` when non-empty. `name`s must be **unique within the entrypoint** (enforced at eval time — duplicates would collapse to one AE trigger). |
+
+**`ScheduleSpec`:**
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `name` | String | — | Stable reconcile identity key → AE `trigger_id`. Never rename/reuse (a rename is a delete + recreate downstream); must be unique within the entrypoint. |
+| `cronExpression` | String | — | Standard 5-field cron, e.g. `"0 0 * * *"`. |
+| `timezone` | String (IANA, format-validated) | `"UTC"` | e.g. `"America/New_York"`. Validated for format at eval time. |
+| `status` | `"ACTIVE"\|"PAUSED"` | `"ACTIVE"` | Closed set. Ship a disabled job as `"PAUSED"` (don't omit it) — a free-string typo would otherwise silently pause a schedule downstream. |
+
+```pkl
+schedules {
+  new ScheduleSpec {
+    name = "daily-midnight"
+    cronExpression = "0 0 * * *"          // timezone defaults to UTC, status to ACTIVE
+  }
+  new ScheduleSpec {
+    name = "six-hourly-disabled"
+    cronExpression = "0 */6 * * *"
+    status = "PAUSED"
+  }
+}
+```
+→ generated `manifest.json`:
+```jsonc
+"triggers": {
+  "schedules": [
+    { "name": "daily-midnight",       "cron_expression": "0 0 * * *",   "timezone": "UTC", "status": "ACTIVE" },
+    { "name": "six-hourly-disabled",  "cron_expression": "0 */6 * * *", "timezone": "UTC", "status": "PAUSED" }
+  ]
+}
+```
+
+**Placement:** `schedules` is a single-entrypoint manifest-shaping property, exactly
+like `pipeline` / `uiConfig` / `extraNodes` — for a single-entrypoint app it feeds
+that app's manifest. For a **multi-entrypoint** app, declare `schedules` on each
+[entrypoint's `contract`](#multi-entrypoint-bundle) (per-entrypoint), since each
+entrypoint renders its own manifest.
+
+See [`examples/scheduled/`](../examples/scheduled/) for a full worked example.
+(Same field/behaviour exists on the legacy `NativeApp.pkl`.)
+
 ### E2E Test Harness
 
 These fields are emitted into `app/generated/_e2e_base.py` and are required by `BaseE2ETest` / `SQLAppE2ETest`. The defaults are derived from `name`; 95% of connectors never need to override them.
