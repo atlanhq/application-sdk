@@ -30,16 +30,27 @@ from application_sdk.credentials.errors import (
     CredentialRoutingError,
 )
 from application_sdk.credentials.spec import AgentCredentialSpec
-from application_sdk.infrastructure.secrets import SecretNotFoundError, SecretStoreError
+from application_sdk.infrastructure.secrets import (
+    SecretNotFoundError,
+    SecretStoreError,
+    SecretStoreUnavailableError,
+)
 from application_sdk.testing.mocks import MockSecretStore
 
 
 @pytest.fixture(autouse=True)
 def _no_bundle_fetch_retry(monkeypatch):
     """Disable the cold-sidecar bundle-fetch retry window by default so
-    store-failure tests fail fast. The dedicated retry tests re-enable it."""
+    store-failure tests fail fast. The dedicated retry tests re-enable it.
+
+    Also reset the process-level cold-start gate before each test — it's a
+    module global that a successful resolve elsewhere would otherwise leave set,
+    which would make later tests skip the readiness loop under test."""
     monkeypatch.setattr(
         "application_sdk.credentials.agent._BUNDLE_FETCH_MAX_WAIT_SECONDS", 0.0
+    )
+    monkeypatch.setattr(
+        "application_sdk.credentials.agent._sidecar_confirmed_ready", False
     )
 
 
@@ -461,9 +472,7 @@ class TestBundleFetchReadinessRetry:
             async def get(self, name: str) -> str:
                 calls["n"] += 1
                 if calls["n"] < 3:  # sidecar still cold on the first two tries
-                    raise SecretStoreError(
-                        "Failed to get secret: All connection attempts failed"
-                    )
+                    raise SecretStoreUnavailableError("p")
                 return _bundle(user="real")
 
         result = await resolve_agent_json(self._AGENT_JSON, ColdThenReady())  # type: ignore[arg-type]
@@ -502,7 +511,7 @@ class TestBundleFetchReadinessRetry:
         class AlwaysDown:
             async def get(self, name: str) -> str:
                 calls["n"] += 1
-                raise SecretStoreError("All connection attempts failed")
+                raise SecretStoreUnavailableError("p")
 
         with pytest.raises(CredentialError):
             await resolve_agent_json(self._AGENT_JSON, AlwaysDown())  # type: ignore[arg-type]
@@ -526,34 +535,56 @@ class TestBundleFetchReadinessRetry:
             await resolve_agent_json(self._AGENT_JSON, BadBinding())  # type: ignore[arg-type]
         assert calls["n"] == 1  # not retried — not a transient/connection error
 
-    async def test_connection_class_cause_is_treated_transient(
+    async def test_genuine_store_error_fails_fast_regardless_of_message(
         self, monkeypatch
     ) -> None:
-        # A store error whose *message* isn't obviously connection-y is still
-        # retried when its cause chain is a connection-class exception.
+        # Classification is by TYPE now, not text: a plain SecretStoreError is
+        # never retried even if its message looks connection-y — only
+        # SecretStoreUnavailableError (raised by the infra layer for a real
+        # transport failure) is transient.
         monkeypatch.setattr(
             "application_sdk.credentials.agent._BUNDLE_FETCH_MAX_WAIT_SECONDS", 30.0
         )
+        calls = {"n": 0}
+
+        class ConnectionyMessage:
+            async def get(self, name: str) -> str:
+                calls["n"] += 1
+                raise SecretStoreError("All connection attempts failed")
+
+        with pytest.raises(CredentialError):
+            await resolve_agent_json(self._AGENT_JSON, ConnectionyMessage())  # type: ignore[arg-type]
+        assert (
+            calls["n"] == 1
+        )  # not retried — type is SecretStoreError, not Unavailable
+
+    async def test_cold_start_wait_not_rearmed_after_first_success(
+        self, monkeypatch
+    ) -> None:
+        # Chris finding #2: once the store has answered this process, the long
+        # cold-start wait is NOT re-armed — a later outage fails fast (single
+        # attempt) rather than being masked for the whole 120s budget.
         monkeypatch.setattr(
-            "application_sdk.credentials.agent._BUNDLE_FETCH_BASE_DELAY_SECONDS", 0.0
-        )
-        monkeypatch.setattr(
-            "application_sdk.credentials.agent._BUNDLE_FETCH_MAX_DELAY_SECONDS", 0.0
+            "application_sdk.credentials.agent._BUNDLE_FETCH_MAX_WAIT_SECONDS", 30.0
         )
         calls = {"n": 0}
 
-        class ColdViaCause:
+        class ReadyThenDown:
             async def get(self, name: str) -> str:
                 calls["n"] += 1
-                if calls["n"] < 2:
-                    raise SecretStoreError("sidecar unavailable") from ConnectionError(
-                        "connect call failed"
-                    )
-                return _bundle(user="real")
+                if calls["n"] == 1:
+                    return _bundle(user="real")  # first call confirms readiness
+                raise SecretStoreUnavailableError("p")  # later steady-state outage
 
-        result = await resolve_agent_json(self._AGENT_JSON, ColdViaCause())  # type: ignore[arg-type]
-        assert calls["n"] == 2  # retried via the connection-class cause
-        assert result["agent-name"] == "t"
+        # First resolution succeeds and flips the process-level cold-start gate.
+        await resolve_agent_json(self._AGENT_JSON, ReadyThenDown())  # type: ignore[arg-type]
+        assert calls["n"] == 1
+
+        # A second resolution that hits an outage must NOT re-enter the retry
+        # loop — exactly one attempt, not a 30s retry window.
+        with pytest.raises(CredentialError):
+            await resolve_agent_json(self._AGENT_JSON, ReadyThenDown())  # type: ignore[arg-type]
+        assert calls["n"] == 2
 
 
 class TestSingleKeyMode:

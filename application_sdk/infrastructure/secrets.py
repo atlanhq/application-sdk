@@ -117,6 +117,29 @@ class SecretStoreError(DependencyUnavailableError):
         return " | ".join(parts)
 
 
+class SecretStoreUnavailableError(SecretStoreError):
+    """The secret store / Dapr sidecar was *unreachable* — a transport failure
+    (connection refused, reset mid-handshake, read/write/close error, timeout)
+    or a 5xx from a still-initialising component — as opposed to the store
+    answering and rejecting the request (bad auth / binding / path, which is a
+    plain :class:`SecretStoreError`).
+
+    Classified at the infrastructure layer (``_dapr/client.py``), where the
+    httpx exception family is visible, so callers can retry a cold-start race
+    against a not-yet-ready sidecar without duck-typing exception text. Remains
+    a ``SecretStoreError`` so ``except SecretStoreError`` still catches it.
+    """
+
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_SECRET_STORE_UNREACHABLE"
+
+    def __init__(self, secret_name: str, *, cause: Exception | None = None) -> None:
+        super().__init__(
+            f"Secret store unavailable while fetching secret '{secret_name}'",
+            secret_name=secret_name,
+            cause=cause,
+        )
+
+
 @dataclass(kw_only=True)
 class SecretNotFoundError(NotFoundError, SecretStoreError):
     """The requested secret key was not found in the secret store.

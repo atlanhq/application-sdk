@@ -58,7 +58,10 @@ from application_sdk.credentials.errors import (
     CredentialParseError,
 )
 from application_sdk.errors import redact_secrets
-from application_sdk.infrastructure.secrets import SecretNotFoundError
+from application_sdk.infrastructure.secrets import (
+    SecretNotFoundError,
+    SecretStoreUnavailableError,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
@@ -71,8 +74,8 @@ logger = get_logger(__name__)
 #: preflight credential resolution). On SDR/agent runs it can race a Dapr sidecar
 #: that is still finishing its cold start — daprd component init has been observed
 #: up to ~75s on fresh CI runners, past the app's startup readiness gate —
-#: surfacing as "SecretStoreError: Failed to get secret: All connection attempts
-#: failed". Retry the fetch (any transient error EXCEPT a genuine missing secret)
+#: surfacing as a transport failure ("All connection attempts failed"). The
+#: secret store raises ``SecretStoreUnavailableError`` for that case; retry it
 #: until the store responds, bounded by this deadline so a truly-broken store
 #: still fails rather than hanging. Env-overridable for pathological runners.
 _BUNDLE_FETCH_MAX_WAIT_SECONDS: float = float(
@@ -80,6 +83,13 @@ _BUNDLE_FETCH_MAX_WAIT_SECONDS: float = float(
 )
 _BUNDLE_FETCH_BASE_DELAY_SECONDS: float = 2.0
 _BUNDLE_FETCH_MAX_DELAY_SECONDS: float = 10.0
+
+#: Process-level cold-start gate. Set once the secret store answers (a success or
+#: a definitive not-found) in this worker; thereafter the long readiness wait
+#: above is NOT re-armed — a later failure is a steady-state outage that should
+#: surface fast via the transport's own (~15s) retry budget, not be masked for the
+#: full deadline on every subsequent agent-mode credential resolution.
+_sidecar_confirmed_ready: bool = False
 
 #: Root-level keys whose values are always literals, never ref-keys
 #: into the secret bundle. Mirrors the contract the Atlan platform
@@ -181,81 +191,52 @@ async def resolve_agent_json(
     return await resolve_agent_credential(spec, secret_store)
 
 
-def _is_transient_store_error(exc: BaseException) -> bool:
-    """Whether a bundle-fetch failure looks like the secret store / Dapr sidecar
-    being *not yet reachable* (worth waiting on) vs. a *genuine* store error
-    (bad auth, wrong path/binding — should fail fast).
-
-    Type alone can't distinguish them — a cold sidecar and a misconfigured
-    binding both surface as ``SecretStoreError`` — so this walks the
-    cause/context chain and matches connection-class exceptions plus the
-    canonical connection-failure text. It deliberately errs toward NOT retrying
-    an unrecognised error, so a real misconfiguration still fails in
-    milliseconds instead of blocking for the whole retry window.
-
-    Transport-coupled: the class-name-token and text branches are tuned to the
-    httpx-backed Dapr client (``_dapr/http.py``). If that transport is ever
-    swapped (e.g. gRPC, whose connect failure is ``AioRpcError`` / "failed to
-    connect to all addresses" — no connect/timeout/transport token), extend the
-    token/text set below or this quietly stops retrying the cold-sidecar case.
-    """
-    seen: set[int] = set()
-    cur: BaseException | None = exc
-    while cur is not None and id(cur) not in seen:
-        seen.add(id(cur))
-        # ConnectionError / TimeoutError (+ subclasses like ConnectionRefused)
-        # are unambiguously transport-level. NB: OSError is intentionally NOT
-        # matched — PermissionError etc. are OSError subclasses and must fail
-        # fast.
-        if isinstance(cur, (ConnectionError, TimeoutError)):
-            return True
-        # Backend-agnostic: httpx.ConnectError/ConnectTimeout/ReadTimeout/
-        # TransportError etc. (the Dapr HTTP client) by class-name token, so we
-        # don't hard-depend on httpx here.
-        type_name = type(cur).__name__.lower()
-        if any(tok in type_name for tok in ("connect", "timeout", "transport")):
-            return True
-        text = str(cur).lower()
-        if "all connection attempts failed" in text or "connection refused" in text:
-            return True
-        cur = cur.__cause__ or cur.__context__
-    return False
-
-
 async def _get_bundle_raw(secret_store: SecretStore, secret_path: str) -> Any:
-    """``secret_store.get`` with a readiness retry for a cold Dapr sidecar.
+    """``secret_store.get`` with a cold-start readiness retry for the Dapr sidecar.
 
-    A genuine missing secret (``SecretNotFoundError``) is re-raised immediately.
-    Other failures are retried **only if they look transient** (see
-    :func:`_is_transient_store_error` — a not-yet-reachable sidecar/store), with
-    capped exponential backoff until ``_BUNDLE_FETCH_MAX_WAIT_SECONDS`` elapses;
-    a genuine store error (auth, bad binding/path) is re-raised at once. Pure
-    retry wrapper — no behaviour change once the store responds.
+    The agent secret-bundle fetch is the first Dapr call a workflow makes, and on
+    SDR runs it can race a sidecar still finishing its cold start. The secret
+    store classifies an unreachable sidecar/store as
+    :class:`SecretStoreUnavailableError` (a transport failure, or a 5xx from a
+    still-initialising component) — distinct from a definitive rejection (bad
+    auth/binding/path → plain ``SecretStoreError``) or a missing secret
+    (``SecretNotFoundError``). Only the *unavailable* case is retried, with
+    capped exponential backoff, until ``_BUNDLE_FETCH_MAX_WAIT_SECONDS`` elapses;
+    everything else fails fast on the first attempt. No exception-text/class-name
+    duck-typing — the transient/genuine split is decided structurally at the
+    infrastructure layer (``_dapr/client.py``), so the two can't drift apart.
 
-    Deliberately layered on top of the transport's own retry: the Dapr HTTP
-    client (``_dapr/http.py``) already wraps calls in a ``RetryTransport`` that
-    retries the same connect/network errors on a short (~15s) budget — so each
-    ``secret_store.get`` here spends that budget internally before this loop
-    backs off. The long readiness wait lives here, at the agent layer, on
-    purpose: it is scoped to the *idempotent* secret GET. Widening the transport
-    budget instead would apply the same 120s wait to the non-idempotent POSTs
-    (save_state / publish_event / invoke_binding / delete_state) that share the
-    client — which we don't want. Keep both layers.
+    Scoped to cold start: once the store has answered at least once in this
+    worker process (``_sidecar_confirmed_ready``), the long wait is not re-armed
+    — a later failure is a genuine steady-state outage, left to surface via the
+    transport's own (~15s) retry budget rather than being masked for the full
+    deadline on every subsequent agent-mode credential resolution.
+
+    The long wait lives here rather than in the transport on purpose: it is
+    scoped to the *idempotent* secret GET. Widening the transport's own retry
+    budget would apply the same wait to the non-idempotent POSTs (save_state /
+    publish_event / invoke_binding / delete_state) that share the client.
     """
+    global _sidecar_confirmed_ready
+
+    # Steady state: the sidecar has already answered this process, so skip the
+    # cold-start wait and let a genuine outage fail fast via the transport budget.
+    if _sidecar_confirmed_ready:
+        return await secret_store.get(secret_path)
+
     deadline = time.monotonic() + _BUNDLE_FETCH_MAX_WAIT_SECONDS
     attempt = 0
     while True:
         attempt += 1
         try:
-            return await secret_store.get(secret_path)
+            result = await secret_store.get(secret_path)
         except SecretNotFoundError:
+            # The store answered (the key just isn't there) → the sidecar is up.
+            _sidecar_confirmed_ready = True
             raise
-        # conformance: ignore[E004] transient-fetch retry; re-raises non-transient errors and the last error once the deadline passes
-        except Exception as exc:
+        except SecretStoreUnavailableError as exc:
             remaining = deadline - time.monotonic()
-            # Fail fast on a genuine (non-transient) store error, or once the
-            # budget is spent.
-            if remaining <= 0 or not _is_transient_store_error(exc):
+            if remaining <= 0:
                 raise
             # Cap the backoff to the remaining budget so the total wait can't
             # overshoot _BUNDLE_FETCH_MAX_WAIT_SECONDS by a full delay.
@@ -266,7 +247,7 @@ async def _get_bundle_raw(secret_store: SecretStore, secret_path: str) -> Any:
             )
             logger.warning(
                 "Agent secret-bundle fetch at '%s' failed (attempt %d); the Dapr "
-                "sidecar / secret store may still be starting — retrying in %.1fs: %s",
+                "sidecar / secret store is not yet reachable — retrying in %.1fs: %s",
                 secret_path,
                 attempt,
                 delay,
@@ -274,6 +255,9 @@ async def _get_bundle_raw(secret_store: SecretStore, secret_path: str) -> Any:
                 exc_info=True,
             )
             await asyncio.sleep(delay)
+        else:
+            _sidecar_confirmed_ready = True
+            return result
 
 
 async def _fetch_bundle(secret_store: SecretStore, secret_path: str) -> dict[str, Any]:

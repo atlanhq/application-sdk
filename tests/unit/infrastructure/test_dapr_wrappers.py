@@ -3,6 +3,7 @@
 import json
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import orjson
 import pytest
 
@@ -18,7 +19,11 @@ from application_sdk.infrastructure._dapr.client import (
 from application_sdk.infrastructure._dapr.http import AsyncDaprClient, BindingResult
 from application_sdk.infrastructure.bindings import BindingError, BindingResponse
 from application_sdk.infrastructure.pubsub import PubSubError
-from application_sdk.infrastructure.secrets import SecretNotFoundError, SecretStoreError
+from application_sdk.infrastructure.secrets import (
+    SecretNotFoundError,
+    SecretStoreError,
+    SecretStoreUnavailableError,
+)
 from application_sdk.infrastructure.state import StateStoreError
 
 # ---------------------------------------------------------------------------
@@ -129,8 +134,47 @@ class TestDaprSecretStore:
 
     async def test_get_wraps_exception(self):
         self.client.get_secret.side_effect = RuntimeError("boom")
-        with pytest.raises(SecretStoreError):
+        with pytest.raises(SecretStoreError) as exc:
             await self.store.get("x")
+        # A generic error is a plain store error, NOT the "unreachable" subtype.
+        assert not isinstance(exc.value, SecretStoreUnavailableError)
+
+    async def test_transport_error_raises_unavailable(self):
+        """A cold-start ConnectError → SecretStoreUnavailableError (retryable)."""
+        self.client.get_secret.side_effect = httpx.ConnectError(
+            "All connection attempts failed"
+        )
+        with pytest.raises(SecretStoreUnavailableError) as exc:
+            await self.store.get("x")
+        assert isinstance(exc.value.cause, httpx.ConnectError)
+
+    async def test_read_error_raises_unavailable(self):
+        """Chris #1: a reset-mid-handshake surfaces as ReadError (a TransportError,
+        not ConnectError) — it MUST still be classified unavailable, not fail-fast."""
+        self.client.get_secret.side_effect = httpx.ReadError("connection reset")
+        with pytest.raises(SecretStoreUnavailableError):
+            await self.store.get("x")
+
+    async def test_5xx_status_raises_unavailable(self):
+        """A 5xx that survived the transport's own retries is still cold-start-shaped."""
+        req = httpx.Request("GET", "http://localhost/secret")
+        resp = httpx.Response(503, request=req)
+        self.client.get_secret.side_effect = httpx.HTTPStatusError(
+            "service unavailable", request=req, response=resp
+        )
+        with pytest.raises(SecretStoreUnavailableError):
+            await self.store.get("x")
+
+    async def test_4xx_status_raises_plain_store_error(self):
+        """A 4xx is a definitive rejection (bad binding/auth/path) → fail fast."""
+        req = httpx.Request("GET", "http://localhost/secret")
+        resp = httpx.Response(403, request=req)
+        self.client.get_secret.side_effect = httpx.HTTPStatusError(
+            "forbidden", request=req, response=resp
+        )
+        with pytest.raises(SecretStoreError) as exc:
+            await self.store.get("x")
+        assert not isinstance(exc.value, SecretStoreUnavailableError)
 
     async def test_get_optional_returns_value(self):
         self.client.get_secret.return_value = {"token": "abc"}

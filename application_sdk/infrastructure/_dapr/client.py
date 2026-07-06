@@ -3,12 +3,17 @@
 import json
 from typing import Any
 
+import httpx
 import orjson
 
 from application_sdk.infrastructure._dapr.http import AsyncDaprClient
 from application_sdk.infrastructure.bindings import BindingError, BindingResponse
 from application_sdk.infrastructure.pubsub import MessageHandler, PubSubError
-from application_sdk.infrastructure.secrets import SecretNotFoundError, SecretStoreError
+from application_sdk.infrastructure.secrets import (
+    SecretNotFoundError,
+    SecretStoreError,
+    SecretStoreUnavailableError,
+)
 from application_sdk.infrastructure.state import StateStoreError
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -162,6 +167,23 @@ class DaprSecretStore:
             return orjson.dumps(result).decode()
         except SecretNotFoundError:
             raise
+        # Classify "unreachable" vs "answered-and-rejected" HERE, where the httpx
+        # exception family is visible (agent.py, being outside _dapr/, can't import
+        # httpx — the same layering rule that gates dapr/redis imports). A transport
+        # error (cold start, connection refused, reset mid-handshake, timeout) or a
+        # 5xx that survived the transport's own retries is cold-start-shaped and
+        # retryable; a 4xx / anything else is a definitive rejection. Raising a
+        # distinct type lets callers retry a startup race without duck-typing text.
+        # conformance: ignore[E004] re-raises as typed SecretStore(Unavailable)Error with cause chain; traceback preserved
+        except httpx.TransportError as e:
+            raise SecretStoreUnavailableError(name, cause=e) from e
+        # conformance: ignore[E004] re-raises as typed SecretStore(Unavailable)Error with cause chain; traceback preserved
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code >= 500:
+                raise SecretStoreUnavailableError(name, cause=e) from e
+            raise SecretStoreError(
+                f"Failed to get secret: {e}", secret_name=name, cause=e
+            ) from e
         # conformance: ignore[E004] re-raises as typed SecretStoreError with cause chain; traceback preserved
         except Exception as e:
             raise SecretStoreError(
