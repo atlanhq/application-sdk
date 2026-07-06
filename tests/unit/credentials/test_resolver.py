@@ -284,6 +284,29 @@ class TestGuidResolutionPath:
             with pytest.raises(CredentialNotFoundError):
                 await getattr(resolver, method)(ref)
 
+    @pytest.mark.parametrize("method", ["resolve_raw", "resolve"])
+    async def test_vault_dependency_unavailable_is_not_collapsed_to_not_found(
+        self, store, resolver, method
+    ):
+        """A genuine dependency-unavailable failure from the vault (e.g. a
+        cold-start retry that exhausted its budget) must propagate as-is,
+        not collapse into CredentialNotFoundError — that would misreport a
+        retryable platform outage as a non-retryable, user-facing
+        "credential not found".
+        """
+        from application_sdk.infrastructure.credential_vault import CredentialVaultError
+
+        p_vault, p_dapr, _ = _make_vault_patches(
+            vault_side_effect=CredentialVaultError(
+                "Failed to resolve credentials for abc-123: secret store unavailable",
+                credential_guid="abc-123",
+            )
+        )
+        with p_vault, p_dapr:
+            ref = legacy_credential_ref("abc-123")
+            with pytest.raises(CredentialVaultError):
+                await getattr(resolver, method)(ref)
+
 
 # ---------------------------------------------------------------------------
 # End-to-end credential resolution test

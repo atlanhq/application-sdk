@@ -186,8 +186,13 @@ class ColdStartRaceError(DependencyUnavailableError):
     state store, pub/sub, ...) by catching this one marker, without a new
     per-domain exception type or check for each. Not meant to be raised
     directly — concrete subtypes (e.g. ``SecretStoreUnavailableError``)
-    multiply-inherit it alongside their domain's own error type.
+    multiply-inherit it alongside their domain's own error type. Declares
+    its own code regardless, so a direct instantiation still gets a
+    triageable code instead of collapsing to the bare
+    ``DependencyUnavailableError`` bucket.
     """
+
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_COLD_START"
 
 
 @dataclass(kw_only=True)

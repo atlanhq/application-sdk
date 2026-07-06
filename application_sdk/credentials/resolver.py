@@ -203,6 +203,9 @@ class CredentialResolver:
         from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
             CredentialNotFoundError,
         )
+        from application_sdk.errors import (  # noqa: PLC0415 — circular: errors imports observability which loads credentials transitively
+            DependencyUnavailableError,
+        )
         from application_sdk.infrastructure import (  # noqa: PLC0415 — optional dep: dapr (DaprCredentialVault is Dapr-only)
             AsyncDaprClient,
             DaprCredentialVault,
@@ -214,6 +217,12 @@ class CredentialResolver:
             result: dict[str, Any] = await vault.get_credentials(ref.credential_guid)
             return result
         except CredentialNotFoundError:
+            raise
+        # A genuine dependency-unavailable failure (e.g. CredentialVaultError
+        # after retry_past_cold_start exhausts its budget) must not collapse
+        # into "not found" — that would misreport a retryable platform outage
+        # as a non-retryable, user-facing "credential not found".
+        except DependencyUnavailableError:
             raise
         # conformance: ignore[E004] re-raise only; wraps any unexpected vault error into typed CredentialNotFoundError and re-raises
         except Exception as exc:
