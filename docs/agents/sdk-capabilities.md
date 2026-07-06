@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.20.3
-source-sha:    ace322e5d02463733736b4b11984b32a57943d9e
-source-date:   2026-07-05T13:26:56+01:00
+source-sha:    70d2c1a092a01d641eba76c8654c54517cddd056
+source-date:   2026-07-07T00:41:25+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -1543,7 +1543,7 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 
 - **Import:** `from application_sdk.handler import PreflightStatus`
 - **Signature:** `class PreflightStatus`
-- **Summary:** Overall result of a preflight check.
+- **Summary:** Advisory result of a preflight check — for display/diagnostics only.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `SqlMetadataObject`
@@ -2474,6 +2474,25 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 
 ### `application_sdk.handler.contracts`
 
+#### `AgentCredentialSpec`
+
+- **Import:** `from application_sdk.handler.contracts import AgentCredentialSpec`
+- **Summary:** Typed envelope for an agent-shape credential payload.
+- **Fields:**
+  - `agent_name: str` `= Field(default='', alias='agent-name')` — Name of the Secure Agent instance. Used by ``is_populated()`` to
+  - `secret_manager: str` `= Field(default='', alias='secret-manager')` — Secret store backend: ``awssecretmanager``, ``azurekeyvault``,
+  - `secret_path: str` `= Field(default='', alias='secret-path')` — Path / ARN / name of the secret in the external secret manager.
+  - `auth_type: str` `= Field(default='', alias='auth-type')` — Authentication strategy: ``basic``, ``noauth``, ``gcp-wif``,
+  - `host: str` `= ''` — Database / service hostname. Required for JDBC connectors.
+  - `port: int` `= 0` — Database / service port.
+  - `connect_by: str` `= Field(default='', alias='connectBy')` — Connection method hint (``host``, ``url``, etc.).
+  - `agent_type: str` `= Field(default='', alias='agent-type')` — Agent framework version. ``new-app-framework`` for SA 2.0 agents.
+  - `key_type: str` `= Field(default='', alias='key-type')` — Secret key layout: ``multi-key``, ``single-key``, etc.
+  - `aws_region: str` `= Field(default='', alias='aws-region')` — AWS region for the secret manager.
+  - `aws_auth_method: str` `= Field(default='', alias='aws-auth-method')` — AWS auth method: ``iam``, ``iam-assume-role``, ``access-key``.
+  - `azure_auth_method: str` `= Field(default='', alias='azure-auth-method')` — Azure auth method: ``managed_identity``, ``service_principal``.
+- **Defined in:** `application_sdk/credentials/spec.py`
+
 #### `ApiMetadataObject`
 
 - **Import:** `from application_sdk.handler.contracts import ApiMetadataObject`
@@ -2531,6 +2550,18 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `data: dict[str, Any]`
   - `datacontenttype: str` `= 'application/json'`
 - **Defined in:** `application_sdk/handler/contracts.py`
+
+#### `CredentialRef`
+
+- **Import:** `from application_sdk.handler.contracts import CredentialRef`
+- **Summary:** A reference to a credential in the secret store.
+- **Fields:**
+  - `name: str` `= ''` — Secret store key or human-readable name for this credential.
+  - `credential_type: str` `= ''` — Type identifier used to look up the parser in the registry
+  - `store_name: str` `= 'default'` — Which secret store to use (for multi-store setups).
+  - `credential_guid: str` `= ''` — Platform-issued credential GUID — non-empty triggers GUID resolution path.
+  - `agent_spec: AgentCredentialSpec | None` — Typed agent credential spec — non-None triggers v3 agent resolution.
+- **Defined in:** `application_sdk/credentials/ref.py`
 
 #### `EventFilterRule`
 
@@ -2613,8 +2644,22 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Fields:**
   - `name: str` `= Field(..., min_length=1)` — Check name (e.g., 'connectivity', 'permissions').
   - `passed: bool` `= False` — Whether the check passed.
+  - `blocking: bool` `= False` — Whether failing this check must stop the run before extraction.
   - `message: str` `= ''` — Details about the check result.
   - `duration_ms: float` `= 0.0` — How long the check took in milliseconds.
+- **Defined in:** `application_sdk/handler/contracts.py`
+
+#### `PreflightGateInput`
+
+- **Import:** `from application_sdk.handler.contracts import PreflightGateInput`
+- **Summary:** Credential-routing fields the injected preflight gate threads from the
+- **Fields:**
+  - `extraction_method: str` `= ''` — Credential routing mode (e.g. ``agent`` / ``direct``).
+  - `credential_guid: str` `= ''` — Platform credential GUID for direct (vault) resolution.
+  - `agent_json: AgentCredentialSpec | None` — Agent-shape credential spec for inline (secret-manager) resolution.
+  - `credential_ref: CredentialRef | None` — Pre-built reference, when the extraction input already carries one.
+  - `entrypoint: str` `= ''` — Bare entry-point name of the gated workflow (for per-entrypoint checks).
+  - `metadata: BaseMetadataConfig` `= Field(default_factory=BaseMetadataConfig)` — Form-level metadata forwarded to the handler, mirroring the HTTP path.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `PreflightInput`
@@ -2636,10 +2681,11 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.handler.contracts import PreflightOutput`
 - **Summary:** Output from the preflight_check handler operation.
 - **Fields:**
-  - `status: PreflightStatus` — Overall preflight result.
-  - `checks: list[PreflightCheck]` `= []` — Individual check results.
+  - `status: PreflightStatus` — Advisory result for display (Sage UI / connector-pulse / AE event).
+  - `checks: list[PreflightCheck]` `= []` — Individual check results. A check's :attr:`PreflightCheck.blocking` flag
   - `message: str` `= ''` — Human-readable summary.
   - `total_duration_ms: float` `= 0.0` — Total time for all checks in milliseconds.
+  - `should_block: bool` — Whether the gate must abort the run (a blocking check failed).
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `SqlMetadataObject`
