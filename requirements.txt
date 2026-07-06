@@ -30,7 +30,7 @@ azure-identity==1.25.3
     # via atlan-application-sdk
 boto3==1.43.41
     # via atlan-application-sdk
-boto3-stubs==1.43.40
+boto3-stubs==1.43.41
 botocore==1.43.41
     # via
     #   boto3
@@ -43,7 +43,7 @@ certifi==2026.6.17
     #   httpx
     #   requests
     #   sentry-sdk
-cffi==2.0.0 ; platform_python_implementation != 'PyPy'
+cffi==2.1.0 ; platform_python_implementation != 'PyPy'
     # via cryptography
 cfgv==3.5.0
     # via pre-commit
@@ -89,7 +89,7 @@ fastar==0.11.0
     # via
     #   fastapi
     #   fastapi-cloud-cli
-filelock==3.29.5
+filelock==3.29.6
     # via
     #   python-discovery
     #   virtualenv
@@ -410,7 +410,7 @@ uvloop==0.22.1 ; sys_platform != 'win32'
     # via
     #   atlan-application-sdk
     #   uvicorn
-virtualenv==21.5.2
+virtualenv==21.6.0
     # via pre-commit
 watchfiles==1.2.0
     # via uvicorn
