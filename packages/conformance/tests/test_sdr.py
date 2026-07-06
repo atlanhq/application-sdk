@@ -35,6 +35,57 @@ _MANIFEST_WITH_AGENT_JSON = json.dumps(
                 "inputs": {
                     "args": {
                         "agent_json": "{{agent-json}}",
+                        "extraction_method": "{{extraction-method}}",
+                        "host": "{{host}}",
+                    }
+                }
+            }
+        }
+    },
+    indent=2,
+)
+
+# Agent-capable (carries the {{agent-json}} placeholder) but the routing fields
+# are nested ONLY under args.metadata — the atlan-tableau-app / snowflake shape.
+_MANIFEST_AGENT_NESTED_ONLY = json.dumps(
+    {
+        "dag": {
+            "extract": {
+                "inputs": {
+                    "args": {
+                        "host": "{{host}}",
+                        "metadata": {
+                            "agent_json": "{{agent-json}}",
+                            "extraction_method": "{{extraction-method}}",
+                        },
+                    }
+                }
+            }
+        }
+    },
+    indent=2,
+)
+
+# Agent-capable, agent_json at top level, but extraction_method missing (partial).
+_MANIFEST_MISSING_EXTRACTION_METHOD = json.dumps(
+    {
+        "dag": {
+            "extract": {
+                "inputs": {"args": {"agent_json": "{{agent-json}}", "host": "{{host}}"}}
+            }
+        }
+    },
+    indent=2,
+)
+
+# A non-agent entrypoint (miner/QI, clean): no {{agent-json}} placeholder → exempt.
+_MANIFEST_NON_AGENT = json.dumps(
+    {
+        "dag": {
+            "extract": {
+                "inputs": {
+                    "args": {
+                        "extraction_method": "{{extraction-method}}",
                         "host": "{{host}}",
                     }
                 }
@@ -70,15 +121,20 @@ _MANIFEST_NO_INPUTS = json.dumps(
     indent=2,
 )
 
+_AGENT_ARGS = {
+    "agent_json": "{{agent-json}}",
+    "extraction_method": "{{extraction-method}}",
+}
+
 _MANIFEST_NO_PUBLISH = json.dumps(
-    {"dag": {"extract": {"inputs": {"args": {"agent_json": "{{agent-json}}"}}}}},
+    {"dag": {"extract": {"inputs": {"args": _AGENT_ARGS}}}},
     indent=2,
 )
 
 _MANIFEST_WITH_PUBLISH = json.dumps(
     {
         "dag": {
-            "extract": {"inputs": {"args": {"agent_json": "{{agent-json}}"}}},
+            "extract": {"inputs": {"args": _AGENT_ARGS}},
             "publish": {"activity_name": "publish_assets"},
         }
     },
@@ -219,13 +275,15 @@ def test_p029_fires_on_missing_inputs_key(tmp_path: Path) -> None:
     assert any(f.rule_id == "P029" for f in findings)
 
 
-def test_p029_fires_per_manifest_in_multi_ep(tmp_path: Path) -> None:
+def test_p029_fires_per_agent_capable_manifest_in_multi_ep(tmp_path: Path) -> None:
+    # Two agent-capable manifests that both nest the routing fields → one
+    # per-manifest finding each.
     _write(
         tmp_path,
         {
             "atlan.yaml": _SDR_ATLAN_YAML,
-            "app/generated/extract/manifest.json": _MANIFEST_WITHOUT_AGENT_JSON,
-            "app/generated/profile/manifest.json": _MANIFEST_WITHOUT_AGENT_JSON,
+            "app/generated/extract/manifest.json": _MANIFEST_AGENT_NESTED_ONLY,
+            "app/generated/profile/manifest.json": _MANIFEST_AGENT_NESTED_ONLY,
             "app/connector.py": "class Connector:\n    async def run(self):\n        await self.upload('output')\n",
         },
     )
@@ -247,11 +305,12 @@ def test_p029_silent_on_valid_manifest_in_multi_ep(tmp_path: Path) -> None:
 
 
 def test_p029_mixed_ep_one_fire_one_silent(tmp_path: Path) -> None:
+    # A nested (broken) agent manifest fires; a valid one alongside it does not.
     _write(
         tmp_path,
         {
             "atlan.yaml": _SDR_ATLAN_YAML,
-            "app/generated/extract/manifest.json": _MANIFEST_WITHOUT_AGENT_JSON,
+            "app/generated/extract/manifest.json": _MANIFEST_AGENT_NESTED_ONLY,
             "app/generated/profile/manifest.json": _MANIFEST_WITH_AGENT_JSON,
             "app/connector.py": "class Connector:\n    async def run(self):\n        await self.upload('output')\n",
         },
@@ -259,6 +318,55 @@ def test_p029_mixed_ep_one_fire_one_silent(tmp_path: Path) -> None:
     findings = [f for f in _run(tmp_path) if f.rule_id == "P029"]
     assert len(findings) == 1
     assert "extract" in findings[0].file
+
+
+def test_p029_fires_on_nested_only_agent_routing(tmp_path: Path) -> None:
+    # Tableau/Snowflake shape: agent-capable but fields nested only under metadata.
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/generated/manifest.json": _MANIFEST_AGENT_NESTED_ONLY,
+            "app/connector.py": "class Connector:\n    async def run(self):\n        await self.upload('output')\n",
+        },
+    )
+    p029 = [f for f in _run(tmp_path) if f.rule_id == "P029"]
+    assert len(p029) == 1
+    assert "top" in p029[0].message.lower()
+    assert "agent_json" in p029[0].message
+    assert "extraction_method" in p029[0].message
+
+
+def test_p029_fires_on_missing_extraction_method(tmp_path: Path) -> None:
+    # agent_json present at top level but extraction_method absent → partial.
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/generated/manifest.json": _MANIFEST_MISSING_EXTRACTION_METHOD,
+            "app/connector.py": "class Connector:\n    async def run(self):\n        await self.upload('output')\n",
+        },
+    )
+    p029 = [f for f in _run(tmp_path) if f.rule_id == "P029"]
+    assert len(p029) == 1
+    assert "extraction_method" in p029[0].message
+    # Only the actually-missing field is listed (agent_json is present here).
+    assert "'agent_json'" not in p029[0].message
+
+
+def test_p029_exempts_non_agent_entrypoint(tmp_path: Path) -> None:
+    # A miner/clean entrypoint (no {{agent-json}}) is exempt; the valid agent
+    # crawler alongside it satisfies the app-level requirement → silent.
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/generated/crawler/manifest.json": _MANIFEST_WITH_AGENT_JSON,
+            "app/generated/miner/manifest.json": _MANIFEST_NON_AGENT,
+            "app/connector.py": "class Connector:\n    async def run(self):\n        await self.upload('output')\n",
+        },
+    )
+    assert not any(f.rule_id == "P029" for f in _run(tmp_path))
 
 
 def test_p029_skips_invalid_json_manifest(tmp_path: Path) -> None:
