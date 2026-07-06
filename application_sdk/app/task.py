@@ -16,6 +16,7 @@ Tasks support heartbeating for long-running operations:
 """
 
 import inspect
+import re
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -104,6 +105,14 @@ class TaskMetadata:
     timeout_seconds: int = _DEFAULT_TIMEOUT_SECONDS
     """Default timeout for this task. Defaults to ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS
     env var, or 600s (10 minutes) if unset."""
+
+    pool: str | None = None
+    """Logical worker-pool name for this task.
+    When set, the framework routes this activity to the task queue registered
+    for that pool via ``ATLAN_POOL_<POOL>_QUEUE``. Tasks without a pool run
+    on the workflow's own task queue (default behavior). Must match a key
+    declared in the app's pkl contract ``pools { ["name"] = new Pool { … } }``.
+    """
 
     retry_policy: "RetryPolicy | None" = field(default=None, compare=False)
     """Full retry policy for this task. When provided, takes precedence over
@@ -242,6 +251,7 @@ def task(
     retry_max_interval_seconds: int = 30,
     heartbeat_timeout_seconds: int | None | object = _USE_DEFAULT,
     auto_heartbeat_seconds: int | None | object = _USE_DEFAULT,
+    pool: str | None = None,
 ) -> Callable[[F], F]: ...
 
 
@@ -256,6 +266,7 @@ def task(
     retry_max_interval_seconds: int = 30,
     heartbeat_timeout_seconds: int | None | object = _USE_DEFAULT,
     auto_heartbeat_seconds: int | None | object = _USE_DEFAULT,
+    pool: str | None = None,
 ) -> F | Callable[[F], F]:
     """Decorator to mark a method as a task (Temporal activity).
 
@@ -333,6 +344,16 @@ def task(
         auto_heartbeat_seconds: Auto-heartbeat interval - framework sends
             heartbeats at this rate in a background task. Set to None to disable
             auto-heartbeating (manual only). Default: 10 seconds (~1/6 of timeout).
+        pool: Logical worker-pool name for this task. When set, the framework
+            routes this activity to the task queue registered for that pool via
+            ``ATLAN_POOL_<POOL>_QUEUE``. Must match a key in the app's pkl
+            contract ``pools { … }``. Must be a non-empty lowercase kebab-case
+            string (e.g. ``"heavy"``, ``"cold-tier"``). The env-var key is
+            derived by uppercasing the pool name and replacing hyphens with
+            underscores (``"cold-tier"`` → ``ATLAN_POOL_COLD_TIER_QUEUE``), so
+            mixed or upper case would create a lookup mismatch. Unset tasks run
+            on the workflow's own task queue (default, backward-compatible
+            behavior).
 
     Returns:
         The decorated function with task metadata attached.
@@ -340,6 +361,22 @@ def task(
     Raises:
         TaskContractError: If the method doesn't follow the contract pattern.
     """
+    if pool is not None:
+        if not pool or not pool.strip():
+            raise TaskContractError(
+                "pool must not be empty or whitespace-only. "
+                "Use a lowercase kebab-case string (e.g. 'heavy', 'cold-tier') "
+                "matching a key in pools { ... } in your app contract."
+            )
+        if not re.fullmatch(r"[a-z][a-z0-9]*(-[a-z0-9]+)*", pool):
+            raise TaskContractError(
+                f"pool={pool!r} must be lowercase kebab-case "
+                "(e.g. 'heavy', 'cold-tier'). "
+                "Pool keys must match entries in pools { ... } in App.pkl; "
+                "the ATLAN_POOL_<POOL>_QUEUE env-var key is derived by uppercasing "
+                "the pool name, so mixed or upper case creates a lookup mismatch."
+            )
+
     # Resolve sentinels at decoration time so test-side monkeypatching of
     # _DEFAULT_* constants takes effect on subsequent @task uses; env-var values
     # themselves are read once at module import via env_int().
@@ -374,6 +411,7 @@ def task(
             app_name="",  # Will be set by App registration
             description=description or fn.__doc__ or "",
             timeout_seconds=resolved_timeout,
+            pool=pool,
             retry_policy=retry_policy,
             retry_max_attempts=retry_max_attempts,
             retry_max_interval_seconds=retry_max_interval_seconds,

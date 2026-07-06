@@ -1,0 +1,83 @@
+/// Multi-pool deployment example — two named worker pools with per-pool
+/// KEDA, resources, cooldownPeriod, and env.
+///
+/// Two pools:
+///   "hot"  — always-on (minReplicaCount=1), lenient cooldown (300 s)
+///             so warm workers survive bursts.
+///   "cold" — scale-to-zero (minReplicaCount=0), aggressive cooldown
+///             (30 s) to reclaim resources fast.
+///
+/// Pool keys here must match the strings used in @task(pool="…")
+/// in Python. The runtime resolves them to task queues via
+/// ATLAN_POOL_<POOL>_QUEUE env vars.
+amends "../../src/App.pkl"
+
+name = "pools-example"
+displayName = "Pools Map Example"
+icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
+hasCredentialConfig = false
+
+deploy = new DeployConfig {
+  pools {
+    ["hot"] = new Pool {
+      keda {
+        enabled = true
+        minReplicaCount = 1
+        cooldownPeriod = 300
+        temporal {
+          targetQueueSize = 10
+        }
+      }
+      resources = new ResourceConfig {
+        requests {
+          ["cpu"] = "500m"
+          ["memory"] = "1Gi"
+        }
+        limits {
+          ["cpu"] = "2"
+          ["memory"] = "4Gi"
+        }
+      }
+      env {
+        ["WORKER_TYPE"] = "hot"
+      }
+    }
+    ["cold"] = new Pool {
+      keda {
+        enabled = true
+        minReplicaCount = 0
+        cooldownPeriod = 30
+        temporal {
+          targetQueueSize = 5
+        }
+      }
+      resources = new ResourceConfig {
+        requests {
+          ["cpu"] = "100m"
+          ["memory"] = "256Mi"
+        }
+      }
+      env {
+        ["WORKER_TYPE"] = "cold"
+      }
+    }
+  }
+}
+
+pipeline {
+  publish = null
+}
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["target"] = new TextInput {
+          title = "Target"
+          placeholderText = "my-target"
+          helpText = "What to process."
+        }
+      }
+    }
+  }
+}
