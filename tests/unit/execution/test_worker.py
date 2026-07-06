@@ -669,3 +669,101 @@ class TestShutdownDrainDelay:
             await app_worker.__aexit__(None, None, None)
 
         inner.__aexit__.assert_called_once()
+
+
+class TestWorkerPoolQueueResolution:
+    """ADR-0016 §3: startup pool→queue diagnostic log emitted by create_worker."""
+
+    def setup_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def _register_pooled_app(self, pool: str) -> None:
+        class _PoolApp(App):
+            @task(pool=pool)
+            async def heavy_work(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+    def _pool_map_from_info_calls(self, mock_logger: mock.MagicMock) -> dict | None:
+        """Extract the pool-queue dict from logger.info('Pool queue map: %s', ...)."""
+        for call in mock_logger.info.call_args_list:
+            if call.args and "Pool queue map" in str(call.args[0]):
+                return call.args[1]
+        return None
+
+    def test_explicit_env_var_logged(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Explicit ATLAN_POOL_HEAVY_QUEUE value appears in the startup info log."""
+        monkeypatch.setenv("ATLAN_POOL_HEAVY_QUEUE", "dedicated-heavy")
+        monkeypatch.delenv("ATLAN_TASK_QUEUE", raising=False)
+        self._register_pooled_app("heavy")
+        client = _make_mock_client()
+        mock_logger = mock.MagicMock()
+        with (
+            mock.patch(
+                "application_sdk.execution._temporal.worker.Worker"
+            ) as MockWorker,
+            mock.patch(
+                "application_sdk.execution._temporal.worker.logger", mock_logger
+            ),
+        ):
+            MockWorker.return_value = mock.MagicMock()
+            create_worker(client)
+        pool_map = self._pool_map_from_info_calls(mock_logger)
+        assert pool_map is not None
+        assert pool_map.get("heavy") == "dedicated-heavy"
+
+    def test_derived_queue_logged(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When no explicit override is set, derived queue appears in startup info log."""
+        monkeypatch.delenv("ATLAN_POOL_HEAVY_QUEUE", raising=False)
+        monkeypatch.setenv("ATLAN_TASK_QUEUE", "base-queue")
+        self._register_pooled_app("heavy")
+        client = _make_mock_client()
+        mock_logger = mock.MagicMock()
+        with (
+            mock.patch(
+                "application_sdk.execution._temporal.worker.Worker"
+            ) as MockWorker,
+            mock.patch(
+                "application_sdk.execution._temporal.worker.logger", mock_logger
+            ),
+        ):
+            MockWorker.return_value = mock.MagicMock()
+            create_worker(client)
+        pool_map = self._pool_map_from_info_calls(mock_logger)
+        assert pool_map is not None
+        assert pool_map.get("heavy") == "base-queue-heavy"
+
+    def test_no_queue_warns(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When neither env var is set, a warning naming the pool is emitted."""
+        monkeypatch.delenv("ATLAN_POOL_HEAVY_QUEUE", raising=False)
+        monkeypatch.delenv("ATLAN_TASK_QUEUE", raising=False)
+        self._register_pooled_app("heavy")
+        client = _make_mock_client()
+        mock_logger = mock.MagicMock()
+        with (
+            mock.patch(
+                "application_sdk.execution._temporal.worker.Worker"
+            ) as MockWorker,
+            mock.patch(
+                "application_sdk.execution._temporal.worker.logger", mock_logger
+            ),
+        ):
+            MockWorker.return_value = mock.MagicMock()
+            create_worker(client)
+        pool_warn = next(
+            (
+                c
+                for c in mock_logger.warning.call_args_list
+                if c.args and "no resolvable queue" in str(c.args[0])
+            ),
+            None,
+        )
+        assert pool_warn is not None
+        assert pool_warn.args[1] == "heavy"

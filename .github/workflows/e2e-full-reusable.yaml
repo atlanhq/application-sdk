@@ -198,8 +198,12 @@ jobs:
           compose-overlay: ${{ inputs.compose-overlay }}
           # Bump the container-health wait because the worker has to
           # establish the Temporal connection with TLS + auth before
-          # /server/health turns green.
-          container-health-timeout-seconds: "120"
+          # /server/health turns green. Matches ATLAN_DAPR_SIDECAR_WAIT_TIMEOUT
+          # in .github/actions/sdr-e2e/docker-compose.ci.yml — the app can wait
+          # up to that long on a cold daprd sidecar before it ever starts
+          # serving /server/health, so this outer gate must be >= it or a slow
+          # (but healthy) cold start trips this timeout first.
+          container-health-timeout-seconds: "300"
           # `-s` streams the harness's poll-loop output in real time so
           # operators can watch the colour-emoji DAG progression
           # instead of waiting for a final dump.
