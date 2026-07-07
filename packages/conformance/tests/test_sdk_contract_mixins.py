@@ -2,9 +2,9 @@
 
 ``_sdk_contract_mixins.SDK_CONTRACT_BASE_FIELDS`` hand-mirrors the fields of
 ``application_sdk.contracts.base.Input`` / ``Output`` / ``PublishInputMixin``,
-because those classes live outside the scanned repo when the B005/B006
-checker (or the ledger generator) runs against a consumer app — see
-``_resolve_contract_fields`` in ``_contract_compat.py``.
+because those classes live outside the scanned repo when a checker (or the
+ledger generator) runs against a consumer app — see ``resolve_contract_fields``
+in the neutral ``_contract_fields`` module.
 
 This test keeps the registry honest as the SDK evolves: it locates the real
 ``application_sdk`` package (a ``test`` extra dependency of this package),
@@ -21,8 +21,8 @@ import importlib.util
 from pathlib import Path
 
 import pytest
-from conformance.suite.checks.deprecation._contract_compat import _iter_fields
-from conformance.suite.checks.deprecation._sdk_contract_mixins import (
+from conformance.suite.checks._contract_fields import _iter_fields
+from conformance.suite.checks._sdk_contract_mixins import (
     SDK_CONTRACT_BASE_FIELDS,
     SdkField,
 )

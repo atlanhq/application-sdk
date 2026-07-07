@@ -19,7 +19,7 @@ Design
 Scans all Python files in *repo* for entrypoint contracts (same P013/P014
 boundary logic as the B005/B006 checker uses) and builds or updates the
 committed ledger. Field extraction resolves the full base-class chain
-(``_resolve_contract_fields``): fields inherited from an in-repo base class or
+(``resolve_contract_fields``): fields inherited from an in-repo base class or
 from an SDK-provided mixin (e.g. ``PublishInputMixin``) are recorded exactly
 like fields declared directly on the contract.
 
@@ -38,9 +38,9 @@ import sys
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import discover
-from conformance.suite.checks.deprecation._contract_compat import (
-    _collect_entrypoint_contract_names,
-    _resolve_contract_fields,
+from conformance.suite.checks._contract_fields import (
+    collect_entrypoint_contract_names,
+    resolve_contract_fields,
 )
 from conformance.suite.checks.deprecation._ledger_schema import (
     ContractField,
@@ -89,7 +89,7 @@ def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
         for rec in collect_classes(tree, rel, aliases):
             by_name.setdefault(rec.name, rec)
 
-    entrypoint_names = _collect_entrypoint_contract_names(file_trees, by_name)
+    entrypoint_names = collect_entrypoint_contract_names(file_trees, by_name)
 
     # Index existing ledger entries for fast lookup
     existing_by_key: dict[tuple[str, str], ContractField] = {
@@ -105,7 +105,7 @@ def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
                 continue
             if class_node.name not in entrypoint_names:
                 continue
-            for fi in _resolve_contract_fields(class_node, aliases, by_name):
+            for fi in resolve_contract_fields(class_node, aliases, by_name):
                 key = (class_node.name, fi.name)
                 live_entries[key] = ContractField(
                     contract=class_node.name,

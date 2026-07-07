@@ -1,13 +1,13 @@
 """Static field registry for SDK-provided contract base classes and mixins.
 
-The B005/B006 checker and the ledger generator resolve contract fields across
-the full inheritance hierarchy (see ``_resolve_contract_fields`` in
-``_contract_compat.py``). In-repo base classes are resolved directly from
-source via the cross-file class registry (``collect_classes`` /
-``by_name``). SDK-provided contract bases
-(``application_sdk.contracts.base.Input`` / ``Output`` / ``PublishInputMixin``)
-are *not* part of the scanned repo when the checker runs against a consumer
-app, so their fields are hand-mirrored here instead.
+``resolve_contract_fields`` in the neutral ``_contract_fields`` module resolves
+contract fields across the full inheritance hierarchy — used today by the
+B005/B006 checker and the ledger generator, and expected to also back the
+K-series. In-repo base classes are resolved directly from source via the
+cross-file class registry (``collect_classes`` / ``by_name``). SDK-provided
+contract bases (``application_sdk.contracts.base.Input`` / ``Output`` /
+``PublishInputMixin``) are *not* part of the scanned repo when a checker runs
+against a consumer app, so their fields are hand-mirrored here instead.
 
 Keep this in sync with ``application_sdk/contracts/base.py``.
 ``tests/test_sdk_contract_mixins.py`` guards drift by comparing this registry
