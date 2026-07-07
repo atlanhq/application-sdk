@@ -13,6 +13,11 @@ from __future__ import annotations
 import hashlib
 import json
 from typing import Any
+from unittest.mock import AsyncMock
+from urllib.parse import quote
+
+import httpx
+import pytest
 
 from application_sdk.common.transforms import expand_dotted_keys
 from application_sdk.credentials.agent import (
@@ -28,8 +33,28 @@ from application_sdk.credentials.errors import (
     CredentialRoutingError,
 )
 from application_sdk.credentials.spec import AgentCredentialSpec
-from application_sdk.infrastructure.secrets import SecretStoreError
+from application_sdk.infrastructure.secrets import (
+    SecretNotFoundError,
+    SecretStoreError,
+    SecretStoreUnavailableError,
+)
 from application_sdk.testing.mocks import MockSecretStore
+
+
+@pytest.fixture(autouse=True)
+def _no_bundle_fetch_retry(monkeypatch):
+    """Disable the cold-sidecar retry window by default so store-failure
+    tests fail fast. The dedicated retry tests re-enable it.
+
+    The process-level cold-start gate itself (shared across every
+    ``retry_past_dapr_cold_start`` caller, in ``infrastructure._dapr.http``)
+    is reset by the session-wide ``tests/unit/conftest.py`` fixture, not
+    here."""
+    monkeypatch.setattr(
+        "application_sdk.infrastructure._dapr.http.DAPR_COLD_START_MAX_WAIT_SECONDS",
+        0.0,
+    )
+
 
 # ---------------------------------------------------------------------------
 # Fixtures — based on the real cloudsql-postgres agent payload from dbbi-331
@@ -382,6 +407,15 @@ class TestResolveAgentJsonErrorPaths:
             await resolve_agent_json(agent_json, store)
 
     async def test_generic_store_failure_wrapped_in_credential_error(self) -> None:
+        """A SecretStore backend that raises a plain SecretStoreError directly
+        (not via classify_secret_fetch_error's not-found/cold-start typing)
+        is a genuine, undifferentiated failure and must escalate — this
+        module stays backend-opaque and never re-interprets SecretStoreError
+        itself; only SecretNotFoundError means "absent". Dapr's own
+        genuinely-missing-key case is classified as SecretNotFoundError at
+        the source (see test_classify_secret_fetch_error_missing_key_is_not_found
+        in tests/unit/infrastructure/test_dapr_wrappers.py), not here.
+        """
         import pytest
 
         class FlakyStore:
@@ -418,6 +452,173 @@ class TestResolveAgentJsonErrorPaths:
 # ---------------------------------------------------------------------------
 # resolve_agent_credential — single-key (per-field secret lookup) mode
 # ---------------------------------------------------------------------------
+
+
+class TestBundleFetchReadinessRetry:
+    """The agent bundle fetch rides out a cold Dapr sidecar (transient fetch
+    failures) but never retries a genuine missing secret."""
+
+    _AGENT_JSON = json.dumps(
+        {
+            "agent-name": "t",
+            "auth-type": "basic",
+            "secret-path": "p",
+            "basic.username": "u",
+        }
+    )
+
+    async def test_retries_transient_failure_then_succeeds(
+        self, fast_dapr_cold_start_retry
+    ) -> None:
+        calls = {"n": 0}
+
+        class ColdThenReady:
+            async def get(self, name: str) -> str:
+                calls["n"] += 1
+                if calls["n"] < 3:  # sidecar still cold on the first two tries
+                    raise SecretStoreUnavailableError("p")
+                return _bundle(user="real")
+
+        result = await resolve_agent_json(self._AGENT_JSON, ColdThenReady())  # type: ignore[arg-type]
+        assert calls["n"] == 3  # rode out the two cold failures
+        assert result["agent-name"] == "t"
+
+    async def test_missing_secret_is_not_retried(self, monkeypatch) -> None:
+        # A generous window would let a retry loop run — but a genuine missing
+        # secret must fail fast, on the first attempt.
+        monkeypatch.setattr(
+            "application_sdk.infrastructure._dapr.http.DAPR_COLD_START_MAX_WAIT_SECONDS",
+            30.0,
+        )
+        calls = {"n": 0}
+
+        class AlwaysMissing:
+            async def get(self, name: str) -> str:
+                calls["n"] += 1
+                raise SecretNotFoundError("p")
+
+        with pytest.raises(CredentialNotFoundError):
+            await resolve_agent_json(self._AGENT_JSON, AlwaysMissing())  # type: ignore[arg-type]
+        assert calls["n"] == 1  # not retried
+
+    async def test_persistent_transient_failure_gives_up(
+        self, deterministic_dapr_cold_start_deadline
+    ) -> None:
+        calls = {"n": 0}
+
+        class AlwaysDown:
+            async def get(self, name: str) -> str:
+                calls["n"] += 1
+                raise SecretStoreUnavailableError("p")
+
+        with pytest.raises(CredentialError):
+            await resolve_agent_json(self._AGENT_JSON, AlwaysDown())  # type: ignore[arg-type]
+        assert calls["n"] == 2  # retried once, then gave up at the deadline
+
+    async def test_non_transient_error_fails_fast(self, monkeypatch) -> None:
+        # A genuine, non-connection store error (bad auth / binding / path) must
+        # NOT be retried — it fails on the first attempt even with a generous
+        # window, so a real misconfiguration doesn't block for the whole budget.
+        monkeypatch.setattr(
+            "application_sdk.infrastructure._dapr.http.DAPR_COLD_START_MAX_WAIT_SECONDS",
+            30.0,
+        )
+        calls = {"n": 0}
+
+        class BadBinding:
+            async def get(self, name: str) -> str:
+                calls["n"] += 1
+                raise SecretStoreError("Failed to get secret: access denied")
+
+        with pytest.raises(CredentialError):
+            await resolve_agent_json(self._AGENT_JSON, BadBinding())  # type: ignore[arg-type]
+        assert calls["n"] == 1  # not retried — not a transient/connection error
+
+    async def test_genuine_store_error_fails_fast_regardless_of_message(
+        self, monkeypatch
+    ) -> None:
+        # Classification is by TYPE now, not text: a plain SecretStoreError is
+        # never retried even if its message looks connection-y — only
+        # SecretStoreUnavailableError (raised by the infra layer for a real
+        # transport failure) is transient.
+        monkeypatch.setattr(
+            "application_sdk.infrastructure._dapr.http.DAPR_COLD_START_MAX_WAIT_SECONDS",
+            30.0,
+        )
+        calls = {"n": 0}
+
+        class ConnectionyMessage:
+            async def get(self, name: str) -> str:
+                calls["n"] += 1
+                raise SecretStoreError("All connection attempts failed")
+
+        with pytest.raises(CredentialError):
+            await resolve_agent_json(self._AGENT_JSON, ConnectionyMessage())  # type: ignore[arg-type]
+        assert (
+            calls["n"] == 1
+        )  # not retried — type is SecretStoreError, not Unavailable
+
+    async def test_cold_start_wait_not_rearmed_after_first_success(
+        self, monkeypatch
+    ) -> None:
+        # Chris finding #2: once the store has answered this process, the long
+        # cold-start wait is NOT re-armed — a later outage fails fast (single
+        # attempt) rather than being masked for the whole 120s budget.
+        monkeypatch.setattr(
+            "application_sdk.infrastructure._dapr.http.DAPR_COLD_START_MAX_WAIT_SECONDS",
+            30.0,
+        )
+        calls = {"n": 0}
+
+        class ReadyThenDown:
+            async def get(self, name: str) -> str:
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    return _bundle(user="real")  # first call confirms readiness
+                raise SecretStoreUnavailableError("p")  # later steady-state outage
+
+        # First resolution succeeds and flips the process-level cold-start gate.
+        await resolve_agent_json(self._AGENT_JSON, ReadyThenDown())  # type: ignore[arg-type]
+        assert calls["n"] == 1
+
+        # A second resolution that hits an outage must NOT re-enter the retry
+        # loop — exactly one attempt, not a 30s retry window.
+        with pytest.raises(CredentialError):
+            await resolve_agent_json(self._AGENT_JSON, ReadyThenDown())  # type: ignore[arg-type]
+        assert calls["n"] == 2
+
+    async def test_cold_start_wait_not_rearmed_after_not_found(
+        self, monkeypatch
+    ) -> None:
+        # A definitive "not found" is proof the sidecar is up, just like a
+        # success — it must arm the gate too, so a later outage in the same
+        # worker process fails fast instead of re-entering the retry window.
+        monkeypatch.setattr(
+            "application_sdk.infrastructure._dapr.http.DAPR_COLD_START_MAX_WAIT_SECONDS",
+            30.0,
+        )
+        calls = {"n": 0}
+
+        class ReadyButMissingThenDown:
+            async def get(self, name: str) -> str:
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    raise SecretNotFoundError("p")  # confirms readiness
+                raise SecretStoreUnavailableError("p")  # later steady-state outage
+
+        with pytest.raises(CredentialNotFoundError):
+            await resolve_agent_json(
+                self._AGENT_JSON,
+                ReadyButMissingThenDown(),  # type: ignore[arg-type]
+            )
+        assert calls["n"] == 1
+
+        with pytest.raises(CredentialError):
+            await resolve_agent_json(
+                self._AGENT_JSON,
+                ReadyButMissingThenDown(),  # type: ignore[arg-type]
+            )
+        assert calls["n"] == 2  # not retried — the gate was already armed
 
 
 class TestSingleKeyMode:
@@ -536,6 +737,75 @@ class TestSingleKeyMode:
         # Lookup error on BOOM was swallowed; placeholder retained.
         assert resolved["password"] == "BOOM"
 
+    async def test_transient_probe_failure_is_retried_not_misclassified(
+        self, fast_dapr_cold_start_retry
+    ) -> None:
+        """A cold-start SecretStoreUnavailableError during a single-key probe
+        must be retried, not silently treated as "key not in store" — that
+        would misclassify a transient infra outage as a definitive absence.
+        """
+        calls = {"n": 0}
+
+        class ColdThenReady:
+            async def get_optional(self, name: str) -> str | None:
+                calls["n"] += 1
+                if calls["n"] < 3:
+                    raise SecretStoreUnavailableError(name)
+                return "real_user" if name == "ATLAN_USER" else None
+
+        agent_json = json.dumps(
+            {
+                "agent-name": "test-agent",
+                "key-type": "single-key",
+                "auth-type": "basic",
+                "basic.username": "ATLAN_USER",
+            }
+        )
+
+        resolved = await resolve_agent_json(agent_json, ColdThenReady())  # type: ignore[arg-type]
+
+        assert resolved["username"] == "real_user"
+        assert calls["n"] == 3  # rode out the two cold failures, not skipped
+
+    async def test_persistent_transient_failure_raises_not_silently_swallowed(
+        self, deterministic_dapr_cold_start_deadline
+    ) -> None:
+        """Single-key probing must not silently proceed with an incomplete
+        credential when the secret store genuinely never answers — same
+        swallow already fixed for the vault sibling (see
+        test_agent_single_key_mode_outage_raises_not_silently_swallowed in
+        test_credential_vault.py). An exhausted cold-start outage must
+        raise, not fall back to the literal ref-key placeholder.
+        """
+        calls = {"n": 0}
+
+        class AlwaysDown:
+            async def get_optional(self, name: str) -> str | None:
+                calls["n"] += 1
+                raise SecretStoreUnavailableError(name)
+
+        agent_json = json.dumps(
+            {
+                "agent-name": "test-agent",
+                "key-type": "single-key",
+                "auth-type": "basic",
+                "basic.username": "ATLAN_USER",
+            }
+        )
+
+        with pytest.raises(SecretStoreUnavailableError) as exc_info:
+            await resolve_agent_json(agent_json, AlwaysDown())  # type: ignore[arg-type]
+
+        # Retried once, then gave up at the deadline — same budget as every
+        # other call site.
+        assert calls["n"] == 2
+
+        # The raised exception must not carry the raw ref-key — it's
+        # rebuilt with a hashed label before propagating, not the original
+        # SecretStoreUnavailableError("ATLAN_USER", ...) the store raised.
+        assert "ATLAN_USER" not in str(exc_info.value)
+        assert exc_info.value.secret_name != "ATLAN_USER"
+
     async def test_store_outage_does_not_leak_ref_key_in_logs(self) -> None:
         """On a store outage during a single-key probe, the WARNING must not
         leak the raw ref-key. The store error renders the ref-key both as
@@ -581,6 +851,58 @@ class TestSingleKeyMode:
         # (3) ... and the store-failure diagnosis still survives.
         assert "Traceback" in logged
         assert "PermissionError" in logged
+
+    async def test_url_encoded_ref_key_does_not_leak_in_logs(self) -> None:
+        """A ref-key with a URL-unsafe character (``/``, common in
+        Vault/AWS-Secrets-Manager-style path keys) must also be scrubbed in
+        its percent-encoded form. ``response.raise_for_status()`` — the real
+        production call site, see ``AsyncDaprClient.get_secret`` — builds its
+        message as ``"... for url '<request.url>'"``, and the request URL
+        was built via ``quote(key, safe="")`` (mirroring
+        ``AsyncDaprClient.get_secret``'s own encoding), so the raw-value
+        regex alone would miss the encoded form embedded there.
+        """
+        from unittest.mock import patch
+
+        ref_key = "snowflake/prod/password"
+        encoded_key = quote(ref_key, safe="")
+        expected_hash = hashlib.sha256(ref_key.encode()).hexdigest()[:8]
+
+        class OutageStore:
+            async def get_optional(self, name: str) -> str | None:
+                req = httpx.Request(
+                    "GET",
+                    f"http://localhost:3500/v1.0/secrets/secretstore/{quote(name, safe='')}",
+                )
+                resp = httpx.Response(403, request=req)
+                try:
+                    resp.raise_for_status()
+                except httpx.HTTPStatusError as http_exc:
+                    raise SecretStoreError(
+                        f"Failed to get secret: {http_exc}",
+                        secret_name=name,
+                        cause=http_exc,
+                    ) from http_exc
+                raise AssertionError("unreachable")
+
+        agent_json = json.dumps(
+            {
+                "agent-name": "test-agent",
+                "key-type": "single-key",
+                "auth-type": "basic",
+                "basic.password": ref_key,
+            }
+        )
+
+        with patch("application_sdk.credentials.agent.logger") as mock_logger:
+            resolved = await resolve_agent_json(agent_json, OutageStore())  # type: ignore[arg-type]
+
+        assert resolved["password"] == ref_key
+        mock_logger.warning.assert_called_once()
+        logged = " ".join(str(arg) for arg in mock_logger.warning.call_args.args)
+        assert ref_key not in logged
+        assert encoded_key not in logged
+        assert f"sha256:{expected_hash}" in logged
 
     async def test_short_ref_key_does_not_corrupt_unrelated_tokens(self) -> None:
         """The ref-key scrub is token-bounded: a short key like ``DB`` must
@@ -1045,7 +1367,7 @@ class TestCredentialResolverAgentBranch:
         """Legacy GUID refs resolve via DaprCredentialVault — agent branch
         is additive, not a replacement.
         """
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import MagicMock, patch
 
         from application_sdk.credentials.ref import CredentialRef
         from application_sdk.credentials.resolver import CredentialResolver

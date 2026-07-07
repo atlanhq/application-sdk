@@ -144,12 +144,24 @@ class CredentialResolver:
             CredentialNotFoundError,
             CredentialParseError,
         )
+        from application_sdk.infrastructure import (  # noqa: PLC0415 — circular: infrastructure imports observability which loads credentials transitively
+            DAPR_SECRET_STORE_COMPONENT,
+            retry_past_dapr_cold_start,
+        )
         from application_sdk.infrastructure.secrets import (  # noqa: PLC0415 — circular: infrastructure.secrets imports observability which loads credentials transitively
             SecretNotFoundError,
         )
 
         try:
-            raw = await self._secret_store.get(ref.name)
+            # Named-path fetch races the same cold Dapr sidecar the agent
+            # bundle fetch does (application_sdk.credentials.agent) — share
+            # its retry/one-shot-gate mechanics rather than failing fast on
+            # a startup race this store call has no special handling for.
+            raw = await retry_past_dapr_cold_start(
+                lambda: self._secret_store.get(ref.name),
+                description=f"Named credential fetch for '{ref.name}'",
+                component=DAPR_SECRET_STORE_COMPONENT,
+            )
         except SecretNotFoundError as exc:
             raise CredentialNotFoundError(ref.name) from exc
         # conformance: ignore[E004] re-raise only; wraps any unexpected fetch error into typed CredentialError and re-raises
@@ -195,9 +207,18 @@ class CredentialResolver:
         from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
             CredentialNotFoundError,
         )
+        from application_sdk.errors import (  # noqa: PLC0415 — circular: errors imports observability which loads credentials transitively
+            DependencyUnavailableError,
+        )
+        from application_sdk.errors.leaves import (  # noqa: PLC0415 — circular: errors imports observability which loads credentials transitively
+            ColdStartRaceError,
+        )
         from application_sdk.infrastructure import (  # noqa: PLC0415 — optional dep: dapr (DaprCredentialVault is Dapr-only)
             AsyncDaprClient,
             DaprCredentialVault,
+        )
+        from application_sdk.infrastructure.credential_vault import (  # noqa: PLC0415 — optional dep: dapr (DaprCredentialVault is Dapr-only)
+            CredentialVaultError,
         )
 
         dapr_client = AsyncDaprClient()
@@ -206,6 +227,39 @@ class CredentialResolver:
             result: dict[str, Any] = await vault.get_credentials(ref.credential_guid)
             return result
         except CredentialNotFoundError:
+            raise
+        except CredentialVaultError as exc:
+            # CredentialVaultError is the CredentialVault Protocol's
+            # documented raise contract (see
+            # infrastructure/credential_vault.py) — deprecated for v4.0
+            # removal, but still the only type any current implementation
+            # (DaprCredentialVault) raises, so this except clause can't be
+            # phrased in terms of a non-deprecated ancestor without losing
+            # the ability to disambiguate the two cases below. Migrating
+            # DaprCredentialVault off it is a separate, Protocol-wide change
+            # (it would alter the CredentialVault Protocol's own documented
+            # contract and the tests that pin it) — out of scope here.
+            #
+            # DaprCredentialVault raises it directly (with no `cause`) for a
+            # definitively missing/invalid credential config, AND uses it to
+            # wrap a genuine platform outage that exhausted
+            # retry_past_dapr_cold_start's budget (`cause` is the surviving
+            # ColdStartRaceError, e.g. SecretStoreUnavailableError). Only the
+            # latter must bypass the not-found collapse below — collapsing a
+            # real outage into "not found" would misreport a retryable
+            # platform issue as a non-retryable, user-facing "credential not
+            # found". A genuinely absent config IS a not-found and should
+            # collapse like every other failure here, not be swept up by the
+            # broader DependencyUnavailableError check just because this
+            # deprecated umbrella type happens to subclass it.
+            if isinstance(exc.cause, ColdStartRaceError):
+                raise
+            raise CredentialNotFoundError(ref.credential_guid) from exc
+        # A genuine dependency-unavailable failure that didn't come through
+        # CredentialVaultError (e.g. a future CredentialVault implementation
+        # raising DependencyUnavailableError directly) must not collapse
+        # into "not found" either — same reasoning as above.
+        except DependencyUnavailableError:
             raise
         # conformance: ignore[E004] re-raise only; wraps any unexpected vault error into typed CredentialNotFoundError and re-raises
         except Exception as exc:

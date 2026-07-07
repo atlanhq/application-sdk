@@ -168,6 +168,41 @@ class DependencyUnavailableError(AppError):
     audience: ClassVar[Audience] = Audience.PLATFORM
 
 
+class ColdStartRaceError(DependencyUnavailableError):
+    """Marker for a :class:`DependencyUnavailableError` that specifically means
+    "this Dapr-backed dependency is not yet reachable" — as opposed to the
+    dependency answering and definitively rejecting the request.
+
+    What counts as "not yet reachable" is domain-specific and decided by
+    each concrete subtype's classifier, not by this marker: a transport
+    failure always qualifies, but a bare 5xx status does NOT necessarily —
+    e.g. the Dapr *secrets* API also returns 500 for a genuinely-missing
+    key (see
+    :func:`~application_sdk.infrastructure._dapr.client.classify_secret_fetch_error`),
+    so that classifier additionally inspects the error body before
+    concluding "not yet reachable".
+
+    Deliberately independent of ``retryable``/``effective_retryable``: that
+    field is a general Temporal/wire-level retry hint (a plain, unclassified
+    ``DependencyUnavailableError`` subtype legitimately defaults it to
+    ``True`` — "this category of failure is generically worth retrying at
+    the activity level"). This marker answers a narrower, unrelated
+    question — "is this specific failure a cold-start race right now" — so a
+    generic dependency helper (e.g.
+    :func:`~application_sdk.infrastructure.retry_past_dapr_cold_start`)
+    can retry any current or future subtype across domains (secret store,
+    state store, pub/sub, ...) by catching this one marker, without a new
+    per-domain exception type or check for each. Not meant to be raised
+    directly — concrete subtypes (e.g. ``SecretStoreUnavailableError``)
+    multiply-inherit it alongside their domain's own error type. Declares
+    its own code regardless, so a direct instantiation still gets a
+    triageable code instead of collapsing to the bare
+    ``DependencyUnavailableError`` bucket.
+    """
+
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_COLD_START"
+
+
 @dataclass(kw_only=True)
 class SourceUnavailableError(AppError):
     """Customer-controlled source system is temporarily unreachable.

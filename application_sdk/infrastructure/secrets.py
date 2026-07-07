@@ -6,7 +6,11 @@ from typing import Any, ClassVar, Protocol
 
 from application_sdk.errors import SECRET_NOT_FOUND, SECRET_STORE_ERROR, ErrorCode
 from application_sdk.errors.categories import Audience
-from application_sdk.errors.leaves import DependencyUnavailableError, NotFoundError
+from application_sdk.errors.leaves import (
+    ColdStartRaceError,
+    DependencyUnavailableError,
+    NotFoundError,
+)
 from application_sdk.infrastructure._secret_utils import process_secret_data
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -95,8 +99,11 @@ class SecretStoreError(DependencyUnavailableError):
         secret_name: str | None = None,
         cause: Exception | None = None,
         error_code: ErrorCode | None = None,
+        retryable: bool | None = None,
     ) -> None:
-        DependencyUnavailableError.__init__(self, message=message, cause=cause)
+        DependencyUnavailableError.__init__(
+            self, message=message, cause=cause, retryable=retryable
+        )
         self.secret_name = secret_name
         self._error_code = error_code
 
@@ -115,6 +122,34 @@ class SecretStoreError(DependencyUnavailableError):
         if self.cause:
             parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
         return " | ".join(parts)
+
+
+class SecretStoreUnavailableError(SecretStoreError, ColdStartRaceError):
+    """The secret store / Dapr sidecar was *unreachable* — a transport failure
+    (connection refused, reset mid-handshake, read/write/close error, timeout)
+    or the Dapr secrets-API ``ERR_SECRET_STORES_NOT_CONFIGURED`` response (no
+    secret store component registered yet) — as opposed to the store
+    answering and rejecting the request (bad auth / binding / path, *or a
+    genuinely-missing key* — Dapr returns the same 500/``ERR_SECRET_GET``
+    shape for both, which is a plain :class:`SecretStoreError`, not this).
+
+    Classified at the infrastructure layer (``_dapr/client.py``), where the
+    httpx exception family and the Dapr error body are visible, so callers
+    can retry a cold-start race against a not-yet-ready sidecar without
+    duck-typing exception text. Remains a ``SecretStoreError`` so ``except
+    SecretStoreError`` still catches it, and a :class:`ColdStartRaceError` so
+    :func:`~application_sdk.infrastructure.retry_past_dapr_cold_start`
+    retries it.
+    """
+
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_SECRET_STORE_UNREACHABLE"
+
+    def __init__(self, secret_name: str, *, cause: Exception | None = None) -> None:
+        super().__init__(
+            f"Secret store unavailable while fetching secret '{secret_name}'",
+            secret_name=secret_name,
+            cause=cause,
+        )
 
 
 @dataclass(kw_only=True)

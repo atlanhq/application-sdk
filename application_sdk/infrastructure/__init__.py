@@ -15,7 +15,11 @@ from application_sdk.infrastructure._dapr import (
     DaprSecretStore,
     DaprStateStore,
 )
-from application_sdk.infrastructure._dapr.http import AsyncDaprClient
+from application_sdk.infrastructure._dapr.http import (
+    DAPR_SECRET_STORE_COMPONENT,
+    AsyncDaprClient,
+    retry_past_dapr_cold_start,
+)
 from application_sdk.infrastructure.bindings import (
     Binding,
     BindingError,
@@ -52,6 +56,7 @@ from application_sdk.infrastructure.secrets import (
     SecretNotFoundError,
     SecretStore,
     SecretStoreError,
+    SecretStoreUnavailableError,
     get_deployment_secret,
 )
 from application_sdk.infrastructure.state import StateStore, StateStoreError
@@ -65,6 +70,7 @@ __all__ = [
     "CapacityPool",
     "CredentialVault",
     "CredentialVaultError",
+    "DAPR_SECRET_STORE_COMPONENT",
     "DaprBinding",
     "DaprCredentialVault",
     "DaprPubSub",
@@ -82,6 +88,7 @@ __all__ = [
     "SecretNotFoundError",
     "SecretStore",
     "SecretStoreError",
+    "SecretStoreUnavailableError",
     "StateStore",
     "StateStoreError",
     "Subscription",
@@ -90,5 +97,6 @@ __all__ = [
     "get_capacity_pool",
     "get_deployment_secret",
     "get_infrastructure",
+    "retry_past_dapr_cold_start",
     "set_infrastructure",
 ]

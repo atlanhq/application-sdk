@@ -12,7 +12,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from typing import Any
+import time
+from collections.abc import Awaitable, Callable
+from typing import Any, TypeVar
 from urllib.parse import quote
 
 import httpx
@@ -25,9 +27,12 @@ from application_sdk.constants import (
     DEPLOYMENT_NAME,
     LOCAL_ENVIRONMENT,
 )
+from application_sdk.errors.leaves import ColdStartRaceError
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+_T = TypeVar("_T")
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -72,20 +77,63 @@ def _dapr_base_url() -> str:
     return f"http://localhost:{port}"
 
 
+#: Set once this worker process has confirmed the Dapr sidecar is reachable
+#: via :func:`wait_for_dapr_sidecar` getting a 204 — Dapr only returns this
+#: once *every* component has finished initializing, so this is a genuinely
+#: holistic signal that short-circuits :func:`retry_past_dapr_cold_start` for
+#: every component, not just the one it happened to call. A worker whose
+#: startup probe timed out ("proceeding anyway") leaves this False, so its
+#: first real Dapr call(s) still get a full retry budget instead of being
+#: falsely told they're ready.
+_dapr_sidecar_confirmed_ready: bool = False
+
+#: Per-component readiness, set by :func:`retry_past_dapr_cold_start` once a
+#: wrapped call gets a definitive answer (success or a non-transient
+#: rejection) for that ``component``. Deliberately keyed by component —
+#: unlike the holistic :data:`_dapr_sidecar_confirmed_ready` signal above, one
+#: component answering definitively (e.g. the credential-vault's object-store
+#: binding) says nothing about whether a *different* component (e.g. the
+#: secret store) has finished initializing, so it must not short-circuit that
+#: other component's own cold-start retry. Callers that hit the same
+#: underlying Dapr component (e.g. every secret-store fetch, regardless of
+#: which module resolves it) should pass the same ``component`` identifier so
+#: they correctly share one gate instead of each paying their own wait.
+_dapr_component_confirmed_ready: set[str] = set()
+
+#: Shared ``component`` identifier for every call site that fetches secrets
+#: via the Dapr secret-store component — the agent bundle fetch, single-key
+#: probes, the named-credential resolver path, and the GUID/vault credential
+#: path's secret fetch. They all race the same underlying component, so they
+#: share one cold-start gate.
+DAPR_SECRET_STORE_COMPONENT = "secretstore"
+
+#: ``component`` identifier for the GUID/vault credential path's upstream
+#: object-store binding fetch — a distinct Dapr component from
+#: :data:`DAPR_SECRET_STORE_COMPONENT`, so it must not share that gate (see
+#: :data:`_dapr_component_confirmed_ready`).
+DAPR_UPSTREAM_BINDING_COMPONENT = "upstream-binding"
+
+
 async def wait_for_dapr_sidecar(
     timeout: float = _DEFAULT_SIDECAR_WAIT_TIMEOUT,
     interval: float = _DEFAULT_SIDECAR_POLL_INTERVAL,
 ) -> None:
     """Poll /v1.0/healthz until the Dapr sidecar is ready or timeout elapses.
 
-    Dapr returns 204 when all components have finished initializing.
-    On timeout the function logs a warning and returns — startup proceeds
-    and the subsequent metadata call will surface any remaining errors.
+    Dapr returns 204 when all components have finished initializing. On
+    success, arms :data:`_dapr_sidecar_confirmed_ready` so the first real
+    Dapr call skips :func:`retry_past_dapr_cold_start`'s own wait — this
+    probe already paid it. On timeout the function logs a warning and
+    returns without arming the gate — startup proceeds, and the first real
+    call still gets a full retry budget in case the sidecar needed a little
+    longer.
 
     Skipped entirely in local dev — /v1.0/healthz returns 500 because
     AWS-backed components can't initialize without real credentials.
     All components have ignoreErrors: true so the sidecar works fine.
     """
+    global _dapr_sidecar_confirmed_ready
+
     if DEPLOYMENT_NAME == LOCAL_ENVIRONMENT:
         logger.debug("Local dev — skipping Dapr sidecar health check")
         return
@@ -98,6 +146,7 @@ async def wait_for_dapr_sidecar(
             try:
                 r = await client.get(url)
                 if r.status_code == 204:
+                    _dapr_sidecar_confirmed_ready = True
                     return
             # conformance: ignore[E004] sidecar health probe; network errors are expected during startup and logged at debug
             except Exception:
@@ -108,6 +157,129 @@ async def wait_for_dapr_sidecar(
                 )
                 return
             await asyncio.sleep(interval)
+
+
+#: How long an idempotent Dapr-backed call may retry a transient
+#: :class:`~application_sdk.errors.leaves.ColdStartRaceError` before giving
+#: up. The agent secret-bundle fetch is typically the first Dapr call a
+#: workflow makes and can race a cold sidecar (daprd component init has been
+#: observed up to ~75s on fresh CI runners); every
+#: :func:`retry_past_dapr_cold_start` caller shares this one budget, since
+#: they all race the same sidecar. This is a floor, not a hard ceiling: each
+#: retried ``call()`` can itself burn up to the transport's own internal
+#: retry budget (~15s, see ``_DEFAULT_RETRY_TOTAL`` above) before raising, so
+#: the worst-case total wait before final failure can exceed this value by
+#: up to one attempt's duration. Env-overridable for pathological runners.
+DAPR_COLD_START_MAX_WAIT_SECONDS: float = float(
+    os.environ.get("ATLAN_DAPR_COLD_START_MAX_WAIT_SECONDS", "120.0")
+)
+DAPR_COLD_START_BASE_DELAY_SECONDS: float = 2.0
+DAPR_COLD_START_MAX_DELAY_SECONDS: float = 10.0
+
+
+async def retry_past_dapr_cold_start(
+    call: Callable[[], Awaitable[_T]],
+    *,
+    description: str,
+    component: str,
+) -> _T:
+    """Retry an idempotent Dapr-backed call past a cold sidecar.
+
+    Retries a :class:`~application_sdk.errors.leaves.ColdStartRaceError` (a
+    structurally transient failure — e.g. ``SecretStoreUnavailableError``)
+    with capped exponential backoff until
+    :data:`DAPR_COLD_START_MAX_WAIT_SECONDS` elapses. Branching on that
+    marker rather than a single concrete exception type means any current or
+    future ``DependencyUnavailableError`` subtype (secret store, state
+    store, pub/sub, credential-vault config binding, ...) can opt into
+    cold-start retry just by also inheriting ``ColdStartRaceError`` for its
+    transient case — no new call site-specific check needed here. This is
+    deliberately independent of ``retryable``/``effective_retryable``, which
+    is a separate, general Temporal/wire-level retry hint — see
+    ``ColdStartRaceError``'s docstring for why the two must not be
+    conflated.
+
+    Any other exception (a definitive rejection, e.g. ``SecretNotFoundError``
+    or a 4xx ``SecretStoreError``, or an exception outside the
+    ``ColdStartRaceError`` family entirely) is proof *this* component is
+    reachable: it arms :data:`_dapr_component_confirmed_ready` for
+    ``component`` and is re-raised immediately, never retried.
+
+    Scoped to cold start, and scoped to ``component``: a call here skips the
+    wait entirely once either :data:`_dapr_sidecar_confirmed_ready` is set
+    (a holistic 204 from :func:`wait_for_dapr_sidecar`, which confirms every
+    component at once) or ``component`` itself has already answered
+    definitively. Callers that hit the same underlying Dapr component (see
+    :data:`DAPR_SECRET_STORE_COMPONENT`, :data:`DAPR_UPSTREAM_BINDING_COMPONENT`)
+    must pass the same identifier to share that gate; a different component
+    answering says nothing about this one's readiness, so it does not
+    short-circuit it. A later outage on an already-confirmed component is
+    then a steady-state failure, left to surface via the backend's own
+    (shorter) retry budget instead of being masked for the full deadline on
+    every subsequent call.
+
+    Args:
+        call: Zero-arg async callable to retry, e.g. ``lambda:
+            secret_store.get(name)``. Must be idempotent — it may be invoked
+            more than once.
+        description: Human-readable label for the retry-warning log line,
+            e.g. ``"Agent secret-bundle fetch at 'foo'"``. Only ``description``
+            and the failing exception's *type name* are logged on each
+            retried attempt — never the exception's message/traceback, since
+            a ``SecretStoreError``'s ``str()`` embeds ``secret=<name>`` and
+            some callers pass a hashed/redacted ``description`` specifically
+            to keep the raw secret/ref-key out of logs. Callers that need
+            full diagnostics on terminal failure should log them at their
+            own boundary, with whatever redaction they require.
+        component: Identifies which Dapr component ``call`` talks to (e.g.
+            :data:`DAPR_SECRET_STORE_COMPONENT`). Callers racing the same
+            component must use the same identifier.
+    """
+    global _dapr_sidecar_confirmed_ready
+
+    if _dapr_sidecar_confirmed_ready or component in _dapr_component_confirmed_ready:
+        return await call()
+
+    deadline = time.monotonic() + DAPR_COLD_START_MAX_WAIT_SECONDS
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            result = await call()
+        except ColdStartRaceError as exc:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                # Gave up waiting, but the dependency never actually
+                # answered — do NOT arm the gate, a later call should still
+                # wait out the cold start rather than assume steady-state
+                # readiness.
+                raise
+            # Cap the backoff to the remaining budget so the total wait can't
+            # overshoot DAPR_COLD_START_MAX_WAIT_SECONDS by a full delay, and
+            # cap the exponent so a very large max-wait override can't
+            # overflow.
+            delay = min(
+                DAPR_COLD_START_MAX_DELAY_SECONDS,
+                DAPR_COLD_START_BASE_DELAY_SECONDS * (2 ** min(attempt - 1, 10)),
+                remaining,
+            )
+            # conformance: ignore[L004,E005] exc_info=True would attach str(exc)/traceback, which for a SecretStoreError embeds `secret=<name>` and the backend cause's message — undoing the hashed `description` some callers deliberately pass to keep the raw ref-key out of logs. Logging the exception TYPE only is intentional, not an oversight — see the description arg's docstring above.
+            logger.warning(
+                "%s failed (attempt %d, %s); the dependency is not yet "
+                "reachable — retrying in %.1fs",
+                description,
+                attempt,
+                type(exc).__name__,
+                delay,
+            )
+            await asyncio.sleep(delay)
+        # conformance: ignore[E004] proof the component answered (definitively) — arms its cold-start gate and re-raises unchanged
+        except Exception:
+            _dapr_component_confirmed_ready.add(component)
+            raise
+        else:
+            _dapr_component_confirmed_ready.add(component)
+            return result
 
 
 # ---------------------------------------------------------------------------

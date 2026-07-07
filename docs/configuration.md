@@ -110,6 +110,13 @@ Dapr component names are read at module-import time (not at runtime) because the
 | `DEPLOYMENT_SECRET_STORE_NAME` | `deployment-secret-store` | Dapr secret store holding deployment-scoped secrets (auth credentials, etc.). |
 | `DAPR_MAX_GRPC_MESSAGE_LENGTH` | `104857600` (100 MB) | Maximum gRPC message size in bytes for Dapr client calls. Increase for apps that move large payloads through Dapr state or bindings. |
 
+### Dapr Sidecar Readiness / Cold-Start Retry
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ATLAN_DAPR_SIDECAR_WAIT_TIMEOUT` | `60` | Seconds to poll `/v1.0/healthz` at startup before proceeding anyway. Increase for pathologically slow cold starts (image pull + daprd boot + component init). |
+| `ATLAN_DAPR_COLD_START_MAX_WAIT_SECONDS` | `120.0` | Seconds a Dapr-backed call (secret fetch, credential-vault config fetch, ...) may retry a cold-sidecar race before giving up. Shared by every call site that opts into `retry_past_dapr_cold_start`. Env-overridable for pathologically slow runners. |
+
 ---
 
 ## Redis (Capacity Lock)
