@@ -18,7 +18,10 @@ Design
 ------
 Scans all Python files in *repo* for entrypoint contracts (same P013/P014
 boundary logic as the B005/B006 checker uses) and builds or updates the
-committed ledger.
+committed ledger. Field extraction resolves the full base-class chain
+(``_resolve_contract_fields``): fields inherited from an in-repo base class or
+from an SDK-provided mixin (e.g. ``PublishInputMixin``) are recorded exactly
+like fields declared directly on the contract.
 
 **Append-only invariant**: the generator can add new entries and update the
 ``status`` of existing entries (active → deprecated → sunset), but it NEVER
@@ -37,7 +40,7 @@ from pathlib import Path
 from conformance.suite.checks._ast_common import discover
 from conformance.suite.checks.deprecation._contract_compat import (
     _collect_entrypoint_contract_names,
-    _iter_fields,
+    _resolve_contract_fields,
 )
 from conformance.suite.checks.deprecation._ledger_schema import (
     ContractField,
@@ -62,8 +65,9 @@ def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
     paths = list(discover(repo_root))
 
     # Parse all files and build the class registry (needed for App-subclass
-    # resolution during entrypoint detection)
+    # resolution during entrypoint detection, and for inherited-field resolution)
     file_trees: dict[Path, ast.AST] = {}
+    file_aliases: dict[Path, dict[str, str]] = {}
     by_name: dict[str, ClassRecord] = {}
 
     for path in paths:
@@ -81,6 +85,7 @@ def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
         except ValueError:
             rel = str(path)
         aliases = collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
+        file_aliases[path] = aliases
         for rec in collect_classes(tree, rel, aliases):
             by_name.setdefault(rec.name, rec)
 
@@ -94,12 +99,13 @@ def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
     # Collect all live contract fields from entrypoint classes
     live_entries: dict[tuple[str, str], ContractField] = {}
     for path, tree in file_trees.items():
+        aliases = file_aliases.get(path, {})
         for class_node in ast.walk(tree):
             if not isinstance(class_node, ast.ClassDef):
                 continue
             if class_node.name not in entrypoint_names:
                 continue
-            for fi in _iter_fields(class_node):
+            for fi in _resolve_contract_fields(class_node, aliases, by_name):
                 key = (class_node.name, fi.name)
                 live_entries[key] = ContractField(
                     contract=class_node.name,

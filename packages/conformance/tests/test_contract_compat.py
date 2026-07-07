@@ -374,6 +374,152 @@ def test_b005_inline_suppress_clears(tmp_path: Path) -> None:
     assert "B005" not in _ids(findings)
 
 
+# ── Inheritance: in-repo base class (cross-file) ──────────────────────────────
+
+_BASE_FILE = """\
+class BaseInput:
+    name: str
+"""
+
+_SUBCLASS_FILE = """\
+from application_sdk.app import App
+from base import BaseInput
+
+class MyInput(BaseInput):
+    pass
+
+class MyApp(App):
+    async def run(self, input: MyInput) -> None:
+        pass
+"""
+
+_SUBCLASS_FILE_OVERRIDE = """\
+from application_sdk.app import App
+from base import BaseInput
+
+class MyInput(BaseInput):
+    name: int  # own-body override changes the type
+
+class MyApp(App):
+    async def run(self, input: MyInput) -> None:
+        pass
+"""
+
+
+def test_b005_inherited_field_across_files_not_flagged_removed(
+    tmp_path: Path,
+) -> None:
+    """A field declared only on a cross-file base class is not 'removed'."""
+    ledger = _make_ledger(ContractField("MyInput", "name", "str", "active"))
+    findings = _scan(
+        tmp_path,
+        {"base.py": _BASE_FILE, "app.py": _SUBCLASS_FILE},
+        ledger,
+    )
+    assert "B005" not in _ids(findings)
+
+
+def test_b006_inherited_field_across_files_tracked_silent(tmp_path: Path) -> None:
+    """A ledger-recorded field inherited from a cross-file base is not 'stale'."""
+    ledger = _make_ledger(ContractField("MyInput", "name", "str", "active"))
+    findings = _scan(
+        tmp_path,
+        {"base.py": _BASE_FILE, "app.py": _SUBCLASS_FILE},
+        ledger,
+    )
+    assert "B006" not in _ids(findings)
+
+
+def test_b006_inherited_field_not_yet_in_ledger_fires(tmp_path: Path) -> None:
+    """An inherited field with no ledger entry at all is still B006-visible."""
+    findings = _scan(tmp_path, {"base.py": _BASE_FILE, "app.py": _SUBCLASS_FILE})
+    b006 = [f for f in findings if f.rule_id == "B006"]
+    assert any("MyInput.name" in f.message for f in b006)
+    assert any("inherited" in f.message for f in b006)
+
+
+def test_b005_own_body_override_wins_over_inherited(tmp_path: Path) -> None:
+    """A subclass redeclaring an inherited field changes its live type."""
+    ledger = _make_ledger(ContractField("MyInput", "name", "str", "active"))
+    findings = _scan(
+        tmp_path,
+        {"base.py": _BASE_FILE, "app.py": _SUBCLASS_FILE_OVERRIDE},
+        ledger,
+    )
+    b005 = [f for f in findings if f.rule_id == "B005"]
+    assert b005, "own-body override to a different type must still fire B005"
+    assert "type changed" in b005[0].message.lower()
+
+
+# ── Inheritance: ClassVar on a base class is excluded ─────────────────────────
+
+_BASE_WITH_CLASSVAR = """\
+from typing import ClassVar
+
+class BaseInput:
+    TEMPLATE: ClassVar[str] = "x"
+    name: str
+"""
+
+
+def test_classvar_on_base_class_excluded_from_resolution(tmp_path: Path) -> None:
+    """A ClassVar sentinel on a base class is never treated as a contract field."""
+    ledger = _make_ledger(ContractField("MyInput", "name", "str", "active"))
+    findings = _scan(
+        tmp_path,
+        {"base.py": _BASE_WITH_CLASSVAR, "app.py": _SUBCLASS_FILE},
+        ledger,
+    )
+    # If TEMPLATE were (incorrectly) resolved as a field, it would be untracked
+    # and fire B006. Only "name" is live and it is ledger-recorded, so no B005/B006.
+    assert "B006" not in _ids(findings)
+    assert "B005" not in _ids(findings)
+
+
+# ── Inheritance: SDK-provided mixin resolved via static registry ─────────────
+
+_EP_MIXIN_OUTPUT = """\
+from application_sdk.app import App, entrypoint
+from application_sdk.contracts.base import PublishInputMixin
+
+class MyInput:
+    url: str
+
+class MyOutput(PublishInputMixin):
+    custom: str
+
+class MyApp(App):
+    @entrypoint
+    async def extract(self, input: MyInput) -> MyOutput:
+        pass
+"""
+
+
+def test_b005_sdk_mixin_field_resolved_via_static_registry(tmp_path: Path) -> None:
+    """A field from an SDK mixin with no in-repo definition resolves via the registry."""
+    ledger = _make_ledger(
+        ContractField("MyOutput", "connection_qualified_name", "str", "active")
+    )
+    findings = _scan(tmp_path, {"app.py": _EP_MIXIN_OUTPUT}, ledger)
+    assert "B005" not in _ids(
+        findings
+    ), "PublishInputMixin.connection_qualified_name must resolve via the SDK registry"
+
+
+def test_b006_sdk_mixin_field_not_yet_in_ledger_fires_and_notes_inherited(
+    tmp_path: Path,
+) -> None:
+    """An untracked SDK-mixin field still fires B006, anchored on the subclass."""
+    findings = _scan(tmp_path, {"app.py": _EP_MIXIN_OUTPUT})
+    b006 = [f for f in findings if f.rule_id == "B006"]
+    mixin_findings = [
+        f for f in b006 if "MyOutput.transformed_data_prefix" in f.message
+    ]
+    assert mixin_findings, "expected B006 for the untracked mixin field"
+    assert "inherited" in mixin_findings[0].message
+    assert mixin_findings[0].file == "app.py"
+
+
 # ── End-to-end via full B-series scan_all ─────────────────────────────────────
 
 

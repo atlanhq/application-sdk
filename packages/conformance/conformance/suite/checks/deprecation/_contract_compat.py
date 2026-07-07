@@ -7,6 +7,13 @@ The check uses the same cross-file class-registry machinery as P013/P014:
 ``collect_classes`` + ``resolve_ancestor`` for App-subclass detection, and
 ``is_entrypoint_decorator`` / ``is_task_decorator`` for decorator provenance.
 
+Field extraction resolves the full inheritance hierarchy (``_resolve_contract_fields``):
+in-repo base classes are resolved from their own AST body via ``by_name``; SDK-provided
+contract bases (``Input``, ``Output``, ``PublishInputMixin``) that live outside the
+scanned repo are resolved from the static registry in ``_sdk_contract_mixins``. This
+means a field inherited from a base class or SDK mixin is tracked exactly like one
+declared directly on the contract — no need to redeclare it just to stay ledger-protected.
+
 Type normalization produces stable canonical strings that are consistent between
 the ledger generator and the checker so small syntactic variations
 (``Optional[str]`` vs ``str | None``) do not produce false positives.
@@ -32,6 +39,7 @@ from conformance.suite.checks.prescriptions._decorator_provenance import (
 )
 from conformance.suite.checks.prescriptions._error_code_prefix import (
     ClassRecord,
+    _is_classvar_annotation,
     collect_classes,
     collect_import_aliases,
     resolve_ancestor,
@@ -44,6 +52,7 @@ from conformance.suite.checks.prescriptions._typed_boundaries import (
 from conformance.suite.schema.findings import Finding
 
 from ._ledger_schema import ContractField, ContractLedger
+from ._sdk_contract_mixins import SDK_CONTRACT_BASE_FIELDS
 
 # ── Canonical type normalization ──────────────────────────────────────────────
 
@@ -175,7 +184,7 @@ class _FieldInfo(NamedTuple):
     name: str
     canonical_type: str
     status: str  # "active" | "deprecated" | "sunset"
-    node: ast.AnnAssign
+    node: ast.AnnAssign | None  # None for fields resolved via inheritance
 
 
 def _field_status(ann_node: ast.AnnAssign) -> str:
@@ -226,12 +235,18 @@ def _field_status(ann_node: ast.AnnAssign) -> str:
 
 
 def _iter_fields(classdef: ast.ClassDef) -> list[_FieldInfo]:
-    """Return annotated field info for all public fields of a contract class."""
+    """Return annotated field info declared directly on *classdef*'s own body.
+
+    Does not resolve fields inherited from a base class or mixin — use
+    :func:`_resolve_contract_fields` for that.
+    """
     result = []
     for stmt in classdef.body:
         if not isinstance(stmt, ast.AnnAssign):
             continue
         if not isinstance(stmt.target, ast.Name):
+            continue
+        if _is_classvar_annotation(stmt.annotation):
             continue
         name = stmt.target.id
         if name.startswith("_"):
@@ -245,6 +260,80 @@ def _iter_fields(classdef: ast.ClassDef) -> list[_FieldInfo]:
             )
         )
     return result
+
+
+def _base_name(base: ast.expr) -> str | None:
+    """Return the simple name of a base-class expression (``Name`` or ``Attribute``)."""
+    if isinstance(base, ast.Name):
+        return base.id
+    if isinstance(base, ast.Attribute):
+        return base.attr
+    return None
+
+
+def _resolve_contract_fields(
+    classdef: ast.ClassDef,
+    aliases: dict[str, str],
+    by_name: dict[str, ClassRecord],
+) -> list[_FieldInfo]:
+    """Return field info for *classdef*, resolved across its full base-class chain.
+
+    In-repo base classes are resolved recursively from their own AST body (via
+    *by_name*); SDK-provided contract bases not present in the scanned repo
+    (``Input``, ``Output``, ``PublishInputMixin``) are resolved from the static
+    registry in :mod:`_sdk_contract_mixins`. A field declared directly on a
+    (sub)class always overrides a same-named field inherited from a base —
+    mirrors Python's MRO. Cycle-safe: mirrors the ``visiting``-guarded pattern
+    used by :func:`resolve_ancestor` in ``_error_code_prefix``.
+
+    ``ClassRecord.bases`` (not ``rec.node.bases``) is used once recursion
+    reaches a registered ancestor: ``collect_classes`` already de-aliases base
+    names against *that ancestor's own file*, so re-deriving them here against
+    *classdef*'s (possibly different) file's aliases would be wrong.
+
+    Inherited fields always carry ``node=None``, even when the ancestor is
+    defined in-repo: the ancestor's AST node belongs to a different file than
+    the one being reported for *classdef*, so its ``lineno`` would be
+    attributed to the wrong file if reused directly. Findings for inherited
+    fields anchor on *classdef* itself instead (see call sites).
+    """
+    fields_by_name: dict[str, _FieldInfo] = {}
+
+    def merge_ancestor(name: str, visiting: set[str]) -> None:
+        if name in visiting:
+            return  # cycle — treat as unknown, same as resolve_ancestor
+        visiting.add(name)
+
+        rec = by_name.get(name)
+        if rec is not None:
+            # Reversed so the leftmost grand-ancestor (highest MRO precedence)
+            # is merged last and therefore wins the dict overwrite below.
+            for base_name in reversed(rec.bases):
+                merge_ancestor(base_name, visiting)
+            for fi in _iter_fields(rec.node):
+                fields_by_name[fi.name] = fi._replace(node=None)
+        else:
+            for sdk_field in SDK_CONTRACT_BASE_FIELDS.get(name, ()):
+                fields_by_name[sdk_field.name] = _FieldInfo(
+                    name=sdk_field.name,
+                    canonical_type=sdk_field.canonical_type,
+                    status=sdk_field.status,
+                    node=None,
+                )
+
+        visiting.discard(name)
+
+    visiting: set[str] = {classdef.name}
+    for base in reversed(classdef.bases):
+        bname = _base_name(base)
+        if bname is not None:
+            merge_ancestor(aliases.get(bname, bname), visiting)
+
+    # Fields declared directly on classdef always win over inherited ones.
+    for fi in _iter_fields(classdef):
+        fields_by_name[fi.name] = fi
+
+    return list(fields_by_name.values())
 
 
 # ── Entrypoint contract discovery ─────────────────────────────────────────────
@@ -282,11 +371,7 @@ def _collect_entrypoint_contract_names(
 
                 elif func.name == "run" and isinstance(func, ast.AsyncFunctionDef):
                     for base in class_node.bases:
-                        bname: str | None = None
-                        if isinstance(base, ast.Name):
-                            bname = base.id
-                        elif isinstance(base, ast.Attribute):
-                            bname = base.attr
+                        bname = _base_name(base)
                         if bname is None:
                             continue
                         bname = aliases.get(bname, bname)
@@ -336,6 +421,7 @@ def scan_contract_compat(
     # Pass 1: parse + build class registry
     file_trees: dict[Path, ast.AST] = {}
     file_directives: dict[Path, dict[int, _IgnoreDirective]] = {}
+    file_aliases: dict[Path, dict[str, str]] = {}
     by_name: dict[str, ClassRecord] = {}
 
     for path in paths:
@@ -355,6 +441,7 @@ def scan_contract_compat(
         except ValueError:
             rel = str(path)
         aliases = collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
+        file_aliases[path] = aliases
         for rec in collect_classes(tree, rel, aliases):
             by_name.setdefault(rec.name, rec)
 
@@ -387,7 +474,8 @@ def scan_contract_compat(
             if class_node.name not in entrypoint_names:
                 continue
 
-            live_fields = _iter_fields(class_node)
+            aliases = file_aliases.get(path, {})
+            live_fields = _resolve_contract_fields(class_node, aliases, by_name)
             live_by_name = {f.name: f for f in live_fields}
 
             # B005: every ledger field must still exist with its recorded type
@@ -413,18 +501,23 @@ def scan_contract_compat(
                         )
                     )
                 elif live.canonical_type != lf.type:
+                    inherited_note = (
+                        " (inherited from a base class or mixin)"
+                        if live.node is None
+                        else ""
+                    )
                     findings.append(
                         make_finding(
                             filename=rel,
                             rule_id="B005",
-                            node=live.node,
+                            node=live.node or class_node,
                             message=(
-                                f"Contract field '{class_node.name}.{live.name}' "
-                                f"type changed from '{lf.type}' (ledger) to "
-                                f"'{live.canonical_type}' (current). Type changes "
-                                f"break serialized payloads. Revert to '{lf.type}', "
-                                "or deprecate/sunset this field and add a new one "
-                                "with the new type. "
+                                f"Contract field '{class_node.name}.{live.name}'"
+                                f"{inherited_note} type changed from '{lf.type}' "
+                                f"(ledger) to '{live.canonical_type}' (current). "
+                                "Type changes break serialized payloads. Revert to "
+                                f"'{lf.type}', or deprecate/sunset this field and add "
+                                "a new one with the new type. "
                                 "Suppress with '# conformance: ignore[B005] <reason>' "
                                 "only if this contract has no deployed consumers."
                             ),
@@ -435,15 +528,20 @@ def scan_contract_compat(
             # B006: every live field must be recorded in the ledger
             for fi in live_fields:
                 if (class_node.name, fi.name) not in ledger_by_key:
+                    inherited_note = (
+                        " (inherited from a base class or mixin)"
+                        if fi.node is None
+                        else ""
+                    )
                     findings.append(
                         make_finding(
                             filename=rel,
                             rule_id="B006",
-                            node=fi.node,
+                            node=fi.node or class_node,
                             message=(
-                                f"Contract field '{class_node.name}.{fi.name}' is not "
-                                "recorded in the contract ledger "
-                                "(contract_schema.lock.json). Run "
+                                f"Contract field '{class_node.name}.{fi.name}'"
+                                f"{inherited_note} is not recorded in the contract "
+                                "ledger (contract_schema.lock.json). Run "
                                 "'uv run atlan-application-sdk-conformance "
                                 "gen-contract-ledger' (writes contract_schema.lock.json "
                                 "in the repo root) and commit that file in the same PR. "

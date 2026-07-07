@@ -165,6 +165,12 @@ Type comparison uses canonical normalized strings: `Optional[X]` and `X | None` 
 equivalent, as are `List[X]` and `list[X]`, so purely syntactic rewrites do not trigger
 a false positive.
 
+Field resolution walks the full base-class chain, not just the contract's own body: a
+field inherited from an in-repo base class, or from an SDK-provided mixin such as
+`PublishInputMixin`, is tracked exactly like one declared directly on the contract.
+Composing a contract from a mixin (the documented pattern) does not require redeclaring
+the mixin's fields to stay ledger-protected.
+
 Only entrypoint contracts are gated — Input/Output classes bound to an
 `@entrypoint`-decorated method or an `App.run()` method.  `@task` boundary contracts are
 explicitly excluded: tasks are internal and may evolve with breaking changes.
@@ -192,7 +198,10 @@ defeats the backwards-compat guarantee.
 
 Fires when a live entrypoint contract field has no corresponding entry in
 `contract_schema.lock.json`.  This means the ledger was not regenerated after the field
-was introduced.
+was introduced. This includes fields introduced by inheritance — a field inherited from
+an in-repo base class or an SDK-provided mixin (e.g. `PublishInputMixin`) is just as
+ledger-tracked as one declared directly on the contract, so adopting a new mixin can
+also trigger this on the fields it contributes.
 
 Fix: run `uv run atlan-application-sdk-conformance gen-contract-ledger` and commit the
 updated ledger in the same PR as the contract change.
