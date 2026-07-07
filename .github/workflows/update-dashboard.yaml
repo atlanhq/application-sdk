@@ -459,19 +459,23 @@ jobs:
                       tool_versions.add(driver["version"])
 
                   # Build rule catalog from the embedded descriptors — carry
-                  # tier/category/series/since so connector-pulse never needs
-                  # to re-fetch the rule metadata separately.
+                  # tier/category/series/since/description/rationale so
+                  # connector-pulse never needs to re-fetch the rule metadata
+                  # (or bundle its own static copy) separately.
                   for rule in driver.get("rules", []):
                       rid = rule.get("id")
                       if rid and rid not in rule_catalog:
                           props = rule.get("properties", {})
                           rule_catalog[rid] = {
-                              "name":     rule.get("name", ""),
-                              "tier":     props.get("atlan/tier", ""),
-                              "category": props.get("atlan/category", ""),
-                              "series":   props.get("atlan/series", ""),
-                              "since":    props.get("atlan/since", ""),
-                              "helpUri":  rule.get("helpUri", ""),
+                              "name":             rule.get("name", ""),
+                              "tier":             props.get("atlan/tier", ""),
+                              "category":         props.get("atlan/category", ""),
+                              "series":           props.get("atlan/series", ""),
+                              "since":            props.get("atlan/since", ""),
+                              "helpUri":          rule.get("helpUri", ""),
+                              "shortDescription": (rule.get("shortDescription") or {}).get("text", ""),
+                              "fullDescription":  (rule.get("fullDescription") or {}).get("text", ""),
+                              "rationale":        props.get("atlan/rationale", ""),
                           }
 
                   # Run-level pre-computed summary (accurate counts from the suite).
