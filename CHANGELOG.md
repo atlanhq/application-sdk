@@ -1,5 +1,22 @@
 # Changelog
 
+## v3.21.0 (July 07, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.20.3...v3.21.0
+
+### Features
+
+- add SourceUnavailableError for customer-controlled source systems (#2476) (by @araghuraman-atlan in [4ba7158](https://github.com/atlanhq/application-sdk/commit/4ba7158))
+- route/card split, pools map, pool task routing (BLDX-1342, BLDX-1375, BLDX-1382) (#2351) (by @cmgrote in [b0c780b](https://github.com/atlanhq/application-sdk/commit/b0c780b))
+
+### Bug Fixes
+
+- wait for cold-starting sidecar + retry connection errors (fixes SDR e2e secret-fetch race) (#2467) (by @adityachoudhury-cloud in [892bb3d](https://github.com/atlanhq/application-sdk/commit/892bb3d))
+- re-export Temporal client-side failure exceptions (#2516) (by @cmgrote in [c0c75f7](https://github.com/atlanhq/application-sdk/commit/c0c75f7))
+- hash files off the event loop in materialize_file_reference (#2538) (by @chaitanyaatlan in [1e3d33d](https://github.com/atlanhq/application-sdk/commit/1e3d33d))
+- retry agent secret-bundle fetch past a cold Dapr sidecar (fixes openapi e2e flake) (#2525) (by @adityachoudhury-cloud in [1805dfc](https://github.com/atlanhq/application-sdk/commit/1805dfc))
+
+
 ## v3.20.3 (July 01, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.20.2...v3.20.3
