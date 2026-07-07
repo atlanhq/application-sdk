@@ -627,3 +627,36 @@ def test_upstream_assets_landed_warns_when_no_upstream_path(
     with patch(_LOAD) as m:
         _NoUpstreamPath()._assert_upstream_assets_landed(workflow_scenario, _RESP)
         m.assert_not_called()  # no upstream path → warn + return, can't verify
+
+
+# ---------------------------------------------------------------------------
+# Env-controllable guards — lets the sdr-e2e action drive the harness SDK-side
+# (enable a guard + point it at the store mount) without editing the connector.
+# ---------------------------------------------------------------------------
+
+
+def test_sdr_flag_env_overrides_classvar(monkeypatch) -> None:
+    f = BaseSDRIntegrationTest._sdr_flag
+    monkeypatch.setenv("SDR_REQUIRE_ASSETS_LANDED", "true")
+    assert f("SDR_REQUIRE_ASSETS_LANDED", False) is True  # env True beats default False
+    monkeypatch.setenv("SDR_REQUIRE_ASSETS_LANDED", "false")
+    assert f("SDR_REQUIRE_ASSETS_LANDED", True) is False  # env False beats default True
+    monkeypatch.delenv("SDR_REQUIRE_ASSETS_LANDED", raising=False)
+    assert f("SDR_REQUIRE_ASSETS_LANDED", True) is True  # env unset → class default
+
+
+def test_upstream_base_path_read_from_env(
+    monkeypatch, workflow_scenario: Scenario
+) -> None:
+    """The action can point the upstream guard at the mount it created via env,
+    with no upstream_output_base_path set on the connector's suite."""
+    monkeypatch.setenv("SDR_UPSTREAM_OUTPUT_BASE_PATH", "data-upstream/out")
+
+    class _EnvUpstream(_WfSuite):
+        require_upstream_assets_landed = True
+        upstream_output_base_path = None  # not set on the class — env supplies it
+        scenarios = []
+
+    with patch(_LOAD, return_value=[_asset("default/mssql/1700/db/t")]) as m:
+        _EnvUpstream()._assert_upstream_assets_landed(workflow_scenario, _RESP)
+        assert m.call_args.args[0] == "data-upstream/out"  # env path was used

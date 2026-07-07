@@ -323,6 +323,18 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
             merged["workflow_type"] = self.workflow_type
         return merged
 
+    @staticmethod
+    def _sdr_flag(env_name: str, default: bool) -> bool:
+        """Effective boolean for a guard: an env override wins over the class
+        default. The ``sdr-e2e`` action sets these (e.g. from a fleet allowlist)
+        to enable a guard for a connector WITHOUT editing the connector's suite —
+        so the whole SDR harness stays SDK-side. Env unset → the class default.
+        """
+        val = os.environ.get(env_name)
+        if val is not None:
+            return val.strip().lower() in ("1", "true", "yes", "on")
+        return default
+
     def _execute_scenario(self, scenario: Scenario) -> ScenarioResult:
         result = super()._execute_scenario(scenario)
         # The base class only polls when expected_data or schema_base_path
@@ -339,9 +351,14 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
         ):
             try:
                 self._ensure_workflow_completed(scenario, result.response)
-                if self.require_assets_landed:
+                if self._sdr_flag(
+                    "SDR_REQUIRE_ASSETS_LANDED", self.require_assets_landed
+                ):
                     self._assert_assets_landed(scenario, result.response)
-                if self.require_upstream_assets_landed:
+                if self._sdr_flag(
+                    "SDR_REQUIRE_UPSTREAM_ASSETS_LANDED",
+                    self.require_upstream_assets_landed,
+                ):
                     self._assert_upstream_assets_landed(scenario, result.response)
             # conformance: ignore[E004] re-raises immediately; only mutates result object before propagation so caller boundary handles logging
             except Exception as exc:
@@ -388,7 +405,9 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
         ``extracted_output_base_path`` is known; otherwise warns.
         """
         base_path = (
-            scenario.extracted_output_base_path or self.extracted_output_base_path
+            os.environ.get("SDR_EXTRACTED_OUTPUT_BASE_PATH")
+            or scenario.extracted_output_base_path
+            or self.extracted_output_base_path
         )
         if not base_path:
             logger.warning(
@@ -489,7 +508,10 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
         cannot see. Only runs when ``upstream_output_base_path`` is set (the
         two-store CI stack); otherwise warns.
         """
-        base_path = self.upstream_output_base_path
+        base_path = (
+            os.environ.get("SDR_UPSTREAM_OUTPUT_BASE_PATH")
+            or self.upstream_output_base_path
+        )
         if not base_path:
             logger.warning(
                 "SDR workflow scenario %r: require_upstream_assets_landed is set but "
