@@ -55,7 +55,7 @@ from application_sdk.credentials.errors import (
     CredentialNotFoundError,
     CredentialParseError,
 )
-from application_sdk.errors import redact_secrets
+from application_sdk.errors import ColdStartRaceError, redact_secrets
 from application_sdk.infrastructure import (
     DAPR_SECRET_STORE_COMPONENT,
     retry_past_dapr_cold_start,
@@ -234,9 +234,11 @@ async def _fetch_per_key_bundle(
 
     A transient cold-start outage on a probe is retried via
     :func:`~application_sdk.infrastructure.retry_past_dapr_cold_start`
-    (shared with :func:`_fetch_bundle` — both race the same sidecar); only
-    a genuine, non-transient store error or an outage that exhausts the
-    retry budget falls through to the silent-skip path below.
+    (shared with :func:`_fetch_bundle` — both race the same sidecar). Only
+    a genuine, non-transient store error falls through to the silent-skip
+    path below; an outage that exhausts the retry budget is raised
+    instead, mirroring every other :func:`retry_past_dapr_cold_start`
+    call site.
     """
     bundle: dict[str, Any] = {}
     seen: set[str] = set()
@@ -252,11 +254,19 @@ async def _fetch_per_key_bundle(
                 description=f"single-key probe for sha256:{value_hash}",
                 component=DAPR_SECRET_STORE_COMPONENT,
             )
+        except ColdStartRaceError:
+            # The store never actually answered — a cold-start outage that
+            # exhausted the full retry budget, not "this field isn't a
+            # secret" (that case is already collapsed to None by
+            # get_optional without raising). Propagate so the caller sees
+            # a typed outage instead of silently proceeding with a
+            # corrupt credential, mirroring the vault sibling
+            # (credential_vault.py's _fetch_single_key_secrets).
+            raise
         # conformance: ignore[E004] logger.warning with redacted traceback is emitted below; exc_info omitted intentionally to prevent secret ref-key leaking through stdlib traceback formatting
         except Exception as exc:
-            # Genuine, non-transient store error (or a cold-start outage that
-            # exhausted the retry budget) — distinct from "key not in store"
-            # (silent below). A real secret field hitting this would
+            # Genuine, non-transient store error — distinct from "key not
+            # in store" (silent below). A real secret field hitting this would
             # otherwise auth-fail with the ref-key as the literal username,
             # so surface at WARNING with the stack trace.
             # Log a hash, not the ref-key itself: ref-key names encode secret

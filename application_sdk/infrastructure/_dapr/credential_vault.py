@@ -5,6 +5,7 @@ references via the Dapr secret store.
 """
 
 import copy
+import hashlib
 import json
 import re
 from enum import Enum
@@ -286,7 +287,11 @@ class DaprCredentialVault:
         return json.loads(response.data)
 
     async def _get_secret(
-        self, secret_key: str, component_name: str | None = None
+        self,
+        secret_key: str,
+        component_name: str | None = None,
+        *,
+        log_label: str | None = None,
     ) -> dict[str, Any]:
         """Fetch and process a secret from the Dapr secret store.
 
@@ -299,6 +304,12 @@ class DaprCredentialVault:
         sidecar race here indistinguishable from "no secret", so callers
         had no way to retry it and silently proceeded with an incomplete
         credential instead.
+
+        ``log_label`` overrides ``secret_key`` in the retry-warning log
+        description — pass a hashed label when ``secret_key`` is a ref-key
+        (single-key mode) so its raw value, which encodes secret-store
+        topology, never lands in WARNING logs (mirrors
+        :mod:`application_sdk.credentials.agent`'s single-key probe).
 
         Returns ``{}`` when the key is definitively absent from the store,
         or in local-environment deployments to avoid secret store
@@ -327,7 +338,9 @@ class DaprCredentialVault:
         try:
             result = await retry_past_dapr_cold_start(
                 _fetch,
-                description=f"Credential-vault secret fetch for '{secret_key}'",
+                description=(
+                    f"Credential-vault secret fetch for '{log_label or secret_key}'"
+                ),
                 component=DAPR_SECRET_STORE_COMPONENT,
             )
         except SecretNotFoundError:
@@ -372,8 +385,11 @@ class DaprCredentialVault:
         async def _try_fetch(label: str, value: str) -> None:
             if not value.strip():
                 return
+            value_hash = hashlib.sha256(value.encode()).hexdigest()[:8]
             try:
-                single_secret = await self._get_secret(value)
+                single_secret = await self._get_secret(
+                    value, log_label=f"sha256:{value_hash}"
+                )
                 if single_secret:
                     for k, v in single_secret.items():
                         if v is None or v == "":

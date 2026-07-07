@@ -758,19 +758,15 @@ class TestSingleKeyMode:
         assert resolved["username"] == "real_user"
         assert calls["n"] == 3  # rode out the two cold failures, not skipped
 
-    async def test_persistent_transient_failure_falls_back_to_ref_key(
+    async def test_persistent_transient_failure_raises_not_silently_swallowed(
         self, deterministic_dapr_cold_start_deadline
     ) -> None:
-        """Unlike every other retry_past_dapr_cold_start call site (bundle
-        fetch, named-credential fetch, GUID/vault fetch — all of which raise
-        once their retry deadline is exhausted), the single-key probe
-        intentionally swallows an exhausted cold-start outage and leaves the
-        field as its literal ref-key placeholder instead of raising — see
-        the WARNING-log comment in _fetch_per_key_bundle._try_fetch. Pin
-        this asymmetry as an intentional, tested contract so a future
-        "simplify the except clauses" refactor can't silently regress it
-        into raising (or into misclassifying the outage as a normal
-        not-found) without a test failing.
+        """Single-key probing must not silently proceed with an incomplete
+        credential when the secret store genuinely never answers — same
+        swallow already fixed for the vault sibling (see
+        test_agent_single_key_mode_outage_raises_not_silently_swallowed in
+        test_credential_vault.py). An exhausted cold-start outage must
+        raise, not fall back to the literal ref-key placeholder.
         """
         calls = {"n": 0}
 
@@ -788,12 +784,12 @@ class TestSingleKeyMode:
             }
         )
 
-        resolved = await resolve_agent_json(agent_json, AlwaysDown())  # type: ignore[arg-type]
+        with pytest.raises(SecretStoreUnavailableError):
+            await resolve_agent_json(agent_json, AlwaysDown())  # type: ignore[arg-type]
 
         # Retried once, then gave up at the deadline — same budget as every
-        # other call site — but the field falls back rather than raising.
+        # other call site.
         assert calls["n"] == 2
-        assert resolved["username"] == "ATLAN_USER"
 
     async def test_store_outage_does_not_leak_ref_key_in_logs(self) -> None:
         """On a store outage during a single-key probe, the WARNING must not
