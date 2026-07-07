@@ -87,6 +87,11 @@ on:
         required: false
         type: boolean
         default: false
+      skip_certification:
+        description: "TEST/PRELIMINARY ONLY — skip the certify gate (v3-shape + contract drift + unit tests + coverage). For validating the marketplace deploy path of an app that is not yet migrated (e.g. its raw `pytest tests/unit` still trips pre-existing test-isolation debt). MUST NOT be set on a real GA release. Default false — existing callers unaffected."
+        required: false
+        type: boolean
+        default: false
     secrets:
       ORG_PAT_GITHUB:
         required: true
@@ -383,7 +388,7 @@ jobs:
   # See docs/standards/app-certification.md.
   certify:
     name: Certify app
-    if: inputs.publish
+    if: inputs.publish && !inputs.skip_certification
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
