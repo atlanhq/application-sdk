@@ -24,8 +24,8 @@
 # values are the matrix entries (series letter, display name, sarif slug,
 # changed-files path glob, and the caller's exclude-paths input).  Note C-series
 # watches `.github/**`, D-series watches `**/pyproject.toml`, T-series watches
-# `tests/integration/**`, I-series watches `Dockerfile`, and the AST series
-# (E/P/O/L) watch `**/*.py`; that asymmetry is just a matrix field, not a
+# `{tests/**,**/pyproject.toml}`, I-series watches `Dockerfile`, and the AST
+# series (E/P/O/L) watch `**/*.py`; that asymmetry is just a matrix field, not a
 # separate job.
 #
 # Scope: the runner auto-detects whether the caller repo is the SDK or a consumer
@@ -269,16 +269,17 @@ jobs:
             slug: logging
             paths: "**/*.py"
             exclude_paths: ${{ inputs.exclude-paths-l }}
-          # T001's verdict also depends on the unit-job deselection markers in
-          # `pyproject.toml` (`addopts`), but the changed-files filter watches only
-          # `tests/integration/**` to avoid running every other leg on pyproject
-          # churn.  A PR that changes *only* `addopts` (e.g. dropping a `not <marker>`)
-          # therefore won't re-run this leg — that staleness is caught on push to
-          # main, where every leg runs unconditionally.  Acceptable at WARN tier.
+          # T005-T009/T013 walk the whole `tests/` tree (not just integration) and
+          # T010-T012/T014-T015 read `pyproject.toml` directly, so the filter covers
+          # both.  Any PR that changes a test file or `pyproject.toml` re-runs this
+          # leg; staleness for the remaining edge cases (e.g. a change to a
+          # workflow's own `--fail-under` input, which T014 doesn't read) is caught
+          # on push to main, where every leg runs unconditionally.  Acceptable at
+          # WARN tier.
           - series: T
             name: "Tests"
             slug: tests
-            paths: "tests/integration/**"
+            paths: "{tests/**,**/pyproject.toml}"
             exclude_paths: ${{ inputs.exclude-paths-t }}
           # I-series (container image) is APP-scoped and no-ops on the SDK itself
           # since the SDK Dockerfile builds the base image, not a consumer app.

@@ -4,10 +4,15 @@ name: tests-area
 description: >
   Maintains the current T-series violation-set and drives remediation of
   test-quality conformance findings: unmarked integration tests (T001), SDR
-  test-coverage gaps (T002-T003), and dev-entrypoint delegation (T004).  Every
+  test-coverage gaps (T002-T003), dev-entrypoint delegation (T004), assertion
+  meaningfulness and silent non-execution (T005-T009), test-tier structure and
+  placement (T010-T013), and coverage-config integrity (T014-T015).  Every
   rule in this series classifies as "judgment" — each fix requires reading the
   test's I/O intent, the app's manifest/contract, or the app's App subclass
-  before a fix can be proposed with confidence.
+  before a fix can be proposed with confidence.  T014/T015 are the most
+  mechanical of the set (usually a one-line pyproject.toml edit) but still
+  route to residue like the rest of the series — picking a real fail_under
+  value or confirming an omit pattern is legitimate still requires judgment.
 ---
 
 ### Maintains
@@ -167,15 +172,164 @@ to residue):
 
   `classification` is always `"judgment"`.
 
+- **T005 AssertionFreeTest** — a collected test's body is non-empty but
+  contains no recognised assertion. Read the test body and the function it
+  calls to determine what outcome the test was meant to verify, then add a
+  concrete assertion on that outcome — e.g. a return value, a record count, a
+  side effect on disk, or a raised exception. Do not add `assert True` or any
+  other constant-true placeholder to make the finding go away — that
+  converts a T005 into a T007 (`VacuousAssertion`), which is not a fix.
+
+  If the test's only real purpose is confirming a call doesn't raise (rare —
+  most such tests are better expressed by also asserting on the return
+  value), leave it flagged and route to residue with that assessment rather
+  than fabricating an assertion that doesn't reflect real intent.
+
+  `classification` is always `"judgment"` — knowing what outcome a test
+  *should* verify requires reading the code under test, not just the finding.
+
+- **T006 EmptyTestBody** — a collected test's body is only a stub
+  (`pass`/`...`/a docstring). Either implement the test by reading what it is
+  named to cover and what the surrounding test class/module already
+  exercises, or propose deleting it if it duplicates coverage elsewhere.
+  Never fill a stub with a vacuous assertion just to satisfy the checker.
+
+  `classification` is always `"judgment"`.
+
+- **T007 VacuousAssertion** — every assertion in a collected test is a
+  constant-true expression (`assert True`, `assert 1`) that can never fail.
+  Read what the test body actually exercises (the setup code above the
+  vacuous assert almost always reveals the intended check — e.g. a comment
+  like "verify cleanup was performed" right above `assert True` is a strong
+  signal of what to assert instead) and replace the constant with a real
+  assertion on that outcome.
+
+  `classification` is always `"judgment"`.
+
+- **T008 UncollectableTestFile** — a file under `tests/` defines
+  `test*`/`Test*` collectables but its filename doesn't match pytest's
+  default collection glob (`test_*.py`/`*_test.py`), so it is silently never
+  collected. Fix: rename the file to match the convention (e.g.
+  `tests/unit/connector_tests.py` → `tests/unit/test_connector.py`). Check
+  for import references to the old filename (rare, since test modules are
+  not usually imported by name) before renaming.
+
+  `classification` is always `"judgment"` — even when the new name is
+  unambiguous, the fix renames a file under `tests/`, which is outside the
+  remediator's write-scope (see `remediate-finding.prose.md`); route to
+  residue with the suggested rename for a human to apply.
+
+- **T009 UnconditionalModuleSkip** — a module-level
+  `pytest.skip(..., allow_module_level=True)` is not guarded by an `if`/`try`,
+  unconditionally disabling every test in the file. Read why the skip was
+  added (check git history / a nearby comment) to decide the fix:
+  - If the file should run again, remove the skip and re-verify the tests
+    still pass — or, if they don't yet, route to residue with what's broken.
+  - If the file needs a real precondition guard (the legitimate e2e
+    pattern), wrap it: `if not os.environ.get('<VAR>'): pytest.skip(..., allow_module_level=True)`.
+  - If the file is intentionally, permanently disabled pending removal,
+    suppress with `# conformance: ignore[T009] <reason>` naming the tracked
+    removal issue, rather than leaving an unexplained unconditional skip.
+
+  `classification` is always `"judgment"` — the correct outcome depends on
+  why the skip exists, which the finding alone doesn't say.
+
+- **T010 MissingUnitTestSuite** — no collectable tests under `tests/unit/`.
+  Draft an initial unit suite covering the app's helper functions and
+  `@task`-decorated activities directly (call them as coroutines — the
+  decorator only attaches metadata outside the workflow runtime), following
+  the minimal shape in `atlan-hello-world-app/tests/unit/`: typed
+  `Input`/`Output` contracts, a `pytest.fixture` for the app instance, and
+  real outcome assertions. This is not exemptable — do not propose a
+  suppression or an `exempt_test_tiers` entry for T010.
+
+  `classification` is always `"judgment"` — route to residue; a from-scratch
+  unit suite requires reading the app's actual handler/mapper/client code,
+  not just the finding.
+
+- **T011 MissingIntegrationTestSuite** / **T012 MissingE2ETestSuite** — no
+  collectable tests under `tests/integration/` or `tests/e2e/`. Two possible
+  fixes, and the finding alone can't tell you which applies:
+  1. The app genuinely needs this tier — draft a suite following the
+     reference shape in `atlan-mysql-app`/`atlan-metabase-app`/
+     `atlan-openapi-app` (integration: embedded Temporal + testcontainers or
+     mocked infra; e2e: a thin class inheriting the SDK-generated
+     `*GeneratedE2EBase`, env-guarded, `@pytest.mark.e2e`).
+  2. The app is a genuine scaffold/minimal app with nothing to exercise at
+     this tier yet — propose adding to `pyproject.toml`:
+
+     ```toml
+     [tool.conformance]
+     exempt_test_tiers = ["integration"]  # or ["e2e"], or both
+     ```
+
+     State the reason in a comment above the table (e.g. "no external source
+     configured yet — tracked in <ticket>").
+
+  Route to residue either way — deciding between "draft the suite" and
+  "exempt the tier" requires knowing whether the app has a real source/
+  system-app integration to test, which only reading the app's code
+  (handlers, clients, `atlan.yaml` entrypoints) can answer.
+
+  `classification` is always `"judgment"`.
+
+- **T013 TestFileOutsideTierDir** — a collectable test file lives under
+  `tests/` but outside the four canonical tier directories. Read what the
+  test actually exercises (external I/O → `tests/integration/`; no I/O →
+  `tests/unit/`) and move it into the matching tier directory. If the file
+  is genuinely non-tier test infrastructure that happens to match the
+  collection glob (rare), suppress with
+  `# conformance: ignore[T013] <reason>` instead of moving it.
+
+  `classification` is always `"judgment"` — even when the correct tier is
+  unambiguous from the test's imports/fixtures (e.g. it uses a
+  `testcontainers` fixture → integration), the fix moves a file under
+  `tests/`, which is outside the remediator's write-scope (see
+  `remediate-finding.prose.md`); route to residue with the suggested
+  destination for a human to apply.
+
+- **T014 CoverageGateDisabled** — `[tool.coverage]` is configured but
+  `[tool.coverage.report].fail_under` is absent or `0`. Run the test suite's
+  own coverage report (or read the most recent CI coverage artifact) to find
+  the *current* measured percentage, then set `fail_under` to that value (or
+  the nearest whole number at or below it — never above, or the fix itself
+  would fail the gate it's setting). Do not jump straight to the 90-100%
+  target in one step; that is a follow-up ratchet, not this fix.
+
+  ```toml
+  [tool.coverage.report]
+  fail_under = 60  # current measured percentage; ratchet up in follow-ups
+  ```
+
+  `classification` is `"judgment"` — the specific number requires knowing
+  the repo's actual current coverage, which isn't in the finding.
+
+- **T015 CoverageOmitsProductCode** — `[tool.coverage.run].omit` excludes
+  real product code under `app/`, or `source` is configured but excludes the
+  `app/` tree entirely. Read each offending `omit` entry named in the
+  finding's message: if it targets a real handler/client/mapper module,
+  remove it from `omit` (or narrow `source` to include `app/`) so that
+  module contributes to (and is held to) the coverage floor. Only keep an
+  `app/`-rooted omission if it targets generated contract artifacts
+  (`app/generated/**`) or test infra — anything else should come out.
+
+  `classification` is `"judgment"` — confirming a given module is safe to
+  keep omitted (vs. real product code that should count) requires reading
+  what the module does, not just its path.
+
 **Suppress outcome (strict mode only, WARNING-tier findings)**:
 
 When `mode == "strict"` and `finding.disposition == "warning"`, the model may
-propose a suppression instead of a fix if the test location is a false positive
-(e.g. a conftest helper that looks like a test but is not one):
+propose a suppression instead of a fix if the location is a false positive
+(e.g. a conftest helper that looks like a test but is not one; or, for
+T011/T012, an app with a deliberate `exempt_test_tiers` entry not yet added):
 
 ```
-# conformance: ignore[T001] <concise justification, 8–40 words>
+# conformance: ignore[TNNN] <concise justification, 8–40 words>
 ```
+
+using the specific rule id from `finding.rule_id` (e.g. `T001`, `T009`,
+`T014`).
 
 The justification must describe *why* the marker is inappropriate here, not
 merely that the rule is being suppressed.  Route every suppression to residue

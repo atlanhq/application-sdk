@@ -44,8 +44,13 @@ from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any
 
+from conformance.suite.checks._ast_common import _is_suppressed
 from conformance.suite.checks._ast_common import discover as _discover_sources
-from conformance.suite.checks._ast_common import is_sdk_package_name, make_cli_main
+from conformance.suite.checks._ast_common import (
+    is_sdk_package_name,
+    make_cli_main,
+    parse_toml_suppressions,
+)
 from conformance.suite.schema.findings import Finding
 
 SERIES = "D"
@@ -85,14 +90,6 @@ _REMOTE_COMPONENT_FETCH_RE = re.compile(
 # by ``test_d006_sdk_python_floor_matches_sdk_pyproject``, which re-reads the
 # SDK's real pyproject.toml and fails if this constant drifts.
 SDK_PYTHON_FLOOR: tuple[int, int] = (3, 11)
-
-# Inline suppression directive; identical regex to the E-series so the docs
-# remain consistent (``# conformance: ignore[D00x] reason``). TOML uses ``#``
-# for comments, so this slots in naturally.
-_SUPPRESS_RE = re.compile(
-    r"^#\s*conformance\s*:\s*ignore\s*(?:\[([^\]]*)\])?\s*(.*)",
-    re.IGNORECASE,
-)
 
 # A PEP 508 / requirement-string fragment. Captures the package *name*; the
 # rest of the line is treated as the version-specifier blob.
@@ -480,62 +477,6 @@ def _iter_dependency_group_entries(
 
 
 # ---------------------------------------------------------------------------
-# Suppression
-# ---------------------------------------------------------------------------
-
-
-def _parse_suppressions(text: str) -> dict[int, tuple[frozenset[str] | None, str]]:
-    """Return ``{lineno: (rule_ids_or_None, justification)}`` for every
-    ``# conformance: ignore[...]`` directive in *text*.
-
-    ``rule_ids_or_None`` is ``None`` for a rule-id-less directive (matches any
-    rule on that line). Framed from the violation's side to match
-    ``_is_suppressed``: a directive at line N suppresses findings on lines N and
-    N+1 (its own line and the one immediately below — the E-series convention,
-    so users only have to learn one form).
-    """
-    out: dict[int, tuple[frozenset[str] | None, str]] = {}
-    for lineno, raw in enumerate(text.splitlines(), start=1):
-        stripped = raw.lstrip()
-        # A suppression must be on a comment-only line *or* trail an entry as
-        # ``"req-spec",  # conformance: ignore[D002] reason``.
-        idx = stripped.find("#")
-        if idx == -1:
-            continue
-        comment = stripped[idx:]
-        m = _SUPPRESS_RE.match(comment)
-        if m is None:
-            continue
-        ids_blob = (m.group(1) or "").strip()
-        ids: frozenset[str] | None = (
-            None
-            if not ids_blob
-            else frozenset(s.strip() for s in ids_blob.split(",") if s.strip())
-        )
-        out[lineno] = (ids, m.group(2).strip())
-    return out
-
-
-def _is_suppressed(
-    suppressions: dict[int, tuple[frozenset[str] | None, str]],
-    rule_id: str,
-    line: int,
-) -> tuple[bool, str | None]:
-    """Return ``(suppressed, justification)`` for a finding at *line*.
-
-    A directive on the same line or on the line immediately above suppresses
-    the finding when its rule-id list is empty *or* contains *rule_id*.
-    """
-    for cand in (line, line - 1):
-        if cand not in suppressions:
-            continue
-        ids, just = suppressions[cand]
-        if ids is None or rule_id in ids:
-            return True, just
-    return False, None
-
-
-# ---------------------------------------------------------------------------
 # SDK-managed-deps lookup
 # ---------------------------------------------------------------------------
 
@@ -774,7 +715,7 @@ def scan_text(
         return []
 
     findings: list[Finding] = []
-    suppressions = _parse_suppressions(text)
+    suppressions = parse_toml_suppressions(text)
 
     entries = list(_iter_dep_entries(text, data=data))
 
@@ -1253,7 +1194,7 @@ def scan_all(
     d003_findings, unresolved = _scan_unused_dependencies(
         dep_entries,
         imported_modules,
-        _parse_suppressions(text),
+        parse_toml_suppressions(text),
         str(rel),
         dist_import_map=dist_import_map,
     )
