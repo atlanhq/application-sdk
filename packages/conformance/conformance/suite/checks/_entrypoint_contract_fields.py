@@ -280,6 +280,14 @@ def resolve_contract_fields(
     mirrors Python's MRO. Cycle-safe: mirrors the ``visiting``-guarded pattern
     used by :func:`resolve_ancestor` in ``_error_code_prefix``.
 
+    Each ancestor contributes its fields at most once, via the first (highest
+    MRO precedence) path that reaches it — tracked by *merged*, separate from
+    the per-branch cycle-detection *visiting* set. Without this, a shared
+    ancestor in diamond-shaped multiple inheritance (``D(B, C)`` where both
+    ``B`` and ``C`` derive from ``A``) would be re-merged once per path,
+    re-applying its fields and clobbering an override a higher-precedence
+    sibling already established for the same field name.
+
     ``ClassRecord.bases`` (not ``rec.node.bases``) is used once recursion
     reaches a registered ancestor: ``collect_classes`` already de-aliases base
     names against *that ancestor's own file*, so re-deriving them here against
@@ -292,8 +300,11 @@ def resolve_contract_fields(
     findings for inherited fields on *classdef* itself instead.
     """
     fields_by_name: dict[str, _FieldInfo] = {}
+    merged: set[str] = set()
 
     def merge_ancestor(name: str, visiting: set[str]) -> None:
+        if name in merged:
+            return  # already contributed via a higher-precedence path
         if name in visiting:
             return  # cycle — treat as unknown, same as resolve_ancestor
         visiting.add(name)
@@ -314,6 +325,7 @@ def resolve_contract_fields(
                     status=sdk_field.status,
                     node=None,
                 )
+        merged.add(name)
 
         visiting.discard(name)
 

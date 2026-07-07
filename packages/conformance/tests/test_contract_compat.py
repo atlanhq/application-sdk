@@ -476,6 +476,78 @@ def test_classvar_on_base_class_excluded_from_resolution(tmp_path: Path) -> None
     assert "B005" not in _ids(findings)
 
 
+# ── Inheritance: diamond multiple inheritance ─────────────────────────────────
+
+_DIAMOND_A_FILE = """\
+class A:
+    shared: str
+    unique_a: str
+"""
+
+_DIAMOND_B_FILE = """\
+from a import A
+
+class B(A):
+    pass
+"""
+
+_DIAMOND_C_FILE = """\
+from a import A
+
+class C(A):
+    shared: int  # overrides A's type for this field
+"""
+
+_DIAMOND_APP_FILE = """\
+from application_sdk.app import App
+from b import B
+from c import C
+
+class D(B, C):
+    pass
+
+class MyApp(App):
+    async def run(self, input: D) -> None:
+        pass
+"""
+
+_DIAMOND_FILES = {
+    "a.py": _DIAMOND_A_FILE,
+    "b.py": _DIAMOND_B_FILE,
+    "c.py": _DIAMOND_C_FILE,
+    "app.py": _DIAMOND_APP_FILE,
+}
+
+
+def test_diamond_inheritance_resolves_via_mro_not_last_visited_path(
+    tmp_path: Path,
+) -> None:
+    """D(B, C), B(A), C(A): D.shared must resolve to C's override (int), not A's
+    original type (str), matching Python's actual MRO (D, B, C, A).
+
+    Regression test: a shared ancestor (A) reachable via two sibling branches
+    (B and C) must contribute its fields at most once. Re-merging A a second
+    time (via B, after C already overrode 'shared') must not clobber C's
+    override back to A's original type.
+    """
+    ledger = _make_ledger(ContractField("D", "shared", "int", "active"))
+    findings = _scan(tmp_path, _DIAMOND_FILES, ledger)
+    assert "B005" not in _ids(
+        findings
+    ), "D.shared must resolve to C's override (int) via MRO, not A's str"
+
+
+def test_diamond_inheritance_untouched_field_still_resolves(tmp_path: Path) -> None:
+    """A field only A declares (untouched by B, C, or D) is still resolved once."""
+    ledger = _make_ledger(
+        ContractField("D", "unique_a", "str", "active"),
+        ContractField("D", "shared", "int", "active"),
+    )
+    findings = _scan(tmp_path, _DIAMOND_FILES, ledger)
+    assert "B005" not in _ids(findings)
+    assert "B006" not in _ids(findings)
+
+
 # ── Inheritance: SDK-provided mixin resolved via static registry ─────────────
 
 _EP_MIXIN_OUTPUT = """\
