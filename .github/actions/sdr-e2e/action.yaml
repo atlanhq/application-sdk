@@ -464,6 +464,13 @@ runs:
           # 1. Upstream localstorage component (overrides the configurator's
           #    unusable S3-to-tenant atlan-objectstore). Copied AFTER the
           #    component-override step, so it wins.
+          #    Remove ANY configurator-generated component that declares
+          #    metadata.name: atlan-objectstore first — matched by name, not
+          #    filename, since the configurator may emit it under a different
+          #    filename. Otherwise Dapr loads two components with the same name
+          #    (ours alongside, not overriding) and routing is undefined.
+          grep -rlE '^[[:space:]]*name:[[:space:]]*atlan-objectstore[[:space:]]*$' \
+            ci-deploy/components/ 2>/dev/null | xargs -r rm -f
           cp "${ACTION_ROOT}/two-store/atlan-objectstore.yaml" ci-deploy/components/
           # 2. Host-writable mount dirs (containers run as uid 1000; a root-owned
           #    bind mount would be permission-denied to daprd/the app).

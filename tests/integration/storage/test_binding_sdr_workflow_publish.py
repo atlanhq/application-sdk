@@ -99,12 +99,19 @@ async def extract_assets(args: dict) -> str:
     n = int(args["n_records"])
     base_path = args["base_path"]
 
+    # A small SQL-shaped crawl nested under the connection QN — varied typeNames
+    # (1 db, 1 schema, 2 tables, rest columns) so the count/location assertions
+    # exercise a realistic hierarchy rather than N identical records.
+    schema_qn = f"{connection_qn}/db/schema"
     records = [
-        {
-            "typeName": "Column",
-            "qualifiedName": f"{connection_qn}/db/schema/table/col_{i}",
-        }
-        for i in range(n)
+        {"typeName": "Database", "qualifiedName": f"{connection_qn}/db"},
+        {"typeName": "Schema", "qualifiedName": schema_qn},
+        {"typeName": "Table", "qualifiedName": f"{schema_qn}/table_0"},
+        {"typeName": "Table", "qualifiedName": f"{schema_qn}/table_1"},
+    ]
+    records += [
+        {"typeName": "Column", "qualifiedName": f"{schema_qn}/table_0/col_{i}"}
+        for i in range(n - len(records))
     ]
 
     async with RollingFileWriter(
@@ -322,11 +329,12 @@ async def test_gcs_sdr_workflow_publish_lands_assets(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Emulator (MinIO) — the CHEAP, every-PR counterpart of the real-cloud tests.
-# Runs in the SDK storage-emulator job (every SDK PR) and, via the sdr-e2e
-# composite action, on every connector PR — so an app's SDR-readiness is
-# validated end-to-end (workflow → publish → count/location) with no real-cloud
-# cost. The real-cloud variants above run nightly SDK-side.
+# Emulator (MinIO) — the CHEAP, creds-free counterpart of the real-cloud tests.
+# Runs in the SDK storage-emulator job on every SDK PR (no real-cloud cost).
+# NOTE: this is an application-sdk test, so it does NOT run on connector PRs —
+# the sdr-e2e action runs the connector's OWN SDR suite (its inputs.test-path),
+# and that suite + the two-store guards give the connector its workflow →
+# publish → count/location coverage. The real-cloud variants above run nightly.
 # ---------------------------------------------------------------------------
 
 _MINIO_ENDPOINT = os.environ.get("AWS_ENDPOINT_URL", "http://localhost:9000")

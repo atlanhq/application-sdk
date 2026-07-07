@@ -370,6 +370,34 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
                 result.success = False
                 result.error = exc
                 raise
+        elif (
+            scenario.api.lower() == "workflow"
+            and result.success
+            and (
+                scenario.expected_data
+                or scenario.schema_base_path
+                or self.schema_base_path
+            )
+            and (
+                self._sdr_flag("SDR_REQUIRE_ASSETS_LANDED", self.require_assets_landed)
+                or self._sdr_flag(
+                    "SDR_REQUIRE_UPSTREAM_ASSETS_LANDED",
+                    self.require_upstream_assets_landed,
+                )
+            )
+        ):
+            # An assets-landed guard is requested, but this scenario validates
+            # via expected_data/schema_base_path — so the guard block above is
+            # skipped and the check silently does NOT run. Surface it so a green
+            # tick isn't mistaken for guard coverage.
+            logger.warning(
+                "SDR workflow scenario %r: an assets-landed guard is enabled "
+                "(SDR_REQUIRE_ASSETS_LANDED / SDR_REQUIRE_UPSTREAM_ASSETS_LANDED) but "
+                "the scenario validates via expected_data/schema_base_path, so the "
+                "guard is NOT applied here. Use a scenario without "
+                "expected_data/schema_base_path to enforce the assets-landed check.",
+                scenario.name,
+            )
         return result
 
     # ------------------------------------------------------------------
@@ -471,11 +499,18 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
                     len(records),
                 )
             else:
+                # Segment-boundary match: the connection asset itself (qn ==
+                # conn_qn) or a descendant (conn_qn + "/..."). A bare startswith
+                # would treat "default/oracle/17300" as nested under
+                # "default/oracle/1730".
                 misplaced = [
                     qn
                     for r in records
                     for qn in [(r.get("attributes") or {}).get("qualifiedName")]
-                    if isinstance(qn, str) and qn and not qn.startswith(conn_qn)
+                    if isinstance(qn, str)
+                    and qn
+                    and qn != conn_qn
+                    and not qn.startswith(conn_qn + "/")
                 ]
                 assert not misplaced, (
                     f"SDR workflow scenario '{scenario.name}': {len(misplaced)} of "

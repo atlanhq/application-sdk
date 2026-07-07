@@ -472,6 +472,73 @@ def test_assets_landed_fails_on_wrong_location(workflow_scenario: Scenario) -> N
             suite._assert_assets_landed(workflow_scenario, _RESP)
 
 
+def test_assets_landed_flags_sibling_prefix_boundary(
+    workflow_scenario: Scenario,
+) -> None:
+    """A sibling connection that shares a numeric prefix (…/1700 vs …/17000)
+    must be flagged misplaced — the connection-prefix check is segment-boundary
+    aware, not a bare startswith."""
+    suite = _WfSuite()
+    with patch(
+        _LOAD,
+        return_value=[
+            _asset("default/mssql/1700/db/sch/t1"),
+            _asset(
+                "default/mssql/17000/db/sch/t2"
+            ),  # different connection, shared prefix
+        ],
+    ):
+        with pytest.raises(AssertionError, match="NOT nested under the connection"):
+            suite._assert_assets_landed(workflow_scenario, _RESP)
+
+
+def test_assets_landed_allows_connection_asset_itself(
+    workflow_scenario: Scenario,
+) -> None:
+    """The connection asset itself (qn == connection QN) is nested, not misplaced."""
+    suite = _WfSuite()
+    with patch(
+        _LOAD,
+        return_value=[
+            _asset("default/mssql/1700"),  # the connection asset itself
+            _asset("default/mssql/1700/db/sch/t1"),
+        ],
+    ):
+        suite._assert_assets_landed(workflow_scenario, _RESP)  # no raise
+
+
+def test_execute_scenario_warns_when_guard_enabled_but_expected_data_set(
+    tmp_path, monkeypatch
+) -> None:
+    """A guard enabled via env is a silent no-op when the scenario validates via
+    expected_data — the guard must NOT run and the skip must be warned, so a
+    green tick isn't mistaken for assets-landed coverage."""
+    monkeypatch.setenv("SDR_REQUIRE_ASSETS_LANDED", "true")
+    expected = tmp_path / "expected.json"
+    expected.write_text("{}")
+    sc = Scenario(
+        name="wf",
+        api="workflow",
+        assert_that={"success": lambda v: True},
+        workflow_timeout=300,
+        expected_data=str(expected),
+    )
+    suite = _Suite()
+    with (
+        patch.object(
+            BaseIntegrationTest,
+            "_execute_scenario",
+            return_value=MagicMock(success=True, response=_RESP),
+        ),
+        patch.object(suite, "_assert_assets_landed") as guard,
+        patch("application_sdk.testing.sdr.base.logger") as mock_logger,
+    ):
+        suite._execute_scenario(sc)
+    guard.assert_not_called()
+    warned = " ".join(str(c.args) for c in mock_logger.warning.call_args_list)
+    assert "guard is enabled" in warned
+
+
 def test_assets_landed_skips_location_when_conn_qn_unresolved(
     workflow_scenario: Scenario,
 ) -> None:
