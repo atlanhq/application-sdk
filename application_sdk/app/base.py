@@ -1564,6 +1564,13 @@ async def _run_preflight_gate(
 
     Credential resolution happens inside the activity, not here — the
     deterministic workflow only forwards secret-free references.
+
+    Dispatch is to the single **app-level** handler (one gate per app), with
+    ``entrypoint`` threaded through so a handler can branch internally by entry
+    point. Unlike the HTTP ``/check`` path, the gate does not resolve
+    per-entrypoint handler modules (``service.py``'s ``_discover_handler_fn``);
+    a multi-entrypoint app that needs per-entrypoint preflight logic branches on
+    ``input.entrypoint`` inside its one handler.
     """
     if not workflow.patched("preflight-gate"):
         return
@@ -1573,9 +1580,9 @@ async def _run_preflight_gate(
             CredentialResolvable,
         )
         from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
-            _GATE_RETRY,
-            _GATE_SCHEDULE_TO_CLOSE,
-            _GATE_START_TO_CLOSE,
+            GATE_RETRY,
+            GATE_SCHEDULE_TO_CLOSE,
+            GATE_START_TO_CLOSE,
             preflight_gate_activity_name,
         )
         from application_sdk.handler.contracts import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
@@ -1613,9 +1620,9 @@ async def _run_preflight_gate(
             preflight_gate_activity_name(app_name),
             gate_input,
             result_type=PreflightOutput,
-            schedule_to_close_timeout=_GATE_SCHEDULE_TO_CLOSE,
-            start_to_close_timeout=_GATE_START_TO_CLOSE,
-            retry_policy=_GATE_RETRY,
+            schedule_to_close_timeout=GATE_SCHEDULE_TO_CLOSE,
+            start_to_close_timeout=GATE_START_TO_CLOSE,
+            retry_policy=GATE_RETRY,
         )
     except FailureError:
         _safe_log(

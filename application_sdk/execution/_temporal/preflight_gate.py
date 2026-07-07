@@ -60,9 +60,9 @@ def preflight_gate_activity_name(app_name: str) -> str:
 # source can't stall extraction start indefinitely. start_to_close is sized so
 # two attempts (plus backoff) fit inside schedule_to_close — otherwise the retry
 # is cosmetic (the second attempt can't run before the schedule cap fires).
-_GATE_SCHEDULE_TO_CLOSE = timedelta(seconds=60)
-_GATE_START_TO_CLOSE = timedelta(seconds=25)
-_GATE_RETRY = RetryPolicy(maximum_attempts=2, backoff_coefficient=2)
+GATE_SCHEDULE_TO_CLOSE = timedelta(seconds=60)
+GATE_START_TO_CLOSE = timedelta(seconds=25)
+GATE_RETRY = RetryPolicy(maximum_attempts=2, backoff_coefficient=2)
 
 
 def build_preflight_gate_activity(

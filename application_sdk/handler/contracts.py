@@ -457,6 +457,14 @@ class PreflightGateInput(BaseModel):
     ``extraction_method``/``credential_guid``/``agent_json`` triple so it
     satisfies ``CredentialResolvable`` and ``CredentialRef.resolve`` works on
     it directly.
+
+    No ``connection_config`` is threaded: the extraction ``input_data`` carries
+    none (``connection_config`` is a UI-form field populated only on the HTTP
+    ``/check`` path). On the gate path a handler reads connectivity (host, port,
+    database, …) from the resolved ``credentials`` the activity injects into
+    :class:`PreflightInput` — the same credentials the HTTP path receives — so
+    handlers that already resolve connectivity from credentials behave
+    identically on both surfaces.
     """
 
     extraction_method: str = ""
