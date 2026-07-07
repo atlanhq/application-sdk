@@ -430,6 +430,8 @@ runs:
       env:
         SDK_COMPOSE: ${{ steps.action_root.outputs.path }}/docker-compose.ci.yml
         APP_COMPOSE: ${{ inputs.compose-overlay }}
+        APP_NAME: ${{ inputs.app-name }}
+        ACTION_ROOT: ${{ steps.action_root.outputs.path }}
       run: |
         # Order: configurator-generated base → SDK CI overrides → optional app layer.
         FILES=("-f" "ci-deploy/docker-compose.yaml" "-f" "${SDK_COMPOSE}")
@@ -444,6 +446,41 @@ runs:
           echo "Adding app-level compose layer from ${OVERLAY}"
           FILES+=("-f" "${OVERLAY}")
         fi
+
+        # ── Two-store SDR mode (opt-in, SDK-side, scoped to the allowlist) ─────
+        # For these connectors run the FULL SDR flow in CI: extract → deployment
+        # store, then the connector's upload_to_atlan/upload_to_upstream →
+        # UPSTREAM (atlan-objectstore) store that Publish reads. Both stores are
+        # local + bind-mounted to the host so BaseSDRIntegrationTest's
+        # assets-landed (deployment) + upstream guards can assert count/location.
+        # Everything here is SDK-side — no connector-repo change. Adding a
+        # connector to the case below is the only edit needed to onboard it.
+        case "${APP_NAME}" in
+          oracle | mssql | mysql | redshift | saperp | tableau | looker) TWO_STORE=1 ;;
+          *) TWO_STORE=0 ;;
+        esac
+        if [ "${TWO_STORE}" = "1" ]; then
+          echo "Two-store SDR mode enabled for '${APP_NAME}'"
+          # 1. Upstream localstorage component (overrides the configurator's
+          #    unusable S3-to-tenant atlan-objectstore). Copied AFTER the
+          #    component-override step, so it wins.
+          cp "${ACTION_ROOT}/two-store/atlan-objectstore.yaml" ci-deploy/components/
+          # 2. Host-writable mount dirs (containers run as uid 1000; a root-owned
+          #    bind mount would be permission-denied to daprd/the app).
+          mkdir -p "${GITHUB_WORKSPACE}/data" "${GITHUB_WORKSPACE}/data-upstream"
+          chmod 777 "${GITHUB_WORKSPACE}/data" "${GITHUB_WORKSPACE}/data-upstream"
+          # 3. Overlay: pin the SDR upload envs + bind-mount both stores.
+          FILES+=("-f" "${ACTION_ROOT}/two-store/docker-compose.two-store.yml")
+          # 4. Enable + point the guards (read host-side by the pytest run;
+          #    GITHUB_ENV persists to the "Run connector SDR tests" step).
+          {
+            echo "SDR_REQUIRE_ASSETS_LANDED=true"
+            echo "SDR_REQUIRE_UPSTREAM_ASSETS_LANDED=true"
+            echo "SDR_EXTRACTED_OUTPUT_BASE_PATH=data/artifacts/apps/${APP_NAME}/workflows"
+            echo "SDR_UPSTREAM_OUTPUT_BASE_PATH=data-upstream/artifacts/apps/${APP_NAME}/workflows"
+          } >> "$GITHUB_ENV"
+        fi
+
         # Persist the array as a single space-joined string (compose -f flags
         # are simple paths, no whitespace issues).
         echo "files=${FILES[*]}" >> "$GITHUB_OUTPUT"

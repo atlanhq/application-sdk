@@ -1,0 +1,22 @@
+# Two-store SDR CI overlay (opt-in via the action's app-name allowlist).
+#
+# Bind-mounts BOTH object stores to the host so the SDR guards (host-side pytest)
+# can read them, and pins the SDR upload envs. Absolute host paths via
+# GITHUB_WORKSPACE because compose resolves relative volume paths against the
+# FIRST -f file's dir (ci-deploy/), not this overlay — same reason the SDK
+# secrets mount uses ${GITHUB_WORKSPACE}. The host dirs are pre-created +
+# chmod 777 by the action (containers run as uid 1000; a root-owned bind mount
+# would be permission-denied).
+services:
+  atlan-app:
+    environment:
+      # Pinned (the configurator .env already sets these) so two-store mode is
+      # self-documenting and robust to a configurator change.
+      - ENABLE_ATLAN_UPLOAD=true
+      - DEPLOYMENT_OBJECT_STORE_NAME=objectstore
+      - UPSTREAM_OBJECT_STORE_NAME=atlan-objectstore
+    volumes:
+      # Deployment store (objectstore.yaml rootPath /tmp/atlan-data) → host ./data
+      - ${GITHUB_WORKSPACE}/data:/tmp/atlan-data
+      # Upstream store (two-store/atlan-objectstore.yaml rootPath /tmp/atlan-upstream) → host ./data-upstream
+      - ${GITHUB_WORKSPACE}/data-upstream:/tmp/atlan-upstream

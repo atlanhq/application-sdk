@@ -1,0 +1,20 @@
+# Two-store SDR CI mode (opt-in via the action's app-name allowlist).
+#
+# Overrides the configurator-generated atlan-objectstore component (which is a
+# bindings.aws.s3 binding pointed at the tenant's /api/blobstorage and is not
+# usable in CI) with a LOCAL store, so the connector's upload_to_atlan /
+# upload_to_upstream step actually runs and writes the transformed/ handoff to a
+# path we bind-mount to the host. The SDR upstream guard then asserts it is
+# populated — catching the "green extraction but Publish publishes 0 assets"
+# class (atlan-looker-app#134). rootPath differs from the deployment store's
+# /tmp/atlan-data so the two stores don't collide.
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: atlan-objectstore
+spec:
+  type: bindings.localstorage
+  version: v1
+  metadata:
+    - name: rootPath
+      value: /tmp/atlan-upstream
