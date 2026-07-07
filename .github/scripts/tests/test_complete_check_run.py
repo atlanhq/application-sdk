@@ -20,6 +20,19 @@ def _completed(stdout: str) -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
 
 
+def _list_check_runs_call(cmd: list[str]) -> bool:
+    """True for the paginated 'gh api --paginate .../check-runs ... --jq' call."""
+    return "--paginate" in cmd and any(
+        "check-runs?per_page=100" in part for part in cmd
+    )
+
+
+def _ndjson(runs: list[dict]) -> subprocess.CompletedProcess:
+    """What `--jq '.check_runs[] | tojson'` produces: one compact JSON object
+    per line, regardless of how many pages it took to gather them."""
+    return _completed("\n".join(json.dumps(r) for r in runs) + ("\n" if runs else ""))
+
+
 def test_find_check_run_picks_highest_id_on_duplicates():
     runs = [
         {"id": 1, "name": NAME},
@@ -45,13 +58,49 @@ def test_truncate_summary_long_gets_truncated():
     assert result.endswith("(truncated)")
 
 
+def test_list_check_runs_uses_paginate_and_parses_ndjson(monkeypatch):
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _ndjson([{"id": 1, "name": NAME}, {"id": 2, "name": "other"}])
+
+    monkeypatch.setattr(mod, "run", fake_run)
+
+    runs = mod.list_check_runs(REPO, SHA)
+
+    assert "--paginate" in captured["cmd"]
+    assert "--jq" in captured["cmd"]
+    assert runs == [{"id": 1, "name": NAME}, {"id": 2, "name": "other"}]
+
+
+def test_list_check_runs_handles_empty_result(monkeypatch):
+    monkeypatch.setattr(mod, "run", lambda cmd, **kw: _ndjson([]))
+    assert mod.list_check_runs(REPO, SHA) == []
+
+
+def test_list_check_runs_raises_on_failure(monkeypatch):
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(
+            args=[], returncode=1, stdout="", stderr="rate limited"
+        )
+
+    monkeypatch.setattr(mod, "run", fake_run)
+
+    try:
+        mod.list_check_runs(REPO, SHA)
+        assert False, "expected SystemExit"
+    except SystemExit as e:
+        assert "rate limited" in str(e)
+
+
 def test_complete_check_run_patches_existing(monkeypatch):
     calls = []
 
     def fake_run(cmd, **kwargs):
         calls.append((cmd, kwargs.get("input")))
-        if cmd[0:2] == ["gh", "api"] and "check-runs?per_page=100" in cmd[2]:
-            return _completed(json.dumps({"check_runs": [{"id": 55, "name": NAME}]}))
+        if _list_check_runs_call(cmd):
+            return _ndjson([{"id": 55, "name": NAME}])
         return _completed("{}")
 
     monkeypatch.setattr(mod, "run", fake_run)
@@ -73,8 +122,8 @@ def test_complete_check_run_creates_when_missing(monkeypatch):
 
     def fake_run(cmd, **kwargs):
         calls.append((cmd, kwargs.get("input")))
-        if "check-runs?per_page=100" in cmd[2]:
-            return _completed(json.dumps({"check_runs": []}))
+        if _list_check_runs_call(cmd):
+            return _ndjson([])
         return _completed("{}")
 
     monkeypatch.setattr(mod, "run", fake_run)
@@ -91,8 +140,8 @@ def test_complete_check_run_creates_when_missing(monkeypatch):
 
 def test_complete_check_run_raises_on_patch_failure(monkeypatch):
     def fake_run(cmd, **kwargs):
-        if "check-runs?per_page=100" in cmd[2]:
-            return _completed(json.dumps({"check_runs": [{"id": 1, "name": NAME}]}))
+        if _list_check_runs_call(cmd):
+            return _ndjson([{"id": 1, "name": NAME}])
         return subprocess.CompletedProcess(
             args=[], returncode=1, stdout="", stderr="nope"
         )
@@ -113,8 +162,8 @@ def test_main_reads_summary_file(monkeypatch, tmp_path):
 
     def fake_run(cmd, **kwargs):
         calls.append((cmd, kwargs.get("input")))
-        if "check-runs?per_page=100" in cmd[2]:
-            return _completed(json.dumps({"check_runs": [{"id": 9, "name": NAME}]}))
+        if _list_check_runs_call(cmd):
+            return _ndjson([{"id": 9, "name": NAME}])
         return _completed("{}")
 
     monkeypatch.setattr(mod, "run", fake_run)

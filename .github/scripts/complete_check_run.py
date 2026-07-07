@@ -39,8 +39,20 @@ def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
 
 
 def list_check_runs(repo: str, sha: str) -> list[dict]:
+    # --paginate follows the Link: rel="next" header across pages; --jq
+    # flattens each page's nested `check_runs` array and `tojson`-encodes
+    # each entry so every check run prints on its own line regardless of
+    # how many pages it took to fetch them all (a commit with >100 check
+    # runs would otherwise silently lose the ones on page 2+).
     result = run(
-        ["gh", "api", f"repos/{repo}/commits/{sha}/check-runs?per_page=100"],
+        [
+            "gh",
+            "api",
+            "--paginate",
+            f"repos/{repo}/commits/{sha}/check-runs?per_page=100",
+            "--jq",
+            ".check_runs[] | tojson",
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -49,7 +61,7 @@ def list_check_runs(repo: str, sha: str) -> list[dict]:
         raise SystemExit(
             f"::error::failed to list check runs for {repo}@{sha}: {result.stderr}"
         )
-    return json.loads(result.stdout).get("check_runs", [])
+    return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
 
 
 def find_check_run(check_runs: list[dict], name: str) -> dict | None:

@@ -120,6 +120,29 @@ def test_wait_for_checks_uses_304_cache_without_losing_state(monkeypatch):
     assert calls["n"] == 1  # loop breaks right after the first (complete) poll
 
 
+def test_wait_for_checks_fails_loudly_when_truncated(monkeypatch):
+    # total_count exceeds what a single per_page=100 page returns — ETag
+    # caching can't safely span multiple pages (a page-1 match doesn't
+    # prove page 2 is unchanged), so this must fail closed rather than
+    # silently missing check runs that live past page 1.
+    def fake_run(cmd, **kwargs):
+        body = {
+            "total_count": 150,
+            "check_runs": [
+                {"name": NAMES[0], "status": "completed", "conclusion": "success"}
+            ],
+        }
+        return _http_response(200, '"v1"', body)
+
+    monkeypatch.setattr(mod, "run", fake_run)
+    try:
+        mod.wait_for_checks(REPO, SHA, NAMES, sleep=lambda s: None)
+        assert False, "expected SystemExit"
+    except SystemExit as e:
+        assert "150 check runs" in str(e)
+        assert "pagination isn't supported" in str(e)
+
+
 def test_wait_for_checks_fails_on_bad_conclusion(monkeypatch):
     def fake_run(cmd, **kwargs):
         runs = [

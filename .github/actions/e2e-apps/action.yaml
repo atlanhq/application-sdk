@@ -63,7 +63,13 @@ inputs:
 runs:
   using: "composite"
   steps:
+    # Only callback mode needs the repo on disk (it runs .github/scripts/*.py
+    # directly). Poll mode's steps (codex-/return-dispatch, curl, gh api,
+    # github-script) never touch local files, and the calling job has
+    # already checked out the repo before invoking this local composite
+    # action anyway — so this would be a pure no-op there.
     - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      if: inputs.wait-mode == 'callback'
       with:
         ref: ${{ github.ref }}
 

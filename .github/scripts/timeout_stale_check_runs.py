@@ -34,8 +34,19 @@ def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
 
 
 def list_open_prs(repo: str) -> list[dict]:
+    # --paginate follows Link: rel="next" across pages; --jq + tojson prints
+    # one compact JSON object per PR regardless of page count, so a repo
+    # with >100 open PRs doesn't silently lose the watchdog's coverage of
+    # the rest.
     result = run(
-        ["gh", "api", f"repos/{repo}/pulls?state=open&per_page=100"],
+        [
+            "gh",
+            "api",
+            "--paginate",
+            f"repos/{repo}/pulls?state=open&per_page=100",
+            "--jq",
+            ".[] | tojson",
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -44,12 +55,21 @@ def list_open_prs(repo: str) -> list[dict]:
         raise SystemExit(
             f"::error::failed to list open PRs for {repo}: {result.stderr}"
         )
-    return json.loads(result.stdout)
+    return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
 
 
 def list_check_runs(repo: str, sha: str) -> list[dict]:
+    # Same pagination rationale as list_open_prs, applied to the nested
+    # `check_runs` array.
     result = run(
-        ["gh", "api", f"repos/{repo}/commits/{sha}/check-runs?per_page=100"],
+        [
+            "gh",
+            "api",
+            "--paginate",
+            f"repos/{repo}/commits/{sha}/check-runs?per_page=100",
+            "--jq",
+            ".check_runs[] | tojson",
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -58,7 +78,7 @@ def list_check_runs(repo: str, sha: str) -> list[dict]:
         raise SystemExit(
             f"::error::failed to list check runs for {repo}@{sha}: {result.stderr}"
         )
-    return json.loads(result.stdout).get("check_runs", [])
+    return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
 
 
 def is_stale(check_run: dict, max_age: timedelta, now: datetime) -> bool:

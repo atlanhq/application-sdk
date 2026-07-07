@@ -94,7 +94,22 @@ def wait_for_checks(
     for attempt in range(1, max_attempts + 1):
         status_code, etag, body = gh_api_conditional(path, etag=etag)
         if status_code == 200 and body is not None:
-            for check_run in body.get("check_runs", []):
+            check_runs = body.get("check_runs", [])
+            # Conditional caching (If-None-Match) only covers this single
+            # page — a page-1 ETag match doesn't prove pages 2+ are
+            # unchanged too, so paginating here would risk silently missing
+            # a failing check run on a later page. That's worse than
+            # failing loudly: fail closed instead of paginating "for free".
+            total_count = body.get("total_count", len(check_runs))
+            if total_count > len(check_runs):
+                raise SystemExit(
+                    f"::error::{repo}@{sha} has {total_count} check runs, more than "
+                    f"the {len(check_runs)} this poll fetches (per_page=100) — "
+                    "pagination isn't supported here since ETag caching can't "
+                    "safely cover multiple pages. Reduce the matrix size or "
+                    "extend poll_check_runs_gate.py."
+                )
+            for check_run in check_runs:
                 if check_run.get("name") in expected_names:
                     latest[check_run["name"]] = check_run
         elif status_code != 304:
