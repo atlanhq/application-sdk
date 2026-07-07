@@ -1,4 +1,4 @@
-"""Determinism / async-correctness rule definitions (P020–P024).
+"""Determinism / async-correctness rule definitions (P020–P024, P031).
 
 App and SDK code must respect the SDK's async and determinism expectations in the
 execution path.  Temporal **workflow** code (an ``App`` subclass's ``run`` /
@@ -226,5 +226,53 @@ RULES: tuple[RuleDefinition, ...] = (
             "``# conformance: ignore[P024] <reason>``.\n"
         ),
         help_uri=f"{_HELP_BASE}#p024",
+    ),
+    RuleDefinition(
+        id="P031",
+        scope=RuleScope.BOTH,
+        name="SharedDefaultExecutorOffload",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="async-correctness",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.13.0",
+        rationale=(
+            "asyncio.to_thread(...) and run_in_executor(None, ...) both dispatch "
+            "onto asyncio's shared default executor. Temporal's Python SDK uses "
+            "that same default executor internally for its own scheduling, so "
+            "routing long-running blocking work through it can exhaust the pool "
+            "and deadlock the worker. The SDK exposes a dedicated escape hatch, "
+            "run_in_thread(), which dispatches onto its own thread pool "
+            "specifically to avoid this contention — a prior fix shipped a raw "
+            "asyncio.to_thread(...) call that nothing caught in review."
+        ),
+        short_description=(
+            "Thread offload onto asyncio's shared default executor instead of "
+            "run_in_thread()"
+        ),
+        full_description=(
+            "A call offloads blocking work onto asyncio's **shared default**\n"
+            "executor instead of the SDK's dedicated ``run_in_thread()`` pool:\n"
+            "``asyncio.to_thread(...)``, or ``run_in_executor(None, ...)``\n"
+            "(including ``loop.run_in_executor(None, ...)`` /\n"
+            "``asyncio.get_event_loop().run_in_executor(None, ...)``).  Temporal's\n"
+            "Python SDK uses that same default executor for its own internal\n"
+            "scheduling, so sharing it with long-running blocking calls can exhaust\n"
+            "the pool and deadlock the worker.  Use ``run_in_thread()`` —\n"
+            "``App.run_in_thread()`` or ``self.task_context.run_in_thread()`` — which\n"
+            "dispatches onto the SDK's own dedicated ``sdk-blocking-*`` thread pool.\n"
+            "\n"
+            "``run_in_executor(<some-executor>, ...)`` with any executor other than\n"
+            "``None`` is not flagged — a call-site-owned ``ThreadPoolExecutor`` is\n"
+            "not the shared-pool contention this rule targets.\n"
+            "``application_sdk/execution/heartbeat.py`` is exempt: that is where\n"
+            "``run_in_thread()``'s own dedicated-executor dispatch lives.\n"
+            "\n"
+            "Remediation is a restructure (swap in ``run_in_thread()``), so findings\n"
+            "route to residue.  Land as ``WARN``; suppress a reviewed exception with\n"
+            "``# conformance: ignore[P031] <reason>``.\n"
+        ),
+        help_uri=f"{_HELP_BASE}#p031",
     ),
 )

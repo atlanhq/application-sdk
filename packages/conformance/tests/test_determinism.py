@@ -1,4 +1,4 @@
-"""Meta-tests for the P-series determinism / async-correctness checks (P020–P024).
+"""Meta-tests for the P-series determinism / async-correctness checks (P020–P024, P031).
 
 Each rule is tested to fire *exactly* when it should and stay silent otherwise —
 both false positives and false negatives are guarded.  The load-bearing properties
@@ -324,11 +324,71 @@ def test_p024_suppression() -> None:
     assert len(findings) == 1 and findings[0].suppressed
 
 
+# ── P031 SharedDefaultExecutorOffload ────────────────────────────────────────
+
+
+def test_p031_flags_asyncio_to_thread() -> None:
+    body = "import asyncio\nasync def f():\n    return await asyncio.to_thread(g)\n"
+    assert len(_rule(body, "P031", header="")) == 1
+
+
+def test_p031_flags_to_thread_from_import() -> None:
+    body = (
+        "from asyncio import to_thread\n"
+        "async def f():\n"
+        "    return await to_thread(g)\n"
+    )
+    assert len(_rule(body, "P031", header="")) == 1
+
+
+def test_p031_flags_run_in_executor_none() -> None:
+    body = "async def f(loop):\n" "    return await loop.run_in_executor(None, g)\n"
+    assert len(_rule(body, "P031", header="")) == 1
+
+
+def test_p031_flags_get_event_loop_run_in_executor_none() -> None:
+    body = (
+        "import asyncio\n"
+        "async def f():\n"
+        "    return await asyncio.get_event_loop().run_in_executor(None, g)\n"
+    )
+    assert len(_rule(body, "P031", header="")) == 1
+
+
+def test_p031_silent_on_custom_executor() -> None:
+    body = (
+        "async def f(loop, pool):\n" "    return await loop.run_in_executor(pool, g)\n"
+    )
+    assert _rule(body, "P031", header="") == []
+
+
+def test_p031_exempts_heartbeat_module() -> None:
+    from conformance.suite.checks.determinism import scan_text as _scan_text
+
+    body = "import asyncio\nasync def f():\n    return await asyncio.to_thread(g)\n"
+    findings = [
+        f
+        for f in _scan_text(body, "application_sdk/execution/heartbeat.py")
+        if f.rule_id == "P031"
+    ]
+    assert findings == []
+
+
+def test_p031_suppression() -> None:
+    body = (
+        "import asyncio\n"
+        "async def f():\n"
+        "    return await asyncio.to_thread(g)  # conformance: ignore[P031] legacy\n"
+    )
+    findings = _rule(body, "P031", header="")
+    assert len(findings) == 1 and findings[0].suppressed
+
+
 # ── catalog meta-tests ───────────────────────────────────────────────────────
 
 
 def test_new_rules_present_and_scoped_both() -> None:
-    for rid in ("P020", "P021", "P022", "P023", "P024"):
+    for rid in ("P020", "P021", "P022", "P023", "P024", "P031"):
         assert rid in CATALOG, f"{rid} missing from catalog"
         assert CATALOG[rid].scope is RuleScope.BOTH
         assert CATALOG[rid].rationale.strip(), f"{rid} needs a non-empty rationale"

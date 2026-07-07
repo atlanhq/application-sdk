@@ -92,31 +92,33 @@ def test_load_respects_pool_pre_ping_override(
 
 
 @pytest.mark.asyncio
-@patch("application_sdk.clients.sql.asyncio.to_thread")
+@patch("application_sdk.clients.sql.run_in_thread")
 @patch("sqlalchemy.create_engine")
-async def test_load_uses_asyncio_to_thread_for_ping(
-    mock_create_engine: Any, mock_to_thread: AsyncMock, sql_client: BaseSQLClient
+async def test_load_uses_run_in_thread_for_ping(
+    mock_create_engine: Any, mock_run_in_thread: AsyncMock, sql_client: BaseSQLClient
 ):
-    """load() must delegate the blocking engine.connect() ping to asyncio.to_thread.
+    """load() must delegate the blocking engine.connect() ping to run_in_thread.
 
     The ping closes the event loop for the duration of the ODBC handshake; running
     it on the event loop directly starves Temporal's auto-heartbeat. Verify that
-    asyncio.to_thread is called (not a direct engine.connect() on the loop).
+    run_in_thread is called (not a direct engine.connect() on the loop, and not
+    asyncio.to_thread — which would land on asyncio's shared default executor
+    instead of the SDK's dedicated pool).
     """
     from unittest.mock import AsyncMock as _AsyncMock
 
     mock_engine = MagicMock()
     mock_create_engine.return_value = mock_engine
-    mock_to_thread.return_value = None  # AsyncMock already returns a coroutine
-    mock_to_thread.__class__ = _AsyncMock
+    mock_run_in_thread.return_value = None  # AsyncMock already returns a coroutine
+    mock_run_in_thread.__class__ = _AsyncMock
 
     # Replace with a true AsyncMock so await works
     actual_async_mock = _AsyncMock(return_value=None)
-    with patch("application_sdk.clients.sql.asyncio.to_thread", actual_async_mock):
+    with patch("application_sdk.clients.sql.run_in_thread", actual_async_mock):
         await sql_client.load({"username": "u", "password": "p"})
 
     actual_async_mock.assert_called_once()
-    # The callable passed to to_thread should trigger engine.connect when called
+    # The callable passed to run_in_thread should trigger engine.connect when called
     ping_fn = actual_async_mock.call_args[0][0]
     ping_fn()
     mock_engine.connect.assert_called_once()
@@ -671,9 +673,9 @@ async def test_load_wraps_engine_failure_as_client_error(
     mock_engine = MagicMock()
     mock_create_engine.return_value = mock_engine
 
-    # Force the connect-test inside asyncio.to_thread to fail
+    # Force the connect-test inside run_in_thread to fail
     actual_async_mock = AsyncMock(side_effect=RuntimeError("auth handshake failed"))
-    with patch("application_sdk.clients.sql.asyncio.to_thread", actual_async_mock):
+    with patch("application_sdk.clients.sql.run_in_thread", actual_async_mock):
         with pytest.raises(SqlClientAuthFailedError) as exc_info:
             await sql_client.load({"username": "u", "password": "p"})
     assert isinstance(exc_info.value.cause, RuntimeError)
