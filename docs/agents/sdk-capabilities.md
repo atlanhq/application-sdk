@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.20.3
-source-sha:    70d2c1a092a01d641eba76c8654c54517cddd056
-source-date:   2026-07-07T00:41:25+05:30
+source-sha:    5234ae098222c616bd0dafc0c6d94062a1664a2a
+source-date:   2026-07-07T09:30:51+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2646,6 +2646,8 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `passed: bool` `= False` — Whether the check passed.
   - `blocking: bool` `= False` — Whether failing this check must stop the run before extraction.
   - `message: str` `= ''` — Details about the check result.
+  - `category: FailureCategory | None` — Typed failure category for a blocking failure.
+  - `suggested_action: str` `= ''` — Optional remediation hint carried alongside the failure classification.
   - `duration_ms: float` `= 0.0` — How long the check took in milliseconds.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
