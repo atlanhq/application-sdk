@@ -275,8 +275,13 @@ class TestDaprCredentialVaultGetCredentials:
 
         with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
             vault = self._make_vault(mock_client)
-            with pytest.raises(CredentialVaultError):
+            with pytest.raises(CredentialVaultError) as exc_info:
                 await vault.get_credentials("my-guid")
+
+        # The raw ref-key must not survive into the outer CredentialVaultError's
+        # message — it's rebuilt with a hashed label before propagating out of
+        # _try_fetch, not the original SecretStoreUnavailableError("secret_key_ref").
+        assert "secret_key_ref" not in str(exc_info.value)
 
     async def test_single_key_failure_summary_does_not_leak_ref_key_in_logs(
         self,
@@ -462,6 +467,49 @@ class TestDaprCredentialVaultColdStartRetry:
         config = {"credentialSource": "direct", "host": "db.example.com"}
         mock_client = _make_mock_dapr_client(
             config_bytes=json.dumps(config).encode(), secret_data={}
+        )
+
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+            vault = self._make_vault(mock_client)
+            result = await vault.get_credentials("my-guid")
+
+        assert result["host"] == "db.example.com"
+        assert "password" not in result
+
+    async def test_genuinely_missing_bundle_proceeds_with_empty_secrets(self) -> None:
+        """Dapr's real shape for a genuinely-missing key is NOT an empty-200
+        response — it's HTTP 500 with errorCode=ERR_SECRET_GET (see
+        classify_secret_fetch_error's docstring, verified against a live
+        sidecar). An AGENT-source credential's secret-path bundle is
+        explicitly optional ("not every credential has one" — see
+        get_credentials's MULTI_KEY branch), so this must proceed with an
+        empty secret dict exactly like the empty-200 case above, not raise.
+        Regression test: this shape used to escalate to CredentialVaultError
+        because classify_secret_fetch_error returned a generic
+        SecretStoreError for it, which _get_secret's `except
+        SecretNotFoundError: return {}` never caught."""
+        config = {
+            "credentialSource": "agent",
+            "secret-path": "bundle/path",
+            "host": "db.example.com",
+        }
+        req = httpx.Request("GET", "http://localhost/secret")
+        resp = httpx.Response(
+            500,
+            request=req,
+            json={
+                "errorCode": "ERR_SECRET_GET",
+                "message": "failed getting secret with key bundle/path from "
+                "secret store secretstore: secret bundle/path not found",
+            },
+        )
+        mock_client = _make_mock_dapr_client(
+            config_bytes=json.dumps(config).encode(), secret_data={}
+        )
+        mock_client.get_secret = AsyncMock(
+            side_effect=httpx.HTTPStatusError(
+                "internal error", request=req, response=resp
+            )
         )
 
         with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):

@@ -155,13 +155,27 @@ class TestDaprSecretStore:
         with pytest.raises(SecretStoreUnavailableError):
             await self.store.get("x")
 
-    async def test_5xx_without_not_configured_code_is_not_unavailable(self):
+    async def test_5xx_with_get_error_code_is_not_found(self):
         """A bare 5xx is NOT enough to infer "cold sidecar": verified against a
         live Dapr sidecar, a *genuinely missing* secret key also returns 500
         with errorCode=ERR_SECRET_GET — identical to a still-cold component.
         Treating this as retryable would retry a permanently-missing secret
         for the full cold-start budget and then misreport it as a platform
-        outage instead of not-found."""
+        outage instead of not-found.
+
+        Classified as SecretNotFoundError specifically (not a generic
+        SecretStoreError) so every existing `except SecretNotFoundError`
+        call site in credentials/agent.py, credentials/resolver.py, and
+        infrastructure/_dapr/credential_vault.py — all written against a
+        backend-opaque "absent secret" contract, none of which know about
+        Dapr error codes — treats a genuinely-missing key as "absent"
+        without needing their own copy of this classification. Regression
+        coverage for a bug where those call sites' `except SecretNotFoundError`
+        went dead once this case stopped raising that type, breaking their
+        documented not-found contract for the common "no secret bundle"
+        case (see the AGENT-mode multi-key and single-key tests in
+        tests/unit/infrastructure/test_credential_vault.py and
+        tests/unit/credentials/test_agent.py)."""
         req = httpx.Request("GET", "http://localhost/secret")
         resp = httpx.Response(
             500,
@@ -175,7 +189,7 @@ class TestDaprSecretStore:
         self.client.get_secret.side_effect = httpx.HTTPStatusError(
             "internal error", request=req, response=resp
         )
-        with pytest.raises(SecretStoreError) as exc:
+        with pytest.raises(SecretNotFoundError) as exc:
             await self.store.get("x")
         assert not isinstance(exc.value, SecretStoreUnavailableError)
         assert exc.value.effective_retryable is False

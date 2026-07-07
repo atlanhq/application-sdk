@@ -24,7 +24,10 @@ from application_sdk.infrastructure._dapr.http import (
 )
 from application_sdk.infrastructure._secret_utils import process_secret_data
 from application_sdk.infrastructure.bindings import BindingError
-from application_sdk.infrastructure.secrets import SecretNotFoundError
+from application_sdk.infrastructure.secrets import (
+    SecretNotFoundError,
+    SecretStoreUnavailableError,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -403,7 +406,15 @@ class DaprCredentialVault:
                 # raises a typed CredentialVaultError instead of silently
                 # proceeding with an incomplete credential, mirroring the
                 # multi-key branch above.
-                raise
+                #
+                # Not a bare `raise` and not `from exc`: SecretStoreUnavailableError
+                # (the only ColdStartRaceError subtype this path raises) carries
+                # the raw ref-key in both `.secret_name` and `__str__()`, and its
+                # `cause` (the underlying httpx exception) can re-embed the same
+                # ref-key via a percent-encoded request URL — the exact leak the
+                # `except Exception` branch below scrubs at length. Re-raise a
+                # hash-labelled, cause-free equivalent instead of the original.
+                raise SecretStoreUnavailableError(f"sha256:{value_hash}") from None
             # conformance: ignore[E004] exc_info=True would leak the raw ref-key (SecretStoreError.__str__ embeds `secret=<ref-key>`); hash + exception type name logged instead, mirroring retry_past_dapr_cold_start's warning log
             except Exception as e:
                 logger.debug(

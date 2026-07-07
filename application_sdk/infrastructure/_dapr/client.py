@@ -150,6 +150,15 @@ def is_dapr_transport_unavailable(exc: BaseException) -> bool:
 #: ``pkg/api/http/http_test.go`` in ``dapr/dapr`` for the canonical mapping.
 _ERR_SECRET_STORES_NOT_CONFIGURED = "ERR_SECRET_STORES_NOT_CONFIGURED"
 
+#: Dapr's "failed to get the secret" code for an already-ready, correctly
+#: configured store — the shape it uses for a genuinely-missing key. NOT a
+#: safe signal on its own (see :data:`_ERR_SECRET_STORES_NOT_CONFIGURED`'s
+#: docstring for why a bare 5xx isn't enough), but combined with a 5xx status
+#: and the "not configured" code having already been ruled out, this is the
+#: narrowest available "probably absent, not a real rejection" signal. A 4xx
+#: (bad auth/binding/path) never carries this code and always escalates.
+_ERR_SECRET_GET = "ERR_SECRET_GET"
+
 
 def _dapr_secrets_error_code(exc: httpx.HTTPStatusError) -> str | None:
     """Best-effort extraction of the Dapr secrets-API error body's ``errorCode``
@@ -166,10 +175,21 @@ def _dapr_secrets_error_code(exc: httpx.HTTPStatusError) -> str | None:
 
 
 def classify_secret_fetch_error(name: str, exc: Exception) -> SecretStoreError:
-    """Classify a raw Dapr secret-fetch exception as unreachable vs. rejected.
+    """Classify a raw Dapr secret-fetch exception as unreachable / not-found /
+    rejected.
 
     Raising a distinct type for the unreachable case lets callers retry a
-    cold-start race without duck-typing exception text.
+    cold-start race without duck-typing exception text; raising
+    :class:`SecretNotFoundError` for the genuinely-missing-key case (rather
+    than a generic :class:`SecretStoreError`) lets every existing
+    ``except SecretNotFoundError`` call site — which predates this
+    function and is written against a backend-opaque contract (Dapr, AWS
+    Secrets Manager, or a test double) — keep working without needing to
+    know Dapr's specific error codes. Classifying here, once, instead of at
+    each call site, is deliberate: those call sites (``credentials/agent.py``,
+    ``credentials/resolver.py``) must stay backend-opaque per their own
+    module contracts, and must not import from this private ``_dapr``
+    adapter to make this distinction themselves.
 
     Deliberately narrower than :func:`is_dapr_transport_unavailable` for the
     5xx case: a bare 5xx status is NOT enough on its own to infer "still
@@ -179,27 +199,29 @@ def classify_secret_fetch_error(name: str, exc: Exception) -> SecretStoreError:
     sidecar — see :data:`_ERR_SECRET_STORES_NOT_CONFIGURED`'s docstring).
     Treating that as retryable would retry a permanently-missing secret for
     the full cold-start budget and then misreport it as a platform outage
-    instead of "not found". Only a true transport failure or the
-    structurally distinct "no secret store configured" code are treated as
-    a cold-start race here; any other 5xx is a definitive rejection, exactly
-    like a 4xx.
+    instead of "not found". A 4xx, or a 5xx that carries neither the
+    "not configured" nor the "get failed" code, is a definitive rejection
+    (bad auth/binding/path) — never collapsed to "not found", since that
+    would silently hide a real misconfiguration.
     """
     if isinstance(exc, httpx.TransportError):
         return SecretStoreUnavailableError(name, cause=exc)
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
-        if status >= 500 and _dapr_secrets_error_code(exc) == (
-            _ERR_SECRET_STORES_NOT_CONFIGURED
-        ):
-            return SecretStoreUnavailableError(name, cause=exc)
-        # A 4xx, or a 5xx that isn't the "not configured" signal, is a
-        # definitive rejection (bad auth/binding/path, or a genuinely
-        # missing key) — retrying the identical request would fail
-        # identically every time, so mark it explicitly non-retryable
-        # rather than inheriting the optimistic DependencyUnavailableError
-        # default. This is a *wire-level* retry hint (Temporal/observability),
-        # independent of retry_past_dapr_cold_start — which dispatches on
-        # ColdStartRaceError type, not this flag.
+        if status >= 500:
+            code = _dapr_secrets_error_code(exc)
+            if code == _ERR_SECRET_STORES_NOT_CONFIGURED:
+                return SecretStoreUnavailableError(name, cause=exc)
+            if code == _ERR_SECRET_GET:
+                return SecretNotFoundError(name)
+        # A 4xx, or a 5xx that isn't either recognized code, is a definitive
+        # rejection (bad auth/binding/path) — retrying the identical request
+        # would fail identically every time, so mark it explicitly
+        # non-retryable rather than inheriting the optimistic
+        # DependencyUnavailableError default. This is a *wire-level* retry
+        # hint (Temporal/observability), independent of
+        # retry_past_dapr_cold_start — which dispatches on ColdStartRaceError
+        # type, not this flag.
         return SecretStoreError(
             f"Failed to get secret: {exc}",
             secret_name=name,

@@ -407,6 +407,15 @@ class TestResolveAgentJsonErrorPaths:
             await resolve_agent_json(agent_json, store)
 
     async def test_generic_store_failure_wrapped_in_credential_error(self) -> None:
+        """A SecretStore backend that raises a plain SecretStoreError directly
+        (not via classify_secret_fetch_error's not-found/cold-start typing)
+        is a genuine, undifferentiated failure and must escalate — this
+        module stays backend-opaque and never re-interprets SecretStoreError
+        itself; only SecretNotFoundError means "absent". Dapr's own
+        genuinely-missing-key case is classified as SecretNotFoundError at
+        the source (see test_classify_secret_fetch_error_missing_key_is_not_found
+        in tests/unit/infrastructure/test_dapr_wrappers.py), not here.
+        """
         import pytest
 
         class FlakyStore:
@@ -784,12 +793,18 @@ class TestSingleKeyMode:
             }
         )
 
-        with pytest.raises(SecretStoreUnavailableError):
+        with pytest.raises(SecretStoreUnavailableError) as exc_info:
             await resolve_agent_json(agent_json, AlwaysDown())  # type: ignore[arg-type]
 
         # Retried once, then gave up at the deadline — same budget as every
         # other call site.
         assert calls["n"] == 2
+
+        # The raised exception must not carry the raw ref-key — it's
+        # rebuilt with a hashed label before propagating, not the original
+        # SecretStoreUnavailableError("ATLAN_USER", ...) the store raised.
+        assert "ATLAN_USER" not in str(exc_info.value)
+        assert exc_info.value.secret_name != "ATLAN_USER"
 
     async def test_store_outage_does_not_leak_ref_key_in_logs(self) -> None:
         """On a store outage during a single-key probe, the WARNING must not

@@ -60,7 +60,10 @@ from application_sdk.infrastructure import (
     DAPR_SECRET_STORE_COMPONENT,
     retry_past_dapr_cold_start,
 )
-from application_sdk.infrastructure.secrets import SecretNotFoundError
+from application_sdk.infrastructure.secrets import (
+    SecretNotFoundError,
+    SecretStoreUnavailableError,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
@@ -262,7 +265,15 @@ async def _fetch_per_key_bundle(
             # a typed outage instead of silently proceeding with a
             # corrupt credential, mirroring the vault sibling
             # (credential_vault.py's _fetch_single_key_secrets).
-            raise
+            #
+            # Not a bare `raise` and not `from exc`: SecretStoreUnavailableError
+            # (the only ColdStartRaceError subtype this path raises) carries
+            # the raw ref-key in both `.secret_name` and `__str__()`, and its
+            # `cause` (the underlying httpx exception) can re-embed the same
+            # ref-key via a percent-encoded request URL — the exact leak the
+            # `except Exception` branch below scrubs at length. Re-raise a
+            # hash-labelled, cause-free equivalent instead of the original.
+            raise SecretStoreUnavailableError(f"sha256:{value_hash}") from None
         # conformance: ignore[E004] logger.warning with redacted traceback is emitted below; exc_info omitted intentionally to prevent secret ref-key leaking through stdlib traceback formatting
         except Exception as exc:
             # Genuine, non-transient store error — distinct from "key not
