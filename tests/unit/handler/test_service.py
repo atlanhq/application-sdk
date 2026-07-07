@@ -5152,7 +5152,7 @@ class TestComputeManifestHook:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """An ``async def compute_manifest`` is awaited directly (not run via
-        run_in_thread, which would hand back an un-awaited coroutine)."""
+        ``run_in_thread``, which would hand back an un-awaited coroutine)."""
         from application_sdk.handler import service as svc_module
 
         contract_dir = tmp_path / "generated"
@@ -5229,7 +5229,7 @@ class TestComputeManifestHook:
     ) -> None:
         """The hook is async-only: a *sync* ``def compute_manifest`` is not
         discovered and the route serves the static manifest unchanged (rather
-        than running it via run_in_thread)."""
+        than running it via ``run_in_thread``)."""
         from application_sdk.handler import service as svc_module
 
         contract_dir = tmp_path / "generated"

@@ -1810,7 +1810,8 @@ def _register_workflow_routes(
                 # The hook is async-only (discovery rejects sync defs), so
                 # await it directly. Authors doing CPU/IO-bound work inside
                 # (SQL generation, full DAG rewrite) own offloading it — e.g.
-                # `await self.run_in_thread(...)` — rather than the SDK
+                # `from application_sdk.execution.heartbeat import run_in_thread`
+                # then `await run_in_thread(...)` — rather than the SDK
                 # guessing on their behalf.
                 computed = await compute(manifest_dict, fe_inputs_decoded)
             except HTTPException:

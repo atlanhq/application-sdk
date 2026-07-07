@@ -92,7 +92,7 @@ def test_load_respects_pool_pre_ping_override(
 
 
 @pytest.mark.asyncio
-@patch("application_sdk.clients.sql.run_in_thread")
+@patch("application_sdk.clients.sql.run_in_thread", new_callable=AsyncMock)
 @patch("sqlalchemy.create_engine")
 async def test_load_uses_run_in_thread_for_ping(
     mock_create_engine: Any, mock_run_in_thread: AsyncMock, sql_client: BaseSQLClient
@@ -105,21 +105,15 @@ async def test_load_uses_run_in_thread_for_ping(
     asyncio.to_thread — which would land on asyncio's shared default executor
     instead of the SDK's dedicated pool).
     """
-    from unittest.mock import AsyncMock as _AsyncMock
-
     mock_engine = MagicMock()
     mock_create_engine.return_value = mock_engine
-    mock_run_in_thread.return_value = None  # AsyncMock already returns a coroutine
-    mock_run_in_thread.__class__ = _AsyncMock
+    mock_run_in_thread.return_value = None
 
-    # Replace with a true AsyncMock so await works
-    actual_async_mock = _AsyncMock(return_value=None)
-    with patch("application_sdk.clients.sql.run_in_thread", actual_async_mock):
-        await sql_client.load({"username": "u", "password": "p"})
+    await sql_client.load({"username": "u", "password": "p"})
 
-    actual_async_mock.assert_called_once()
+    mock_run_in_thread.assert_called_once()
     # The callable passed to run_in_thread should trigger engine.connect when called
-    ping_fn = actual_async_mock.call_args[0][0]
+    ping_fn = mock_run_in_thread.call_args[0][0]
     ping_fn()
     mock_engine.connect.assert_called_once()
 
