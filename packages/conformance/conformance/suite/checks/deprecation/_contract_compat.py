@@ -4,11 +4,11 @@ Entrypoint-only scope: only Input/Output contracts referenced by ``@entrypoint``
 methods or implicit ``App.run()`` are gated.  ``@task`` contracts are excluded.
 
 Entrypoint-contract discovery and field extraction (including the full
-inheritance-hierarchy walk) live in the neutral ``suite.checks._contract_fields``
-module — shared with the ledger generator, and expected to also back the
-K-series contract-toolkit checks. This module owns only the B005/B006
-finding-emission logic: comparing resolved live fields against the committed
-ledger.
+inheritance-hierarchy walk) live in the neutral
+``suite.checks._entrypoint_contract_fields`` module — shared with the ledger
+generator, and expected to also back the K-series contract-toolkit checks.
+This module owns only the B005/B006 finding-emission logic: comparing
+resolved live fields against the committed ledger.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from conformance.suite.checks._ast_common import (
     _parse_directives,
     make_finding,
 )
-from conformance.suite.checks._contract_fields import (
+from conformance.suite.checks._entrypoint_contract_fields import (
     collect_entrypoint_contract_names,
     resolve_contract_fields,
 )

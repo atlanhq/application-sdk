@@ -38,7 +38,7 @@ import sys
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import discover
-from conformance.suite.checks._contract_fields import (
+from conformance.suite.checks._entrypoint_contract_fields import (
     collect_entrypoint_contract_names,
     resolve_contract_fields,
 )
