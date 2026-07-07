@@ -21,6 +21,7 @@ from application_sdk.handler.contracts import (
     AuthOutput,
     AuthStatus,
     MetadataInput,
+    PreflightCheck,
     PreflightGateInput,
     PreflightInput,
     PreflightOutput,
@@ -119,3 +120,46 @@ class TestPreflightGateActivity:
         await gate(PreflightGateInput())
         with pytest.raises(AppContextError):
             _ = handler.context
+
+    async def test_warns_when_not_ready_without_blocking_check(self) -> None:
+        """A handler that reports not_ready but marks no check blocking lets the
+        run proceed — almost always a forgotten blocking=True. The gate warns."""
+
+        class _SoftFailHandler(DefaultHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                return PreflightOutput(
+                    status=PreflightStatus.NOT_READY,
+                    checks=[PreflightCheck(name="auth", passed=False, blocking=False)],
+                )
+
+        gate = build_preflight_gate_activity(_SoftFailHandler(), app_name="myapp")
+        with mock.patch(
+            "application_sdk.execution._temporal.preflight_gate.logger"
+        ) as mock_logger:
+            result = await gate(PreflightGateInput())
+
+        assert result.should_block is False
+        mock_logger.warning.assert_called_once()
+
+    async def test_no_warning_on_ready_or_blocking_verdict(self) -> None:
+        """Clean pass (READY) and a real block (blocking check failed) are both
+        expected states — neither trips the missing-blocking warning."""
+
+        class _BlockHandler(DefaultHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                return PreflightOutput(
+                    status=PreflightStatus.NOT_READY,
+                    checks=[PreflightCheck(name="auth", passed=False, blocking=True)],
+                )
+
+        gate_ready = _gate(_StubHandler())
+        gate_block = build_preflight_gate_activity(_BlockHandler(), app_name="myapp")
+        with mock.patch(
+            "application_sdk.execution._temporal.preflight_gate.logger"
+        ) as mock_logger:
+            ready = await gate_ready(PreflightGateInput())
+            blocked = await gate_block(PreflightGateInput())
+
+        assert ready.should_block is False
+        assert blocked.should_block is True
+        mock_logger.warning.assert_not_called()

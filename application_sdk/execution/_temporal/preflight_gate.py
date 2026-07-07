@@ -34,6 +34,7 @@ with workflow.unsafe.imports_passed_through():
         PreflightGateInput,
         PreflightInput,
         PreflightOutput,
+        PreflightStatus,
     )
     from application_sdk.infrastructure.context import get_infrastructure
     from application_sdk.observability.logger_adaptor import get_logger
@@ -103,6 +104,22 @@ def build_preflight_gate_activity(
             result.status.value,
             len(result.checks),
         )
+        # Catch the un-migrated-handler trap: a handler that reports a problem via
+        # advisory status but marks no check blocking lets the run proceed. That's
+        # the backward-compat default (blocking is opt-in), but it's almost always
+        # a forgotten blocking=True — warn loudly so it isn't a silent no-op.
+        if not result.should_block and result.status in (
+            PreflightStatus.NOT_READY,
+            PreflightStatus.PARTIAL,
+        ):
+            logger.warning(
+                "Preflight reported %s but no check is marked blocking — the gate will "
+                "NOT stop this run. If a failing check must abort extraction, set "
+                "blocking=True on it in Handler.preflight_check (entrypoint=%s, checks=%d).",
+                result.status.value,
+                input.entrypoint or "<implicit>",
+                len(result.checks),
+            )
         return result
 
     return preflight_gate
