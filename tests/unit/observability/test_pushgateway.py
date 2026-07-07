@@ -14,7 +14,7 @@ from application_sdk.observability.pushgateway import (
 
 _PUSH_TARGET = "application_sdk.observability.pushgateway.push_to_gateway"
 _DELETE_TARGET = "application_sdk.observability.pushgateway.delete_from_gateway"
-_TO_THREAD_TARGET = "application_sdk.observability.pushgateway.asyncio.to_thread"
+_RUN_IN_THREAD_TARGET = "application_sdk.observability.pushgateway.run_in_thread"
 
 _PROMETHEUS_TEXT = (
     "# HELP test_counter A test counter\n"
@@ -24,11 +24,11 @@ _PROMETHEUS_TEXT = (
 
 
 @pytest.fixture
-def mock_to_thread():
+def mock_run_in_thread():
     async def inline(func, *args, **kwargs):
         return func(*args, **kwargs)
 
-    with patch(_TO_THREAD_TARGET, side_effect=inline):
+    with patch(_RUN_IN_THREAD_TARGET, side_effect=inline):
         yield
 
 
@@ -140,12 +140,14 @@ class TestPushGatewayClientInit:
 
 
 class TestPushGatewayClientPushNow:
-    async def test_push_now_calls_push_to_gateway(self, client, mock_to_thread):
+    async def test_push_now_calls_push_to_gateway(self, client, mock_run_in_thread):
         with patch(_PUSH_TARGET) as mock_push:
             await client.push_now()
         mock_push.assert_called_once()
 
-    async def test_push_now_passes_correct_url_and_job(self, client, mock_to_thread):
+    async def test_push_now_passes_correct_url_and_job(
+        self, client, mock_run_in_thread
+    ):
         with patch(_PUSH_TARGET) as mock_push:
             await client.push_now()
         _, kwargs = mock_push.call_args
@@ -157,12 +159,12 @@ class TestPushGatewayClientPushNow:
         url_arg = args[0] if args else kwargs.get("gateway")
         assert "localhost:9091" in str(url_arg)
 
-    async def test_push_now_propagates_push_exception(self, client, mock_to_thread):
+    async def test_push_now_propagates_push_exception(self, client, mock_run_in_thread):
         with patch(_PUSH_TARGET, side_effect=ConnectionError("refused")):
             with pytest.raises(ConnectionError):
                 await client.push_now()
 
-    async def test_push_passes_http_timeout(self, mock_to_thread):
+    async def test_push_passes_http_timeout(self, mock_run_in_thread):
         """The configured http_timeout_s must reach push_to_gateway so a hung
         gateway can't tie up the worker thread for the prometheus_client
         default of 30s."""
@@ -176,7 +178,7 @@ class TestPushGatewayClientPushNow:
             await c.push_now()
         assert mock_push.call_args.kwargs.get("timeout") == 7.5
 
-    async def test_delete_on_shutdown_passes_http_timeout(self, mock_to_thread):
+    async def test_delete_on_shutdown_passes_http_timeout(self, mock_run_in_thread):
         """Same timeout knob must apply to DELETE_ON_SHUTDOWN; otherwise a
         down gateway at shutdown burns the prometheus_client default 30s
         and pushes us past terminationGracePeriodSeconds."""
@@ -194,12 +196,14 @@ class TestPushGatewayClientPushNow:
 
 
 class TestPushGatewayClientStop:
-    async def test_stop_makes_final_push(self, client, mock_to_thread):
+    async def test_stop_makes_final_push(self, client, mock_run_in_thread):
         with patch(_PUSH_TARGET) as mock_push:
             await client.stop()
         mock_push.assert_called_once()
 
-    async def test_stop_calls_push_before_delete_when_flag_set(self, mock_to_thread):
+    async def test_stop_calls_push_before_delete_when_flag_set(
+        self, mock_run_in_thread
+    ):
         c = PushGatewayClient(
             url="http://localhost:9091",
             job="j",
@@ -217,7 +221,9 @@ class TestPushGatewayClientStop:
             await c.stop()
         assert call_order == ["push", "delete"]
 
-    async def test_stop_calls_delete_when_delete_on_shutdown_true(self, mock_to_thread):
+    async def test_stop_calls_delete_when_delete_on_shutdown_true(
+        self, mock_run_in_thread
+    ):
         c = PushGatewayClient(
             url="http://localhost:9091",
             job="my-job",
@@ -233,7 +239,7 @@ class TestPushGatewayClientStop:
         assert "localhost:9091" in str(url_arg)
 
     async def test_stop_sleeps_before_delete_to_allow_prometheus_scrape(
-        self, mock_to_thread
+        self, mock_run_in_thread
     ):
         """Default behavior: between final push and DELETE, sleep for the
         shutdown_delete_delay_s window so Prometheus has at least one scrape
@@ -264,7 +270,7 @@ class TestPushGatewayClientStop:
         # push → sleep → delete, in that order
         assert events == [("push",), ("sleep", 15.0), ("delete",)]
 
-    async def test_stop_skips_sleep_when_delay_is_zero(self, mock_to_thread):
+    async def test_stop_skips_sleep_when_delay_is_zero(self, mock_run_in_thread):
         """shutdown_delete_delay_s=0 disables the wait — useful for tests and for
         apps that want the legacy fast-shutdown behavior."""
         c = PushGatewayClient(
@@ -292,25 +298,25 @@ class TestPushGatewayClientStop:
         assert sleep_calls == []
 
     async def test_stop_does_not_call_delete_when_flag_false(
-        self, client, mock_to_thread
+        self, client, mock_run_in_thread
     ):
         with patch(_PUSH_TARGET), patch(_DELETE_TARGET) as mock_delete:
             await client.stop()
         mock_delete.assert_not_called()
 
-    async def test_stop_swallows_push_failure(self, client, mock_to_thread):
+    async def test_stop_swallows_push_failure(self, client, mock_run_in_thread):
         with patch(_PUSH_TARGET, side_effect=ConnectionError("gateway down")):
             await client.stop()  # must not raise
 
 
 class TestPushGatewayClientLifecycle:
-    async def test_start_creates_background_task(self, client, mock_to_thread):
+    async def test_start_creates_background_task(self, client, mock_run_in_thread):
         with patch(_PUSH_TARGET):
             await client.start()
             assert client._task is not None
             await client.stop()
 
-    async def test_start_is_idempotent(self, client, mock_to_thread):
+    async def test_start_is_idempotent(self, client, mock_run_in_thread):
         with patch(_PUSH_TARGET):
             await client.start()
             first_task = client._task

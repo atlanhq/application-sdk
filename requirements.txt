@@ -47,7 +47,7 @@ cffi==2.1.0 ; platform_python_implementation != 'PyPy'
     # via cryptography
 cfgv==3.5.0
     # via pre-commit
-charset-normalizer==3.4.8
+charset-normalizer==3.4.9
     # via requests
 click==8.4.2
     # via

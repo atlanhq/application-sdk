@@ -67,6 +67,15 @@ runs:
 
           echo "Attempting OpenConnect to: ${{ inputs.portal-url }}"
 
+          # Unique per-run client hostname. GlobalProtect treats "same user +
+          # same computer" as a session replacement, so without a distinct
+          # --local-hostname two concurrent VPN jobs sharing these GLOBALPROTECT_*
+          # creds (this reviewer plus any other workflow) silently displace each
+          # other's tunnels. Derive it from the run id / job / attempt.
+          LOCAL_HOSTNAME="gha-${GITHUB_RUN_ID:-0}-${GITHUB_JOB:-job}-${GITHUB_RUN_ATTEMPT:-1}"
+          LOCAL_HOSTNAME=$(echo "$LOCAL_HOSTNAME" | tr -cd 'a-zA-Z0-9-' | cut -c1-63)
+          echo "Using --local-hostname: ${LOCAL_HOSTNAME}"
+
           # Connect with openconnect in the background.
           #
           # >/tmp/openconnect.log 2>&1 is required: without it, the
@@ -79,10 +88,21 @@ runs:
           # step closes cleanly. (stdin stays on the pipe so --passwd-on-stdin
           # still reads the password; the pipe closes after echo and the
           # daemon ends up with stdin at EOF, which is fine.)
+          #
+          # --verbose surfaces the GlobalProtect HTTP response detail — e.g. the
+          # body behind an "Unexpected NNN result from server" auth rejection
+          # (the getconfig.esp 512) — into /tmp/openconnect.log so failures are
+          # actually diagnosable. It does NOT print the password: the credential
+          # is read from stdin, and single-level --verbose logs request lines +
+          # response status/body, not request bodies. Do NOT escalate to -vvvv
+          # or --dump-http-traffic — those dump full request bodies and the GP
+          # credential POST would leak the password into the runner log.
           echo "${{ inputs.password }}" | sudo openconnect \
             --protocol=gp \
             --user="${{ inputs.username }}" \
             --passwd-on-stdin \
+            --local-hostname="${LOCAL_HOSTNAME}" \
+            --verbose \
             --background \
             "${{ inputs.portal-url }}" >/tmp/openconnect.log 2>&1 || {
             echo "OpenConnect connection failed"
@@ -106,6 +126,12 @@ runs:
             echo "Initial connectivity test successful"
           else
             echo "Initial connectivity test failed"
+            # Dump the openconnect log on this path too. openconnect may have
+            # exited 0 above (tunnel came up) yet the tunnel is unusable — a
+            # split-tunnel/route blackhole, or a session displaced by a
+            # concurrent run. Without this, the most common real failure mode
+            # logs nothing about the VPN itself.
+            cat /tmp/openconnect.log 2>/dev/null || true
             exit 1
           fi
 
