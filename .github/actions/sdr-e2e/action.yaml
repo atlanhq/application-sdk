@@ -478,6 +478,14 @@ runs:
             echo "SDR_REQUIRE_UPSTREAM_ASSETS_LANDED=true"
             echo "SDR_EXTRACTED_OUTPUT_BASE_PATH=data/artifacts/apps/${APP_NAME}/workflows"
             echo "SDR_UPSTREAM_OUTPUT_BASE_PATH=data-upstream/artifacts/apps/${APP_NAME}/workflows"
+            # Stream the guards' confirmation ("N record(s) landed at …",
+            # "N transformed record(s) reached the upstream store") into the
+            # captured pytest output. The SDK logs via loguru (writes to
+            # stderr) — NOT stdlib logging — so pytest's log_cli can't surface
+            # it; only disabling capture (-s) lets loguru stream through to the
+            # tee'd log. Without this the anti-silent-success check shows only a
+            # green tick with no evidence it ran. Scoped to two-store apps.
+            echo "PYTEST_ADDOPTS=-s"
           } >> "$GITHUB_ENV"
         fi
 
