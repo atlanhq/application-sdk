@@ -409,7 +409,16 @@ def create_worker(
         *(build_preflight_gate_activity(gate_handler, name) for name in gate_app_names),
     ]
 
-    if enable_sdr:
+    # SDR (the control-plane test_auth/preflight_check/fetch_metadata workflows)
+    # requires a REAL handler — never the bare DefaultHandler sentinel. Both the
+    # worker path (passes None) and the combined path (passes DefaultHandler() to
+    # also serve HTTP) fall back for handler-less apps; binding that to SDR would
+    # expose sdr:test_auth returning unconditional SUCCESS — a fake green on the
+    # Sage "Check". Exact-type check, not isinstance: a DefaultHandler *subclass*
+    # with real overrides is a real handler and does get SDR. The gate above uses
+    # gate_handler regardless because it must always be dispatchable.
+    has_real_handler = handler is not None and type(handler) is not DefaultHandler
+    if enable_sdr and has_real_handler:
         from application_sdk.execution._temporal.sdr import (  # noqa: PLC0415 — lazy: only load SDR workflows when SDR is enabled
             SDR_WORKFLOWS,
             build_sdr_activities,
@@ -418,11 +427,11 @@ def create_worker(
         app_workflows = [*app_workflows, *SDR_WORKFLOWS]
         task_activities = [
             *task_activities,
-            *build_sdr_activities(gate_handler, resolved_app_name),
+            *build_sdr_activities(handler, resolved_app_name),
         ]
         logger.info(
             "SDR workflows registered for handler %s (app=%s)",
-            type(gate_handler).__name__,
+            type(handler).__name__,
             resolved_app_name,
         )
 

@@ -377,12 +377,13 @@ class TestCreateWorker:
 
         assert app_worker._start_event_params["max_concurrent_workflow_tasks"] == 3
 
-    def test_sdr_workflows_registered_with_default_handler_when_no_handler(
+    def test_gate_registered_but_sdr_skipped_when_no_handler(
         self,
     ) -> None:
-        """SDR/gate activities are ALWAYS registered (the preflight gate is
-        mandatory): with no app Handler, DefaultHandler is bound so the
-        injected {app}:preflight gate is still dispatchable."""
+        """With no app Handler: the mandatory gate ({app}:preflight) is still
+        registered (bound to DefaultHandler, no-op safe), but SDR is NOT — binding
+        DefaultHandler to sdr:test_auth would fake a green auth check for an app
+        that implements none. SDR exposes only capabilities the app actually has."""
 
         class _NoHandlerApp(App):
             async def run(self, input: _WorkerInput) -> _WorkerOutput:
@@ -404,6 +405,47 @@ class TestCreateWorker:
 
         from application_sdk.execution._temporal.sdr import SDR_WORKFLOWS
 
+        activity_names = {
+            getattr(a, "__temporal_activity_definition").name  # type: ignore[union-attr]
+            for a in captured["activities"]
+            if hasattr(a, "__temporal_activity_definition")
+        }
+        # Gate is always registered.
+        assert any(n.endswith(":preflight") for n in activity_names)
+        # SDR is skipped entirely — no workflows, no sdr:* activities.
+        for sdr_wf in SDR_WORKFLOWS:
+            assert sdr_wf not in captured["workflows"]
+        assert not any(n.startswith("sdr:") for n in activity_names)
+
+    def test_sdr_workflows_registered_when_real_handler_provided(self) -> None:
+        """When a REAL handler is provided (a DefaultHandler subclass counts),
+        SDR workflows + activities are appended."""
+
+        from application_sdk.handler.base import DefaultHandler
+
+        class _RealHandler(DefaultHandler):
+            """A real handler — not the bare DefaultHandler sentinel."""
+
+        class _WithHandlerApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        client = _make_mock_client()
+        captured: dict = {}
+
+        def capture_worker(*args, **kwargs):
+            captured["workflows"] = list(kwargs.get("workflows", []))
+            captured["activities"] = list(kwargs.get("activities", []))
+            return mock.MagicMock()
+
+        with mock.patch(
+            "application_sdk.execution._temporal.worker.Worker",
+            side_effect=capture_worker,
+        ):
+            create_worker(client, handler=_RealHandler())
+
+        from application_sdk.execution._temporal.sdr import SDR_WORKFLOWS
+
         for sdr_wf in SDR_WORKFLOWS:
             assert sdr_wf in captured["workflows"]
         activity_names = {
@@ -416,15 +458,15 @@ class TestCreateWorker:
             "sdr:preflight_check",
             "sdr:fetch_metadata",
         }.issubset(activity_names)
-        # Gate is app-namespaced ({app}:preflight) and always registered.
-        assert any(n.endswith(":preflight") for n in activity_names)
 
-    def test_sdr_workflows_registered_when_handler_provided(self) -> None:
-        """When ``handler`` is provided, SDR workflows + activities are appended."""
+    def test_sdr_skipped_for_bare_default_handler(self) -> None:
+        """Combined mode passes a bare DefaultHandler() (to also serve HTTP) for a
+        handler-less app. SDR must still be skipped — binding it would fake a green
+        sdr:test_auth — while the mandatory gate is registered."""
 
         from application_sdk.handler.base import DefaultHandler
 
-        class _WithHandlerApp(App):
+        class _BareApp(App):
             async def run(self, input: _WorkerInput) -> _WorkerOutput:
                 return _WorkerOutput()
 
@@ -444,23 +486,23 @@ class TestCreateWorker:
 
         from application_sdk.execution._temporal.sdr import SDR_WORKFLOWS
 
-        for sdr_wf in SDR_WORKFLOWS:
-            assert sdr_wf in captured["workflows"]
         activity_names = {
             getattr(a, "__temporal_activity_definition").name  # type: ignore[union-attr]
             for a in captured["activities"]
             if hasattr(a, "__temporal_activity_definition")
         }
-        assert {
-            "sdr:test_auth",
-            "sdr:preflight_check",
-            "sdr:fetch_metadata",
-        }.issubset(activity_names)
+        assert any(n.endswith(":preflight") for n in activity_names)  # gate present
+        for sdr_wf in SDR_WORKFLOWS:
+            assert sdr_wf not in captured["workflows"]
+        assert not any(n.startswith("sdr:") for n in activity_names)
 
     def test_sdr_opt_out_via_enable_sdr_flag(self) -> None:
-        """``enable_sdr=False`` suppresses SDR even when a handler is provided."""
+        """``enable_sdr=False`` suppresses SDR even when a real handler is provided."""
 
         from application_sdk.handler.base import DefaultHandler
+
+        class _RealHandler(DefaultHandler):
+            """A real handler — so the skip is attributable to enable_sdr=False."""
 
         class _OptOutApp(App):
             async def run(self, input: _WorkerInput) -> _WorkerOutput:
@@ -478,7 +520,7 @@ class TestCreateWorker:
             "application_sdk.execution._temporal.worker.Worker",
             side_effect=capture_worker,
         ):
-            create_worker(client, handler=DefaultHandler(), enable_sdr=False)
+            create_worker(client, handler=_RealHandler(), enable_sdr=False)
 
         from application_sdk.execution._temporal.sdr import SDR_WORKFLOWS
 
