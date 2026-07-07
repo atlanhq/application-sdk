@@ -1,10 +1,12 @@
 """Generalized SDR workflow → real-cloud-bucket publish validation.
 
 Runs a **real** (embedded-Temporal) extraction workflow whose activity produces
-asset-shaped records via the SDK's real ``RollingFileWriter``, then publishes the
-extracted output directory to the **real** provisioned cloud bucket (S3 / Azure /
-GCS, keyless OIDC) and asserts the assets land with the correct **count** and
-**location**.
+asset-shaped records via the SDK's real ``RollingFileWriter``, then persists the
+extracted output to the **real** provisioned cloud bucket (S3 / Azure / GCS,
+keyless OIDC) via the **production** ``persist_file_refs`` path — the same
+FileReference→objectstore upload a connector activity performs on return
+(run-scoped egress prefix + SHA-256 sidecar) — and asserts the assets land with
+the correct **count** and **location**.
 
 This is the connector-agnostic counterpart of the per-connector SDR extraction
 (``BaseSDRIntegrationTest``): there is no real database or connector — a synthetic
@@ -39,10 +41,12 @@ from temporalio import activity, workflow
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
+from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.storage import ops
 from application_sdk.storage.binding import create_store_from_binding
 from application_sdk.storage.cloud import CloudStore
-from application_sdk.storage.transfer import upload as transfer_upload
+from application_sdk.storage.factory import create_local_store
+from application_sdk.storage.file_ref_sync import persist_file_refs
 from tests.integration.storage.conftest import (
     AZURE_ACCOUNT,
     AZURE_CLIENT_ID,
@@ -61,6 +65,16 @@ from tests.integration.storage.conftest import (
 # prefix + records under the connection QN).
 _CONNECTION_QN = "default/sdr-generic/1730000000"
 _N_RECORDS = 14  # a SQL-shaped crawl: 1 db + 1 schema + 2 tables + 10 columns
+
+
+def _count_records(paths: list) -> int:
+    """Sum the record counts across a set of JSON record files (sync helper so
+    the blocking file reads stay out of the async test bodies)."""
+    total = 0
+    for path in paths:
+        with open(path) as fh:
+            total += len(json.load(fh))
+    return total
 
 
 def _flush_json(batches: list, path: str) -> None:
@@ -120,49 +134,63 @@ async def _run_extract_workflow(base_path: str) -> str:
     """Run the extraction workflow on an embedded Temporal server; return the
     local output directory the activity wrote the asset parquet to."""
     qid = uuid.uuid4().hex[:8]
-    async with await WorkflowEnvironment.start_local() as env:
-        async with Worker(
+    async with (
+        await WorkflowEnvironment.start_local() as env,
+        Worker(
             env.client,
             task_queue=f"sdr-extract-{qid}",
             workflows=[SdrExtractWorkflow],
             activities=[extract_assets],
-        ):
-            return await env.client.execute_workflow(
-                SdrExtractWorkflow.run,
-                {
-                    "base_path": base_path,
-                    "connection_qn": _CONNECTION_QN,
-                    "n_records": _N_RECORDS,
-                },
-                id=f"sdr-extract-{qid}",
-                task_queue=f"sdr-extract-{qid}",
-            )
+        ),
+    ):
+        return await env.client.execute_workflow(
+            SdrExtractWorkflow.run,
+            {
+                "base_path": base_path,
+                "connection_qn": _CONNECTION_QN,
+                "n_records": _N_RECORDS,
+            },
+            id=f"sdr-extract-{qid}",
+            task_queue=f"sdr-extract-{qid}",
+        )
 
 
 async def _assert_workflow_publish_lands_assets(store, provider: str, tmp_path) -> None:
-    """Run the extraction workflow, publish its output to the real bucket, and
-    assert the assets land with the correct COUNT and LOCATION."""
+    """Run the extraction workflow, persist its output to the real bucket via the
+    production ``persist_file_refs`` path, and assert the assets land with the
+    correct COUNT and LOCATION."""
     out_dir = await _run_extract_workflow(str(tmp_path))
     run = os.environ.get("GITHUB_RUN_ID", "local")
-    dst_prefix = f"integ-sdr-wf/{provider}-{run}-{uuid.uuid4().hex[:8]}/published"
+    run_prefix = f"integ-sdr-wf/{provider}-{run}-{uuid.uuid4().hex[:8]}"
     cs = CloudStore(store, provider=provider)
     landed: set[str] = set()
     try:
-        # Publish the extracted output directory → the real bucket (the SDR
-        # customer-objectstore publish step).
-        result = await transfer_upload(out_dir, dst_prefix, store=store)
-        assert result.synced is True
-
-        # LOCATION — assets landed in the real bucket under the publish prefix.
-        async for batch in obstore.list(store, prefix=dst_prefix):
-            for item in batch:
-                landed.add(str(item["path"]))
-        assert landed, f"no assets published under {dst_prefix} in the real bucket"
-        assert all(k.startswith(dst_prefix + "/") for k in landed), (
-            f"asset(s) landed outside the publish prefix: {sorted(landed)}"
+        # Production persist path: a real activity returns a FileReference for its
+        # extracted output; the SDK's persist_file_refs uploads it to the
+        # objectstore under the run-scoped egress prefix + writes a sha256
+        # sidecar. Drive that exact code against the real bucket.
+        ref = FileReference.from_local(out_dir, tier=StorageTier.RETAINED)
+        result = await persist_file_refs(store, {"output": ref}, output_path=run_prefix)
+        durable = result["output"]
+        assert durable.is_durable, "ref not marked durable after persist"
+        assert durable.storage_path and durable.storage_path.startswith(run_prefix), (
+            f"persisted to an unexpected egress path: {durable.storage_path}"
         )
 
-        # COUNT — read the published records back from the REAL bucket and assert
+        # LOCATION — assets landed in the real bucket under the run prefix, with
+        # a sha256 sidecar (the production egress contract).
+        async for batch in obstore.list(store, prefix=run_prefix):
+            for item in batch:
+                landed.add(str(item["path"]))
+        assert landed, f"no assets persisted under {run_prefix} in the real bucket"
+        assert all(k.startswith(run_prefix + "/") for k in landed), (
+            f"asset(s) landed outside the run prefix: {sorted(landed)}"
+        )
+        assert any(k.endswith(".sha256") for k in landed), (
+            "no sha256 sidecar written to the bucket"
+        )
+
+        # COUNT — read the persisted records back from the REAL bucket and assert
         # the asset-record count matches what the workflow extracted, and every
         # record is nested under the connection qualifiedName.
         total = 0
@@ -173,7 +201,7 @@ async def _assert_workflow_publish_lands_assets(store, provider: str, tmp_path) 
             total += len(records)
             assert all(
                 r["qualifiedName"].startswith(_CONNECTION_QN) for r in records
-            ), "published asset records are not nested under the connection QN"
+            ), "persisted asset records are not nested under the connection QN"
         assert total == _N_RECORDS, (
             f"expected {_N_RECORDS} asset records in the bucket, got {total}"
         )
@@ -195,11 +223,49 @@ async def test_workflow_writes_asset_parquet_locally(tmp_path):
     out_dir = await _run_extract_workflow(str(tmp_path))
     files = [f for f in os.listdir(out_dir) if f.endswith(".json")]
     assert files, f"no records written under {out_dir}"
-    total = 0
-    for f in files:
-        with open(os.path.join(out_dir, f)) as fh:
-            total += len(json.load(fh))
-    assert total == _N_RECORDS
+    assert _count_records([os.path.join(out_dir, f) for f in files]) == _N_RECORDS
+
+
+@pytest.mark.integration
+async def test_workflow_output_persists_via_file_ref_locally(tmp_path):
+    """The production persist path — FileReference → ``persist_file_refs`` — is
+    what a real activity uses to move extracted output into the objectstore
+    (SHA-256 sidecars, run-scoped egress prefix). Validate it creds-free against
+    a LocalStore: it's the exact code the per-cloud tests run against real
+    buckets, so this pins the wiring on every SDK PR."""
+    import glob
+
+    out_dir = await _run_extract_workflow(str(tmp_path / "extract"))
+    store_root = tmp_path / "objectstore"
+    store = create_local_store(store_root)
+    run_prefix = "artifacts/apps/sdr-generic/workflows/wf1/run1"
+
+    ref = FileReference.from_local(out_dir, tier=StorageTier.RETAINED)
+    result = await persist_file_refs(store, {"output": ref}, output_path=run_prefix)
+    durable = result["output"]
+
+    # LOCATION — the persisted ref is durable and lands under the run prefix.
+    assert durable.is_durable, "ref not marked durable after persist"
+    assert durable.storage_path, "durable ref has no storage_path"
+    assert durable.storage_path.startswith(run_prefix), durable.storage_path
+
+    landed = [
+        p
+        for p in glob.glob(
+            os.path.join(str(store_root), run_prefix, "**", "*"), recursive=True
+        )
+        if os.path.isfile(p)
+    ]
+    record_files = [p for p in landed if p.endswith(".json")]
+    assert record_files, f"no records persisted under {run_prefix}: {landed}"
+
+    # COUNT — every extracted record persisted.
+    assert _count_records(record_files) == _N_RECORDS
+
+    # INTEGRITY — a sha256 sidecar was written to the store next to the output.
+    assert any(p.endswith(".sha256") for p in landed), (
+        f"no sha256 sidecar persisted under {run_prefix}: {landed}"
+    )
 
 
 # ---------------------------------------------------------------------------
