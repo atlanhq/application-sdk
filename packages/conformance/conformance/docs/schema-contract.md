@@ -218,7 +218,7 @@ code review and self-documents at the violation site. Reach for `[tool.conforman
 only for the repo-wide-absence case above.
 
 Each `[tool.conformance]` key is namespaced per rule family (`exempt_test_tiers` is
-T010–T012's key; a future rule needing the same durable-exemption shape should add its
+T011–T012's key; a future rule needing the same durable-exemption shape should add its
 own key here rather than overloading an existing one) and is read directly by the
 check module that owns it — there is no central registry, matching how each rule owns
 its own inline-suppression parsing. Document the specific keys a rule module reads in
