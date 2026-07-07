@@ -575,3 +575,55 @@ def test_floor_hard_fails_when_auth_only_and_enforced() -> None:
 
     with pytest.raises(AssertionError, match="no api='workflow' scenario"):
         _Enforced().test_sdr_suite_runs_an_extraction()
+
+
+# ---------------------------------------------------------------------------
+# Upstream (atlan) object-store assertion — the Looker-class catch
+# ---------------------------------------------------------------------------
+
+
+class _UpstreamSuite(_WfSuite):
+    require_upstream_assets_landed = True
+    upstream_output_base_path = "data-upstream/artifacts/apps/x/workflows"
+    scenarios = []
+
+
+def test_upstream_assets_landed_passes_when_upstream_populated(
+    workflow_scenario: Scenario,
+) -> None:
+    suite = _UpstreamSuite()
+    with patch(_LOAD, return_value=[_asset("default/mssql/1700/db/sch/t1")]):
+        suite._assert_upstream_assets_landed(workflow_scenario, _RESP)  # no raise
+
+
+def test_upstream_assets_landed_fails_when_upstream_empty(
+    workflow_scenario: Scenario,
+) -> None:
+    """Deployment store has assets, but the upstream transformed/ is empty
+    (missing upload_to_atlan) → Publish would publish 0 → hard failure."""
+    suite = _UpstreamSuite()
+    with patch(_LOAD, side_effect=FileNotFoundError("no upstream transformed/")):
+        with pytest.raises(AssertionError, match="would publish ZERO assets"):
+            suite._assert_upstream_assets_landed(workflow_scenario, _RESP)
+
+
+def test_upstream_assets_landed_fails_on_zero_records(
+    workflow_scenario: Scenario,
+) -> None:
+    suite = _UpstreamSuite()
+    with patch(_LOAD, return_value=[]):
+        with pytest.raises(AssertionError, match="ZERO records"):
+            suite._assert_upstream_assets_landed(workflow_scenario, _RESP)
+
+
+def test_upstream_assets_landed_warns_when_no_upstream_path(
+    workflow_scenario: Scenario,
+) -> None:
+    class _NoUpstreamPath(_WfSuite):
+        require_upstream_assets_landed = True
+        upstream_output_base_path = None
+        scenarios = []
+
+    with patch(_LOAD) as m:
+        _NoUpstreamPath()._assert_upstream_assets_landed(workflow_scenario, _RESP)
+        m.assert_not_called()  # no upstream path → warn + return, can't verify

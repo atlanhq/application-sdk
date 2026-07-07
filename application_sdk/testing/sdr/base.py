@@ -144,6 +144,24 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
     #: fleet-wide red. Flip on once the suite has a workflow-to-completion scenario.
     enforce_workflow_floor: ClassVar[bool] = False
 
+    #: When True, additionally assert the UPSTREAM (atlan) object store's
+    #: ``transformed/`` is populated after the extraction — the store the
+    #: atlan-side Publish app actually reads. In SDR (two-store) mode the
+    #: connector must copy ``transformed/`` from the deployment store to the
+    #: upstream store (``upload_to_atlan`` / ``ENABLE_ATLAN_UPLOAD``). If it
+    #: doesn't, extraction is green and the deployment store has assets, but
+    #: Publish finds an empty ``transformed/`` and publishes ZERO assets — the
+    #: atlan-looker-app#134 class of bug, which the deployment-store check above
+    #: cannot see. Default False: needs a two-store CI stack + a set
+    #: ``upstream_output_base_path``; flip on per connector once it wires the
+    #: upstream upload.
+    require_upstream_assets_landed: ClassVar[bool] = False
+
+    #: Local path where the UPSTREAM (atlan) object store's output is mounted in
+    #: the two-store CI SDR stack (e.g. ``data-upstream/artifacts/apps/<app>/workflows``).
+    #: Required for :pyattr:`require_upstream_assets_landed`.
+    upstream_output_base_path: ClassVar[str | None] = None
+
     def _build_scenario_args(self, scenario: Scenario) -> dict[str, Any]:
         args = super()._build_scenario_args(scenario)
         if scenario.api.lower() != "workflow":
@@ -316,6 +334,8 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
                 self._ensure_workflow_completed(scenario, result.response)
                 if self.require_assets_landed:
                     self._assert_assets_landed(scenario, result.response)
+                if self.require_upstream_assets_landed:
+                    self._assert_upstream_assets_landed(scenario, result.response)
             # conformance: ignore[E004] re-raises immediately; only mutates result object before propagation so caller boundary handles logging
             except Exception as exc:
                 # The parent's try/except/finally already appended `result`
@@ -440,6 +460,75 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
                 )
         logger.info(
             "SDR workflow scenario %r: %d asset record(s) landed at %s/%s/%s",
+            scenario.name,
+            len(records),
+            base_path,
+            workflow_id,
+            run_id,
+        )
+
+    def _assert_upstream_assets_landed(
+        self, scenario: Scenario, response: dict[str, Any]
+    ) -> None:
+        """After a workflow scenario reaches COMPLETED, assert the transformed
+        assets also reached the UPSTREAM (atlan) object store — the store the
+        atlan-side Publish app actually reads.
+
+        In SDR (two-store) mode the connector copies ``transformed/`` from the
+        deployment store to the upstream store (``upload_to_atlan`` /
+        ``ENABLE_ATLAN_UPLOAD``). A green extraction whose deployment store has
+        assets but whose upstream ``transformed/`` is empty makes Publish emit
+        ZERO assets (atlan-looker-app#134) — a failure the deployment-store check
+        cannot see. Only runs when ``upstream_output_base_path`` is set (the
+        two-store CI stack); otherwise warns.
+        """
+        base_path = self.upstream_output_base_path
+        if not base_path:
+            logger.warning(
+                "SDR workflow scenario %r: require_upstream_assets_landed is set but "
+                "upstream_output_base_path is not — cannot verify the upstream (atlan) "
+                "object store. Point it at the two-store CI stack's upstream mount.",
+                scenario.name,
+            )
+            return
+
+        data = response.get("data", {})
+        workflow_id, run_id = data.get("workflow_id"), data.get("run_id")
+        if not workflow_id or not run_id:
+            raise AssertionError(
+                f"SDR workflow scenario '{scenario.name}' completed but the response is "
+                f"missing workflow_id/run_id — cannot locate the upstream output."
+            )
+        from application_sdk.testing.integration.comparison import (  # noqa: PLC0415
+            load_actual_output,
+        )
+
+        try:
+            records = load_actual_output(
+                base_path,
+                workflow_id,
+                run_id,
+                subdirectory=scenario.output_subdirectory,
+            )
+        # conformance: ignore[E004] re-raised as AssertionError carrying the diagnostic
+        except FileNotFoundError as exc:
+            raise AssertionError(
+                f"SDR workflow scenario '{scenario.name}' completed and landed assets in "
+                f"the deployment store, but the UPSTREAM (atlan) object store's "
+                f"transformed/ at {base_path}/{workflow_id}/{run_id} is EMPTY — the "
+                f"atlan-side Publish app would publish ZERO assets. The connector's "
+                f"transformed output never reached the upstream store (missing/broken "
+                f"upload_to_atlan, or ENABLE_ATLAN_UPLOAD not honoured). ({exc})"
+            ) from exc
+        if not records:
+            raise AssertionError(
+                f"SDR workflow scenario '{scenario.name}': the upstream (atlan) object "
+                f"store's transformed/ under {base_path}/{workflow_id}/{run_id} has ZERO "
+                f"records — Publish would publish nothing."
+            )
+        logger.info(
+            "SDR workflow scenario %r: %d transformed record(s) reached the upstream "
+            "(atlan) object store at %s/%s/%s",
             scenario.name,
             len(records),
             base_path,
