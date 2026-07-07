@@ -61,6 +61,8 @@ from application_sdk.errors import (
     ErrorCode,
 )
 from application_sdk.errors.base import AppError as _NewAppError
+from application_sdk.errors.categories import FailureCategory
+from application_sdk.errors.leaves import LEAF_BY_CATEGORY
 from application_sdk.errors.leaves import InternalError as _InternalError
 from application_sdk.errors.leaves import InvalidInputError as _InvalidInputError
 from application_sdk.observability.logger_adaptor import get_logger
@@ -1594,17 +1596,37 @@ async def _run_preflight_gate(
         **({"metadata": metadata} if metadata is not None else {}),
     )
 
-    # A handler that raises its own typed preflight error surfaces as a
-    # FailureError and propagates straight through to fail the run — the gate's
-    # verdict path below only handles handlers that return a should_block result.
-    result = await workflow.execute_activity(
-        preflight_gate_activity_name(app_name),
-        gate_input,
-        result_type=PreflightOutput,
-        schedule_to_close_timeout=_GATE_SCHEDULE_TO_CLOSE,
-        start_to_close_timeout=_GATE_START_TO_CLOSE,
-        retry_policy=_GATE_RETRY,
-    )
+    # Fail-open on gate infra errors (HYP-1883 decision). The gate is an injected
+    # guardrail the app never opted into, so if it can't produce a verdict —
+    # activity timeout, secret-store/transport failure, or an unexpected handler
+    # crash (all FailureError subclasses) — log loudly and PROCEED rather than kill
+    # a run over the gate's own plumbing. This keeps the "un-opted-in apps run
+    # exactly as before" guarantee: on day-one no app has marked a check blocking,
+    # so a fail-closed gate would turn any transient into fleet-wide run failures.
+    # Blocking is expressed ONLY by a returned should_block verdict — a handler
+    # that must stop a run marks a check blocking=True. A handler that *raises* no
+    # longer blocks here: a raise is indistinguishable from a gate failure, so it
+    # is treated the same ("couldn't verify -> proceed"). A genuinely bad source
+    # still fails later in extraction with its own error, as it did pre-gate.
+    try:
+        result = await workflow.execute_activity(
+            preflight_gate_activity_name(app_name),
+            gate_input,
+            result_type=PreflightOutput,
+            schedule_to_close_timeout=_GATE_SCHEDULE_TO_CLOSE,
+            start_to_close_timeout=_GATE_START_TO_CLOSE,
+            retry_policy=_GATE_RETRY,
+        )
+    except FailureError:
+        _safe_log(
+            "error",
+            "Preflight gate could not produce a verdict; proceeding without source "
+            "verification (fail-open)",
+            app_name=app_name,
+            entrypoint=entrypoint or "<implicit>",
+            exc_info=True,
+        )
+        return
 
     if not result.should_block:
         return
@@ -1616,20 +1638,44 @@ async def _run_preflight_gate(
     # failures don't block and shouldn't appear). Not length-capped: no other
     # preflight message path caps, and Temporal's payload limit is far above any
     # realistic concatenation of per-check messages.
-    reasons = "; ".join(
-        check.message
-        for check in result.checks
-        if check.blocking and not check.passed and check.message
+    blocking_failures = [
+        check for check in result.checks if check.blocking and not check.passed
+    ]
+    reason = (
+        result.message
+        or "; ".join(c.message for c in blocking_failures if c.message)
+        or "Preflight check failed; aborting before extraction"
     )
+
+    # Carry the block's typed classification to the Automation Engine. A returned
+    # should_block verdict is the only blocking channel (a handler raise fails
+    # open), so the category travels on the verdict: the first classified blocking
+    # failure wins, unclassified blocks default to PRECONDITION, and we rebuild the
+    # canonical FailureDetails via that category's leaf so AE attributes the abort
+    # (AUTH / SOURCE_UNAVAILABLE / …) from structured details rather than the
+    # opaque "PreflightFailed" type. Forced non-retryable to keep the gate's
+    # fail-fast posture regardless of the category's canonical retryability.
+    category = next(
+        (c.category for c in blocking_failures if c.category is not None),
+        FailureCategory.PRECONDITION,
+    )
+    suggested = next(
+        (c.suggested_action for c in blocking_failures if c.suggested_action), ""
+    )
+    details = LEAF_BY_CATEGORY[category](
+        message=reason,
+        suggested_action=suggested or None,
+        retryable=False,
+        app_name=app_name,
+    ).to_failure_details()
 
     from application_sdk.execution.errors import (  # noqa: PLC0415 — circular: execution/__init__ imports app.base
         ApplicationError,
     )
 
     raise ApplicationError(
-        result.message
-        or reasons
-        or "Preflight check failed; aborting before extraction",
+        reason,
+        details,
         type="PreflightFailed",
         non_retryable=True,
     )

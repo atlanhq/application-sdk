@@ -24,6 +24,7 @@ from pydantic.alias_generators import to_camel
 from application_sdk.contracts.base import SerializableEnum
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.credentials.spec import AgentCredentialSpec
+from application_sdk.errors.categories import FailureCategory
 
 
 class _DictLikeConfigBase(BaseModel):
@@ -339,6 +340,21 @@ class PreflightCheck(BaseModel):
 
     message: str = ""
     """Details about the check result."""
+
+    category: FailureCategory | None = None
+    """Typed failure category for a blocking failure.
+
+    When this check is the one that blocks the run, the gate carries this category
+    to the Automation Engine (via the canonical wire ``FailureDetails``) so the
+    abort is attributed — ``AUTH`` / ``SOURCE_UNAVAILABLE`` / ``PERMISSION`` / … —
+    instead of an opaque preflight failure. The category also fixes the canonical
+    ``code`` / ``audience`` / retryability of the leaf it maps to. ``None`` → the
+    gate defaults to ``PRECONDITION``. Ignored unless the check is blocking and
+    failed; a raise from the handler no longer blocks (the gate fails open), so
+    this is how a handler expresses a *typed* block."""
+
+    suggested_action: str = ""
+    """Optional remediation hint carried alongside the failure classification."""
 
     duration_ms: float = 0.0
     """How long the check took in milliseconds."""

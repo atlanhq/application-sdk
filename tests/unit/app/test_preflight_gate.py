@@ -12,6 +12,7 @@ from unittest import mock
 import pytest
 
 from application_sdk.app.base import _run_preflight_gate
+from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.execution.errors import ApplicationError
 from application_sdk.handler.contracts import (
     PreflightCheck,
@@ -179,6 +180,70 @@ class TestRunPreflightGate:
         assert excinfo.value.message == "Summary: 3 of 5 checks failed"
         assert "auth down" not in excinfo.value.message
 
+    async def test_abort_details_carry_typed_category(self) -> None:
+        # A blocking check that declares a category must surface that category
+        # (and its canonical code/audience) to AE via structured FailureDetails,
+        # while the "PreflightFailed" type marker is preserved.
+        verdict = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(
+                    name="auth",
+                    passed=False,
+                    blocking=True,
+                    message="Auth failed",
+                    category=FailureCategory.AUTH,
+                    suggested_action="Rotate the credential",
+                )
+            ],
+        )
+        _, exec_patch = _exec(verdict)
+        with _patched(True), exec_patch:
+            with pytest.raises(ApplicationError) as excinfo:
+                await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        err = excinfo.value
+        assert err.type == "PreflightFailed"  # preflight marker preserved
+        details = err.details[0]
+        assert details.category is FailureCategory.AUTH
+        assert details.code == "AUTH"
+        assert details.audience is Audience.USER
+        assert details.retryable is False
+        assert details.suggested_action == "Rotate the credential"
+
+    async def test_abort_details_default_precondition_when_unclassified(self) -> None:
+        # _blocking() sets no category → default to PRECONDITION so the abort
+        # still carries structured details (better than an opaque PreflightFailed).
+        _, exec_patch = _exec(_blocking())
+        with _patched(True), exec_patch:
+            with pytest.raises(ApplicationError) as excinfo:
+                await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        assert excinfo.value.details[0].category is FailureCategory.PRECONDITION
+
+    async def test_abort_uses_first_classified_blocking_failure(self) -> None:
+        # When multiple blocking checks fail, the first classified one wins.
+        verdict = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(
+                    name="a",
+                    passed=False,
+                    blocking=True,
+                    category=FailureCategory.SOURCE_UNAVAILABLE,
+                ),
+                PreflightCheck(
+                    name="b",
+                    passed=False,
+                    blocking=True,
+                    category=FailureCategory.PERMISSION,
+                ),
+            ],
+        )
+        _, exec_patch = _exec(verdict)
+        with _patched(True), exec_patch:
+            with pytest.raises(ApplicationError) as excinfo:
+                await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        assert excinfo.value.details[0].category is FailureCategory.SOURCE_UNAVAILABLE
+
     async def test_proceeds_on_success(self) -> None:
         exec_mock, exec_patch = _exec(_proceeding())
         with _patched(True), exec_patch:
@@ -193,17 +258,36 @@ class TestRunPreflightGate:
             result = await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
         assert result is None
 
-    async def test_handler_raise_propagates(self) -> None:
-        # A handler that raises its own typed error surfaces as a FailureError
-        # and propagates straight through to fail the run.
+    async def test_infra_error_fails_open(self) -> None:
+        # Fail-open (HYP-1883): if the gate activity can't produce a verdict —
+        # timeout, transport/secret-store failure, or an unexpected handler crash
+        # (all FailureError subclasses) — the run PROCEEDS rather than dies. A
+        # handler that raises no longer blocks; blocking is only via should_block.
         from temporalio.exceptions import ApplicationError as TemporalApplicationError
 
         exec_mock = mock.AsyncMock(side_effect=TemporalApplicationError("boom"))
         with (
             _patched(True),
             mock.patch("application_sdk.app.base.workflow.execute_activity", exec_mock),
+            mock.patch("application_sdk.app.base._safe_log") as safe_log,
         ):
-            with pytest.raises(TemporalApplicationError):
+            result = await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        assert result is None  # proceeded, did not raise
+        exec_mock.assert_awaited_once()
+        safe_log.assert_called_once()
+        assert safe_log.call_args.args[0] == "error"  # logged loudly
+
+    async def test_non_failure_error_still_propagates(self) -> None:
+        # Fail-open catches only FailureError (gate plumbing). Control-flow
+        # exceptions like cancellation must NOT be swallowed.
+        import asyncio
+
+        exec_mock = mock.AsyncMock(side_effect=asyncio.CancelledError())
+        with (
+            _patched(True),
+            mock.patch("application_sdk.app.base.workflow.execute_activity", exec_mock),
+        ):
+            with pytest.raises(asyncio.CancelledError):
                 await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
 
     async def test_dispatches_activity_with_preflight_output_result_type(self) -> None:
