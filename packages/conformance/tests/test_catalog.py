@@ -344,7 +344,7 @@ def test_catalog_d_series_present() -> None:
 
 
 def test_catalog_p_series_present() -> None:
-    """The P-series prescription rules are exactly P001–P025.
+    """The P-series prescription rules are exactly P001–P025, P031.
 
     Strict equality (not just not-missing): P004–P007 are the orchestration-seam
     rules (BLDX-1417); P008–P012 are the storage-seam rules (BLDX-1398);
@@ -361,6 +361,9 @@ def test_catalog_p_series_present() -> None:
     AppStateAsCrossTaskChannel, ManualQualifiedNameFString).
     P029/P030 are the SDR-readiness rules — manifest agent_json slot and
     upload call presence (DISTR-752).
+    P031 is SharedDefaultExecutorOffload — asyncio.to_thread(...) /
+    run_in_executor(None, ...) bypass the SDK's dedicated run_in_thread() pool
+    and land on asyncio's shared default executor instead (BLDX-1525).
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -397,6 +400,7 @@ def test_catalog_p_series_present() -> None:
         "P028",
         "P029",
         "P030",
+        "P031",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
