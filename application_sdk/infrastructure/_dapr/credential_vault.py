@@ -404,15 +404,17 @@ class DaprCredentialVault:
                 # proceeding with an incomplete credential, mirroring the
                 # multi-key branch above.
                 raise
-            # conformance: ignore[E004] exc_info=True already present on the logger.debug call below
+            # conformance: ignore[E004] exc_info=True would leak the raw ref-key (SecretStoreError.__str__ embeds `secret=<ref-key>`); hash + exception type name logged instead, mirroring retry_past_dapr_cold_start's warning log
             except Exception as e:
                 logger.debug(
-                    "Secret resolution failed for '%s' (value=%s)",
+                    "Secret resolution failed for '%s' (sha256:%s): %s",
                     label,
-                    value,
-                    exc_info=True,
+                    value_hash,
+                    type(e).__name__,
                 )
-                failed_lookups.append("  '%s' → '%s': %s" % (label, value, e))
+                failed_lookups.append(
+                    "  '%s' → sha256:%s: %s" % (label, value_hash, type(e).__name__)
+                )
 
         for field, value in credential_config.items():
             if isinstance(value, str):

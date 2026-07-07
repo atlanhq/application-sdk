@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -276,6 +277,47 @@ class TestDaprCredentialVaultGetCredentials:
             vault = self._make_vault(mock_client)
             with pytest.raises(CredentialVaultError):
                 await vault.get_credentials("my-guid")
+
+    async def test_single_key_failure_summary_does_not_leak_ref_key_in_logs(
+        self,
+    ) -> None:
+        """A definitive (non-cold-start) rejection during single-key probing
+        must not leak the raw ref-key in either the per-field DEBUG log or
+        the aggregated ERROR summary — mirrors credentials.agent's ref-key
+        hashing for the identical single-key-probe shape."""
+        ref_key = "SNOWFLAKE_PROD_PASSWORD"
+        expected_hash = hashlib.sha256(ref_key.encode()).hexdigest()[:8]
+        config = {"credentialSource": "agent", "password": ref_key}
+
+        req = httpx.Request("GET", "http://localhost/secret")
+        resp = httpx.Response(403, request=req)
+        mock_client = _make_mock_dapr_client(
+            config_bytes=json.dumps(config).encode(), secret_data={}
+        )
+        mock_client.get_secret = AsyncMock(
+            side_effect=httpx.HTTPStatusError("forbidden", request=req, response=resp)
+        )
+
+        with (
+            patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
+            patch(
+                "application_sdk.infrastructure._dapr.credential_vault.logger"
+            ) as mock_logger,
+        ):
+            vault = self._make_vault(mock_client)
+            result = await vault.get_credentials("my-guid")
+
+        # Unresolved placeholder retained — mirrors the "not a secret" fallthrough.
+        assert result.get("password") == ref_key
+
+        logged = " ".join(
+            str(arg)
+            for call in mock_logger.debug.call_args_list
+            + mock_logger.error.call_args_list
+            for arg in call.args
+        )
+        assert ref_key not in logged
+        assert f"sha256:{expected_hash}" in logged
 
     async def test_guid_validation_rejects_path_traversal(self) -> None:
         """GUIDs with unsafe characters (e.g. '../') raise CredentialVaultError immediately."""
