@@ -469,7 +469,7 @@ runs:
           #    filename, since the configurator may emit it under a different
           #    filename. Otherwise Dapr loads two components with the same name
           #    (ours alongside, not overriding) and routing is undefined.
-          grep -rlE '^[[:space:]]*name:[[:space:]]*atlan-objectstore[[:space:]]*$' \
+          grep -rlE '^[[:space:]]*name:[[:space:]]*["'"'"']?atlan-objectstore["'"'"']?[[:space:]]*$' \
             ci-deploy/components/ 2>/dev/null | xargs -r rm -f
           cp "${ACTION_ROOT}/two-store/atlan-objectstore.yaml" ci-deploy/components/
           # 2. Host-writable mount dirs (containers run as uid 1000; a root-owned
