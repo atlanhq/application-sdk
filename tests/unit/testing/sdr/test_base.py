@@ -82,9 +82,9 @@ def test_workflow_scenario_gets_agent_routing_args(workflow_scenario: Scenario) 
     args = suite._build_scenario_args(workflow_scenario)
     assert args["extraction_method"] == "agent"
     assert args["agent_json"] == _Suite.agent_spec_template
-    assert (
-        "workflow_type" not in args
-    ), "workflow_type only injected when subclass sets it"
+    assert "workflow_type" not in args, (
+        "workflow_type only injected when subclass sets it"
+    )
 
 
 def test_workflow_scenario_with_workflow_type_set(workflow_scenario: Scenario) -> None:
@@ -309,9 +309,9 @@ def test_manifest_missing_agent_json_slot_is_not_injected(
         scenarios = []
 
     args = _BadManifestSuite()._build_scenario_args(workflow_scenario)
-    assert (
-        "agent_json" not in args
-    ), "manifest had no agent_json slot — the derived input must not contain it"
+    assert "agent_json" not in args, (
+        "manifest had no agent_json slot — the derived input must not contain it"
+    )
     # Slots the manifest DID declare are still substituted.
     assert args["extraction_method"] == "agent"
 
@@ -403,3 +403,163 @@ def test_execute_scenario_skips_polling_when_expected_data_set(tmp_path) -> None
     ):
         suite._execute_scenario(sc)
         ensure.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# SDR readiness — dynamic assertions: assets landed (count + location) + floor
+# ---------------------------------------------------------------------------
+
+_RESP = {"data": {"workflow_id": "wf1", "run_id": "run1"}}
+_LOAD = "application_sdk.testing.integration.comparison.load_actual_output"
+
+
+def _asset(qn: str) -> dict[str, Any]:
+    return {"typeName": "Table", "attributes": {"qualifiedName": qn}}
+
+
+class _WfSuite(BaseSDRIntegrationTest):
+    agent_spec_template = {"agent-name": "a", "secret-path": "p"}
+    extracted_output_base_path = "data/out"
+    default_connection = {
+        "typeName": "Connection",
+        "attributes": {"qualifiedName": "default/mssql/1700"},
+    }
+    scenarios = []
+
+
+def test_assets_landed_passes_when_records_under_connection(
+    workflow_scenario: Scenario,
+) -> None:
+    suite = _WfSuite()
+    with patch(
+        _LOAD,
+        return_value=[
+            _asset("default/mssql/1700/db/sch/t1"),
+            _asset("default/mssql/1700/db/sch/t2"),
+        ],
+    ):
+        suite._assert_assets_landed(workflow_scenario, _RESP)  # no raise
+
+
+def test_assets_landed_fails_on_zero_assets_missing_dir(
+    workflow_scenario: Scenario,
+) -> None:
+    suite = _WfSuite()
+    with patch(_LOAD, side_effect=FileNotFoundError("no output dir")):
+        with pytest.raises(AssertionError, match="NO extracted assets"):
+            suite._assert_assets_landed(workflow_scenario, _RESP)
+
+
+def test_assets_landed_fails_on_empty_record_list(
+    workflow_scenario: Scenario,
+) -> None:
+    suite = _WfSuite()
+    with patch(_LOAD, return_value=[]):
+        with pytest.raises(AssertionError, match="ZERO asset records"):
+            suite._assert_assets_landed(workflow_scenario, _RESP)
+
+
+def test_assets_landed_fails_on_wrong_location(workflow_scenario: Scenario) -> None:
+    suite = _WfSuite()
+    with patch(
+        _LOAD,
+        return_value=[
+            _asset("default/mssql/1700/db/sch/t1"),
+            _asset("default/OTHER/9999/db/sch/t2"),  # not under the connection QN
+        ],
+    ):
+        with pytest.raises(AssertionError, match="NOT nested under the connection"):
+            suite._assert_assets_landed(workflow_scenario, _RESP)
+
+
+def test_assets_landed_skips_location_when_conn_qn_unresolved(
+    workflow_scenario: Scenario,
+) -> None:
+    class _NoConn(_WfSuite):
+        default_connection = {}
+        scenarios = []
+
+    with patch(_LOAD, return_value=[_asset("anything/at/all")]):
+        _NoConn()._assert_assets_landed(
+            workflow_scenario, _RESP
+        )  # count ok, loc skipped
+
+
+def test_assets_landed_warns_and_skips_when_no_base_path(
+    workflow_scenario: Scenario,
+) -> None:
+    class _NoBase(BaseSDRIntegrationTest):
+        agent_spec_template = {"agent-name": "a", "secret-path": "p"}
+        extracted_output_base_path = ""
+        scenarios = []
+
+    with patch(_LOAD) as m:
+        _NoBase()._assert_assets_landed(workflow_scenario, _RESP)
+        m.assert_not_called()  # no base path → can't locate output → warn + return
+
+
+def test_sdr_connection_qn_nested_flat_and_unresolved() -> None:
+    class _N(BaseSDRIntegrationTest):
+        default_connection = {"attributes": {"qualifiedName": "default/x/1"}}
+        scenarios = []
+
+    class _F(BaseSDRIntegrationTest):
+        default_connection = {"connection_qualified_name": "default/y/2"}
+        scenarios = []
+
+    class _U(BaseSDRIntegrationTest):
+        default_connection = {}
+        scenarios = []
+
+    assert _N()._sdr_connection_qn() == "default/x/1"
+    assert _F()._sdr_connection_qn() == "default/y/2"
+    assert _U()._sdr_connection_qn() is None
+
+
+def _wf_scen() -> Scenario:
+    return Scenario(
+        name="wf",
+        api="workflow",
+        assert_that={"success": lambda v: True},
+        workflow_timeout=300,
+    )
+
+
+def test_floor_skips_non_agent_suite() -> None:
+    class _Direct(BaseSDRIntegrationTest):
+        agent_spec_template = {}
+        scenarios = []
+
+    with pytest.raises(pytest.skip.Exception):
+        _Direct().test_sdr_suite_runs_an_extraction()
+
+
+def test_floor_passes_when_workflow_scenario_present() -> None:
+    class _Ok(BaseSDRIntegrationTest):
+        agent_spec_template = {"agent-name": "a", "secret-path": "p"}
+        scenarios = [_wf_scen()]
+
+    _Ok().test_sdr_suite_runs_an_extraction()  # returns (no skip, no raise)
+
+
+def test_floor_advisory_skip_when_auth_only_and_not_enforced() -> None:
+    class _AuthOnly(BaseSDRIntegrationTest):
+        agent_spec_template = {"agent-name": "a", "secret-path": "p"}
+        scenarios = [
+            Scenario(name="auth", api="auth", assert_that={"success": lambda v: True})
+        ]
+
+    with pytest.raises(pytest.skip.Exception):
+        _AuthOnly().test_sdr_suite_runs_an_extraction()
+
+
+def test_floor_hard_fails_when_auth_only_and_enforced() -> None:
+    class _Enforced(BaseSDRIntegrationTest):
+        agent_spec_template = {"agent-name": "a", "secret-path": "p"}
+        enforce_workflow_floor = True
+        scenarios = [
+            Scenario(name="auth", api="auth", assert_that={"success": lambda v: True})
+        ]
+
+    with pytest.raises(AssertionError, match="no api='workflow' scenario"):
+        _Enforced().test_sdr_suite_runs_an_extraction()
