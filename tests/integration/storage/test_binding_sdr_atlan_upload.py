@@ -117,14 +117,21 @@ async def _assert_sdr_handoff_lands_assets(store, provider: str) -> None:
             f"got file_count={result.ref.file_count}"
         )
 
-        # 3b. LOCATION — the real bucket holds exactly the expected keys under
-        #     the destination prefix (no strays, no misplacement).
+        # 3b. LOCATION — the real bucket holds exactly the expected data keys
+        #     under the destination prefix (no strays, no misplacement).
+        #     transfer.upload also writes a `{key}.sha256` sidecar per file
+        #     (part of the egress contract), so compare the data keys and assert
+        #     each sidecar landed alongside.
         expected_keys = {f"{dst_prefix}/{rel}" for rel in _FILES}
         landed_keys = await _list_keys(store, dst_prefix)
-        assert landed_keys == expected_keys, (
+        data_keys = {k for k in landed_keys if not k.endswith(".sha256")}
+        assert data_keys == expected_keys, (
             f"assets landed at the wrong location.\n"
             f"  expected: {sorted(expected_keys)}\n"
-            f"  actual:   {sorted(landed_keys)}"
+            f"  actual:   {sorted(data_keys)}"
+        )
+        assert all(f"{k}.sha256" in landed_keys for k in expected_keys), (
+            f"missing sha256 sidecar(s); landed: {sorted(landed_keys)}"
         )
 
         # 3c. INTEGRITY — each landed object is byte-for-byte the source.
@@ -137,8 +144,9 @@ async def _assert_sdr_handoff_lands_assets(store, provider: str) -> None:
 
         for rel in _FILES:
             for prefix in (src_prefix, dst_prefix):
-                with contextlib.suppress(Exception):
-                    await ops.delete(f"{prefix}/{rel}", store=store)
+                for key in (f"{prefix}/{rel}", f"{prefix}/{rel}.sha256"):
+                    with contextlib.suppress(Exception):
+                        await ops.delete(key, store=store)
 
 
 @pytest.mark.s3_integration
