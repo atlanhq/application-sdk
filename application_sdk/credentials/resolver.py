@@ -144,7 +144,7 @@ class CredentialResolver:
             CredentialNotFoundError,
             CredentialParseError,
         )
-        from application_sdk.infrastructure._dapr.http import (  # noqa: PLC0415 — circular: infrastructure imports observability which loads credentials transitively
+        from application_sdk.infrastructure import (  # noqa: PLC0415 — circular: infrastructure imports observability which loads credentials transitively
             retry_past_dapr_cold_start,
         )
         from application_sdk.infrastructure.secrets import (  # noqa: PLC0415 — circular: infrastructure.secrets imports observability which loads credentials transitively

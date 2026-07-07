@@ -56,7 +56,7 @@ from application_sdk.credentials.errors import (
     CredentialParseError,
 )
 from application_sdk.errors import redact_secrets
-from application_sdk.infrastructure._dapr.http import retry_past_dapr_cold_start
+from application_sdk.infrastructure import retry_past_dapr_cold_start
 from application_sdk.infrastructure.secrets import SecretNotFoundError
 from application_sdk.observability.logger_adaptor import get_logger
 
