@@ -32,6 +32,25 @@ freshness (a hand-edit that keeps the banner is invisible to a static scanner);
 that guarantee belongs to the CI regenerate-and-diff freshness gate. All three
 are WARN and APP-scoped, and no-op on any repo without a ``contract/`` directory.
 
+Manifest-vs-contract field validation (BLDX-1527)
+--------------------------------------------------
+K006 closes a different structural gap: ``App.pkl``'s pipeline nodes (e.g.
+``PublishNode``) unconditionally wire a downstream node's args to the
+entrypoint's runtime output via a JSONPath such as
+``$.extract.outputs.publish_state_prefix``. Pkl compiles this before any
+Python runs and has zero visibility into the app's ``Output`` model; the B005
+contract-ledger checker only knows a field "was tracked and disappeared," with
+no knowledge of the manifest's JSONPath requirements. An app can silently
+delete a field the manifest depends on and nothing static catches it — only a
+rarely-run, non-deterministic full-DAG e2e does (the incident that motivated
+this rule: ``OpenAPIConnectorOutput`` lost ``publish_state_prefix`` /
+``current_state_prefix`` in a cleanup PR and went undetected for ~12 days).
+K006 cross-references every ``$.extract.outputs.<field>`` reference in the
+committed ``app/generated/**/manifest.json`` against the entrypoint's Python
+``Output`` contract, resolved across its full inheritance chain (so a field
+supplied by an SDK mixin such as ``PublishInputMixin`` counts as declared).
+WARN and APP-scoped; no-op on any repo without ``app/generated/``.
+
 Scope
 -----
 ``APP`` only: consumer apps have a ``contract/`` directory; the SDK itself does
@@ -384,6 +403,78 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k005"
+        ),
+    ),
+    RuleDefinition(
+        id="K006",
+        scope=RuleScope.APP,
+        name="ManifestContractFieldMismatch",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="contract-toolkit",
+        autofixable=False,
+        since="0.14.0",
+        orthogonal_gate="tests",
+        rationale=(
+            "App.pkl's pipeline nodes (e.g. PublishNode) unconditionally wire a "
+            "downstream node's args to the entrypoint's runtime output via a "
+            "JSONPath such as $.extract.outputs.publish_state_prefix. Pkl compiles "
+            "this before any Python runs and has zero visibility into the app's "
+            "Output model; the B005 contract-ledger checker only knows a field 'was "
+            "tracked and disappeared,' with no knowledge of the manifest's JSONPath "
+            "requirements. An app can therefore silently delete a field the manifest "
+            "depends on, and nothing static catches it — only a rarely-run, "
+            "non-deterministic full-DAG e2e run against a real Automation Engine "
+            "does. This is exactly what happened when OpenAPIConnectorOutput lost "
+            "publish_state_prefix and current_state_prefix in an unrelated "
+            "conformance-cleanup PR and went undetected for about 12 days (BLDX-1527). "
+            "K006 closes the loop with a structural manifest-vs-contract diff, "
+            "computed once both artifacts exist, without either layer needing "
+            "visibility into the other's language."
+        ),
+        short_description=(
+            "app/generated/**/manifest.json references an "
+            "$.extract.outputs.<field> the entrypoint's Output contract "
+            "does not declare"
+        ),
+        full_description=(
+            "A ``$.extract.outputs.<field>`` JSONPath reference in a committed "
+            "``app/generated/**/manifest.json`` DAG node's ``inputs.args`` names a "
+            "field that the corresponding entrypoint's Python ``Output`` contract "
+            "does not declare — not directly, and not via any inherited base class "
+            "or SDK mixin.\n"
+            "\n"
+            "The Automation Engine resolves this JSONPath at runtime against the "
+            "object the entrypoint's workflow actually returned. A missing field "
+            "means the reference never resolves, and the dependent pipeline step "
+            "(most commonly the default ``publish`` step) fails at runtime with an "
+            "unresolved-JSONPath error — the one signal that would have caught this "
+            "is a rarely-run, opt-in-labeled, non-deterministic full-DAG e2e test.\n"
+            "\n"
+            "**Fix:** declare the missing field(s) on the entrypoint's ``Output`` "
+            "model, or mix in the SDK contract base that already supplies them. For "
+            "the publish-state fields specifically "
+            "(``connection_qualified_name``, ``transformed_data_prefix``, "
+            "``publish_state_prefix``, ``current_state_prefix``), mix in "
+            "``application_sdk.contracts.base.PublishInputMixin`` rather than "
+            "hand-declaring each field — it also derives the values correctly from "
+            "``connection_qualified_name``.\n"
+            "\n"
+            "**Never hand-edit** ``app/generated/manifest.json`` to work around a "
+            "finding — it is a ``pkl eval`` output (K004/K005 and the generated-"
+            "artifact freshness gate catch a hand-edited manifest). If the "
+            "referenced field is genuinely not needed (e.g. the pipeline step that "
+            "consumes it should not be enabled), remove or reconfigure that step in "
+            "``contract/app.pkl`` and re-run ``pkl eval -m . contract/app.pkl`` "
+            "instead.\n"
+            "\n"
+            "**Suppress** with ``# conformance: ignore[K006] <reason>`` on the "
+            "``Output`` class definition (or the comment-only line directly above "
+            "it) when a mismatch is understood and deliberately deferred.\n"
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k006"
         ),
     ),
 )

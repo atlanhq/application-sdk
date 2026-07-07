@@ -43,6 +43,7 @@ from conformance.suite.checks import (
     gitignore_entries,
     integration_marking,
     legacy_contract,
+    manifest_contract,
     optimizations,
     orchestration,
     prescriptions,
@@ -192,6 +193,12 @@ _CHECKS: list[CheckRegistration] = [
         discover=generated_freshness.discover,
         scan_path=generated_freshness.scan_path,
         scan_all=generated_freshness.scan_all,
+    ),
+    CheckRegistration(
+        series=manifest_contract.SERIES,
+        discover=manifest_contract.discover,
+        scan_path=manifest_contract.scan_path,
+        scan_all=manifest_contract.scan_all,
     ),
     CheckRegistration(
         series=sdr_checks.SERIES,
