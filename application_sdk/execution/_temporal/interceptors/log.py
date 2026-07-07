@@ -386,7 +386,14 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             try:
                 if status == "ERROR":
                     ended_attrs.update(_extract_failure_attrs(exc_caught))
-                    logger.error("workflow.ended", exc_info=True, **ended_attrs)
+                    # A deliberate preflight-gate block is an expected, typed
+                    # outcome, not a crash — log it terse (no stack). Its
+                    # classification is already in ended_attrs via the failure
+                    # details. Real failures keep the ERROR traceback.
+                    if getattr(exc_caught, "type", None) == "PreflightFailed":
+                        logger.warning("workflow.ended", **ended_attrs)
+                    else:
+                        logger.error("workflow.ended", exc_info=True, **ended_attrs)
                 else:
                     logger.info("workflow.ended", **ended_attrs)
             # conformance: ignore[E004] best-effort observability guard in finally; logging failure must never block workflow completion

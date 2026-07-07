@@ -1776,15 +1776,30 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
 
         # conformance: ignore[E004] top-level entrypoint handler; logged via _safe_log with exc_info=True and re-raised as typed ApplicationError
         except Exception as e:
-            _safe_log(
-                "error",
-                "App failed",
-                app_name=app_name,
-                run_id=str(run_id),
-                correlation_id=context.correlation_id,
-                error_type=type(e).__name__,
-                exc_info=True,
-            )
+            # A deliberate preflight-gate block (PreflightFailed) is an expected,
+            # typed outcome — log it terse (one line, no stack) so it doesn't read
+            # like an unexpected crash. Its classification already rides on the
+            # error's FailureDetails. Every other failure keeps the full ERROR
+            # traceback (the diagnostic evidence a real crash needs).
+            if getattr(e, "type", None) == "PreflightFailed":
+                _safe_log(
+                    "warning",
+                    "App blocked by preflight gate",
+                    app_name=app_name,
+                    run_id=str(run_id),
+                    correlation_id=context.correlation_id,
+                    reason=str(e),
+                )
+            else:
+                _safe_log(
+                    "error",
+                    "App failed",
+                    app_name=app_name,
+                    run_id=str(run_id),
+                    correlation_id=context.correlation_id,
+                    error_type=type(e).__name__,
+                    exc_info=True,
+                )
             # deferred import: circular dependency
             # Raw Python exceptions (e.g. ValueError raised directly in an
             # entrypoint) must be wrapped in ApplicationError so Temporal

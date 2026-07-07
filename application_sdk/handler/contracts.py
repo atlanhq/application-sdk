@@ -337,7 +337,11 @@ class PreflightCheck(BaseModel):
     """
 
     message: str = ""
-    """Details about the check result."""
+    """What happened — a clean, single-sentence description of the check result.
+
+    This is the human-facing line the UI shows and the abort reason folds in, so
+    keep it self-contained and safe (no stack traces, no host/credential detail).
+    Says *what* went wrong, not what to do — see :attr:`suggested_action`."""
 
     category: FailureCategory | None = None
     """Typed failure category for a blocking failure.
@@ -352,7 +356,13 @@ class PreflightCheck(BaseModel):
     this is how a handler expresses a *typed* block."""
 
     suggested_action: str = ""
-    """Optional remediation hint carried alongside the failure classification."""
+    """Optional remediation — what the reader should DO about a failure.
+
+    Distinct from :attr:`message` (what happened): set this only when there is a
+    concrete, audience-appropriate next step, and only for **user-fixable**
+    failures. Leave empty for internal/unexpected failures the reader can't act on
+    (a "verify your credentials" hint on an app bug is misleading). Flows into the
+    abort's ``FailureDetails.suggested_action`` for a blocking failure."""
 
     duration_ms: float = 0.0
     """How long the check took in milliseconds."""
