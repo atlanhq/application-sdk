@@ -295,10 +295,10 @@ class DaprCredentialVault:
         :func:`~application_sdk.infrastructure._dapr.client.classify_secret_fetch_error`
         (transport/5xx = unreachable, retried; 4xx = definitive rejection,
         not retried) instead of collapsing every failure into a single
-        non-retryable ``SecretFetchError`` the way this used to — that made
-        a transient sidecar race here indistinguishable from "no secret",
-        so callers had no way to retry it and silently proceeded with an
-        incomplete credential instead.
+        non-retryable error the way this used to — that made a transient
+        sidecar race here indistinguishable from "no secret", so callers
+        had no way to retry it and silently proceeded with an incomplete
+        credential instead.
 
         Returns ``{}`` when the key is definitively absent from the store,
         or in local-environment deployments to avoid secret store
