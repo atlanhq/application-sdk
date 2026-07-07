@@ -23,10 +23,10 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 9 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 54 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 55 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 20 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
-| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 34 |
+| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 37 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
@@ -940,6 +940,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/errors/leaves.py`
 
+#### `ColdStartRaceError`
+
+- **Import:** `from application_sdk.errors import ColdStartRaceError`
+- **Signature:** `class ColdStartRaceError`
+- **Summary:** Marker for a :class:`DependencyUnavailableError` that specifically means
+- **Defined in:** `application_sdk/errors/leaves.py`
+
 #### `DataIntegrityError`
 
 - **Import:** `from application_sdk.errors import DataIntegrityError`
@@ -1750,6 +1757,13 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 - **Summary:** Generic secret-store failure (category=DEPENDENCY_UNAVAILABLE).
 - **Defined in:** `application_sdk/infrastructure/secrets.py`
 
+#### `SecretStoreUnavailableError`
+
+- **Import:** `from application_sdk.infrastructure import SecretStoreUnavailableError`
+- **Signature:** `class SecretStoreUnavailableError(secret_name: str, *, cause: Exception | None = None)`
+- **Summary:** The secret store / Dapr sidecar was *unreachable* — a transport failure
+- **Defined in:** `application_sdk/infrastructure/secrets.py`
+
 #### `StateStore`
 
 - **Import:** `from application_sdk.infrastructure import StateStore`
@@ -1808,6 +1822,13 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 - **Summary:** Get the current infrastructure context.
 - **Defined in:** `application_sdk/infrastructure/context.py`
 
+#### `retry_past_dapr_cold_start`
+
+- **Import:** `from application_sdk.infrastructure import retry_past_dapr_cold_start`
+- **Signature:** `retry_past_dapr_cold_start(call: Callable[[], Awaitable[_T]], *, description: str, component: str)`
+- **Summary:** Retry an idempotent Dapr-backed call past a cold sidecar.
+- **Defined in:** `application_sdk/infrastructure/_dapr/http.py`
+
 #### `set_infrastructure`
 
 - **Import:** `from application_sdk.infrastructure import set_infrastructure`
@@ -1816,6 +1837,13 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 - **Defined in:** `application_sdk/infrastructure/context.py`
 
 ### Constants and Enums
+
+#### `DAPR_SECRET_STORE_COMPONENT`
+
+- **Import:** `from application_sdk.infrastructure import DAPR_SECRET_STORE_COMPONENT`
+- **Signature:** `DAPR_SECRET_STORE_COMPONENT`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/infrastructure/_dapr/http.py`
 
 #### `MessageHandler`
 

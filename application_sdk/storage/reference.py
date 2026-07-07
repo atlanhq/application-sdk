@@ -49,6 +49,7 @@ from typing import TYPE_CHECKING
 
 from application_sdk.common._listing import safe_list_directory
 from application_sdk.contracts.types import FileReference
+from application_sdk.execution.heartbeat import run_in_thread
 
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
@@ -103,6 +104,21 @@ def _sha256_hex_file(path: Path) -> str:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+async def _sha256_hex_file_async(path: Path) -> str:
+    """Run :func:`_sha256_hex_file` in a worker thread.
+
+    ``_sha256_hex_file`` reads and digests the whole file with no ``await``;
+    calling it directly on the event loop blocks the loop for the full
+    read+hash. A blocked loop cannot run the SDK's auto-heartbeat coroutine, so
+    activities that verify many/large files heartbeat-time-out even while making
+    progress. Uses ``run_in_thread`` (dedicated pool) rather than
+    ``asyncio.to_thread`` (asyncio's default executor) so this doesn't
+    contend with Temporal's own use of the default executor — same reason
+    directory listing is offloaded this way in ``persist``.
+    """
+    return await run_in_thread(_sha256_hex_file, path)
 
 
 async def _get_stored_sidecar(storage_path: str, store: ObjectStore) -> str | None:
@@ -205,8 +221,9 @@ async def persist_file_reference(
     if local.is_dir():
         # ── Directory upload ───────────────────────────────────────────────
         prefix = _make_storage_prefix(ref, output_path=output_path)
-        # to_thread keeps the blocking fsync + scandir off the event loop.
-        files = await asyncio.to_thread(safe_list_directory, local)
+        # run_in_thread keeps the blocking fsync + scandir off the event loop,
+        # using the dedicated pool rather than asyncio's default executor.
+        files = await run_in_thread(safe_list_directory, local)
         _t0 = time.monotonic()
         logger.info(
             "file_ref.persist.start",
@@ -409,7 +426,7 @@ async def materialize_file_reference(
         # Fast path: local file exists — validate before deciding to download.
         stored_hash: str | None = None
         if ref.local_path is not None and Path(ref.local_path).exists():
-            local_hash = _sha256_hex_file(Path(ref.local_path))
+            local_hash = await _sha256_hex_file_async(Path(ref.local_path))
             stored_hash = await _get_stored_sidecar(ref.storage_path, store)
 
             if stored_hash is not None and local_hash == stored_hash:
@@ -580,7 +597,7 @@ async def materialize_file_reference(
             # OOM recoveries on the same node) free after the first pass.
             if dest_path.exists() and dest_sidecar.exists():
                 try:
-                    local_hash = _sha256_hex_file(dest_path)
+                    local_hash = await _sha256_hex_file_async(dest_path)
                     if local_hash == dest_sidecar.read_text().strip():
                         logger.debug(
                             "file_ref.materialize.skipped",

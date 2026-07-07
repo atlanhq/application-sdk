@@ -2,6 +2,25 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.12.0] - 2026-07-07
+
+### Features
+
+- add T005-T015 test-quality rules for coverage meaningfulness (#2540) ([4a8bfb6](https://github.com/atlanhq/application-sdk/commit/4a8bfb6))
+- bundle Dapr component YAMLs into the SDK wheel (#2531) ([80bd999](https://github.com/atlanhq/application-sdk/commit/80bd999))
+
+### Bug fixes
+
+- P029 requires extraction_method top-level + exempts non-agent entrypoints (#2536) ([a6b604b](https://github.com/atlanhq/application-sdk/commit/a6b604b))
+
+### Other changes
+
+- chore(deps): lock file maintenance (#2542) ([9da8605](https://github.com/atlanhq/application-sdk/commit/9da8605))
+- chore(deps): lock file maintenance (#2539) ([657d744](https://github.com/atlanhq/application-sdk/commit/657d744))
+- chore(deps): lock file maintenance (#2535) ([6cf2cc2](https://github.com/atlanhq/application-sdk/commit/6cf2cc2))
+- chore(deps): lock file maintenance (#2530) ([5fddad4](https://github.com/atlanhq/application-sdk/commit/5fddad4))
+- chore(deps): lock file maintenance (#2528) ([4b7a42d](https://github.com/atlanhq/application-sdk/commit/4b7a42d))
+
 ## [0.11.3] - 2026-07-06
 
 ### Bug fixes

@@ -7,6 +7,7 @@ import tomllib
 from pathlib import Path
 
 import pytest
+from conformance.suite.checks._ast_common import parse_toml_suppressions
 from conformance.suite.checks.dependency_conformance import (
     _REMOTE_COMPONENT_FETCH_RE,
     SDK_PYTHON_FLOOR,
@@ -15,7 +16,6 @@ from conformance.suite.checks.dependency_conformance import (
     _iter_dependency_group_entries,
     _normalise_name,
     _parse_requirement,
-    _parse_suppressions,
     _requires_python_lower_bound,
     _sdk_extras_in,
     main,
@@ -295,7 +295,7 @@ def test_parse_suppressions_inline_directive() -> None:
         '    "pydantic>=2,<3",  # conformance: ignore[D002] override for hotfix\n'
         "]\n"
     )
-    suppressions = _parse_suppressions(text)
+    suppressions = parse_toml_suppressions(text)
     assert 4 in suppressions
     ids, just = suppressions[4]
     assert ids == frozenset({"D002"})
