@@ -341,7 +341,7 @@ jobs:
 
       - name: "Run ${{ matrix.series }}-series checks"
         if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all
-        uses: atlanhq/application-sdk/.github/actions/run-conformance-detect@main
+        uses: ./.github/actions/run-conformance-detect
         with:
           series: ${{ matrix.series }}
           slug: ${{ matrix.slug }}
