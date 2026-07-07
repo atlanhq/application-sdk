@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.20.3
-source-sha:    352c04a4d331c8a1e841cc5a087279dabcc24598
-source-date:   2026-07-07T01:24:18+01:00
+source-sha:    fe203eb27a91e9fab92ba0c166be0102f18fd9b2
+source-date:   2026-07-07T02:24:45+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -23,7 +23,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 9 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 54 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 55 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 20 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 37 |
@@ -938,6 +938,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Import:** `from application_sdk.errors import CancelledError`
 - **Signature:** `class CancelledError(*, ...)`
 - **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `ColdStartRaceError`
+
+- **Import:** `from application_sdk.errors import ColdStartRaceError`
+- **Signature:** `class ColdStartRaceError`
+- **Summary:** Marker for a :class:`DependencyUnavailableError` that specifically means
 - **Defined in:** `application_sdk/errors/leaves.py`
 
 #### `DataIntegrityError`
