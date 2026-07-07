@@ -319,3 +319,54 @@ async def test_gcs_sdr_workflow_publish_lands_assets(tmp_path):
         "gcs-sdr-wf-store", components_dir=tmp_path / "components"
     )
     await _assert_workflow_publish_lands_assets(store, "gcs", tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Emulator (MinIO) — the CHEAP, every-PR counterpart of the real-cloud tests.
+# Runs in the SDK storage-emulator job (every SDK PR) and, via the sdr-e2e
+# composite action, on every connector PR — so an app's SDR-readiness is
+# validated end-to-end (workflow → publish → count/location) with no real-cloud
+# cost. The real-cloud variants above run nightly SDK-side.
+# ---------------------------------------------------------------------------
+
+_MINIO_ENDPOINT = os.environ.get("AWS_ENDPOINT_URL", "http://localhost:9000")
+_MINIO_USER = os.environ.get("MINIO_ROOT_USER", "minioadmin")
+_MINIO_PASS = os.environ.get("MINIO_ROOT_PASSWORD", "minioadmin")
+_MINIO_BUCKET = os.environ.get("ATLAN_OBJECT_STORE_BUCKET", "sdk-atlan-objectstore")
+
+
+def _minio_reachable() -> bool:
+    import httpx
+
+    try:
+        with httpx.Client(timeout=3.0) as client:
+            return client.get(f"{_MINIO_ENDPOINT}/minio/health/live").status_code < 500
+    except Exception:
+        return False
+
+
+@pytest.mark.storage_emulator
+async def test_emulator_sdr_workflow_publish_lands_assets(tmp_path):
+    """Generalized workflow → persist_file_refs → count/location against MinIO.
+
+    Same connector-agnostic harness as the real-cloud tests, on an emulator, so
+    it can run on every connector PR without real-cloud creds or cost."""
+    if not _minio_reachable():
+        pytest.skip(f"MinIO not reachable at {_MINIO_ENDPOINT}")
+    write_dapr_component(
+        tmp_path / "components",
+        name="minio-sdr-wf-store",
+        binding_type="bindings.aws.s3",
+        metadata={
+            "bucket": _MINIO_BUCKET,
+            "region": "us-east-1",
+            "endpoint": _MINIO_ENDPOINT,
+            "forcePathStyle": "true",
+            "accessKey": _MINIO_USER,
+            "secretKey": _MINIO_PASS,
+        },
+    )
+    store = create_store_from_binding(
+        "minio-sdr-wf-store", components_dir=tmp_path / "components"
+    )
+    await _assert_workflow_publish_lands_assets(store, "s3", tmp_path)
