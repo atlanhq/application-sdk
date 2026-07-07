@@ -103,9 +103,7 @@ async def _assert_sdr_handoff_lands_assets(store, provider: str) -> None:
             "",
             dst_prefix,
             store=store,
-            _source_ref=FileReference(
-                local_path="extracted", storage_path=src_prefix
-            ),
+            _source_ref=FileReference(local_path="extracted", storage_path=src_prefix),
             _source_store=store,
             _tier=StorageTier.RETAINED,
         )
@@ -130,23 +128,26 @@ async def _assert_sdr_handoff_lands_assets(store, provider: str) -> None:
             f"  expected: {sorted(expected_keys)}\n"
             f"  actual:   {sorted(data_keys)}"
         )
-        assert all(f"{k}.sha256" in landed_keys for k in expected_keys), (
-            f"missing sha256 sidecar(s); landed: {sorted(landed_keys)}"
-        )
+        assert all(
+            f"{k}.sha256" in landed_keys for k in expected_keys
+        ), f"missing sha256 sidecar(s); landed: {sorted(landed_keys)}"
 
         # 3c. INTEGRITY — each landed object is byte-for-byte the source.
         for rel, data in _FILES.items():
             assert await cs.get_bytes(f"{dst_prefix}/{rel}") == data
     finally:
-        # Runs on any path (incl. assertion failure) so reruns against the
-        # persistent real bucket stay idempotent.
+        # Delete EVERY key under this run's tag (data files + .sha256 sidecars,
+        # both src and dst) so reruns against the persistent real bucket stay
+        # idempotent and nothing leaks — list actual keys rather than guessing
+        # the layout.
         import contextlib
 
-        for rel in _FILES:
-            for prefix in (src_prefix, dst_prefix):
-                for key in (f"{prefix}/{rel}", f"{prefix}/{rel}.sha256"):
-                    with contextlib.suppress(Exception):
-                        await ops.delete(key, store=store)
+        cleanup_keys: set[str] = set()
+        with contextlib.suppress(Exception):
+            cleanup_keys = await _list_keys(store, tag)
+        for key in cleanup_keys:
+            with contextlib.suppress(Exception):
+                await ops.delete(key, store=store)
 
 
 @pytest.mark.s3_integration

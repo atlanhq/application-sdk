@@ -82,9 +82,9 @@ def test_workflow_scenario_gets_agent_routing_args(workflow_scenario: Scenario) 
     args = suite._build_scenario_args(workflow_scenario)
     assert args["extraction_method"] == "agent"
     assert args["agent_json"] == _Suite.agent_spec_template
-    assert "workflow_type" not in args, (
-        "workflow_type only injected when subclass sets it"
-    )
+    assert (
+        "workflow_type" not in args
+    ), "workflow_type only injected when subclass sets it"
 
 
 def test_workflow_scenario_with_workflow_type_set(workflow_scenario: Scenario) -> None:
@@ -309,9 +309,9 @@ def test_manifest_missing_agent_json_slot_is_not_injected(
         scenarios = []
 
     args = _BadManifestSuite()._build_scenario_args(workflow_scenario)
-    assert "agent_json" not in args, (
-        "manifest had no agent_json slot — the derived input must not contain it"
-    )
+    assert (
+        "agent_json" not in args
+    ), "manifest had no agent_json slot — the derived input must not contain it"
     # Slots the manifest DID declare are still substituted.
     assert args["extraction_method"] == "agent"
 
@@ -496,6 +496,18 @@ def test_assets_landed_warns_and_skips_when_no_base_path(
     with patch(_LOAD) as m:
         _NoBase()._assert_assets_landed(workflow_scenario, _RESP)
         m.assert_not_called()  # no base path → can't locate output → warn + return
+
+
+def test_assets_landed_fails_cleanly_on_missing_ids(
+    workflow_scenario: Scenario,
+) -> None:
+    """A COMPLETED response missing workflow_id/run_id raises the diagnostic
+    AssertionError, not a TypeError from os.path.join(base, None)."""
+    suite = _WfSuite()
+    with patch(_LOAD) as m:
+        with pytest.raises(AssertionError, match="missing workflow_id/run_id"):
+            suite._assert_assets_landed(workflow_scenario, {"data": {}})
+        m.assert_not_called()  # bail before trying to locate output
 
 
 def test_sdr_connection_qn_nested_flat_and_unresolved() -> None:

@@ -173,9 +173,9 @@ async def _assert_workflow_publish_lands_assets(store, provider: str, tmp_path) 
         result = await persist_file_refs(store, {"output": ref}, output_path=run_prefix)
         durable = result["output"]
         assert durable.is_durable, "ref not marked durable after persist"
-        assert durable.storage_path and durable.storage_path.startswith(run_prefix), (
-            f"persisted to an unexpected egress path: {durable.storage_path}"
-        )
+        assert durable.storage_path and durable.storage_path.startswith(
+            run_prefix
+        ), f"persisted to an unexpected egress path: {durable.storage_path}"
 
         # LOCATION — assets landed in the real bucket under the run prefix, with
         # a sha256 sidecar (the production egress contract).
@@ -183,12 +183,12 @@ async def _assert_workflow_publish_lands_assets(store, provider: str, tmp_path) 
             for item in batch:
                 landed.add(str(item["path"]))
         assert landed, f"no assets persisted under {run_prefix} in the real bucket"
-        assert all(k.startswith(run_prefix + "/") for k in landed), (
-            f"asset(s) landed outside the run prefix: {sorted(landed)}"
-        )
-        assert any(k.endswith(".sha256") for k in landed), (
-            "no sha256 sidecar written to the bucket"
-        )
+        assert all(
+            k.startswith(run_prefix + "/") for k in landed
+        ), f"asset(s) landed outside the run prefix: {sorted(landed)}"
+        assert any(
+            k.endswith(".sha256") for k in landed
+        ), "no sha256 sidecar written to the bucket"
 
         # COUNT — read the persisted records back from the REAL bucket and assert
         # the asset-record count matches what the workflow extracted, and every
@@ -202,9 +202,9 @@ async def _assert_workflow_publish_lands_assets(store, provider: str, tmp_path) 
             assert all(
                 r["qualifiedName"].startswith(_CONNECTION_QN) for r in records
             ), "persisted asset records are not nested under the connection QN"
-        assert total == _N_RECORDS, (
-            f"expected {_N_RECORDS} asset records in the bucket, got {total}"
-        )
+        assert (
+            total == _N_RECORDS
+        ), f"expected {_N_RECORDS} asset records in the bucket, got {total}"
     finally:
         for key in landed:
             with contextlib.suppress(Exception):
@@ -263,9 +263,9 @@ async def test_workflow_output_persists_via_file_ref_locally(tmp_path):
     assert _count_records(record_files) == _N_RECORDS
 
     # INTEGRITY — a sha256 sidecar was written to the store next to the output.
-    assert any(p.endswith(".sha256") for p in landed), (
-        f"no sha256 sidecar persisted under {run_prefix}: {landed}"
-    )
+    assert any(
+        p.endswith(".sha256") for p in landed
+    ), f"no sha256 sidecar persisted under {run_prefix}: {landed}"
 
 
 # ---------------------------------------------------------------------------

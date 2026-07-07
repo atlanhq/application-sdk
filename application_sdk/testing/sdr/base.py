@@ -374,6 +374,16 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
 
         data = response.get("data", {})
         workflow_id, run_id = data.get("workflow_id"), data.get("run_id")
+        # A COMPLETED run that doesn't return both IDs can't be located — surface
+        # the clean diagnostic here instead of a TypeError from os.path.join(...,
+        # None) downstream in load_actual_output.
+        if not workflow_id or not run_id:
+            raise AssertionError(
+                f"SDR workflow scenario '{scenario.name}' completed with status "
+                f"'success' but the response is missing workflow_id/run_id "
+                f"(workflow_id={workflow_id!r}, run_id={run_id!r}) — cannot locate "
+                f"the extracted output to verify assets landed."
+            )
         from application_sdk.testing.integration.comparison import (  # noqa: PLC0415
             load_actual_output,
         )
