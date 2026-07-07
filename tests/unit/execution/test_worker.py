@@ -13,6 +13,7 @@ from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
 from application_sdk.execution._temporal._activity_errors import (
+    WorkerActivityNameCollisionError,
     WorkerInterceptorDuplicateError,
 )
 from application_sdk.execution._temporal.worker import AppWorker, create_worker
@@ -211,6 +212,65 @@ class TestCreateWorker:
         }
         assert "_filter-app-a" in user_app_names
         assert "_filter-app-b" in user_app_names
+
+    def test_gate_registration_deduped_across_versions(self) -> None:
+        """An app registered under multiple versions must register the gate
+        activity ONCE — list_all() returns one entry per version, and two
+        activities named {app}:preflight crash the worker at boot."""
+
+        class _MultiVersionApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        meta = AppRegistry.get_instance().list_all()[0]
+        AppRegistry.get_instance().register(
+            name=meta.name,
+            version="9.9.9",
+            app_cls=meta.app_cls,
+            input_type=meta.input_type,
+            output_type=meta.output_type,
+        )
+        assert len(AppRegistry.get_instance().list_all()) == 2
+
+        client = _make_mock_client()
+        captured: dict = {}
+
+        def capture_worker(*args, **kwargs):
+            captured["activities"] = list(kwargs.get("activities", []))
+            return mock.MagicMock()
+
+        with mock.patch(
+            "application_sdk.execution._temporal.worker.Worker",
+            side_effect=capture_worker,
+        ):
+            create_worker(client)
+
+        gate_names = [
+            getattr(a, "__temporal_activity_definition").name
+            for a in captured["activities"]
+            if hasattr(a, "__temporal_activity_definition")
+            and getattr(a, "__temporal_activity_definition").name.endswith(":preflight")
+        ]
+        assert gate_names == list(dict.fromkeys(gate_names))  # no duplicate names
+        assert len(gate_names) == 1
+
+    def test_task_named_preflight_collides_with_gate(self) -> None:
+        """A bare @task named `preflight` registers as {app}:preflight, colliding
+        with the injected gate. create_worker must fail with a descriptive error,
+        not the opaque temporalio duplicate-activity ValueError."""
+
+        class _CollidingApp(App):
+            @task(timeout_seconds=60)
+            async def preflight(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        client = _make_mock_client()
+        with pytest.raises(WorkerActivityNameCollisionError) as excinfo:
+            create_worker(client)
+        assert "preflight" in str(excinfo.value)
 
     def test_rejects_caller_supplied_log_interceptor(self) -> None:
         """``create_worker(interceptors=[LogInterceptor()])`` must fail loudly:

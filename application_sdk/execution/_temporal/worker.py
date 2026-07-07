@@ -347,6 +347,7 @@ def create_worker(
 
     from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — lazy: handler-activity machinery loaded at worker assembly
         build_preflight_gate_activity,
+        preflight_gate_activity_name,
     )
     from application_sdk.handler.base import DefaultHandler  # noqa: PLC0415
 
@@ -367,8 +368,42 @@ def create_worker(
     # of the SDR opt-out, so the mandatory gate is always dispatchable. The gate
     # name is app-namespaced ({app}:preflight), so register one per registered
     # app to match each workflow's own app_name (single entry for single-app
-    # workers, the common case).
-    gate_app_names = [m.name for m in sdr_registered_apps] or [resolved_app_name]
+    # workers, the common case). Dedupe names: an app registered under multiple
+    # versions appears once per version in list_all(), and building the gate
+    # twice under one name is a boot-time duplicate-activity crash.
+    gate_app_names = list(dict.fromkeys(m.name for m in sdr_registered_apps)) or [
+        resolved_app_name
+    ]
+    gate_activity_names = [
+        preflight_gate_activity_name(name) for name in gate_app_names
+    ]
+
+    # An app @task literally named `preflight` registers as `{app}:preflight` —
+    # byte-identical to the gate. Temporal rejects the duplicate with an opaque
+    # "More than one activity named ..." ValueError at Worker construction;
+    # surface a descriptive error naming the collision and the fix instead.
+    task_activity_names = {
+        f"{tm.app_name}:{tm.name}"
+        for tasks in TaskRegistry.get_instance().get_all_tasks().values()
+        for tm in tasks
+    }
+    gate_collisions = sorted(set(gate_activity_names) & task_activity_names)
+    if gate_collisions:
+        from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
+            WorkerActivityNameCollisionError,
+        )
+
+        raise WorkerActivityNameCollisionError(
+            message=(
+                f"App task(s) register activity name(s) {gate_collisions}, which the SDK "
+                "reserves for the injected preflight gate. Rename the offending @task "
+                "method (a discovery step 'preflight' -> 'fetch_databases'/'discover', or "
+                "fold a readiness check into Handler.preflight_check). A worker cannot "
+                "register two activities with the same name."
+            ),
+            field="task_name",
+        )
+
     task_activities = [
         *task_activities,
         *(build_preflight_gate_activity(gate_handler, name) for name in gate_app_names),
