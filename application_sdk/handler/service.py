@@ -212,16 +212,14 @@ def _preflight_runtime_summary(result: PreflightOutput) -> dict[str, Any]:
     """Runtime metadata kept outside the SageV2 ``data`` map.
 
     ``should_block`` is the gate signal: ``True`` iff a blocking check failed.
-    ``status`` / ``app_status`` carry the advisory handler status (``ready`` /
-    ``not_ready`` / ``partial``) — downstream consumers (Heracles, the Automation
-    Engine event, the connector-pulse dashboard) read it to distinguish a
-    soft-failure from a clean pass and to track adoption. Per-check ``blocking``
-    flags are included in ``checks``. Keep these key names in sync with those
-    consumers if ever renamed.
+    ``status`` carries the advisory handler status (``ready`` / ``not_ready`` /
+    ``partial``) — downstream consumers (Heracles, the Automation Engine event,
+    the connector-pulse dashboard) read it to distinguish a soft-failure from a
+    clean pass. Per-check ``blocking`` flags are included in ``checks``. Keep
+    these key names in sync with those consumers if ever renamed.
     """
     return {
         "status": result.status.value,
-        "app_status": result.status.value,
         "should_block": result.should_block,
         "message": result.message,
         "total_duration_ms": result.total_duration_ms,

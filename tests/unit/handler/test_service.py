@@ -382,7 +382,6 @@ class TestPreflightEndpoint:
         assert body["data"] == {}
         assert body["message"] == "ready"
         assert body["preflight"]["status"] == "ready"
-        assert body["preflight"]["app_status"] == "ready"
         assert body["preflight"]["should_block"] is False
         assert body["preflight"]["checks"] == []
 
@@ -401,7 +400,6 @@ class TestPreflightEndpoint:
         assert body["data"] == {}
         assert body["message"] == "No preflight handler registered"
         assert body["preflight"]["status"] == "ready"
-        assert body["preflight"]["app_status"] == "ready"
         assert body["preflight"]["should_block"] is False
         assert body["preflight"]["checks"] == []
 
@@ -627,7 +625,6 @@ class TestPreflightEndpoint:
         assert entry["failureMessage"] == "Metadata GraphQL API returned no sites"
         assert entry["successMessage"] == ""
         assert body["preflight"]["status"] == "not_ready"
-        assert body["preflight"]["app_status"] == "not_ready"
         assert body["preflight"]["should_block"] is False
         assert "status" not in body["data"]
 
@@ -657,7 +654,6 @@ class TestPreflightEndpoint:
         assert body["data"]["loginCheck"]["success"] is False
         assert body["preflight"]["should_block"] is True
         assert body["preflight"]["status"] == "not_ready"
-        assert body["preflight"]["app_status"] == "not_ready"
         assert body["preflight"]["checks"][0]["blocking"] is True
         assert "status" not in body["data"]
         assert "checks" not in body["data"]
@@ -853,7 +849,6 @@ class TestPreflightEndpoint:
         assert body["success"] is False
         assert body["data"] == {}
         assert body["preflight"]["status"] == "not_ready"
-        assert body["preflight"]["app_status"] == "not_ready"
         assert body["preflight"]["should_block"] is False
 
 
