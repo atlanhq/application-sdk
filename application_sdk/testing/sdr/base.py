@@ -120,14 +120,21 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
     #: Empty string ("") keeps the legacy hand-written behaviour.
     manifest_path: ClassVar[str] = ""
 
-    #: When True (default), a workflow scenario that runs to completion must have
-    #: written NON-EMPTY extracted output at ``extracted_output_base_path`` —
-    #: catching the "COMPLETED with status success but zero assets" silent SDR
-    #: failure (and, because the output is read from the exact
-    #: ``{base}/{workflow_id}/{run_id}`` path, an egress-path bug that writes to
-    #: the wrong prefix). Skipped with a warning when no ``extracted_output_base_path``
-    #: is set (we can't locate the output).
-    require_assets_landed: ClassVar[bool] = True
+    #: When True, a workflow scenario that runs to completion must have written
+    #: NON-EMPTY extracted output at ``extracted_output_base_path`` — catching the
+    #: "COMPLETED with status success but zero assets" silent SDR failure (and,
+    #: because the output is read from the exact ``{base}/{workflow_id}/{run_id}``
+    #: path, an egress-path bug that writes to the wrong prefix).
+    #:
+    #: Default False (OPT-IN): reading the output requires the connector's SDR
+    #: object store to be bind-mounted to the host at ``extracted_output_base_path``.
+    #: The current CI SDR stack does NOT mount it — the deployment localstorage
+    #: (``bindings.localstorage`` rootPath ``/tmp/atlan-data``) lives inside the
+    #: container, so the host path is empty. Enabling this without that mount would
+    #: false-fail. Flip on per connector once the deployment store is mounted to the
+    #: host (see the two-store CI stack work). Skipped with a warning when no
+    #: ``extracted_output_base_path`` is set.
+    require_assets_landed: ClassVar[bool] = False
 
     #: When True, EVERY landed asset's ``attributes.qualifiedName`` must be nested
     #: under the connection's qualifiedName prefix — catching assets that landed
