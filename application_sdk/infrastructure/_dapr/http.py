@@ -77,26 +77,41 @@ def _dapr_base_url() -> str:
     return f"http://localhost:{port}"
 
 
-#: Set once this worker process has confirmed the Dapr sidecar is
-#: reachable — either :func:`wait_for_dapr_sidecar` got a 204 (Dapr only
-#: returns this once *every* component has finished initializing, so this
-#: path is a genuinely holistic signal), or :func:`retry_past_dapr_cold_start`
-#: got a definitive answer (success or a non-transient rejection) from a
-#: wrapped call. Shared by both so a worker that already confirmed readiness
-#: at startup doesn't pay a second, uninformed cold-start wait on its first
-#: real Dapr call — and so a worker whose startup probe timed out
-#: ("proceeding anyway") still gets a real retry budget on that first call
-#: instead of being falsely told it's ready.
-#:
-#: Caveat: the :func:`retry_past_dapr_cold_start` arming path is *not*
-#: per-component — a definitive answer from one component (e.g. the
-#: credential-vault's object-store binding) arms this for every other
-#: component too (e.g. the secret store), even if that other component is
-#: still cold. In practice this only matters when the startup probe above
-#: already timed out (the common case, a 204, is holistic); if components
-#: are ever observed to become ready at meaningfully different times within
-#: that window, this would need to become per-component-type.
+#: Set once this worker process has confirmed the Dapr sidecar is reachable
+#: via :func:`wait_for_dapr_sidecar` getting a 204 — Dapr only returns this
+#: once *every* component has finished initializing, so this is a genuinely
+#: holistic signal that short-circuits :func:`retry_past_dapr_cold_start` for
+#: every component, not just the one it happened to call. A worker whose
+#: startup probe timed out ("proceeding anyway") leaves this False, so its
+#: first real Dapr call(s) still get a full retry budget instead of being
+#: falsely told they're ready.
 _dapr_sidecar_confirmed_ready: bool = False
+
+#: Per-component readiness, set by :func:`retry_past_dapr_cold_start` once a
+#: wrapped call gets a definitive answer (success or a non-transient
+#: rejection) for that ``component``. Deliberately keyed by component —
+#: unlike the holistic :data:`_dapr_sidecar_confirmed_ready` signal above, one
+#: component answering definitively (e.g. the credential-vault's object-store
+#: binding) says nothing about whether a *different* component (e.g. the
+#: secret store) has finished initializing, so it must not short-circuit that
+#: other component's own cold-start retry. Callers that hit the same
+#: underlying Dapr component (e.g. every secret-store fetch, regardless of
+#: which module resolves it) should pass the same ``component`` identifier so
+#: they correctly share one gate instead of each paying their own wait.
+_dapr_component_confirmed_ready: set[str] = set()
+
+#: Shared ``component`` identifier for every call site that fetches secrets
+#: via the Dapr secret-store component — the agent bundle fetch, single-key
+#: probes, the named-credential resolver path, and the GUID/vault credential
+#: path's secret fetch. They all race the same underlying component, so they
+#: share one cold-start gate.
+DAPR_SECRET_STORE_COMPONENT = "secretstore"
+
+#: ``component`` identifier for the GUID/vault credential path's upstream
+#: object-store binding fetch — a distinct Dapr component from
+#: :data:`DAPR_SECRET_STORE_COMPONENT`, so it must not share that gate (see
+#: :data:`_dapr_component_confirmed_ready`).
+DAPR_UPSTREAM_BINDING_COMPONENT = "upstream-binding"
 
 
 async def wait_for_dapr_sidecar(
@@ -166,6 +181,7 @@ async def retry_past_dapr_cold_start(
     call: Callable[[], Awaitable[_T]],
     *,
     description: str,
+    component: str,
 ) -> _T:
     """Retry an idempotent Dapr-backed call past a cold sidecar.
 
@@ -185,24 +201,22 @@ async def retry_past_dapr_cold_start(
 
     Any other exception (a definitive rejection, e.g. ``SecretNotFoundError``
     or a 4xx ``SecretStoreError``, or an exception outside the
-    ``ColdStartRaceError`` family entirely) is proof the dependency is
-    reachable: it arms :data:`_dapr_sidecar_confirmed_ready` and is
-    re-raised immediately, never retried.
+    ``ColdStartRaceError`` family entirely) is proof *this* component is
+    reachable: it arms :data:`_dapr_component_confirmed_ready` for
+    ``component`` and is re-raised immediately, never retried.
 
-    Scoped to cold start: shares :data:`_dapr_sidecar_confirmed_ready` with
-    :func:`wait_for_dapr_sidecar` — once either has seen the sidecar answer
-    definitively (a 204 health probe, or any call here getting a definitive
-    answer), later calls skip the wait entirely and call through once. A
-    later outage is then a steady-state failure, left to surface via the
-    backend's own (shorter) retry budget instead of being masked for the
-    full deadline on every subsequent call.
-
-    Shared across every call site that opts in (the agent secret-bundle
-    fetch, single-key probes, the named-credential resolver path, the
-    GUID/vault credential path and its config-fetch step) — they all race
-    the same sidecar process, so one confirming readiness arms it for the
-    rest. Not per-component, though: see the caveat on
-    :data:`_dapr_sidecar_confirmed_ready`.
+    Scoped to cold start, and scoped to ``component``: a call here skips the
+    wait entirely once either :data:`_dapr_sidecar_confirmed_ready` is set
+    (a holistic 204 from :func:`wait_for_dapr_sidecar`, which confirms every
+    component at once) or ``component`` itself has already answered
+    definitively. Callers that hit the same underlying Dapr component (see
+    :data:`DAPR_SECRET_STORE_COMPONENT`, :data:`DAPR_UPSTREAM_BINDING_COMPONENT`)
+    must pass the same identifier to share that gate; a different component
+    answering says nothing about this one's readiness, so it does not
+    short-circuit it. A later outage on an already-confirmed component is
+    then a steady-state failure, left to surface via the backend's own
+    (shorter) retry budget instead of being masked for the full deadline on
+    every subsequent call.
 
     Args:
         call: Zero-arg async callable to retry, e.g. ``lambda:
@@ -217,10 +231,13 @@ async def retry_past_dapr_cold_start(
             to keep the raw secret/ref-key out of logs. Callers that need
             full diagnostics on terminal failure should log them at their
             own boundary, with whatever redaction they require.
+        component: Identifies which Dapr component ``call`` talks to (e.g.
+            :data:`DAPR_SECRET_STORE_COMPONENT`). Callers racing the same
+            component must use the same identifier.
     """
     global _dapr_sidecar_confirmed_ready
 
-    if _dapr_sidecar_confirmed_ready:
+    if _dapr_sidecar_confirmed_ready or component in _dapr_component_confirmed_ready:
         return await call()
 
     deadline = time.monotonic() + DAPR_COLD_START_MAX_WAIT_SECONDS
@@ -256,12 +273,12 @@ async def retry_past_dapr_cold_start(
                 delay,
             )
             await asyncio.sleep(delay)
-        # conformance: ignore[E004] proof the dependency answered (definitively) — arms the cold-start gate and re-raises unchanged
+        # conformance: ignore[E004] proof the component answered (definitively) — arms its cold-start gate and re-raises unchanged
         except Exception:
-            _dapr_sidecar_confirmed_ready = True
+            _dapr_component_confirmed_ready.add(component)
             raise
         else:
-            _dapr_sidecar_confirmed_ready = True
+            _dapr_component_confirmed_ready.add(component)
             return result
 
 

@@ -252,6 +252,31 @@ class TestDaprCredentialVaultGetCredentials:
 
         assert result.get("password") == "actual_password"
 
+    async def test_agent_single_key_mode_outage_raises_not_silently_swallowed(
+        self, deterministic_dapr_cold_start_deadline
+    ) -> None:
+        """Single-key mode must not silently proceed with an incomplete
+        credential when the secret store genuinely never answers — that's
+        the same swallow already fixed for multi-key mode (see
+        test_persistent_transient_failure_raises_not_silently_swallowed);
+        single-key probing must still fail loudly on an exhausted
+        cold-start outage rather than treating it like a non-secret field."""
+        config = {
+            "credentialSource": "agent",
+            "password": "secret_key_ref",
+        }
+        mock_client = _make_mock_dapr_client(
+            config_bytes=json.dumps(config).encode(), secret_data={}
+        )
+        mock_client.get_secret = AsyncMock(
+            side_effect=httpx.ConnectError("all connection attempts failed")
+        )
+
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+            vault = self._make_vault(mock_client)
+            with pytest.raises(CredentialVaultError):
+                await vault.get_credentials("my-guid")
+
     async def test_guid_validation_rejects_path_traversal(self) -> None:
         """GUIDs with unsafe characters (e.g. '../') raise CredentialVaultError immediately."""
         mock_client = _make_mock_dapr_client(config_bytes=b"", secret_data={})
@@ -292,15 +317,6 @@ class TestDaprCredentialVaultColdStartRetry:
     async def test_transient_failure_is_retried_then_succeeds(
         self, fast_dapr_cold_start_retry
     ) -> None:
-        # Exercises _get_secret directly rather than via the full
-        # get_credentials() flow: _fetch_credential_config now also retries
-        # past a cold start (see TestFetchCredentialConfigColdStartRetry)
-        # and shares the same process-level "confirmed ready" gate — going
-        # through get_credentials() would have the config-fetch step's own
-        # (immediate) success arm the gate first, making this transient
-        # failure fail fast instead of retrying. That gate-sharing is
-        # intentional (every call races the same sidecar); isolate the unit
-        # actually under test here instead of fighting it.
         calls = {"n": 0}
 
         async def _cold_then_ready(*, store_name: str, key: str) -> dict[str, str]:
@@ -317,6 +333,38 @@ class TestDaprCredentialVaultColdStartRetry:
             result = await vault._get_secret("my-guid")
 
         assert result == {"password": "secret_pass"}
+        assert calls["n"] == 3
+
+    async def test_secretstore_cold_start_not_masked_by_binding_success(
+        self, fast_dapr_cold_start_retry
+    ) -> None:
+        """The upstream object-store binding and the secret store are
+        distinct Dapr components racing the same cold sidecar independently
+        — the binding's config-fetch answering immediately (e.g. it happened
+        to finish initializing first) must not arm the secret store's gate
+        too. Exercises the full get_credentials() flow, where both steps
+        run in the same call."""
+        config = {"credentialSource": "direct", "host": "db.example.com"}
+        calls = {"n": 0}
+
+        async def _cold_then_ready(*, store_name: str, key: str) -> dict[str, str]:
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise httpx.ConnectError("all connection attempts failed")
+            return {"password": "secret_pass"}
+
+        # Config-fetch (binding) succeeds immediately — this alone must not
+        # arm the secret store's cold-start gate.
+        mock_client = _make_mock_dapr_client(
+            config_bytes=json.dumps(config).encode(), secret_data={}
+        )
+        mock_client.get_secret = AsyncMock(side_effect=_cold_then_ready)
+
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+            vault = self._make_vault(mock_client)
+            result = await vault.get_credentials("my-guid")
+
+        assert result["password"] == "secret_pass"
         assert calls["n"] == 3
 
     async def test_persistent_transient_failure_raises_not_silently_swallowed(

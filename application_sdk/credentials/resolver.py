@@ -145,6 +145,7 @@ class CredentialResolver:
             CredentialParseError,
         )
         from application_sdk.infrastructure import (  # noqa: PLC0415 — circular: infrastructure imports observability which loads credentials transitively
+            DAPR_SECRET_STORE_COMPONENT,
             retry_past_dapr_cold_start,
         )
         from application_sdk.infrastructure.secrets import (  # noqa: PLC0415 — circular: infrastructure.secrets imports observability which loads credentials transitively
@@ -159,6 +160,7 @@ class CredentialResolver:
             raw = await retry_past_dapr_cold_start(
                 lambda: self._secret_store.get(ref.name),
                 description=f"Named credential fetch for '{ref.name}'",
+                component=DAPR_SECRET_STORE_COMPONENT,
             )
         except SecretNotFoundError as exc:
             raise CredentialNotFoundError(ref.name) from exc

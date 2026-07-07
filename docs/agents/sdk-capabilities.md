@@ -26,7 +26,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 54 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 20 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
-| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 36 |
+| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 37 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
@@ -1818,7 +1818,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `retry_past_dapr_cold_start`
 
 - **Import:** `from application_sdk.infrastructure import retry_past_dapr_cold_start`
-- **Signature:** `retry_past_dapr_cold_start(call: Callable[[], Awaitable[_T]], *, description: str)`
+- **Signature:** `retry_past_dapr_cold_start(call: Callable[[], Awaitable[_T]], *, description: str, component: str)`
 - **Summary:** Retry an idempotent Dapr-backed call past a cold sidecar.
 - **Defined in:** `application_sdk/infrastructure/_dapr/http.py`
 
@@ -1830,6 +1830,13 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 - **Defined in:** `application_sdk/infrastructure/context.py`
 
 ### Constants and Enums
+
+#### `DAPR_SECRET_STORE_COMPONENT`
+
+- **Import:** `from application_sdk.infrastructure import DAPR_SECRET_STORE_COMPONENT`
+- **Signature:** `DAPR_SECRET_STORE_COMPONENT`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/infrastructure/_dapr/http.py`
 
 #### `MessageHandler`
 

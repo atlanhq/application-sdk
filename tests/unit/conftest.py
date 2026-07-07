@@ -48,18 +48,23 @@ def _safe_patch(target, side_effect=None, mock_obj=None):
 
 @pytest.fixture(autouse=True)
 def _reset_dapr_sidecar_cold_start_gate(monkeypatch):
-    """Reset the process-level Dapr cold-start gate before every unit test.
+    """Reset the process-level Dapr cold-start gates before every unit test.
 
     ``application_sdk.infrastructure._dapr.http._dapr_sidecar_confirmed_ready``
-    is a module global shared by ``wait_for_dapr_sidecar`` and every
-    ``retry_past_dapr_cold_start`` caller (agent bundle fetch, single-key
-    probes, the named-credential resolver path, the GUID/vault credential
-    and config-fetch paths). Without a reset, a successful resolve in one
-    test would leave it set for the rest of the session, silently skipping
-    the cold-start retry loop under test in a later, order-dependent test.
+    (holistic, healthz-confirmed) and ``_dapr_component_confirmed_ready``
+    (per-component, set by ``retry_past_dapr_cold_start`` callers — agent
+    bundle fetch, single-key probes, the named-credential resolver path, the
+    GUID/vault credential and config-fetch paths) are both module globals.
+    Without a reset, a successful resolve in one test would leave them set
+    for the rest of the session, silently skipping the cold-start retry loop
+    under test in a later, order-dependent test.
     """
     monkeypatch.setattr(
         "application_sdk.infrastructure._dapr.http._dapr_sidecar_confirmed_ready", False
+    )
+    monkeypatch.setattr(
+        "application_sdk.infrastructure._dapr.http._dapr_component_confirmed_ready",
+        set(),
     )
 
 

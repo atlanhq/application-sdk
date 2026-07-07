@@ -16,6 +16,8 @@ from application_sdk.infrastructure._dapr.client import (
     is_dapr_transport_unavailable,
 )
 from application_sdk.infrastructure._dapr.http import (
+    DAPR_SECRET_STORE_COMPONENT,
+    DAPR_UPSTREAM_BINDING_COMPONENT,
     AsyncDaprClient,
     retry_past_dapr_cold_start,
 )
@@ -271,6 +273,7 @@ class DaprCredentialVault:
         response = await retry_past_dapr_cold_start(
             _fetch,
             description=f"Credential-vault config fetch for '{credential_guid}'",
+            component=DAPR_UPSTREAM_BINDING_COMPONENT,
         )
 
         if response.data is None:
@@ -325,6 +328,7 @@ class DaprCredentialVault:
             result = await retry_past_dapr_cold_start(
                 _fetch,
                 description=f"Credential-vault secret fetch for '{secret_key}'",
+                component=DAPR_SECRET_STORE_COMPONENT,
             )
         except SecretNotFoundError:
             return {}
@@ -375,6 +379,15 @@ class DaprCredentialVault:
                         if v is None or v == "":
                             continue
                         collected[k] = v
+            except ColdStartRaceError:
+                # The store never actually answered — a cold-start outage
+                # that exhausted the full retry budget, not "this field
+                # isn't a secret" (that case is already collapsed to {} by
+                # _get_secret without raising). Propagate so the caller
+                # raises a typed CredentialVaultError instead of silently
+                # proceeding with an incomplete credential, mirroring the
+                # multi-key branch above.
+                raise
             # conformance: ignore[E004] exc_info=True already present on the logger.debug call below
             except Exception as e:
                 logger.debug(

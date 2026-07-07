@@ -56,7 +56,10 @@ from application_sdk.credentials.errors import (
     CredentialParseError,
 )
 from application_sdk.errors import redact_secrets
-from application_sdk.infrastructure import retry_past_dapr_cold_start
+from application_sdk.infrastructure import (
+    DAPR_SECRET_STORE_COMPONENT,
+    retry_past_dapr_cold_start,
+)
 from application_sdk.infrastructure.secrets import SecretNotFoundError
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -181,6 +184,7 @@ async def _fetch_bundle(secret_store: SecretStore, secret_path: str) -> dict[str
         raw = await retry_past_dapr_cold_start(
             lambda: secret_store.get(secret_path),
             description=f"Agent secret-bundle fetch at '{secret_path}'",
+            component=DAPR_SECRET_STORE_COMPONENT,
         )
     except SecretNotFoundError as exc:
         raise CredentialNotFoundError(secret_path) from exc
@@ -246,6 +250,7 @@ async def _fetch_per_key_bundle(
             secret = await retry_past_dapr_cold_start(
                 lambda: secret_store.get_optional(value),
                 description=f"single-key probe for sha256:{value_hash}",
+                component=DAPR_SECRET_STORE_COMPONENT,
             )
         # conformance: ignore[E004] logger.warning with redacted traceback is emitted below; exc_info omitted intentionally to prevent secret ref-key leaking through stdlib traceback formatting
         except Exception as exc:

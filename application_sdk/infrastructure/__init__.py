@@ -16,6 +16,7 @@ from application_sdk.infrastructure._dapr import (
     DaprStateStore,
 )
 from application_sdk.infrastructure._dapr.http import (
+    DAPR_SECRET_STORE_COMPONENT,
     AsyncDaprClient,
     retry_past_dapr_cold_start,
 )
@@ -69,6 +70,7 @@ __all__ = [
     "CapacityPool",
     "CredentialVault",
     "CredentialVaultError",
+    "DAPR_SECRET_STORE_COMPONENT",
     "DaprBinding",
     "DaprCredentialVault",
     "DaprPubSub",

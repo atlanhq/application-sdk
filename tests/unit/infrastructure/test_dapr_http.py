@@ -571,7 +571,9 @@ class TestRetryPastDaprColdStart:
                 raise SecretStoreUnavailableError("p")
             return "value"
 
-        result = await retry_past_dapr_cold_start(call, description="test call")
+        result = await retry_past_dapr_cold_start(
+            call, description="test call", component="test-component"
+        )
 
         assert result == "value"
         assert calls["n"] == 3
@@ -590,17 +592,55 @@ class TestRetryPastDaprColdStart:
             raise SecretNotFoundError("p")
 
         with pytest.raises(SecretNotFoundError):
-            await retry_past_dapr_cold_start(call, description="test call")
+            await retry_past_dapr_cold_start(
+                call, description="test call", component="test-component"
+            )
         assert calls["n"] == 1
 
-        # The gate is now armed — a later transient failure is not retried.
+        # The gate is now armed for this component — a later transient
+        # failure on the SAME component is not retried.
         async def transient_call() -> str:
             calls["n"] += 1
             raise SecretStoreUnavailableError("p")
 
         with pytest.raises(SecretStoreUnavailableError):
-            await retry_past_dapr_cold_start(transient_call, description="test call")
+            await retry_past_dapr_cold_start(
+                transient_call, description="test call", component="test-component"
+            )
         assert calls["n"] == 2
+
+    async def test_different_component_does_not_share_gate(
+        self, fast_dapr_cold_start_retry
+    ) -> None:
+        """A definitive answer on one component must not arm the gate for a
+        different component — the cross-component leak fixed alongside the
+        introduction of ``component``."""
+        calls = {"n": 0}
+
+        async def call() -> str:
+            calls["n"] += 1
+            raise SecretNotFoundError("p")
+
+        with pytest.raises(SecretNotFoundError):
+            await retry_past_dapr_cold_start(
+                call, description="test call", component="component-a"
+            )
+        assert calls["n"] == 1
+
+        # A different component still gets a full retry budget.
+        async def transient_call() -> str:
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise SecretStoreUnavailableError("p")
+            return "value"
+
+        result = await retry_past_dapr_cold_start(
+            transient_call,
+            description="test call",
+            component="component-b",
+        )
+        assert result == "value"
+        assert calls["n"] == 3
 
     async def test_gives_up_at_deadline(
         self, deterministic_dapr_cold_start_deadline
@@ -612,7 +652,9 @@ class TestRetryPastDaprColdStart:
             raise SecretStoreUnavailableError("p")
 
         with pytest.raises(SecretStoreUnavailableError):
-            await retry_past_dapr_cold_start(call, description="test call")
+            await retry_past_dapr_cold_start(
+                call, description="test call", component="test-component"
+            )
         assert calls["n"] == 2
 
 
