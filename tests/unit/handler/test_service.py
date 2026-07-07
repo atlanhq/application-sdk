@@ -55,6 +55,23 @@ class _TestHandler(Handler):
         return SqlMetadataOutput(objects=[])
 
 
+class _ConfigCapture(_TestHandler):
+    """Records the (metadata, connection_config) each preflight_check received."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.received: list[dict[str, dict]] = []
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        self.received.append(
+            {
+                "metadata": dict(input.metadata),
+                "connection_config": dict(input.connection_config),
+            }
+        )
+        return PreflightOutput(status=PreflightStatus.READY, message="ready")
+
+
 class _ApiTreeHandler(Handler):
     """Handler that returns ApiMetadataOutput (BI connector path)."""
 
@@ -450,19 +467,8 @@ class TestPreflightEndpoint:
         ]
 
     def test_preflight_metadata_only_mirrors_to_connection_config(self) -> None:
-        received: list[dict[str, dict]] = []
-
-        class _ConfigCapture(_TestHandler):
-            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-                received.append(
-                    {
-                        "metadata": dict(input.metadata),
-                        "connection_config": dict(input.connection_config),
-                    }
-                )
-                return PreflightOutput(status=PreflightStatus.READY, message="ready")
-
-        client = _make_client(handler=_ConfigCapture())
+        handler = _ConfigCapture()
+        client = _make_client(handler=handler)
         response = client.post(
             "/workflows/v1/check",
             json={
@@ -472,7 +478,7 @@ class TestPreflightEndpoint:
         )
 
         assert response.status_code == 200
-        assert received == [
+        assert handler.received == [
             {
                 "metadata": {"warehouse": "COMPUTE_WH"},
                 "connection_config": {"warehouse": "COMPUTE_WH"},
@@ -480,19 +486,8 @@ class TestPreflightEndpoint:
         ]
 
     def test_preflight_connection_config_only_mirrors_to_metadata(self) -> None:
-        received: list[dict[str, dict]] = []
-
-        class _ConfigCapture(_TestHandler):
-            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-                received.append(
-                    {
-                        "metadata": dict(input.metadata),
-                        "connection_config": dict(input.connection_config),
-                    }
-                )
-                return PreflightOutput(status=PreflightStatus.READY, message="ready")
-
-        client = _make_client(handler=_ConfigCapture())
+        handler = _ConfigCapture()
+        client = _make_client(handler=handler)
         response = client.post(
             "/workflows/v1/check",
             json={
@@ -502,7 +497,7 @@ class TestPreflightEndpoint:
         )
 
         assert response.status_code == 200
-        assert received == [
+        assert handler.received == [
             {
                 "metadata": {"warehouse": "COMPUTE_WH"},
                 "connection_config": {"warehouse": "COMPUTE_WH"},
@@ -510,19 +505,8 @@ class TestPreflightEndpoint:
         ]
 
     def test_preflight_connection_config_and_metadata_are_preserved(self) -> None:
-        received: list[dict[str, dict]] = []
-
-        class _ConfigCapture(_TestHandler):
-            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-                received.append(
-                    {
-                        "metadata": dict(input.metadata),
-                        "connection_config": dict(input.connection_config),
-                    }
-                )
-                return PreflightOutput(status=PreflightStatus.READY, message="ready")
-
-        client = _make_client(handler=_ConfigCapture())
+        handler = _ConfigCapture()
+        client = _make_client(handler=handler)
         response = client.post(
             "/workflows/v1/check",
             json={
@@ -533,7 +517,7 @@ class TestPreflightEndpoint:
         )
 
         assert response.status_code == 200
-        assert received == [
+        assert handler.received == [
             {
                 "metadata": {"legacy": "kept"},
                 "connection_config": {"canonical": "kept"},

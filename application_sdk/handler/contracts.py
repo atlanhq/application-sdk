@@ -22,8 +22,6 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 from application_sdk.contracts.base import SerializableEnum
-from application_sdk.credentials.ref import CredentialRef
-from application_sdk.credentials.spec import AgentCredentialSpec
 from application_sdk.errors.categories import FailureCategory
 
 
@@ -445,45 +443,9 @@ class PreflightOutput(BaseModel):
         return any(check.blocking and not check.passed for check in self.checks)
 
 
-class PreflightGateInput(BaseModel):
-    """Credential-routing fields the injected preflight gate threads from the
-    extraction input into the gate activity.
-
-    Built deterministically inside the generated workflow ``_run`` from the
-    extraction ``input_data`` (which satisfies
-    :class:`~application_sdk.credentials.ref.CredentialResolvable`). Carries
-    only secret-free references — resolution happens inside the gate activity,
-    never in the deterministic workflow. Declares the
-    ``extraction_method``/``credential_guid``/``agent_json`` triple so it
-    satisfies ``CredentialResolvable`` and ``CredentialRef.resolve`` works on
-    it directly.
-
-    No ``connection_config`` is threaded: the extraction ``input_data`` carries
-    none (``connection_config`` is a UI-form field populated only on the HTTP
-    ``/check`` path). On the gate path a handler reads connectivity (host, port,
-    database, …) from the resolved ``credentials`` the activity injects into
-    :class:`PreflightInput` — the same credentials the HTTP path receives — so
-    handlers that already resolve connectivity from credentials behave
-    identically on both surfaces.
-    """
-
-    extraction_method: str = ""
-    """Credential routing mode (e.g. ``agent`` / ``direct``)."""
-
-    credential_guid: str = ""
-    """Platform credential GUID for direct (vault) resolution."""
-
-    agent_json: AgentCredentialSpec | None = None
-    """Agent-shape credential spec for inline (secret-manager) resolution."""
-
-    credential_ref: CredentialRef | None = None
-    """Pre-built reference, when the extraction input already carries one."""
-
-    entrypoint: str = ""
-    """Bare entry-point name of the gated workflow (for per-entrypoint checks)."""
-
-    metadata: BaseMetadataConfig = Field(default_factory=BaseMetadataConfig)
-    """Form-level metadata forwarded to the handler, mirroring the HTTP path."""
+# PreflightGateInput lives in application_sdk.execution._temporal.preflight_gate —
+# it is the gate's workflow-to-activity envelope, not a handler-facing contract,
+# and handlers never see it.
 
 
 # ---------------------------------------------------------------------------

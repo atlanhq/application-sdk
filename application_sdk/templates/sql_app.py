@@ -984,13 +984,13 @@ class SqlApp(App):
     def _resolve_credential_ref(self, input: ExtractionInput) -> CredentialRef | None:
         """Resolve credential ref from extraction input.
 
-        Delegates to :meth:`CredentialRef.resolve_or_none` — prefers a pre-built
-        ref, routes direct (credential_guid) / agent (agent_json) modes, and
-        degrades to a legacy GUID ref or ``None`` on a routing edge case. Shared
-        with the injected preflight gate so both paths route identically.
+        Delegates to :meth:`CredentialRef.resolve_or_none` — prefers the input's
+        own ``credential_ref``, routes direct (credential_guid) / agent
+        (agent_json) modes, and degrades to a legacy GUID ref or ``None`` on a
+        routing edge case. Shared with the injected preflight gate so both paths
+        route identically.
         """
-        prebuilt = getattr(input, "credential_ref", None)
-        return CredentialRef.resolve_or_none(input, prebuilt=prebuilt)
+        return CredentialRef.resolve_or_none(input)
 
     async def _extract_entity(
         self,

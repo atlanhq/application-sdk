@@ -209,10 +209,11 @@ class TestResolveOrNone:
     """CredentialRef.resolve_or_none — graceful fallback shared by the
     extraction path and the injected preflight gate."""
 
-    def test_prebuilt_returned_as_is(self):
+    def test_source_credential_ref_preferred(self):
+        # When the input carries its own credential_ref, it wins over guid routing.
         prebuilt = CredentialRef(name="x", credential_type="api_key")
-        src = ExtractionInput(credential_guid="g-1")
-        assert CredentialRef.resolve_or_none(src, prebuilt=prebuilt) is prebuilt
+        src = ExtractionInput(credential_ref=prebuilt, credential_guid="g-1")
+        assert CredentialRef.resolve_or_none(src) == prebuilt
 
     def test_no_routing_returns_none(self):
         # Source-less input (no guid / agent) — gate skips resolution.

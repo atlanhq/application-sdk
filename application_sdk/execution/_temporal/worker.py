@@ -17,7 +17,12 @@ from temporalio.worker import Interceptor as TemporalInterceptor
 from temporalio.worker import Worker, WorkerDeploymentConfig, WorkerDeploymentVersion
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 
-from application_sdk.app.registry import AppRegistry, TaskRegistry, resolve_pool_queue
+from application_sdk.app.registry import (
+    AppRegistry,
+    TaskRegistry,
+    get_activity_name,
+    resolve_pool_queue,
+)
 from application_sdk.constants import (
     APP_BUILD_ID,
     APP_DEPLOYMENT_NAME,
@@ -383,7 +388,7 @@ def create_worker(
     # "More than one activity named ..." ValueError at Worker construction;
     # surface a descriptive error naming the collision and the fix instead.
     task_activity_names = {
-        f"{tm.app_name}:{tm.name}"
+        get_activity_name(tm.app_name, tm.name)
         for tasks in TaskRegistry.get_instance().get_all_tasks().values()
         for tm in tasks
     }

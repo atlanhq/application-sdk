@@ -160,23 +160,19 @@ class CredentialRef(BaseModel, frozen=True):
         raise CredentialRoutingError()
 
     @classmethod
-    def resolve_or_none(
-        cls,
-        source: CredentialResolvable,
-        *,
-        prebuilt: CredentialRef | None = None,
-    ) -> CredentialRef | None:
+    def resolve_or_none(cls, source: CredentialResolvable) -> CredentialRef | None:
         """Resolve a :class:`CredentialRef` with graceful fallback.
 
-        Prefers an already-built ``prebuilt`` ref; otherwise routes via
-        :meth:`resolve`. Returns ``None`` when the source carries no
-        credential routing at all (e.g. a source-less app input). On a
-        routing/type error, falls back to a legacy GUID ref when a
+        Prefers a ref the source already carries on its ``credential_ref``
+        attribute; otherwise routes via :meth:`resolve`. Returns ``None`` when
+        the source carries no credential routing at all (e.g. a source-less app
+        input). On a routing/type error, falls back to a legacy GUID ref when a
         ``credential_guid`` is present, else ``None``.
 
         Shared by the extraction task path and the injected preflight gate so
         both degrade identically instead of erroring on a routing edge case.
         """
+        prebuilt = getattr(source, "credential_ref", None)
         if prebuilt is not None:
             return prebuilt
 

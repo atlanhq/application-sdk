@@ -161,3 +161,32 @@ def bind_handler_context(ctx: HandlerContext) -> Iterator[HandlerContext]:
         yield ctx
     finally:
         _current_handler_context.reset(token)
+
+
+@contextmanager
+def bind_invocation_context(
+    app_name: str, credentials: list[Any]
+) -> Iterator[HandlerContext]:
+    """Build and bind a per-invocation :class:`HandlerContext` for the block.
+
+    Shared by the SDR activities and the injected preflight gate so each handler
+    invocation runs with the same ContextVar-backed context the HTTP path builds
+    (app name, credentials, and the worker's secret store when present). Kept
+    here — next to :func:`bind_handler_context` — rather than in any one caller,
+    since it is generic handler-context binding, not an SDR/gate concern.
+    """
+    from application_sdk.infrastructure.context import (  # noqa: PLC0415 — lazy: avoid import cycle at module load
+        get_infrastructure,
+    )
+
+    infra = get_infrastructure()
+    secret_store = infra.secret_store if infra is not None else None
+    context = HandlerContext(
+        app_name=app_name,
+        request_id=uuid4(),
+        started_at=datetime.now(UTC),
+        _credentials=list(credentials),
+        _secret_store=secret_store,
+    )
+    with bind_handler_context(context):
+        yield context

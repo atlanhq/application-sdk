@@ -1583,39 +1583,23 @@ async def _run_preflight_gate(
             GATE_RETRY,
             GATE_SCHEDULE_TO_CLOSE,
             GATE_START_TO_CLOSE,
+            PreflightGateInput,
             preflight_gate_activity_name,
         )
         from application_sdk.handler.contracts import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
-            PreflightGateInput,
             PreflightOutput,
         )
 
     if not isinstance(input_data, CredentialResolvable):
         return
 
-    metadata = getattr(input_data, "metadata", None)
-    gate_input = PreflightGateInput(
-        extraction_method=getattr(input_data, "extraction_method", "") or "",
-        credential_guid=getattr(input_data, "credential_guid", "") or "",
-        agent_json=getattr(input_data, "agent_json", None),
-        credential_ref=getattr(input_data, "credential_ref", None),
-        entrypoint=entrypoint,
-        **({"metadata": metadata} if metadata is not None else {}),
-    )
-
-    # Fail-open on gate infra errors (HYP-1883 decision). The gate is an injected
-    # guardrail the app never opted into, so if it can't produce a verdict —
-    # activity timeout, secret-store/transport failure, or an unexpected handler
-    # crash (all FailureError subclasses) — log loudly and PROCEED rather than kill
-    # a run over the gate's own plumbing. This keeps the "un-opted-in apps run
-    # exactly as before" guarantee: on day-one no app has marked a check blocking,
-    # so a fail-closed gate would turn any transient into fleet-wide run failures.
-    # Blocking is expressed ONLY by a returned should_block verdict — a handler
-    # that must stop a run marks a check blocking=True. A handler that *raises* no
-    # longer blocks here: a raise is indistinguishable from a gate failure, so it
-    # is treated the same ("couldn't verify -> proceed"). A genuinely bad source
-    # still fails later in extraction with its own error, as it did pre-gate.
+    # Fail-open (HYP-1883): the gate is an injected guardrail the app never opted
+    # into, so if it can't produce a verdict — an input that won't build, an
+    # activity timeout, a secret-store/transport failure, or a handler crash — log
+    # and PROCEED rather than kill a run over the gate's own plumbing. Blocking is
+    # expressed only by a returned should_block verdict; a raise does not block.
     try:
+        gate_input = PreflightGateInput.from_extraction_input(input_data, entrypoint)
         result = await workflow.execute_activity(
             preflight_gate_activity_name(app_name),
             gate_input,
@@ -1638,13 +1622,11 @@ async def _run_preflight_gate(
     if not result.should_block:
         return
 
-    # Surface *why* the gate blocked. The failed blocking checks already carry
-    # the reason (e.g. "Auth failed: ..."); fold them in so an automated run's
-    # Temporal failure shows it without a worker-log dive. Only blocking-and-
-    # failed checks contribute, so the reason matches why it blocked (advisory
-    # failures don't block and shouldn't appear). Not length-capped: no other
-    # preflight message path caps, and Temporal's payload limit is far above any
-    # realistic concatenation of per-check messages.
+    # Fold the failed blocking checks' messages into the abort reason (advisory
+    # failures are excluded), and carry the block's typed category to the
+    # Automation Engine: the first classified blocking failure wins (default
+    # PRECONDITION), rebuilt as canonical FailureDetails so AE attributes the
+    # abort from structured details, not the opaque "PreflightFailed" type.
     blocking_failures = [
         check for check in result.checks if check.blocking and not check.passed
     ]
@@ -1653,15 +1635,6 @@ async def _run_preflight_gate(
         or "; ".join(c.message for c in blocking_failures if c.message)
         or "Preflight check failed; aborting before extraction"
     )
-
-    # Carry the block's typed classification to the Automation Engine. A returned
-    # should_block verdict is the only blocking channel (a handler raise fails
-    # open), so the category travels on the verdict: the first classified blocking
-    # failure wins, unclassified blocks default to PRECONDITION, and we rebuild the
-    # canonical FailureDetails via that category's leaf so AE attributes the abort
-    # (AUTH / SOURCE_UNAVAILABLE / …) from structured details rather than the
-    # opaque "PreflightFailed" type. Forced non-retryable to keep the gate's
-    # fail-fast posture regardless of the category's canonical retryability.
     category = next(
         (c.category for c in blocking_failures if c.category is not None),
         FailureCategory.PRECONDITION,

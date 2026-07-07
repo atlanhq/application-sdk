@@ -12,6 +12,7 @@ import pytest
 from application_sdk.app.base import AppContextError
 from application_sdk.credentials.ref import CredentialResolvable
 from application_sdk.execution._temporal.preflight_gate import (
+    PreflightGateInput,
     build_preflight_gate_activity,
     preflight_gate_activity_name,
 )
@@ -22,7 +23,6 @@ from application_sdk.handler.contracts import (
     AuthStatus,
     MetadataInput,
     PreflightCheck,
-    PreflightGateInput,
     PreflightInput,
     PreflightOutput,
     PreflightStatus,
@@ -114,6 +114,24 @@ class TestPreflightGateActivity:
         assert handler.preflight_input is not None
         assert handler.preflight_input.credentials == []
 
+    async def test_raises_when_secret_store_unavailable(self) -> None:
+        # A ref exists but there is no secret store to resolve it — an infra
+        # failure. Raise (routes to the workflow's fail-open) rather than call the
+        # handler with empty creds and misattribute the block as AUTH.
+        from application_sdk.errors.leaves import DependencyUnavailableError
+
+        handler = _StubHandler()
+        gate = _gate(handler)
+        fake_infra = mock.MagicMock()
+        fake_infra.secret_store = None
+        with mock.patch(
+            "application_sdk.execution._temporal.preflight_gate.get_infrastructure",
+            return_value=fake_infra,
+        ):
+            with pytest.raises(DependencyUnavailableError):
+                await gate(PreflightGateInput(credential_guid="guid-123"))
+        assert handler.preflight_input is None  # bailed before calling the handler
+
     async def test_gate_clears_context_after_call(self) -> None:
         handler = _StubHandler()
         gate = _gate(handler)
@@ -163,3 +181,28 @@ class TestPreflightGateActivity:
         assert ready.should_block is False
         assert blocked.should_block is True
         mock_logger.warning.assert_not_called()
+
+    def test_from_extraction_input_reads_routing_fields(self) -> None:
+        class _Inp:
+            extraction_method = "direct"
+            credential_guid = "g-9"
+            agent_json = None
+            credential_ref = None
+
+        gate_input = PreflightGateInput.from_extraction_input(_Inp(), "crawl")
+        assert gate_input.credential_guid == "g-9"
+        assert gate_input.entrypoint == "crawl"
+
+    def test_from_extraction_input_degrades_on_unbuildable_metadata(self) -> None:
+        # A custom input whose metadata can't fit the model must not raise —
+        # the gate has to fail open before dispatch, not only during it.
+        class _Inp:
+            extraction_method = "direct"
+            credential_guid = "g-9"
+            agent_json = None
+            credential_ref = None
+            metadata = 12345  # not a mapping / BaseMetadataConfig
+
+        gate_input = PreflightGateInput.from_extraction_input(_Inp(), "crawl")
+        assert gate_input.entrypoint == "crawl"  # built, did not raise
+        assert gate_input.credential_guid == "g-9"
