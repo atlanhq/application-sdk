@@ -1583,6 +1583,7 @@ async def _run_preflight_gate(
             GATE_RETRY,
             GATE_SCHEDULE_TO_CLOSE,
             GATE_START_TO_CLOSE,
+            PREFLIGHT_FAILED_ERROR_TYPE,
             PreflightGateInput,
             preflight_gate_activity_name,
         )
@@ -1608,7 +1609,7 @@ async def _run_preflight_gate(
             start_to_close_timeout=GATE_START_TO_CLOSE,
             retry_policy=GATE_RETRY,
         )
-    except FailureError:
+    except Exception:
         _safe_log(
             "error",
             "Preflight gate could not produce a verdict; proceeding without source "
@@ -1642,7 +1643,7 @@ async def _run_preflight_gate(
     suggested = next(
         (c.suggested_action for c in blocking_failures if c.suggested_action), ""
     )
-    details = LEAF_BY_CATEGORY[category](
+    details = LEAF_BY_CATEGORY.get(category, _InternalError)(
         message=reason,
         suggested_action=suggested or None,
         retryable=False,
@@ -1656,7 +1657,7 @@ async def _run_preflight_gate(
     raise ApplicationError(
         reason,
         details,
-        type="PreflightFailed",
+        type=PREFLIGHT_FAILED_ERROR_TYPE,
         non_retryable=True,
     )
 
@@ -1776,12 +1777,16 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
 
         # conformance: ignore[E004] top-level entrypoint handler; logged via _safe_log with exc_info=True and re-raised as typed ApplicationError
         except Exception as e:
+            with workflow.unsafe.imports_passed_through():
+                from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
+                    PREFLIGHT_FAILED_ERROR_TYPE,
+                )
             # A deliberate preflight-gate block (PreflightFailed) is an expected,
             # typed outcome — log it terse (one line, no stack) so it doesn't read
             # like an unexpected crash. Its classification already rides on the
             # error's FailureDetails. Every other failure keeps the full ERROR
             # traceback (the diagnostic evidence a real crash needs).
-            if getattr(e, "type", None) == "PreflightFailed":
+            if getattr(e, "type", None) == PREFLIGHT_FAILED_ERROR_TYPE:
                 _safe_log(
                     "warning",
                     "App blocked by preflight gate",

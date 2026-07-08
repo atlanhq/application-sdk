@@ -41,6 +41,9 @@ from temporalio.worker import (
 
 from application_sdk.errors.base import AppError
 from application_sdk.errors.wire import FailureDetails
+from application_sdk.execution._temporal.preflight_gate import (
+    PREFLIGHT_FAILED_ERROR_TYPE,
+)
 from application_sdk.observability.context import (
     ExecutionContext,
     set_execution_context,
@@ -390,7 +393,7 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                     # outcome, not a crash — log it terse (no stack). Its
                     # classification is already in ended_attrs via the failure
                     # details. Real failures keep the ERROR traceback.
-                    if getattr(exc_caught, "type", None) == "PreflightFailed":
+                    if getattr(exc_caught, "type", None) == PREFLIGHT_FAILED_ERROR_TYPE:
                         logger.warning("workflow.ended", **ended_attrs)
                     else:
                         logger.error("workflow.ended", exc_info=True, **ended_attrs)

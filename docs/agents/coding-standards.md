@@ -45,6 +45,55 @@ Code in `run()` and `@entrypoint` methods MUST be deterministic. Temporal replay
 
 All I/O, network calls, and non-deterministic operations go in `@task` methods.
 
+## Preflight Gate (HYP-1883)
+
+Every extraction workflow runs a `{app}:preflight` Temporal activity as its first
+step. The activity resolves credentials, calls `handler.preflight_check(PreflightInput)`,
+and aborts before extraction if any check has `blocking=True` and `passed=False`.
+
+### What the gate does
+
+- The **workflow** builds a `PreflightGateInput` — a secret-free envelope containing
+  credential references and a raw `model_dump()` snapshot of the extraction input.
+- The **activity** resolves credentials, converts the snapshot into `PreflightInput`
+  metadata, and calls the handler.
+- Field reads from the extraction input therefore happen **inside the activity** (not
+  in the deterministic workflow context), which is required for Temporal replay safety.
+
+### `PreflightInput.metadata` / `connection_config` on the gate path
+
+The gate derives `metadata` and `connection_config` from `extraction_snapshot` via
+`_config_from_snapshot()` (runs in the activity frame). That helper:
+
+- Excludes credential-routing fields (`extraction_method`, `credential_guid`, etc.).
+- Produces both the original field name and its hyphenated variant so handlers that
+  use either naming convention work on the gate path (e.g. `include_filter` and
+  `include-filter`).
+
+If no snapshot is present (gate inputs built without a `model_dump`-capable extraction
+input, e.g. manually constructed in tests), the activity falls back to `input.metadata`.
+
+### `preflight_config()` on extraction input contracts
+
+Some extraction input contracts define a `preflight_config()` method (e.g.
+`SqlMetadataConfig`). **The gate no longer calls this method** — config now flows via
+the `extraction_snapshot` path above. The method is retained on contracts for use by
+the HTTP `/check` path and tests that call it directly. Do not rely on `preflight_config()`
+being invoked by the gate.
+
+### Fail-open semantics
+
+Gate failures (infra errors, timeouts, handler crashes, activity dispatch errors) are
+**non-blocking**: the workflow logs at `error` and proceeds. Only a returned
+`PreflightOutput.should_block` verdict (a blocking check that failed) aborts the run.
+A gate failure is never treated as a blocking check.
+
+### Logging contract
+
+- **Gate blocks** (`PreflightFailed` `ApplicationError`) — `warning`, no stack trace.
+  The block is an expected typed outcome, not a crash.
+- **Gate infra failures** (exception during dispatch) — `error` with `exc_info=True`.
+
 ## Contract Evolution
 
 - NEVER remove or rename fields on Input/Output classes

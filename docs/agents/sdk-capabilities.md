@@ -1421,58 +1421,6 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Summary:** Decorator to mark activities that require distributed locking.
 - **Defined in:** `application_sdk/execution/decorators.py`
 
-### Preflight gate
-
-Every extraction workflow runs a `{app}:preflight` activity as its first step. The
-activity resolves credentials inside itself (the workflow only forwards secret-free
-references), then calls `handler.preflight_check(PreflightInput)`. If any check in
-the result has `blocking=True` and `passed=False`, the workflow aborts before
-extraction begins (`PreflightOutput.should_block`).
-
-#### `preflight_config()` hook
-
-**When to implement:** Add this method to your extraction input contract whenever
-your `Handler.preflight_check` reads filter or scope fields from
-`PreflightInput.metadata` or `PreflightInput.connection_config` (e.g. include/exclude
-filters, temp-table patterns). Without it, those fields are empty on the gate path
-and the affected checks silently no-op.
-
-**Why it's needed:** The AE payload flattens nested `metadata` into typed top-level
-fields on the extraction input (via `_normalize_ae_payload`). The gate needs to
-reverse that flattening so the handler sees the same dict shape it receives on the
-HTTP `/check` path.
-
-**Signature:**
-
-```python
-def preflight_config(self) -> dict[str, Any]:
-    ...
-```
-
-**Return value:** A `dict[str, Any]` whose keys use the hyphenated names your
-handler looks up — the same shape Heracles sends in the HTTP request body. Example
-from `SqlMetadataConfig`:
-
-```python
-def preflight_config(self) -> dict[str, Any]:
-    config: dict[str, Any] = {}
-    if self.include_filter:
-        config["include-filter"] = self.include_filter
-    if self.exclude_filter:
-        config["exclude-filter"] = self.exclude_filter
-    if self.temp_table_regex:
-        config["temp-table-regex"] = self.temp_table_regex
-    return config
-```
-
-**Fallback behaviour:** If the hook is absent or raises, the gate falls back to the
-input's literal `.metadata` attribute. If that is also absent or the wrong shape,
-the handler runs with empty `metadata` and `connection_config` — no error, but
-filter/scope checks that read those fields will silently pass without evaluating.
-
-**Defined in:** `application_sdk/execution/_temporal/preflight_gate.py`
-(`PreflightGateInput.from_extraction_input`)
-
 ## `application_sdk.handler`
 
 HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory
@@ -1590,11 +1538,6 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 - **Signature:** `class PreflightInput`
 - **Summary:** Input for the preflight_check handler operation.
 - **Defined in:** `application_sdk/handler/contracts.py`
-- **Gate path note:** On the injected gate path `credentials` and `entrypoint` are
-  always populated; `metadata` and `connection_config` are populated only when the
-  extraction input implements the `preflight_config()` hook — see
-  [Preflight gate → `preflight_config()` hook](#preflight_config-hook) in
-  `application_sdk.execution`.
 
 #### `PreflightOutput`
 

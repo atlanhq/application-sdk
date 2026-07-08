@@ -1233,6 +1233,78 @@ class TestGenerateWorkflowClass:
 
         assert isinstance(out, _BLDXOutput)
 
+    @pytest.mark.asyncio
+    async def test_preflight_block_logs_warning_not_error(self) -> None:
+        """A PreflightFailed gate block must log at warning (no stack), not error."""
+
+        class BlockedApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+        ep = self._make_ep(_BLDXInput, _BLDXOutput)
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.run", side_effect=lambda f: f
+            ),
+            mock.patch(
+                "application_sdk.app.base.workflow.defn",
+                side_effect=lambda **_: lambda c: c,
+            ),
+        ):
+            wf_cls = generate_workflow_class(BlockedApp, ep)
+
+        from application_sdk.execution._temporal.preflight_gate import (
+            PREFLIGHT_FAILED_ERROR_TYPE,
+        )
+        from application_sdk.execution.errors import ApplicationError
+
+        info_mock = mock.MagicMock(run_id="r", workflow_id="w")
+        safe_log_mock = mock.MagicMock()
+        preflight_error = ApplicationError(
+            "source unreachable",
+            type=PREFLIGHT_FAILED_ERROR_TYPE,
+            non_retryable=True,
+        )
+        with (
+            self._patched_workflow_layer(info_mock),
+            mock.patch("application_sdk.app.base._safe_log", safe_log_mock),
+            mock.patch.object(BlockedApp, "on_complete", new_callable=mock.AsyncMock),
+            mock.patch(
+                "application_sdk.observability.correlation.get_correlation_context",
+                return_value=None,
+            ),
+            mock.patch(
+                "application_sdk.app.base._run_preflight_gate",
+                side_effect=preflight_error,
+            ),
+            pytest.raises(ApplicationError),
+        ):
+            await wf_cls.run(mock.MagicMock(), _BLDXInput())
+
+        warning_calls = [
+            c
+            for c in safe_log_mock.call_args_list
+            if c.args
+            and c.args[0] == "warning"
+            and "blocked by preflight" in str(c.args[1] if len(c.args) > 1 else "")
+        ]
+        assert (
+            warning_calls
+        ), "_safe_log('warning', 'App blocked by preflight gate', ...) was not called"
+        for call in warning_calls:
+            assert not call.kwargs.get(
+                "exc_info"
+            ), "Preflight block must not include exc_info=True"
+        # Also confirm no error-level call was made for the gate block
+        error_calls = [
+            c
+            for c in safe_log_mock.call_args_list
+            if c.args
+            and c.args[0] == "error"
+            and "blocked by preflight" in str(c.args[1] if len(c.args) > 1 else "")
+        ]
+        assert not error_calls, "Preflight block must not log at error level"
+
 
 # =============================================================================
 # Runtime interaction relay (BLDX-1283) — @signal / @query / @update on App

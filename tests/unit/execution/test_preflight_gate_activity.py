@@ -13,6 +13,7 @@ from application_sdk.app.base import AppContextError
 from application_sdk.credentials.ref import CredentialResolvable
 from application_sdk.execution._temporal.preflight_gate import (
     PreflightGateInput,
+    _config_from_snapshot,
     build_preflight_gate_activity,
     preflight_gate_activity_name,
 )
@@ -207,37 +208,64 @@ class TestPreflightGateActivity:
         assert gate_input.entrypoint == "crawl"  # built, did not raise
         assert gate_input.credential_guid == "g-9"
 
-    def test_from_extraction_input_uses_preflight_config_hook(self) -> None:
-        # Extraction inputs flatten form config into typed top-level fields; the
-        # gate reads it back via preflight_config() into the gate input metadata,
-        # so the handler's filter/scope checks are not blind on the gate path.
+    def test_from_extraction_input_stores_snapshot(self) -> None:
+        # Gate now stores the raw model_dump() as extraction_snapshot so the
+        # activity can build PreflightInput metadata in the activity frame, not
+        # in the deterministic workflow context on replay.
+        from pydantic import BaseModel
+
+        class _Model(BaseModel):
+            extraction_method: str = "direct"
+            credential_guid: str = "g-9"
+            agent_json: None = None
+            credential_ref: None = None
+            include_filter: dict = {}
+
+            def model_dump(self, **kw):
+                return {
+                    "extraction_method": "direct",
+                    "credential_guid": "g-9",
+                    "agent_json": None,
+                    "credential_ref": None,
+                    "include_filter": {"^db$": ["^s$"]},
+                }
+
+        gate_input = PreflightGateInput.from_extraction_input(_Model(), "crawl")
+        assert gate_input.extraction_snapshot.get("include_filter") == {"^db$": ["^s$"]}
+        # Routing fields are still in the snapshot (excluded by _config_from_snapshot)
+        assert "credential_guid" in gate_input.extraction_snapshot
+
+    def test_from_extraction_input_snapshot_failure_degrades(self) -> None:
+        # If model_dump() raises, snapshot is empty but the gate still builds.
         class _Inp:
             extraction_method = "direct"
             credential_guid = "g-9"
             agent_json = None
             credential_ref = None
 
-            def preflight_config(self) -> dict:
-                return {"include-filter": {"^db$": ["^s$"]}}
-
-        gate_input = PreflightGateInput.from_extraction_input(_Inp(), "crawl")
-        assert gate_input.metadata.model_dump().get("include-filter") == {
-            "^db$": ["^s$"]
-        }
-
-    def test_from_extraction_input_hook_failure_degrades(self) -> None:
-        # A hook that raises must not break the gate — it fails open before dispatch.
-        class _Inp:
-            extraction_method = "direct"
-            credential_guid = "g-9"
-            agent_json = None
-            credential_ref = None
-
-            def preflight_config(self) -> dict:
-                raise RuntimeError("boom")
+            def model_dump(self, **kw) -> dict:
+                raise RuntimeError("dump failed")
 
         gate_input = PreflightGateInput.from_extraction_input(_Inp(), "crawl")
         assert gate_input.entrypoint == "crawl"  # did not raise
+        assert gate_input.extraction_snapshot == {}
+
+    def test_from_extraction_input_degrades_on_pydantic_validation_failure(
+        self,
+    ) -> None:
+        # An input field that won't fit PreflightGateInput (e.g. credential_ref
+        # as a plain string rather than a CredentialRef) triggers ValidationError.
+        # The gate must degrade to a minimal input, never raise.
+        class _Inp:
+            extraction_method = "direct"
+            credential_guid = "g-9"
+            agent_json = None
+            credential_ref = "not-a-CredentialRef"  # wrong type → ValidationError
+
+        gate_input = PreflightGateInput.from_extraction_input(_Inp(), "crawl")
+        assert gate_input.entrypoint == "crawl"  # built, did not raise
+        # Minimal fallback: routing fields from the bad input are not present
+        assert gate_input.credential_guid == ""
 
     async def test_gate_mirrors_metadata_into_connection_config(self) -> None:
         # Handlers may read config from either metadata or connection_config; the
@@ -259,3 +287,55 @@ class TestPreflightGateActivity:
         assert handler.preflight_input.connection_config.model_dump().get(
             "include-filter"
         ) == {"^db$": ["^s$"]}
+
+    def test_config_from_snapshot_excludes_routing_keys_and_adds_hyphen_variants(
+        self,
+    ) -> None:
+        snapshot = {
+            "extraction_method": "direct",
+            "credential_guid": "g-9",
+            "agent_json": None,
+            "credential_ref": None,
+            "include_filter": {"^db$": ["^s$"]},
+            "connection_timeout": 30,
+        }
+        config = _config_from_snapshot(snapshot)
+        # Routing keys must be absent
+        for key in (
+            "extraction_method",
+            "credential_guid",
+            "agent_json",
+            "credential_ref",
+        ):
+            assert key not in config, f"Routing key {key!r} leaked into config"
+        # Non-routing fields present with original and hyphenated names
+        assert config.get("include_filter") == {"^db$": ["^s$"]}
+        assert config.get("include-filter") == {"^db$": ["^s$"]}
+        assert config.get("connection_timeout") == 30
+        assert config.get("connection-timeout") == 30
+
+    async def test_activity_uses_snapshot_to_build_preflight_metadata(self) -> None:
+        # When extraction_snapshot is populated, the activity must derive metadata
+        # from it (activity frame), not from input.metadata (workflow frame).
+        handler = _StubHandler()
+        gate = _gate(handler)
+
+        await gate(
+            PreflightGateInput(
+                entrypoint="crawl",
+                extraction_snapshot={
+                    "extraction_method": "direct",
+                    "credential_guid": "",
+                    "include_filter": {"^db$": ["^s$"]},
+                },
+            )
+        )
+
+        assert handler.preflight_input is not None
+        # include_filter (and its hyphenated variant) must appear via snapshot path
+        assert handler.preflight_input.metadata.model_dump().get("include_filter") == {
+            "^db$": ["^s$"]
+        }
+        assert handler.preflight_input.metadata.model_dump().get("include-filter") == {
+            "^db$": ["^s$"]
+        }

@@ -38,6 +38,8 @@ with workflow.unsafe.imports_passed_through():
 
 logger = get_logger(__name__)
 
+PREFLIGHT_FAILED_ERROR_TYPE = "PreflightFailed"
+
 if TYPE_CHECKING:
     from application_sdk.handler.base import Handler
 
@@ -80,8 +82,17 @@ class PreflightGateInput(BaseModel):
     """Bare entry-point name of the gated workflow (for per-entrypoint checks)."""
 
     metadata: BaseMetadataConfig = Field(default_factory=BaseMetadataConfig)
-    """Form-level metadata forwarded to the handler, mirroring the HTTP path.
-    Empty on the standard extraction path (the SDK input carries no metadata)."""
+    """Form-level metadata fallback for gate inputs built without a model_dump-capable
+    extraction input (e.g. manually constructed in tests or by an older caller)."""
+
+    extraction_snapshot: dict[str, Any] = Field(default_factory=dict)
+    """Raw ``model_dump(mode='json')`` of the extraction input.
+
+    Stored here (secret-free routing fields only carry refs, not creds) so the
+    gate activity can build ``PreflightInput.metadata`` inside the activity frame
+    rather than in the deterministic workflow — preventing app-authored field reads
+    (e.g. filter config) from running in a non-deterministic context on replay.
+    """
 
     @classmethod
     def from_extraction_input(
@@ -89,45 +100,30 @@ class PreflightGateInput(BaseModel):
     ) -> PreflightGateInput:
         """Build the gate input from a workflow extraction input — never raises.
 
-        Reads only secret-free routing refs plus ``entrypoint``/``metadata`` via
-        getattr, so it works for any input satisfying ``CredentialResolvable``.
-        If a field does not fit (an oddly-shaped custom input), it degrades to a
-        minimal input rather than raising — the gate must fail open *before* the
-        dispatch, not only during it.
+        Collects only secret-free credential routing fields plus the raw
+        ``model_dump`` snapshot so the gate activity can derive form config in the
+        activity frame. If a field does not fit (an oddly-shaped custom input),
+        degrades to a minimal input — the gate must fail open *before* dispatch.
         """
-        # Form config for the handler's filter/scope checks. Extraction inputs
-        # flatten the AE payload's nested ``metadata`` into typed top-level
-        # fields, so a literal ``.metadata`` is usually absent — prefer an
-        # explicit ``preflight_config()`` hook that reconstructs the dict the
-        # handler reads, and fall back to a literal ``metadata`` attr otherwise.
-        # Without this the handler runs on the gate path with empty config and
-        # its filter/scope checks silently no-op.
-        config: Any = None
-        hook = getattr(input_data, "preflight_config", None)
-        if callable(hook):
+        snapshot: dict[str, Any] = {}
+        if hasattr(input_data, "model_dump"):
             try:
-                config = hook()
+                snapshot = input_data.model_dump(mode="json")
             except Exception:  # never raise — the gate must fail open before dispatch
-                logger.warning(
-                    "preflight_config() raised; gate proceeds without form config",
+                logger.debug(
+                    "Could not snapshot extraction input; gate proceeds without form config",
                     exc_info=True,
                 )
-                config = None
-        if config is None:
-            metadata = getattr(input_data, "metadata", None)
-            config = (
-                metadata if isinstance(metadata, (dict, BaseMetadataConfig)) else None
-            )
-        metadata_kw = {"metadata": config} if config is not None else {}
         base_kw: dict[str, Any] = dict(
             extraction_method=getattr(input_data, "extraction_method", "") or "",
             credential_guid=getattr(input_data, "credential_guid", "") or "",
             agent_json=getattr(input_data, "agent_json", None),
             credential_ref=getattr(input_data, "credential_ref", None),
             entrypoint=entrypoint,
+            extraction_snapshot=snapshot,
         )
         try:
-            return cls(**base_kw, **metadata_kw)
+            return cls(**base_kw)
         except ValidationError:
             logger.warning(
                 "Extraction input did not fit PreflightGateInput; using a minimal "
@@ -161,6 +157,29 @@ GATE_START_TO_CLOSE = timedelta(seconds=25)
 GATE_RETRY = RetryPolicy(maximum_attempts=2, backoff_coefficient=2)
 
 
+_ROUTING_KEYS: frozenset[str] = frozenset(
+    {"extraction_method", "credential_guid", "agent_json", "credential_ref"}
+)
+
+
+def _config_from_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Extract preflight form config from a raw extraction-input snapshot.
+
+    Called inside the gate activity (activity frame, not workflow) so any
+    field reads by the app never run in a deterministic context on replay.
+    Produces both the original field name and its hyphenated equivalent so
+    handlers that use either naming convention work on the gate path.
+    """
+    config: dict[str, Any] = {}
+    for k, v in snapshot.items():
+        if not v or k in _ROUTING_KEYS:
+            continue
+        config[k] = v
+        if "_" in k:
+            config[k.replace("_", "-")] = v
+    return config
+
+
 def build_preflight_gate_activity(
     handler: Handler,
     app_name: str,
@@ -191,14 +210,18 @@ def build_preflight_gate_activity(
                 )
             raw = await CredentialResolver(secret_store).resolve_raw(ref) or {}
             credentials = HandlerCredential.list_from_raw(raw)
-        # Mirror the form config into both ``metadata`` and ``connection_config``
-        # so a handler reading either field sees it — matching the HTTP /check
-        # path's ``_normalize_preflight_request`` behaviour.
-        metadata_dump = input.metadata.model_dump() if input.metadata else {}
+        # Build form config from the extraction-input snapshot — runs here (activity
+        # frame) so any field reads by the app are outside the deterministic workflow.
+        # Falls back to the literal metadata field for gate inputs built without a
+        # model_dump-capable extraction input (e.g. manually constructed in tests).
+        if input.extraction_snapshot:
+            metadata_dump = _config_from_snapshot(input.extraction_snapshot)
+        else:
+            metadata_dump = input.metadata.model_dump() if input.metadata else {}
         preflight_input = PreflightInput(
             credentials=credentials,
             entrypoint=input.entrypoint,
-            metadata=input.metadata,
+            metadata=BaseMetadataConfig(**metadata_dump),
             connection_config=BaseConnectionConfig(**metadata_dump),
         )
         with bind_invocation_context(app_name, credentials):
