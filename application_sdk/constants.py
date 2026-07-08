@@ -351,6 +351,18 @@ _HTTP_POOL_TIMEOUT_SECONDS = 30.0
 #: Whether to enable Atlan storage upload
 ENABLE_ATLAN_UPLOAD = os.getenv("ENABLE_ATLAN_UPLOAD", "false").lower() == "true"
 
+#: Application-layer gateway auth headers, as a JSON object of ``{header: value}``.
+#: Some deployments route Atlan-bound egress through a customer-managed API
+#: gateway that authenticates every request itself (custom headers, Basic, or a
+#: signed JWT) instead of accepting standard HTTP forward-proxy env vars. These
+#: headers are injected on the HTTP egress paths that can carry an application-
+#: layer header — the OAuth token exchange and the event binding. Empty (the
+#: default) means no injection, so non-gateway deployments are unaffected.
+#: Egress whose wire auth can't carry an extra header (object-store SigV4,
+#: Temporal gRPC) is out of scope here — it transits the gateway via TCP/TLS
+#: pass-through with mTLS at the edge (object-store ``proxy_url`` / Temporal mTLS).
+GATEWAY_AUTH_HEADERS = os.getenv("ATLAN_GATEWAY_AUTH_HEADERS", "")
+
 # Dual-write — BLDX-1464: when both stores are configured (SDR), App.upload writes
 # to the deployment (customer) store first, then to upstream (Atlan), at the same
 # run-scoped key.  See ADR-0014 §"App.upload() — dual-write when both stores are

@@ -230,6 +230,9 @@ class OAuthTokenService:
         """
         import httpx  # deferred: matches existing lazy-import pattern for optional heavy deps  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
 
+        from application_sdk.clients.gateway_auth import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+            gateway_auth_headers,
+        )
         from application_sdk.clients.ssl_utils import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
             get_ssl_context,
         )
@@ -253,7 +256,14 @@ class OAuthTokenService:
             async with httpx.AsyncClient(
                 timeout=30.0, verify=get_ssl_context()
             ) as http:
-                response = await http.post(self._base.token_url, data=data)
+                # Inject application-layer gateway auth headers when the
+                # deployment routes egress through an authenticating API gateway
+                # (no-op when ATLAN_GATEWAY_AUTH_HEADERS is unset).
+                response = await http.post(
+                    self._base.token_url,
+                    data=data,
+                    headers=gateway_auth_headers(),
+                )
                 response.raise_for_status()
                 body: dict = response.json()
         except httpx.HTTPStatusError as exc:

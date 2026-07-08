@@ -264,6 +264,18 @@ async def _publish_event_via_binding(event: Event) -> None:
             exc_info=True,
         )
 
+    # Inject application-layer gateway auth headers when the deployment routes
+    # egress through an authenticating API gateway (no-op when unset). Use
+    # setdefault so they never clobber the OAuth bearer / content-type already
+    # set above — the gateway auth for this path must be a non-Authorization
+    # header (the Authorization slot carries the Atlan bearer).
+    from application_sdk.clients.gateway_auth import (  # noqa: PLC0415 — cold path: only on event publish
+        gateway_auth_headers,
+    )
+
+    for _hdr, _val in gateway_auth_headers().items():
+        binding_metadata.setdefault(_hdr, _val)
+
     await infra.event_binding.invoke(
         operation="create",
         data=payload,
