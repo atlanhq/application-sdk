@@ -1,5 +1,18 @@
 # Changelog
 
+## v3.21.1 (July 08, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.21.0...v3.21.1
+
+### Bug Fixes
+
+- add P031 rule for shared-default-executor offload (#2556) (by @cmgrote in [76d92b2](https://github.com/atlanhq/application-sdk/commit/76d92b2))
+- accept pandas DataFrame in transform_metadata (#2585) (by @cmgrote in [c0f8c35](https://github.com/atlanhq/application-sdk/commit/c0f8c35))
+- add opt-in two-store SDR posture to the full-DAG suite (#2586) (by @cmgrote in [bf87f36](https://github.com/atlanhq/application-sdk/commit/bf87f36))
+- remediate error-handling, logging, and optimization findings (#2573) (by @cmgrote in [460d7f2](https://github.com/atlanhq/application-sdk/commit/460d7f2))
+- two-store SDR guards (deployment + upstream) + real-cloud handoff (#2552) (by @adityachoudhury-cloud in [25b8f2d](https://github.com/atlanhq/application-sdk/commit/25b8f2d))
+
+
 ## v3.21.0 (July 07, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.20.3...v3.21.0
