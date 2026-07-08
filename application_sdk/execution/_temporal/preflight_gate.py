@@ -26,6 +26,7 @@ with workflow.unsafe.imports_passed_through():
     from application_sdk.errors.leaves import DependencyUnavailableError
     from application_sdk.handler.context import bind_invocation_context
     from application_sdk.handler.contracts import (
+        BaseConnectionConfig,
         BaseMetadataConfig,
         HandlerCredential,
         PreflightInput,
@@ -94,12 +95,30 @@ class PreflightGateInput(BaseModel):
         minimal input rather than raising — the gate must fail open *before* the
         dispatch, not only during it.
         """
-        metadata = getattr(input_data, "metadata", None)
-        metadata_kw = (
-            {"metadata": metadata}
-            if isinstance(metadata, (dict, BaseMetadataConfig))
-            else {}
-        )
+        # Form config for the handler's filter/scope checks. Extraction inputs
+        # flatten the AE payload's nested ``metadata`` into typed top-level
+        # fields, so a literal ``.metadata`` is usually absent — prefer an
+        # explicit ``preflight_config()`` hook that reconstructs the dict the
+        # handler reads, and fall back to a literal ``metadata`` attr otherwise.
+        # Without this the handler runs on the gate path with empty config and
+        # its filter/scope checks silently no-op.
+        config: Any = None
+        hook = getattr(input_data, "preflight_config", None)
+        if callable(hook):
+            try:
+                config = hook()
+            except Exception:  # never raise — the gate must fail open before dispatch
+                logger.warning(
+                    "preflight_config() raised; gate proceeds without form config",
+                    exc_info=True,
+                )
+                config = None
+        if config is None:
+            metadata = getattr(input_data, "metadata", None)
+            config = (
+                metadata if isinstance(metadata, (dict, BaseMetadataConfig)) else None
+            )
+        metadata_kw = {"metadata": config} if config is not None else {}
         base_kw: dict[str, Any] = dict(
             extraction_method=getattr(input_data, "extraction_method", "") or "",
             credential_guid=getattr(input_data, "credential_guid", "") or "",
@@ -172,10 +191,15 @@ def build_preflight_gate_activity(
                 )
             raw = await CredentialResolver(secret_store).resolve_raw(ref) or {}
             credentials = HandlerCredential.list_from_raw(raw)
+        # Mirror the form config into both ``metadata`` and ``connection_config``
+        # so a handler reading either field sees it — matching the HTTP /check
+        # path's ``_normalize_preflight_request`` behaviour.
+        metadata_dump = input.metadata.model_dump() if input.metadata else {}
         preflight_input = PreflightInput(
             credentials=credentials,
             entrypoint=input.entrypoint,
             metadata=input.metadata,
+            connection_config=BaseConnectionConfig(**metadata_dump),
         )
         with bind_invocation_context(app_name, credentials):
             result = await handler.preflight_check(preflight_input)

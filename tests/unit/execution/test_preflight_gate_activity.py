@@ -206,3 +206,56 @@ class TestPreflightGateActivity:
         gate_input = PreflightGateInput.from_extraction_input(_Inp(), "crawl")
         assert gate_input.entrypoint == "crawl"  # built, did not raise
         assert gate_input.credential_guid == "g-9"
+
+    def test_from_extraction_input_uses_preflight_config_hook(self) -> None:
+        # Extraction inputs flatten form config into typed top-level fields; the
+        # gate reads it back via preflight_config() into the gate input metadata,
+        # so the handler's filter/scope checks are not blind on the gate path.
+        class _Inp:
+            extraction_method = "direct"
+            credential_guid = "g-9"
+            agent_json = None
+            credential_ref = None
+
+            def preflight_config(self) -> dict:
+                return {"include-filter": {"^db$": ["^s$"]}}
+
+        gate_input = PreflightGateInput.from_extraction_input(_Inp(), "crawl")
+        assert gate_input.metadata.model_dump().get("include-filter") == {
+            "^db$": ["^s$"]
+        }
+
+    def test_from_extraction_input_hook_failure_degrades(self) -> None:
+        # A hook that raises must not break the gate — it fails open before dispatch.
+        class _Inp:
+            extraction_method = "direct"
+            credential_guid = "g-9"
+            agent_json = None
+            credential_ref = None
+
+            def preflight_config(self) -> dict:
+                raise RuntimeError("boom")
+
+        gate_input = PreflightGateInput.from_extraction_input(_Inp(), "crawl")
+        assert gate_input.entrypoint == "crawl"  # did not raise
+
+    async def test_gate_mirrors_metadata_into_connection_config(self) -> None:
+        # Handlers may read config from either metadata or connection_config; the
+        # gate mirrors metadata into both, matching the HTTP /check path.
+        handler = _StubHandler()
+        gate = _gate(handler)
+
+        await gate(
+            PreflightGateInput(
+                entrypoint="crawl",
+                metadata={"include-filter": {"^db$": ["^s$"]}},
+            )
+        )
+
+        assert handler.preflight_input is not None
+        assert handler.preflight_input.metadata.model_dump().get("include-filter") == {
+            "^db$": ["^s$"]
+        }
+        assert handler.preflight_input.connection_config.model_dump().get(
+            "include-filter"
+        ) == {"^db$": ["^s$"]}
