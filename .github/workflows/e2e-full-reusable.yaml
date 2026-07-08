@@ -128,6 +128,29 @@ on:
         required: false
         type: string
         default: ""
+      two-store:
+        description: |
+          Opt-in ADR-0014 two-store SDR posture (docs/adr/0014-two-store-
+          storage-architecture.md). When true, the connector's deployment
+          `objectstore` is forced to the SDK-default CI-local binding
+          (never the tenant-blobstorage override some connectors ship),
+          `atlan-objectstore` stays the configurator-emitted tenant
+          binding, and ENABLE_ATLAN_UPLOAD=true is set on the worker.
+          This makes the two stores physically distinct so a connector
+          that forgets to bridge an artifact via `App.upload()` shows up
+          as zero downstream assets/lineage in Atlas instead of being
+          silently masked by a single shared bucket.
+
+          Only meaningful when the test class runs in RunMode.AGENT —
+          in RunMode.DIRECT the connector's extract activity runs on the
+          tenant's own pod, whose storage config this harness does not
+          control, so the gap is not observable there.
+
+          Default false: existing full-DAG adopters are unaffected until
+          they opt in per docs/standards/connector-ci-e2e.md.
+        required: false
+        type: boolean
+        default: false
     secrets:
       SDR_TEST_TENANT:
         description: Tenant FQDN (e.g. devex.atlan.com — no https:// prefix). ATLAN_BASE_URL is derived from this.
@@ -206,3 +229,4 @@ jobs:
           pytest-extra-args: "-s"
           application-sdk-ref: ${{ inputs.application-sdk-ref }}
           base-image-ref: ${{ inputs.base-image-ref }}
+          enable-two-store: ${{ inputs.two-store }}

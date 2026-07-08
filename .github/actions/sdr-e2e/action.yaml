@@ -141,6 +141,20 @@ inputs:
               && uv sync --locked --no-install-project
     required: false
     default: ""
+  enable-two-store:
+    description: |
+      Opt-in ADR-0014 two-store SDR posture (docs/adr/0014-two-store-
+      storage-architecture.md). When "true": the connector's `objectstore`
+      component is forced to the SDK default (an app-level
+      `objectstore.yaml` override is ignored) so it stays physically
+      distinct from the configurator-emitted `atlan-objectstore`; the
+      composite hard-fails if `atlan-objectstore.yaml` isn't present; and
+      ENABLE_ATLAN_UPLOAD=true / ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE=required
+      are set on the worker via docker-compose.two-store.yml. Set by
+      e2e-full-reusable.yaml's `two-store` input; the pure-SDR pipeline
+      never sets this.
+    required: false
+    default: "false"
 outputs:
   test-outcome:
     description: pytest exit outcome (success/failure)
@@ -404,63 +418,45 @@ runs:
         fi
 
     # SDK defaults first, app overrides on top so apps can replace any single
-    # component file without forking the whole set.
-    - name: Override CI Dapr components
+    # component file without forking the whole set. Two-store mode is the one
+    # exception: see select_dapr_components.py docstring for why the app's
+    # own objectstore.yaml override is skipped in that mode. Branching logic
+    # lives in the tested script per docs/standards/ci.md; this step is
+    # straight-line.
+    - name: Select CI Dapr components
       shell: bash
       env:
-        SDK_COMPONENTS: ${{ steps.action_root.outputs.path }}/components
+        SDR_E2E_ROOT: ${{ steps.action_root.outputs.path }}
         APP_COMPONENTS: ${{ inputs.components-dir }}
+        TWO_STORE: ${{ inputs.enable-two-store }}
       run: |
-        cp "${SDK_COMPONENTS}"/*.yaml ci-deploy/components/
-        # Resolve effective overrides directory: explicit input wins,
-        # otherwise fall back to $SDR_CONFIG_DIR/components convention.
-        if [ -n "${APP_COMPONENTS}" ]; then
-          OVERRIDE_DIR="${APP_COMPONENTS}"
-        else
-          OVERRIDE_DIR="$SDR_CONFIG_DIR/components"
-        fi
-        if [ -d "${OVERRIDE_DIR}" ] && [ -n "$(ls -A "${OVERRIDE_DIR}" 2>/dev/null)" ]; then
-          echo "Applying app-level component overrides from ${OVERRIDE_DIR}"
-          cp "${OVERRIDE_DIR}"/*.yaml ci-deploy/components/
-        fi
+        python3 "$SDR_E2E_ROOT/select_dapr_components.py" \
+          --ci-components-dir ci-deploy/components \
+          --sdk-components-dir "$SDR_E2E_ROOT/components" \
+          --app-components-dir "${APP_COMPONENTS}" \
+          --sdr-config-dir "$SDR_CONFIG_DIR" \
+          --two-store "${TWO_STORE}"
 
+    # Order: configurator-generated base → SDK CI overrides → optional app
+    # layer → two-store overlay (only when enabled, always last — see
+    # build_compose_chain.py). Branching logic lives in the tested script
+    # per docs/standards/ci.md; this step is straight-line.
     - name: Build compose -f chain
       id: compose_files
       shell: bash
       env:
-        SDK_COMPOSE: ${{ steps.action_root.outputs.path }}/docker-compose.ci.yml
+        SDR_E2E_ROOT: ${{ steps.action_root.outputs.path }}
         APP_COMPOSE: ${{ inputs.compose-overlay }}
-        APP_NAME: ${{ inputs.app-name }}
-        ACTION_ROOT: ${{ steps.action_root.outputs.path }}
+        TWO_STORE: ${{ inputs.enable-two-store }}
       run: |
-        # Order: configurator-generated base → SDK CI overrides → optional app layer.
-        FILES=("-f" "ci-deploy/docker-compose.yaml" "-f" "${SDK_COMPOSE}")
-        # Resolve effective compose overlay: explicit input wins,
-        # otherwise fall back to $SDR_CONFIG_DIR/docker-compose.ci.yml convention.
-        if [ -n "${APP_COMPOSE}" ]; then
-          OVERLAY="${APP_COMPOSE}"
-        else
-          OVERLAY="$SDR_CONFIG_DIR/docker-compose.ci.yml"
-        fi
-        if [ -f "${OVERLAY}" ]; then
-          echo "Adding app-level compose layer from ${OVERLAY}"
-          FILES+=("-f" "${OVERLAY}")
-        fi
-
-        # ── Two-store SDR mode (opt-in, SDK-side, scoped to an allowlist) ─────
-        # The setup driver owns the allowlist decision + all side effects (the
-        # atlan-objectstore component override, the host-writable mount dirs, and
-        # the guard env vars appended to $GITHUB_ENV) — keeping branching logic
-        # out of this YAML (docs/standards/ci.md). It prints the extra compose
-        # "-f <overlay>" tokens (nothing when the app isn't a two-store app),
-        # which we append unconditionally. Onboard a connector by editing
-        # TWO_STORE_APPS in .github/scripts/two_store_setup.py (unit-tested).
-        read -r -a TWO_STORE_FILES <<< "$(python3 "${ACTION_ROOT}/../../scripts/two_store_setup.py" "${APP_NAME}" "${ACTION_ROOT}/two-store")"
-        FILES+=("${TWO_STORE_FILES[@]}")
-
-        # Persist the array as a single space-joined string (compose -f flags
-        # are simple paths, no whitespace issues).
-        echo "files=${FILES[*]}" >> "$GITHUB_OUTPUT"
+        OUT=$(python3 "$SDR_E2E_ROOT/build_compose_chain.py" \
+          --base-compose ci-deploy/docker-compose.yaml \
+          --sdk-compose "$SDR_E2E_ROOT/docker-compose.ci.yml" \
+          --app-compose "${APP_COMPOSE}" \
+          --sdr-config-dir "$SDR_CONFIG_DIR" \
+          --two-store "${TWO_STORE}" \
+          --two-store-compose "$SDR_E2E_ROOT/docker-compose.two-store.yml")
+        echo "$OUT" >> "$GITHUB_OUTPUT"
 
     # GH-runner docker bridges have no global IPv6 routing, but
     # temporalio's bundled Rust gRPC resolver returns AAAA records and
@@ -526,6 +522,9 @@ runs:
       shell: bash
       env:
         ATLAN_APPLICATION_NAME: ${{ inputs.app-name }}
+        # Read by BaseE2ETest.setup_method() to warn if two-store is on
+        # but the test class runs in RunMode.DIRECT, where it has no effect.
+        TWO_STORE: ${{ inputs.enable-two-store }}
       run: |
         mkdir -p results
         set +e
@@ -541,20 +540,6 @@ runs:
         echo "summary=${SUMMARY}" >> "$GITHUB_OUTPUT"
         echo "exit_code=${TEST_EXIT_CODE}" >> "$GITHUB_OUTPUT"
         exit "${TEST_EXIT_CODE}"
-
-    # Decoupling prototype: assert assets landed (deployment + upstream) by
-    # reading the bind-mounted stores on the HOST — no dependency on the app's
-    # installed SDK, so the guard runs on any SDR app at its CURRENT SDK version
-    # (redshift 3.14, looker/saperp 3.17, …) with no SDK bump. Env flags are set
-    # by the two-store block above.
-    - name: SDR asset guards (host-side, SDK-version-independent)
-      if: always()
-      shell: bash
-      env:
-        SDR_OUTPUT_SUBDIR: transformed
-      run: |
-        ROOT="${{ steps.action_root.outputs.path }}"
-        python3 "$ROOT/two-store/sdr_asset_guards.py"
 
     - name: Extract Temporal workflow links
       id: wf_links
@@ -784,6 +769,7 @@ runs:
       shell: bash
       env:
         SDR_TEST_TENANT: ${{ env.SDR_TEST_TENANT }}
+        TWO_STORE: ${{ inputs.enable-two-store }}
       run: |
         uv run python3 - <<'PYEOF'
         import os
@@ -928,11 +914,37 @@ runs:
             assets_match = next(iter(list(assets_re.finditer(test_text))[::-1]), None)
             lineage_match = next(iter(list(lineage_re.finditer(test_text))[::-1]), None)
             if assets_match:
+                atlas_counts = _safe_dict(assets_match.group("counts"))
                 lines.extend(_render_section(
                     "Assets in Atlas",
                     assets_match.group("qn"),
-                    _safe_dict(assets_match.group("counts")),
+                    atlas_counts,
                 ))
+                # Two-store diagnostic (not a gate — the existing
+                # expected_min_asset_counts / require_nonempty_assets
+                # assertions already fail the run on this condition).
+                # Extraction succeeding locally while nothing reaches
+                # Atlas is exactly the ADR-0014 hand-off gap this posture
+                # exists to catch: the interceptor wrote to `objectstore`
+                # but the connector never bridged it to `atlan-objectstore`
+                # via App.upload(), so publish/QI/lineage read an empty
+                # upstream bucket.
+                if os.environ.get("TWO_STORE") == "true":
+                    total_transformed = sum(
+                        n
+                        for entity_counts in transformed.values()
+                        for n in entity_counts.values()
+                    )
+                    if total_transformed > 0 and sum(atlas_counts.values()) == 0:
+                        lines.append(
+                            "> ⚠️ **Possible missing hand-off:** the connector "
+                            f"transformed {total_transformed} record(s) locally "
+                            "but 0 assets reached Atlas. Check for a missing "
+                            "`App.upload()` bridging the transformed-data prefix "
+                            "from the deployment `objectstore` to "
+                            "`atlan-objectstore` (see ADR-0014)."
+                        )
+                        lines.append("")
             if lineage_match:
                 lineage_counts = _safe_dict(lineage_match.group("counts"))
                 lines.extend(_render_section(
