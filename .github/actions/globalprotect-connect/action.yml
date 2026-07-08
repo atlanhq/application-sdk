@@ -4,14 +4,19 @@ author: "Atlan"
 
 inputs:
   portal-url:
-    description: "GlobalProtect portal URL"
-    required: true
+    description: "GlobalProtect portal URL. Empty falls back to https://vpn2.atlan.app."
+    required: false
+    default: ""
   username:
-    description: "GlobalProtect username"
+    description: "GlobalProtect username (org secret GLOBALPROTECT_USERNAME)"
     required: true
   password:
-    description: "GlobalProtect password"
+    description: "GlobalProtect password (org secret GLOBALPROTECT_PASSWORD)"
     required: true
+  mothership-url:
+    description: "Target service the tunnel must reach; the post-connect health probe hits ${mothership-url}/health. This is what the caller actually needs reachable, so probe it directly instead of an unrelated host."
+    required: false
+    default: "https://mothership.atlan.dev"
   max-attempts:
     description: "Maximum number of connection attempts"
     required: false
@@ -49,23 +54,35 @@ runs:
           sudo apt-get update
           sudo apt-get install -y openconnect
 
-          # Check required inputs
-          if [ -z "${{ inputs.portal-url }}" ]; then
-            echo "portal-url input not provided"
-            exit 1
-          fi
-
+          # Check required credentials. An empty username/password almost
+          # always means the org-level GLOBALPROTECT_* Actions secret is not
+          # granted to this repo (or was descoped) — a repo-settings problem,
+          # not a code one. Say so explicitly so the failure is actionable.
           if [ -z "${{ inputs.username }}" ]; then
-            echo "username input not provided"
+            echo "::error::GLOBALPROTECT_USERNAME is empty. The GlobalProtect VPN secret is not available to this repo — an org admin must grant this repo access to the org-level GLOBALPROTECT_USERNAME/GLOBALPROTECT_PASSWORD secrets (or set them at repo level). A workflow change cannot provision a secret."
             exit 1
           fi
-
           if [ -z "${{ inputs.password }}" ]; then
-            echo "password input not provided"
+            echo "::error::GLOBALPROTECT_PASSWORD is empty. See the GLOBALPROTECT_USERNAME error above — same root cause."
             exit 1
           fi
 
-          echo "Attempting OpenConnect to: ${{ inputs.portal-url }}"
+          # Portal: use the caller-supplied portal, else fall back to the
+          # canonical Atlan portal. A missing GLOBALPROTECT_PORTAL_URL var must
+          # not hard-fail the connect (this mirrors the mothership reviewer
+          # action, which hardcodes the same fallback).
+          PRIMARY="${{ inputs.portal-url }}"
+          [ -z "$PRIMARY" ] && PRIMARY="https://vpn2.atlan.app"
+          case "$PRIMARY" in https://*) ;; *) PRIMARY="https://$PRIMARY" ;; esac
+          FALLBACK="https://vpn2.atlan.app"
+
+          # Probe the service the tunnel actually has to reach. The previous
+          # implementation tested https://phoenix-ai.atlan.com, so a
+          # phoenix-ai outage failed the VPN step even when the tunnel to
+          # mothership was healthy — and, worse, a green phoenix-ai probe
+          # declared success without ever confirming mothership was reachable.
+          MOTHERSHIP_URL="${{ inputs.mothership-url }}"
+          [ -z "$MOTHERSHIP_URL" ] && MOTHERSHIP_URL="https://mothership.atlan.dev"
 
           # Unique per-run client hostname. GlobalProtect treats "same user +
           # same computer" as a session replacement, so without a distinct
@@ -76,18 +93,18 @@ runs:
           LOCAL_HOSTNAME=$(echo "$LOCAL_HOSTNAME" | tr -cd 'a-zA-Z0-9-' | cut -c1-63)
           echo "Using --local-hostname: ${LOCAL_HOSTNAME}"
 
-          # Connect with openconnect in the background.
+          # Connect to one portal, then verify the tunnel reaches mothership.
+          # Returns 0 only when ${MOTHERSHIP_URL}/health answers 200.
           #
           # >/tmp/openconnect.log 2>&1 is required: without it, the
           # daemonized openconnect process inherits the step's stdout/stderr
           # file descriptors and keeps them open for the lifetime of the VPN
           # session. GitHub's log streamer treats the step as "in progress"
           # until those FDs close, so the step badge in the UI never turns
-          # green even after the script exits and the next step starts
-          # running. Redirecting here detaches the daemon's stdio so the
-          # step closes cleanly. (stdin stays on the pipe so --passwd-on-stdin
-          # still reads the password; the pipe closes after echo and the
-          # daemon ends up with stdin at EOF, which is fine.)
+          # green even after the script exits. Redirecting detaches the
+          # daemon's stdio so the step closes cleanly. (stdin stays on the
+          # pipe so --passwd-on-stdin still reads the password; the pipe
+          # closes after echo and the daemon gets stdin at EOF, which is fine.)
           #
           # --verbose surfaces the GlobalProtect HTTP response detail — e.g. the
           # body behind an "Unexpected NNN result from server" auth rejection
@@ -97,42 +114,52 @@ runs:
           # response status/body, not request bodies. Do NOT escalate to -vvvv
           # or --dump-http-traffic — those dump full request bodies and the GP
           # credential POST would leak the password into the runner log.
-          echo "${{ inputs.password }}" | sudo openconnect \
-            --protocol=gp \
-            --user="${{ inputs.username }}" \
-            --passwd-on-stdin \
-            --local-hostname="${LOCAL_HOSTNAME}" \
-            --verbose \
-            --background \
-            "${{ inputs.portal-url }}" >/tmp/openconnect.log 2>&1 || {
-            echo "OpenConnect connection failed"
+          _connect() {
+            local portal="$1"
+            echo "🔌 Connecting to VPN portal: $portal"
+            sudo pkill openconnect 2>/dev/null || true
+            sleep 2
+            echo "${{ inputs.password }}" | sudo openconnect \
+              --protocol=gp \
+              --user="${{ inputs.username }}" \
+              --passwd-on-stdin \
+              --local-hostname="${LOCAL_HOSTNAME}" \
+              --verbose \
+              --background \
+              "$portal" >/tmp/openconnect.log 2>&1 || {
+              echo "OpenConnect connection to $portal failed"
+              cat /tmp/openconnect.log 2>/dev/null || true
+              return 1
+            }
+
+            # Wait for the tunnel + routes to establish.
+            sleep 10
+
+            # Probe the real target. --max-time 30 fails a black-holed route
+            # fast instead of burning the retry budget on one hung TCP connect.
+            local status
+            status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 \
+              "${MOTHERSHIP_URL}/health" || echo "000")
+            echo "  Probe: HTTP $status via $portal → ${MOTHERSHIP_URL}/health"
+            if [ "$status" = "200" ]; then
+              return 0
+            fi
+            # Tunnel may have come up yet be unusable (route blackhole, or a
+            # session displaced by a concurrent run). Dump the VPN log so the
+            # most common real failure mode is diagnosable.
             cat /tmp/openconnect.log 2>/dev/null || true
-            exit 1
+            return 1
           }
 
-          # Wait a moment for connection to establish
-          sleep 10
-
-          # Initial connectivity test
-          echo "Testing initial connectivity to Phoenix AI..."
-          # --max-time 60 ensures a black-holed route (e.g. broken VPN
-          # split-tunnel) fails fast instead of burning the full retry-action
-          # timeout_minutes budget on a single hung TCP connection. 60s is
-          # comfortably above any healthy response time but well below the
-          # 5-min per-attempt cap.
-          time curl -k -sS --max-time 60 https://phoenix-ai.atlan.com -o /dev/null
-
-          if [ $? -eq 0 ]; then
-            echo "Initial connectivity test successful"
-          else
-            echo "Initial connectivity test failed"
-            # Dump the openconnect log on this path too. openconnect may have
-            # exited 0 above (tunnel came up) yet the tunnel is unusable — a
-            # split-tunnel/route blackhole, or a session displaced by a
-            # concurrent run. Without this, the most common real failure mode
-            # logs nothing about the VPN itself.
-            cat /tmp/openconnect.log 2>/dev/null || true
+          if _connect "$PRIMARY"; then
+            echo "✅ VPN connected via primary ($PRIMARY)"
+          elif [ "$PRIMARY" = "$FALLBACK" ]; then
+            echo "❌ Primary VPN failed and equals fallback — no retry possible."
             exit 1
+          else
+            echo "⚠️ Primary ($PRIMARY) unreachable — trying fallback ($FALLBACK)"
+            _connect "$FALLBACK" || { echo "❌ Both VPN portals failed."; exit 1; }
+            echo "✅ VPN connected via fallback ($FALLBACK)"
           fi
 
           # Set output to indicate successful connection

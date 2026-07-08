@@ -80,7 +80,7 @@ email-validator==2.3.0
     #   pydantic
 fastapi==0.139.0
     # via atlan-application-sdk
-fastapi-cli==0.0.28
+fastapi-cli==0.0.29
     # via fastapi
 fastapi-cloud-cli==0.22.1
     # via fastapi-cli
@@ -102,7 +102,7 @@ googleapis-common-protos==1.75.0
     # via
     #   opentelemetry-exporter-otlp-proto-grpc
     #   opentelemetry-exporter-otlp-proto-http
-grpcio==1.81.1
+grpcio==1.82.1
     # via opentelemetry-exporter-otlp-proto-grpc
 h11==0.16.0
     # via
