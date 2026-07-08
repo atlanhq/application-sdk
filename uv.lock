@@ -1210,16 +1210,16 @@ standard = [
 
 [[package]]
 name = "fastapi-cli"
-version = "0.0.28"
+version = "0.0.29"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "rich-toolkit" },
     { name = "typer" },
     { name = "uvicorn", extra = ["standard"] },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/01/20/43fbf487751e64ea45649855eb55351f8ab588f45220d8fe3ca24d2dee00/fastapi_cli-0.0.28.tar.gz", hash = "sha256:37b384fa1dbb96ac036e7d0cec9eecf5ed37e632b5eda0a2441c7a4ee2274c1b", size = 23648, upload-time = "2026-07-03T19:25:38.314Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6d/82/986d498e3b4c41b043bd14ece562fc1a766b56aa1bfd980ae10717c9bc46/fastapi_cli-0.0.29.tar.gz", hash = "sha256:d1140852664a91754da6db4db1e750ace4059f1a21adcf9b161ad4310271a621", size = 23948, upload-time = "2026-07-08T12:45:03.19Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b4/ba/ee3e08685a8edfac7d74f442a2ae1df1d345d4d09054ea80c54e636a460b/fastapi_cli-0.0.28-py3-none-any.whl", hash = "sha256:396d3b012a15e7c4f12c4c5c7da208bd24ae98882f420c4e2d324d9c7cab8142", size = 13050, upload-time = "2026-07-03T19:25:37.471Z" },
+    { url = "https://files.pythonhosted.org/packages/02/13/0786e5265018238f9a014270ff89d84b02065c2303df9bfac6857ab54bab/fastapi_cli-0.0.29-py3-none-any.whl", hash = "sha256:05bf08e0e527e3649a50c44bd1e0a2c13575c6cf9a939ff70013f288afc074de", size = 13191, upload-time = "2026-07-08T12:45:02.378Z" },
 ]
 
 [package.optional-dependencies]
@@ -2080,14 +2080,14 @@ wheels = [
 
 [[package]]
 name = "joserfc"
-version = "1.7.2"
+version = "1.7.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f1/26/abe1ad855eb334b5ebc9c6495d4798e12bee70e5e8e815d54570710b8312/joserfc-1.7.2.tar.gz", hash = "sha256:537ffb8888b2df039cb5b6d017d7cff6f09d521ce65d89cc9b8ab752b1cff947", size = 233183, upload-time = "2026-06-29T09:03:10.868Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d4/c6/b1cac0280f8efc57626ea8804866b37099f23cae11b1485a42b213245e31/joserfc-1.7.3.tar.gz", hash = "sha256:116955c2587139dba20621fd0bd7fc9255fa960c9fe7f43c43ebef2e801dcfcf", size = 233821, upload-time = "2026-07-08T12:41:42.66Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/13/80/d1b30336582cced4dce0dae776508a6011723e32f907bc7a702c0b25890a/joserfc-1.7.2-py3-none-any.whl", hash = "sha256:ddd818c0ca9b4f17bbc2d72cb3966e6ded7502be089316c62c3cc64ae86132b5", size = 70426, upload-time = "2026-06-29T09:03:09.393Z" },
+    { url = "https://files.pythonhosted.org/packages/7d/f5/650b59d1b74f5befb7a7a7e7d7c92a26b94256df3541e2b4914152cd177a/joserfc-1.7.3-py3-none-any.whl", hash = "sha256:7c39f3f2c943dbc03122747fa8ebbd8e156e54904cf25651b452f4d2634a6075", size = 70982, upload-time = "2026-07-08T12:41:41.521Z" },
 ]
 
 [[package]]
