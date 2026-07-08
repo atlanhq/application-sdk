@@ -366,6 +366,40 @@ class TestCreateTemporalClient:
         assert connect.await_args.kwargs["api_key"] == "secret-token"
 
     @pytest.mark.asyncio
+    async def test_gateway_headers_passed_as_lowercased_rpc_metadata(self) -> None:
+        with (
+            mock.patch.object(backend_module, "_get_or_create_runtime"),
+            mock.patch.object(
+                backend_module.Client,
+                "connect",
+                new=mock.AsyncMock(return_value=mock.MagicMock()),
+            ) as connect,
+            mock.patch(
+                "application_sdk.constants.GATEWAY_AUTH_HEADERS",
+                '{"X-Client-Id": "abc", "X-Client-Secret": "def"}',
+            ),
+        ):
+            await create_temporal_client(connect_max_attempts=1)
+        assert connect.await_args.kwargs["rpc_metadata"] == {
+            "x-client-id": "abc",
+            "x-client-secret": "def",
+        }
+
+    @pytest.mark.asyncio
+    async def test_no_rpc_metadata_when_gateway_unset(self) -> None:
+        with (
+            mock.patch.object(backend_module, "_get_or_create_runtime"),
+            mock.patch.object(
+                backend_module.Client,
+                "connect",
+                new=mock.AsyncMock(return_value=mock.MagicMock()),
+            ) as connect,
+            mock.patch("application_sdk.constants.GATEWAY_AUTH_HEADERS", ""),
+        ):
+            await create_temporal_client(connect_max_attempts=1)
+        assert "rpc_metadata" not in connect.await_args.kwargs
+
+    @pytest.mark.asyncio
     async def test_tls_with_no_paths_uses_custom_ca_when_available(self) -> None:
         """Exercises inline imports of clients.ssl_utils and temporalio.service."""
         with (

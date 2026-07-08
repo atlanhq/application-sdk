@@ -639,6 +639,19 @@ async def create_temporal_client(
     if proxy_config is not None:
         kwargs["http_connect_proxy_config"] = proxy_config
 
+    # Carry application-layer gateway auth on the Temporal connection too, as
+    # gRPC metadata (the same headers injected on the HTTP egress paths), so a
+    # deployment that routes egress through an authenticating API gateway can
+    # authenticate the Temporal stream with the same credentials. gRPC metadata
+    # keys must be lowercase. No-op when ATLAN_GATEWAY_AUTH_HEADERS is unset.
+    from application_sdk.clients.gateway_auth import (  # noqa: PLC0415 — cold path: only at connect
+        gateway_auth_headers,
+    )
+
+    _gateway_md = {k.lower(): v for k, v in gateway_auth_headers().items()}
+    if _gateway_md:
+        kwargs["rpc_metadata"] = _gateway_md
+
     # Configure Temporal runtime (with or without Prometheus metrics)
     kwargs["runtime"] = _get_or_create_runtime(
         enable_prometheus=enable_prometheus,
