@@ -400,3 +400,20 @@ class TestRequireLiveManifest:
             pytest.raises(ManifestFileNotFoundError),
         ):
             self.harness._seed_dag_from_live_or_committed_manifest("atlan-openapi-1")
+
+    def test_sdk_level_opt_out_raises(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """use_live_manifest=False must not silently disable the SDK-level
+        false-green guard — the committed manifest was generated with the OLD
+        toolkit."""
+        dag = {
+            "extract": {
+                "inputs": {"task_queue": "atlan-openapi-{deployment_name}", "args": {}}
+            }
+        }
+        self.harness.manifest_path = str(_write_manifest(tmp_path, dag))  # type: ignore[attr-defined]
+        self.harness.use_live_manifest = False  # type: ignore[attr-defined]
+        monkeypatch.setenv("ATLAN_E2E_REQUIRE_LIVE_MANIFEST", "true")
+        with pytest.raises(ManifestFileNotFoundError, match="use_live_manifest"):
+            self.harness._seed_dag_from_live_or_committed_manifest("atlan-openapi-1")

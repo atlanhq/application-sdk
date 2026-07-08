@@ -149,29 +149,32 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
         fall back on.
         """
         client = getattr(self, "client", None)
+        live = None
         if client is not None and hasattr(client, "get_manifest"):
             live = client.get_manifest(entrypoint=self.workflow_type or None)
-            if live is not None:
-                logger.info(
-                    "Using the live manifest served by the running app (BLDX-1493)."
-                )
-                return live
-            if os.environ.get("ATLAN_E2E_REQUIRE_LIVE_MANIFEST", "").lower() == "true":
-                # SDK-level cross-repo run: the committed manifest was generated
-                # with the OLD toolkit, so falling back to it would give a false
-                # green for the toolkit change under test. Fail loudly instead.
-                raise RuntimeError(
-                    "ATLAN_E2E_REQUIRE_LIVE_MANIFEST is set but the app's /manifest "
-                    "was unreachable; refusing to fall back to the committed "
-                    "manifest (it was generated with the old toolkit and would give "
-                    "a false green — BLDX-1493)."
-                )
-            logger.warning(
-                "Live /manifest unreachable — falling back to the committed "
-                "manifest file at %s (a Contract Toolkit change may go "
-                "untested).",
-                self.manifest_path,
+        if live is not None:
+            logger.info(
+                "Using the live manifest served by the running app (BLDX-1493)."
             )
+            return live
+        # No live manifest — endpoint unreachable OR no capable client. The
+        # guard must cover BOTH: on an SDK-level cross-repo run the committed
+        # manifest was generated with the OLD toolkit, so falling back to it
+        # would give a false green for the toolkit change under test.
+        if os.environ.get("ATLAN_E2E_REQUIRE_LIVE_MANIFEST", "").lower() == "true":
+            raise RuntimeError(
+                "ATLAN_E2E_REQUIRE_LIVE_MANIFEST is set but no live manifest was "
+                "obtained (app's /manifest unreachable, or the test client does "
+                "not support get_manifest); refusing to fall back to the "
+                "committed manifest (it was generated with the old toolkit and "
+                "would give a false green — BLDX-1493)."
+            )
+        logger.warning(
+            "Live /manifest unavailable — falling back to the committed "
+            "manifest file at %s (a Contract Toolkit change may go "
+            "untested).",
+            self.manifest_path,
+        )
 
         path = Path(self.manifest_path)
         if not path.is_absolute():

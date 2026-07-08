@@ -555,3 +555,18 @@ def test_sdk_level_unreachable_raises_instead_of_stale_fallback(
         pytest.raises(ManifestFileNotFoundError),
     ):
         inst._seed_dag_from_live_or_committed_manifest("atlan-mysql-ci")
+
+
+def test_sdk_level_opt_out_raises_instead_of_stale_fallback(
+    manifest_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """use_live_manifest=False must not silently disable the SDK-level
+    false-green guard — the committed manifest was generated with the OLD
+    toolkit (BLDX-1493)."""
+    from application_sdk.testing.full_dag._errors import ManifestFileNotFoundError
+
+    inst = _instance(manifest_file, monkeypatch)
+    inst.use_live_manifest = False
+    monkeypatch.setenv("ATLAN_E2E_REQUIRE_LIVE_MANIFEST", "true")
+    with pytest.raises(ManifestFileNotFoundError, match="use_live_manifest"):
+        inst._seed_dag_from_live_or_committed_manifest("atlan-mysql-ci")

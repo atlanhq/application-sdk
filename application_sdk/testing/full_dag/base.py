@@ -687,6 +687,23 @@ class BaseFullDAGE2ETest:
         committed ``manifest_path`` file (prior behaviour) with a WARNING, so a
         skipped live check is never mistaken for a pass.
         """
+        if not self.use_live_manifest and self._require_live_manifest():
+            # A class-level opt-out must not silently disable the SDK-level
+            # false-green guard: on cross-repo dispatch the committed manifest
+            # was generated with the OLD toolkit, so reading it green-lights a
+            # toolkit change this connector never exercised (BLDX-1493).
+            raise ManifestFileNotFoundError(
+                message=(
+                    "ATLAN_E2E_REQUIRE_LIVE_MANIFEST is set (SDK-level cross-repo "
+                    "run) but this test class sets use_live_manifest=False. "
+                    "Refusing to read the committed manifest — it was generated "
+                    "with the OLD toolkit and would give a false green for the "
+                    "Contract Toolkit change under test (BLDX-1493). Re-enable "
+                    "use_live_manifest (fixing app_manifest_base_url if the app "
+                    "is exposed elsewhere), or skip this test for SDK-level runs."
+                ),
+                resource_identifier=self.app_manifest_base_url,
+            )
         if self.use_live_manifest:
             manifest = self._fetch_live_manifest()
             if manifest is not None:

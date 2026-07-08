@@ -110,6 +110,33 @@ def evaluate(contract_dir: str) -> bool:
     return proc.returncode == 0
 
 
+def clean_outputs() -> list[str]:
+    """Remove the prior generated outputs before ``pkl eval``, mirroring
+    contract-toolkit/scripts/regenerate-all.sh. Overwrite-only regeneration
+    leaves files the new contract/toolkit no longer emits (e.g. a removed
+    entrypoint's ``<ep>/manifest.json``) in the tree — they would be baked into
+    the image and served as if current. Returns the paths that existed (for
+    restore-on-failure)."""
+    existed = []
+    for path in OUTPUT_PATHS:
+        if os.path.isdir(path):
+            shutil.rmtree(path)
+            existed.append(path)
+        elif os.path.exists(path):
+            os.remove(path)
+            existed.append(path)
+    return existed
+
+
+def restore_outputs(paths: list[str]) -> None:
+    """Restore previously-cleaned outputs from HEAD so an app-level eval
+    failure leaves the committed artifacts exactly as before (the safety
+    contract above). Per-path and non-fatal: a path that never existed in HEAD
+    simply stays absent."""
+    for path in paths:
+        run(["git", "checkout", "--", path])
+
+
 def _format_generated(root: Path) -> None:
     """ruff-fix + format every generated ``*.py``, mirroring
     contract-toolkit/scripts/regenerate-all.sh and renovate_pkl_sync.py, so the
@@ -192,6 +219,8 @@ def main(argv: list[str] | None = None) -> int:
         override_toolkit(contract_dir, args.sdk_toolkit_src)
         resolve(contract_dir)
 
+    cleaned = clean_outputs()
+
     if not evaluate(contract_dir):
         if sdk_mode:
             print(
@@ -200,10 +229,28 @@ def main(argv: list[str] | None = None) -> int:
                 "connector contract."
             )
             return 1
+        restore_outputs(cleaned)
         print(
-            "::warning::pkl eval failed — committed contract artifacts left "
+            "::warning::pkl eval failed — committed contract artifacts restored "
             "unchanged; tests will run against the committed manifest (prior "
             "behaviour)."
+        )
+        return 0
+
+    if "app/generated" in cleaned and not Path("app/generated").is_dir():
+        # Eval "succeeded" but emitted no app/generated at all — leaving the
+        # tests with no manifest is strictly worse than a stale one.
+        if sdk_mode:
+            print(
+                "::error::pkl eval with the SDK PR's contract-toolkit emitted no "
+                "app/generated/ for this connector contract."
+            )
+            return 1
+        restore_outputs(cleaned)
+        print(
+            "::warning::pkl eval emitted no app/generated/ — committed contract "
+            "artifacts restored; tests will run against the committed manifest "
+            "(prior behaviour)."
         )
         return 0
 

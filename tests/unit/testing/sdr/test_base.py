@@ -488,3 +488,17 @@ def test_sdk_level_unreachable_raises(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("ATLAN_E2E_REQUIRE_LIVE_MANIFEST", "true")
     with pytest.raises(RuntimeError, match="ATLAN_E2E_REQUIRE_LIVE_MANIFEST"):
         suite._manifest_extract_inputs()
+
+
+def test_sdk_level_no_client_raises(tmp_path, monkeypatch) -> None:
+    """SDK-level run without a live-capable client must also fail hard — a
+    missing client is just another way of never exercising the live manifest
+    (BLDX-1493 false-green guard)."""
+
+    class _Suite(BaseSDRIntegrationTest):
+        manifest_path = _write_manifest(tmp_path, _committed_manifest_args())
+        scenarios = []
+
+    monkeypatch.setenv("ATLAN_E2E_REQUIRE_LIVE_MANIFEST", "true")
+    with pytest.raises(RuntimeError, match="ATLAN_E2E_REQUIRE_LIVE_MANIFEST"):
+        _Suite()._manifest_extract_inputs()

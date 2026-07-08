@@ -77,6 +77,7 @@ def _make_fake_run(
     eval_rc: int = 0,
     fresh_manifest: str = FRESH_MANIFEST,
     calls: list | None = None,
+    emit_output: bool = True,
 ):
     """Build a `run` replacement: simulate pkl/uvx, pass git through to real
     subprocess so the drift comparison is genuinely exercised. Records pkl
@@ -90,7 +91,7 @@ def _make_fake_run(
         if prog == "pkl" and cmd[1:3] == ["project", "resolve"]:
             return types.SimpleNamespace(returncode=0)
         if prog == "pkl" and cmd[1] == "eval":
-            if eval_rc == 0:
+            if eval_rc == 0 and emit_output:
                 out_dir = Path(cmd[cmd.index("-m") + 1])
                 gen = out_dir / "app" / "generated"
                 gen.mkdir(parents=True, exist_ok=True)
@@ -201,6 +202,44 @@ def test_sdk_level_no_toolkit_entry_is_fatal(repo, monkeypatch, tmp_path):
 
     with pytest.raises(SystemExit):
         mod.main(["--sdk-toolkit-src", str(toolkit)])
+
+
+def test_stale_residue_removed_on_regeneration(repo, monkeypatch):
+    """Files the new contract/toolkit no longer emits must not linger: a
+    removed entrypoint's manifest would otherwise be baked into the image and
+    served as if current (mirrors regenerate-all.sh's rm-before-eval)."""
+    residue = repo / "app" / "generated" / "old-ep" / "manifest.json"
+    residue.parent.mkdir()
+    residue.write_text("{}\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "residue")
+    monkeypatch.setattr(mod, "run", _make_fake_run(repo))
+
+    assert mod.main([]) == 0
+
+    assert not residue.exists()
+    assert (repo / "app" / "generated" / "manifest.json").read_text() == FRESH_MANIFEST
+
+
+def test_app_level_empty_eval_output_restores(repo, monkeypatch, capsys):
+    """Eval 'succeeding' without emitting app/generated must restore the
+    committed artifacts — no manifest at all is strictly worse than stale."""
+    monkeypatch.setattr(mod, "run", _make_fake_run(repo, emit_output=False))
+
+    assert mod.main([]) == 0
+
+    assert (repo / "app" / "generated" / "manifest.json").read_text() == STALE_MANIFEST
+    assert "::warning::pkl eval emitted no app/generated" in capsys.readouterr().out
+
+
+def test_sdk_level_empty_eval_output_is_fatal(repo, monkeypatch, tmp_path, capsys):
+    toolkit = tmp_path / "sdk" / "contract-toolkit" / "src"
+    toolkit.mkdir(parents=True)
+    (toolkit / "PklProject").write_text('amends "pkl:Project"\n')
+    monkeypatch.setattr(mod, "run", _make_fake_run(repo, emit_output=False))
+
+    assert mod.main(["--sdk-toolkit-src", str(toolkit)]) == 1
+    assert "::error::pkl eval" in capsys.readouterr().out
 
 
 def test_override_toolkit_rewrites_block_form(tmp_path):

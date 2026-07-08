@@ -46,16 +46,27 @@ inputs:
     required: false
     default: "0.27.2"
     description: pkl runtime version to download. Matches the contract-toolkit-* workflows.
+  working-directory:
+    required: false
+    default: "."
+    description: |
+      Directory the connector repo is checked out at, relative to the
+      workspace root. "." (default) when the connector IS the workspace
+      (connector-integration-tests, sdr-e2e); the checkout path when the
+      caller checks the connector out into a subdirectory
+      (ae-full-dag-local-reusable checks out at <app-name>/).
 
 runs:
   using: composite
   steps:
     # hashFiles returns '' when the glob matches nothing, so this resolves to
-    # 'true'/'false' with no inlined conditional shell.
+    # 'true'/'false' with no inlined conditional shell. @actions/glob
+    # normalizes the pattern, so the "./" prefix from the default
+    # working-directory is harmless.
     - name: Detect contract
       id: guard
       shell: bash
-      run: echo "present=${{ hashFiles(format('{0}/app.pkl', inputs.contract-dir)) != '' }}" >> "$GITHUB_OUTPUT"
+      run: echo "present=${{ hashFiles(format('{0}/{1}/app.pkl', inputs.working-directory, inputs.contract-dir)) != '' }}" >> "$GITHUB_OUTPUT"
 
     - name: Install pkl
       if: steps.guard.outputs.present == 'true'
@@ -101,6 +112,7 @@ runs:
     - name: Regenerate contract artifacts
       if: steps.guard.outputs.present == 'true'
       shell: bash
+      working-directory: ${{ inputs.working-directory }}
       env:
         CONTRACT_DIR: ${{ inputs.contract-dir }}
         CHECK_DRIFT: ${{ inputs.check-drift }}
