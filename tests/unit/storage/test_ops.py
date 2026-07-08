@@ -21,6 +21,7 @@ from application_sdk.storage.ops import (
     download_file,
     download_file_chunked,
     exists,
+    get_file_meta,
     get_file_size,
     normalize_key,
     put_json,
@@ -625,6 +626,52 @@ class TestGetFileSize:
             await get_file_size("k", store, normalize=False)
 
 
+class TestGetFileMeta:
+    """get_file_meta returns (size, e_tag) in one HEAD (BLDX-1523)."""
+
+    async def test_returns_size_and_etag(self, store) -> None:
+        await _put("meta/f.bin", b"hello", store, normalize=False)
+        meta = await get_file_meta("meta/f.bin", store, normalize=False)
+        assert meta is not None
+        size, etag = meta
+        assert size == 5
+        assert etag  # MemoryStore supplies an etag; callers pin range GETs on it
+
+    async def test_missing_key_returns_none(self, store) -> None:
+        assert await get_file_meta("no/such.bin", store, normalize=False) is None
+
+    async def test_non_404_error_raises_storage_error(self) -> None:
+        store = MagicMock()
+        with (
+            patch(
+                "application_sdk.storage.ops.obstore.head_async",
+                new=AsyncMock(side_effect=RuntimeError("permission denied")),
+            ),
+            pytest.raises(StorageError),
+        ):
+            await get_file_meta("k", store, normalize=False)
+
+
+class TestClassifyTransferError:
+    """Failure classification drives the error_family metric label (BLDX-1513)."""
+
+    @pytest.mark.parametrize(
+        "error_class, family",
+        [
+            (None, "none"),
+            ("TimeoutError", "timeout"),
+            ("BodyTimedOut", "timeout"),
+            ("NotFoundError", "not_found"),
+            ("GenericError", "generic"),
+            ("PermissionError", "other"),
+        ],
+    )
+    def test_families(self, error_class, family) -> None:
+        from application_sdk.storage.ops import _classify_transfer_error
+
+        assert _classify_transfer_error(error_class, "") == family
+
+
 # ---------------------------------------------------------------------------
 # BLDX-1513: download_file_chunked file_size (skip-HEAD) + prefix chunking
 # ---------------------------------------------------------------------------
@@ -891,6 +938,164 @@ class TestResumableChunkedDownload:
         assert out.read_bytes() == b"tiny"
         assert not self._state_path(out).exists()
 
+    async def test_env_kill_switch_disables_resume_by_default(
+        self, store, tmp_path
+    ) -> None:
+        # resume=None (the default every SDK call site uses) must follow
+        # ATLAN_STORAGE_RESUME_DOWNLOADS — the fleet-wide kill-switch.
+        await _put("res/m.bin", self.CONTENT, store, normalize=False)
+        out = tmp_path / "m.bin"
+        real_get = __import__("obstore").get_async
+
+        async def failing_get(st, key, **kw):
+            rng = (kw.get("options") or {}).get("range")
+            if rng and rng[0] == 16:
+                raise RuntimeError("boom")
+            return await real_get(st, key, **kw)
+
+        with (
+            patch("application_sdk.constants.STORAGE_RESUME_DOWNLOADS", False),
+            patch("application_sdk.storage.ops.obstore.get_async", new=failing_get),
+            pytest.raises(StorageError),
+        ):
+            await download_file_chunked(
+                "res/m.bin",
+                out,
+                store,
+                chunk_size_bytes=8,
+                max_concurrent_chunks=1,
+                normalize=False,
+            )
+        # Kill-switch active → legacy behaviour: no partial, no checkpoint.
+        assert not out.exists()
+        assert not self._state_path(out).exists()
+
+    @pytest.mark.parametrize(
+        "bad_field, bad_value",
+        [("file_size", 999), ("chunk_size", 4), ("key", "res/other.bin")],
+    )
+    async def test_checkpoint_generation_field_mismatch_is_discarded(
+        self, store, tmp_path, bad_field, bad_value
+    ) -> None:
+        # The resume guard matches on key + file_size + chunk_size + etag; a
+        # mismatch on ANY of them must discard the checkpoint, not resume.
+        await _put("res/n.bin", self.CONTENT, store, normalize=False)
+        out = tmp_path / "n.bin"
+        meta = await get_file_meta("res/n.bin", store, normalize=False)
+        assert meta is not None
+        _, etag = meta
+        out.write_bytes(b"\x00" * len(self.CONTENT))
+        state = {
+            "key": "res/n.bin",
+            "file_size": len(self.CONTENT),
+            "chunk_size": 8,
+            "etag": etag,
+            "done": [0, 1, 2, 3, 4],
+        }
+        state[bad_field] = bad_value
+        self._state_path(out).write_bytes(orjson.dumps(state))
+
+        fetched: list = []
+        real_get = __import__("obstore").get_async
+
+        async def counting_get(st, key, **kw):
+            fetched.append((kw.get("options") or {}).get("range"))
+            return await real_get(st, key, **kw)
+
+        with patch("application_sdk.storage.ops.obstore.get_async", new=counting_get):
+            await download_file_chunked(
+                "res/n.bin", out, store, chunk_size_bytes=8, normalize=False
+            )
+        assert len(fetched) == 5  # checkpoint not trusted → all chunks re-fetched
+        assert out.read_bytes() == self.CONTENT
+
+    async def test_structurally_invalid_checkpoint_falls_back_to_fresh(
+        self, store, tmp_path
+    ) -> None:
+        # Valid JSON, wrong shape ("done" not a list of ints) → same fallback
+        # as unparseable JSON: fresh download, no crash.
+        await _put("res/o.bin", self.CONTENT, store, normalize=False)
+        out = tmp_path / "o.bin"
+        self._state_path(out).write_bytes(
+            orjson.dumps({"key": "res/o.bin", "done": "not-a-list"})
+        )
+        digest = await download_file_chunked(
+            "res/o.bin", out, store, chunk_size_bytes=8, normalize=False
+        )
+        assert out.read_bytes() == self.CONTENT
+        assert digest == hashlib.sha256(self.CONTENT).hexdigest()
+        assert not self._state_path(out).exists()
+
+    async def test_unpinned_range_gets_when_etag_unavailable(
+        self, store, tmp_path
+    ) -> None:
+        # file_size provided without etag → the HEAD is skipped, so no etag is
+        # ever known: chunks must fetch via the unpinned get_range_async branch
+        # and never touch the pinned get_async path.
+        await _put("res/p.bin", self.CONTENT, store, normalize=False)
+        out = tmp_path / "p.bin"
+        with patch(
+            "application_sdk.storage.ops.obstore.get_async",
+            new=AsyncMock(
+                side_effect=AssertionError("etag is None — must use get_range_async")
+            ),
+        ):
+            digest = await download_file_chunked(
+                "res/p.bin",
+                out,
+                store,
+                chunk_size_bytes=8,
+                normalize=False,
+                file_size=len(self.CONTENT),
+            )
+        assert out.read_bytes() == self.CONTENT
+        assert digest == hashlib.sha256(self.CONTENT).hexdigest()
+
+    async def test_sibling_chunks_cancelled_and_drained_on_failure(
+        self, store, tmp_path
+    ) -> None:
+        # gather() does not cancel siblings on first failure; the except path
+        # must cancel + drain them BEFORE closing the fd (BLDX-1523 orphan fix).
+        import asyncio
+
+        await _put("res/q.bin", self.CONTENT, store, normalize=False)
+        out = tmp_path / "q.bin"
+        real_get = __import__("obstore").get_async
+        hang_started = asyncio.Event()
+        sibling_cancelled = asyncio.Event()
+
+        async def hanging_or_failing_get(st, key, **kw):
+            rng = (kw.get("options") or {}).get("range")
+            if rng and rng[0] == 0:
+                hang_started.set()
+                try:
+                    await asyncio.sleep(60)
+                except asyncio.CancelledError:
+                    sibling_cancelled.set()
+                    raise
+            if rng and rng[0] == 8:
+                await hang_started.wait()  # sibling is definitely in flight
+                raise RuntimeError("boom")
+            return await real_get(st, key, **kw)
+
+        with (
+            patch(
+                "application_sdk.storage.ops.obstore.get_async",
+                new=hanging_or_failing_get,
+            ),
+            pytest.raises(StorageError),
+        ):
+            await download_file_chunked(
+                "res/q.bin",
+                out,
+                store,
+                chunk_size_bytes=8,
+                max_concurrent_chunks=2,
+                normalize=False,
+            )
+        # The hung sibling was cancelled (and drained) rather than orphaned.
+        assert sibling_cancelled.is_set()
+
 
 class TestTransferMetrics:
     """Transfers emit metrics via the SDK metrics rail (BLDX-1513)."""
@@ -1011,6 +1216,47 @@ class TestTransferProgressHeartbeat:
         args, _ = mock_logger.log.call_args
         assert "%" not in args[1]
 
+    async def test_heartbeat_fires_during_chunked_download(
+        self, store, tmp_path
+    ) -> None:
+        content = bytes(range(38))
+        await _put("hb/f.bin", content, store, normalize=False)
+        out = tmp_path / "f.bin"
+        with (
+            patch(
+                "application_sdk.constants.STORAGE_PROGRESS_LOG_INTERVAL_SECONDS",
+                1e-9,  # every chunk crosses the interval boundary
+            ),
+            patch("application_sdk.storage.ops._log_transfer_progress") as mock_hb,
+        ):
+            await download_file_chunked(
+                "hb/f.bin",
+                out,
+                store,
+                chunk_size_bytes=8,
+                max_concurrent_chunks=1,
+                normalize=False,
+            )
+        assert mock_hb.called
+
+    async def test_heartbeat_interval_zero_disables(self, store, tmp_path) -> None:
+        content = bytes(range(38))
+        await _put("hb/g.bin", content, store, normalize=False)
+        out = tmp_path / "g.bin"
+        with (
+            patch("application_sdk.constants.STORAGE_PROGRESS_LOG_INTERVAL_SECONDS", 0),
+            patch("application_sdk.storage.ops._log_transfer_progress") as mock_hb,
+        ):
+            await download_file_chunked(
+                "hb/g.bin",
+                out,
+                store,
+                chunk_size_bytes=8,
+                max_concurrent_chunks=1,
+                normalize=False,
+            )
+        assert not mock_hb.called
+
 
 class TestDownloadPrefixChunking:
     async def test_prefix_download_does_not_head_per_file(
@@ -1031,6 +1277,29 @@ class TestDownloadPrefixChunking:
 
         got = {Path(d).read_bytes() for d in dests}
         assert got == {b"aaa", b"bbbb"}
+
+    async def test_prefix_download_threads_size_and_etag_from_listing(
+        self, store, tmp_path
+    ) -> None:
+        # The listing's per-object size AND etag must reach download_file_chunked
+        # so large files chunk without a HEAD and range GETs stay version-pinned.
+        await _put("pre2/a.bin", b"aaa", store, normalize=False)
+
+        import application_sdk.storage.batch as batch_mod
+
+        real = batch_mod.download_file_chunked
+        calls: list[dict] = []
+
+        async def spying(key, dest, st=None, **kw):
+            calls.append({"key": key, **kw})
+            return await real(key, dest, st, **kw)
+
+        with patch("application_sdk.storage.batch.download_file_chunked", new=spying):
+            await download_prefix("pre2/", tmp_path, store, normalize=False)
+
+        assert len(calls) == 1
+        assert calls[0]["file_size"] == 3
+        assert calls[0]["etag"]  # etag from the listing, not a per-file HEAD
 
 
 # ---------------------------------------------------------------------------
