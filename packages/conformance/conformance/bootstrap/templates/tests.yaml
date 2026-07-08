@@ -67,17 +67,6 @@ on:
         required: false
         default: ""
         type: string
-      two_store:
-        description: |
-          Set to 'true' to run the e2e job in the ADR-0014 two-store SDR
-          posture (docs/adr/0014-two-store-storage-architecture.md).
-          Requires the e2e test class to run in RunMode.AGENT and (for the
-          full-DAG pipeline) that the app no longer ships an
-          `objectstore.yaml` override under its e2e components dir.
-          Defaults off.
-        required: false
-        default: false
-        type: boolean
 
 jobs:
   tests:
@@ -104,5 +93,14 @@ jobs:
       run-e2e: ${{ inputs.run_e2e }}
       base-image-ref: ${{ inputs.base_image_ref }}
       agent-name-override: ${{ inputs.agent_name_override }}
-      two-store: ${{ inputs.two_store }}
+      # ADR-0014 two-store SDR posture (docs/adr/0014-two-store-storage-
+      # architecture.md in application-sdk): the e2e job's `objectstore`
+      # is forced to the SDK-default CI-local binding and
+      # ENABLE_ATLAN_UPLOAD=true is set on the worker, so a connector
+      # code path that forgets to bridge an artifact via App.upload()
+      # from `objectstore` to `atlan-objectstore` shows up as zero
+      # downstream assets/lineage in Atlas. See atlan-mysql-app#381 for
+      # the first adopter + confirmed end-to-end proof of the boundary
+      # crossing.
+      two-store: true
     secrets: inherit
