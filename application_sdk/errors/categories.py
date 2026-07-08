@@ -9,6 +9,9 @@ class FailureCategory(Enum):
     Every value maps to exactly one "what happened" — pick the most specific
     one that applies.  When two categories could apply, use these litmus tests:
 
+    - ``SOURCE_UNAVAILABLE`` vs ``DEPENDENCY_UNAVAILABLE``: SOURCE_UNAVAILABLE is for
+      customer-controlled source systems (their DB, SaaS API); DEPENDENCY_UNAVAILABLE is
+      for Atlan-internal platform services (Dapr, Temporal, object store).
     - ``DEPENDENCY_UNAVAILABLE`` vs ``PRECONDITION``: if retrying *the same call*
       without any state change is expected to succeed, use DEPENDENCY_UNAVAILABLE.
       If explicit state must change before the call can succeed, use PRECONDITION.
@@ -52,8 +55,18 @@ class FailureCategory(Enum):
     use DEPENDENCY_UNAVAILABLE if the same call would succeed on retry."""
 
     DEPENDENCY_UNAVAILABLE = "DEPENDENCY_UNAVAILABLE"
-    """Required platform service down or degraded (Dapr, Temporal, object store, source DB).
-    Retrying the same call is expected to succeed; use PRECONDITION if state must change first."""
+    """Required Atlan-internal service down or degraded (Dapr, Temporal, object store).
+    Retrying the same call is expected to succeed; use PRECONDITION if state must change first.
+    For customer-controlled source systems (databases, SaaS APIs), use SOURCE_UNAVAILABLE."""
+
+    SOURCE_UNAVAILABLE = "SOURCE_UNAVAILABLE"
+    """Customer-controlled source system is temporarily unreachable (database, SaaS API, on-prem
+    endpoint).  The connector cannot connect or the source returned a transient server-side error.
+    Retrying is expected to succeed once the source recovers.
+
+    Litmus test vs DEPENDENCY_UNAVAILABLE: SOURCE_UNAVAILABLE is for systems the *customer*
+    owns and operates (their Snowflake account, their on-prem SQL Server); DEPENDENCY_UNAVAILABLE
+    is for Atlan-internal platform services (Dapr, Temporal, object store)."""
 
     RESOURCE_EXHAUSTED = "RESOURCE_EXHAUSTED"
     """Local resource limit hit (OOM, disk full, file handles, worker slots)."""

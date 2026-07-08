@@ -14,6 +14,12 @@
     },
     {
       "contract": "ExtractionInput",
+      "field": "correlation_id",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "ExtractionInput",
       "field": "credential_guid",
       "status": "active",
       "type": "str"
@@ -74,9 +80,27 @@
     },
     {
       "contract": "ExtractionOutput",
+      "field": "artifacts",
+      "status": "active",
+      "type": "dict[str, Any] | None"
+    },
+    {
+      "contract": "ExtractionOutput",
       "field": "columns_extracted",
       "status": "active",
       "type": "int"
+    },
+    {
+      "contract": "ExtractionOutput",
+      "field": "connection_qualified_name",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "ExtractionOutput",
+      "field": "current_state_prefix",
+      "status": "active",
+      "type": "str"
     },
     {
       "contract": "ExtractionOutput",
@@ -92,7 +116,19 @@
     },
     {
       "contract": "ExtractionOutput",
+      "field": "metrics",
+      "status": "active",
+      "type": "dict[str, Any] | None"
+    },
+    {
+      "contract": "ExtractionOutput",
       "field": "output_path",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "ExtractionOutput",
+      "field": "output_prefix",
       "status": "active",
       "type": "str"
     },
@@ -110,6 +146,12 @@
     },
     {
       "contract": "ExtractionOutput",
+      "field": "publish_state_prefix",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "ExtractionOutput",
       "field": "records_uploaded",
       "status": "active",
       "type": "int"
@@ -119,6 +161,18 @@
       "field": "schemas_extracted",
       "status": "active",
       "type": "int"
+    },
+    {
+      "contract": "ExtractionOutput",
+      "field": "staging_data_prefix",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "ExtractionOutput",
+      "field": "status",
+      "status": "active",
+      "type": "OutputStatus"
     },
     {
       "contract": "ExtractionOutput",
@@ -134,6 +188,12 @@
     },
     {
       "contract": "ExtractionOutput",
+      "field": "transformed_data_prefix",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "ExtractionOutput",
       "field": "views_extracted",
       "status": "active",
       "type": "int"
@@ -143,6 +203,12 @@
       "field": "workflow_id",
       "status": "active",
       "type": "str"
+    },
+    {
+      "contract": "IncrementalExtractionInput",
+      "field": "agent_json",
+      "status": "active",
+      "type": "AgentCredentialSpec | None"
     },
     {
       "contract": "IncrementalExtractionInput",
@@ -158,15 +224,69 @@
     },
     {
       "contract": "IncrementalExtractionInput",
+      "field": "connection",
+      "status": "active",
+      "type": "ConnectionRef"
+    },
+    {
+      "contract": "IncrementalExtractionInput",
       "field": "copy_workers",
       "status": "active",
       "type": "int"
     },
     {
       "contract": "IncrementalExtractionInput",
+      "field": "correlation_id",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "IncrementalExtractionInput",
+      "field": "credential_guid",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "IncrementalExtractionInput",
+      "field": "credential_ref",
+      "status": "active",
+      "type": "CredentialRef | None"
+    },
+    {
+      "contract": "IncrementalExtractionInput",
+      "field": "exclude_filter",
+      "status": "active",
+      "type": "FilterMap | str"
+    },
+    {
+      "contract": "IncrementalExtractionInput",
+      "field": "extraction_method",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "IncrementalExtractionInput",
+      "field": "include_filter",
+      "status": "active",
+      "type": "FilterMap | str"
+    },
+    {
+      "contract": "IncrementalExtractionInput",
       "field": "incremental_extraction",
       "status": "active",
       "type": "bool"
+    },
+    {
+      "contract": "IncrementalExtractionInput",
+      "field": "output_path",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "IncrementalExtractionInput",
+      "field": "output_prefix",
+      "status": "active",
+      "type": "str"
     },
     {
       "contract": "IncrementalExtractionInput",
@@ -179,6 +299,30 @@
       "field": "prepone_marker_timestamp",
       "status": "active",
       "type": "bool"
+    },
+    {
+      "contract": "IncrementalExtractionInput",
+      "field": "source_tag_prefix",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "IncrementalExtractionInput",
+      "field": "temp_table_regex",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "IncrementalExtractionInput",
+      "field": "workflow_id",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "IncrementalExtractionOutput",
+      "field": "artifacts",
+      "status": "active",
+      "type": "dict[str, Any] | None"
     },
     {
       "contract": "IncrementalExtractionOutput",
@@ -200,9 +344,39 @@
     },
     {
       "contract": "IncrementalExtractionOutput",
+      "field": "columns_extracted",
+      "status": "active",
+      "type": "int"
+    },
+    {
+      "contract": "IncrementalExtractionOutput",
+      "field": "connection_qualified_name",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "IncrementalExtractionOutput",
       "field": "current_state_files",
       "status": "active",
       "type": "int"
+    },
+    {
+      "contract": "IncrementalExtractionOutput",
+      "field": "current_state_prefix",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "IncrementalExtractionOutput",
+      "field": "databases_extracted",
+      "status": "active",
+      "type": "int"
+    },
+    {
+      "contract": "IncrementalExtractionOutput",
+      "field": "error",
+      "status": "active",
+      "type": "str"
     },
     {
       "contract": "IncrementalExtractionOutput",
@@ -217,6 +391,96 @@
       "type": "bool"
     },
     {
+      "contract": "IncrementalExtractionOutput",
+      "field": "metrics",
+      "status": "active",
+      "type": "dict[str, Any] | None"
+    },
+    {
+      "contract": "IncrementalExtractionOutput",
+      "field": "output_path",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "IncrementalExtractionOutput",
+      "field": "output_prefix",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "IncrementalExtractionOutput",
+      "field": "procedures_extracted",
+      "status": "active",
+      "type": "int"
+    },
+    {
+      "contract": "IncrementalExtractionOutput",
+      "field": "processes_extracted",
+      "status": "active",
+      "type": "int"
+    },
+    {
+      "contract": "IncrementalExtractionOutput",
+      "field": "publish_state_prefix",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "IncrementalExtractionOutput",
+      "field": "records_uploaded",
+      "status": "active",
+      "type": "int"
+    },
+    {
+      "contract": "IncrementalExtractionOutput",
+      "field": "schemas_extracted",
+      "status": "active",
+      "type": "int"
+    },
+    {
+      "contract": "IncrementalExtractionOutput",
+      "field": "staging_data_prefix",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "IncrementalExtractionOutput",
+      "field": "status",
+      "status": "active",
+      "type": "OutputStatus"
+    },
+    {
+      "contract": "IncrementalExtractionOutput",
+      "field": "success",
+      "status": "active",
+      "type": "bool"
+    },
+    {
+      "contract": "IncrementalExtractionOutput",
+      "field": "tables_extracted",
+      "status": "active",
+      "type": "int"
+    },
+    {
+      "contract": "IncrementalExtractionOutput",
+      "field": "transformed_data_prefix",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "IncrementalExtractionOutput",
+      "field": "views_extracted",
+      "status": "active",
+      "type": "int"
+    },
+    {
+      "contract": "IncrementalExtractionOutput",
+      "field": "workflow_id",
+      "status": "active",
+      "type": "str"
+    },
+    {
       "contract": "QueryExtractionInput",
       "field": "batch_size",
       "status": "active",
@@ -227,6 +491,12 @@
       "field": "connection",
       "status": "active",
       "type": "ConnectionRef"
+    },
+    {
+      "contract": "QueryExtractionInput",
+      "field": "correlation_id",
+      "status": "active",
+      "type": "str"
     },
     {
       "contract": "QueryExtractionInput",
@@ -272,15 +542,33 @@
     },
     {
       "contract": "QueryExtractionOutput",
+      "field": "artifacts",
+      "status": "active",
+      "type": "dict[str, Any] | None"
+    },
+    {
+      "contract": "QueryExtractionOutput",
       "field": "error",
       "status": "active",
       "type": "str"
     },
     {
       "contract": "QueryExtractionOutput",
+      "field": "metrics",
+      "status": "active",
+      "type": "dict[str, Any] | None"
+    },
+    {
+      "contract": "QueryExtractionOutput",
       "field": "records_uploaded",
       "status": "active",
       "type": "int"
+    },
+    {
+      "contract": "QueryExtractionOutput",
+      "field": "status",
+      "status": "active",
+      "type": "OutputStatus"
     },
     {
       "contract": "QueryExtractionOutput",

@@ -2,6 +2,81 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.12.0] - 2026-07-07
+
+### Features
+
+- add T005-T015 test-quality rules for coverage meaningfulness (#2540) ([4a8bfb6](https://github.com/atlanhq/application-sdk/commit/4a8bfb6))
+- bundle Dapr component YAMLs into the SDK wheel (#2531) ([80bd999](https://github.com/atlanhq/application-sdk/commit/80bd999))
+
+### Bug fixes
+
+- P029 requires extraction_method top-level + exempts non-agent entrypoints (#2536) ([a6b604b](https://github.com/atlanhq/application-sdk/commit/a6b604b))
+
+### Other changes
+
+- chore(deps): lock file maintenance (#2542) ([9da8605](https://github.com/atlanhq/application-sdk/commit/9da8605))
+- chore(deps): lock file maintenance (#2539) ([657d744](https://github.com/atlanhq/application-sdk/commit/657d744))
+- chore(deps): lock file maintenance (#2535) ([6cf2cc2](https://github.com/atlanhq/application-sdk/commit/6cf2cc2))
+- chore(deps): lock file maintenance (#2530) ([5fddad4](https://github.com/atlanhq/application-sdk/commit/5fddad4))
+- chore(deps): lock file maintenance (#2528) ([4b7a42d](https://github.com/atlanhq/application-sdk/commit/4b7a42d))
+
+## [0.11.3] - 2026-07-06
+
+### Bug fixes
+
+- exempt tests/integration/ from P017 construction/lifecycle checks (#2515) ([3b5e7ff](https://github.com/atlanhq/application-sdk/commit/3b5e7ff))
+
+### Other changes
+
+- chore(deps): lock file maintenance (#2522) ([5b48681](https://github.com/atlanhq/application-sdk/commit/5b48681))
+- chore(deps): lock file maintenance (#2519) ([573bc5b](https://github.com/atlanhq/application-sdk/commit/573bc5b))
+- chore(deps): lock file maintenance (#2509) ([d1e2263](https://github.com/atlanhq/application-sdk/commit/d1e2263))
+
+## [0.11.2] - 2026-07-05
+
+### Bug fixes
+
+- mechanically remediate C001/C002 CI findings (#2504) ([f386ed9](https://github.com/atlanhq/application-sdk/commit/f386ed9))
+- honor --help/-h on bootstrap without side effects (#2506) ([0fb6287](https://github.com/atlanhq/application-sdk/commit/0fb6287))
+
+### Other changes
+
+- chore(deps): lock file maintenance (#2502) ([edf7ef2](https://github.com/atlanhq/application-sdk/commit/edf7ef2))
+
+## [0.11.1] - 2026-07-04
+
+### Bug fixes
+
+- skip P030 for apps with no publish stage (#2500) ([01e3d6c](https://github.com/atlanhq/application-sdk/commit/01e3d6c))
+- suppress T201 inline in build_conformance_args.py (#2486) ([58accfc](https://github.com/atlanhq/application-sdk/commit/58accfc))
+
+### Other changes
+
+- chore(deps): lock file maintenance (#2501) ([b21b1e4](https://github.com/atlanhq/application-sdk/commit/b21b1e4))
+- chore(deps): lock file maintenance (#2493) ([4130b08](https://github.com/atlanhq/application-sdk/commit/4130b08))
+- chore(deps): lock file maintenance (#2491) ([9756039](https://github.com/atlanhq/application-sdk/commit/9756039))
+- chore(deps): lock file maintenance (#2484) ([7c24a41](https://github.com/atlanhq/application-sdk/commit/7c24a41))
+
+## [0.11.0] - 2026-07-03
+
+### Features
+
+- add SourceUnavailableError for customer-controlled source systems (#2476) ([4ba7158](https://github.com/atlanhq/application-sdk/commit/4ba7158))
+
+### Bug fixes
+
+- bootstrap contract ledger scaffold + discovery path bug (#2483) ([3240021](https://github.com/atlanhq/application-sdk/commit/3240021))
+
+### Other changes
+
+- chore(deps): lock file maintenance (#2474) ([afccf21](https://github.com/atlanhq/application-sdk/commit/afccf21))
+- chore(deps): lock file maintenance (#2472) ([55b90d5](https://github.com/atlanhq/application-sdk/commit/55b90d5))
+- chore(deps): lock file maintenance (#2465) ([82a1f3c](https://github.com/atlanhq/application-sdk/commit/82a1f3c))
+- chore(deps): lock file maintenance (#2460) ([1f8f7a6](https://github.com/atlanhq/application-sdk/commit/1f8f7a6))
+- chore(deps): lock file maintenance (#2459) ([fa95c66](https://github.com/atlanhq/application-sdk/commit/fa95c66))
+- chore(deps): lock file maintenance (#2453) ([4feedd8](https://github.com/atlanhq/application-sdk/commit/4feedd8))
+
 ## [0.10.0] - 2026-07-01
 
 ### Features

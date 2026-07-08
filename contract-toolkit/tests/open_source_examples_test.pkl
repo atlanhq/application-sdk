@@ -1,8 +1,12 @@
 amends "pkl:test"
 
+import "../examples/behind-the-scenes/app.pkl" as behindTheScenesApp
 import "../examples/bundle/app.pkl" as bundleApp
+import "../examples/card-split/app.pkl" as cardSplitApp
 import "../examples/connection-ref/app.pkl" as connectionRefApp
 import "../examples/deploy/app.pkl" as deployApp
+
+import "../examples/pools/app.pkl" as poolsApp
 import "../examples/fanin/app.pkl" as faninApp
 import "../examples/full/app.pkl" as fullApp
 import "../examples/minimal/app.pkl" as minimalApp
@@ -10,6 +14,8 @@ import "../examples/publish-controls/app.pkl" as publishControlsApp
 import "../src/App.pkl" as App
 import "../src/Config.pkl"
 import "../src/NativeApp.pkl"
+
+local behindTheScenesAtlanYaml: String = behindTheScenesApp.output.files["atlan.yaml"].text
 
 local connectionRefWorkflowJson: String = connectionRefApp.output.files["app/generated/connection-ref.json"].text
 local connectionRefManifestJson: String = connectionRefApp.output.files["app/generated/manifest.json"].text
@@ -79,6 +85,8 @@ local nativeHelpTextOnlyApp = (NativeApp) {
 }
 local helpTextOnlyInputPy: String = helpTextOnlyApp.output.files["app/generated/_input.py"].text
 local nativeHelpTextOnlyInputPy: String = nativeHelpTextOnlyApp.output.files["_input.py"].text
+local cardSplitAtlanYaml: String = cardSplitApp.output.files["atlan.yaml"].text
+local poolsAtlanYaml: String = poolsApp.output.files["atlan.yaml"].text
 
 facts {
   ["Minimal example generates all standard output files"] {
@@ -212,6 +220,38 @@ facts {
     !minimalAtlanYaml.contains("tags:")
   }
 
+  ["packageId drives marketplace card: auto-derived for single-entrypoint, explicit for multi"] {
+    // Single-entrypoint apps auto-derive "@atlan/{name}" as their packageId.
+    minimalAtlanYaml.contains("package_id: '@atlan/minimal'")
+    minimalAtlanYaml.contains("marketplace_card: true")
+    fullAtlanYaml.contains("package_id: '@atlan/full-featured'")
+    fullAtlanYaml.contains("marketplace_card: true")
+    // Multi-entrypoint: explicit packageId on one entrypoint; route-only has neither field.
+    cardSplitAtlanYaml.contains("package_id: '@atlan/card-split'")
+    cardSplitAtlanYaml.contains("marketplace_card: true")
+    !cardSplitAtlanYaml.contains("marketplace_card: false")
+  }
+
+  ["marketplaceCard = false suppresses package_id and marketplace_card for single-entrypoint apps"] {
+    // Entrypoints block still emitted (app remains routable).
+    behindTheScenesAtlanYaml.contains("entrypoints:")
+    // Neither card field appears — opt-out is honoured.
+    !behindTheScenesAtlanYaml.contains("package_id:")
+    !behindTheScenesAtlanYaml.contains("marketplace_card:")
+  }
+
+  ["deploy block absent from atlan.yaml when deploy is not configured"] {
+    !minimalAtlanYaml.contains("deploy:")
+    !fullAtlanYaml.contains("deploy:")
+    !bundleApp.output.files["atlan.yaml"].text.contains("deploy:")
+  }
+
+  ["deploy block present when deploy is explicitly configured"] {
+    local deployYaml: String = deployApp.output.files["atlan.yaml"].text
+    deployYaml.contains("deploy:")
+    deployYaml.contains("keda:")
+  }
+
   ["Full example fallback emits app-level description and docs_url inside entrypoints[]"] {
     // Indented (2-space) forms only appear inside the entrypoints block, not at top level.
     fullAtlanYaml.contains("  description: Reference contract that exercises every App.pkl property.")
@@ -319,7 +359,7 @@ facts {
     bundleApp.output.files["atlan.yaml"].text.contains("name: miner")
   }
 
-  ["Deploy example atlan.yaml includes typed KEDA, Dapr, resources, env, and deployOverrides"] {
+  ["Deploy example atlan.yaml includes KEDA, resources, env, and pool overrides — no dapr block"] {
     deployApp.output.files.containsKey("atlan.yaml")
     local deployYaml: String = deployApp.output.files["atlan.yaml"].text
     // execution_mode at top level (read by global-marketplace and atlan-local-marketplace-app)
@@ -327,17 +367,63 @@ facts {
     // KEDA settings
     deployYaml.contains("enabled: true")
     deployYaml.contains("targetQueueSize: 10")
-    // Dapr — enabled components
-    deployYaml.contains("objectstore: true")
-    deployYaml.contains("secretstore: true")
+    // dapr omitted when all components are at default (false) — Heracles applies platform defaults
+    !deployYaml.contains("dapr:")
     // Resources
     deployYaml.contains("cpu: 500m")
     deployYaml.contains("memory: 4Gi")
     // Env
     deployYaml.contains("LOG_LEVEL: INFO")
-    // deployOverrides deep-merged (VPA)
+    // pool overrides deep-merged (VPA)
     deployYaml.contains("verticalPodAutoscaler:")
     deployYaml.contains("updateMode: Auto")
+  }
+
+  ["Card-split example: two entrypoints, one card and one route-only"] {
+    cardSplitApp.output.files.containsKey("atlan.yaml")
+    cardSplitApp.output.files.containsKey("app.yaml")
+    // Two distinct entrypoints present
+    cardSplitAtlanYaml.contains("name: extract")
+    cardSplitAtlanYaml.contains("name: extract-lineage")
+    // extract has packageId → emits package_id + marketplace_card: true
+    cardSplitAtlanYaml.contains("package_id: '@atlan/card-split'")
+    cardSplitAtlanYaml.contains("marketplace_card: true")
+    // extract-lineage has no packageId → no package_id, no marketplace_card
+    !cardSplitAtlanYaml.contains("marketplace_card: false")
+  }
+
+  ["Card-split example: no deploy block, no workflow config (no-pipeline app)"] {
+    !cardSplitAtlanYaml.contains("deploy:")
+    // No app/generated files — pipeline is publish=null and no extract node
+    !cardSplitApp.output.files.containsKey("app/generated/card-split.json")
+    !cardSplitApp.output.files.containsKey("app/generated/manifest.json")
+  }
+
+  ["Pools example: emits pools block with both pools"] {
+    poolsAtlanYaml.contains("pools:")
+    poolsAtlanYaml.contains("hot:")
+    poolsAtlanYaml.contains("cold:")
+  }
+
+  ["Pools example: cooldownPeriod emitted in keda"] {
+    poolsAtlanYaml.contains("cooldownPeriod: 300")
+    poolsAtlanYaml.contains("cooldownPeriod: 30")
+  }
+
+  ["Pools example: pool keys are the direct routing names (no profiles field)"] {
+    !poolsAtlanYaml.contains("profiles:")
+  }
+
+  ["Pools example: deploy: block synthesised from first pool"] {
+    poolsAtlanYaml.contains("deploy:")
+    poolsAtlanYaml.contains("keda:")
+  }
+
+  ["Deploy example emits both deploy: (from first pool) and pools: blocks"] {
+    local deployYaml: String = deployApp.output.files["atlan.yaml"].text
+    deployYaml.contains("deploy:")
+    deployYaml.contains("keda:")
+    deployYaml.contains("pools:")
   }
 
 }

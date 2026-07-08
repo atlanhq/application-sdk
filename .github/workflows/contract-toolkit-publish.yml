@@ -7,11 +7,22 @@ name: Publish Contract Toolkit
 # branch, and creates the contract-toolkit-v<version> annotated tag.
 # No GitHub Release is created — that would interleave contract-toolkit
 # versions with SDK v* releases on the repo releases page.
+#
+# Also runnable manually (workflow_dispatch) to retry a publish that failed
+# or timed out without a new release PR — every step is idempotent (gh-pages
+# commit/push, Pages build trigger, and tag creation all no-op if the target
+# is already up to date), so re-running against an unchanged
+# contract-toolkit/src/PklProject version is always safe. Dispatch from
+# `main` to run this workflow's current logic — as with any workflow_dispatch,
+# the ref you dispatch from determines which version of *this file* executes.
+# What's always pinned to `main` regardless of dispatch ref is the *published
+# content*: the actions/checkout step below explicitly checks out `ref: main`.
 
 on:
   pull_request:
     types: [closed]
     branches: [main]
+  workflow_dispatch: {}
 
 permissions:
   contents: write
@@ -28,8 +39,9 @@ jobs:
     name: Publish contract toolkit package
     runs-on: ubuntu-latest
     if: >-
-      github.event.pull_request.merged == true &&
-      contains(github.event.pull_request.labels.*.name, 'release:contract-toolkit')
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true &&
+       contains(github.event.pull_request.labels.*.name, 'release:contract-toolkit'))
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -94,35 +106,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
-          pages_sha="$(git rev-parse HEAD)"
-          gh api --method POST "repos/${GITHUB_REPOSITORY}/pages/builds"
-
-          for attempt in $(seq 1 60); do
-            status="$(gh api "repos/${GITHUB_REPOSITORY}/pages/builds/latest" --jq '.status')"
-            commit="$(gh api "repos/${GITHUB_REPOSITORY}/pages/builds/latest" --jq '.commit')"
-
-            if [ "$commit" != "$pages_sha" ]; then
-              sleep 5
-              continue
-            fi
-
-            case "$status" in
-              built)
-                exit 0
-                ;;
-              errored)
-                message="$(gh api "repos/${GITHUB_REPOSITORY}/pages/builds/latest" --jq '.error.message // "unknown error"')"
-                echo "::error::GitHub Pages build failed: ${message}"
-                exit 1
-                ;;
-            esac
-
-            sleep 5
-          done
-
-          echo "::error::Timed out waiting for GitHub Pages build for ${pages_sha}"
-          exit 1
+          # The previous step leaves the working tree checked out on gh-pages
+          # (which has no .github/scripts/), so restore just this one file
+          # from main rather than switching branches back.
+          git checkout main -- .github/scripts/wait_for_pages_publish.py
+          owner="${GITHUB_REPOSITORY%%/*}"
+          repo_name="${GITHUB_REPOSITORY##*/}"
+          url="https://${owner}.github.io/${repo_name}/${PUBLISH_DIR}/${PKG_NAME}@${{ steps.meta.outputs.version }}.zip"
+          python3 .github/scripts/wait_for_pages_publish.py \
+            --repo "${GITHUB_REPOSITORY}" \
+            --url "$url"
 
       - name: Create source tag
         run: |

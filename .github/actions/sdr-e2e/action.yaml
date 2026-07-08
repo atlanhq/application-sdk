@@ -156,7 +156,7 @@ runs:
   using: composite
   steps:
     - name: Log in to GHCR
-      uses: docker/login-action@c99871dec2022cc055c062a10cc1a1310835ceb4 # v4.3.0
+      uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
       with:
         registry: ghcr.io
         username: ${{ github.actor }}
@@ -299,7 +299,7 @@ runs:
     # Must run before atlan-configurator generates ci-deploy/ — setup-deps
     # uses actions/checkout internally which would wipe generated files.
     - name: Setup Python and dependencies
-      uses: atlanhq/application-sdk/.github/actions/setup-deps@v3.20.3
+      uses: atlanhq/application-sdk/.github/actions/setup-deps@v3.21.0
 
     # setup-deps' actions/checkout wipes the pre-build re-pin above. Do
     # it again so the host pytest runtime resolves the dispatched SDK

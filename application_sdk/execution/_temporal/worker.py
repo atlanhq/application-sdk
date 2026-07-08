@@ -17,7 +17,7 @@ from temporalio.worker import Interceptor as TemporalInterceptor
 from temporalio.worker import Worker, WorkerDeploymentConfig, WorkerDeploymentVersion
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 
-from application_sdk.app.registry import AppRegistry
+from application_sdk.app.registry import AppRegistry, TaskRegistry, resolve_pool_queue
 from application_sdk.constants import (
     APP_BUILD_ID,
     APP_DEPLOYMENT_NAME,
@@ -419,6 +419,28 @@ def create_worker(
     primary_app_name = (
         registered_apps[0].name if registered_apps else (service_name or task_queue)
     )
+
+    # ADR-0016 §3: log resolved pool→queue map at startup so a misconfigured
+    # env var (typo, missing ATLAN_POOL_<POOL>_QUEUE) is diagnosable immediately
+    # rather than manifesting as a silent activity backlog hours later.
+    task_registry = TaskRegistry.get_instance()
+    _pool_queue_map: dict[str, str] = {}
+    for _tasks in task_registry.get_all_tasks().values():
+        for _tm in _tasks:
+            if _tm.pool and _tm.pool not in _pool_queue_map:
+                _queue = resolve_pool_queue(_tm.pool)
+                if _queue is not None:
+                    _pool_queue_map[_tm.pool] = _queue
+                else:
+                    logger.warning(
+                        "Pool %r has no resolvable queue: "
+                        "set ATLAN_POOL_%s_QUEUE or ATLAN_TASK_QUEUE. "
+                        "Activities dispatched to this pool will run on the workflow's default queue.",
+                        _tm.pool,
+                        _tm.pool.upper().replace("-", "_"),
+                    )
+    if _pool_queue_map:
+        logger.info("Pool queue map: %s", _pool_queue_map)
 
     if interceptor_settings.enable_event_interceptor:
         from application_sdk.execution._temporal.interceptors.events import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution

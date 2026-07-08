@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.19.0
-source-sha:    b8d1704887637534f8a7a9fb0e33e55f177bbbe2
-source-date:   2026-06-24T12:00:54+01:00
+sdk-version:   3.20.3
+source-sha:    fe203eb27a91e9fab92ba0c166be0102f18fd9b2
+source-date:   2026-07-07T02:24:45+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -23,10 +23,10 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 9 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 53 |
-| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 14 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 55 |
+| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 20 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
-| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 34 |
+| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 37 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
@@ -940,6 +940,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/errors/leaves.py`
 
+#### `ColdStartRaceError`
+
+- **Import:** `from application_sdk.errors import ColdStartRaceError`
+- **Signature:** `class ColdStartRaceError`
+- **Summary:** Marker for a :class:`DependencyUnavailableError` that specifically means
+- **Defined in:** `application_sdk/errors/leaves.py`
+
 #### `DataIntegrityError`
 
 - **Import:** `from application_sdk.errors import DataIntegrityError`
@@ -951,7 +958,7 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 
 - **Import:** `from application_sdk.errors import DependencyUnavailableError`
 - **Signature:** `class DependencyUnavailableError(*, ...)`
-- **Summary:** Required platform service is temporarily down or degraded.
+- **Summary:** Required Atlan-internal platform service is temporarily down or degraded.
 - **Defined in:** `application_sdk/errors/leaves.py`
 
 #### `ErrorCode`
@@ -1015,6 +1022,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Import:** `from application_sdk.errors import ResourceExhaustedError`
 - **Signature:** `class ResourceExhaustedError(*, ...)`
 - **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `SourceUnavailableError`
+
+- **Import:** `from application_sdk.errors import SourceUnavailableError`
+- **Signature:** `class SourceUnavailableError(*, ...)`
+- **Summary:** Customer-controlled source system is temporarily unreachable.
 - **Defined in:** `application_sdk/errors/leaves.py`
 
 #### `UnimplementedError`
@@ -1293,6 +1307,12 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Summary:** Configuration for retry behavior.
 - **Defined in:** `application_sdk/execution/retry.py`
 
+#### `TemporalActivityError`
+
+- **Import:** `from application_sdk.execution import TemporalActivityError`
+- **Signature:** `class TemporalActivityError(message: str, ...)`
+- **Summary:** Error raised on activity failure. _(re-exported from `temporalio.exceptions.ActivityError`)_
+
 #### `TemporalAuthConfig`
 
 - **Import:** `from application_sdk.execution import TemporalAuthConfig`
@@ -1307,12 +1327,48 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Summary:** Manages OAuth token lifecycle for Temporal client connections.
 - **Defined in:** `application_sdk/execution/_temporal/auth.py`
 
+#### `TemporalCancelledError`
+
+- **Import:** `from application_sdk.execution import TemporalCancelledError`
+- **Signature:** `class TemporalCancelledError(message: str = 'Cancelled', *details: Any)`
+- **Summary:** Error raised on workflow/activity cancellation. _(re-exported from `temporalio.exceptions.CancelledError`)_
+
+#### `TemporalChildWorkflowError`
+
+- **Import:** `from application_sdk.execution import TemporalChildWorkflowError`
+- **Signature:** `class TemporalChildWorkflowError(message: str, ...)`
+- **Summary:** Error raised on child workflow failure. _(re-exported from `temporalio.exceptions.ChildWorkflowError`)_
+
+#### `TemporalClient`
+
+- **Import:** `from application_sdk.execution import TemporalClient`
+- **Signature:** `class TemporalClient(service_client: 'temporalio.service.ServiceClient', ...)`
+- **Summary:** Client for accessing Temporal. _(re-exported from `temporalio.client.Client`)_
+
 #### `TemporalExecutorBackend`
 
 - **Import:** `from application_sdk.execution import TemporalExecutorBackend`
 - **Signature:** `class TemporalExecutorBackend(client: Client, task_queue: str = 'application-sdk')`
 - **Summary:** Temporal-based executor backend for running Apps as workflows.
 - **Defined in:** `application_sdk/execution/_temporal/backend.py`
+
+#### `TemporalTerminatedError`
+
+- **Import:** `from application_sdk.execution import TemporalTerminatedError`
+- **Signature:** `class TemporalTerminatedError(message: str, *details: Any)`
+- **Summary:** Error raised on workflow cancellation. _(re-exported from `temporalio.exceptions.TerminatedError`)_
+
+#### `TemporalTimeoutError`
+
+- **Import:** `from application_sdk.execution import TemporalTimeoutError`
+- **Signature:** `class TemporalTimeoutError(message: str, ...)`
+- **Summary:** Error raised on workflow/activity timeout. _(re-exported from `temporalio.exceptions.TimeoutError`)_
+
+#### `TemporalWorkflowFailureError`
+
+- **Import:** `from application_sdk.execution import TemporalWorkflowFailureError`
+- **Signature:** `class TemporalWorkflowFailureError(*, cause: 'BaseException')`
+- **Summary:** Error that occurs when a workflow is unsuccessful. _(re-exported from `temporalio.client.WorkflowFailureError`)_
 
 ### Functions
 
@@ -1364,11 +1420,6 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Signature:** `needs_lock(max_locks: int = 5, lock_name: Optional[str] = None)`
 - **Summary:** Decorator to mark activities that require distributed locking.
 - **Defined in:** `application_sdk/execution/decorators.py`
-
-#### `TemporalClient`
-
-- **Import:** `from application_sdk.execution import TemporalClient`
-- **Summary:** _(no docstring)_
 
 ## `application_sdk.handler`
 
@@ -1706,6 +1757,13 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 - **Summary:** Generic secret-store failure (category=DEPENDENCY_UNAVAILABLE).
 - **Defined in:** `application_sdk/infrastructure/secrets.py`
 
+#### `SecretStoreUnavailableError`
+
+- **Import:** `from application_sdk.infrastructure import SecretStoreUnavailableError`
+- **Signature:** `class SecretStoreUnavailableError(secret_name: str, *, cause: Exception | None = None)`
+- **Summary:** The secret store / Dapr sidecar was *unreachable* — a transport failure
+- **Defined in:** `application_sdk/infrastructure/secrets.py`
+
 #### `StateStore`
 
 - **Import:** `from application_sdk.infrastructure import StateStore`
@@ -1764,6 +1822,13 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 - **Summary:** Get the current infrastructure context.
 - **Defined in:** `application_sdk/infrastructure/context.py`
 
+#### `retry_past_dapr_cold_start`
+
+- **Import:** `from application_sdk.infrastructure import retry_past_dapr_cold_start`
+- **Signature:** `retry_past_dapr_cold_start(call: Callable[[], Awaitable[_T]], *, description: str, component: str)`
+- **Summary:** Retry an idempotent Dapr-backed call past a cold sidecar.
+- **Defined in:** `application_sdk/infrastructure/_dapr/http.py`
+
 #### `set_infrastructure`
 
 - **Import:** `from application_sdk.infrastructure import set_infrastructure`
@@ -1772,6 +1837,13 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 - **Defined in:** `application_sdk/infrastructure/context.py`
 
 ### Constants and Enums
+
+#### `DAPR_SECRET_STORE_COMPONENT`
+
+- **Import:** `from application_sdk.infrastructure import DAPR_SECRET_STORE_COMPONENT`
+- **Signature:** `DAPR_SECRET_STORE_COMPONENT`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/infrastructure/_dapr/http.py`
 
 #### `MessageHandler`
 

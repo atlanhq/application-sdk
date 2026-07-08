@@ -5,7 +5,7 @@
 
 # Test-Quality Rules (T-series)
 
-**4 rules** · Checker: `suite.checks.integration_marking`, `suite.checks.sdr_test_checks`, and `suite.checks.dev_entrypoint` (AST-based)
+**15 rules** · Checker: `suite.checks.integration_marking` (T001), `suite.checks.sdr_test_checks` (T002-T003), `suite.checks.dev_entrypoint` (T004), `suite.checks.test_quality` (T005-T009), `suite.checks.test_structure` (T010-T013), and `suite.checks.coverage_config` (T014-T015) (AST/TOML-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -19,6 +19,17 @@ Suppress a finding on the violating line or the line directly above it:
 | [T002](#t002) | `MissingSdrTestClass` | `warn` | `app` | `sdr-test-coverage` | — | 0.9.0 |
 | [T003](#t003) | `SdrTestLegacyAgentSpec` | `warn` | `app` | `sdr-test-coverage` | — | 0.9.0 |
 | [T004](#t004) | `DevEntrypointRequiresAppModule` | `warn` | `app` | `dev-entrypoint` | — | 0.10.0 |
+| [T005](#t005) | `AssertionFreeTest` | `warn` | `both` | `test-assertion-quality` | — | 0.12.0 |
+| [T006](#t006) | `EmptyTestBody` | `warn` | `both` | `test-assertion-quality` | — | 0.12.0 |
+| [T007](#t007) | `VacuousAssertion` | `warn` | `both` | `test-assertion-quality` | — | 0.12.0 |
+| [T008](#t008) | `UncollectableTestFile` | `warn` | `both` | `test-collection` | — | 0.12.0 |
+| [T009](#t009) | `UnconditionalModuleSkip` | `warn` | `both` | `test-collection` | — | 0.12.0 |
+| [T010](#t010) | `MissingUnitTestSuite` | `warn` | `app` | `test-tier-coverage` | — | 0.12.0 |
+| [T011](#t011) | `MissingIntegrationTestSuite` | `warn` | `app` | `test-tier-coverage` | — | 0.12.0 |
+| [T012](#t012) | `MissingE2ETestSuite` | `warn` | `app` | `test-tier-coverage` | — | 0.12.0 |
+| [T013](#t013) | `TestFileOutsideTierDir` | `warn` | `both` | `test-tier-coverage` | — | 0.12.0 |
+| [T014](#t014) | `CoverageGateDisabled` | `warn` | `app` | `coverage-config` | — | 0.12.0 |
+| [T015](#t015) | `CoverageOmitsProductCode` | `warn` | `app` | `coverage-config` | — | 0.12.0 |
 
 ---
 
@@ -186,5 +197,438 @@ if __name__ == '__main__':
 Suppress with `# conformance: ignore[T004] <reason>` on the call's line when the app
 genuinely has no local dev-mode boot path and relies on `ATLAN_APP_MODULE` being set
 out-of-band even for CI (e.g. some utility/CSA apps).
+
+---
+
+## T005 — `AssertionFreeTest` {#t005}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `test-assertion-quality` · **Autofixable:** — · **Since:** 0.12.0
+
+> Test has a non-empty body but no recognised assertion — it runs but verifies nothing
+
+**Rationale:** Code coverage measures whether a line executed, not whether anything was verified about
+its behaviour. A test function that calls the code under test but never asserts on the
+outcome inflates the coverage percentage while providing zero protection against a
+regression — it passes whether the code is correct, subtly wrong, or completely broken,
+as long as it doesn't raise. This is the single most common way 'meaningful test
+coverage' targets are gamed unintentionally: a developer writes a test that exercises a
+code path to satisfy a coverage gate, intending to add assertions later, and the
+assertions never arrive. Flagging this deterministically closes the gap between 'the
+coverage tool is green' and 'the tests actually verify something.'
+
+A collected test function (`test*`, including methods of a `Test*` class) has a
+non-empty body but contains none of the recognised assertion forms:
+
+```python
+a bare `assert` statement
+`with pytest.raises(...)` / `pytest.warns(...)` / `pytest.deprecated_call(...)`
+a call named `assert_*` (`self.assertEqual`, `mock.assert_called_once`,
+    `pandas.testing.assert_frame_equal`, a project-local `_assert_*` helper)
+`pytest.fail(...)` / `self.fail(...)`
+an SDK integration-test scenario-helper call: `.equals` / `.contains` /
+    `.exists` / `.is_dict` / `.is_string` / `.is_true` / `.is_list`
+```
+
+This vocabulary is intentionally broad — the check is biased toward zero false positives
+at WARN tier rather than toward catching every possible assertion idiom, mirroring
+T001's documented-limits approach.
+
+**Remediation:** add an assertion on the outcome you actually care about. Before:
+
+```python
+def test_extracts_users():
+    result = extract_users(client)
+```
+
+After:
+
+```python
+def test_extracts_users():
+    result = extract_users(client)
+    assert result.record_count == 3
+```
+
+Suppress with `# conformance: ignore[T005] <reason>` only for a test whose sole purpose
+is confirming the call doesn't raise (rare — usually better expressed as
+`pytest.raises`'s absence isn't a thing worth a dedicated test on its own; prefer
+folding the no-raise expectation into a test that also asserts on the return value).
+
+---
+
+## T006 — `EmptyTestBody` {#t006}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `test-assertion-quality` · **Autofixable:** — · **Since:** 0.12.0
+
+> Test body is a stub — only 'pass', '...', or a docstring
+
+**Rationale:** A test whose body is only 'pass', '...', or a docstring is a placeholder that was
+scaffolded and never filled in. It is worse than an assertion-free test (T005): it
+doesn't even exercise the code under test, so it contributes to the visible test count
+without contributing any coverage at all. Left in place, it reads as 'this behaviour is
+tested' to anyone scanning the test file, which is actively misleading.
+
+A collected test function's body consists solely of `pass`, an `Ellipsis` (`...`), a
+docstring, or some combination of those — no other statement is present.
+
+**Remediation:** either implement the test, or remove it. A stub that documents intent
+without a target date tends to stay a stub forever; prefer tracking the gap in an issue
+over leaving a placeholder that reads as tested coverage. If the test is genuinely not
+yet actionable, use `@pytest.mark.skip(reason='<ticket> — not yet implemented')` so
+pytest's own reporting surfaces it as skipped rather than passing silently.
+
+Suppress with `# conformance: ignore[T006] <reason>` on the `def` line only for an
+intentionally-empty test used purely to assert collection/import succeeds (rare).
+
+---
+
+## T007 — `VacuousAssertion` {#t007}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `test-assertion-quality` · **Autofixable:** — · **Since:** 0.12.0
+
+> Every assertion in this test is a constant-true expression that can never fail
+
+**Rationale:** 'assert True' and equivalents (assert 1, assert "x") satisfy T005's assertion-presence
+check but can never fail — they provide the visual appearance of verification with none
+of the substance. This is the quieter sibling of T005: a reviewer scanning for 'does
+this test have an assert' sees one and moves on, without noticing it is unconditionally
+true. Both are 'coverage without verification'; this one specifically targets a test
+whose entire assertion surface is a truism.
+
+A collected test's only assertion(s) evaluate a literal truthy constant (`assert True`,
+`assert 1`, `assert "non-empty string"`) rather than an expression whose value depends
+on the code under test. Such an assertion can never fail regardless of what the test
+exercised.
+
+**Remediation:** assert on something that actually depends on the call under test.
+Before:
+
+```python
+def test_creates_asset():
+    asset = build_asset(record)
+    assert True  # created without error
+```
+
+After:
+
+```python
+def test_creates_asset():
+    asset = build_asset(record)
+    assert asset.qualified_name == 'default/mysql/db/table'
+```
+
+Suppress with `# conformance: ignore[T007] <reason>` on the assert line only when the
+constant assertion is a deliberate reachability marker in a larger test body that also
+contains real assertions elsewhere (in which case T007 shouldn't fire in the first place
+— file a correction if it does).
+
+---
+
+## T008 — `UncollectableTestFile` {#t008}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `test-collection` · **Autofixable:** — · **Since:** 0.12.0
+
+> File defines test*/Test* collectables but its filename doesn't match pytest's collection glob — never collected
+
+**Rationale:** pytest only collects files matching its python_files convention (test_*.py / *_test.py
+by default). A file under a test-tier directory that defines def test_* functions or
+Test* classes but is named something else (helpers.py, connector_tests.py) is never
+collected — it contributes zero coverage and zero CI signal while looking, to anyone
+reading the directory listing, exactly like a real test file. This is a particularly
+dangerous failure mode because it is invisible in the pytest run output: there is no
+error, no skip, nothing — the tests simply never exist as far as CI is concerned.
+
+A `.py` file under a test-tier directory (`tests/unit`, `tests/integration`,
+`tests/e2e`, `tests/ui`) defines at least one `def test*` function or `class Test*`, but
+its own filename does not match pytest's default collection glob (`test_*.py` /
+`*_test.py`). pytest's default configuration never collects such a file, so every test
+it defines silently never runs.
+
+**Remediation:** rename the file to match the convention. Before:
+
+```python
+tests/unit/connector_tests.py
+```
+
+After:
+
+```python
+tests/unit/test_connector.py
+```
+
+Suppress with `# conformance: ignore[T008] <reason>` on the first line of the file only
+when the repo has a non-default `python_files` override in `pyproject.toml` that
+legitimately collects this name (the check does not read that override — see the module
+docstring).
+
+---
+
+## T009 — `UnconditionalModuleSkip` {#t009}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `test-collection` · **Autofixable:** — · **Since:** 0.12.0
+
+> Module-level pytest.skip(allow_module_level=True) is unconditional — the whole file is permanently disabled
+
+**Rationale:** A module-level pytest.skip(..., allow_module_level=True) that is not nested inside an
+if/try guard unconditionally disables every test in the file on every run, in every
+environment, forever. This differs from the legitimate e2e pattern — 'if not
+os.environ.get(...): pytest.skip(...)' — which disables the file only when a real
+precondition (credentials, a live tenant) is absent, and re-enables it automatically
+once the precondition is met. An unconditional skip usually starts as a temporary
+'disable this flaky suite' workaround and is forgotten, silently zeroing out that file's
+contribution to coverage from that point on.
+
+A module-level call to `pytest.skip(..., allow_module_level=True)` appears directly in
+the module body (not nested inside an `if` or `try` statement), so it executes — and
+disables every test in the file — on every collection, unconditionally.
+
+The legitimate form guards the skip behind a real precondition, so the file re-enables
+itself once the precondition is satisfied:
+
+```python
+if not os.environ.get('ATLAN_API_KEY'):
+    pytest.skip('e2e harness needs ATLAN_API_KEY', allow_module_level=True)
+```
+
+That guarded form is **not** flagged by T009 — only a bare, unguarded call at module
+scope is.
+
+**Remediation:** either delete the file's tests (if they are genuinely obsolete) or
+replace the unconditional skip with a real precondition guard, or with
+`@pytest.mark.skip(reason='<ticket>')` on the individual tests that are temporarily
+disabled — which at least reports as a visible per-test skip in CI output rather than
+silently vanishing at collection time.
+
+Suppress with `# conformance: ignore[T009] <reason>` on the `skip(...)` call's line when
+the file is intentionally, permanently disabled pending removal in a tracked follow-up.
+
+---
+
+## T010 — `MissingUnitTestSuite` {#t010}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `test-tier-coverage` · **Autofixable:** — · **Since:** 0.12.0
+
+> No collectable unit tests under tests/unit/
+
+**Rationale:** Unit tests — method-by-method coverage of helper functions and activities — are the
+universal floor of the agreed testing-tier architecture: every canonical app, including
+the minimal hello-world scaffold, has one. An app with no tests/unit/ directory (or one
+with no collectable tests in it) has no fast, hermetic verification of its own logic at
+all — every other tier (integration, e2e) is slower, network-bound, and exercises the
+app only end-to-end, so a defect in a helper function has no tier positioned to catch it
+cheaply. Unlike T011/T012, this rule has no scaffold exemption: even the smallest app
+has some logic worth a fast unit test.
+
+No collectable pytest tests (`def test*` / `class Test*` in a `test_*.py` / `*_test.py`
+file) exist under `tests/unit/`. This is the universal floor of the tiering architecture
+— unlike `tests/integration/` and `tests/e2e/` (T011/T012), this tier has no
+`exempt_test_tiers` opt-out: every canonical app, including the minimal `hello-world`
+scaffold, ships a real unit suite.
+
+**Remediation:** add `tests/unit/test_<module>.py` files exercising the app's helper
+functions and `@task`-decorated activities directly (call them as coroutines — the
+decorator only attaches metadata outside the workflow runtime). See
+`atlan-hello-world-app/tests/unit/` for the minimal reference shape: typed
+`Input`/`Output` contracts, a `pytest.fixture` for the app instance, and real outcome
+assertions (record counts, on-disk side effects, error paths via `pytest.raises`).
+
+---
+
+## T011 — `MissingIntegrationTestSuite` {#t011}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `test-tier-coverage` · **Autofixable:** — · **Since:** 0.12.0
+
+> No collectable integration tests under tests/integration/
+
+**Rationale:** Integration tests — connecting to the real source and running the app's extract only, no
+system apps — are where most scenario variations (auth modes, schema shapes,
+include/exclude filters) belong per the agreed tiering architecture; the SDK provides
+hermetic paths for this tier (embedded Temporal, testcontainers, mocked infra) so there
+is no cost excuse for skipping it. An app with no tests/integration/ suite has no
+verification that its extraction logic works against anything resembling the real
+source. Scaffold/minimal apps that genuinely have no external source to integrate
+against (e.g. a template with no connector logic yet) can opt out via
+[tool.conformance].exempt_test_tiers in pyproject.toml — atlan.yaml is generated from
+the Pkl contract and must not be hand-edited, so the exemption can't live there.
+
+No collectable pytest tests exist under `tests/integration/`. Per the agreed tiering
+architecture, integration tests connect to the real source and run the app's extract
+path (no system apps) — this is where most scenario-variation coverage belongs, and the
+SDK ships hermetic paths for it (embedded Temporal dev server, testcontainers, or mocked
+infra — see `atlan-mysql-app`/`atlan-metabase-app`/ `atlan-openapi-app` for the
+reference shapes).
+
+**Remediation:** add an integration suite under `tests/integration/` using one of the
+SDK's hermetic test paths, marked so the unit job deselects it (see T001).
+
+**Exemption:** for a scaffold/minimal app with no external source to integrate against
+yet, add to the app's `pyproject.toml`:
+
+```toml
+[tool.conformance]
+exempt_test_tiers = ["integration"]
+```
+
+State the reason in a comment above the table. Suppress a single instance instead with
+`# conformance: ignore[T011] <reason>` on the first line of `pyproject.toml`.
+
+---
+
+## T012 — `MissingE2ETestSuite` {#t012}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `test-tier-coverage` · **Autofixable:** — · **Since:** 0.12.0
+
+> No collectable end-to-end tests under tests/e2e/
+
+**Rationale:** End-to-end tests — the full pipeline including system apps, operating in SDR mode
+against a real tenant — are the tier that catches integration failures between the app
+and the platform itself (AE dispatch, agent routing, upload gating) that a
+tests/integration/ suite cannot see because it deliberately excludes system apps. Per
+the agreed architecture, e2e needs only one representative run, not scenario-level
+coverage, so this rule is the weakest of the three tier rules — it only asks that the
+tier exist at all. Exemptable the same way as T011 for scaffold/minimal apps via
+[tool.conformance].exempt_test_tiers.
+
+No collectable pytest tests exist under `tests/e2e/`. Per the agreed tiering
+architecture this tier needs only one representative run — the full pipeline including
+system apps, in SDR mode against a real tenant — not scenario-level coverage (that
+belongs to `tests/integration/`, T011). See `atlan-mysql-app`/`atlan-metabase-app`/
+`atlan-openapi-app` for the reference shape: a thin test class inheriting from the
+SDK-generated `*GeneratedE2EBase`, double env-guarded (skips without
+`ATLAN_BASE_URL`/`ATLAN_API_KEY` and without the harness import), marked
+`@pytest.mark.e2e`.
+
+**Remediation:** add a representative e2e test under `tests/e2e/` following that
+pattern.
+
+**Exemption:** for a scaffold/minimal app with no system-app integration to exercise
+yet, add to the app's `pyproject.toml`:
+
+```toml
+[tool.conformance]
+exempt_test_tiers = ["e2e"]
+```
+
+State the reason in a comment above the table. Suppress a single instance instead with
+`# conformance: ignore[T012] <reason>` on the first line of `pyproject.toml`.
+
+---
+
+## T013 — `TestFileOutsideTierDir` {#t013}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `test-tier-coverage` · **Autofixable:** — · **Since:** 0.12.0
+
+> Collectable test file lives outside the four canonical tier directories (tests/unit, tests/integration, tests/e2e, tests/ui)
+
+**Rationale:** CI's composite actions locate each tier by directory convention — connector-unit-tests
+runs tests/unit, the integration action defaults to auto-discovery but is commonly
+scoped to tests/integration, and the sdr-e2e/e2e-full-reusable actions default to
+tests/sdr or tests/e2e or tests/full_dag. A collectable test file placed loose under
+tests/ (or in an ad hoc subdirectory outside the four canonical tier dirs) may still get
+picked up by a broad auto-discovery run, or may not — depending on exactly how the
+calling workflow scoped test-paths — making its actual execution status ambiguous from
+the file layout alone. Enforcing the placement convention removes that ambiguity.
+
+A file matching pytest's collection glob (`test_*.py` / `*_test.py`) and defining at
+least one collectable test lives under `tests/` but outside all four canonical tier
+directories (`tests/unit`, `tests/integration`, `tests/e2e`, `tests/ui`) — for example
+directly in `tests/` itself, or under an ad hoc subdirectory like `tests/scratch/`.
+
+**Remediation:** move the file into the tier directory matching what it actually tests —
+a file with no external I/O belongs in `tests/unit/`; a file connecting to a real source
+belongs in `tests/integration/`.
+
+Suppress with `# conformance: ignore[T013] <reason>` on the file's first line for
+intentional non-tier test infrastructure that happens to match the collection glob (rare
+— prefer a filename that doesn't match the glob for pure helpers, which also avoids
+T008-adjacent confusion).
+
+---
+
+## T014 — `CoverageGateDisabled` {#t014}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `coverage-config` · **Autofixable:** — · **Since:** 0.12.0
+
+> Coverage is configured but fail_under is absent or 0 — the number is measured but never enforced
+
+**Rationale:** A coverage percentage that cannot fail a build is decorative: it is reported in every PR
+comment and dashboard, creating the appearance of an enforced quality bar, while
+[tool.coverage.report].fail_under absent or 0 means no percentage — however low —
+actually blocks anything. This is the config-level counterpart to T005-T007: those catch
+tests that run without asserting; this catches a coverage number that exists without
+enforcing. The unified test-framework onboarding path deliberately starts new adopters
+at --cov-fail-under=0 and ramps up over time (Athena at 20%, mssql at 60%), so WARN (not
+BLOCK) matches the agreed rollout reality — this rule's value is making the '0 is
+temporary, not the final state' expectation visible and trackable, not blocking the
+initial adoption PR.
+
+`[tool.coverage.report]` exists in `pyproject.toml` — the repo has opted into coverage
+measurement — but `fail_under` is either absent (defaults to 0) or explicitly set to
+`0`, *and* no CI workflow declares an overriding floor. Coverage is measured and
+reported (e.g. as a PR comment via the `connector-unit-tests` composite action) but can
+never cause a run to fail, regardless of how low it drops.
+
+coverage.py's CLI flag always overrides `pyproject.toml`, so this rule also checks the
+repo's own `.github/workflows/*.yml` for a `connector-unit-tests` `fail-under:` input or
+a `--cov-fail-under=N` flag embedded in a `tests-reusable.yaml` `pytest-args` override.
+Either one, if non-zero, is treated as the effective floor — the finding only fires when
+neither source enforces anything.
+
+**Remediation:** set a real, ratcheting floor:
+
+```toml
+[tool.coverage.report]
+fail_under = 60
+```
+
+Per the unified test-framework's own onboarding guidance, start at the repo's *current*
+measured percentage (never below what's already true) and raise it in follow-up PRs as
+coverage improves — the agreed target for unit tests is 90-100%, but a repo mid-adoption
+is not expected to jump there in one step.
+
+Suppress with `# conformance: ignore[T014] <reason>` on the `[tool.coverage.report]`
+line only during the initial adoption PR itself, explicitly naming the follow-up
+tracking issue that will set a real floor.
+
+---
+
+## T015 — `CoverageOmitsProductCode` {#t015}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `coverage-config` · **Autofixable:** — · **Since:** 0.12.0
+
+> coverage omit/source excludes real product code under app/, inflating the reported percentage
+
+**Rationale:** [tool.coverage.run].omit (or a narrowed source) controls the denominator of the coverage
+percentage: excluding real product code under app/ makes the percentage look higher
+without a single additional test being written, which is a more direct form of gaming
+than T014's disabled gate — the number moves in the intended direction while measuring
+less of what actually ships. Legitimate omissions exist (test helpers, generated code
+under app/generated/, vendored code) but those are not product logic; a pattern that
+reaches into ordinary app/ submodules is the signal this rule targets.
+
+`[tool.coverage.run].omit` contains a pattern matching source under `app/` that is not
+one of the recognised legitimate exclusions (`app/generated/**` — generated contract
+artifacts; `**/test_*.py`/`**/conftest.py` — test infra that happens to live under
+`app/` in some layouts), or `[tool.coverage.run].source` is narrowed to a subset of
+`app/` that excludes real handler/mapper/ client modules.
+
+**Remediation:** narrow the omission to only what shouldn't count — generated code and
+test infra — and let real product modules contribute to (and be held to) the coverage
+floor. Before:
+
+```toml
+[tool.coverage.run]
+omit = ["app/handlers/*", "app/clients/*"]
+```
+
+After:
+
+```toml
+[tool.coverage.run]
+omit = ["app/generated/*"]
+```
+
+Suppress with `# conformance: ignore[T015] <reason>` on the `omit`/ `source` line naming
+the specific module and why it's legitimately excluded (e.g. a vendored third-party shim
+with no branch logic worth covering).
 
 ---

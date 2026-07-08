@@ -53,6 +53,7 @@ AppError  (base — application_sdk.errors)
 │   ├── PreconditionError      PRECONDITION               retryable=False  audience=USER
 │   ├── RateLimitedError       RATE_LIMITED               retryable=True   audience=USER
 │   ├── DependencyUnavailableError  DEPENDENCY_UNAVAILABLE retryable=True  audience=PLATFORM
+│   ├── SourceUnavailableError   SOURCE_UNAVAILABLE        retryable=True   audience=USER
 │   ├── ResourceExhaustedError RESOURCE_EXHAUSTED         retryable=True   audience=PLATFORM
 │   ├── AppTimeoutError        TIMEOUT                    retryable=True   audience=APP_OWNER
 │   ├── CancelledError         CANCELLED                  retryable=False  audience=APP_OWNER
@@ -70,13 +71,33 @@ AppError  (base — application_sdk.errors)
     │   ├── StoragePermissionError(AppPermissionDeniedError, StorageError)
     │   └── StorageConfigError(InvalidInputError, StorageError)
     └── SecretStoreError(DependencyUnavailableError)
-        └── SecretNotFoundError(NotFoundError, SecretStoreError)
+        ├── SecretNotFoundError(NotFoundError, SecretStoreError)
+        └── SecretStoreUnavailableError(SecretStoreError, ColdStartRaceError)
 ```
 
 The **categorical leaf** (listed first in the MRO) drives `category`, `audience`, and
 `default_retryable` on the wire. The **domain umbrella** (listed second) keeps legacy
 `except StorageError:` / `except CredentialError:` catch sites alive. A single exception
 instance satisfies both hierarchies simultaneously.
+
+### ColdStartRaceError — the cross-domain transient marker
+
+`ColdStartRaceError(DependencyUnavailableError)` is not a domain umbrella itself — it's a
+marker mixed into a domain leaf's transient subtype to answer one narrow question: "is this
+specific failure a not-yet-reachable dependency right now" (a transport failure, or — for the
+secrets domain specifically — the one Dapr secrets-API error code that unambiguously means "no
+secret store registered yet"), independent of the general `retryable` wire hint. A bare 5xx
+from the Dapr *secrets* API is deliberately NOT treated as proof of unreachability on its own:
+verified against a live sidecar, a genuinely-missing secret key also returns 500 with
+`errorCode=ERR_SECRET_GET` — indistinguishable by status code alone from a still-cold
+component — so classification there additionally inspects the JSON error body's `errorCode`
+(see `application_sdk.infrastructure._dapr.client.classify_secret_fetch_error`). A generic
+helper — `application_sdk.infrastructure.retry_past_dapr_cold_start` — retries any current or
+future subtype across domains (secret store today; state store, pub/sub, or credential-vault
+config fetches tomorrow) just by catching this one marker, with no new per-domain check needed.
+`SecretStoreUnavailableError` above is the first concrete example: it multiply-inherits
+`SecretStoreError` (so `except SecretStoreError:` still catches it) and `ColdStartRaceError`
+(so the retry helper does too).
 
 ### Raise by failure shape
 

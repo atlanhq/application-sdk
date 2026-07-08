@@ -31,6 +31,7 @@ from conformance.suite.checks import (
     app_name_alignment,
     bootstrap_drift,
     client_seam,
+    coverage_config,
     dependency_conformance,
     deprecation,
     determinism,
@@ -46,6 +47,8 @@ from conformance.suite.checks import (
     orchestration,
     prescriptions,
     security,
+    test_quality,
+    test_structure,
 )
 from conformance.suite.checks._ast_common import TOOL_VERSION, detect_scope
 from conformance.suite.rules import CATALOG, assert_registry_consistent, get_rule
@@ -139,6 +142,22 @@ _CHECKS: list[CheckRegistration] = [
         series=integration_marking.SERIES,
         discover=integration_marking.discover,
         scan_path=integration_marking.scan_path,
+    ),
+    CheckRegistration(
+        series=test_quality.SERIES,
+        discover=test_quality.discover,
+        scan_path=test_quality.scan_path,
+    ),
+    CheckRegistration(
+        series=test_structure.SERIES,
+        discover=test_structure.discover,
+        scan_path=test_structure.scan_path,
+        scan_all=test_structure.scan_all,
+    ),
+    CheckRegistration(
+        series=coverage_config.SERIES,
+        discover=coverage_config.discover,
+        scan_path=coverage_config.scan_path,
     ),
     CheckRegistration(
         series=dockerfile_conformance.SERIES,
