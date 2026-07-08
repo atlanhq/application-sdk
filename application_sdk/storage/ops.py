@@ -579,7 +579,13 @@ def _save_transfer_state(state_path: Path, state: dict) -> None:
     etag check makes the resulting fresh download safe.
     """
     tmp = state_path.with_suffix(state_path.suffix + ".tmp")
-    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # O_BINARY: raw os.write on a Windows text-mode fd would rewrite 0x0A as
+    # 0x0D 0x0A (no-op flag on POSIX, where the attribute doesn't exist).
+    fd = os.open(
+        str(tmp),
+        os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0),
+        0o600,
+    )
     try:
         os.write(fd, orjson.dumps(state))
         os.fsync(fd)
@@ -1193,7 +1199,15 @@ async def download_file_chunked(
         # offset. On resume, open WITHOUT O_TRUNC so completed chunks survive.
         # 0o600: owner-only — downloaded artifacts can contain extracted customer
         # metadata; don't rely on the process umask to keep them private.
-        flags = os.O_WRONLY | os.O_CREAT | (0 if resuming else os.O_TRUNC)
+        # O_BINARY: raw os.write on a Windows text-mode fd would rewrite 0x0A
+        # as 0x0D 0x0A, corrupting content and shifting every later chunk's
+        # offset (no-op flag on POSIX, where the attribute doesn't exist).
+        flags = (
+            os.O_WRONLY
+            | os.O_CREAT
+            | (0 if resuming else os.O_TRUNC)
+            | getattr(os, "O_BINARY", 0)
+        )
         fd = os.open(str(path), flags, 0o600)
         try:
             os.ftruncate(fd, size)
