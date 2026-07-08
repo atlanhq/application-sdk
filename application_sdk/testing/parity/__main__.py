@@ -85,7 +85,7 @@ def main() -> None:
         sys.exit(0)
     else:
         total = sum(len(r.added) + len(r.removed) + len(r.modified) for r in results)
-        logger.info("PARITY BROKEN: %s differences found.", total)
+        logger.error("PARITY BROKEN: %s differences found.", total)
         sys.exit(1)
 
 

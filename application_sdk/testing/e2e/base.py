@@ -673,7 +673,8 @@ class BaseE2ETest:
                             self.connection_qualified_name,
                             type_names=probe_types,
                         )
-                        logger.debug(
+                        # conformance: ignore[L006] short, bounded poll (atlas_asset_poll_timeout_seconds) with modest iteration count, not a hot loop; the per-iteration asset counts are the primary diagnostic signal when an E2E run fails to converge
+                        logger.info(
                             "Atlas inventory under %s: %s",
                             self.connection_qualified_name,
                             asset_counts,

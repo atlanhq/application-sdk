@@ -779,7 +779,8 @@ class AEWorkflowClient:
         del max_forbidden_attempts
         while elapsed < timeout_seconds:
             found = self.connection_exists_in_atlas_via_search(qualified_name)
-            logger.debug(
+            # conformance: ignore[L006] short, bounded poll (timeout_seconds) with modest iteration count, not a hot loop; the per-iteration probe result is the primary diagnostic signal when an E2E run fails to converge
+            logger.info(
                 "Atlas Connection probe [%ds] qn=%s exists=%s",
                 elapsed,
                 qualified_name,

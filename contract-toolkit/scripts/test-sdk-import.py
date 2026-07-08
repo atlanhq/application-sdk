@@ -44,7 +44,7 @@ def test_input(path: Path) -> bool:
     if not hasattr(cls, "model_fields"):
         logger.error("FAIL: %s — AppInputContract is not a Pydantic model", path)
         return False
-    logger.debug("  OK: %s (%d fields)", path, len(cls.model_fields))
+    logger.info("  OK: %s (%d fields)", path, len(cls.model_fields))
     return True
 
 
@@ -90,16 +90,16 @@ def test_e2e(path: Path) -> bool:
                         attr,
                     )
                     return False
-            logger.debug("  OK: %s (%s)", path, matches[0])
+            logger.info("  OK: %s (%s)", path, matches[0])
         else:
             if not hasattr(cls, "model_fields"):
                 logger.error("FAIL: %s — %s is not a Pydantic model", path, matches[0])
                 return False
-            logger.debug(
+            logger.info(
                 "  OK: %s (%s, %d fields)", path, matches[0], len(cls.model_fields)
             )
     else:
-        logger.debug("  OK: %s", path)
+        logger.info("  OK: %s", path)
     return True
 
 

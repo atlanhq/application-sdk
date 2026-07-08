@@ -479,7 +479,7 @@ def check_directory(
             if not is_test:
                 prod_text += content
         except OSError as e:
-            logger.debug("Skipping unreadable file %s: %s", path, e, exc_info=True)
+            logger.warning("Skipping unreadable file %s: %s", path, e, exc_info=True)
 
     # Extra text for entry-point detection: Dockerfile and pyproject.toml may
     # contain `application-sdk --mode combined` in CMD or [project.scripts].
@@ -491,7 +491,9 @@ def check_directory(
                 try:
                     extra_entry_point_text += f.read_text(encoding="utf-8") + "\n"
                 except OSError as e:
-                    logger.debug("Skipping unreadable file %s: %s", f, e, exc_info=True)
+                    logger.warning(
+                        "Skipping unreadable file %s: %s", f, e, exc_info=True
+                    )
 
     advisories: list[str] = []
 

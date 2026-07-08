@@ -303,7 +303,7 @@ def extract_context(root: Path) -> ConnectorContext:
         try:
             source = path.read_text(encoding="utf-8")
         except OSError as e:
-            logger.debug("Skipping unreadable file %s: %s", path, e, exc_info=True)
+            logger.warning("Skipping unreadable file %s: %s", path, e, exc_info=True)
             continue
 
         try:
@@ -331,7 +331,7 @@ def extract_context(root: Path) -> ConnectorContext:
             all_classes.extend(extractor.classes)
         except cst.ParserSyntaxError as e:
             # Best-effort: unparseable source is skipped for class inventory.
-            logger.debug("Could not parse %s with libcst: %s", rel, e, exc_info=True)
+            logger.warning("Could not parse %s with libcst: %s", rel, e, exc_info=True)
 
         # Infrastructure patterns (text-based)
         all_infra.extend(_scan_infra(source, rel))

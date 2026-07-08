@@ -93,7 +93,7 @@ def fingerprint_connector(root: Path) -> FingerprintResult:
         try:
             text = path.read_text(encoding="utf-8")
         except OSError as e:
-            logger.debug("Skipping unreadable file %s: %s", path, e, exc_info=True)
+            logger.warning("Skipping unreadable file %s: %s", path, e, exc_info=True)
             continue
 
         try:
