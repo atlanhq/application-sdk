@@ -27,10 +27,10 @@ reads the freshly-cloned source directly.
 ## Tiers
 
 - **daily** (Mon–Sat) — fast, high-confidence, whole SDK but shallow. Only
-  what a senior engineer would merge without a design debate. PR cap ≤ 3.
+  what a senior engineer would merge without a design debate.
 - **weekly** (Sunday) — the daily superset plus the deep and cross-repo work:
   architecture/ADR drift, Temporal-concept ADR PRs, `/audit-consumers` across
-  v3 apps (bounded consumer PRs), toolkit deep review. PR cap ≤ 8.
+  v3 apps, toolkit deep review. No fixed PR cap — bounded by the time budget.
 
 Both tiers cover all three surfaces: `application_sdk/`, `packages/conformance/`,
 `contract-toolkit/`.

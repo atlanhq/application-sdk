@@ -153,8 +153,11 @@ Any step fails → cancel the ticket, no orphans. One test-fix retry, then KILL.
 
 **Grouping:** bug / security / perf / arch / centralization → individual PR.
 docs / test-quality / stale-cleanup → one PR per category.
-**PR cap:** daily ≤ 3, weekly ≤ 8. Priority: security > bug > docs/test > stale
-> improvement > design.
+**No fixed PR cap** — open a PR for every finding that survives all gates. The
+bound is the stage time budget + the hard stop, not an arbitrary number; if the
+budget runs out, remaining survivors carry to the next run via the suppression
+list. Work in priority order so the most important work lands first when the
+budget is tight: security > bug > docs/test > stale > improvement > design.
 
 ### 4d. DESIGN PRs
 Same mechanics, plus: title `[DESIGN] <category>: <title> [<TICKET_ID>]`,
