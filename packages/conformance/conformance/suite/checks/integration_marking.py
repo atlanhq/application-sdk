@@ -59,13 +59,11 @@ import sys
 import tomllib
 from collections.abc import Iterable
 from pathlib import Path
-from typing import TypeGuard
 
-from conformance.suite.checks._ast_common import (
-    _parse_directives,
-    make_cli_main,
-    make_finding,
-)
+from conformance.suite.checks._ast_common import _parse_directives
+from conformance.suite.checks._ast_common import is_test_class as _is_test_class
+from conformance.suite.checks._ast_common import is_test_function as _is_test_function
+from conformance.suite.checks._ast_common import make_cli_main, make_finding
 from conformance.suite.schema.findings import Finding
 
 SERIES = "T"
@@ -221,27 +219,12 @@ def _decorator_markers(
 
 
 # ---------------------------------------------------------------------------
-# pytest collection mirror (default conventions)
-# ---------------------------------------------------------------------------
-
-
-def _is_test_function(
-    node: ast.stmt,
-) -> TypeGuard[ast.FunctionDef | ast.AsyncFunctionDef]:
-    """True for a pytest-collected test function (default ``python_functions``)."""
-    return isinstance(
-        node, (ast.FunctionDef, ast.AsyncFunctionDef)
-    ) and node.name.startswith("test")
-
-
-def _is_test_class(node: ast.stmt) -> TypeGuard[ast.ClassDef]:
-    """True for a pytest-collected test class (default ``python_classes``)."""
-    return isinstance(node, ast.ClassDef) and node.name.startswith("Test")
-
-
-# ---------------------------------------------------------------------------
 # Scan API
 # ---------------------------------------------------------------------------
+#
+# Pytest collection mirror (default `test*`/`Test*` conventions) is shared
+# across the T-series via `_ast_common.is_test_function`/`is_test_class`,
+# imported above as `_is_test_function`/`_is_test_class`.
 
 _HINT = (
     "Add such a marker on the test, its enclosing class, or a module-level "

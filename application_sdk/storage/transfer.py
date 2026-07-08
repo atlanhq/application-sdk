@@ -43,6 +43,7 @@ from typing import TYPE_CHECKING
 from application_sdk.common._listing import safe_list_directory
 from application_sdk.constants import MAX_CONCURRENT_STORAGE_TRANSFERS
 from application_sdk.contracts.types import FileReference, StorageTier
+from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 
 _logger = get_logger(__name__)
@@ -73,6 +74,19 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: fh.read(65536), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+async def _sha256_file_async(path: Path) -> str:
+    """Run :func:`_sha256_file` in a worker thread.
+
+    ``_sha256_file`` reads and digests the whole file with no ``await``;
+    calling it directly on the event loop blocks the loop for the full
+    read+hash. A blocked loop cannot run the SDK's auto-heartbeat coroutine, so
+    ``App.upload``/``App.download`` (``skip_if_exists=True``) heartbeat-time-out
+    on large files even while making progress — the same failure mode fixed in
+    ``storage.reference._sha256_hex_file_async``.
+    """
+    return await run_in_thread(_sha256_file, path)
 
 
 async def _get_remote_sha256(store: ObjectStore, key: str) -> str | None:
@@ -107,7 +121,7 @@ async def _upload_one(
     )
 
     if skip_if_exists:
-        local_digest = _sha256_file(local_file)
+        local_digest = await _sha256_file_async(local_file)
         remote_digest = await _get_remote_sha256(store, store_key)
         if remote_digest == local_digest:
             return False, "skipped:hash_match"
@@ -204,7 +218,7 @@ async def _download_one(
     if skip_if_exists and local_file.exists():
         remote_digest = await _get_remote_sha256(store, store_key)
         if remote_digest is not None:
-            local_digest = _sha256_file(local_file)
+            local_digest = await _sha256_file_async(local_file)
             if local_digest == remote_digest:
                 return False, "skipped:hash_match"
 
@@ -512,8 +526,9 @@ async def upload(
             normalize_key,
             append_leaf=False,
         )
-        # to_thread keeps the blocking fsync + scandir off the event loop.
-        files = await asyncio.to_thread(safe_list_directory, src)
+        # run_in_thread keeps the blocking fsync + scandir off the event loop,
+        # using the dedicated pool rather than asyncio's default executor.
+        files = await run_in_thread(safe_list_directory, src)
         if raise_on_empty and not files:
             from application_sdk.storage.errors import (  # noqa: PLC0415
                 StorageEmptyUploadError,

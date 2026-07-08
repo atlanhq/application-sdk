@@ -1,6 +1,6 @@
 """P002 CategoryFieldOverride — flag ``category`` ClassVar redeclarations.
 
-A subclass of ``AppError`` (or any of its 14 categorical leaves) that
+A subclass of ``AppError`` (or any of its 15 categorical leaves) that
 redeclares the ``category`` ``ClassVar`` in its own body drifts the canonical
 ``FailureCategory`` taxonomy.  Only the canonical SDK error classes themselves
 are the defining sites for ``category``; all other subclasses must inherit it.

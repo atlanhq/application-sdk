@@ -116,9 +116,32 @@ The embedded runtime above is the recommended local-dev path. If you want to mir
 
 **1. Add the SDK's Dapr component definitions to your project:**
 
+The component YAMLs ship inside the `atlan-application-sdk` wheel — copy them out of your
+installed dependency rather than downloading from GitHub (unauthenticated GitHub requests hit
+rate limits under CI concurrency and can drift from the SDK version actually locked in your
+`uv.lock`). This uses `poe` from the `poethepoet` package, so add it as a dependency first:
+
 ```bash
-curl -sL https://github.com/atlanhq/application-sdk/archive/refs/heads/main.tar.gz \
-  | tar -xz --strip-components=2 application-sdk-main/components
+uv add poethepoet
+```
+
+Then add a `download-components` poe task to `pyproject.toml`:
+
+```toml
+[tool.poe.tasks]
+download-components.shell = """
+python -c "
+import application_sdk, pathlib, shutil
+src = pathlib.Path(application_sdk.__file__).parent / 'components'
+shutil.copytree(src, 'components', dirs_exist_ok=True)
+"
+"""
+```
+
+Then run it:
+
+```bash
+uv run poe download-components
 ```
 
 **2. Start Temporal and a Dapr sidecar in separate terminals:**

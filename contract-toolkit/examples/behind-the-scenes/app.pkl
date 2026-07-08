@@ -1,0 +1,34 @@
+/// Behind-the-scenes example — demonstrates an app with no marketplace presence.
+///
+/// Setting `marketplaceCard = false` at the app level suppresses the
+/// auto-derived `package_id` and `marketplace_card` fields for single-entrypoint
+/// apps. The entrypoints block is still emitted for routing, but the app
+/// does not appear as a card in the marketplace UI.
+///
+/// Use this pattern for purely operational apps (e.g. housekeeping jobs,
+/// internal orchestration) that should never be user-visible in the marketplace.
+amends "../../src/App.pkl"
+
+name = "behind-the-scenes"
+displayName = "Behind the Scenes Example"
+icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
+hasCredentialConfig = false
+marketplaceCard = false
+
+pipeline {
+  publish = null
+}
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["target"] = new TextInput {
+          title = "Target"
+          helpText = "What to process."
+          placeholderText = "my-target"
+        }
+      }
+    }
+  }
+}

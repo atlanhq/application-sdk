@@ -30,7 +30,7 @@ outputs:
   - pyproject.toml (SDK pin bump to >= v3.7.0 if needed)
   - blind-spot report (printed, not committed — phase-2 punch list)
 gates:
-  - "All 14 SDK-provided leaves come from application_sdk.errors. Apps may not invent new categories — only subclass leaves."
+  - "All 15 SDK-provided leaves come from application_sdk.errors. Apps may not invent new categories — only subclass leaves."
   - "Codes follow <CATEGORY>_<SPECIFIC>, connector-agnostic. No vendor name in code."
   - "No logic / control-flow changes unless explicitly approved. Silent-swallow paths report as phase-2 unless owner approves promotion."
 ---
@@ -83,7 +83,7 @@ owner sign-off — surface it in the phase-2 report instead.
 
 ---
 
-## SDK contract — the 14 leaves you may subclass
+## SDK contract — the 15 leaves you may subclass
 
 All leaves are defined in `application_sdk.errors`. **You may not invent new
 categories.** Apps subclass these and override `code` (per the convention below)
@@ -100,7 +100,8 @@ and optionally `audience` (when the locus differs from the SDK base default).
 | `AlreadyExistsError` | ALREADY_EXISTS | USER | False | Idempotent-create conflict |
 | `InvalidInputError` | INVALID_INPUT | USER | False | Argument / payload malformed regardless of system state |
 | `PreconditionError` | PRECONDITION | USER | False | Inputs valid but state forbids action (schema mismatch, version conflict) |
-| `DependencyUnavailableError` | DEPENDENCY_UNAVAILABLE | PLATFORM | **True** | Required service down (Dapr, Temporal, object store, source DB) |
+| `DependencyUnavailableError` | DEPENDENCY_UNAVAILABLE | PLATFORM | **True** | Required service down (Dapr, Temporal, object store) |
+| `SourceUnavailableError` | SOURCE_UNAVAILABLE | USER | **True** | Customer-controlled source system unreachable (their DB, SaaS API, on-prem endpoint) |
 | `ResourceExhaustedError` | RESOURCE_EXHAUSTED | PLATFORM | **True** | Local resource limit (OOM, disk full, file handles) |
 | `DataIntegrityError` | DATA_INTEGRITY | APP_OWNER | False | Returned data corrupt / violates invariants |
 | `InternalError` | INTERNAL | APP_OWNER | False | App / SDK bug, invariant broken |
@@ -210,6 +211,12 @@ class AthenaSourceUnreachable(DependencyUnavailableError):
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_NETWORK"
     audience: ClassVar[Audience] = Audience.USER
 ```
+
+**Note:** new code for an *unreachable* source raises `SourceUnavailableError`
+directly (already `audience=USER`), so no override is needed. The override
+pattern above still applies where no leaf fits the locus — e.g. a source-side
+*timeout* is an `AppTimeoutError` whose `APP_OWNER` default you override to
+`USER`.
 
 If you're tempted to override `audience` more than once or twice per app,
 re-check the SDK base default — most apps don't need to override at all.

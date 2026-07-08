@@ -97,7 +97,7 @@ jobs:
           # when the most recent SDK commit is below the shallow boundary.
           fetch-depth: 0
 
-      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+      - uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
         if: steps.ctx.outputs.release == 'false'
 
       - name: Regenerate capability manifest
@@ -136,7 +136,7 @@ jobs:
 
       - name: Post sticky comment on drift
         if: failure() && steps.drift.outputs.status == 'drift' && github.event.pull_request.head.repo.fork == false
-        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
           header: capability-manifest-drift
           message: |
@@ -154,7 +154,7 @@ jobs:
 
       - name: Clear sticky comment when manifest is current
         if: success() && steps.ctx.outputs.release == 'false' && github.event.pull_request.head.repo.fork == false
-        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
           header: capability-manifest-drift
           delete: true

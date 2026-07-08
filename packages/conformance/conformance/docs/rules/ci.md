@@ -73,6 +73,10 @@ The `atlan-application-sdk-conformance bootstrap` command scaffolds a standard
 from the file. One finding is emitted per missing entry so each can be triaged or
 suppressed independently. Equivalences are respected: `.venv` covers `.venv/`, and
 `**/node_modules/**` covers `node_modules/`. Both absent-file and missing-entry findings
-are WARN only — the file is app-editable and must never block CI.
+are WARN only — the file is app-editable and must never block CI. Note on autofixable:
+only the absent-`.gitignore` case is mechanically fixed (via the same `bootstrap`
+re-sync as C002); a missing-entry finding on an existing `.gitignore` always requires
+human judgment and is not autofixed, which is why this rule's `autofixable` is false
+overall.
 
 ---

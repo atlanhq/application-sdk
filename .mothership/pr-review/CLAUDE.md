@@ -95,7 +95,7 @@ is read-only and never commits or pushes to the PR branch.
 Rover Direct's deterministic `session_id` (derived from the PR head SHA)
 means a re-trigger on the same HEAD resumes context; a new commit produces
 a new HEAD_SHA and a fresh sandbox. If a prior `<!-- SDK_REVIEW -->` summary
-exists, the run is a re-review (deltas tracked — see ORCHESTRATION.md §2d).
+exists, the run is a re-review (deltas tracked — see ORCHESTRATION.md §2e).
 
 ## Path Forward on Every Finding
 

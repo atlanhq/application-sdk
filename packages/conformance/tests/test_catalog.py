@@ -13,6 +13,7 @@ from conformance.suite.schema.disposition import (
     RuleMechanism,
     RuleScope,
 )
+from conformance.suite.schema.extensions import AtlanRuleProperties
 from pydantic import ValidationError
 
 
@@ -121,7 +122,10 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # C002/D001/D002: publisher-side contract. D004/D005: the same
     # redeclaration/extra contract on dependency-groups and SDK extras.
     # D006/D007/D008: the app pyproject baseline (python floor, build backend,
-    # type-checking) the SDK publishes. P004/P005: apps must reach the
+    # type-checking) the SDK publishes. D009: apps fetching Dapr components
+    # from GitHub instead of the installed wheel — the SDK's own
+    # download-components task never does this (it lists local files).
+    # P004/P005: apps must reach the
     # orchestration layer through the SDK seam, not Temporal/SDK-internals
     # (BLDX-1417). P008–P012: apps must use the SDK's storage seam, not
     # hand-roll object stores or bare path fields (BLDX-1398).
@@ -167,6 +171,14 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # seam (EnvironmentSecretStore legitimately reads os.environ), so the rule that
     # steers apps onto that seam is meaningless on the SDK itself (BLDX-1419). S001
     # (hardcoded credentials) stays 'both'.
+    # T010/T011/T012: missing unit/integration/e2e test suite — these encode the
+    # agreed per-connector testing-tier architecture (unit+integration required,
+    # e2e recommended); the SDK's own tests/ layout is graded by its own coverage
+    # gate (fail_under=85), not this per-app tiering policy (BLDX-1400).
+    # T014/T015: coverage-config integrity (disabled fail_under gate, omit/source
+    # hiding app/ product code) — only connector apps have an app/ product-code
+    # tree with a ratcheting coverage floor; the SDK's own coverage config is a
+    # different, already-enforced policy (BLDX-1400).
     assert app_scoped == {
         "B001",
         "C002",
@@ -177,6 +189,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "D006",
         "D007",
         "D008",
+        "D009",
         "E020",
         "K001",
         "K002",
@@ -205,6 +218,11 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "T002",
         "T003",
         "T004",
+        "T010",
+        "T011",
+        "T012",
+        "T014",
+        "T015",
         "O002",
         "O003",
         "O004",
@@ -310,13 +328,23 @@ def test_catalog_d_series_present() -> None:
     """The D-series dependency rules are all present."""
     rules = load_catalog()
     d_ids = {r.id for r in rules if r.id.startswith("D")}
-    expected = {"D001", "D002", "D003", "D004", "D005", "D006", "D007", "D008"}
+    expected = {
+        "D001",
+        "D002",
+        "D003",
+        "D004",
+        "D005",
+        "D006",
+        "D007",
+        "D008",
+        "D009",
+    }
     missing = expected - d_ids
     assert not missing, f"Missing D-series rules: {missing}"
 
 
 def test_catalog_p_series_present() -> None:
-    """The P-series prescription rules are exactly P001–P025.
+    """The P-series prescription rules are exactly P001–P025, P031.
 
     Strict equality (not just not-missing): P004–P007 are the orchestration-seam
     rules (BLDX-1417); P008–P012 are the storage-seam rules (BLDX-1398);
@@ -333,6 +361,9 @@ def test_catalog_p_series_present() -> None:
     AppStateAsCrossTaskChannel, ManualQualifiedNameFString).
     P029/P030 are the SDR-readiness rules — manifest agent_json slot and
     upload call presence (DISTR-752).
+    P031 is SharedDefaultExecutorOffload — asyncio.to_thread(...) /
+    run_in_executor(None, ...) bypass the SDK's dedicated run_in_thread() pool
+    and land on asyncio's shared default executor instead (BLDX-1525).
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -369,6 +400,7 @@ def test_catalog_p_series_present() -> None:
         "P028",
         "P029",
         "P030",
+        "P031",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
@@ -389,7 +421,7 @@ def test_catalog_t_series_present() -> None:
     """The T-series test-quality rules are all present."""
     rules = load_catalog()
     t_ids = {r.id for r in rules if r.id.startswith("T")}
-    expected = {"T001", "T002", "T003", "T004"}
+    expected = {f"T{n:03d}" for n in range(1, 16)}
     missing = expected - t_ids
     assert not missing, f"Missing T-series rules: {missing}"
 
@@ -464,6 +496,52 @@ def test_to_reporting_descriptor_roundtrip() -> None:
     assert descriptor.properties["atlan/category"] == "silent-swallow"
     assert descriptor.properties["atlan/autofixable"] is False
     assert descriptor.properties["atlan/orthogonalGate"] == "tests"
+
+
+def test_to_reporting_descriptor_roundtrip_forces_external_influence() -> None:
+    """C001's forces_external_influence=True survives the SARIF round-trip,
+    and a rule that doesn't set it (E001) omits the property entirely --
+    the field is only ever emitted when True (see AtlanRuleProperties.to_properties)."""
+    c001 = get_rule("C001")
+    descriptor = c001.to_reporting_descriptor()
+    assert descriptor.properties["atlan/forcesExternalInfluence"] is True
+
+    e001 = get_rule("E001")
+    descriptor = e001.to_reporting_descriptor()
+    assert "atlan/forcesExternalInfluence" not in descriptor.properties
+
+
+def test_atlan_rule_properties_forces_external_influence_roundtrip() -> None:
+    """to_properties() -> from_properties() preserves forces_external_influence
+    in both directions, so a typo in the ``atlan/forcesExternalInfluence`` key
+    on either side would fail this test rather than silently defeating C001's
+    mandatory-human-review guarantee."""
+    props = AtlanRuleProperties(
+        tier=EnforcementTier.BLOCK,
+        mechanism=RuleMechanism.STATIC,
+        category="ci-supply-chain",
+        forces_external_influence=True,
+    )
+    serialised = props.to_properties()
+    assert serialised["atlan/forcesExternalInfluence"] is True
+    assert (
+        AtlanRuleProperties.from_properties(serialised).forces_external_influence
+        is True
+    )
+
+    default_props = AtlanRuleProperties(
+        tier=EnforcementTier.BLOCK,
+        mechanism=RuleMechanism.STATIC,
+        category="ci-supply-chain",
+    )
+    default_serialised = default_props.to_properties()
+    assert "atlan/forcesExternalInfluence" not in default_serialised
+    assert (
+        AtlanRuleProperties.from_properties(
+            default_serialised
+        ).forces_external_influence
+        is False
+    )
 
 
 def test_warn_tier_maps_to_warning_level() -> None:

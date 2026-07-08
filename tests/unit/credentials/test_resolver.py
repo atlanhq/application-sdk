@@ -1,6 +1,7 @@
 """Unit tests for CredentialResolver."""
 
 import json
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -20,6 +21,7 @@ from application_sdk.credentials.types import (
     BasicCredential,
     RawCredential,
 )
+from application_sdk.infrastructure.secrets import SecretStoreUnavailableError
 from application_sdk.testing.mocks import MockSecretStore
 
 
@@ -86,13 +88,59 @@ class TestNewPath:
         assert raw["api_key"] == "secret"
 
 
+class TestNamedPathColdStartRetry:
+    """The named-path fetch (``_fetch_raw_json``) races the same cold Dapr
+    sidecar the agent bundle fetch does, and shares its retry engine."""
+
+    async def test_retries_transient_failure_then_succeeds(
+        self, fast_dapr_cold_start_retry
+    ) -> None:
+        calls = {"n": 0}
+
+        class ColdThenReady:
+            async def get(self, name: str) -> str:
+                calls["n"] += 1
+                if calls["n"] < 3:  # sidecar still cold on the first two tries
+                    raise SecretStoreUnavailableError(name)
+                return json.dumps({"type": "api_key", "api_key": "secret123"})
+
+        resolver = CredentialResolver(ColdThenReady())  # type: ignore[arg-type]
+
+        cred = await resolver.resolve(api_key_ref("prod-key"))
+
+        assert isinstance(cred, ApiKeyCredential)
+        assert cred.api_key == "secret123"
+        assert calls["n"] == 3  # rode out the two cold failures
+
+    async def test_persistent_transient_failure_wraps_in_credential_error(
+        self, deterministic_dapr_cold_start_deadline
+    ) -> None:
+        from application_sdk.credentials.errors import CredentialError
+
+        # Also asserts the call count, so this test can't pass merely
+        # because _fetch_raw_json wraps any exception into CredentialError —
+        # it must actually have retried first.
+        calls = {"n": 0}
+
+        class AlwaysDown:
+            async def get(self, name: str) -> str:
+                calls["n"] += 1
+                raise SecretStoreUnavailableError(name)
+
+        resolver = CredentialResolver(AlwaysDown())  # type: ignore[arg-type]
+
+        with pytest.raises(CredentialError):
+            await resolver.resolve(api_key_ref("prod-key"))
+        assert calls["n"] == 2
+
+
 def _make_vault_patches(vault_return=None, vault_side_effect=None):
     """Build mock DaprCredentialVault + DaprClient patches for resolver tests.
 
     DaprCredentialVault and DaprClient are lazy-imported inside _resolve_by_guid,
     so they must be patched at their source modules, not on the resolver module.
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import MagicMock, patch
 
     mock_vault = MagicMock()
     if vault_side_effect is not None:
@@ -135,7 +183,7 @@ class TestGuidResolutionPath:
 
     async def test_get_credentials_receives_string_not_dict(self, store, resolver):
         """Regression: resolver must pass the GUID as a plain string, not a dict."""
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import MagicMock, patch
 
         captured: list = []
         expected_creds = {"host": "db.example.com", "port": 1025}
@@ -208,6 +256,63 @@ class TestGuidResolutionPath:
             with pytest.raises(CredentialNotFoundError):
                 await getattr(resolver, method)(ref)
 
+    @pytest.mark.parametrize("method", ["resolve_raw", "resolve"])
+    async def test_vault_dependency_unavailable_is_not_collapsed_to_not_found(
+        self, store, resolver, method
+    ):
+        """A genuine dependency-unavailable failure from the vault (e.g. a
+        cold-start retry that exhausted its budget) must propagate as-is,
+        not collapse into CredentialNotFoundError — that would misreport a
+        retryable platform outage as a non-retryable, user-facing
+        "credential not found".
+
+        Mirrors how DaprCredentialVault.get_credentials() actually produces
+        this: its catch-all wraps the surviving ColdStartRaceError (e.g.
+        SecretStoreUnavailableError, from an exhausted retry_past_dapr_cold_start
+        budget) as `cause` on a generic CredentialVaultError — the resolver
+        must key off that `cause`, not just the CredentialVaultError type
+        itself (see the sibling "genuinely missing config" test below).
+        """
+        from application_sdk.infrastructure.credential_vault import CredentialVaultError
+        from application_sdk.infrastructure.secrets import SecretStoreUnavailableError
+
+        p_vault, p_dapr, _ = _make_vault_patches(
+            vault_side_effect=CredentialVaultError(
+                "Failed to resolve credentials for abc-123: secret store unavailable",
+                credential_guid="abc-123",
+                cause=SecretStoreUnavailableError("abc-123"),
+            )
+        )
+        with p_vault, p_dapr:
+            ref = legacy_credential_ref("abc-123")
+            with pytest.raises(CredentialVaultError):
+                await getattr(resolver, method)(ref)
+
+    @pytest.mark.parametrize("method", ["resolve_raw", "resolve"])
+    async def test_vault_genuinely_missing_config_collapses_to_not_found(
+        self, store, resolver, method
+    ):
+        """A CredentialVaultError raised directly for a genuinely-absent
+        credential config (no `cause` — e.g. DaprCredentialVault's
+        "No credential config found for GUID ..." case) must still collapse
+        to CredentialNotFoundError, exactly like any other definitive
+        failure from the vault. This must NOT be swept up by the
+        DependencyUnavailableError guard just because the deprecated
+        CredentialVaultError umbrella type happens to subclass it.
+        """
+        from application_sdk.infrastructure.credential_vault import CredentialVaultError
+
+        p_vault, p_dapr, _ = _make_vault_patches(
+            vault_side_effect=CredentialVaultError(
+                "No credential config found for GUID abc-123 in upstream store",
+                credential_guid="abc-123",
+            )
+        )
+        with p_vault, p_dapr:
+            ref = legacy_credential_ref("abc-123")
+            with pytest.raises(CredentialNotFoundError):
+                await getattr(resolver, method)(ref)
+
 
 # ---------------------------------------------------------------------------
 # End-to-end credential resolution test
@@ -222,7 +327,7 @@ class TestEndToEndCredentialResolution:
         → resolve_raw returns merged dict with all fields.
         """
         import os
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import MagicMock, patch
 
         guid = "e2e-test-guid-abc123"
 

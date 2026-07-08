@@ -12,7 +12,8 @@ Canonical API (v3.x+)::
         NotFoundError, AlreadyExistsError,
         InvalidInputError, PreconditionError,
         RateLimitedError, UnimplementedError,
-        DependencyUnavailableError, ResourceExhaustedError,
+        DependencyUnavailableError, SourceUnavailableError,
+        ResourceExhaustedError,
         DataIntegrityError, CancelledError, InternalError,
     )
 
@@ -33,6 +34,7 @@ from application_sdk.errors.leaves import (
     AppTimeoutError,
     AuthError,
     CancelledError,
+    ColdStartRaceError,
     DataIntegrityError,
     DependencyUnavailableError,
     InternalError,
@@ -41,6 +43,7 @@ from application_sdk.errors.leaves import (
     PreconditionError,
     RateLimitedError,
     ResourceExhaustedError,
+    SourceUnavailableError,
     UnimplementedError,
 )
 from application_sdk.errors.wire import FailureDetails
@@ -129,8 +132,10 @@ __all__ = [
     "AppTimeoutError",
     "AuthError",
     "CancelledError",
+    "ColdStartRaceError",
     "DataIntegrityError",
     "DependencyUnavailableError",
+    "SourceUnavailableError",
     "InternalError",
     "InvalidInputError",
     "NotFoundError",

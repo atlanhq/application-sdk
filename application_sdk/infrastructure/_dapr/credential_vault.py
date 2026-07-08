@@ -5,13 +5,29 @@ references via the Dapr secret store.
 """
 
 import copy
+import hashlib
 import json
 import re
 from enum import Enum
 from typing import Any
 
-from application_sdk.infrastructure._dapr.http import AsyncDaprClient
+from application_sdk.errors.leaves import ColdStartRaceError
+from application_sdk.infrastructure._dapr.client import (
+    classify_secret_fetch_error,
+    is_dapr_transport_unavailable,
+)
+from application_sdk.infrastructure._dapr.http import (
+    DAPR_SECRET_STORE_COMPONENT,
+    DAPR_UPSTREAM_BINDING_COMPONENT,
+    AsyncDaprClient,
+    retry_past_dapr_cold_start,
+)
 from application_sdk.infrastructure._secret_utils import process_secret_data
+from application_sdk.infrastructure.bindings import BindingError
+from application_sdk.infrastructure.secrets import (
+    SecretNotFoundError,
+    SecretStoreUnavailableError,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -158,15 +174,14 @@ class DaprCredentialVault:
                     if credential_source == _CredentialSource.AGENT
                     else credential_guid
                 )
-                try:
-                    logger.debug("Fetching multi-key secret: %s", key_to_fetch)
-                    secret_data = await self._get_secret(key_to_fetch)
-                except Exception:
-                    logger.warning(
-                        "Failed to fetch secret bundle: %s",
-                        key_to_fetch,
-                        exc_info=True,
-                    )
+                logger.debug("Fetching multi-key secret: %s", key_to_fetch)
+                # No local swallow: _get_secret already treats a definitively
+                # absent bundle as {} (expected — not every credential has
+                # one); anything else (a cold-start race, a genuine store
+                # rejection) propagates to the except Exception below and
+                # becomes a typed CredentialVaultError, rather than being
+                # silently downgraded to "no secrets" the way it used to be.
+                secret_data = await self._get_secret(key_to_fetch)
             else:
                 secret_data = await self._fetch_single_key_secrets(credential_config)
 
@@ -189,6 +204,18 @@ class DaprCredentialVault:
     async def _fetch_credential_config(self, credential_guid: str) -> dict[str, Any]:
         """Fetch the credential config JSON from the upstream object store.
 
+        Retries a cold-start race via :func:`retry_past_dapr_cold_start`,
+        same as :meth:`_get_secret` — this is typically the *first* Dapr
+        call ``get_credentials()`` makes (before the secret-store fetch), so
+        it races the identical cold sidecar. A transport/5xx failure here is
+        reclassified as a :class:`ColdStartRaceError` (via
+        :func:`~application_sdk.infrastructure._dapr.client.is_dapr_transport_unavailable`,
+        the same predicate :func:`~application_sdk.infrastructure._dapr.client.classify_secret_fetch_error`
+        uses) so :meth:`get_credentials`'s caller can tell a transient outage
+        apart from a genuinely-missing config — without this, a cold-start
+        race here would be indistinguishable from "no config" and get
+        collapsed into a non-retryable ``CredentialNotFoundError``.
+
         Raises:
             CredentialVaultError: If the GUID contains unsafe characters or no
                 config is found in the upstream store.
@@ -200,6 +227,9 @@ class DaprCredentialVault:
             APPLICATION_NAME,
             STATE_STORE_PATH_TEMPLATE,
             TEMPORARY_PATH,
+        )
+        from application_sdk.infrastructure.bindings import (  # noqa: PLC0415 — circular: infrastructure/__init__.py loads sibling modules
+            BindingResponse,
         )
         from application_sdk.infrastructure.credential_vault import (  # noqa: PLC0415 — circular: infrastructure/__init__.py loads sibling modules
             CredentialVaultError,
@@ -233,7 +263,22 @@ class DaprCredentialVault:
             "blobName": normalized_key,
         }
 
-        response = await self._upstream.invoke("get", data=data, metadata=metadata)
+        async def _fetch() -> BindingResponse:
+            try:
+                return await self._upstream.invoke("get", data=data, metadata=metadata)
+            except BindingError as exc:
+                if exc.cause is not None and is_dapr_transport_unavailable(exc.cause):
+                    raise ColdStartRaceError(
+                        message=f"Upstream credential-config store unreachable: {exc.cause}",
+                        cause=exc.cause,
+                    ) from exc
+                raise
+
+        response = await retry_past_dapr_cold_start(
+            _fetch,
+            description=f"Credential-vault config fetch for '{credential_guid}'",
+            component=DAPR_UPSTREAM_BINDING_COMPONENT,
+        )
 
         if response.data is None:
             raise CredentialVaultError(
@@ -245,11 +290,32 @@ class DaprCredentialVault:
         return json.loads(response.data)
 
     async def _get_secret(
-        self, secret_key: str, component_name: str | None = None
+        self,
+        secret_key: str,
+        component_name: str | None = None,
+        *,
+        log_label: str | None = None,
     ) -> dict[str, Any]:
         """Fetch and process a secret from the Dapr secret store.
 
-        Returns ``{}`` in local-environment deployments to avoid secret store
+        Retries a cold-start race via :func:`retry_past_dapr_cold_start` and
+        classifies failures via the shared
+        :func:`~application_sdk.infrastructure._dapr.client.classify_secret_fetch_error`
+        (transport/5xx = unreachable, retried; 4xx = definitive rejection,
+        not retried) instead of collapsing every failure into a single
+        non-retryable error the way this used to — that made a transient
+        sidecar race here indistinguishable from "no secret", so callers
+        had no way to retry it and silently proceeded with an incomplete
+        credential instead.
+
+        ``log_label`` overrides ``secret_key`` in the retry-warning log
+        description — pass a hashed label when ``secret_key`` is a ref-key
+        (single-key mode) so its raw value, which encodes secret-store
+        topology, never lands in WARNING logs (mirrors
+        :mod:`application_sdk.credentials.agent`'s single-key probe).
+
+        Returns ``{}`` when the key is definitively absent from the store,
+        or in local-environment deployments to avoid secret store
         dependency during development.
         """
         from application_sdk.constants import (  # noqa: PLC0415 — cold path: only on credential resolution
@@ -261,16 +327,28 @@ class DaprCredentialVault:
             return self._get_local_secret(secret_key)
 
         store = component_name or self._secret_store_name
-        try:
-            result = await self._client.get_secret(store_name=store, key=secret_key)
-            return process_secret_data(result)
-        # conformance: ignore[E004] re-raises as typed SecretFetchError; caller logs or propagates the typed error
-        except Exception as e:
-            from application_sdk.infrastructure._dapr._dapr_errors import (  # noqa: PLC0415
-                SecretFetchError,
-            )
 
-            raise SecretFetchError(component=store, cause=e) from e
+        async def _fetch() -> dict[str, str]:
+            try:
+                result = await self._client.get_secret(store_name=store, key=secret_key)
+            # conformance: ignore[E004] re-raises as typed SecretStore(Unavailable)Error via the shared classifier; cause chain preserved
+            except Exception as e:
+                raise classify_secret_fetch_error(secret_key, e) from e
+            if not result:
+                raise SecretNotFoundError(secret_key)
+            return result
+
+        try:
+            result = await retry_past_dapr_cold_start(
+                _fetch,
+                description=(
+                    f"Credential-vault secret fetch for '{log_label or secret_key}'"
+                ),
+                component=DAPR_SECRET_STORE_COMPONENT,
+            )
+        except SecretNotFoundError:
+            return {}
+        return process_secret_data(result)
 
     def _get_local_secret(self, secret_key: str) -> dict[str, Any]:
         """Read secret from the local secrets file for development.
@@ -310,22 +388,44 @@ class DaprCredentialVault:
         async def _try_fetch(label: str, value: str) -> None:
             if not value.strip():
                 return
+            value_hash = hashlib.sha256(value.encode()).hexdigest()[:8]
             try:
-                single_secret = await self._get_secret(value)
+                single_secret = await self._get_secret(
+                    value, log_label=f"sha256:{value_hash}"
+                )
                 if single_secret:
                     for k, v in single_secret.items():
                         if v is None or v == "":
                             continue
                         collected[k] = v
-            # conformance: ignore[E004] exc_info=True already present on the logger.debug call below
+            except ColdStartRaceError:
+                # The store never actually answered — a cold-start outage
+                # that exhausted the full retry budget, not "this field
+                # isn't a secret" (that case is already collapsed to {} by
+                # _get_secret without raising). Propagate so the caller
+                # raises a typed CredentialVaultError instead of silently
+                # proceeding with an incomplete credential, mirroring the
+                # multi-key branch above.
+                #
+                # Not a bare `raise` and not `from exc`: SecretStoreUnavailableError
+                # (the only ColdStartRaceError subtype this path raises) carries
+                # the raw ref-key in both `.secret_name` and `__str__()`, and its
+                # `cause` (the underlying httpx exception) can re-embed the same
+                # ref-key via a percent-encoded request URL — the exact leak the
+                # `except Exception` branch below scrubs at length. Re-raise a
+                # hash-labelled, cause-free equivalent instead of the original.
+                raise SecretStoreUnavailableError(f"sha256:{value_hash}") from None
+            # conformance: ignore[E004] exc_info=True would leak the raw ref-key (SecretStoreError.__str__ embeds `secret=<ref-key>`); hash + exception type name logged instead, mirroring retry_past_dapr_cold_start's warning log
             except Exception as e:
                 logger.debug(
-                    "Secret resolution failed for '%s' (value=%s)",
+                    "Secret resolution failed for '%s' (sha256:%s): %s",
                     label,
-                    value,
-                    exc_info=True,
+                    value_hash,
+                    type(e).__name__,
                 )
-                failed_lookups.append("  '%s' → '%s': %s" % (label, value, e))
+                failed_lookups.append(
+                    "  '%s' → sha256:%s: %s" % (label, value_hash, type(e).__name__)
+                )
 
         for field, value in credential_config.items():
             if isinstance(value, str):

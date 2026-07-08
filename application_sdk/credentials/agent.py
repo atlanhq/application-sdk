@@ -45,6 +45,7 @@ import hashlib
 import re
 import traceback
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 
 import orjson
 
@@ -54,8 +55,15 @@ from application_sdk.credentials.errors import (
     CredentialNotFoundError,
     CredentialParseError,
 )
-from application_sdk.errors import redact_secrets
-from application_sdk.infrastructure.secrets import SecretNotFoundError
+from application_sdk.errors import ColdStartRaceError, redact_secrets
+from application_sdk.infrastructure import (
+    DAPR_SECRET_STORE_COMPONENT,
+    retry_past_dapr_cold_start,
+)
+from application_sdk.infrastructure.secrets import (
+    SecretNotFoundError,
+    SecretStoreUnavailableError,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
@@ -165,9 +173,22 @@ async def resolve_agent_json(
 
 
 async def _fetch_bundle(secret_store: SecretStore, secret_path: str) -> dict[str, Any]:
-    """Fetch and JSON-parse the secret bundle at ``secret-path``."""
+    """Fetch and JSON-parse the secret bundle at ``secret-path``.
+
+    The agent secret-bundle fetch is typically the first Dapr call a workflow
+    makes, and on SDR runs it can race a sidecar still finishing its cold
+    start. Retry mechanics (transient classification, capped backoff, the
+    one-shot cold-start gate) live in
+    :func:`~application_sdk.infrastructure.retry_past_dapr_cold_start` —
+    shared with the other credential-resolution paths that race the same
+    sidecar. See that function's docstring for the full contract.
+    """
     try:
-        raw = await secret_store.get(secret_path)
+        raw = await retry_past_dapr_cold_start(
+            lambda: secret_store.get(secret_path),
+            description=f"Agent secret-bundle fetch at '{secret_path}'",
+            component=DAPR_SECRET_STORE_COMPONENT,
+        )
     except SecretNotFoundError as exc:
         raise CredentialNotFoundError(secret_path) from exc
     # conformance: ignore[E004] re-raises immediately as typed CredentialError with chained cause; logging deferred to caller boundary
@@ -213,6 +234,14 @@ async def _fetch_per_key_bundle(
     a hostname) won't fail the resolution. Unmatched ref-keys then take
     the v2-parity fallthrough in :func:`_substitute` (left as-is, surfaced
     by downstream connect errors).
+
+    A transient cold-start outage on a probe is retried via
+    :func:`~application_sdk.infrastructure.retry_past_dapr_cold_start`
+    (shared with :func:`_fetch_bundle` — both race the same sidecar). Only
+    a genuine, non-transient store error falls through to the silent-skip
+    path below; an outage that exhausts the retry budget is raised
+    instead, mirroring every other :func:`retry_past_dapr_cold_start`
+    call site.
     """
     bundle: dict[str, Any] = {}
     seen: set[str] = set()
@@ -221,18 +250,39 @@ async def _fetch_per_key_bundle(
         if not value or value in seen:
             return
         seen.add(value)
+        value_hash = hashlib.sha256(value.encode()).hexdigest()[:8]
         try:
-            secret = await secret_store.get_optional(value)
+            secret = await retry_past_dapr_cold_start(
+                lambda: secret_store.get_optional(value),
+                description=f"single-key probe for sha256:{value_hash}",
+                component=DAPR_SECRET_STORE_COMPONENT,
+            )
+        except ColdStartRaceError:
+            # The store never actually answered — a cold-start outage that
+            # exhausted the full retry budget, not "this field isn't a
+            # secret" (that case is already collapsed to None by
+            # get_optional without raising). Propagate so the caller sees
+            # a typed outage instead of silently proceeding with a
+            # corrupt credential, mirroring the vault sibling
+            # (credential_vault.py's _fetch_single_key_secrets).
+            #
+            # Not a bare `raise` and not `from exc`: SecretStoreUnavailableError
+            # (the only ColdStartRaceError subtype this path raises) carries
+            # the raw ref-key in both `.secret_name` and `__str__()`, and its
+            # `cause` (the underlying httpx exception) can re-embed the same
+            # ref-key via a percent-encoded request URL — the exact leak the
+            # `except Exception` branch below scrubs at length. Re-raise a
+            # hash-labelled, cause-free equivalent instead of the original.
+            raise SecretStoreUnavailableError(f"sha256:{value_hash}") from None
         # conformance: ignore[E004] logger.warning with redacted traceback is emitted below; exc_info omitted intentionally to prevent secret ref-key leaking through stdlib traceback formatting
         except Exception as exc:
-            # Store-side error — distinct from "key not in store" (silent
-            # below). A transient outage here on a real secret field
-            # would otherwise auth-fail with the ref-key as the literal
-            # username, so surface at WARNING with the stack trace.
+            # Genuine, non-transient store error — distinct from "key not
+            # in store" (silent below). A real secret field hitting this would
+            # otherwise auth-fail with the ref-key as the literal username,
+            # so surface at WARNING with the stack trace.
             # Log a hash, not the ref-key itself: ref-key names encode secret
             # store topology (purpose, environment) and enable enumeration if
             # logs leak.
-            value_hash = hashlib.sha256(value.encode()).hexdigest()[:8]
             # NOT exc_info=True: SecretStoreError.__str__ renders `secret=<ref-key>`
             # and its message embeds the backend cause, which can echo the raw
             # ref-key — that would undo the hashing above in the same log record.
@@ -243,11 +293,19 @@ async def _fetch_per_key_bundle(
             # a short key like "DB" would corrupt "DB_CONNECTION"; the
             # lookarounds treat word chars and hyphens as identifier-continuation
             # so only whole-token occurrences are scrubbed.
-            safe_traceback = re.sub(
-                rf"(?<![\w-]){re.escape(value)}(?![\w-])",
-                f"sha256:{value_hash}",
-                redact_secrets("".join(traceback.format_exception(exc))),
-            )
+            #
+            # Also scrub the percent-encoded form: the chained httpx exception's
+            # str() can embed the request URL, which encodes the ref-key via
+            # quote(key, safe="") (see infrastructure/_dapr/http.py's
+            # AsyncDaprClient.get_secret) — a ref-key with URL-unsafe characters
+            # (space, "/", "=") would otherwise survive un-scrubbed in that form.
+            safe_traceback = redact_secrets("".join(traceback.format_exception(exc)))
+            for candidate in {value, quote(value, safe="")}:
+                safe_traceback = re.sub(
+                    rf"(?<![\w-]){re.escape(candidate)}(?![\w-])",
+                    f"sha256:{value_hash}",
+                    safe_traceback,
+                )
             logger.warning(  # conformance: ignore[E005,L004] exc_info would bypass the secret-redacted traceback built above; safe_traceback included inline
                 "single-key probe failed for ref-key sha256:%s — store error, "
                 "treating as non-secret. If this was a real credential "
@@ -262,7 +320,7 @@ async def _fetch_per_key_bundle(
             # in single-key mode (host, port, region literals).
             logger.debug(
                 "single-key probe: sha256:%s not found in store (non-secret field)",
-                hashlib.sha256(value.encode()).hexdigest()[:8],
+                value_hash,
             )
             return
         bundle[value] = secret
