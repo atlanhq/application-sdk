@@ -59,7 +59,6 @@ colorama==0.4.6 ; sys_platform == 'win32'
     #   loguru
     #   pytest
     #   typer
-    #   uvicorn
 coverage==7.15.0
 cryptography==49.0.0
     # via
@@ -89,7 +88,7 @@ fastar==0.11.0
     # via
     #   fastapi
     #   fastapi-cloud-cli
-filelock==3.29.6
+filelock==3.29.7
     # via
     #   python-discovery
     #   virtualenv
@@ -123,7 +122,7 @@ httpx-retries==0.4.6
     # via
     #   atlan-application-sdk
     #   pyatlan
-hypothesis==6.156.2
+hypothesis==6.156.3
 identify==2.6.19
     # via pre-commit
 idna==3.18
@@ -401,7 +400,7 @@ urllib3==2.7.0
     #   botocore
     #   requests
     #   sentry-sdk
-uvicorn==0.50.2
+uvicorn==0.51.0
     # via
     #   fastapi
     #   fastapi-cli

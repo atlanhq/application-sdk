@@ -9,7 +9,11 @@ description: >
   Config/Connectors/Credential/Renderers imports) are guided migration fixes.
   K003 (stale Pkl lock), K004 (missing generated output), and K005 (stripped
   provenance banner) are generated-artifact freshness findings fixed by
-  re-resolving / regenerating — all verified by the pkl-eval gate.
+  re-resolving / regenerating — all verified by the pkl-eval gate.  K006
+  (a manifest.json JSONPath reference the Python Output contract does not
+  declare) is fixed on the Python side — declare the field or mix in the SDK
+  contract base that supplies it — and verified by the test-suite gate, not
+  pkl-eval.
 ---
 
 ### Maintains
@@ -26,7 +30,7 @@ K-series rules are WARN-tier, so in **default** mode this facet is always empty
 (warnings do not fail the gate).  In **strict** mode the fingerprint-set includes
 unsuppressed WARNING results, which is where K-series remediation actually runs.
 
-The active scope decides which rules can appear: K001–K005 are all `scope=APP`,
+The active scope decides which rules can appear: K001–K006 are all `scope=APP`,
 so they surface only on consumer app repos.  The runner auto-detects scope, so
 the SDK repo sees 0 findings.
 
@@ -74,8 +78,11 @@ Before proposing any edit, read the actual lines around `finding.line` in
 generated artifact directly** — those are outputs of `pkl eval`, and K004/K005
 catch the staleness that hand-editing causes.  The *only* sanctioned way to
 change a generated artifact is to regenerate it from the contract.  After every
-edit, the `pkl-eval` gate runs `pkl eval` to verify the contract compiled and
-regenerated cleanly.
+edit to `contract/**/*.pkl` (K001/K002) or the Pkl lock (K003/K004/K005), the
+`pkl-eval` gate runs `pkl eval` to verify the contract compiled and regenerated
+cleanly.  **K006 is the one exception**: its fix is a plain Python edit (see
+below) with no `.pkl` or generated-artifact involvement, so it is verified by
+the standard test-suite gate instead of `pkl-eval`.
 
 The freshness rules (K003/K004/K005) are remediated by running a pkl command
 (`pkl project resolve` and/or `pkl eval -m . contract/app.pkl`), so they are
@@ -223,9 +230,58 @@ K005 never graduates to BLOCK; a hand-maintaining app suppresses per file.
 
 ---
 
+**K006 ManifestContractFieldMismatch** — a `$.extract.outputs.<field>` reference
+in a committed `app/generated/**/manifest.json` DAG node names a field the
+entrypoint's Python `Output` contract does not declare (directly, or via an
+inherited base/mixin).  `classification = "mechanical"` when the fix is
+"mix in the SDK contract base that already supplies this field" (see below);
+`"judgment"` when it requires deciding what value the app itself should
+compute and declaring a new field by hand.  **Does not require `pkl`** — this
+is a pure Python edit, verified by the test-suite gate.
+
+`finding.message` names the missing field(s), the manifest path, and the
+Output contract class. Read the actual `Output` class at `finding.line` in
+`finding.file` before proposing an edit.
+
+*Procedure:*
+
+1. **Check whether an SDK contract mixin already supplies the field(s)** named
+   in the finding — most commonly `application_sdk.contracts.base.PublishInputMixin`
+   for `connection_qualified_name`, `transformed_data_prefix`,
+   `publish_state_prefix`, and `current_state_prefix` (the publish-pipeline
+   fields; it also derives their values correctly from
+   `connection_qualified_name`, so hand-declaring them independently is both
+   unnecessary and a second place to drift). If so, add the mixin to the
+   `Output` class's base classes — `classification = "mechanical"`.
+2. **Otherwise, declare the missing field(s) directly** on the `Output` model
+   with an appropriate type and a sensible default, and set its value wherever
+   the class is constructed. `classification = "judgment"` — the fix requires
+   understanding what the field should actually contain.
+3. **Do not edit `app/generated/manifest.json`** to work around the finding —
+   it is a `pkl eval` output, not the source of truth for what fields exist. If
+   the referenced field is genuinely not needed (the pipeline step that
+   consumes it should not be enabled for this app), the real fix is in
+   `contract/app.pkl` (e.g. `pipeline.publish = null`) followed by
+   `pkl eval -m . contract/app.pkl` — that is a **K001/K002-style contract
+   change**, not a K006 fix; route it there instead if this is the actual
+   intent.
+4. **Verification is the standard test-suite gate**, not `pkl-eval` — a plain
+   `uv run pytest` (or the app's configured test command) after staging the
+   Python edit. Re-running `atlan-application-sdk-conformance detect --series K`
+   also directly re-checks the fixed field is now visible (including through
+   the mixin's inheritance chain).
+5. If the mismatch is understood and deliberately deferred (e.g. the pipeline
+   step is being removed in a separate, already-tracked change), suppress with
+   `# conformance: ignore[K006] <reason>` on the `Output` class definition (or
+   the comment-only line directly above it) and route to residue.
+
+---
+
 **Suppress outcome (strict mode only, WARNING-tier findings)**: the model may
-propose an inline `// conformance: ignore[Kxxx] <8–40 word justification>` on
-the violating line or the comment-only line directly above it when a legitimate
-exception exists (e.g. a K001 finding on a contract intentionally kept at the
-legacy module during a phased migration with a tracked follow-on ticket).  Route
-every suppression to residue for human audit.
+propose an inline suppression comment — `// conformance: ignore[Kxxx]
+<8–40 word justification>` for K001–K005 (`.pkl` source, `//` comments) or
+`# conformance: ignore[K006] <8–40 word justification>` (Python source, `#`
+comments) — on the violating line or the comment-only line directly above it
+when a legitimate exception exists (e.g. a K001 finding on a contract
+intentionally kept at the legacy module during a phased migration with a
+tracked follow-on ticket).  Route every suppression to residue for human audit.
