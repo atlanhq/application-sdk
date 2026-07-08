@@ -147,7 +147,14 @@ absent). Put the GHA run link at the top of the description:
 `**Run:** [logs + cost](<GHA_RUN_URL>)`. Every finding becomes a child.
 
 ### 4c. FIX PRs (atomic, one finding at a time)
+
+**Ticket first, then PR.** For each finding: create a **child Linear ticket**
+under the parent (this yields `<TICKET_ID>`), then branch off it. The ticket
+always precedes the PR — the branch and PR are named after the ticket, and if
+any step below fails the ticket is cancelled (no orphaned tickets, ever).
+
 ```bash
+# 0. create child ticket under the parent → TICKET_ID (see tools.md)
 git checkout main && git clean -fd
 git checkout -b <TICKET_ID> origin/main
 # bug/security/perf → write the failing test FIRST, then fix
