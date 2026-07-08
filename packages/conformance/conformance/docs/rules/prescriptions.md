@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**30 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.determinism` (P020–P024), `suite.checks.app_name_alignment` (P025) (all AST-based / cross-artifact)
+**31 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -53,6 +53,7 @@ reassigned.
 | [P028](#p028) | `ManualQualifiedNameFString` | `warn` | `app` | `asset-modeling` | — | 0.9.0 |
 | [P029](#p029) | `SdrManifestMissingAgentJson` | `block` | `app` | `sdr-readiness` | — | 0.9.0 |
 | [P030](#p030) | `SdrUploadNotCalled` | `warn` | `app` | `sdr-readiness` | — | 0.9.0 |
+| [P031](#p031) | `SharedDefaultExecutorOffload` | `warn` | `both` | `async-correctness` | — | 0.13.0 |
 
 ---
 
@@ -1015,5 +1016,39 @@ Exemption: this rule is skipped for apps whose `contract/app.pkl` sets `pipeline
 = null` (no publish stage), which compiles to a generated manifest with no `dag.publish`
 node.  An extract-only app has nothing to hand the extracted assets off to, so the
 absence of `self.upload()` is by design, not a gap.
+
+---
+
+## P031 — `SharedDefaultExecutorOffload` {#p031}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.13.0
+
+> Thread offload onto asyncio's shared default executor instead of run_in_thread()
+
+**Rationale:** asyncio.to_thread(...) and run_in_executor(None, ...) both dispatch onto asyncio's
+shared default executor. Temporal's Python SDK uses that same default executor
+internally for its own scheduling, so routing long-running blocking work through it can
+exhaust the pool and deadlock the worker. The SDK exposes a dedicated escape hatch,
+run_in_thread(), which dispatches onto its own thread pool specifically to avoid this
+contention — a prior fix shipped a raw asyncio.to_thread(...) call that nothing caught
+in review.
+
+A call offloads blocking work onto asyncio's **shared default** executor instead of the
+SDK's dedicated `run_in_thread()` pool: `asyncio.to_thread(...)`, or
+`run_in_executor(None, ...)` (including `loop.run_in_executor(None, ...)` /
+`asyncio.get_event_loop().run_in_executor(None, ...)`).  Temporal's Python SDK uses that
+same default executor for its own internal scheduling, so sharing it with long-running
+blocking calls can exhaust the pool and deadlock the worker.  Use `run_in_thread()` —
+`App.run_in_thread()` or `self.task_context.run_in_thread()` — which dispatches onto the
+SDK's own dedicated `sdk-blocking-*` thread pool.
+
+`run_in_executor(<some-executor>, ...)` with any executor other than `None` is not
+flagged — a call-site-owned `ThreadPoolExecutor` is not the shared-pool contention this
+rule targets. `application_sdk/execution/heartbeat.py` is exempt: that is where
+`run_in_thread()`'s own dedicated-executor dispatch lives.
+
+Remediation is a restructure (swap in `run_in_thread()`), so findings route to residue.
+Land as `WARN`; suppress a reviewed exception with `# conformance: ignore[P031]
+<reason>`.
 
 ---

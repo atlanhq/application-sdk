@@ -299,6 +299,14 @@ jobs:
         )
       )
     runs-on: ubuntu-latest
+    # Least-privilege override: this is the only job that creates check runs
+    # (e2e-apps wait-mode: callback, via github.token — see docs/standards/ci.md),
+    # so checks:write is scoped here instead of at workflow level. A job-level
+    # permissions block replaces rather than merges with the workflow
+    # defaults, so contents:read is repeated here for the checkout step.
+    permissions:
+      contents: read
+      checks: write
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.matrix-builder.outputs.matrix) }}
@@ -311,6 +319,9 @@ jobs:
           target-branch: "refs/heads/${{ matrix.target_branch }}"
           workflow: tests.yaml
           workflow-inputs: ${{ github.event_name == 'merge_group' && format('{{"application_sdk_ref":"{0}"}}', github.sha) || format('{{"application_sdk_ref":"{0}","run_e2e":"true","base_image_ref":"{1}"}}', github.event.pull_request.head.sha, needs.build-sdk-base-image.outputs.image) }}
+          wait-mode: callback
+          check-run-name: "Connector E2E / ${{ matrix.repo_name }}"
+          check-sha: ${{ github.event_name == 'merge_group' && github.sha || github.event.pull_request.head.sha }}
 
   # SDR-on-Kubernetes e2e — dispatched cross-repo to atlan-local-marketplace-app,
   # which owns the orchestrator + charts and runs the hermetic kind e2e. LM
@@ -350,6 +361,11 @@ jobs:
           target-branch: "refs/heads/main"
           workflow: sdr-k8s-e2e.yaml
           workflow-inputs: ${{ github.event_name == 'merge_group' && format('{{"application_sdk_ref":"{0}"}}', github.sha) || format('{{"application_sdk_ref":"{0}"}}', github.event.pull_request.head.sha) }}
+          # sdr-k8s-e2e.yaml (atlan-local-marketplace-app) doesn't yet report
+          # back via the Checks API callback — stays on the legacy busy-poll
+          # until that's added there too. Explicit so it doesn't silently
+          # inherit a future default change.
+          wait-mode: poll
 
   # ── The single required check for the connector e2e area ────────────────────
   # Always runs and always concludes, so branch protection / the merge queue can
@@ -371,43 +387,52 @@ jobs:
     needs: [changes, matrix-builder, build-sdk-base-image, connector-tests]
     if: always()
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: read
     steps:
-      - name: Evaluate connector e2e area
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # connector-tests now only dispatches (e2e-apps wait-mode: callback) —
+      # its own success means "dispatch succeeded", not "tests passed". The
+      # actual pass/fail lands later via the Connector E2E / <repo> check
+      # runs that each connector completes directly (tests-reusable.yaml's
+      # report-to-sdk job); this step still validates the upstream chain
+      # that had to succeed for those checks to exist at all.
+      - name: Verify upstream jobs + dispatch succeeded
+        id: upstream
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
           MATRIX_RESULT: ${{ needs.matrix-builder.result }}
           BASE_IMAGE_RESULT: ${{ needs.build-sdk-base-image.result }}
           CONNECTOR_RESULT: ${{ needs.connector-tests.result }}
         run: |
+          python3 .github/scripts/verify_connector_gate_upstream.py \
+            --changes-result "$CHANGES_RESULT" \
+            --matrix-result "$MATRIX_RESULT" \
+            --base-image-result "$BASE_IMAGE_RESULT" \
+            --connector-result "$CONNECTOR_RESULT"
+
+      # Rolls up every 'Connector E2E / <repo>' check run in ONE endpoint
+      # call per poll (not one busy-poll per matrix leg), using conditional
+      # requests so an unchanged poll doesn't count against the rate limit.
+      # Each check flips the instant its connector's own run reports back
+      # (tests-reusable.yaml's report-to-sdk job) — this only has to notice
+      # that within one poll interval, not sit through a whole poll cycle
+      # itself.
+      - name: Wait for connector check runs to complete
+        if: steps.upstream.outputs.dispatched == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MATRIX_JSON: ${{ needs.matrix-builder.outputs.matrix }}
+          SHA: ${{ github.event_name == 'merge_group' && github.sha || github.event.pull_request.head.sha }}
+        run: |
           set -euo pipefail
-          # Detection / matrix build have no path-skip — anything other than
-          # success means we cannot trust whether the connector legs ran. A
-          # connector-tests skip downstream of these would then be an
-          # upstream-failure skip, not the docs-only skip. Fail closed.
-          if [[ "$CHANGES_RESULT" != "success" ]]; then
-            echo "::error::Detect Changes did not succeed ($CHANGES_RESULT) — failing the gate closed."
-            exit 1
-          fi
-          if [[ "$MATRIX_RESULT" != "success" ]]; then
-            echo "::error::Build Test Matrix did not succeed ($MATRIX_RESULT) — failing the gate closed."
-            exit 1
-          fi
-          # build-sdk-base-image is legitimately skipped on merge_group and on
-          # non-e2e PRs; only a genuine build FAILURE must block (a base that
-          # won't build is the signal, per the connector-tests if: comment).
-          if [[ "$BASE_IMAGE_RESULT" != "success" && "$BASE_IMAGE_RESULT" != "skipped" ]]; then
-            echo "::error::Build SDK base image did not succeed ($BASE_IMAGE_RESULT) — failing the gate closed."
-            exit 1
-          fi
-          # With upstream proven healthy, a skipped connector-tests is the
-          # genuine docs-only skip (sdk==false && container==false) → pass.
-          if [[ "$CONNECTOR_RESULT" == "success" || "$CONNECTOR_RESULT" == "skipped" ]]; then
-            echo "✓ Connector Tests: $CONNECTOR_RESULT"
-            echo "Connector gate passed."
-          else
-            echo "::error::Connector Tests did not pass ($CONNECTOR_RESULT) — failing the gate."
-            exit 1
-          fi
+          NAMES_JSON=$(jq -c '[.include[] | "Connector E2E / " + .repo_name]' <<< "$MATRIX_JSON")
+          python3 .github/scripts/poll_check_runs_gate.py \
+            --repo "${{ github.repository }}" \
+            --sha "$SHA" \
+            --names-json "$NAMES_JSON"
 
   # Real-cloud storage integration tests (S3 / Azure / GCS) — exercise
   # create_store_from_binding + CloudStore against real buckets/vaults using the
@@ -433,7 +458,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: "./.github/actions/setup-deps"
       - name: AWS — assume the integration role (OIDC)
-        uses: aws-actions/configure-aws-credentials@254c19bd240aabef8777f48595e9d2d7b972184b # v6
+        uses: aws-actions/configure-aws-credentials@517a711dbcd0e402f90c77e7e2f81e849156e31d # v6
         with:
           role-to-assume: ${{ vars.AWS_INTEG_ROLE_ARN }}
           aws-region: ${{ vars.AWS_INTEG_REGION }}

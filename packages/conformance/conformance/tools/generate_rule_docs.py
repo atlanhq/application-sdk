@@ -133,7 +133,7 @@ _SERIES_META: list[SeriesMeta] = [
             "`suite.checks.entrypoint_alignment` (P016), "
             "`suite.checks.entrypoint` (P017–P018, scans test files too), "
             "`suite.checks.client_seam` (P019), "
-            "`suite.checks.determinism` (P020–P024), "
+            "`suite.checks.determinism` (P020–P024, P031), "
             "`suite.checks.app_name_alignment` (P025) "
             "(all AST-based / cross-artifact)"
         ),
@@ -208,7 +208,9 @@ _SERIES_META: list[SeriesMeta] = [
             "``contract/**/*.pkl``), "
             "`suite.checks.generated_freshness` (K003–K005, scans "
             "``contract/PklProject``, ``contract/PklProject.deps.json``, "
-            "``atlan.yaml``, ``app.yaml``, and ``app/generated/**``)"
+            "``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), "
+            "`suite.checks.manifest_contract` (K006, cross-references "
+            "``app/generated/**/manifest.json`` against Python ``Output`` contracts)"
         ),
         suppression_example=(
             "// conformance: ignore[K001] intentional: phased migration tracked in BLDX-XXXX"

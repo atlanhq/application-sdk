@@ -28,7 +28,6 @@ Usage::
 
 from __future__ import annotations
 
-import asyncio
 import dataclasses
 import inspect
 import json
@@ -59,6 +58,7 @@ from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERA
 from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
 from application_sdk.errors import AppError
 from application_sdk.errors.categories import FailureCategory
+from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.context import HandlerContext, bind_handler_context
 from application_sdk.handler.contracts import (
@@ -1508,7 +1508,7 @@ def _register_workflow_routes(
                     shutil.copyfileobj(file.file, dst)
                 return os.path.getsize(safe_tmp_path)
 
-            file_size = await asyncio.to_thread(_drain_to_tmp)
+            file_size = await run_in_thread(_drain_to_tmp)
             await _upload_file(key, safe_tmp_path, _storage)
         finally:
             try:
@@ -1836,7 +1836,8 @@ def _register_workflow_routes(
                 # The hook is async-only (discovery rejects sync defs), so
                 # await it directly. Authors doing CPU/IO-bound work inside
                 # (SQL generation, full DAG rewrite) own offloading it — e.g.
-                # `await asyncio.to_thread(...)` — rather than the SDK
+                # `from application_sdk.execution.heartbeat import run_in_thread`
+                # then `await run_in_thread(...)` — rather than the SDK
                 # guessing on their behalf.
                 computed = await compute(manifest_dict, fe_inputs_decoded)
             except HTTPException:

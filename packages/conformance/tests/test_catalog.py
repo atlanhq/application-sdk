@@ -164,6 +164,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # K003/K004/K005: generated-artifact freshness — a stale Pkl lock, a missing
     # generated output, or a stripped provenance banner are all app-repo concerns
     # (the SDK has no contract/ + generated app artifacts) (BLDX-1414).
+    # K006: manifest-vs-contract field validation — only app repos have a
+    # generated app/generated/**/manifest.json DAG to cross-reference against a
+    # Python Output contract; the SDK has no such generated artifact (BLDX-1527).
     # E020: HTTP-failure-to-empty-return — the harm (publishing a partial crawl as
     # complete) is a connector extract/publish concern; the SDK's matching sites are
     # legitimate best-effort infra (health/metric scrapes), not crawlers (BLDX-1503).
@@ -196,6 +199,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "K003",
         "K004",
         "K005",
+        "K006",
         "P004",
         "P005",
         "P008",
@@ -344,7 +348,7 @@ def test_catalog_d_series_present() -> None:
 
 
 def test_catalog_p_series_present() -> None:
-    """The P-series prescription rules are exactly P001–P025.
+    """The P-series prescription rules are exactly P001–P025, P031.
 
     Strict equality (not just not-missing): P004–P007 are the orchestration-seam
     rules (BLDX-1417); P008–P012 are the storage-seam rules (BLDX-1398);
@@ -361,6 +365,9 @@ def test_catalog_p_series_present() -> None:
     AppStateAsCrossTaskChannel, ManualQualifiedNameFString).
     P029/P030 are the SDR-readiness rules — manifest agent_json slot and
     upload call presence (DISTR-752).
+    P031 is SharedDefaultExecutorOffload — asyncio.to_thread(...) /
+    run_in_executor(None, ...) bypass the SDK's dedicated run_in_thread() pool
+    and land on asyncio's shared default executor instead (BLDX-1525).
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -397,6 +404,7 @@ def test_catalog_p_series_present() -> None:
         "P028",
         "P029",
         "P030",
+        "P031",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
@@ -435,10 +443,11 @@ def test_catalog_b_series_present() -> None:
 
 def test_catalog_k_series_present() -> None:
     """The K-series contract-toolkit rules are K001/K002 (source) plus the
-    generated-artifact freshness rules K003/K004/K005 (BLDX-1414)."""
+    generated-artifact freshness rules K003/K004/K005 (BLDX-1414), plus the
+    manifest-vs-contract field validation rule K006 (BLDX-1527)."""
     rules = load_catalog()
     k_ids = {r.id for r in rules if r.id.startswith("K")}
-    expected = {"K001", "K002", "K003", "K004", "K005"}
+    expected = {"K001", "K002", "K003", "K004", "K005", "K006"}
     missing = expected - k_ids
     assert not missing, f"Missing K-series rules: {missing}"
     extra = k_ids - expected

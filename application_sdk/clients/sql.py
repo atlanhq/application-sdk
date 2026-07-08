@@ -34,6 +34,7 @@ from application_sdk.common.aws_utils import (
 from application_sdk.constants import AWS_SESSION_NAME, USE_SERVER_SIDE_CURSOR
 from application_sdk.credentials.utils import parse_credentials_extra
 from application_sdk.errors import AppError, sanitize_cause_repr
+from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -120,9 +121,11 @@ class BaseSQLClient(ClientInterface):
             install_tolerant_text_decoder_hook(self.engine)
 
             # Test connection briefly to validate credentials.
-            # Wrapped in asyncio.to_thread because SQLAlchemy's synchronous
+            # Wrapped in run_in_thread because SQLAlchemy's synchronous
             # engine.connect() blocks the event loop — critical for Temporal
-            # activities where blocking starves the auto-heartbeat.
+            # activities where blocking starves the auto-heartbeat. run_in_thread
+            # dispatches onto the SDK's dedicated pool rather than asyncio's
+            # shared default executor, which Temporal's own scheduling also uses.
             # Capture engine in a local variable so the closure doesn't need to
             # re-read self.engine (which is typed Optional) and pyright can narrow it.
             _engine = self.engine
@@ -131,7 +134,7 @@ class BaseSQLClient(ClientInterface):
                 with _engine.connect() as _:
                     pass  # Connection test successful
 
-            await asyncio.to_thread(_ping)
+            await run_in_thread(_ping)
 
             # Don't store persistent connection
             self.connection = None
