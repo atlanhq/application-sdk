@@ -150,6 +150,11 @@ class TestObsModeDerivation:
             key = inst._build_remote_key(
                 datetime(2025, 6, 15, 14, 0, 0), "file.json.gz"
             )
+            # Assert the object-store key STRUCTURE, not the runner's path sep:
+            # _build_remote_key uses os.path.join, which yields "\" on a Windows
+            # CI runner. The SDR runtime is Linux (keys are always "/"), so
+            # normalize here rather than couple the test to the runner's OS.
+            key = key.replace("\\", "/")
             assert key.startswith("artifacts/apps/observability/sdr/logs/")
             assert "year=2025" in key and "hour=14" in key
         finally:
