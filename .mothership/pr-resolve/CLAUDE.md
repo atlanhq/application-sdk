@@ -46,3 +46,6 @@ auto-merge loop is what the SDK-evolution rebuild was undoing).
 7. Same-repo PRs only — you push to the PR's head branch. If it's a fork you
    cannot push to, stop and report.
 8. Confidentiality — no customer/tenant/run-ID identifiers in commits or replies.
+9. **Never write the literal `@sdk-resolve` in any PR comment** — it would
+   re-trigger this workflow and loop. Post `@sdk-review` (to invoke the
+   reviewer) and plain-text summaries only.
