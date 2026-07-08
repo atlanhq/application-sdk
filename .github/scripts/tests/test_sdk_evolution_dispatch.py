@@ -59,6 +59,19 @@ def test_prompt_differs_by_tier():
     assert "check-registry.md" in daily  # both tiers point at the registry
 
 
+def test_consumer_pr_cap_metadata_is_weekly_only():
+    # The CONSUMER_PR_CAP metadata row is clutter on daily (daily ignores it).
+    assert "CONSUMER_PR_CAP:" in sd.build_prompt("weekly", "d", "u", 5)
+    assert "CONSUMER_PR_CAP:" not in sd.build_prompt("daily", "d", "u", 5)
+
+
+def test_main_missing_required_env_returns_1(monkeypatch):
+    monkeypatch.delenv("MOTHERSHIP_URL", raising=False)
+    monkeypatch.delenv("HARNESS_TOKEN", raising=False)
+    # Returns 1 before any network call — no KeyError traceback.
+    assert sd.main() == 1
+
+
 # ---------------------------------------------------------------------------
 # SSE state machine + exit decision
 # ---------------------------------------------------------------------------

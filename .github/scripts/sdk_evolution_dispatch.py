@@ -87,6 +87,9 @@ def build_prompt(
         else "\nThis is a DAILY run — fast, high-confidence pass only. Do NOT open "
         "design debates; note weekly DESIGN candidates and move on.\n"
     )
+    # CONSUMER_PR_CAP only applies to the weekly consumer audit — daily ignores
+    # it, so keep it out of the daily prompt header.
+    cap_line = f"\n  CONSUMER_PR_CAP:  {consumer_pr_cap}" if tier == "weekly" else ""
     return f"""You are running the SDK Evolution pipeline in a Cloudflare sandbox.
 
 Repository cloned at: /workspace/application-sdk (on main).
@@ -101,8 +104,7 @@ Read and follow the orchestration EXACTLY:
 Run metadata (use these verbatim):
   TIER:             {tier}
   RUN_DATE:         {run_date}
-  GHA_RUN_URL:      {gha_run_url}
-  CONSUMER_PR_CAP:  {consumer_pr_cap}
+  GHA_RUN_URL:      {gha_run_url}{cap_line}
 {weekly_note}
 GITHUB_TOKEN is pre-injected by the sandbox. Use `gh` for all GitHub operations.
 Linear proxy access: use the $PROXY_BASE and $PROXY_JWT env vars (see tools.md).
@@ -379,6 +381,12 @@ def _consumer_pr_cap() -> int:
 
 
 def main() -> int:
+    missing = [v for v in ("MOTHERSHIP_URL", "HARNESS_TOKEN") if not os.environ.get(v)]
+    if missing:
+        print(
+            f"::error::Missing required environment variable(s): {', '.join(missing)}"
+        )
+        return 1
     base_url = os.environ["MOTHERSHIP_URL"].rstrip("/")
     token = os.environ["HARNESS_TOKEN"]
     gha_run_url = os.environ.get("GHA_RUN_URL", "")
