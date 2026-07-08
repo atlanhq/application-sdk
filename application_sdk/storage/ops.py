@@ -1317,6 +1317,7 @@ async def download_file_chunked(
                     logger.warning(
                         "Object changed during chunked download; restarting fresh: %s",
                         key,
+                        exc_info=True,
                     )
                     file_size = None
                     etag = None
