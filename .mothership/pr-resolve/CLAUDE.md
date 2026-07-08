@@ -37,8 +37,11 @@ auto-merge loop is what the SDK-evolution rebuild was undoing).
    `sdk-review-*` labels, resets the `sdk-review` status) and re-runs CI. That
    is normal. Key your loop off the *reviewer's findings + CI*, never off the
    labels/status you just reset.
-4. **CI before review** — never burn a review round on a CI failure you can
-   already see. Get CI green first, then re-trigger the reviewer.
+4. **CI never gates the review** — greening CI is best-effort and only a
+   head start / round-saver, NOT an entry condition. If CI won't go green, still
+   run `@sdk-review` (the review is valuable on red CI and often explains the
+   failure). CI-green is a merge-ready *exit* condition; a stuck CI ends the run
+   at `NEEDS_HUMAN` with the review posted — never with no review.
 5. **Round cap** — stop after `MAX_ROUNDS` (default 8) review rounds and report
    what remains rather than looping forever.
 6. Conventional Commits; NEVER `--amend`, force-push, `git add -A`, or edit

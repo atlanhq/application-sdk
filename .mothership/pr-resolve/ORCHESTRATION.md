@@ -44,9 +44,17 @@ then:
 
 If you changed files: `uv run pre-commit run --files <changed>`, run the relevant
 tests, then commit + push (see Commit rules). Re-watch and repeat. Cap: **5 fix
-attempts**; if still red for an in-PR reason, stop and report.
+attempts**.
 
-Print: `[Phase 1 complete] ci=<green|noted-preexisting>`
+**Best-effort, NON-blocking — never skip the review over red CI.** This phase
+is a quick head start on the obvious failures, not a gate. If CI is still red
+after the cap (or the failure is pre-existing / infra), do **NOT** stop — carry
+on to Phase 3 and run the review anyway. A review on red CI is still valuable,
+and its findings often explain the failure. CI-green is an *exit* condition
+(Phase 3c), not an *entry* condition: a genuinely stuck CI ends the run at
+`NEEDS_HUMAN` **with the review posted** — never with no review at all.
+
+Print: `[Phase 1 complete] ci=<green|red-carried|noted-preexisting>`
 
 ---
 
@@ -98,13 +106,19 @@ For each bullet, incl. every nit:
 - Genuinely ambiguous design fork with no clear winner → leave it, note it for
   human, keep going with the rest.
 
-### 3e. Commit, push, re-green CI
+### 3e. Commit, push, re-green CI (best-effort)
 `uv run pre-commit run --files <changed>` → relevant tests → commit specific
-files → push. The push resets the reviewer labels/status (expected). Re-run
-Phase 1's CI-green loop on the new HEAD **before** re-triggering — don't waste a
-review round on a known CI failure.
+files → push. The push resets the reviewer labels/status (expected). Then make a
+best-effort pass at greening CI on the new HEAD before re-triggering, so you
+don't waste a round on a failure you just introduced — but if CI stays red for a
+reason you can't fix, still re-trigger the review (same rule as Phase 1: red CI
+never blocks the review).
 
 ### 3f. Repeat → 3a.
+
+If the round cap is hit with findings still open, or CI cannot be greened after
+genuine attempts, stop with verdict `NEEDS_HUMAN` — with the latest review and a
+clear note of what's blocking — rather than looping.
 
 Print each round: `[Phase 3 round R] <N> findings → <F> fixed, <D> dismissed`
 Print at end: `[Phase 3 complete] rounds=<R>, converged=<yes|no>`
