@@ -452,7 +452,9 @@ class IntegrationTestClient:
         try:
             response = requests.get(url, params=params, timeout=self.timeout)
         except requests.RequestException as e:
-            logger.warning("Could not fetch live manifest from %s: %s", url, e)
+            logger.warning(
+                "Could not fetch live manifest from %s: %s", url, e, exc_info=True
+            )
             return None
         if response.status_code != 200:
             logger.warning(
@@ -462,7 +464,9 @@ class IntegrationTestClient:
         try:
             manifest = response.json()
         except ValueError as e:
-            logger.warning("Live manifest %s did not return JSON: %s", url, e)
+            logger.warning(
+                "Live manifest %s did not return JSON: %s", url, e, exc_info=True
+            )
             return None
         if not isinstance(manifest, dict):
             logger.warning(

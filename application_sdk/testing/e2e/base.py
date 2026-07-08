@@ -657,6 +657,7 @@ class BaseE2ETest:
                         "Live /manifest has no usable `dag` — falling back to the "
                         "committed manifest file at %s.",
                         self.manifest_path,
+                        exc_info=True,
                     )
             elif self._require_live_manifest():
                 raise ManifestFileNotFoundError(
@@ -707,7 +708,9 @@ class BaseE2ETest:
                 url, params=params, timeout=self.app_manifest_timeout_seconds
             )
         except requests.RequestException as exc:
-            logger.warning("Could not reach live manifest at %s: %s", url, exc)
+            logger.warning(
+                "Could not reach live manifest at %s: %s", url, exc, exc_info=True
+            )
             return None
         if resp.status_code != 200:
             logger.warning("Live manifest %s returned HTTP %d", url, resp.status_code)
@@ -715,7 +718,9 @@ class BaseE2ETest:
         try:
             manifest = resp.json()
         except ValueError as exc:
-            logger.warning("Live manifest %s did not return JSON: %s", url, exc)
+            logger.warning(
+                "Live manifest %s did not return JSON: %s", url, exc, exc_info=True
+            )
             return None
         if not isinstance(manifest, dict):
             logger.warning(
