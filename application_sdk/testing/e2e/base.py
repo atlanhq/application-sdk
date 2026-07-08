@@ -398,6 +398,7 @@ class BaseE2ETest:
             for asset in client.asset.search(conn_request):
                 if asset.guid:
                     client.asset.purge_by_guid(asset.guid)
+                    # conformance: ignore[L006] loop bounded to a single result via dsl.size=1; one purge event per connection
                     logger.info("e2e cleanup: purged connection %s", conn_qn)
 
         except Exception:
@@ -691,6 +692,7 @@ class BaseE2ETest:
                             self.connection_qualified_name,
                             type_names=probe_types,
                         )
+                        # conformance: ignore[L006] short, bounded poll (atlas_asset_poll_timeout_seconds) with modest iteration count, not a hot loop; the per-iteration asset counts are the primary diagnostic signal when an E2E run fails to converge
                         logger.info(
                             "Atlas inventory under %s: %s",
                             self.connection_qualified_name,

@@ -38,7 +38,7 @@ def parse_credentials_extra(credentials: dict[str, Any]) -> dict[str, Any]:
 
     if isinstance(extra, str):
         try:
-            return json.loads(extra)
+            return orjson.loads(extra)
         except json.JSONDecodeError as e:
             from application_sdk.credentials.errors import (  # noqa: PLC0415
                 CredentialParseError,

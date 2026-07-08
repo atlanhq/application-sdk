@@ -7,11 +7,11 @@ into Atlas entities using the pyatlan library.
 from __future__ import annotations
 
 import hashlib
-import json
 import warnings
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+import orjson
 from pyatlan.model.enums import AtlanConnectorType, EntityStatus
 
 if TYPE_CHECKING:
@@ -163,7 +163,7 @@ class AtlasTransformer(TransformerInterface):
                         typename,
                         sorted(row.keys()) if isinstance(row, dict) else None,
                         hashlib.sha256(
-                            json.dumps(row, sort_keys=True, default=str).encode("utf-8")
+                            orjson.dumps(row, option=orjson.OPT_SORT_KEYS, default=str)
                         ).hexdigest()[:16]
                         if isinstance(row, dict)
                         else None,

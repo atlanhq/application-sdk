@@ -50,7 +50,8 @@ from application_sdk.testing.full_dag.payload import build_ae_payload, build_see
 from application_sdk.testing.full_dag.sql_app import SQLAppE2EFullTest
 
 warnings.warn(
-    "application_sdk.testing.full_dag is deprecated; use application_sdk.testing.e2e",
+    "application_sdk.testing.full_dag is deprecated and will be removed in "
+    "v4.0; use application_sdk.testing.e2e",
     DeprecationWarning,
     stacklevel=2,
 )

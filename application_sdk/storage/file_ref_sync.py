@@ -215,6 +215,7 @@ async def _replace_refs(
                     and isinstance(value, FileReference)
                     and _is_lazy(node, name)
                 ):
+                    # conformance: ignore[L018] storage_path is in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes it to an indexed OTLP attribute — %-style would lose the promotion
                     logger.debug(
                         "file_ref.materialize.lazy_skipped",
                         storage_path=value.storage_path,
@@ -259,6 +260,7 @@ async def _replace_refs(
                 key = node.storage_path or str(id(node))
                 result = _results.get(key, node)
                 if node is not _winners.get(key):
+                    # conformance: ignore[L018] storage_path/dedup_key/reused_local_path/local_path are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
                     logger.debug(
                         "file_ref.materialize.dedup_hit",
                         storage_path=node.storage_path,

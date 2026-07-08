@@ -169,6 +169,13 @@ async def _probe_store(store: object, label: str, binding_name: str) -> str | No
     try:
         await obstore.put_async(store, probe_key, _PREFLIGHT_PAYLOAD)
     except Exception as exc:
+        logger.warning(
+            "SDR preflight: write probe failed for %s store (binding: %s): %s",
+            label,
+            binding_name,
+            exc,
+            exc_info=True,
+        )
         error_class, hint = _classify_access_error(exc)
         return (
             f"  * {label} store (binding: '{binding_name}'): write failed [{error_class}]\n"
@@ -182,6 +189,13 @@ async def _probe_store(store: object, label: str, binding_name: str) -> str | No
     try:
         await obstore.head_async(store, probe_key)
     except Exception as exc:
+        logger.warning(
+            "SDR preflight: read/head probe failed for %s store (binding: %s): %s",
+            label,
+            binding_name,
+            exc,
+            exc_info=True,
+        )
         error_class, hint = _classify_access_error(exc)
         return (
             f"  * {label} store (binding: '{binding_name}'): read/head failed [{error_class}]\n"
@@ -272,6 +286,13 @@ async def verify_object_store_access(infra: InfrastructureContext) -> None:
                 timeout=_PROBE_TIMEOUT_SECS,
             )
         except TimeoutError:
+            logger.warning(
+                "SDR preflight: probe for %s store (binding: %s) timed out after %.0fs",
+                label,
+                binding_name,
+                _PROBE_TIMEOUT_SECS,
+                exc_info=True,
+            )
             failure = (
                 f"  * {label} store (binding: '{binding_name}'): probe timed out "
                 f"after {_PROBE_TIMEOUT_SECS:.0f}s [connectivity / unknown]\n"

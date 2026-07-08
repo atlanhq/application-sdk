@@ -71,6 +71,7 @@ class MCPServer:
                 continue
 
             if mcp_metadata.visible:
+                # conformance: ignore[L006] one-time startup enumeration over a small, statically-configured tool set; production logs are collected at INFO floor, so DEBUG would delete this from observability
                 self.logger.info(
                     "Registering MCP tool %s: %s",
                     mcp_metadata.name,
@@ -84,6 +85,7 @@ class MCPServer:
                     **mcp_metadata.kwargs,
                 )
             else:
+                # conformance: ignore[L006] one-time startup enumeration over a small, statically-configured tool set; production logs are collected at INFO floor, so DEBUG would delete this from observability
                 self.logger.info(
                     "Tool is marked as not visible, skipping registration: %s",
                     mcp_metadata.name,

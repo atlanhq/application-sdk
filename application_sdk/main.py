@@ -33,6 +33,8 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 
+import orjson
+
 from application_sdk.common._env import env_int as _env_int
 from application_sdk.discovery import (
     load_app_class,
@@ -80,6 +82,7 @@ def _debug_dump_handler(signum: int, frame: object) -> None:
         os.write(fd, b"\n===== END DEBUG DUMP =====\n")
     finally:
         os.close(fd)
+    # conformance: ignore[L005] signal handler must stay async-signal-safe; the logging framework takes locks and can deadlock when invoked from a signal context
     print(f"Debug dump written to {dump_path}", file=sys.stderr, flush=True)
 
 
@@ -467,6 +470,7 @@ async def _log_dapr_components(
         safe_meta = yaml_details.get(name, {})
         if safe_meta:
             detail = ", ".join("%s=%s" % (k, v) for k, v in safe_meta.items())
+            # conformance: ignore[L006] one-time startup enumeration over discovered dapr components (small, bounded set), not a hot loop; an existing test pins INFO
             logger.info(
                 "Dapr component: %s (type=%s, version=%s) — %s",
                 name,
@@ -475,6 +479,7 @@ async def _log_dapr_components(
                 detail,
             )
         else:
+            # conformance: ignore[L006] one-time startup enumeration over discovered dapr components (small, bounded set), not a hot loop
             logger.info(
                 "Dapr component: %s (type=%s, version=%s)",
                 name,
@@ -501,6 +506,7 @@ async def _log_dapr_components(
         is_registered = comp_name in registered
 
         if is_registered and declared is not False:
+            # conformance: ignore[L006] one-time startup validation over the fixed 4-element `expected` tuple, not a hot loop
             logger.info(
                 "Dapr binding %s (role=%s) accepted: registered in sidecar (%s=%s)",
                 comp_name,
@@ -509,6 +515,7 @@ async def _log_dapr_components(
                 raw if raw is not None else "<unset>",
             )
         elif is_registered and declared is False:
+            # conformance: ignore[L006] one-time startup validation over the fixed 4-element `expected` tuple, not a hot loop
             logger.info(
                 "Dapr binding %s (role=%s) registered in sidecar despite %s=false — "
                 "possible drift between atlan.yaml deploy.dapr.%s and the deployed chart values",
@@ -526,6 +533,7 @@ async def _log_dapr_components(
                 enable_var,
             )
         elif not is_registered and declared is False:
+            # conformance: ignore[L006] one-time startup validation over the fixed 4-element `expected` tuple, not a hot loop
             logger.info(
                 "Dapr binding %s (role=%s) disabled by config (%s=false); not registered in sidecar (expected)",
                 comp_name,
@@ -533,6 +541,7 @@ async def _log_dapr_components(
                 enable_var,
             )
         else:  # not registered, declared is None
+            # conformance: ignore[L006] one-time startup validation over the fixed 4-element `expected` tuple, not a hot loop
             logger.info(
                 "Dapr binding %s (role=%s) not registered in sidecar and %s is unset — "
                 "the SDK cannot determine whether your app needs it; "
@@ -959,6 +968,7 @@ async def run_worker_mode(config: AppConfig) -> None:
     # Log registrations
     for registered_app in AppRegistry.get_instance().list_apps():
         app_meta = AppRegistry.get_instance().get(registered_app)
+        # conformance: ignore[L006] this worker registers a small, statically-configured set of apps (typically one); production logs are collected at INFO floor, so demoting this to DEBUG would delete it from observability entirely
         logger.info("Registered app %s version %s", registered_app, app_meta.version)
 
     for registered_app, tasks in TaskRegistry.get_instance().get_all_tasks().items():
@@ -1222,6 +1232,7 @@ async def run_combined_mode(config: AppConfig) -> None:
 
     for registered_app in AppRegistry.get_instance().list_apps():
         app_meta = AppRegistry.get_instance().get(registered_app)
+        # conformance: ignore[L006] this worker registers a small, statically-configured set of apps (typically one); production logs are collected at INFO floor, so demoting this to DEBUG would delete it from observability entirely
         logger.info("Registered app %s version %s", registered_app, app_meta.version)
 
     for registered_app, tasks in TaskRegistry.get_instance().get_all_tasks().items():
@@ -1398,9 +1409,10 @@ async def run_dev_combined(
         import warnings  # noqa: PLC0415 — cold path: deprecation warning only
 
         warnings.warn(
-            "`temporal_host` is deprecated and ignored: `run_dev_combined` now "
-            "always boots an in-process workflow runtime. To target an external "
-            "Temporal cluster, use `run_combined_mode(config)` directly.",
+            "`temporal_host` is deprecated and ignored and will be removed in "
+            "v4.0: `run_dev_combined` now always boots an in-process workflow "
+            "runtime. To target an external Temporal cluster, use "
+            "`run_combined_mode(config)` directly.",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -1426,6 +1438,7 @@ async def run_dev_combined(
     ):
         del _dapr  # env-side-effect is sufficient; the dataclass is just for tests
         if _rt.ui_url:
+            # conformance: ignore[L005] direct dev-mode terminal banner; existing tests assert on this via capsys, not the logging pipeline
             print(f"\nTemporal UI running at {_rt.ui_url}")
         await _run_dev_combined_inner(
             app_class=app_class,
@@ -1459,8 +1472,6 @@ async def _run_dev_combined_inner(
     vars → AppConfig fields). ``temporal_host`` and ``temporal_namespace``
     always arrive populated from the embedded runtime.
     """
-    import json as _json  # noqa: PLC0415
-
     app_module = f"{app_class.__module__}:{app_class.__name__}"
 
     config = _build_dev_config(
@@ -1543,32 +1554,49 @@ async def _run_dev_combined_inner(
                     run_id,
                 )
 
+            # conformance: ignore[L005] direct dev-mode terminal banner; existing tests assert on this via capsys, not the logging pipeline
             print(f"\n  Credentials provisioned: credential_guid={credential_guid}")
+            # conformance: ignore[L005] direct dev-mode terminal banner; existing tests assert on this via capsys, not the logging pipeline
             print(f"  Workflow started: workflow_id={workflow_id} run_id={run_id}")
+            # conformance: ignore[L005] direct dev-mode terminal banner; existing tests assert on this via capsys, not the logging pipeline
             print(f"\n  curl {base}/workflows/v1/result/{workflow_id}\n")
 
         # Schedule provisioning + start as a background task — runs after the server starts
         asyncio.create_task(_provision_and_start())
     else:
+        # conformance: ignore[L005] direct dev-mode terminal banner; existing tests assert on this via capsys, not the logging pipeline
         print(
             f"\nDev server running at http://{config.handler_host}:{config.handler_port}"
         )
+        # conformance: ignore[L005] direct dev-mode terminal banner; existing tests assert on this via capsys, not the logging pipeline
         print(
             "  POST /workflows/v1/dev/local-vault                            - Provision credentials"
         )
+        # conformance: ignore[L005] direct dev-mode terminal banner; existing tests assert on this via capsys, not the logging pipeline
         print("  POST /workflows/v1/start                         - Start workflow")
+        # conformance: ignore[L005] direct dev-mode terminal banner; existing tests assert on this via capsys, not the logging pipeline
         print("  POST /workflows/v1/stop/{workflow_id}/{run_id}   - Stop workflow")
+        # conformance: ignore[L005] direct dev-mode terminal banner; existing tests assert on this via capsys, not the logging pipeline
         print("  GET  /workflows/v1/result/{workflow_id}          - Get result")
+        # conformance: ignore[L005] direct dev-mode terminal banner; existing tests assert on this via capsys, not the logging pipeline
         print("  GET  /workflows/v1/status/{workflow_id}/{run_id} - Get status")
+        # conformance: ignore[L005] direct dev-mode terminal banner; existing tests assert on this via capsys, not the logging pipeline
         print("  GET  /health                                      - Health check")
         if example_input is not None:
+            # conformance: ignore[L005] direct dev-mode terminal banner; existing tests assert on this via capsys, not the logging pipeline
             print("\nExample:")
-            example_json = _json.dumps(example_input, indent=2)
+            example_json = orjson.dumps(
+                example_input, option=orjson.OPT_INDENT_2
+            ).decode()
+            # conformance: ignore[L005] direct dev-mode terminal banner; existing tests assert on this via capsys, not the logging pipeline
             print(
                 f"  curl -X POST http://{config.handler_host}:{config.handler_port}/workflows/v1/start \\"
             )
+            # conformance: ignore[L005] direct dev-mode terminal banner; existing tests assert on this via capsys, not the logging pipeline
             print('    -H "Content-Type: application/json" \\')
+            # conformance: ignore[L005] direct dev-mode terminal banner; existing tests assert on this via capsys, not the logging pipeline
             print(f"    -d '{example_json}'")
+        # conformance: ignore[L005] direct dev-mode terminal banner; existing tests assert on this via capsys, not the logging pipeline
         print(
             f"\n  curl http://{config.handler_host}:{config.handler_port}/workflows/v1/result/{{workflow_id}}\n"
         )

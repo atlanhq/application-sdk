@@ -567,7 +567,16 @@ def _adc_is_external_account() -> bool:
         # malformed — treat it as "not external_account" and let obstore's own
         # decoder surface the error, rather than crashing boot with AttributeError.
         return isinstance(data, dict) and data.get("type") == "external_account"
-    except (OSError, ValueError):
+    except (OSError, ValueError) as e:
+        # Best-effort: an unreadable/unparseable creds file is left for obstore's
+        # own decoder to surface authoritatively; here we just decline to treat
+        # it as external_account.
+        _get_logger().warning(
+            "Could not read ADC credential file %r for external_account check: %s",
+            path,
+            e,
+            exc_info=True,
+        )
         return False
 
 

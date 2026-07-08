@@ -312,6 +312,7 @@ workflows = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "atlan-application-sdk-conformance" },
     { name = "boto3-stubs" },
     { name = "isort" },
     { name = "libcst" },
@@ -397,6 +398,7 @@ provides-extras = ["workflows", "sql", "daft", "storage", "incremental", "iam-au
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "atlan-application-sdk-conformance", directory = "packages/conformance" },
     { name = "boto3-stubs", specifier = ">=1.38.6,<2.0.0" },
     { name = "isort", specifier = ">=8.0.1,<8.1.0" },
     { name = "libcst", specifier = ">=1.4.0,<2.0.0" },
@@ -427,6 +429,27 @@ test = [
     { name = "semver", specifier = ">=3.0.2,<4.0.0" },
     { name = "trustme", specifier = ">=1.2.1,<2.0.0" },
 ]
+
+[[package]]
+name = "atlan-application-sdk-conformance"
+version = "0.12.0"
+source = { directory = "packages/conformance" }
+dependencies = [
+    { name = "jinja2" },
+    { name = "jsonschema" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "atlan-application-sdk", marker = "extra == 'test'" },
+    { name = "jinja2", specifier = ">=3.1.0,<4.0.0" },
+    { name = "jsonschema", specifier = ">=4.23.0,<5.0.0" },
+    { name = "pydantic", specifier = ">=2.10.6,<3.0.0" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.3.3,<10.0.0" },
+    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=1.4.0,<2.0.0" },
+]
+provides-extras = ["test"]
 
 [[package]]
 name = "attrs"

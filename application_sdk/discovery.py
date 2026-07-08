@@ -254,6 +254,7 @@ def load_handler_class(
     # Fall back to scanning for any Handler subclass
     for name, obj in inspect.getmembers(module, inspect.isclass):
         if issubclass(obj, Handler) and obj is not Handler:
+            # conformance: ignore[L006] fires at most once per call — the immediately-following return exits the loop on first match; not per-item log volume
             logger.info(
                 "Found handler class by type inspection module_path=%s class=%s",
                 module_path,
