@@ -331,7 +331,7 @@ def test_manifest_without_extract_args_raises(
 ) -> None:
     """A manifest whose extract node has no ``args`` object raises ValueError
     (rather than silently deriving an empty input). Pins the second raise branch
-    of ``_manifest_extract_inputs`` (the first, FileNotFoundError, is covered above).
+    of ``_manifest_node_inputs`` (the first, FileNotFoundError, is covered above).
     """
     manifest = {
         "execution_mode": "automation-engine",
@@ -347,6 +347,100 @@ def test_manifest_without_extract_args_raises(
 
     with pytest.raises(ValueError, match="dag.extract.inputs.args"):
         _NoArgsManifestSuite()._build_scenario_args(workflow_scenario)
+
+
+# ---------------------------------------------------------------------------
+# Non-crawler entrypoint routing — build the SDR run from a non-extract DAG
+# node (miner / lineage / clean) so those agent-credentialed entrypoints are
+# routed dynamically in SDR, not just checked statically (conformance P029).
+# ---------------------------------------------------------------------------
+
+
+def _write_manifest_with_nodes(tmp_path, nodes: dict[str, dict[str, Any]]) -> str:
+    """Write a manifest whose ``dag`` has one node per ``nodes`` entry (name → args)."""
+    manifest = {
+        "execution_mode": "automation-engine",
+        "dag": {name: {"inputs": {"args": args}} for name, args in nodes.items()},
+    }
+    path = tmp_path / "manifest.json"
+    path.write_bytes(orjson.dumps(manifest))
+    return str(path)
+
+
+# A non-crawler (miner) entrypoint's args: it needs source creds via agent_json
+# too, and carries a distinctive, non-placeholder key so a test can tell the
+# miner node's args apart from the extract node's.
+_MINER_ARGS: dict[str, Any] = {
+    "connection": "{{connection}}",
+    "extraction_method": "{{extraction-method}}",
+    "agent_json": "{{agent-json}}",
+    "miner_only": "miner-value",
+}
+
+
+def test_manifest_node_selects_non_crawler_node(
+    tmp_path, workflow_scenario: Scenario
+) -> None:
+    """With ``manifest_node`` set to a non-extract node, the workflow input is
+    built from THAT node's args — and the entrypoint still gets source-cred agent
+    routing (the P029 concern), so miner/lineage runs are exercised dynamically."""
+
+    class _MinerSuite(BaseSDRIntegrationTest):
+        manifest_path = _write_manifest_with_nodes(
+            tmp_path,
+            {"extract": dict(_ARGS_WITH_AGENT_JSON), "miner": dict(_MINER_ARGS)},
+        )
+        manifest_node = "miner"
+        agent_spec_template = {"agent-name": "miner-agent", "secret-path": "creds"}
+        default_connection = {
+            "typeName": "Connection",
+            "attributes": {"qualifiedName": "default/x/1"},
+        }
+        scenarios = []
+
+    args = _MinerSuite()._build_scenario_args(workflow_scenario)
+    # Built from the MINER node, not extract.
+    assert args["miner_only"] == "miner-value"
+    assert "include_filter" not in args, "extract-only slot leaked into a miner run"
+    # The non-crawler entrypoint is agent-routed for its source credentials.
+    assert args["extraction_method"] == "agent"
+    assert args["agent_json"] == _MinerSuite.agent_spec_template
+    assert args["connection"] == _MinerSuite.default_connection
+
+
+def test_manifest_node_defaults_to_extract(
+    tmp_path, workflow_scenario: Scenario
+) -> None:
+    """Unset ``manifest_node`` still reads ``dag.extract`` even when other nodes
+    exist — the default is fully backward compatible."""
+
+    class _DefaultSuite(BaseSDRIntegrationTest):
+        manifest_path = _write_manifest_with_nodes(
+            tmp_path,
+            {"extract": dict(_ARGS_WITH_AGENT_JSON), "miner": dict(_MINER_ARGS)},
+        )
+        agent_spec_template = {"agent-name": "a", "secret-path": "p"}
+        scenarios = []
+
+    args = _DefaultSuite()._build_scenario_args(workflow_scenario)
+    assert "include_filter" in args  # extract node's slot present
+    assert "miner_only" not in args  # miner node's slot NOT used
+
+
+def test_manifest_node_missing_raises(tmp_path, workflow_scenario: Scenario) -> None:
+    """Selecting a node the manifest doesn't declare raises a diagnostic
+    ValueError naming the missing node (not a silent empty input)."""
+
+    class _NoLineageSuite(BaseSDRIntegrationTest):
+        manifest_path = _write_manifest_with_nodes(
+            tmp_path, {"extract": dict(_ARGS_WITH_AGENT_JSON)}
+        )
+        manifest_node = "lineage"
+        agent_spec_template = {"agent-name": "a", "secret-path": "p"}
+        scenarios = []
+
+    with pytest.raises(ValueError, match=r"dag\.lineage\.inputs\.args"):
+        _NoLineageSuite()._build_scenario_args(workflow_scenario)
 
 
 def test_execute_scenario_polls_workflow_completion(

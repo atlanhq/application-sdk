@@ -120,6 +120,22 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
     #: Empty string ("") keeps the legacy hand-written behaviour.
     manifest_path: ClassVar[str] = ""
 
+    #: Which manifest DAG node the workflow input is built from. Defaults to
+    #: ``"extract"`` (the crawler entrypoint). Set it to a non-crawler entrypoint
+    #: node — ``"miner"``, ``"lineage"``, ``"clean"`` — for a suite that exercises
+    #: that entrypoint, so the SDR run is built from (and agent-routed through)
+    #: ``dag.<manifest_node>.inputs.args`` instead of ``dag.extract``. These
+    #: entrypoints also resolve source credentials via ``agent_json`` (statically
+    #: checked by conformance P029); pointing the SDR harness at their node is what
+    #: lets that agent routing be exercised dynamically, not just linted.
+    #:
+    #: This is the manifest DAG node KEY — distinct from :pyattr:`workflow_type`
+    #: (the SDK entrypoint name sent in the start body) and from the manifest's
+    #: sibling ``inputs.workflow_type`` (the AE workflow-type slug); a
+    #: multi-entrypoint SQL app whose variants (e.g. ``ecc``/``s4``) still crawl
+    #: through the single ``dag.extract`` node keeps the default.
+    manifest_node: ClassVar[str] = "extract"
+
     #: When True, a workflow scenario that runs to completion must have written
     #: NON-EMPTY extracted output at ``extracted_output_base_path`` — catching the
     #: "COMPLETED with status success but zero assets" silent SDR failure (and,
@@ -184,12 +200,14 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
                 args["workflow_type"] = self.workflow_type
         return args
 
-    def _manifest_extract_inputs(self) -> dict[str, Any]:
-        """Load the connector's manifest and return its extract node's ``args``.
+    def _manifest_node_inputs(self, node: str = "extract") -> dict[str, Any]:
+        """Load the connector's manifest and return the ``args`` of its *node*
+        DAG node (``"extract"`` by default; ``"miner"`` / ``"lineage"`` / … for a
+        non-crawler entrypoint — see :pyattr:`manifest_node`).
 
-        Raises if the manifest is missing or has no ``dag.extract.inputs.args``
-        — a manifest-driven SDR test with no usable extract node is a config
-        error, not something to silently fall back on.
+        Raises if the manifest is missing or the selected node has no
+        ``dag.<node>.inputs.args`` — a manifest-driven SDR test with no usable
+        node is a config error, not something to silently fall back on.
 
         Note: the sibling ``inputs.workflow_type`` (the AE workflow-type slug) is
         deliberately NOT read — see :meth:`_workflow_args_from_manifest`.
@@ -203,18 +221,23 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
                 "connector's manifest.json, or '' to use agent_spec_template."
             )
         manifest = orjson.loads(path.read_bytes())
-        inputs = ((manifest.get("dag") or {}).get("extract") or {}).get("inputs") or {}
+        dag = manifest.get("dag") or {}
+        inputs = (dag.get(node) or {}).get("inputs") or {}
         if not isinstance(inputs.get("args"), dict):
             raise ValueError(
-                f"Manifest at {path} has no `dag.extract.inputs.args` object — "
-                "cannot derive the workflow input from it."
+                f"Manifest at {path} has no `dag.{node}.inputs.args` object — "
+                f"cannot derive the workflow input from it (available DAG nodes: "
+                f"{sorted(dag)})."
             )
         return inputs["args"]
 
     def _workflow_args_from_manifest(self, base_args: dict[str, Any]) -> dict[str, Any]:
         """Build workflow input from the manifest's extract args + substitutions.
 
-        Only ``dag.extract.inputs.args`` is substituted — exactly like the e2e /
+        Only the selected node's ``dag.<manifest_node>.inputs.args`` is
+        substituted (``manifest_node`` defaults to ``"extract"``; set it to a
+        non-crawler entrypoint node — ``"miner"`` / ``"lineage"`` / ``"clean"`` —
+        to build + agent-route that entrypoint's SDR run) — exactly like the e2e /
         full_dag walker. The base fills the *universal* SDR slots every
         SDR-capable connector has (``connection``, ``credential`` /
         ``credential-guid``, ``extraction-method``, ``agent-json``,
@@ -237,7 +260,7 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
         (agent mode) the end state matches; a direct-mode suite opted into this
         would diverge from the legacy local-vault provisioning path.
         """
-        extract_args = self._manifest_extract_inputs()
+        node_args = self._manifest_node_inputs(self.manifest_node)
         method = "agent" if self.agent_spec_template else "direct"
         # A manifest-driven suite with no agent_spec_template silently degrades to
         # direct mode (no agent spec injected) — warn so the misconfig isn't silent.
@@ -276,7 +299,7 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
                 continue
             subs[placeholder] = value
 
-        placeholders = _collect_placeholders(extract_args)
+        placeholders = _collect_placeholders(node_args)
         # A metadata key that matches no placeholder (e.g. hyphen-vs-underscore:
         # metadata ``include-filter`` against a manifest ``{{include_filter}}``)
         # would otherwise be silently ignored — surface it.
@@ -305,7 +328,7 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
                     placeholder,
                 )
                 subs[placeholder] = ""
-        wf_args = _apply_mustache_subs(extract_args, subs)
+        wf_args = _apply_mustache_subs(node_args, subs)
         # Carry credentials through for the start endpoint (agent mode resolves
         # via agent_json; direct mode + the client's credential provisioning use
         # these). The manifest-substituted args are authoritative for the run;

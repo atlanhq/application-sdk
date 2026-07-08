@@ -41,6 +41,8 @@ from temporalio import activity, workflow
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
+from application_sdk.constants import WORKFLOW_OUTPUT_PATH_TEMPLATE
+from application_sdk.contracts.base import PublishInputMixin
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.storage import ops
 from application_sdk.storage.binding import create_store_from_binding
@@ -273,6 +275,80 @@ async def test_workflow_output_persists_via_file_ref_locally(tmp_path):
     assert any(
         p.endswith(".sha256") for p in landed
     ), f"no sha256 sidecar persisted under {run_prefix}: {landed}"
+
+
+async def _read_records_from_store(store, prefix: str) -> list[dict]:
+    """Read every JSON record file under *prefix* the way the Publish app's
+    input reader does — list the prefix, fetch each object's bytes, flatten the
+    record lists. The ``.sha256`` integrity sidecars are skipped."""
+    records: list[dict] = []
+    async for batch in obstore.list(store, prefix=prefix):
+        for item in batch:
+            key = str(item["path"])
+            if not key.endswith(".json"):
+                continue
+            result = await obstore.get_async(store, key)
+            records.extend(json.loads(bytes(await result.bytes_async())))
+    return records
+
+
+@pytest.mark.integration
+async def test_publish_reads_back_exactly_what_extract_wrote(tmp_path):
+    """Two-app round trip, creds-free: EXTRACT writes asset records through the
+    SDK writer and persists them to the object store under its ``output_path``'s
+    ``transformed/`` prefix; the PUBLISH app then independently derives that same
+    prefix from the extract output — via ``PublishInputMixin.transformed_data_prefix``
+    (``WORKFLOW_OUTPUT_PATH_TEMPLATE`` + ``/transformed``) — and reads it back.
+    Asserts the records Publish reads equal what Extract wrote (count + content).
+
+    This pins the publish↔extract egress contract at the SDK level: a divergence
+    between the prefix Extract writes to and the prefix Publish derives (the class
+    of bug that lands 0 published assets) fails here, creds-free, on every SDK PR —
+    complementing the unit-contract test and the connector two-store e2e guards."""
+    # EXTRACT side: run the workflow, then persist its output to the store under
+    # the run's output_path + /transformed — the exact prefix Publish will read.
+    out_dir = await _run_extract_workflow(str(tmp_path / "extract"))
+    store = create_local_store(tmp_path / "objectstore")
+
+    output_path = WORKFLOW_OUTPUT_PATH_TEMPLATE.format(
+        application_name="sdr-generic",
+        workflow_id="wf-roundtrip",
+        run_id="run-roundtrip",
+    )
+    transformed_prefix = f"{output_path}/transformed"
+    ref = FileReference.from_local(out_dir, tier=StorageTier.RETAINED)
+    await persist_file_refs(store, {"output": ref}, output_path=transformed_prefix)
+
+    # PUBLISH side: derive the input prefix the way the Publish app does — from
+    # the extract output_path via PublishInputMixin — and confirm it resolves to
+    # exactly where Extract persisted the transformed records.
+    publish_input = PublishInputMixin(output_path=output_path)
+    assert (
+        publish_input.transformed_data_prefix == transformed_prefix
+    ), "Publish derived a different transformed prefix than Extract wrote to"
+
+    # What EXTRACT wrote (source of truth: the local writer output).
+    written: list[dict] = []
+    for name in os.listdir(out_dir):
+        if name.endswith(".json"):
+            with open(os.path.join(out_dir, name)) as fh:
+                written.extend(json.load(fh))
+
+    # What PUBLISH reads (from the store at the derived prefix).
+    read_back = await _read_records_from_store(
+        store, publish_input.transformed_data_prefix
+    )
+
+    # COUNT — every extracted record is visible to Publish.
+    assert len(read_back) == _N_RECORDS, (
+        f"Publish read {len(read_back)} records at "
+        f"{publish_input.transformed_data_prefix}, expected {_N_RECORDS}"
+    )
+    assert len(read_back) == len(written)
+    # CONTENT — Publish reads exactly the records Extract wrote (order-independent).
+    assert sorted(read_back, key=lambda r: r["qualifiedName"]) == sorted(
+        written, key=lambda r: r["qualifiedName"]
+    ), "records Publish read back differ from what Extract wrote"
 
 
 # ---------------------------------------------------------------------------

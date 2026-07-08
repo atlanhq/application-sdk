@@ -1,0 +1,25 @@
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: statestore
+spec:
+  version: v1
+  # A DURABLE state store for the SDR e2e stack. The set previously shipped only
+  # eventstore/objectstore/secretstore, so a connector that calls
+  # AppContext.save_state/load_state (miner cursors, incremental checkpoints,
+  # long-running scan bookmarks) had NO statestore component in SDR CI — daprd
+  # 500s on the state API and the run fails, or the gap goes unexercised. The dev
+  # embedded statestore is `state.in-memory`, which is non-durable: state is lost
+  # across a worker restart / KEDA scale-to-zero, so an in-memory store would let
+  # a durability regression pass in CI. `state.sqlite` persists to a local file
+  # (no external dependency), matching the SDK dev/default statestore backend, so
+  # a connector's save_state → load_state round-trips durably in SDR e2e.
+  #
+  # Copied into ci-deploy/components/ by the action's "Override CI Dapr
+  # components" step (cp of every *.yaml here) — no additional wiring needed.
+  type: state.sqlite
+  ignoreErrors: true
+  metadata:
+    # File path; /tmp exists in the container, sqlite creates the DB on first use.
+    - name: connectionString
+      value: "/tmp/atlan-statestore.db"
