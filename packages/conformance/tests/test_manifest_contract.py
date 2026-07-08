@@ -342,6 +342,68 @@ def test_k006_multi_entrypoint_maps_subdir_to_wire_name(tmp_path: Path) -> None:
     assert "CrawlOutput" in k006[0].message
 
 
+_BUNDLE_APP_ATTRIBUTE_DECORATOR = """\
+import application_sdk.app as sdk
+
+class CrawlInput:
+    url: str
+
+class CrawlOutput:
+    connection_qualified_name: str
+    # publish_state_prefix removed — should fire only for the crawler manifest.
+
+class MineInput:
+    path: str
+
+class MineOutput:
+    connection_qualified_name: str
+    publish_state_prefix: str
+
+class MyApp(sdk.App):
+    @sdk.entrypoint(name="crawler")
+    async def crawl(self, input: CrawlInput) -> CrawlOutput:
+        pass
+
+    @sdk.entrypoint(name="miner")
+    async def mine(self, input: MineInput) -> MineOutput:
+        pass
+"""
+
+
+def test_k006_multi_entrypoint_with_attribute_style_decorator(tmp_path: Path) -> None:
+    """Attribute-form decorators (``@sdk.entrypoint``, via a module alias) must
+    resolve a wire name just like the bare ``@entrypoint`` form.
+
+    ``is_entrypoint_decorator`` (used for entrypoint detection) recognises
+    attribute-form decorators, so wire-name extraction must too — otherwise
+    the entrypoint resolves with ``wire_name=None``, never matches its manifest
+    subdir, and K006 silently skips it (a false negative)."""
+    paths = _write_py(tmp_path, {"app.py": _BUNDLE_APP_ATTRIBUTE_DECORATOR})
+    _write_manifest(
+        tmp_path / "app" / "generated" / "crawler" / "manifest.json",
+        {
+            "extract": _extract_node("crawler"),
+            "publish": _publish_node(
+                ["connection_qualified_name", "publish_state_prefix"]
+            ),
+        },
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "miner" / "manifest.json",
+        {
+            "extract": _extract_node("miner"),
+            "publish": _publish_node(
+                ["connection_qualified_name", "publish_state_prefix"]
+            ),
+        },
+    )
+    findings = scan_all(paths, tmp_path)
+    k006 = _k006(findings)
+    assert len(k006) == 1
+    assert "publish_state_prefix" in k006[0].message
+    assert "CrawlOutput" in k006[0].message
+
+
 # ---------------------------------------------------------------------------
 # Ambiguous / no-op scenarios
 # ---------------------------------------------------------------------------

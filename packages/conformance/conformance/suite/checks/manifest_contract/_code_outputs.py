@@ -59,12 +59,19 @@ def _method_name_to_kebab(name: str) -> str:
 def _extract_wire_name(deco: ast.expr, method_name: str) -> tuple[str | None, bool]:
     """Parse an ``@entrypoint`` decorator expression for its wire name.
 
-    Returns ``(name, is_unresolved)`` — mirrors
-    ``entrypoint_alignment._code_entrypoints._extract_ep_name``.
+    Returns ``(name, is_unresolved)``. Handles both ``ast.Name``/``ast.Attribute``
+    bare-decorator forms (``@entrypoint`` / ``@app.entrypoint``) and their
+    ``ast.Call`` counterparts (``@entrypoint(...)`` / ``@app.entrypoint(...)``) —
+    unlike ``entrypoint_alignment._code_entrypoints._extract_ep_name`` (which this
+    otherwise mirrors), the decorator-detection this module uses
+    (``is_entrypoint_decorator``) also recognises attribute-form decorators via a
+    module alias (e.g. ``import application_sdk.app as app`` -> ``@app.entrypoint``),
+    so wire-name extraction must handle that form too or a matching entrypoint
+    silently resolves to ``wire_name=None`` and never matches a manifest subdir.
     """
-    if isinstance(deco, ast.Name):
+    if isinstance(deco, (ast.Name, ast.Attribute)):
         return _method_name_to_kebab(method_name), False
-    if isinstance(deco, ast.Call) and isinstance(deco.func, ast.Name):
+    if isinstance(deco, ast.Call) and isinstance(deco.func, (ast.Name, ast.Attribute)):
         for kw in deco.keywords:
             if kw.arg == "name":
                 if isinstance(kw.value, ast.Constant) and isinstance(
