@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, Any
+
+import orjson
 
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -177,8 +178,8 @@ class CredentialResolver:
             ) from exc
 
         try:
-            data: dict[str, Any] = json.loads(raw)
-        except json.JSONDecodeError as exc:
+            data: dict[str, Any] = orjson.loads(raw)
+        except orjson.JSONDecodeError as exc:
             raise CredentialParseError(
                 f"Credential '{ref.name}' is not valid JSON: {exc}",
                 credential_name=ref.name,

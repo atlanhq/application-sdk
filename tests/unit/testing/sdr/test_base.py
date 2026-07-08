@@ -367,6 +367,34 @@ def test_execute_scenario_polls_workflow_completion(
         ensure.assert_called_once_with(workflow_scenario, fake_response)
 
 
+def test_execute_scenario_mutates_result_on_guard_exception(
+    workflow_scenario: Scenario,
+) -> None:
+    """On an exception while polling completion / running a guard, `_execute_scenario`
+    mutates the SAME `ScenarioResult` the parent already appended to `cls._results`
+    (with `success=True`) to `success=False` + `error=exc` before re-raising — so
+    the on-disk summary reflects the real, failed outcome instead of a false green
+    on a scenario pytest reports as FAILED."""
+    suite = _Suite()
+    fake_response = {"data": {"workflow_id": "wf-1", "run_id": "run-1"}}
+    fake_result = MagicMock(success=True, response=fake_response, error=None)
+    boom = RuntimeError("workflow never completed")
+
+    with (
+        patch.object(
+            BaseIntegrationTest,
+            "_execute_scenario",
+            return_value=fake_result,
+        ),
+        patch.object(suite, "_ensure_workflow_completed", side_effect=boom),
+    ):
+        with pytest.raises(RuntimeError, match="workflow never completed"):
+            suite._execute_scenario(workflow_scenario)
+
+    assert fake_result.success is False
+    assert fake_result.error is boom
+
+
 def test_execute_scenario_skips_polling_for_auth(auth_scenario: Scenario) -> None:
     suite = _Suite()
     with (
@@ -403,3 +431,340 @@ def test_execute_scenario_skips_polling_when_expected_data_set(tmp_path) -> None
     ):
         suite._execute_scenario(sc)
         ensure.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# SDR readiness — dynamic assertions: assets landed (count + location) + floor
+# ---------------------------------------------------------------------------
+
+_RESP = {"data": {"workflow_id": "wf1", "run_id": "run1"}}
+_LOAD = "application_sdk.testing.integration.comparison.load_actual_output"
+
+
+def _asset(qn: str) -> dict[str, Any]:
+    return {"typeName": "Table", "attributes": {"qualifiedName": qn}}
+
+
+class _WfSuite(BaseSDRIntegrationTest):
+    agent_spec_template = {"agent-name": "a", "secret-path": "p"}
+    extracted_output_base_path = "data/out"
+    default_connection = {
+        "typeName": "Connection",
+        "attributes": {"qualifiedName": "default/mssql/1700"},
+    }
+    scenarios = []
+
+
+def test_assets_landed_passes_when_records_under_connection(
+    workflow_scenario: Scenario,
+) -> None:
+    suite = _WfSuite()
+    with patch(
+        _LOAD,
+        return_value=[
+            _asset("default/mssql/1700/db/sch/t1"),
+            _asset("default/mssql/1700/db/sch/t2"),
+        ],
+    ):
+        suite._assert_assets_landed(workflow_scenario, _RESP)  # no raise
+
+
+def test_assets_landed_fails_on_zero_assets_missing_dir(
+    workflow_scenario: Scenario,
+) -> None:
+    suite = _WfSuite()
+    with patch(_LOAD, side_effect=FileNotFoundError("no output dir")):
+        with pytest.raises(AssertionError, match="NO extracted assets"):
+            suite._assert_assets_landed(workflow_scenario, _RESP)
+
+
+def test_assets_landed_fails_on_empty_record_list(
+    workflow_scenario: Scenario,
+) -> None:
+    suite = _WfSuite()
+    with patch(_LOAD, return_value=[]):
+        with pytest.raises(AssertionError, match="ZERO asset records"):
+            suite._assert_assets_landed(workflow_scenario, _RESP)
+
+
+def test_assets_landed_fails_on_wrong_location(workflow_scenario: Scenario) -> None:
+    suite = _WfSuite()
+    with patch(
+        _LOAD,
+        return_value=[
+            _asset("default/mssql/1700/db/sch/t1"),
+            _asset("default/OTHER/9999/db/sch/t2"),  # not under the connection QN
+        ],
+    ):
+        with pytest.raises(AssertionError, match="NOT nested under the connection"):
+            suite._assert_assets_landed(workflow_scenario, _RESP)
+
+
+def test_assets_landed_flags_sibling_prefix_boundary(
+    workflow_scenario: Scenario,
+) -> None:
+    """A sibling connection that shares a numeric prefix (…/1700 vs …/17000)
+    must be flagged misplaced — the connection-prefix check is segment-boundary
+    aware, not a bare startswith."""
+    suite = _WfSuite()
+    with patch(
+        _LOAD,
+        return_value=[
+            _asset("default/mssql/1700/db/sch/t1"),
+            _asset(
+                "default/mssql/17000/db/sch/t2"
+            ),  # different connection, shared prefix
+        ],
+    ):
+        with pytest.raises(AssertionError, match="NOT nested under the connection"):
+            suite._assert_assets_landed(workflow_scenario, _RESP)
+
+
+def test_assets_landed_allows_connection_asset_itself(
+    workflow_scenario: Scenario,
+) -> None:
+    """The connection asset itself (qn == connection QN) is nested, not misplaced."""
+    suite = _WfSuite()
+    with patch(
+        _LOAD,
+        return_value=[
+            _asset("default/mssql/1700"),  # the connection asset itself
+            _asset("default/mssql/1700/db/sch/t1"),
+        ],
+    ):
+        suite._assert_assets_landed(workflow_scenario, _RESP)  # no raise
+
+
+def test_execute_scenario_warns_when_guard_enabled_but_expected_data_set(
+    tmp_path, monkeypatch
+) -> None:
+    """A guard enabled via env is a silent no-op when the scenario validates via
+    expected_data — the guard must NOT run and the skip must be warned, so a
+    green tick isn't mistaken for assets-landed coverage."""
+    monkeypatch.setenv("SDR_REQUIRE_ASSETS_LANDED", "true")
+    expected = tmp_path / "expected.json"
+    expected.write_text("{}")
+    sc = Scenario(
+        name="wf",
+        api="workflow",
+        assert_that={"success": lambda v: True},
+        workflow_timeout=300,
+        expected_data=str(expected),
+    )
+    suite = _Suite()
+    with (
+        patch.object(
+            BaseIntegrationTest,
+            "_execute_scenario",
+            return_value=MagicMock(success=True, response=_RESP),
+        ),
+        patch.object(suite, "_assert_assets_landed") as guard,
+        patch("application_sdk.testing.sdr.base.logger") as mock_logger,
+    ):
+        suite._execute_scenario(sc)
+    guard.assert_not_called()
+    warned = " ".join(str(c.args) for c in mock_logger.warning.call_args_list)
+    assert "guard is enabled" in warned
+
+
+def test_assets_landed_skips_location_when_conn_qn_unresolved(
+    workflow_scenario: Scenario,
+) -> None:
+    class _NoConn(_WfSuite):
+        default_connection = {}
+        scenarios = []
+
+    with patch(_LOAD, return_value=[_asset("anything/at/all")]):
+        _NoConn()._assert_assets_landed(
+            workflow_scenario, _RESP
+        )  # count ok, loc skipped
+
+
+def test_assets_landed_warns_and_skips_when_no_base_path(
+    workflow_scenario: Scenario,
+) -> None:
+    class _NoBase(BaseSDRIntegrationTest):
+        agent_spec_template = {"agent-name": "a", "secret-path": "p"}
+        extracted_output_base_path = ""
+        scenarios = []
+
+    with patch(_LOAD) as m:
+        _NoBase()._assert_assets_landed(workflow_scenario, _RESP)
+        m.assert_not_called()  # no base path → can't locate output → warn + return
+
+
+def test_assets_landed_fails_cleanly_on_missing_ids(
+    workflow_scenario: Scenario,
+) -> None:
+    """A COMPLETED response missing workflow_id/run_id raises the diagnostic
+    AssertionError, not a TypeError from os.path.join(base, None)."""
+    suite = _WfSuite()
+    with patch(_LOAD) as m:
+        with pytest.raises(AssertionError, match="missing workflow_id/run_id"):
+            suite._assert_assets_landed(workflow_scenario, {"data": {}})
+        m.assert_not_called()  # bail before trying to locate output
+
+
+def test_sdr_connection_qn_nested_flat_and_unresolved() -> None:
+    class _N(BaseSDRIntegrationTest):
+        default_connection = {"attributes": {"qualifiedName": "default/x/1"}}
+        scenarios = []
+
+    class _F(BaseSDRIntegrationTest):
+        default_connection = {"connection_qualified_name": "default/y/2"}
+        scenarios = []
+
+    class _U(BaseSDRIntegrationTest):
+        default_connection = {}
+        scenarios = []
+
+    assert _N()._sdr_connection_qn() == "default/x/1"
+    assert _F()._sdr_connection_qn() == "default/y/2"
+    assert _U()._sdr_connection_qn() is None
+
+
+def _wf_scen() -> Scenario:
+    return Scenario(
+        name="wf",
+        api="workflow",
+        assert_that={"success": lambda v: True},
+        workflow_timeout=300,
+    )
+
+
+def test_floor_skips_non_agent_suite() -> None:
+    class _Direct(BaseSDRIntegrationTest):
+        agent_spec_template = {}
+        scenarios = []
+
+    with pytest.raises(pytest.skip.Exception):
+        _Direct().test_sdr_suite_runs_an_extraction()
+
+
+def test_floor_passes_when_workflow_scenario_present() -> None:
+    class _Ok(BaseSDRIntegrationTest):
+        agent_spec_template = {"agent-name": "a", "secret-path": "p"}
+        scenarios = [_wf_scen()]
+
+    _Ok().test_sdr_suite_runs_an_extraction()  # returns (no skip, no raise)
+
+
+def test_floor_advisory_skip_when_auth_only_and_not_enforced() -> None:
+    class _AuthOnly(BaseSDRIntegrationTest):
+        agent_spec_template = {"agent-name": "a", "secret-path": "p"}
+        scenarios = [
+            Scenario(name="auth", api="auth", assert_that={"success": lambda v: True})
+        ]
+
+    with pytest.raises(pytest.skip.Exception):
+        _AuthOnly().test_sdr_suite_runs_an_extraction()
+
+
+def test_floor_hard_fails_when_auth_only_and_enforced() -> None:
+    class _Enforced(BaseSDRIntegrationTest):
+        agent_spec_template = {"agent-name": "a", "secret-path": "p"}
+        enforce_workflow_floor = True
+        scenarios = [
+            Scenario(name="auth", api="auth", assert_that={"success": lambda v: True})
+        ]
+
+    with pytest.raises(AssertionError, match="no api='workflow' scenario"):
+        _Enforced().test_sdr_suite_runs_an_extraction()
+
+
+# ---------------------------------------------------------------------------
+# Upstream (atlan) object-store assertion — the Looker-class catch
+# ---------------------------------------------------------------------------
+
+
+class _UpstreamSuite(_WfSuite):
+    require_upstream_assets_landed = True
+    upstream_output_base_path = "data-upstream/artifacts/apps/x/workflows"
+    scenarios = []
+
+
+def test_upstream_assets_landed_passes_when_upstream_populated(
+    workflow_scenario: Scenario,
+) -> None:
+    suite = _UpstreamSuite()
+    with patch(_LOAD, return_value=[_asset("default/mssql/1700/db/sch/t1")]):
+        suite._assert_upstream_assets_landed(workflow_scenario, _RESP)  # no raise
+
+
+def test_upstream_assets_landed_fails_when_upstream_empty(
+    workflow_scenario: Scenario,
+) -> None:
+    """Deployment store has assets, but the upstream transformed/ is empty
+    (missing upload_to_atlan) → Publish would publish 0 → hard failure."""
+    suite = _UpstreamSuite()
+    with patch(_LOAD, side_effect=FileNotFoundError("no upstream transformed/")):
+        with pytest.raises(AssertionError, match="would publish ZERO assets"):
+            suite._assert_upstream_assets_landed(workflow_scenario, _RESP)
+
+
+def test_upstream_assets_landed_fails_on_zero_records(
+    workflow_scenario: Scenario,
+) -> None:
+    suite = _UpstreamSuite()
+    with patch(_LOAD, return_value=[]):
+        with pytest.raises(AssertionError, match="ZERO records"):
+            suite._assert_upstream_assets_landed(workflow_scenario, _RESP)
+
+
+def test_upstream_assets_landed_warns_when_no_upstream_path(
+    workflow_scenario: Scenario,
+) -> None:
+    class _NoUpstreamPath(_WfSuite):
+        require_upstream_assets_landed = True
+        upstream_output_base_path = None
+        scenarios = []
+
+    with patch(_LOAD) as m:
+        _NoUpstreamPath()._assert_upstream_assets_landed(workflow_scenario, _RESP)
+        m.assert_not_called()  # no upstream path → warn + return, can't verify
+
+
+def test_upstream_assets_landed_fails_cleanly_on_missing_ids(
+    workflow_scenario: Scenario,
+) -> None:
+    """Mirrors test_assets_landed_fails_cleanly_on_missing_ids for the upstream
+    guard: a COMPLETED response missing workflow_id/run_id raises the diagnostic
+    AssertionError, not a TypeError from os.path.join(base, None) downstream."""
+    suite = _UpstreamSuite()
+    with patch(_LOAD) as m:
+        with pytest.raises(AssertionError, match="missing workflow_id/run_id"):
+            suite._assert_upstream_assets_landed(workflow_scenario, {"data": {}})
+        m.assert_not_called()  # bail before trying to locate output
+
+
+# ---------------------------------------------------------------------------
+# Env-controllable guards — lets the sdr-e2e action drive the harness SDK-side
+# (enable a guard + point it at the store mount) without editing the connector.
+# ---------------------------------------------------------------------------
+
+
+def test_sdr_flag_env_overrides_classvar(monkeypatch) -> None:
+    f = BaseSDRIntegrationTest._sdr_flag
+    monkeypatch.setenv("SDR_REQUIRE_ASSETS_LANDED", "true")
+    assert f("SDR_REQUIRE_ASSETS_LANDED", False) is True  # env True beats default False
+    monkeypatch.setenv("SDR_REQUIRE_ASSETS_LANDED", "false")
+    assert f("SDR_REQUIRE_ASSETS_LANDED", True) is False  # env False beats default True
+    monkeypatch.delenv("SDR_REQUIRE_ASSETS_LANDED", raising=False)
+    assert f("SDR_REQUIRE_ASSETS_LANDED", True) is True  # env unset → class default
+
+
+def test_upstream_base_path_read_from_env(
+    monkeypatch, workflow_scenario: Scenario
+) -> None:
+    """The action can point the upstream guard at the mount it created via env,
+    with no upstream_output_base_path set on the connector's suite."""
+    monkeypatch.setenv("SDR_UPSTREAM_OUTPUT_BASE_PATH", "data-upstream/out")
+
+    class _EnvUpstream(_WfSuite):
+        require_upstream_assets_landed = True
+        upstream_output_base_path = None  # not set on the class — env supplies it
+        scenarios = []
+
+    with patch(_LOAD, return_value=[_asset("default/mssql/1700/db/t")]) as m:
+        _EnvUpstream()._assert_upstream_assets_landed(workflow_scenario, _RESP)
+        assert m.call_args.args[0] == "data-upstream/out"  # env path was used

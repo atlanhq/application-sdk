@@ -1,3 +1,4 @@
+# conformance: ignore[L002] deliberate low-level loguru fallback for the workflow-safe logger's activity path; get_logger (the AtlanLoggerAdapter) would recurse here
 """Execution context for Apps."""
 
 from collections.abc import Callable
@@ -6,6 +7,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, TypeVar
 from uuid import uuid4
 
+# Low-level loguru import used only as the activity-context fallback below.
 from loguru import logger as _loguru_logger
 from temporalio import workflow as _workflow
 

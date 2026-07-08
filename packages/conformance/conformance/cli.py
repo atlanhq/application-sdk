@@ -49,6 +49,16 @@ def _cmd_gen_deprecations(argv: list[str]) -> int:
         return int(e.code) if e.code is not None else 0
 
 
+def _cmd_gen_toolkit_baseline(argv: list[str]) -> int:
+    from conformance.tools.generate_toolkit_baseline import main
+
+    try:
+        main(argv)
+        return 0
+    except SystemExit as e:
+        return int(e.code) if e.code is not None else 0
+
+
 def _cmd_ledger_guard(argv: list[str]) -> int:
     from conformance.tools.ledger_guard import main
 
@@ -99,6 +109,7 @@ _COMMANDS = {
     "gen-rule-docs": _cmd_gen_rule_docs,
     "gen-deprecations": _cmd_gen_deprecations,
     "gen-contract-ledger": _cmd_gen_contract_ledger,
+    "gen-toolkit-baseline": _cmd_gen_toolkit_baseline,
     "ledger-guard": _cmd_ledger_guard,
     "remediate": _cmd_remediate,
     "bootstrap": _cmd_bootstrap,
@@ -117,6 +128,9 @@ commands:
                        --repo DIR    repo root to scan (default: auto-detected)
                        --outfile PATH  ledger path (default: contract_schema.lock.json in cwd)
                        --check       verify ledger is current; exit 1 if stale
+  gen-toolkit-baseline Regenerate data/toolkit_baseline.json from contract-toolkit/src/PklProject
+                       --sdk-root DIR  repo root to read (default: auto-detected)
+                       --check       verify baseline is current; exit 1 if stale
   ledger-guard         CI append-only guard: block ledger deletions and type changes between
                        base ref and HEAD (run after fetch-depth: 0 checkout)
                          --base-ref REF      git ref for the base (default: origin/main)

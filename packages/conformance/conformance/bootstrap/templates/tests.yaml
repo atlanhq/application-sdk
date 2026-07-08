@@ -67,6 +67,17 @@ on:
         required: false
         default: ""
         type: string
+      two_store:
+        description: |
+          Set to 'true' to run the e2e job in the ADR-0014 two-store SDR
+          posture (docs/adr/0014-two-store-storage-architecture.md).
+          Requires the e2e test class to run in RunMode.AGENT and (for the
+          full-DAG pipeline) that the app no longer ships an
+          `objectstore.yaml` override under its e2e components dir.
+          Defaults off.
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   tests:
@@ -93,4 +104,5 @@ jobs:
       run-e2e: ${{ inputs.run_e2e }}
       base-image-ref: ${{ inputs.base_image_ref }}
       agent-name-override: ${{ inputs.agent_name_override }}
+      two-store: ${{ inputs.two_store }}
     secrets: inherit

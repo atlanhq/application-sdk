@@ -243,7 +243,7 @@ class CredentialRef(BaseModel, frozen=True):
         """
         warnings.warn(
             "CredentialRef.from_workflow_args() is deprecated and will be removed "
-            "in a future release. Use CredentialRef.resolve(input) instead.",
+            "in v4.0. Use CredentialRef.resolve(input) instead.",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -360,8 +360,8 @@ def legacy_credential_ref(guid: str, credential_type: str = "unknown") -> Creden
         supports direct (GUID) mode and will be removed in a future release.
     """
     warnings.warn(
-        "legacy_credential_ref() is deprecated and will be removed in a "
-        "future release. Use CredentialRef.resolve(input) instead.",
+        "legacy_credential_ref() is deprecated and will be removed in v4.0. "
+        "Use CredentialRef.resolve(input) instead.",
         DeprecationWarning,
         stacklevel=2,
     )

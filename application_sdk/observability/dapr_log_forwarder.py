@@ -50,6 +50,8 @@ import signal
 import sys
 from typing import Any
 
+import orjson
+
 # daprd (logrus) log levels → AtlanLoggerAdapter method names.
 _LEVEL_TO_METHOD = {
     "debug": "debug",
@@ -90,6 +92,7 @@ def _make_emitter() -> tuple[Any, Any]:
     def _stderr_fallback(_level: str, message: str) -> None:
         # Deliberate stderr write: this path runs when the SDK logger itself is
         # unavailable/failing, so we must not route through it.
+        # conformance: ignore[L005] deliberate stderr fallback used only when the SDK logger is unavailable/failing; routing through the logger here is impossible by design
         print(message, file=sys.stderr, flush=True)  # noqa: T201
 
     try:
@@ -100,13 +103,16 @@ def _make_emitter() -> tuple[Any, Any]:
         # Created inside the running loop (see main) so the SDK's async store
         # sink and periodic flush bind to that loop.
         logger = get_logger("dapr.runtime")
+    # conformance: ignore[E004] logger setup itself failed; the logger being initialized cannot be used to report its own failure, so we fall back to the stderr emitter
     except Exception:  # pragma: no cover - defensive: logging must never break daprd
+        # conformance: ignore[E007] returns the stderr-fallback emitter itself; the SDK logger is unavailable here, so logging this failure through it is impossible
         return _stderr_fallback, None
 
     def _emit(level: str, message: str) -> None:
         try:
             method = getattr(logger, _LEVEL_TO_METHOD.get(level, "info"), logger.info)
             method(message)
+        # conformance: ignore[E004] the SDK logger just failed while emitting this line; reporting the failure through the same logger is impossible, so we fall back to stderr
         except Exception:
             _stderr_fallback(level, message)
 
@@ -127,10 +133,11 @@ def _format_line(raw: str) -> tuple[str, str]:
     """
     raw = raw.rstrip("\n")
     try:
-        record = json.loads(raw)
+        record = orjson.loads(raw)
         if not isinstance(record, dict):
             return "info", raw
     except (json.JSONDecodeError, ValueError):
+        # conformance: ignore[E007] non-JSON daprd lines are expected; the raw line is still returned and forwarded verbatim at INFO, so nothing is hidden and this module has no logger
         return "info", raw
 
     level = str(record.get("level", "info")).lower()
@@ -164,6 +171,7 @@ async def _drain_and_flush(complete: Any) -> None:
     if complete is not None:
         try:
             await complete()
+        # conformance: ignore[E004] best-effort drain of the very logger pipeline being flushed; failures are non-actionable and routing them back through that logger risks recursion
         except Exception:  # noqa: S110 — best-effort drain
             pass
     try:
@@ -172,6 +180,7 @@ async def _drain_and_flush(complete: Any) -> None:
         )
 
         await AtlanObservability.flush_all()
+    # conformance: ignore[E004] best-effort flush of the observability buffer during shutdown; failures are non-actionable and cannot be safely reported through the buffer being flushed
     except Exception:  # noqa: S110 — best-effort flush
         pass
 
@@ -192,6 +201,7 @@ async def _periodic_drain_flush(complete: Any, interval: float) -> None:
             await _drain_and_flush(complete)
         except asyncio.CancelledError:
             raise
+        # conformance: ignore[E004,E014] periodic drain loop for the log-forwarding pipeline itself; must keep flushing across transient upload errors, deliberately swallowing them to stay alive, and cannot safely report them through the logger it drains
         except Exception:  # noqa: S110 — keep flushing across transient errors
             pass
 
@@ -229,7 +239,7 @@ async def _run(child_cmd: list[str]) -> int:
                 chunk = await proc.stdout.readexactly(exc.consumed)
                 try:
                     await proc.stdout.readuntil(b"\n")
-                # conformance: ignore[E002] draining the remainder of an oversized line; both exceptions are expected best-effort outcomes (further overrun or EOF mid-line)
+                # conformance: ignore[E002,E014] draining the remainder of an oversized line inside the read loop; both exceptions are expected best-effort outcomes (further overrun or EOF mid-line) and this module has no logger
                 except (asyncio.LimitOverrunError, asyncio.IncompleteReadError):
                     pass
                 prefix = chunk[:256].decode("utf-8", errors="replace").rstrip("\n")
@@ -245,8 +255,10 @@ async def _run(child_cmd: list[str]) -> int:
             try:
                 level, message = _format_line(line)
                 emit(level, message)
+            # conformance: ignore[E004] log-forwarding boundary: any failure formatting/emitting a line must never interrupt daprd's stream, so it falls back to a raw stderr write
             except Exception:
                 # Forwarding must never interrupt the stream — fall back to raw.
+                # conformance: ignore[L005] deliberate stderr fallback when logger emit failed; routing through the logger that just failed is impossible
                 print(line.rstrip("\n"), file=sys.stderr, flush=True)  # noqa: T201
     finally:
         flusher.cancel()
@@ -266,6 +278,7 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv if argv is None else argv)
     child_cmd = _split_child_command(argv)
     if not child_cmd:
+        # conformance: ignore[L005] startup argument error emitted before any logger is set up; stderr is the only available output at this point
         print(  # noqa: T201 — startup arg error, before any logger is set up
             "dapr_log_forwarder: no child command supplied (expected '-- daprd ...')",
             file=sys.stderr,

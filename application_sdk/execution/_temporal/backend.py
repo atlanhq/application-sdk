@@ -654,6 +654,7 @@ async def create_temporal_client(
     for attempt in range(1, connect_max_attempts + 1):
         try:
             client = await Client.connect(**kwargs)
+            # conformance: ignore[L006] fires exactly once on successful connect then returns; a genuine INFO lifecycle event, not per-iteration retry-loop volume
             logger.info("Connected to Temporal: host=%s namespace=%s", host, namespace)
             return client
         except Exception as exc:

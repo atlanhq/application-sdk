@@ -1002,8 +1002,9 @@ class App(ABC):
         if result is None:
             # Unreachable under current target-construction logic (the single-target
             # branch is always fatal=True), but guards against future changes.
-            raise RuntimeError(
-                "App.upload fan-out captured no result — this is a programming error"
+            raise _InternalError(
+                message="App.upload fan-out captured no result — this is a programming error",
+                invariant="upload fan-out must produce at least one result",
             )
         return result
 

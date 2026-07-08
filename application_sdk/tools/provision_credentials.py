@@ -8,6 +8,7 @@ Usage:
 import argparse
 import json
 
+import orjson
 import requests
 
 
@@ -20,7 +21,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.body:
-        body = json.loads(args.body)
+        body = orjson.loads(args.body)
     else:
         with open(args.from_file) as f:
             body = json.load(f)
@@ -35,7 +36,13 @@ def main() -> None:
     credential_guid = result.get("data", {}).get("credential_guid") or result.get(
         "credential_guid"
     )
-    print(json.dumps({"credential_guid": credential_guid}, indent=2))  # noqa: T201
+    # conformance: ignore[L005] CLI tool; credential_guid is user-facing stdout meant to be copied into the /start call, not a log record
+    print(  # noqa: T201
+        orjson.dumps(
+            {"credential_guid": credential_guid}, option=orjson.OPT_INDENT_2
+        ).decode()
+    )
+    # conformance: ignore[L005] CLI tool; user-facing stdout instruction for the developer, not a log record
     print(  # noqa: T201
         f'\nUse this in your /start call: "credential_guid": "{credential_guid}"'
     )

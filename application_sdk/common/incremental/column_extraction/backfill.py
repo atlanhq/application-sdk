@@ -175,6 +175,7 @@ def _load_tables_to_duckdb(
             {union_query}
         """)
     except duckdb.Error:
+        # conformance: ignore[L009] log adds caller-invisible context (file count and table name) not carried by the re-raised duckdb.Error
         logger.error(
             "DuckDB failed to load %d JSON files for table %s",
             len(json_files),

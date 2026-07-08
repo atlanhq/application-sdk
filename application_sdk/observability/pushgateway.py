@@ -376,6 +376,7 @@ class PushGatewayClient:
                     timeout=self._http_timeout_s,
                 )
                 deleted += 1
+                # conformance: ignore[L006] fires only for actually-stale groups found during a periodic sweep (rare, not per-item hot path); production logs are collected at INFO floor, so DEBUG would delete this from observability
                 logger.info(
                     "Swept stale Pushgateway group: job=%s instance=%s stale_for_seconds=%.1f",
                     self._job,
