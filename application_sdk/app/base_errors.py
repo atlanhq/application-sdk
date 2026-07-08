@@ -5,7 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
-from application_sdk.errors.leaves import PreconditionError, UnimplementedError
+from application_sdk.errors.leaves import (
+    InvalidInputError,
+    PreconditionError,
+    UnimplementedError,
+)
 
 
 @dataclass(kw_only=True)
@@ -48,3 +52,10 @@ class AbstractRunNotImplementedError(UnimplementedError):
     code: ClassVar[str] = "UNIMPLEMENTED_APP_RUN"
     app_class: str | None = None
     message: str = "App must implement run() or define @entrypoint methods"
+
+
+@dataclass(kw_only=True)
+class DurableIterateInvalidArgumentError(InvalidInputError):
+    """App.iterate() called with an invalid threshold or page-limit argument."""
+
+    code: ClassVar[str] = "INVALID_INPUT_DURABLE_ITERATE_ARGUMENT"

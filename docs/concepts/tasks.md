@@ -117,6 +117,41 @@ class MyConnector(App):
             )
 ```
 
+## Processing Large Datasets: `App.iterate`
+
+Temporal force-terminates any workflow whose event history exceeds **~51,200 events / 50 MB**. A connector that dispatches **one activity per item** (10k tables = 10k activities) drives history linearly toward that cap and gets killed mid-run on large tenants. The root-cause fix is to **stop writing per-item activities**; `App.iterate` packages that fix (see [ADR-0017](../adr/0017-durable-page-iteration.md)):
+
+1. **The fix — write one heartbeating page-task, not one activity per item.** A single `@task` processes a whole *page* internally, heartbeating per item (§Manual Heartbeats) and offloading blocking work via `run_in_thread`. That page is **one** activity — a handful of history events — no matter how many items it holds. At ~4–6 events per activity, coarse pages let a single run absorb **millions of items** with no history reset. For essentially every connector, this lever alone keeps history bounded.
+2. **The safety net — continue-as-new between pages.** Because 50K is a hard limit, an extreme tenant whose history still approaches the cap must reset it. `App.iterate` checks `is_continue_as_new_suggested()` after each page and, *only when Temporal reports history is near the cap*, restarts with a fresh history via `continue_with`, resuming at the current cursor. **In the common case this never fires** — it is a backstop, not the mechanism you rely on.
+
+```python
+class CrawlApp(App):
+    @task
+    async def crawl_page(self, input: PageInput) -> PageOutput:
+        rows, next_token = await self.run_in_thread(fetch_page, input.page_token)
+        for i, row in enumerate(rows):
+            persist(row)  # per-page results MUST be persisted here — see caveat
+            self.heartbeat(PageProgress(page_token=input.page_token, index=i))
+        return PageOutput(next_page_token=next_token)  # None => done
+
+    async def run(self, input: CrawlInput) -> CrawlOutput:
+        await self.iterate(
+            self.crawl_page,
+            cursor=input.page_token,                       # None first run; resumed after CAN
+            input_factory=lambda tok: PageInput(page_token=tok),
+            next_cursor=lambda out: out.next_page_token,   # None => iteration complete
+            resume_input=lambda tok: replace(input, page_token=tok),
+        )
+        return CrawlOutput(...)
+```
+
+Design rules:
+
+- **Page size is bounded by memory / payload, *not* by the heartbeat timeout** — heartbeating inside the activity is the timeout-prevention mechanism. Keep a page under the ~2 MB payload limit; use `FileReference` for large per-item data (§FileReference).
+- **The cursor must round-trip through `run()`'s `Input`** so the workflow behaves identically first-run and after continue-as-new. Large cursors belong in `persistent_state` (claim-check), not inline.
+- **Persist per-page results in the page-task** (object/state store). Values accumulated in workflow memory do **not** survive a continue-as-new boundary; `iterate` returns only the final generation's `Output`.
+- **Cleanup runs every generation.** `continue_with` triggers `on_complete()` cleanup (`cleanup_files` / `cleanup_storage`) on each cycle — never rely on transient local temp surviving across a boundary.
+
 ## Infrastructure Access via self.context
 
 Inside a `@task` method, access infrastructure through `self.context`:

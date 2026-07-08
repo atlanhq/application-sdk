@@ -10,7 +10,7 @@ import sys
 import threading
 import warnings
 from abc import ABC
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Any, ClassVar, Literal, Never, TypeVar, cast, get_type_hints
@@ -29,12 +29,14 @@ from application_sdk.app._ep_registration import (
 )
 from application_sdk.app.base_errors import (
     AbstractRunNotImplementedError,
+    DurableIterateInvalidArgumentError,
     ObjectStoreNotConfiguredError,
 )
 from application_sdk.app.context import (
     AppContext,
     TaskExecutionContext,
     _is_atlan_logger,
+    _is_in_workflow,
 )
 from application_sdk.app.entrypoint import EntryPointMetadata
 from application_sdk.app.registry import AppMetadata, resolve_pool_queue
@@ -77,6 +79,11 @@ except importlib.metadata.PackageNotFoundError:  # conformance: ignore[E009] pac
 # Type variable for require() method
 T = TypeVar("T")
 HT = TypeVar("HT", bound=HeartbeatDetails)
+
+# Type variables for App.iterate() — the durable page-iteration driver.
+_PageInT = TypeVar("_PageInT", bound=Input)
+_PageOutT = TypeVar("_PageOutT", bound=Output)
+_CursorT = TypeVar("_CursorT")
 
 # BLDX-878: inter-app calls deactivated pending review.
 # TChildInput = TypeVar("TChildInput", bound=Input)
@@ -838,6 +845,176 @@ class App(ABC):
             args=[input],
             memo={"correlation_id": self.correlation_id},
         )
+
+    def _iterate_should_continue_as_new(self, history_threshold: int | None) -> bool:
+        """Decide whether the page loop should continue-as-new now.
+
+        Returns True when Temporal itself suggests it (history approaching the
+        50k-event cap) or when an explicit ``history_threshold`` event count has
+        been reached. Returns False outside workflow context (local dev / unit
+        tests), so the loop runs to completion there instead of trying to
+        continue-as-new.
+        """
+        if not _is_in_workflow():
+            return False
+        info = workflow.info()
+        if info.is_continue_as_new_suggested():
+            return True
+        if history_threshold is not None:
+            return info.get_current_history_length() >= history_threshold
+        return False
+
+    async def iterate(
+        self,
+        page_task: Callable[[_PageInT], "Awaitable[_PageOutT]"],
+        *,
+        cursor: "_CursorT | None",
+        input_factory: Callable[["_CursorT | None"], _PageInT],
+        next_cursor: Callable[[_PageOutT], "_CursorT | None"],
+        resume_input: Callable[["_CursorT | None"], Input],
+        history_threshold: int | None = None,
+        max_pages_per_generation: int | None = None,
+    ) -> _PageOutT:
+        """Drive a cursor-paged ``@task`` while keeping workflow history bounded.
+
+        This is the SDK's answer to Temporal's hard **50,000-event history cap**,
+        which force-terminates large connector runs (e.g. lineage / query-history
+        miners on high-volume tenants) mid-flight. The root cause is an *unbounded
+        number of granular, per-item activities*; the fix is to stop writing them.
+
+        **The fix (what does the work): one heartbeating page-activity, not one
+        activity per item.** You write a single ``@task`` that processes a *whole
+        page* internally (looping, calling ``self.heartbeat(cursor)`` per item, and
+        offloading blocking work via ``self.run_in_thread``). That page is one
+        activity — a handful of history events — regardless of page size, and page
+        size is bounded only by memory / payload, never by the heartbeat timeout. At
+        ~4–6 events per activity, coarse pages let a single run absorb millions of
+        items with no history reset. For essentially every connector, this alone
+        keeps history bounded.
+
+        **The safety net (last resort): continue-as-new between pages.** 50k events
+        is a hard limit, so a tenant large enough that even coarse pages approach it
+        must reset history. After each page ``iterate`` checks
+        ``is_continue_as_new_suggested()`` and, *only when Temporal reports history
+        is near the cap*, restarts the workflow with a fresh history via
+        :meth:`continue_with`, resuming exactly at the current cursor. **In the
+        common case this never fires** — it is a backstop, not the mechanism you
+        rely on.
+
+        The safety net is used the way continue-as-new is designed for, not the way
+        it is misused: granularity is fixed first (so it never papers over granular
+        activities), and each page's activity is **awaited before** the boundary, so
+        no activity is ever left pending across it. The loop is deterministic (only
+        cursor state + activity calls), so it is workflow-replay-safe.
+
+        Call from ``run()``. Per-page results must be **persisted by the page-task**
+        (object store / state store) — values accumulated in workflow memory do not
+        survive a continue-as-new boundary. ``iterate`` returns only the final
+        page's ``Output`` (the generation in which the source is exhausted).
+
+        Cursor design: the cursor must round-trip through ``run()``'s ``Input`` so
+        the workflow behaves identically on first run and after continue-as-new.
+        ``resume_input`` builds the next ``run()`` input embedding the cursor;
+        ``run()`` reads that cursor back and passes it as ``cursor=``. Large cursors
+        should ride in ``persistent_state`` (claim-check) rather than inline.
+
+        Example::
+
+            @task
+            async def crawl_page(self, input: PageInput) -> PageOutput:
+                rows, next_token = await self.run_in_thread(
+                    fetch_page, input.page_token
+                )
+                for i, row in enumerate(rows):
+                    process(row)
+                    self.heartbeat(PageProgress(page_token=input.page_token, index=i))
+                return PageOutput(next_page_token=next_token, count=len(rows))
+
+            async def run(self, input: CrawlInput) -> CrawlOutput:
+                final = await self.iterate(
+                    self.crawl_page,
+                    cursor=input.page_token,
+                    input_factory=lambda tok: PageInput(page_token=tok),
+                    next_cursor=lambda out: out.next_page_token,  # None => done
+                    resume_input=lambda tok: replace(input, page_token=tok),
+                )
+                return CrawlOutput(...)
+
+        Args:
+            page_task: The ``@task`` method to invoke once per page (e.g.
+                ``self.crawl_page``). It must process the whole page and return an
+                ``Output`` from which ``next_cursor`` can derive the next cursor.
+            cursor: The starting cursor. ``None`` on the first run; the resumed
+                value (read from ``run()``'s input) after a continue-as-new.
+            input_factory: Builds the page-task's ``Input`` from the current cursor.
+            next_cursor: Extracts the next cursor from a page ``Output``. Return
+                ``None`` to signal the source is exhausted and end iteration.
+            resume_input: Builds the ``run()`` ``Input`` to continue-as-new with,
+                embedding the given cursor. Typically ``dataclasses.replace``.
+            history_threshold: Advanced override — an explicit event-count trigger
+                that forces the continue-as-new safety net earlier than Temporal
+                suggests. Must be >= 1 if provided. Most callers leave this unset
+                and rely on ``is_continue_as_new_suggested()`` alone.
+            max_pages_per_generation: Optional cap on pages processed per workflow
+                generation before forcing a continue-as-new. Must be >= 1 if
+                provided. Useful as a deterministic bound and for testing.
+
+        Returns:
+            The final page's ``Output`` (the generation in which iteration
+            completes). Does not return across a continue-as-new boundary.
+
+        Raises:
+            DurableIterateInvalidArgumentError: If ``history_threshold`` or
+                ``max_pages_per_generation`` is < 1.
+            AppContextError: If called outside ``run()`` execution.
+        """
+        if history_threshold is not None and history_threshold < 1:
+            raise DurableIterateInvalidArgumentError(
+                message=(
+                    f"iterate() history_threshold must be >= 1, "
+                    f"got {history_threshold}"
+                ),
+                field="history_threshold",
+                constraint=">= 1",
+                value_summary=str(history_threshold),
+            )
+        if max_pages_per_generation is not None and max_pages_per_generation < 1:
+            raise DurableIterateInvalidArgumentError(
+                message=(
+                    f"iterate() max_pages_per_generation must be >= 1, "
+                    f"got {max_pages_per_generation}"
+                ),
+                field="max_pages_per_generation",
+                constraint=">= 1",
+                value_summary=str(max_pages_per_generation),
+            )
+        if self._context is None:
+            raise AppContextError("iterate() is only available during run() execution.")
+
+        pages_this_generation = 0
+        while True:
+            page_input = input_factory(cursor)
+            # One activity for the whole page — awaited fully before we ever reach
+            # a continue-as-new boundary, so nothing is left pending across it.
+            output = await page_task(page_input)
+            pages_this_generation += 1
+
+            next_ = next_cursor(output)
+            if next_ is None:
+                # Source exhausted — iteration is complete for good.
+                return output
+            cursor = next_
+
+            reached_page_limit = (
+                max_pages_per_generation is not None
+                and pages_this_generation >= max_pages_per_generation
+            )
+            if reached_page_limit or self._iterate_should_continue_as_new(
+                history_threshold
+            ):
+                # Restart with a fresh history, resuming at the current cursor.
+                # Does not return.
+                self.continue_with(resume_input(cursor))
 
     # =========================================================================
     # Framework-provided storage tasks
