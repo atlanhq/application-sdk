@@ -232,6 +232,25 @@ class BaseE2ETest:
                     field=required,
                 )
 
+        # ADR-0014 two-store posture (sdr-e2e's `enable-two-store` input,
+        # threaded through as this env var) only changes anything on the
+        # CI-built worker container, which is only in the extraction path
+        # under RunMode.AGENT — the harness submits to that worker's own
+        # dynamic queue. Under RunMode.DIRECT extraction runs on the
+        # tenant's already-deployed production pod instead, whose storage
+        # config this harness never touches, so a missing App.upload()
+        # hand-off would not be caught even with two-store enabled here.
+        # Warn rather than fail: a DIRECT-mode run is still valid and
+        # useful on its own terms, just not a two-store hand-off check.
+        if os.environ.get("TWO_STORE") == "true" and self.mode is RunMode.DIRECT:
+            logger.warning(
+                "two-store mode is enabled but %s runs in RunMode.DIRECT — "
+                "extraction happens on the tenant's own production pod, not "
+                "the CI worker the two-store env vars were applied to, so a "
+                "missing App.upload() hand-off will NOT be caught by this run.",
+                type(self).__name__,
+            )
+
         tenant_url = os.environ.get("ATLAN_BASE_URL", "").rstrip("/")
         api_token = os.environ.get("ATLAN_API_KEY", "")
         if not tenant_url or not api_token:
