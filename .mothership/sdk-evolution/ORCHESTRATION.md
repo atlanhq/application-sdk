@@ -51,7 +51,15 @@ the prompt header — do NOT re-derive them.
    each open ticket; skip re-raising them. On proxy failure → empty suppression
    (fail-open, you'll dedupe some duplicates but won't block).
 
-Print: `[Stage 0 complete] tier=<daily|weekly>, suppressed=<N>`
+4. **Outcome feedback (self-tuning, grounded in merges — not self-report):**
+   Read the previous run's parent-ticket children and their final state. If a
+   check category was **closed-unmerged ≥ 3 times** recently, it is noisy →
+   this run, raise its confidence bar and drop its low-severity findings. If a
+   category consistently **merges**, keep it as-is. This replaces the old
+   self-improve-to-Linear YAML with a signal you can trust: what humans actually
+   merged vs closed.
+
+Print: `[Stage 0 complete] tier=<daily|weekly>, suppressed=<N>, noisy_categories=<list>`
 
 ---
 
@@ -60,11 +68,13 @@ Print: `[Stage 0 complete] tier=<daily|weekly>, suppressed=<N>`
 Dispatch all three via the Agent tool simultaneously. Each reads the same files
 and applies the checks the **check-registry** assigns to this TIER:
 
-1. `agents/correctness-quality.md` → `[BUG] [DOCS] [TEST] [STALE] [MANIFEST]`
-   and (weekly) `[ARCH]`.
-2. `agents/safety.md` → `[SEC]` (always) and (weekly) `[PERF]`.
+1. `agents/correctness-quality.md` →
+   `[BUG] [DOCS] [TEST] [STALE] [MANIFEST] [LOG] [TYPES] [APICOMPAT]`
+   and (weekly) `[ARCH] [FLAKY] [SMOKE]`.
+2. `agents/safety.md` → `[SEC]` (always) and (weekly)
+   `[PERF] [DEPDRIFT] [PERFTREND]`.
 3. `agents/evolution.md` → `[CONF]` (rule proposals), and (weekly)
-   `[DX] [CENTRAL] [TEMPORAL] [TOOLKIT] [EXAMPLE]`.
+   `[DX] [CENTRAL] [TEMPORAL] [TOOLKIT] [EXAMPLE] [FLEET] [DOCSITE]`.
 
 **Scope by surface, always all three:** `application_sdk/`,
 `packages/conformance/`, `contract-toolkit/`. Weekly additionally runs the

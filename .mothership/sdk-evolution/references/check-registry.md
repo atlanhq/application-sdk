@@ -94,6 +94,28 @@ shape, regenerate via `/capability-manifest`.
 
 **Exit:** FIX PR (regeneration only).
 
+### LOG — observability signal quality `[daily]`
+Not the L-series log-*level* lint (conformance owns that). Flag log **signal**
+defects: exceptions swallowed with no log, stack traces dropped on re-raise,
+ERROR used for non-failures, or INFO chatter that buries real lifecycle events.
+Apply the `signal-over-noise` lens.
+
+**Exit:** FIX PR.
+
+### TYPES — public-surface type safety `[daily]`
+Gradual-typing erosion pyright doesn't error on: a public/exported signature
+that newly widens to `Any`, bare `dict`/`list`, or `Dict[str, Any]` in a
+contract, or a missing return annotation on an exported symbol.
+
+**Exit:** FIX PR.
+
+### APICOMPAT — public API break detection `[daily]`
+An exported symbol (in an `__all__`) removed, renamed, or with a changed
+signature and **no deprecation path** — a silent break for connectors. Diff the
+public surface against the last release tag.
+
+**Exit:** FIX PR (restore + deprecate) — or DESIGN if the break is intended.
+
 ### CONF — SDK-level conformance rule proposal `[daily]`
 When ≥ 3 findings this run share one detectable pattern that CI does **not**
 yet gate, propose a conformance rule instead of N point fixes.
@@ -167,3 +189,43 @@ missing pooling, sync large-file IO. Static perf lint is not the job here.
 references to removed symbols.
 
 **Exit:** FIX PR.
+
+### FLEET — v3 adoption & version drift `[weekly]`
+From the `/audit-consumers` discovery data, which `atlanhq/` v3 apps are N SDK
+versions behind. Surface the laggards so adoption is visible; complements the
+conformance fleet dashboard.
+
+**Exit:** a summary section on the parent ticket (+ a DESIGN ticket where a
+migration is actually needed).
+
+### DEPDRIFT — dependency / runtime version staleness `[weekly]`
+Beyond CVE scanning (trivy/grype own that): direct deps, and the **Dapr** and
+**Temporal** SDK versions, materially behind upstream stable — or a pin that is
+blocking a security-relevant upgrade.
+
+**Exit:** bump PR — or DESIGN if the upgrade needs source changes.
+
+### PERFTREND — performance regression trend `[weekly]`
+Run the micro-benchmark suite and compare against the previous weekly run; flag
+regressions over a threshold instead of one-shot guesses. Static perf lint is
+not the job (that's the `PERF` check).
+
+**Exit:** DESIGN ticket with the measured delta.
+
+### FLAKY — flaky-test detection `[weekly]`
+Mine recent CI history for tests that pass only on retry or intermittently —
+the unit suite hides these because a green re-run looks clean.
+
+**Exit:** FIX PR (stabilise) — or DESIGN if it exposes a real race.
+
+### SMOKE — golden-path scaffold check `[weekly]`
+Does `/scaffold-app` still produce an app that boots against the current SDK?
+Catches integration breakage the unit suite misses.
+
+**Exit:** FIX PR.
+
+### DOCSITE — published-docs drift `[weekly]`
+Cross-check the docs.atlan.com SDK guides against the real APIs (via the
+`write-docs` lens); flag guides that reference removed/renamed symbols.
+
+**Exit:** DESIGN ticket (published-docs changes are reviewed).

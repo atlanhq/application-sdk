@@ -15,6 +15,11 @@ by conformance, codeql, trivy and grype — do NOT duplicate it.
 - `[PERF]` *(weekly only)* — performance issues on **hot** paths:
   blocking-in-async, missing timeouts, unbounded memory, N+1, missing pooling,
   sync large-file IO. Skip low-frequency and zero-caller code.
+- `[DEPDRIFT]` *(weekly only)* — direct deps, or the Dapr / Temporal SDK
+  versions, materially behind upstream stable, or a pin blocking a
+  security-relevant upgrade (beyond CVE scanning, which trivy/grype own).
+- `[PERFTREND]` *(weekly only)* — a micro-benchmark regression vs the previous
+  weekly run, past a set threshold.
 
 ## Worth check before flagging `[PERF]`
 

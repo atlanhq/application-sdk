@@ -21,6 +21,10 @@ the current `TIER`.
 - `[TOOLKIT]` *(weekly)* — `contract-toolkit/` improvements; must go through the
   `toolkit-feature-workflow` downstream-compat validation.
 - `[EXAMPLE]` *(weekly)* — `contract-toolkit/examples/` drift from current APIs.
+- `[FLEET]` *(weekly)* — from `/audit-consumers` data, which v3 apps are N SDK
+  versions behind; surface adoption laggards.
+- `[DOCSITE]` *(weekly)* — docs.atlan.com SDK guides referencing removed/renamed
+  symbols (via the `write-docs` lens).
 
 ## Inputs
 

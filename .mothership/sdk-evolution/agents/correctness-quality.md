@@ -15,8 +15,18 @@ exclusion list (never surface anything ruff / conformance / codeql already gate)
 - `[STALE]` — stale deprecation shims, zero-caller dead code, aging TODO/FIXME,
   leftover v2 remnants where all callers have migrated.
 - `[MANIFEST]` — `docs/agents/sdk-capabilities.md` content drift vs real signatures.
+- `[LOG]` — log signal quality (swallowed exceptions, dropped stack traces,
+  wrong severity, INFO chatter) — NOT the CI-gated log-level lint.
+- `[TYPES]` — public-surface type erosion (new `Any`/bare `dict`/`Dict[str,Any]`
+  in contracts, missing return annotations on exported symbols).
+- `[APICOMPAT]` — an exported symbol removed/renamed/re-signatured with no
+  deprecation path (diff the public surface vs the last release tag).
 - `[ARCH]` *(weekly only)* — ADR drift (`docs/adr/`), dependency-direction
   violations, dumping-ground files, cross-cutting refactor candidates.
+- `[FLAKY]` *(weekly only)* — tests that pass only on retry / intermittently
+  (mine recent CI history).
+- `[SMOKE]` *(weekly only)* — `/scaffold-app` no longer boots against the
+  current SDK.
 
 ## Inputs
 
