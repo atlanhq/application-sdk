@@ -167,6 +167,11 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # K006: manifest-vs-contract field validation — only app repos have a
     # generated app/generated/**/manifest.json DAG to cross-reference against a
     # Python Output contract; the SDK has no such generated artifact (BLDX-1527).
+    # K007/K008: toolkit version floor + source provenance — the app's PklProject
+    # declares the app-contract-toolkit dependency; the SDK *is* the publisher, so
+    # it has no such dependency to grade (BLDX-1479). K009: unresolved scaffold
+    # placeholder in a generated artifact; K010: missing generated E2E scaffolding
+    # — both are app-repo generated-output concerns (BLDX-1479).
     # E020: HTTP-failure-to-empty-return — the harm (publishing a partial crawl as
     # complete) is a connector extract/publish concern; the SDK's matching sites are
     # legitimate best-effort infra (health/metric scrapes), not crawlers (BLDX-1503).
@@ -200,6 +205,10 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "K004",
         "K005",
         "K006",
+        "K007",
+        "K008",
+        "K009",
+        "K010",
         "P004",
         "P005",
         "P008",
@@ -442,12 +451,25 @@ def test_catalog_b_series_present() -> None:
 
 
 def test_catalog_k_series_present() -> None:
-    """The K-series contract-toolkit rules are K001/K002 (source) plus the
-    generated-artifact freshness rules K003/K004/K005 (BLDX-1414), plus the
-    manifest-vs-contract field validation rule K006 (BLDX-1527)."""
+    """The K-series contract-toolkit rules are K001/K002 (source), the
+    generated-artifact freshness rules K003/K004/K005 (BLDX-1414), the
+    manifest-vs-contract field validation rule K006 (BLDX-1527), and the toolkit
+    hygiene rules K007–K010 (version floor, source provenance, unresolved
+    placeholder, missing E2E scaffolding) (BLDX-1479)."""
     rules = load_catalog()
     k_ids = {r.id for r in rules if r.id.startswith("K")}
-    expected = {"K001", "K002", "K003", "K004", "K005", "K006"}
+    expected = {
+        "K001",
+        "K002",
+        "K003",
+        "K004",
+        "K005",
+        "K006",
+        "K007",
+        "K008",
+        "K009",
+        "K010",
+    }
     missing = expected - k_ids
     assert not missing, f"Missing K-series rules: {missing}"
     extra = k_ids - expected

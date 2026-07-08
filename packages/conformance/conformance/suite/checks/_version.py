@@ -1,9 +1,10 @@
-"""Tiny version parsing/comparison for the B-series — no external dependency.
+"""Tiny version parsing/comparison shared across checks — no external dependency.
 
 The conformance package is deliberately lean (it scans source text), so rather
-than pull in ``packaging`` just to compare deprecation removal versions, we parse
-the small, well-behaved version strings the SDK actually writes — ``"v3.2.0"``,
-``"4.0"``, ``"3.18.0"`` — into comparable integer tuples.
+than pull in ``packaging`` just to compare version strings, we parse the small,
+well-behaved versions the SDK and toolkit actually write — ``"v3.2.0"``,
+``"4.0"``, ``"3.18.0"`` — into comparable integer tuples. Used by the B-series
+deprecation removal check and the K-series toolkit version floor.
 
 Only the dotted numeric release segment is understood; any pre-release / local
 suffix is ignored.  A string with no leading numeric component yields ``None``
