@@ -580,6 +580,20 @@ runs:
         echo "exit_code=${TEST_EXIT_CODE}" >> "$GITHUB_OUTPUT"
         exit "${TEST_EXIT_CODE}"
 
+    # Decoupling prototype: assert assets landed (deployment + upstream) by
+    # reading the bind-mounted stores on the HOST — no dependency on the app's
+    # installed SDK, so the guard runs on any SDR app at its CURRENT SDK version
+    # (redshift 3.14, looker/saperp 3.17, …) with no SDK bump. Env flags are set
+    # by the two-store block above.
+    - name: SDR asset guards (host-side, SDK-version-independent)
+      if: always()
+      shell: bash
+      env:
+        SDR_OUTPUT_SUBDIR: transformed
+      run: |
+        ROOT="${{ steps.action_root.outputs.path }}"
+        python3 "$ROOT/two-store/sdr_asset_guards.py"
+
     - name: Extract Temporal workflow links
       id: wf_links
       if: always()
