@@ -11,11 +11,6 @@ permissions:
   pull-requests: write
   issues: write
   security-events: write
-  # Connector E2E callback pattern (e2e-apps wait-mode: callback):
-  # connector-tests creates an in_progress check run on github.token's own
-  # rate-limit bucket; connector-gate polls it back via the same token
-  # (checks:write covers read too). See docs/standards/ci.md.
-  checks: write
 
 jobs:
   # Detect which files changed
@@ -304,6 +299,14 @@ jobs:
         )
       )
     runs-on: ubuntu-latest
+    # Least-privilege override: this is the only job that creates check runs
+    # (e2e-apps wait-mode: callback, via github.token — see docs/standards/ci.md),
+    # so checks:write is scoped here instead of at workflow level. A job-level
+    # permissions block replaces rather than merges with the workflow
+    # defaults, so contents:read is repeated here for the checkout step.
+    permissions:
+      contents: read
+      checks: write
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.matrix-builder.outputs.matrix) }}
@@ -424,6 +427,7 @@ jobs:
           MATRIX_JSON: ${{ needs.matrix-builder.outputs.matrix }}
           SHA: ${{ github.event_name == 'merge_group' && github.sha || github.event.pull_request.head.sha }}
         run: |
+          set -euo pipefail
           NAMES_JSON=$(jq -c '[.include[] | "Connector E2E / " + .repo_name]' <<< "$MATRIX_JSON")
           python3 .github/scripts/poll_check_runs_gate.py \
             --repo "${{ github.repository }}" \

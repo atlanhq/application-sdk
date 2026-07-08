@@ -34,6 +34,11 @@ jobs:
   sweep:
     name: Time out stuck connector check runs
     runs-on: ubuntu-latest
+    # Without an explicit ceiling this inherits GitHub's 6h default. Paired
+    # with concurrency: cancel-in-progress: false, a hung run (stuck gh api
+    # call, network partition) would then queue up every subsequent 15-min
+    # cron tick behind it instead of just skipping a cycle.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
