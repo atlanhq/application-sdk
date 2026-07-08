@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import subprocess
 import sys
 import time
@@ -32,27 +33,56 @@ PASSING_CONCLUSIONS = {"success", "neutral", "skipped"}
 
 
 def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
-    """Single seam so tests can stub the `gh` CLI."""
+    """Single seam so tests can stub the HTTP client."""
     return subprocess.run(cmd, **kwargs)
 
 
 def gh_api_conditional(path: str, *, etag: str | None = None):
-    """GET `path` via `gh api -i`, returning (status_code, new_etag, body_json_or_None).
+    """GET https://api.github.com/{path}, returning (status_code, new_etag, body_json_or_None).
 
-    `-i` includes the response headers so the ETag can be read and replayed
-    on the next call; body is None on a 304 (nothing changed since last poll).
+    Uses curl, not `gh api`: `gh api` treats ANY non-2xx response — including
+    a 304 Not Modified, which is the entire point of this conditional-request
+    pattern — as a command failure, printing its own short diagnostic instead
+    of the actual response, so a 304 can't be distinguished from a real error.
+    Confirmed in production (run 28949755456): the very first poll that hit an
+    unchanged state failed with "gh: HTTP 304" instead of being treated as
+    "nothing changed yet" — and since a dispatched e2e run can easily run for
+    20+ minutes without its check run changing, an unchanged poll is the
+    *common* case here, not an edge case.
+
+    curl without --fail prints the full response (headers + body, via -i) for
+    any status code and only exits non-zero on a genuine transport failure
+    (timeout, DNS, connection refused) — exactly the raw-HTTP-semantics
+    reference used elsewhere in these scripts (see wait_for_pages_publish.py).
     """
-    cmd = ["gh", "api", "-i", path]
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if not token:
+        raise SystemExit("::error::GH_TOKEN (or GITHUB_TOKEN) must be set")
+
+    cmd = [
+        "curl",
+        "-sS",
+        "-i",
+        "--max-time",
+        "30",
+        "-H",
+        "Accept: application/vnd.github+json",
+        "-H",
+        "X-GitHub-Api-Version: 2022-11-28",
+        "-H",
+        f"Authorization: Bearer {token}",
+    ]
     if etag:
         cmd += ["-H", f"If-None-Match: {etag}"]
+    cmd.append(f"https://api.github.com/{path}")
+
     result = run(cmd, capture_output=True, text=True, check=False)
     if result.returncode != 0:
-        raise SystemExit(f"::error::gh api failed for {path}: {result.stderr}")
+        raise SystemExit(f"::error::curl failed for {path}: {result.stderr}")
+
     raw = result.stdout.replace("\r\n", "\n")
     if "\n\n" not in raw:
-        raise SystemExit(
-            f"::error::unexpected gh api response for {path}: {raw[:300]!r}"
-        )
+        raise SystemExit(f"::error::unexpected response for {path}: {raw[:300]!r}")
     header_block, _, body = raw.partition("\n\n")
     lines = header_block.splitlines()
     try:
@@ -66,6 +96,11 @@ def gh_api_conditional(path: str, *, etag: str | None = None):
     for line in lines[1:]:
         if line.lower().startswith("etag:"):
             new_etag = line.split(":", 1)[1].strip()
+
+    if status_code >= 400:
+        raise SystemExit(
+            f"::error::GitHub API returned {status_code} for {path}: {body[:500]}"
+        )
 
     body_json = json.loads(body) if status_code == 200 and body.strip() else None
     return status_code, new_etag, body_json

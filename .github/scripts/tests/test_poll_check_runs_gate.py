@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import poll_check_runs_gate as mod
@@ -14,6 +16,11 @@ import poll_check_runs_gate as mod
 REPO = "atlanhq/application-sdk"
 SHA = "abc123"
 NAMES = ["Connector E2E / atlan-openapi-app", "Connector E2E / atlan-mysql-app"]
+
+
+@pytest.fixture(autouse=True)
+def _gh_token(monkeypatch):
+    monkeypatch.setenv("GH_TOKEN", "test-token")
 
 
 def _http_response(
@@ -31,6 +38,13 @@ def _check_runs_body(runs: list[dict]) -> dict:
     return {"total_count": len(runs), "check_runs": runs}
 
 
+def _completed_raw(status: int, body_text: str) -> subprocess.CompletedProcess:
+    """Like _http_response, but for a raw (non-JSON-dict) body string —
+    e.g. a GitHub error response's raw text."""
+    raw = f"HTTP/2.0 {status} whatever\n\n{body_text}"
+    return subprocess.CompletedProcess(args=[], returncode=0, stdout=raw, stderr="")
+
+
 def test_gh_api_conditional_parses_200_and_etag(monkeypatch):
     monkeypatch.setattr(
         mod, "run", lambda cmd, **kw: _http_response(200, '"v1"', {"check_runs": []})
@@ -43,6 +57,12 @@ def test_gh_api_conditional_parses_200_and_etag(monkeypatch):
 
 
 def test_gh_api_conditional_304_has_no_body_and_keeps_prior_etag(monkeypatch):
+    # Regression test for a real production failure (merge-queue run
+    # 28949755456): the original implementation shelled out to `gh api`,
+    # which treats a 304 as a command failure (exits non-zero, prints
+    # "gh: HTTP 304" instead of the response) — indistinguishable from a
+    # genuine error. curl without --fail returns 0 and the real response
+    # for ANY status code, so a 304 must parse cleanly here, not raise.
     monkeypatch.setattr(mod, "run", lambda cmd, **kw: _http_response(304, None, None))
 
     status, etag, body = mod.gh_api_conditional("some/path", etag='"v1"')
@@ -51,10 +71,37 @@ def test_gh_api_conditional_304_has_no_body_and_keeps_prior_etag(monkeypatch):
     assert body is None
 
 
-def test_gh_api_conditional_raises_with_stderr_on_gh_failure(monkeypatch):
+def test_gh_api_conditional_uses_curl_not_gh(monkeypatch):
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _http_response(200, '"v1"', {"check_runs": []})
+
+    monkeypatch.setattr(mod, "run", fake_run)
+    mod.gh_api_conditional("some/path")
+
+    assert captured["cmd"][0] == "curl"
+    assert "gh" not in captured["cmd"]
+    assert any("Authorization: Bearer test-token" == p for p in captured["cmd"])
+    assert captured["cmd"][-1] == "https://api.github.com/some/path"
+
+
+def test_gh_api_conditional_requires_a_token(monkeypatch):
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    try:
+        mod.gh_api_conditional("some/path")
+        assert False, "expected SystemExit"
+    except SystemExit as e:
+        assert "GH_TOKEN" in str(e)
+
+
+def test_gh_api_conditional_raises_on_transport_failure(monkeypatch):
     def fake_run(cmd, **kwargs):
         return subprocess.CompletedProcess(
-            args=[], returncode=1, stdout="", stderr="API rate limit exceeded"
+            args=[], returncode=28, stdout="", stderr="curl: (28) Operation timed out"
         )
 
     monkeypatch.setattr(mod, "run", fake_run)
@@ -63,6 +110,21 @@ def test_gh_api_conditional_raises_with_stderr_on_gh_failure(monkeypatch):
         mod.gh_api_conditional("some/path")
         assert False, "expected SystemExit"
     except SystemExit as e:
+        assert "Operation timed out" in str(e)
+
+
+def test_gh_api_conditional_raises_on_http_error_status(monkeypatch):
+    monkeypatch.setattr(
+        mod,
+        "run",
+        lambda cmd, **kw: _completed_raw(403, '{"message": "API rate limit exceeded"}'),
+    )
+
+    try:
+        mod.gh_api_conditional("some/path")
+        assert False, "expected SystemExit"
+    except SystemExit as e:
+        assert "403" in str(e)
         assert "API rate limit exceeded" in str(e)
 
 
