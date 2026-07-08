@@ -22,12 +22,12 @@ inputs:
     description: >
       Comma-separated list of areas to remediate.  Defaults to every area the
       top-level program enables (error-handling, deprecation, dependency,
-      prescriptions, optimizations, dockerfile, tests, logging, security; ci is
-      partially remediated — C002 and C003's absent-file case are fixed
-      mechanically via `bootstrap`; C001 is mechanically pinned
-      (SHA-resolve + repin) but always escalated to residue for mandatory
-      human sign-off — assisted, not autonomous, remediation; C003's
-      missing-entry case and drifted `tests.yaml`/
+      prescriptions, optimizations, dockerfile, tests, logging,
+      contract-toolkit, security; ci is partially remediated — C002 and
+      C003's absent-file case are fixed mechanically via `bootstrap`; C001 is
+      mechanically pinned (SHA-resolve + repin) but always escalated to
+      residue for mandatory human sign-off — assisted, not autonomous,
+      remediation; C003's missing-entry case and drifted `tests.yaml`/
       `renovate.json` still route to residue with no fix attempted; security
       is suggest-only — every S-series finding is routed to residue with a
       drafted fix, never auto-applied).
