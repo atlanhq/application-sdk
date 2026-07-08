@@ -447,54 +447,16 @@ runs:
           FILES+=("-f" "${OVERLAY}")
         fi
 
-        # ── Two-store SDR mode (opt-in, SDK-side, scoped to the allowlist) ─────
-        # For these connectors run the FULL SDR flow in CI: extract → deployment
-        # store, then the connector's upload_to_atlan/upload_to_upstream →
-        # UPSTREAM (atlan-objectstore) store that Publish reads. Both stores are
-        # local + bind-mounted to the host so BaseSDRIntegrationTest's
-        # assets-landed (deployment) + upstream guards can assert count/location.
-        # Everything here is SDK-side — no connector-repo change. Adding a
-        # connector to the case below is the only edit needed to onboard it.
-        case "${APP_NAME}" in
-          oracle | mssql | mysql | redshift | saperp | tableau | looker) TWO_STORE=1 ;;
-          *) TWO_STORE=0 ;;
-        esac
-        if [ "${TWO_STORE}" = "1" ]; then
-          echo "Two-store SDR mode enabled for '${APP_NAME}'"
-          # 1. Upstream localstorage component (overrides the configurator's
-          #    unusable S3-to-tenant atlan-objectstore). Copied AFTER the
-          #    component-override step, so it wins.
-          #    Remove ANY configurator-generated component that declares
-          #    metadata.name: atlan-objectstore first — matched by name, not
-          #    filename, since the configurator may emit it under a different
-          #    filename. Otherwise Dapr loads two components with the same name
-          #    (ours alongside, not overriding) and routing is undefined.
-          grep -rlE '^[[:space:]]*name:[[:space:]]*["'"'"']?atlan-objectstore["'"'"']?[[:space:]]*$' \
-            ci-deploy/components/ 2>/dev/null | xargs -r rm -f
-          cp "${ACTION_ROOT}/two-store/atlan-objectstore.yaml" ci-deploy/components/
-          # 2. Host-writable mount dirs (containers run as uid 1000; a root-owned
-          #    bind mount would be permission-denied to daprd/the app).
-          mkdir -p "${GITHUB_WORKSPACE}/data" "${GITHUB_WORKSPACE}/data-upstream"
-          chmod 777 "${GITHUB_WORKSPACE}/data" "${GITHUB_WORKSPACE}/data-upstream"
-          # 3. Overlay: pin the SDR upload envs + bind-mount both stores.
-          FILES+=("-f" "${ACTION_ROOT}/two-store/docker-compose.two-store.yml")
-          # 4. Enable + point the guards (read host-side by the pytest run;
-          #    GITHUB_ENV persists to the "Run connector SDR tests" step).
-          {
-            echo "SDR_REQUIRE_ASSETS_LANDED=true"
-            echo "SDR_REQUIRE_UPSTREAM_ASSETS_LANDED=true"
-            echo "SDR_EXTRACTED_OUTPUT_BASE_PATH=data/artifacts/apps/${APP_NAME}/workflows"
-            echo "SDR_UPSTREAM_OUTPUT_BASE_PATH=data-upstream/artifacts/apps/${APP_NAME}/workflows"
-            # Stream the guards' confirmation ("N record(s) landed at …",
-            # "N transformed record(s) reached the upstream store") into the
-            # captured pytest output. The SDK logs via loguru (writes to
-            # stderr) — NOT stdlib logging — so pytest's log_cli can't surface
-            # it; only disabling capture (-s) lets loguru stream through to the
-            # tee'd log. Without this the anti-silent-success check shows only a
-            # green tick with no evidence it ran. Scoped to two-store apps.
-            echo "PYTEST_ADDOPTS=-s"
-          } >> "$GITHUB_ENV"
-        fi
+        # ── Two-store SDR mode (opt-in, SDK-side, scoped to an allowlist) ─────
+        # The setup driver owns the allowlist decision + all side effects (the
+        # atlan-objectstore component override, the host-writable mount dirs, and
+        # the guard env vars appended to $GITHUB_ENV) — keeping branching logic
+        # out of this YAML (docs/standards/ci.md). It prints the extra compose
+        # "-f <overlay>" tokens (nothing when the app isn't a two-store app),
+        # which we append unconditionally. Onboard a connector by editing
+        # TWO_STORE_APPS in .github/scripts/two_store_setup.py (unit-tested).
+        read -r -a TWO_STORE_FILES <<< "$(python3 "${ACTION_ROOT}/../../scripts/two_store_setup.py" "${APP_NAME}" "${ACTION_ROOT}/two-store")"
+        FILES+=("${TWO_STORE_FILES[@]}")
 
         # Persist the array as a single space-joined string (compose -f flags
         # are simple paths, no whitespace issues).
