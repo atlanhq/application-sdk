@@ -1,4 +1,4 @@
-# ADR-0016: Infra-Failure Routing and Interpreter Placement
+# ADR-0017: Infra-Failure Routing and Interpreter Placement
 
 ## Status
 **Proposed**
@@ -153,11 +153,17 @@ and hands the SDK a ready-made **action primitive**. The SDK just executes it.
 - **Version skew:** the service can emit a primitive a deployed SDK version does not
   support; needs a capability contract or a safe-ignore rule. More brittle than the
   executor owning its own actions.
-- Demotes the SDK from orchestrator to actuator, in tension with P2. And the
-  primitive is still SDK-specific, so the service is coupled to SDK concepts anyway -
-  the decoupling is illusory.
+- Demotes the SDK from orchestrator to actuator, in tension with P2. And it does not
+  actually decouple: the action primitive is still SDK-specific, so externalizing the
+  mapper *inverts* the coupling rather than removing it - an infra-adjacent service now
+  reasons about SDK orchestration, the wrong direction. In-SDK the coupling runs the
+  natural way: the orchestrator consumes an infra vocabulary it already understands.
 - Adds a second synchronous decision dependency on the failure path (beyond the fact
   lookup).
+- Fleet-wide blast radius: a bad or stale policy push misroutes every app at once -
+  fast to fix, but fast to break, and it needs staged-rollout guardrails on the policy
+  itself. In-SDK, a bad mapping ships via a normal SDK release (reviewed, staged,
+  rolled out per app), so it cannot break the whole fleet in a single push.
 
 ### Approach 3 - Fold the interpreter into the recorder (recorder returns the action)
 
