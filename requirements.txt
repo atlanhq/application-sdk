@@ -59,7 +59,6 @@ colorama==0.4.6 ; sys_platform == 'win32'
     #   loguru
     #   pytest
     #   typer
-    #   uvicorn
 coverage==7.15.0
 cryptography==49.0.0
     # via
@@ -401,7 +400,7 @@ urllib3==2.7.0
     #   botocore
     #   requests
     #   sentry-sdk
-uvicorn==0.50.2
+uvicorn==0.51.0
     # via
     #   fastapi
     #   fastapi-cli
