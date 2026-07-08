@@ -758,18 +758,6 @@ class TestConnectionQnExtraction:
         inp = ExtractionInput(connection=ConnectionRef())
         assert self._extract_connection_qn(inp) == ""
 
-    def test_preflight_config_reconstructs_form_filters(self) -> None:
-        # The injected gate reads config back off the flattened extraction input
-        # via this hook, using the hyphenated keys the handler looks up.
-        inp = ExtractionInput(include_filter="^prod_.*$", temp_table_regex="^_tmp_")
-        cfg = inp.preflight_config()
-        assert "include-filter" in cfg
-        assert cfg["temp-table-regex"] == "^_tmp_"
-        assert "exclude-filter" not in cfg  # empty fields are omitted
-
-    def test_preflight_config_empty_when_no_filters(self) -> None:
-        assert ExtractionInput().preflight_config() == {}
-
     def test_returns_empty_when_qualified_name_is_empty(self) -> None:
         from application_sdk.contracts.types import ConnectionAttributes, ConnectionRef
 

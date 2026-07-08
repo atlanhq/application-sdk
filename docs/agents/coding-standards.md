@@ -73,13 +73,26 @@ The gate derives `metadata` and `connection_config` from `extraction_snapshot` v
 If no snapshot is present (gate inputs built without a `model_dump`-capable extraction
 input, e.g. manually constructed in tests), the activity falls back to `input.metadata`.
 
-### `preflight_config()` on extraction input contracts
+### Adopting the gate — two clauses
 
-Some extraction input contracts define a `preflight_config()` method (e.g.
-`SqlMetadataConfig`). **The gate no longer calls this method** — config now flows via
-the `extraction_snapshot` path above. The method is retained on contracts for use by
-the HTTP `/check` path and tests that call it directly. Do not rely on `preflight_config()`
-being invoked by the gate.
+**(i) The input must be gate-eligible.** The gate only fires when the entrypoint's
+input is `CredentialResolvable` — it declares `extraction_method`, `credential_guid`,
+and `agent_json` as **top-level** fields. Declare them as real fields, not Pydantic
+extras or nested config: extras are not a portable way to satisfy the protocol (the
+`isinstance` check ignores them on Python 3.12+). A toolkit-generated `AppInputContract(ExtractionInput)`
+satisfies this automatically — `ExtractionInput` declares the fields and its
+`_normalize_ae_payload` lifts them out of the nested AE `metadata`. A hand-written input
+that omits them (or keeps them nested) is **silently skipped** — so the SDK warns at
+worker startup for any registered entrypoint whose input is not gate-eligible. The fix
+is to put the input on `ExtractionInput` (via the toolkit) rather than hand-rolling the
+lift.
+
+**(ii) Block by returning a check, never by raising.** The handler blocks a run by
+**returning** a `PreflightCheck(passed=False, blocking=True, category=<FailureCategory>)`;
+the gate rebuilds typed `FailureDetails` from that category. A handler that **raises**
+does *not* block — the exception escapes to the gate, which fails open and proceeds
+(see below). So `preflight_check` must catch its own probe exceptions and convert them
+to returned blocking checks (reuse a raised SDK `AppError`'s `.category`).
 
 ### Fail-open semantics
 

@@ -20,7 +20,7 @@ from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
-    from application_sdk.credentials.ref import CredentialRef
+    from application_sdk.credentials.ref import CredentialRef, CredentialResolvable
     from application_sdk.credentials.resolver import CredentialResolver
     from application_sdk.credentials.spec import AgentCredentialSpec
     from application_sdk.errors.leaves import DependencyUnavailableError
@@ -39,6 +39,23 @@ with workflow.unsafe.imports_passed_through():
 logger = get_logger(__name__)
 
 PREFLIGHT_FAILED_ERROR_TYPE = "PreflightFailed"
+
+
+def input_type_supports_gate(input_type: type) -> bool:
+    """Whether an entrypoint's input type is gate-eligible.
+
+    Lifts the runtime ``isinstance(input, CredentialResolvable)`` guard (see
+    ``_run_preflight_gate``) to the *type* level so the worker can warn once at
+    boot instead of skipping silently on every run. Checks that the three
+    protocol members are declared as top-level Pydantic ``model_fields`` —
+    declaring them (rather than carrying them as Pydantic extras) is the
+    portable way to satisfy the guard across supported Python versions.
+    """
+    fields = getattr(input_type, "model_fields", None)
+    if not fields:
+        return False
+    return all(name in fields for name in CredentialResolvable.__annotations__)
+
 
 if TYPE_CHECKING:
     from application_sdk.handler.base import Handler

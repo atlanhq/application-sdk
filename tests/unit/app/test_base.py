@@ -356,6 +356,14 @@ class _BLDXOutput(Output, allow_unbounded_fields=True):
     result: str = ""
 
 
+class _GateEligibleInput(Input, allow_unbounded_fields=True):
+    """Declares the three CredentialResolvable fields top-level — gate-eligible."""
+
+    extraction_method: str = ""
+    credential_guid: str = ""
+    agent_json: _Any = None
+
+
 @pytest.fixture(autouse=True)
 def _reset_app_base_state(clean_app_registry, clean_task_registry):
     with _app_state_lock:
@@ -986,6 +994,51 @@ class TestGenerateWorkflowClass:
             wf_cls_a = generate_workflow_class(_CachedApp, ep)
             wf_cls_b = generate_workflow_class(_CachedApp, ep)
         assert wf_cls_a is wf_cls_b
+
+    @pytest.mark.asyncio
+    async def test_warns_at_boot_when_input_not_gate_eligible(self) -> None:
+        # _BLDXInput is a bare Input — not credential-resolvable — so the gate
+        # would silently skip at runtime. Boot must surface that once, loudly.
+        class _NotResolvableApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+        ep = self._make_ep(_BLDXInput, _BLDXOutput)
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.run", side_effect=lambda f: f
+            ),
+            mock.patch(
+                "application_sdk.app.base.workflow.defn",
+                side_effect=lambda **_: lambda c: c,
+            ),
+            mock.patch("application_sdk.app.base._task_logger") as log,
+        ):
+            generate_workflow_class(_NotResolvableApp, ep)
+
+        assert log.warning.called
+        assert "Preflight gate will not run" in log.warning.call_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_no_boot_warn_when_input_gate_eligible(self) -> None:
+        class _ResolvableApp(App):
+            async def run(self, input: _GateEligibleInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+        ep = self._make_ep(_GateEligibleInput, _BLDXOutput)
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.run", side_effect=lambda f: f
+            ),
+            mock.patch(
+                "application_sdk.app.base.workflow.defn",
+                side_effect=lambda **_: lambda c: c,
+            ),
+            mock.patch("application_sdk.app.base._task_logger") as log,
+        ):
+            generate_workflow_class(_ResolvableApp, ep)
+
+        assert not log.warning.called
 
     @pytest.mark.asyncio
     async def test_run_happy_path_executes_entry_method(self) -> None:

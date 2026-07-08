@@ -263,26 +263,6 @@ class ExtractionInput(Input):
         validate_filter_no_sql_injection(v)
         return v
 
-    def preflight_config(self) -> dict[str, Any]:
-        """Form config as the dict shape ``Handler.preflight_check`` reads.
-
-        The injected preflight gate builds its ``PreflightInput`` from this
-        extraction input, which has already flattened the AE payload's nested
-        ``metadata`` into typed top-level fields (see ``_normalize_ae_payload``).
-        This reverses that flattening so the gate hands the handler the same
-        ``metadata``/``connection_config`` shape the HTTP ``/check`` path builds;
-        without it, filter/scope checks that read those fields silently no-op on
-        the gate path. Keys use the hyphenated names the handler looks up.
-        """
-        config: dict[str, Any] = {}
-        if self.include_filter:
-            config["include-filter"] = self.include_filter
-        if self.exclude_filter:
-            config["exclude-filter"] = self.exclude_filter
-        if self.temp_table_regex:
-            config["temp-table-regex"] = self.temp_table_regex
-        return config
-
 
 class ExtractionOutput(Output, PublishInputMixin):
     """Top-level output from a SQL metadata extraction run."""

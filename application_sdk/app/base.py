@@ -1689,6 +1689,23 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
     app_name = app_cls._app_name
     app_version = app_cls._app_version
 
+    from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — boot-time (not in workflow sandbox); avoids a module-load cycle
+        input_type_supports_gate,
+    )
+
+    if not input_type_supports_gate(input_type):
+        _task_logger.warning(
+            "Preflight gate will not run for entrypoint '%s' (%s): input type %s does "
+            "not declare the credential-routing fields (extraction_method, "
+            "credential_guid, agent_json) top-level. Expected for source-less "
+            "entrypoints; if this entrypoint verifies a data source, declare those "
+            "fields (e.g. via the contract toolkit's ExtractionInput) so source "
+            "verification runs before extraction.",
+            entrypoint_name,
+            workflow_name,
+            input_type.__name__,
+        )
+
     async def _run(self, input_data: Input) -> Output:
         # deferred imports: inside Temporal sandbox (workflow.unsafe.imports_passed_through context)
         # BLDX-878: inter-app calls deactivated pending review.

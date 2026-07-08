@@ -15,6 +15,7 @@ from application_sdk.execution._temporal.preflight_gate import (
     PreflightGateInput,
     _config_from_snapshot,
     build_preflight_gate_activity,
+    input_type_supports_gate,
     preflight_gate_activity_name,
 )
 from application_sdk.handler.base import DefaultHandler, Handler
@@ -339,3 +340,30 @@ class TestPreflightGateActivity:
         assert handler.preflight_input.metadata.model_dump().get("include-filter") == {
             "^db$": ["^s$"]
         }
+
+
+class TestInputTypeSupportsGate:
+    """Boot-time eligibility check — mirrors the runtime CredentialResolvable guard."""
+
+    def test_extraction_input_is_eligible(self) -> None:
+        from application_sdk.templates.contracts import ExtractionInput
+
+        assert input_type_supports_gate(ExtractionInput) is True
+
+    def test_bare_input_is_not_eligible(self) -> None:
+        from application_sdk.contracts.base import Input
+
+        assert input_type_supports_gate(Input) is False
+
+    def test_input_missing_a_routing_field_is_not_eligible(self) -> None:
+        from application_sdk.contracts.base import Input
+
+        # Declares two of the three CredentialResolvable fields — not enough.
+        class _Partial(Input):
+            credential_guid: str = ""
+            extraction_method: str = ""
+
+        assert input_type_supports_gate(_Partial) is False
+
+    def test_non_model_type_is_not_eligible(self) -> None:
+        assert input_type_supports_gate(str) is False
