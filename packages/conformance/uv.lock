@@ -219,7 +219,7 @@ wheels = [
 
 [[package]]
 name = "atlan-application-sdk-conformance"
-version = "0.13.0"
+version = "0.12.0"
 source = { editable = "." }
 dependencies = [
     { name = "jinja2" },

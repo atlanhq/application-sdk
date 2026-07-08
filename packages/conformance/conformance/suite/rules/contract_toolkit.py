@@ -413,7 +413,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
         autofixable=False,
-        since="0.14.0",
+        since="0.13.0",
         orthogonal_gate="tests",
         rationale=(
             "App.pkl's pipeline nodes (e.g. PublishNode) unconditionally wire a "

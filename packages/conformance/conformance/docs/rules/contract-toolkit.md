@@ -20,7 +20,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [K003](#k003) | `ContractLockDrift` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
 | [K004](#k004) | `MissingGeneratedArtifact` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
 | [K005](#k005) | `GeneratedArtifactBannerStripped` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
-| [K006](#k006) | `ManifestContractFieldMismatch` | `warn` | `app` | `contract-toolkit` | — | 0.14.0 |
+| [K006](#k006) | `ManifestContractFieldMismatch` | `warn` | `app` | `contract-toolkit` | — | 0.13.0 |
 
 ---
 
@@ -248,7 +248,7 @@ proves full freshness.
 
 ## K006 — `ManifestContractFieldMismatch` {#k006}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.14.0
+**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.13.0
 
 > app/generated/**/manifest.json references an $.extract.outputs.<field> the entrypoint's Output contract does not declare
 
