@@ -110,7 +110,7 @@ async def list_keys(
         ) from exc
 
 
-async def list_keys_with_sizes(
+async def list_keys_with_meta(
     prefix: str = "",
     store: BoundStore | ObjectStore | None = None,
     *,
@@ -280,9 +280,7 @@ async def download_prefix(
     """
     import asyncio  # noqa: PLC0415 — stdlib asyncio; lazy use only
 
-    items = await list_keys_with_sizes(
-        prefix, store, suffix=suffix, normalize=normalize
-    )
+    items = await list_keys_with_meta(prefix, store, suffix=suffix, normalize=normalize)
     local = Path(local_dir)
     # Reject keys whose resolved path escapes local_dir (e.g. via ".." segments).
     destinations = [str(_safe_join_under(local, key)) for key, _, _ in items]
@@ -300,7 +298,6 @@ async def download_prefix(
                 key,
                 dest,
                 store,
-                compute_hash=False,
                 normalize=False,
                 file_size=size,
                 etag=etag,

@@ -968,9 +968,9 @@ async def get_file_size(
 ) -> int | None:
     """Return the byte size of *key* via a HEAD request, or ``None`` if not found.
 
-    Uses a lightweight metadata-only request; the object body is never
-    transferred.  Raises :class:`~application_sdk.storage.errors.StorageError`
-    for non-404 errors (permission denied, I/O error, etc.).
+    Thin wrapper over :func:`get_file_meta` (same single HEAD request) that
+    discards the etag. Prefer :func:`get_file_meta` when you also need the
+    etag — e.g. to version-pin a subsequent chunked download.
 
     Args:
         key: Object key / path.  Normalised by default.
@@ -985,21 +985,8 @@ async def get_file_size(
         StorageError: For non-404 errors.
         ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
     """
-    resolved = _resolve_store(store)
-    if normalize:
-        key = normalize_key(key)
-    try:
-        meta = await obstore.head_async(resolved, key)
-        return int(meta["size"])
-    # conformance: ignore[E004] not-found returns None as documented API contract; other exceptions re-raised via StorageError chain
-    except Exception as exc:
-        if _is_not_found(exc):
-            return None
-        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-            StorageError,
-        )
-
-        raise StorageError(f"Failed to head key '{key}'", key=key, cause=exc) from exc
+    meta = await get_file_meta(key, store, normalize=normalize)
+    return None if meta is None else meta[0]
 
 
 async def get_file_meta(
@@ -1042,7 +1029,7 @@ async def download_file_chunked(
     *,
     chunk_size_bytes: int = 16 * 1024 * 1024,
     max_concurrent_chunks: int = 4,
-    compute_hash: bool = True,
+    compute_hash: bool = False,
     normalize: bool = True,
     file_size: int | None = None,
     etag: str | None = None,
@@ -1085,8 +1072,10 @@ async def download_file_chunked(
         chunk_size_bytes: Size of each range-GET chunk (default 16 MiB).
         max_concurrent_chunks: Maximum number of in-flight chunk requests
             (default 4).
-        compute_hash: When ``True`` (default), compute and return a SHA-256
-            digest over the completed file.
+        compute_hash: When ``True``, compute and return a SHA-256 digest over
+            the completed file. Default ``False`` (matches
+            :func:`download_file`) — hashing re-reads the whole file, so
+            callers opt in only when they need the digest.
         normalize: When ``True`` (default), normalise *key* before use.
         file_size: Pre-known object size in bytes. When supplied (e.g. from a
             prior listing that already carried sizes), the internal HEAD is

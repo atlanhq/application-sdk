@@ -755,7 +755,12 @@ class TestResumableChunkedDownload:
 
         with patch("application_sdk.storage.ops.obstore.get_async", new=counting_get):
             digest = await download_file_chunked(
-                "res/f.bin", out, store, chunk_size_bytes=8, normalize=False
+                "res/f.bin",
+                out,
+                store,
+                chunk_size_bytes=8,
+                compute_hash=True,
+                normalize=False,
             )
 
         assert out.read_bytes() == self.CONTENT
@@ -811,6 +816,7 @@ class TestResumableChunkedDownload:
                 store,
                 chunk_size_bytes=8,
                 max_concurrent_chunks=1,
+                compute_hash=True,
                 normalize=False,
             )
 
@@ -831,6 +837,7 @@ class TestResumableChunkedDownload:
             out,
             store,
             chunk_size_bytes=8,
+            compute_hash=True,
             normalize=False,
             file_size=len(self.CONTENT),
             etag='"stale-etag"',
@@ -881,7 +888,12 @@ class TestResumableChunkedDownload:
             )
         )
         digest = await download_file_chunked(
-            "res/j.bin", out, store, chunk_size_bytes=8, normalize=False
+            "res/j.bin",
+            out,
+            store,
+            chunk_size_bytes=8,
+            compute_hash=True,
+            normalize=False,
         )
         assert out.read_bytes() == self.CONTENT  # zeros were NOT trusted
         assert digest == hashlib.sha256(self.CONTENT).hexdigest()
@@ -893,7 +905,12 @@ class TestResumableChunkedDownload:
         out = tmp_path / "k.bin"
         self._state_path(out).write_bytes(b"not json at all {{{")
         digest = await download_file_chunked(
-            "res/k.bin", out, store, chunk_size_bytes=8, normalize=False
+            "res/k.bin",
+            out,
+            store,
+            chunk_size_bytes=8,
+            compute_hash=True,
+            normalize=False,
         )
         assert out.read_bytes() == self.CONTENT
         assert digest == hashlib.sha256(self.CONTENT).hexdigest()
@@ -1020,7 +1037,12 @@ class TestResumableChunkedDownload:
             orjson.dumps({"key": "res/o.bin", "done": "not-a-list"})
         )
         digest = await download_file_chunked(
-            "res/o.bin", out, store, chunk_size_bytes=8, normalize=False
+            "res/o.bin",
+            out,
+            store,
+            chunk_size_bytes=8,
+            compute_hash=True,
+            normalize=False,
         )
         assert out.read_bytes() == self.CONTENT
         assert digest == hashlib.sha256(self.CONTENT).hexdigest()
@@ -1045,11 +1067,53 @@ class TestResumableChunkedDownload:
                 out,
                 store,
                 chunk_size_bytes=8,
+                compute_hash=True,
                 normalize=False,
                 file_size=len(self.CONTENT),
             )
         assert out.read_bytes() == self.CONTENT
         assert digest == hashlib.sha256(self.CONTENT).hexdigest()
+
+    async def test_head_without_etag_downloads_unpinned(self, store, tmp_path) -> None:
+        # A store whose HEAD carries no e_tag (allowed by the contract) must
+        # fall back to unpinned get_range_async — no if_match anywhere.
+        await _put("res/r.bin", self.CONTENT, store, normalize=False)
+        out = tmp_path / "r.bin"
+        real_range = __import__("obstore").get_range_async
+        range_calls: list = []
+
+        async def counting_range(st, key, **kw):
+            range_calls.append(kw)
+            return await real_range(st, key, **kw)
+
+        with (
+            patch(
+                "application_sdk.storage.ops.obstore.head_async",
+                new=AsyncMock(return_value={"size": len(self.CONTENT)}),
+            ),
+            patch(
+                "application_sdk.storage.ops.obstore.get_async",
+                new=AsyncMock(
+                    side_effect=AssertionError("no etag — must not pin with if_match")
+                ),
+            ),
+            patch(
+                "application_sdk.storage.ops.obstore.get_range_async",
+                new=counting_range,
+            ),
+        ):
+            digest = await download_file_chunked(
+                "res/r.bin",
+                out,
+                store,
+                chunk_size_bytes=8,
+                compute_hash=True,
+                normalize=False,
+            )
+        assert out.read_bytes() == self.CONTENT
+        assert digest == hashlib.sha256(self.CONTENT).hexdigest()
+        assert len(range_calls) == 5
+        assert all("if_match" not in kw and "options" not in kw for kw in range_calls)
 
     async def test_sibling_chunks_cancelled_and_drained_on_failure(
         self, store, tmp_path
@@ -1326,6 +1390,7 @@ class TestDownloadFileChunked:
                 dest,
                 store,
                 chunk_size_bytes=1024,
+                compute_hash=True,
                 normalize=False,
             )
 
@@ -1348,6 +1413,7 @@ class TestDownloadFileChunked:
             store,
             chunk_size_bytes=3,
             max_concurrent_chunks=2,
+            compute_hash=True,
             normalize=False,
         )
 

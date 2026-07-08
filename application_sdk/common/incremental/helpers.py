@@ -24,7 +24,7 @@ from application_sdk.constants import (
     TEMPORARY_PATH,
 )
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.storage.batch import list_keys_with_sizes
+from application_sdk.storage.batch import list_keys_with_meta
 from application_sdk.storage.ops import download_file, download_file_chunked
 
 logger = get_logger(__name__)
@@ -245,7 +245,7 @@ async def download_s3_prefix_with_structure(
     # List files under the prefix from Object Store. Sizes + etags from the
     # listing let large files fetch via bounded, version-pinned range GETs
     # without a per-file HEAD (BLDX-1513 / BLDX-1523).
-    items = await list_keys_with_sizes(
+    items = await list_keys_with_meta(
         prefix=s3_prefix,
     )
 
@@ -268,7 +268,6 @@ async def download_s3_prefix_with_structure(
             await download_file_chunked(
                 key=file_path,
                 local_path=str(local_file_path),
-                compute_hash=False,
                 file_size=size,
                 etag=etag,
             )

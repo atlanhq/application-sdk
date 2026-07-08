@@ -393,7 +393,7 @@ async def materialize_file_reference(
         FILE_REF_CHUNKED_THRESHOLD_BYTES,
     )
     from application_sdk.storage.batch import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        list_keys_with_sizes,
+        list_keys_with_meta,
     )
     from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         StorageError,
@@ -412,7 +412,7 @@ async def materialize_file_reference(
     # Determine single-file vs directory by listing sub-keys under the path.
     # Sizes come back with the listing so the directory branch can chunk large
     # files without a per-file HEAD (BLDX-1513).
-    all_items = await list_keys_with_sizes(ref.storage_path, store)
+    all_items = await list_keys_with_meta(ref.storage_path, store)
     data_items = [(k, s, e) for k, s, e in all_items if not k.endswith(".sha256")]
     data_keys = [k for k, _, _ in data_items]
 

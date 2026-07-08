@@ -244,11 +244,9 @@ class CloudStore:
         # Chunked path streams small objects in a single GET and fetches large
         # ones via bounded parallel range GETs (each with its own timeout /
         # retry budget) so a slow-egress GB-class file doesn't die on one long
-        # request. compute_hash=False — external stores skip the integrity
-        # sidecar protocol. (BLDX-1513)
-        await download_file_chunked(
-            key, local_path, store=self._store, compute_hash=False, normalize=False
-        )
+        # request. No hash — external stores skip the integrity sidecar
+        # protocol. (BLDX-1513)
+        await download_file_chunked(key, local_path, store=self._store, normalize=False)
         _log().info("Downloaded key=%s local_path=%s", key, str(local_path))
         return [local_path]
 
@@ -263,7 +261,7 @@ class CloudStore:
         list_prefix = f"{prefix.strip('/')}/" if prefix else ""
         _log().info("Listing objects under prefix=%s", list_prefix)
 
-        items = await self._list_keys_with_sizes(list_prefix, suffix_filter)
+        items = await self._list_keys_with_meta(list_prefix, suffix_filter)
 
         if not items:
             raise StorageError(
@@ -289,7 +287,6 @@ class CloudStore:
                     obj_key,
                     local_path,
                     store=self._store,
-                    compute_hash=False,
                     normalize=False,
                     file_size=size,
                     etag=etag,
@@ -319,7 +316,7 @@ class CloudStore:
                 f"Failed to list keys with prefix: {list_prefix!r}", cause=exc
             ) from exc
 
-    async def _list_keys_with_sizes(
+    async def _list_keys_with_meta(
         self, list_prefix: str, suffix_filter: set[str] | None = None
     ) -> list[tuple[str, int, str | None]]:
         """Like :meth:`_list_keys` but return ``(key, size_bytes, e_tag)``

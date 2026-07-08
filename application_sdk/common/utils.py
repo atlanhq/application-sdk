@@ -70,7 +70,6 @@ async def download_file_from_upload_response(
     await download_file_chunked(
         key=key,
         local_path=local_path,
-        compute_hash=False,
     )
 
     return local_path

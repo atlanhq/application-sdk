@@ -185,9 +185,7 @@ async def _upload_from_store(
     try:
         # Chunk large source objects (bounded range GETs) so a big deployment-store
         # file survives slow egress on the cross-store copy path. (BLDX-1513)
-        await download_file_chunked(
-            source_key, tmp, source_store, compute_hash=False, normalize=False
-        )
+        await download_file_chunked(source_key, tmp, source_store, normalize=False)
         sha256 = await upload_file(target_key, tmp, target_store, normalize=False)
         await _put_remote_sha256(target_store, target_key, sha256)
         return True, "uploaded"
@@ -227,7 +225,6 @@ async def _download_one(
         store_key,
         local_file,
         store,
-        compute_hash=False,
         normalize=False,
         file_size=file_size,
         etag=etag,
@@ -703,7 +700,7 @@ async def download(
     )
     from application_sdk.storage.batch import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         list_keys,
-        list_keys_with_sizes,
+        list_keys_with_meta,
     )
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         _resolve_store,
@@ -766,7 +763,7 @@ async def download(
         prefix = norm_path.rstrip("/") + "/"
         # Listing carries per-object sizes, so large files chunk without a
         # per-file HEAD (BLDX-1513).
-        all_items = await list_keys_with_sizes(prefix, resolved, normalize=False)
+        all_items = await list_keys_with_meta(prefix, resolved, normalize=False)
         # Exclude SHA-256 sidecars from the listing.
         data_items = [(k, s, e) for k, s, e in all_items if not _is_sidecar(k)]
 

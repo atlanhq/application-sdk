@@ -280,7 +280,7 @@ class TestDownloadS3PrefixWithStructure:
 
             with (
                 patch(
-                    "application_sdk.common.incremental.helpers.list_keys_with_sizes",
+                    "application_sdk.common.incremental.helpers.list_keys_with_meta",
                     mock_list,
                 ),
                 patch(
@@ -297,14 +297,12 @@ class TestDownloadS3PrefixWithStructure:
             mock_download.assert_any_await(
                 key="bucket/tenant/data/subdir/file1.json",
                 local_path=str(local_dest / "subdir" / "file1.json"),
-                compute_hash=False,
                 file_size=11,
                 etag='"etag-1"',
             )
             mock_download.assert_any_await(
                 key="bucket/tenant/data/file2.json",
                 local_path=str(local_dest / "file2.json"),
-                compute_hash=False,
                 file_size=22,
                 etag='"etag-2"',
             )
@@ -330,7 +328,7 @@ class TestDownloadS3PrefixWithStructure:
         with (
             tempfile.TemporaryDirectory() as temp_dir,
             patch(
-                "application_sdk.common.incremental.helpers.list_keys_with_sizes",
+                "application_sdk.common.incremental.helpers.list_keys_with_meta",
                 AsyncMock(return_value=items),
             ),
             patch(
@@ -347,7 +345,7 @@ class TestDownloadS3PrefixWithStructure:
         mock_download = AsyncMock()
         with (
             patch(
-                "application_sdk.common.incremental.helpers.list_keys_with_sizes",
+                "application_sdk.common.incremental.helpers.list_keys_with_meta",
                 AsyncMock(return_value=[]),
             ),
             patch(
@@ -367,7 +365,7 @@ class TestDownloadS3PrefixWithStructure:
 
             with (
                 patch(
-                    "application_sdk.common.incremental.helpers.list_keys_with_sizes",
+                    "application_sdk.common.incremental.helpers.list_keys_with_meta",
                     AsyncMock(return_value=[("other/path/file.json", 5, None)]),
                 ),
                 patch(
@@ -380,7 +378,6 @@ class TestDownloadS3PrefixWithStructure:
             mock_download.assert_awaited_once_with(
                 key="other/path/file.json",
                 local_path=str(local_dest / "other" / "path" / "file.json"),
-                compute_hash=False,
                 file_size=5,
                 etag=None,
             )

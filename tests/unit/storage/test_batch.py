@@ -165,14 +165,14 @@ class TestDownloadPrefix:
         """A listed key containing ``..`` must not write outside *local_dir*.
 
         obstore rejects ``..`` keys on put, so we plant a hostile listing via
-        a patched ``list_keys_with_sizes`` and assert the containment guard fires
+        a patched ``list_keys_with_meta`` and assert the containment guard fires
         before any local write happens (issue #1694).
         """
         dest = tmp_path / "dest"
         canary = tmp_path / "canary.txt"
         with (
             patch(
-                "application_sdk.storage.batch.list_keys_with_sizes",
+                "application_sdk.storage.batch.list_keys_with_meta",
                 new=AsyncMock(return_value=[("safe/../../canary.txt", 10, None)]),
             ),
             pytest.raises(StorageError, match="Path traversal"),
