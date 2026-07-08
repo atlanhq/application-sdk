@@ -74,7 +74,8 @@ and applies the checks the **check-registry** assigns to this TIER:
 2. `agents/safety.md` → `[SEC]` (always) and (weekly)
    `[PERF] [DEPDRIFT] [PERFTREND]`.
 3. `agents/evolution.md` → `[CONF]` (rule proposals), and (weekly)
-   `[DX] [CENTRAL] [TEMPORAL] [TOOLKIT] [EXAMPLE] [FLEET] [DOCSITE]`.
+   `[DX] [CENTRAL] [TEMPORAL] [TOOLKIT] [EXAMPLE] [FLEET] [BOILERPLATE]
+   [APPHEALTH] [DOCSITE]`.
 
 **Scope by surface, always all three:** `application_sdk/`,
 `packages/conformance/`, `contract-toolkit/`. Weekly additionally runs the
@@ -179,9 +180,16 @@ rule **and its remediation counterpart in this same PR** + the catalog entry.
 ### 4e. Weekly-only work
 - **TEMPORAL** → open an **ADR PR** against `docs/adr/` (prototype diff where
   feasible), `needs-design-review`.
-- **CONSUMERS** → run `/audit-consumers` (read-only discovery). Raise migration
-  PRs against consumer repos with `--raise-prs`, **capped at `CONSUMER_PR_CAP`**;
-  list the rotated-over repos in the parent ticket so next week picks them up.
+- **CONSUMERS** → run `/audit-consumers --sdk-major 3` (**v3 apps only**). Cover:
+  (a) **boilerplate removal** — app code reimplementing SDK-provided
+  functionality → migration PR that deletes it and calls the SDK; (b) **missing
+  guardrails** → new app-scope conformance rule (rule + remediation same PR);
+  (c) **SDK gaps** → DESIGN ticket for a new SDK utility. Raise app-repo PRs with
+  `--raise-prs`, **capped at `CONSUMER_PR_CAP`**; list rotated-over repos on the
+  parent ticket so next week picks them up.
+- **APPHEALTH** → for each v3 app, check it still builds / boots / passes CI
+  against the current SDK; report the fleet's health on the parent ticket and
+  open a DESIGN ticket per app that's broken against current SDK.
 - **TOOLKIT** → changes to `contract-toolkit/` go through the
   `toolkit-feature-workflow` downstream-compat validation before the PR opens.
 

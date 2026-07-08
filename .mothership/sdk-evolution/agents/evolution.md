@@ -23,6 +23,11 @@ the current `TIER`.
 - `[EXAMPLE]` *(weekly)* — `contract-toolkit/examples/` drift from current APIs.
 - `[FLEET]` *(weekly)* — from `/audit-consumers` data, which v3 apps are N SDK
   versions behind; surface adoption laggards.
+- `[BOILERPLATE]` *(weekly)* — v3 app code reimplementing SDK-provided
+  functionality → migration PR that deletes it and calls the SDK (and, when the
+  reinvention recurs, a new app-scope conformance rule).
+- `[APPHEALTH]` *(weekly)* — v3 apps that no longer build / boot / pass CI
+  against the current SDK.
 - `[DOCSITE]` *(weekly)* — docs.atlan.com SDK guides referencing removed/renamed
   symbols (via the `write-docs` lens).
 

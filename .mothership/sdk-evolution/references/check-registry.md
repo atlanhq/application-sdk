@@ -152,16 +152,34 @@ Where the SDK could model workflows more idiomatically:
 **Exit:** an **ADR PR** against `docs/adr/` proposing the change, with a
 prototype diff where feasible. `needs-design-review`.
 
-### CONSUMERS — v3 app audit → SDK evolution + app conformance `[weekly]`
-Run `/audit-consumers` (grep-based, read-only discovery) across `atlanhq/` v3
-consumers of `application_sdk`. From the findings:
-- SDK evolution opportunities (patterns ≥ 3 apps reimplement → new SDK utility).
-- **App-specific conformance rules** (scope = `app`), rule + remediation same PR.
-- **Bounded migration PRs** raised against consumer repos with `--raise-prs`,
-  capped at `CONSUMER_PR_CAP` per run; rotate the remainder to following weeks
-  (this cap is what keeps the run inside the 2h sandbox budget).
+### CONSUMERS — v3 app audit → evolution + boilerplate removal + conformance `[weekly]`
+Run `/audit-consumers --sdk-major 3` (grep-based, read-only discovery) across
+`atlanhq/` **v3 apps only** (v2 / other majors are skipped). Four angles:
+- **Boilerplate removal** — app code that reimplements something the SDK
+  ALREADY provides (retry/backoff, pagination, credential resolution,
+  state/object store, logging setup, heartbeating, typed errors, config
+  parsing, …). Raise a migration PR that **deletes the app code and calls the
+  SDK** instead — smaller app surface, one canonical path.
+- **Missing guardrail → new check** — when the same reinvention recurs and no
+  rule catches it, add an **app-scope conformance rule** (scope = `app`, rule +
+  remediation same PR) so future apps can't drift back into it.
+- **SDK gap → evolution** — a pattern ≥ 3 apps reinvent that the SDK does NOT
+  yet provide → DESIGN proposal for a new SDK utility.
+- **Migration PRs** raised against app repos with `--raise-prs`, limited by
+  `CONSUMER_PR_CAP` per run (external-repo safety knob for the 2h budget);
+  rotate the remainder to following weeks.
 
-**Exit:** SDK DESIGN tickets + app conformance PR(s) + ≤ cap consumer PRs.
+**Exit:** SDK DESIGN tickets + app conformance PR(s) + boilerplate-removal PRs
+(≤ cap) against v3 app repos.
+
+### APPHEALTH — v3 app fleet health `[weekly]`
+Are the v3 apps actually running? For each discovered **v3** app, check whether
+it still **builds / boots / passes its own CI against the CURRENT SDK** — so a
+broken or stalled fleet is visible instead of silent. Surface apps that are red,
+or pinned to an old SDK major/minor and drifting.
+
+**Exit:** a fleet-health section on the parent ticket + a DESIGN ticket per app
+that is broken against the current SDK.
 
 ### TOOLKIT — contract-toolkit deep review `[weekly]`
 Review `contract-toolkit/` through the `toolkit-feature-workflow` lens:
