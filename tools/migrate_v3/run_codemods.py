@@ -407,36 +407,49 @@ def main(argv: list[str] | None = None) -> int:
 
     # Header
     dry_tag = " (dry-run)" if args.dry_run else ""
-    logger.info(
-        "Fingerprint: %s (confidence=%.1f)%s",
-        result.connector_type,
-        result.confidence,
-        dry_tag,
+    # conformance: ignore[L005] direct dev-mode CLI report; ANSI color codes and blank-line grouping between file sections would be lost through the logging pipeline
+    print(
+        f"Fingerprint: {result.connector_type}"
+        f" (confidence={result.confidence:.1f}){dry_tag}"
     )
     if not result.changes_by_file and not result.errors:
-        logger.info("No changes.")
+        # conformance: ignore[L005] direct dev-mode CLI report; see rationale above
+        print("No changes.")
         return 0
 
+    # conformance: ignore[L005] direct dev-mode CLI report; blank-line group separator
+    print()
+
     for file_path, file_changes in result.changes_by_file.items():
-        # conformance: ignore[L006] CLI codemod report; loop is bounded to the actual files this run touched, not an unbounded hot path
-        logger.info("%s", _color(file_path, "1", no_color=no_color))
+        # conformance: ignore[L005] direct dev-mode CLI report; ANSI color codes would be lost through the logging pipeline
+        print(f"  {_color(file_path, '1', no_color=no_color)}")
         for codemod_id, changes in file_changes.items():
             for change in changes:
                 prefix = "SKIPPED" if change.startswith("SKIPPED") else codemod_id
                 color_code = "33" if change.startswith("SKIPPED") else "32"
-                line = f"{_color(prefix, color_code, no_color=no_color)}: {change}"
-                # conformance: ignore[L006] CLI codemod report; loop is bounded to the actual changes made in this file, not an unbounded hot path
-                logger.info("%s", line)
+                line = f"    {_color(prefix, color_code, no_color=no_color)}: {change}"
+                # conformance: ignore[L005] direct dev-mode CLI report; ANSI color codes would be lost through the logging pipeline
+                print(line)
+        # conformance: ignore[L005] direct dev-mode CLI report; blank-line group separator
+        print()
 
     for err in result.errors:
-        logger.error("%s: %s", _color("ERROR", "31", no_color=no_color), err)
+        # conformance: ignore[L005] direct dev-mode CLI report; ANSI color codes would be lost through the logging pipeline
+        print(f"  {_color('ERROR', '31', no_color=no_color)}: {err}", file=sys.stderr)
 
     if result.type_errors:
+        # conformance: ignore[L005] direct dev-mode CLI report; blank-line group separator
+        print()
         for te in result.type_errors:
-            logger.error("%s: %s", _color("TYPE ERROR", "35", no_color=no_color), te)
+            # conformance: ignore[L005] direct dev-mode CLI report; ANSI color codes would be lost through the logging pipeline
+            print(
+                f"  {_color('TYPE ERROR', '35', no_color=no_color)}: {te}",
+                file=sys.stderr,
+            )
 
     if output_json is not None:
-        logger.info("Report written to: %s", output_json)
+        # conformance: ignore[L005] direct dev-mode CLI report; see rationale above
+        print(f"\nReport written to: {output_json}")
 
     # Summary
     todo_str = (
@@ -446,12 +459,10 @@ def main(argv: list[str] | None = None) -> int:
     type_err_str = (
         f", {len(result.type_errors)} type error(s)" if result.type_errors else ""
     )
-    logger.info(
-        "Summary: %s file(s) changed%s%s%s",
-        result.files_changed,
-        todo_str,
-        err_str,
-        type_err_str,
+    # conformance: ignore[L005] direct dev-mode CLI report; see rationale above
+    print(
+        f"Summary: {result.files_changed} file(s) changed"
+        f"{todo_str}{err_str}{type_err_str}"
     )
 
     return 1 if result.errors else 0
