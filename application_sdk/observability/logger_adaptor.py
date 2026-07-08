@@ -520,7 +520,8 @@ class _LazyLoggerProxy:
 
     def critical(self, msg: str, **kwargs: Any) -> None:
         try:
-            self._logger.error(msg, **kwargs)
+            # conformance: ignore[L007] this *is* the proxy's own .critical() definition (loguru's bound-opt logger natively supports it), not a deprecated call site — downgrading to .error() would change emitted severity
+            self._logger.critical(msg, **kwargs)
         except Exception:
             logging.error("Error in lazy critical logging", exc_info=True)
 

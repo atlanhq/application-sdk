@@ -1709,10 +1709,12 @@ def _register_workflow_routes(
                     _workflow_config.app_name, None, unknown_ep_status=404
                 )
             except HTTPException:
-                # Benign control-flow fallback: no default entrypoint resolvable
-                # (the only HTTPException _resolve_app_entrypoint raises), so the
-                # handler falls through to a 404. Debug-level to avoid noise.
-                logger.debug(
+                # No default entrypoint resolvable (the only HTTPException
+                # _resolve_app_entrypoint raises), so the handler falls through
+                # to a 404. Warning, not debug: this is exc_info-worthy
+                # telemetry an operator should see in production, not just
+                # local control flow.
+                logger.warning(
                     "No default entrypoint for app %s; serving configmap 404",
                     _workflow_config.app_name,
                     exc_info=True,
@@ -1904,10 +1906,12 @@ def _register_workflow_routes(
                 _workflow_config.app_name, None, unknown_ep_status=404
             )
         except HTTPException:
-            # Benign control-flow fallback: no default entrypoint resolvable
-            # (the only HTTPException _resolve_app_entrypoint raises), so the
-            # handler falls through to a 404. Debug-level to avoid noise.
-            logger.debug(
+            # No default entrypoint resolvable (the only HTTPException
+            # _resolve_app_entrypoint raises), so the handler falls through
+            # to a 404. Warning, not debug: this is exc_info-worthy
+            # telemetry an operator should see in production, not just
+            # local control flow.
+            logger.warning(
                 "No default entrypoint for app %s; serving manifest 404",
                 _workflow_config.app_name,
                 exc_info=True,

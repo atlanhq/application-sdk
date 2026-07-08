@@ -168,9 +168,8 @@ def _dapr_secrets_error_code(exc: httpx.HTTPStatusError) -> str | None:
     """
     try:
         body = exc.response.json()
-    # conformance: ignore[E004] best-effort error-body parse; logged at DEBUG since a non-JSON body is an expected "unknown errorCode" outcome, not a failure worth warning on
     except Exception as e:
-        logger.debug(
+        logger.warning(
             "Could not parse Dapr secrets error body as JSON: %s", e, exc_info=True
         )
         return None

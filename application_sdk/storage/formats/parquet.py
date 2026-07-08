@@ -498,10 +498,11 @@ class ParquetFileWriter(Writer):
                 exc_info=True,
             )
         else:
+            # conformance: ignore[L018] ParquetFileWriter is deprecated (removed in v4.0); existing dashboards/alerts likely query these kwarg keys directly out of the JSON blob, so we keep the anti-pattern rather than risk breaking them for a class on its way out
             logger.info(
-                "Cleared existing parquet object-store prefix=%s deleted_count=%d",
-                normalized_prefix,
-                deleted_count,
+                "Cleared existing parquet object-store prefix",
+                prefix=normalized_prefix,
+                deleted_count=deleted_count,
             )
         self._prefix_replaced = True
 

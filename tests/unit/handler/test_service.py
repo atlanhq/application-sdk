@@ -1587,7 +1587,12 @@ class TestConfigMapEndpoints:
                 response = client.get("/workflows/v1/configmap/saphana")
             assert response.status_code == 404
             assert response.json()["detail"] == "ConfigMap 'saphana' not found"
-            mock_logger.warning.assert_called_once_with(
+            # assert_any_call, not assert_called_once_with: the no-default
+            # -entrypoint fallback earlier in the handler also logs a
+            # warning (with exc_info) when the app has no default
+            # entrypoint — this test only cares that the configmap-specific
+            # warning below was among them, not that it's the only one.
+            mock_logger.warning.assert_any_call(
                 "ConfigMap not found: requested=%s available=%s",
                 "saphana",
                 ["sap-hana"],

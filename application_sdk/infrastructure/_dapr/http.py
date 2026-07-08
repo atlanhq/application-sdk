@@ -500,9 +500,8 @@ async def get_dapr_component_types() -> dict[str, str]:
         # Degrade to {} rather than stall on the default 30s x retries.
         async with AsyncDaprClient(timeout=2.0, retries=0) as client:
             meta = await client.get_metadata()
-    # conformance: ignore[E004] intentional worker-startup boundary: pure observability that must never gate the worker; already logged with exc_info=True and degrades to {}
     except Exception:
-        logger.debug("Could not read Dapr component metadata", exc_info=True)
+        logger.warning("Could not read Dapr component metadata", exc_info=True)
         return {}
 
     types: dict[str, str] = {}

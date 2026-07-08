@@ -968,7 +968,8 @@ async def run_worker_mode(config: AppConfig) -> None:
     # Log registrations
     for registered_app in AppRegistry.get_instance().list_apps():
         app_meta = AppRegistry.get_instance().get(registered_app)
-        logger.debug("Registered app %s version %s", registered_app, app_meta.version)
+        # conformance: ignore[L006] this worker registers a small, statically-configured set of apps (typically one); production logs are collected at INFO floor, so demoting this to DEBUG would delete it from observability entirely
+        logger.info("Registered app %s version %s", registered_app, app_meta.version)
 
     for registered_app, tasks in TaskRegistry.get_instance().get_all_tasks().items():
         for task_meta in tasks:
@@ -1231,7 +1232,8 @@ async def run_combined_mode(config: AppConfig) -> None:
 
     for registered_app in AppRegistry.get_instance().list_apps():
         app_meta = AppRegistry.get_instance().get(registered_app)
-        logger.debug("Registered app %s version %s", registered_app, app_meta.version)
+        # conformance: ignore[L006] this worker registers a small, statically-configured set of apps (typically one); production logs are collected at INFO floor, so demoting this to DEBUG would delete it from observability entirely
+        logger.info("Registered app %s version %s", registered_app, app_meta.version)
 
     for registered_app, tasks in TaskRegistry.get_instance().get_all_tasks().items():
         for task_meta in tasks:

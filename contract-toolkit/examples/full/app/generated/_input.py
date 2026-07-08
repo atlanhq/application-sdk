@@ -2,17 +2,14 @@
 # To regenerate: pkl eval -m . contract/app.pkl
 from __future__ import annotations
 
+import json
 from typing import Annotated, Any, ClassVar
 
-import orjson
 from pydantic import Field, field_validator
 
 from application_sdk.contracts.types import MaxItems
 from application_sdk.credentials.ref import CredentialRef
-from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates.contracts import ExtractionInput
-
-logger = get_logger(__name__)
 
 
 class AppInputContract(ExtractionInput):
@@ -60,13 +57,8 @@ class AppInputContract(ExtractionInput):
             if not stripped:
                 return {}
             try:
-                parsed = orjson.loads(stripped)
-            except orjson.JSONDecodeError as exc:
-                logger.warning(
-                    "schemas value is not valid JSON, passing through unparsed: %s",
-                    exc,
-                    exc_info=True,
-                )
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
                 return value
             if isinstance(parsed, dict):
                 return parsed

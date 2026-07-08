@@ -571,7 +571,7 @@ def _adc_is_external_account() -> bool:
         # Best-effort: an unreadable/unparseable creds file is left for obstore's
         # own decoder to surface authoritatively; here we just decline to treat
         # it as external_account.
-        _get_logger().debug(
+        _get_logger().warning(
             "Could not read ADC credential file %r for external_account check: %s",
             path,
             e,
