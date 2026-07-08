@@ -130,11 +130,16 @@ class AtlasTransformer(TransformerInterface):
         if isinstance(dataframe, list):
             rows: list[dict[str, Any]] = dataframe
         else:
-            import pandas as pd  # noqa: PLC0415 — optional dep: pandas
+            import sys  # noqa: PLC0415
 
-            if isinstance(dataframe, pd.DataFrame):
-                # Readers (e.g. ParquetFileReader) return pandas; bridge it to
-                # the pyarrow Table this transformer operates on.
+            # Readers (e.g. ParquetFileReader) return pandas; bridge it to the
+            # pyarrow Table this transformer operates on. Producing a pandas
+            # DataFrame in the first place requires pandas to already be
+            # installed and imported, so probing sys.modules here (rather
+            # than importing pandas unconditionally) never forces the
+            # optional dependency on callers passing a pa.Table input.
+            pd = sys.modules.get("pandas")
+            if pd is not None and isinstance(dataframe, pd.DataFrame):
                 import pyarrow as pa  # noqa: PLC0415 — optional dep: pyarrow
 
                 dataframe = pa.Table.from_pandas(dataframe, preserve_index=False)

@@ -323,14 +323,21 @@ class QueryBasedTransformer(TransformerInterface):
         **kwargs: Any,
     ) -> list[dict[str, Any]] | None:
         """Transform records using SQL executed through DuckDB"""
-        import pandas as pd  # noqa: PLC0415 — optional dep: pandas
+        import sys  # noqa: PLC0415
+
         import pyarrow as pa  # noqa: PLC0415 — optional dep: pyarrow
+
+        # Readers (e.g. ParquetFileReader) return pandas; bridge it to the
+        # pyarrow Table this transformer operates on. Producing a pandas
+        # DataFrame in the first place requires pandas to already be
+        # installed and imported, so probing sys.modules here (rather than
+        # importing pandas unconditionally) never forces the optional
+        # dependency on callers passing a pa.Table or list[dict] input.
+        pd = sys.modules.get("pandas")
 
         if isinstance(dataframe, list):
             dataframe = pa.Table.from_pylist(dataframe) if dataframe else None
-        elif isinstance(dataframe, pd.DataFrame):
-            # Readers (e.g. ParquetFileReader) return pandas; bridge it to the
-            # pyarrow Table this transformer operates on.
+        elif pd is not None and isinstance(dataframe, pd.DataFrame):
             dataframe = pa.Table.from_pandas(dataframe, preserve_index=False)
         if dataframe is None or len(dataframe) == 0:
             return None
