@@ -32,7 +32,8 @@ by conformance, codeql, trivy and grype — do NOT duplicate it.
 - Full content of the three surfaces plus, for `[SEC]`, always inspect:
   `Dockerfile`, `.github/workflows/`, `application_sdk/constants.py`, and any
   credential-handling module — even if not in the primary scan set.
-- `references/check-registry.md` and the suppression list. No prebuilt index.
+- `references/check-registry.md`, `references/safety-examples.md` (BAD/GOOD +
+  the perf worth-check), and the suppression list. No prebuilt index.
 
 ## Instructions
 

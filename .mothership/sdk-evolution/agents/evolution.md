@@ -34,6 +34,8 @@ the current `TIER`.
 ## Inputs
 
 - Full content of the three surfaces; the ADR library at `docs/adr/`.
+- `references/check-registry.md` + `references/evolution-examples.md`
+  (BAD/GOOD + skip-when anchors for CENTRAL/DX/CONF/TEMPORAL/BOILERPLATE/…).
 - `references/check-registry.md` and the suppression list. No prebuilt index —
   establish "repeated in N places" with `rg` yourself, e.g.:
   ```bash

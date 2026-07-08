@@ -10,6 +10,11 @@ proposal).
 > **weekly** = the Sunday superset. Everything daily does, plus the deep,
 > design-level and cross-repo work. Weekly is the expensive run.
 
+**Worked examples** (concrete BAD → GOOD + skip-when per check) live alongside
+this file — each discovery agent reads its own set:
+`correctness-examples.md`, `safety-examples.md`, `evolution-examples.md`. This
+file is the index (what/when/exit); those are the precision anchors.
+
 ## Surfaces (all three, every run)
 
 | Surface | Path | Daily depth | Weekly depth |

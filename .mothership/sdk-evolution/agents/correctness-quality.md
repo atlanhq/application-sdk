@@ -32,7 +32,8 @@ exclusion list (never surface anything ruff / conformance / codeql already gate)
 
 - Full content of the files on the three surfaces (`application_sdk/`,
   `packages/conformance/`, `contract-toolkit/`).
-- `references/check-registry.md` (your ruleset) and the suppression list.
+- `references/check-registry.md` (your ruleset), `references/correctness-examples.md`
+  (concrete BAD/GOOD + skip-when anchors), and the suppression list.
 
 There is no prebuilt index — read the source directly. Use `rg`/`grep` and read
 callers yourself to establish caller counts and dumping-ground status.
