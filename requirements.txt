@@ -34,7 +34,7 @@ azure-identity==1.25.3
     # via atlan-application-sdk
 boto3==1.43.43
     # via atlan-application-sdk
-boto3-stubs==1.43.42
+boto3-stubs==1.43.43
 botocore==1.43.43
     # via
     #   boto3
