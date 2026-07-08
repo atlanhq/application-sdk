@@ -367,6 +367,34 @@ def test_execute_scenario_polls_workflow_completion(
         ensure.assert_called_once_with(workflow_scenario, fake_response)
 
 
+def test_execute_scenario_mutates_result_on_guard_exception(
+    workflow_scenario: Scenario,
+) -> None:
+    """On an exception while polling completion / running a guard, `_execute_scenario`
+    mutates the SAME `ScenarioResult` the parent already appended to `cls._results`
+    (with `success=True`) to `success=False` + `error=exc` before re-raising — so
+    the on-disk summary reflects the real, failed outcome instead of a false green
+    on a scenario pytest reports as FAILED."""
+    suite = _Suite()
+    fake_response = {"data": {"workflow_id": "wf-1", "run_id": "run-1"}}
+    fake_result = MagicMock(success=True, response=fake_response, error=None)
+    boom = RuntimeError("workflow never completed")
+
+    with (
+        patch.object(
+            BaseIntegrationTest,
+            "_execute_scenario",
+            return_value=fake_result,
+        ),
+        patch.object(suite, "_ensure_workflow_completed", side_effect=boom),
+    ):
+        with pytest.raises(RuntimeError, match="workflow never completed"):
+            suite._execute_scenario(workflow_scenario)
+
+    assert fake_result.success is False
+    assert fake_result.error is boom
+
+
 def test_execute_scenario_skips_polling_for_auth(auth_scenario: Scenario) -> None:
     suite = _Suite()
     with (
@@ -694,6 +722,19 @@ def test_upstream_assets_landed_warns_when_no_upstream_path(
     with patch(_LOAD) as m:
         _NoUpstreamPath()._assert_upstream_assets_landed(workflow_scenario, _RESP)
         m.assert_not_called()  # no upstream path → warn + return, can't verify
+
+
+def test_upstream_assets_landed_fails_cleanly_on_missing_ids(
+    workflow_scenario: Scenario,
+) -> None:
+    """Mirrors test_assets_landed_fails_cleanly_on_missing_ids for the upstream
+    guard: a COMPLETED response missing workflow_id/run_id raises the diagnostic
+    AssertionError, not a TypeError from os.path.join(base, None) downstream."""
+    suite = _UpstreamSuite()
+    with patch(_LOAD) as m:
+        with pytest.raises(AssertionError, match="missing workflow_id/run_id"):
+            suite._assert_upstream_assets_landed(workflow_scenario, {"data": {}})
+        m.assert_not_called()  # bail before trying to locate output
 
 
 # ---------------------------------------------------------------------------
