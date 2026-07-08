@@ -15,23 +15,25 @@ description: >
   with the OpenProse skill to use the full Reactor-ready contract semantics; or
   invoke the program directly via the instructions below.
 
-argument-hint: "[--area error-handling|deprecation|dependency|prescriptions|optimizations|dockerfile|tests|logging|ci|contract-toolkit] [--strict] [path]"
+argument-hint: "[--area error-handling|deprecation|dependency|prescriptions|optimizations|dockerfile|tests|logging|ci|contract-toolkit|security] [--strict] [path]"
 
 inputs:
   - name: area
     description: >
       Comma-separated list of areas to remediate.  Defaults to every area the
       top-level program enables (error-handling, deprecation, dependency,
-      prescriptions, optimizations, dockerfile, tests, logging; ci is
+      prescriptions, optimizations, dockerfile, tests, logging, security; ci is
       partially remediated — C002 and C003's absent-file case are fixed
       mechanically via `bootstrap`; C001 is mechanically pinned
       (SHA-resolve + repin) but always escalated to residue for mandatory
       human sign-off — assisted, not autonomous, remediation; C003's
       missing-entry case and drifted `tests.yaml`/
-      `renovate.json` still route to residue with no fix attempted).
+      `renovate.json` still route to residue with no fix attempted; security
+      is suggest-only — every S-series finding is routed to residue with a
+      drafted fix, never auto-applied).
       Example: --area deprecation
     required: false
-    default: "error-handling,deprecation,dependency,prescriptions,optimizations,dockerfile,tests,logging,ci,contract-toolkit"
+    default: "error-handling,deprecation,dependency,prescriptions,optimizations,dockerfile,tests,logging,ci,contract-toolkit,security"
   - name: strict
     description: >
       When present, also remediates WARNING-tier findings.  Each WARNING is
@@ -149,6 +151,7 @@ dispatches each finding to its area prescription.
 | logging | L | ✅ Implemented | Mechanical (L004, L007, L015, L017, L020) auto-fixed; judgment (L001, L002, L005, others) modelled + routed to residue |
 | ci | C | ✅ Partial | C002 (managed-file drift) and C003's absent-`.gitignore` case both mechanical via the same `bootstrap` re-sync, invoked directly for either finding. C001 (unpinned action) mechanical SHA-resolve + repin, always escalated to residue for sign-off (external lookup). C003 missing-entry and drifted `tests.yaml`/`renovate.json` → residue |
 | contract-toolkit | K | ✅ Strict-only | K001/K002 guided migration to App.pkl; verified by pkl-eval gate |
+| security | S | ✅ Suggest-only | S001/S002 (hardcoded credential / raw env access) drafted as proposed fixes routed to residue for mandatory human sign-off — never auto-applied, since no orthogonal gate can confirm a secret-relocation fix resolves the same credential |
 
 To add a new area prescription: author `<programs-dir>/areas/<name>.prose.md`
 and add a dispatch branch to `<programs-dir>/functions/remediate-finding.prose.md`.
@@ -176,7 +179,7 @@ so app-only series no-op on the SDK):
 ```
 let before = call detect-violations
   scope: .
-  series: E,L,C,P,O,D,B,I,T,K
+  series: E,L,C,P,O,D,B,I,T,K,S
   target: if strict then "failing+warning" else "failing"
   path_prefix: <path argument, if any>
 ```
@@ -198,8 +201,8 @@ Execution order (from `conformance-remediation.prose.md`):
 
 1. Run every area responsibility in parallel (error-handling, deprecation,
    dependency, prescriptions, optimizations, dockerfile, tests, logging, ci,
-   contract-toolkit) — the top-level contract fans out to all of them; do not
-   hardcode a subset.
+   contract-toolkit, security) — the top-level contract fans out to all of
+   them; do not hardcode a subset.
 
 2. Each area responsibility calls the `detect-fix-recheck` pattern
    (`patterns/detect-fix-recheck.prose.md`), which loops:
@@ -221,7 +224,7 @@ Call `detect-violations` again and copy the result to `after.sarif`:
 ```
 let after = call detect-violations
   scope: .
-  series: E,L,C,P,O,D,B,I,T,K
+  series: E,L,C,P,O,D,B,I,T,K,S
   target: if strict then "failing+warning" else "failing"
   path_prefix: <path argument, if any>
 ```

@@ -30,7 +30,7 @@ An aggregate of violation counts across all enabled areas:
 Postcondition (deterministic validator — never render-attested):
 
 **Default mode:** `atlan-application-sdk-conformance detect --repo . --series
-E,L,C,P,O,D,B,I,T,K` exits 0 — zero unsuppressed FAILING results across all enabled areas.
+E,L,C,P,O,D,B,I,T,K,S` exits 0 — zero unsuppressed FAILING results across all enabled areas.
 
 **Strict mode** (`--strict`): additionally, the `atlan/summary.warning` count
 in the SARIF output is 0 — zero unsuppressed WARNING results.  Every WARNING
