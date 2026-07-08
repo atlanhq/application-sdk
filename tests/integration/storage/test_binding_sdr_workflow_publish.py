@@ -213,6 +213,17 @@ async def _assert_workflow_publish_lands_assets(store, provider: str, tmp_path) 
             total == _N_RECORDS
         ), f"expected {_N_RECORDS} asset records in the bucket, got {total}"
     finally:
+        # Re-list under run_prefix rather than trusting only the in-memory
+        # `landed` set built above: a failure between the upload (persist_file_refs)
+        # and that listing — e.g. the durable/storage_path asserts, or the
+        # obstore.list call itself — would otherwise leave uploaded-but-unlisted
+        # objects in the bucket. run_prefix is per-invocation so orphans stay
+        # isolated, but they still accumulate cost across nightly runs against a
+        # persistent bucket. Mirrors the cleanup in test_binding_sdr_atlan_upload.py.
+        with contextlib.suppress(Exception):
+            async for batch in obstore.list(store, prefix=run_prefix):
+                for item in batch:
+                    landed.add(str(item["path"]))
         for key in landed:
             with contextlib.suppress(Exception):
                 await ops.delete(key, store=store)
