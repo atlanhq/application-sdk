@@ -268,7 +268,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "    manifest_path = 'app/generated/manifest.json'\n"
             "\n"
             "The ``manifest_path`` class var tells ``BaseSDRIntegrationTest`` to\n"
-            "call ``_manifest_extract_inputs()`` which reads ``dag.extract.inputs``\n"
+            "call ``_manifest_node_inputs()`` which reads ``dag.extract.inputs``\n"
             "from the manifest — including the ``agent_json`` slot — and passes\n"
             "them as the workflow start parameters.  If ``agent_json`` is missing\n"
             "from the manifest the test will raise a ``KeyError`` at startup,\n"

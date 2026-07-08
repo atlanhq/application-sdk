@@ -140,7 +140,7 @@ manifest_path = 'app/generated/manifest.json'
 ```
 
 The `manifest_path` class var tells `BaseSDRIntegrationTest` to call
-`_manifest_extract_inputs()` which reads `dag.extract.inputs` from the manifest —
+`_manifest_node_inputs()` which reads `dag.extract.inputs` from the manifest —
 including the `agent_json` slot — and passes them as the workflow start parameters.  If
 `agent_json` is missing from the manifest the test will raise a `KeyError` at startup,
 surface the defect, and fail the CI run rather than letting the broken manifest reach
