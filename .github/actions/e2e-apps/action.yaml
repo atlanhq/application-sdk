@@ -47,10 +47,13 @@ inputs:
       run's status via the REST API every 60s for up to 2h, all against
       the shared org PAT. 'callback': create an in_progress GitHub check
       run on this repo's own SHA (github-token's own rate-limit bucket),
-      dispatch, and exit immediately — the connector's own workflow
-      completes the check run directly when it finishes (see
-      tests-reusable.yaml's report-to-sdk job), so there is no polling
-      and no wait at all on this side. Requires check-run-name + check-sha.
+      dispatch + do a short bounded locate of the resulting run (so the
+      check has a real link to click, not just the connector's generic
+      Actions tab), then exit — the connector's own workflow completes
+      the check run directly when it finishes (see tests-reusable.yaml's
+      report-to-sdk job), so there is no waiting for the actual test
+      result on this side, only for the dispatch to become visible.
+      Requires check-run-name + check-sha.
   check-run-name:
     required: false
     default: ""
@@ -103,6 +106,7 @@ runs:
         fi
 
     - name: Create pending check run
+      id: create_check
       if: inputs.wait-mode == 'callback'
       shell: bash
       env:
@@ -119,21 +123,51 @@ runs:
           --details-url "https://github.com/atlanhq/${REPO_NAME}/actions" \
           --summary "Dispatched to ${REPO_NAME}; awaiting results — this check completes when that run finishes."
 
-    - name: Dispatch connector workflow
+    # Dispatches AND locates the resulting run (bounded: up to 600s, usually
+    # resolves in 1-3min) so the check above can get a real, clickable link
+    # instead of the connector's generic Actions tab. This is NOT the old
+    # busy-poll this callback pattern replaced — that polled run *status*
+    # for up to 2h; this only confirms the run exists and grabs its URL.
+    #
+    # continue-on-error: unlike poll mode, a failure here (e.g. locate
+    # timing out under a backlogged runner queue) must not fail this job —
+    # the check-run already exists and the connector's own callback will
+    # still complete it correctly regardless of whether we found a pretty
+    # link for it. Worst case the check keeps its generic fallback URL, or
+    # (rare: the dispatch call itself failed) the check surfaces that later
+    # via the gate/watchdog timeout rather than an immediate job failure —
+    # an acceptable trade for not duplicating return-dispatch's own
+    # well-tested dispatch+locate logic.
+    - name: Dispatch connector workflow + locate the run
+      id: return_dispatch_callback
       if: inputs.wait-mode == 'callback'
+      continue-on-error: true
+      uses: codex-/return-dispatch@16fa9d14771c4d56ae0196bbda1d3c17f7f3650f # v3
+      with:
+        token: "${{ inputs.github-token }}"
+        ref: ${{ inputs.target-branch }}
+        repo: ${{ inputs.repo-name }}
+        owner: "atlanhq"
+        workflow: "${{ inputs.workflow }}"
+        workflow_timeout_seconds: 600
+        workflow_job_steps_retry_seconds: 60
+        distinct_id: "${{ inputs.check-sha }}"
+        workflow_inputs: ${{ inputs.workflow-inputs }}
+
+    - name: Update check run with dispatched run link
+      if: always() && inputs.wait-mode == 'callback' && steps.return_dispatch_callback.outputs.run_url != ''
+      continue-on-error: true
       shell: bash
       env:
-        GH_TOKEN: ${{ inputs.github-token }}
-        REPO_NAME: ${{ inputs.repo-name }}
-        WORKFLOW: ${{ inputs.workflow }}
-        TARGET_BRANCH: ${{ inputs.target-branch }}
-        WORKFLOW_INPUTS: ${{ inputs.workflow-inputs }}
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        CHECK_RUN_ID: ${{ steps.create_check.outputs.check_run_id }}
+        RUN_URL: ${{ steps.return_dispatch_callback.outputs.run_url }}
       run: |
-        python3 .github/scripts/dispatch_workflow.py \
-          --repo "atlanhq/${REPO_NAME}" \
-          --workflow "$WORKFLOW" \
-          --ref "$TARGET_BRANCH" \
-          --inputs "$WORKFLOW_INPUTS"
+        python3 .github/scripts/update_check_run_details_url.py \
+          --repo "$REPO" \
+          --check-run-id "$CHECK_RUN_ID" \
+          --details-url "$RUN_URL"
 
     # ── poll mode (legacy): dispatch, busy-poll, fetch artifact, comment ──
     - name: Trigger E2E Integrations Tests
