@@ -351,43 +351,13 @@ jobs:
           workflow: sdr-k8s-e2e.yaml
           workflow-inputs: ${{ github.event_name == 'merge_group' && format('{{"application_sdk_ref":"{0}"}}', github.sha) || format('{{"application_sdk_ref":"{0}"}}', github.event.pull_request.head.sha) }}
 
-  # Two-store SDR hand-off e2e — dispatched cross-repo to atlan-mysql-app's
-  # full-DAG suite (via its `tests.yaml`) with `two_store: true`. This
-  # regression-guards the ADR-0014 two-store posture
-  # (docs/adr/0014-two-store-storage-architecture.md): a connector that
-  # forgets to bridge an artifact via `App.upload()` from its deployment
-  # `objectstore` to the upstream `atlan-objectstore` now shows up as zero
-  # downstream assets/lineage in Atlas instead of being silently masked by
-  # a single shared bucket. Mysql is the canonical first adopter — the
-  # connector where this exact gap was originally found.
-  #
-  # Opt-in via a dedicated 'two-store-e2e' label (not 'e2e' or the sdk/
-  # container/ci path filter) while this is new on both sides: the SDK
-  # capability landing here, and the per-connector config each adopter
-  # still needs (docs/standards/connector-ci-e2e.md). No merge_group leg
-  # yet and not part of connector-gate — promote once mysql (and other
-  # adopters) have migrated and this has proven stable. Omits
-  # base_image_ref: this check exercises the two-store harness logic, not
-  # the connector's runtime base image, so mysql builds from its own
-  # Dockerfile's default base here (same as the merge_group leg of
-  # connector-tests).
-  two-store-e2e:
-    name: Two-Store E2E (mysql)
-    if: |
-      github.event_name == 'pull_request' &&
-      contains(github.event.pull_request.labels.*.name, 'two-store-e2e') &&
-      github.event.pull_request.head.repo.fork != true &&
-      github.event.pull_request.user.login != 'dependabot[bot]'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: "./.github/actions/e2e-apps"
-        with:
-          github-token: ${{ secrets.ORG_PAT_GITHUB }}
-          repo-name: atlan-mysql-app
-          target-branch: "refs/heads/main"
-          workflow: tests.yaml
-          workflow-inputs: ${{ format('{{"application_sdk_ref":"{0}","run_e2e":"true","two_store":"true"}}', github.event.pull_request.head.sha) }}
+  # (No dedicated two-store-e2e job: mysql's own tests.yaml hardcodes
+  # `two-store: true` unconditionally, so its EXISTING full-DAG run —
+  # already dispatched by connector-tests below via the 'e2e' label —
+  # regression-guards the ADR-0014 two-store posture with no extra SDK-
+  # side dispatch glue. A standalone per-connector job here would repeat
+  # the exact mistake sdr-matrix-builder / sdr-e2e-apps / e2e-full-mysql
+  # were removed for — see the comment near the bottom of this file.)
 
   # ── The single required check for the connector e2e area ────────────────────
   # Always runs and always concludes, so branch protection / the merge queue can
