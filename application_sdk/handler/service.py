@@ -134,6 +134,7 @@ def _record_proxy_failure(
 def _serialize_credential_value(v: Any) -> str:
     if isinstance(v, str):
         return v
+    # conformance: ignore[O001] downstream v2-credential consumers compare this string against stdlib json.dumps' spaced separators; orjson's compact output is a behavioral incompatibility here, not a style choice
     return json.dumps(v)
 
 
@@ -591,7 +592,9 @@ def _decode_fe_inputs(raw: str | None) -> dict[str, Any]:
             detail=f"fe_inputs exceeds the {_MAX_FE_INPUTS_BYTES}-byte limit",
         )
     try:
-        parsed = json.loads(raw)
+        # orjson.JSONDecodeError subclasses json.JSONDecodeError, so the
+        # existing except clause still catches malformed input.
+        parsed = orjson.loads(raw)
     except json.JSONDecodeError as exc:
         raise HTTPException(
             status_code=400, detail=f"fe_inputs is not valid JSON: {exc}"
@@ -739,6 +742,7 @@ def _resolve_app_entrypoint(
 
     if selected_entrypoint:
         if selected_entrypoint not in entry_points:
+            # conformance: ignore[L009] logs caller-invisible context (the available entrypoints) that the generic HTTPException detail does not carry.
             logger.warning(
                 "Unknown entrypoint '%s' for app %s; available: %s",
                 selected_entrypoint,
@@ -756,6 +760,7 @@ def _resolve_app_entrypoint(
     ep = _resolve_default_entrypoint(entry_points)
     if ep is None:
         if entry_points:
+            # conformance: ignore[L009] logs caller-invisible context (the available entrypoints) that the generic HTTPException detail does not carry.
             logger.warning(
                 "entrypoint required but not provided for multi-entry-point "
                 "app %s with no default; available: %s",
@@ -985,7 +990,8 @@ def _register_workflow_routes(
         if legacy_workflow_type is not None and entrypoint_param is None:
             warnings.warn(
                 f"App {app_name}: 'workflow_type' body field is deprecated. "
-                "Use ?entrypoint=<name> query param instead.",
+                "Use ?entrypoint=<name> query param instead. "
+                "Will be removed in v4.0.",
                 DeprecationWarning,
                 stacklevel=2,
             )
@@ -1103,11 +1109,13 @@ def _register_workflow_routes(
         except HTTPException:
             raise
         except TypeError as e:
+            # conformance: ignore[L009] boundary handler logs the real exception (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record of the actual failure.
             logger.error(
                 "Invalid workflow input for app %s: %s", app_name, e, exc_info=True
             )
             raise HTTPException(status_code=400, detail="Invalid input") from None
         except Exception as e:
+            # conformance: ignore[L009] boundary handler logs the real exception (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record of the actual failure.
             logger.error(
                 "Failed to start workflow %s for app %s: %s",
                 workflow_id,
@@ -1141,6 +1149,7 @@ def _register_workflow_routes(
                 raise HTTPException(
                     status_code=404, detail=f"Workflow not found: {workflow_id}"
                 ) from None
+            # conformance: ignore[L009] boundary handler logs the real exception (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record of the actual failure.
             logger.error(
                 "Failed to stop workflow %s run %s: %s",
                 workflow_id,
@@ -1327,6 +1336,7 @@ def _register_workflow_routes(
                 raise HTTPException(
                     status_code=404, detail=f"Workflow not found: {workflow_id}"
                 ) from None
+            # conformance: ignore[L009] boundary handler logs the real exception (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record of the actual failure.
             logger.error(
                 "Failed to get workflow result for %s: %s",
                 workflow_id,
@@ -1379,6 +1389,7 @@ def _register_workflow_routes(
                 raise HTTPException(
                     status_code=404, detail=f"Workflow not found: {workflow_id}"
                 ) from None
+            # conformance: ignore[L009] boundary handler logs the real exception (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record of the actual failure.
             logger.error(
                 "Failed to get workflow status for %s run %s: %s",
                 workflow_id,
@@ -1430,7 +1441,8 @@ def _register_workflow_routes(
         if type == "workflows":
             warnings.warn(
                 "Saving config with type='workflows' is deprecated; "
-                "use a specific config type instead.",
+                "use a specific config type instead. "
+                "Will be removed in v4.0.",
                 DeprecationWarning,
                 stacklevel=2,
             )
@@ -1603,6 +1615,7 @@ def _register_workflow_routes(
         except Exception:
             # Log details server-side; the HTTPException intentionally hides the
             # parse internals from the client (avoid leaking file/line/offset).
+            # conformance: ignore[L009] the log is the only server-side record; the raised HTTPException deliberately withholds the parse internals.
             logger.warning("Failed to parse JSON request body", exc_info=True)
             raise HTTPException(status_code=400, detail="Invalid JSON body") from None
 
@@ -1696,6 +1709,14 @@ def _register_workflow_routes(
                     _workflow_config.app_name, None, unknown_ep_status=404
                 )
             except HTTPException:
+                # Benign control-flow fallback: no default entrypoint resolvable
+                # (the only HTTPException _resolve_app_entrypoint raises), so the
+                # handler falls through to a 404. Debug-level to avoid noise.
+                logger.debug(
+                    "No default entrypoint for app %s; serving configmap 404",
+                    _workflow_config.app_name,
+                    exc_info=True,
+                )
                 ep = None
             if ep is not None:
                 # Form configmaps for an entrypoint live under
@@ -1716,7 +1737,9 @@ def _register_workflow_routes(
         if target is not None:
             with open(target) as f:
                 raw = json.load(f)
-            data: dict[str, Any] = {"config": json.dumps(raw.get("config", raw))}
+            data: dict[str, Any] = {
+                "config": orjson.dumps(raw.get("config", raw)).decode()
+            }
             # Some configmaps (e.g., connector apps) carry a top-level
             # `defaultConnectorType`; surface it alongside `config` when present.
             default_connector_type = raw.get("defaultConnectorType")
@@ -1735,6 +1758,7 @@ def _register_workflow_routes(
                 )
             )
 
+        # conformance: ignore[L009] logs caller-invisible context (the available configmaps) that the generic 404 HTTPException detail does not carry.
         logger.warning(
             "ConfigMap not found: requested=%s available=%s",
             config_map_id,
@@ -1805,7 +1829,7 @@ def _register_workflow_routes(
         compute = _discover_compute_manifest(entrypoint_name)
         if compute is not None:
             fe_inputs_decoded = _decode_fe_inputs(fe_inputs)
-            manifest_dict = json.loads(raw)
+            manifest_dict = orjson.loads(raw)
             try:
                 # The hook is async-only (discovery rejects sync defs), so
                 # await it directly. Authors doing CPU/IO-bound work inside
@@ -1818,6 +1842,7 @@ def _register_workflow_routes(
             except Exception:
                 # Don't leak the hook's internals (stack/SQL/paths) to the
                 # caller — mirror the other handler routes' generic 500.
+                # conformance: ignore[L009] boundary handler logs the real exception (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record of the actual failure.
                 logger.error(
                     "compute_manifest hook failed for entrypoint %r",
                     entrypoint_name,
@@ -1827,13 +1852,14 @@ def _register_workflow_routes(
                     status_code=500, detail="Internal server error"
                 ) from None
             if not isinstance(computed, dict):
+                # conformance: ignore[L009] logs caller-invisible context (the actual returned type) that the generic 500 HTTPException detail omits.
                 logger.error(
                     "compute_manifest for entrypoint %r returned %s, expected dict",
                     entrypoint_name,
                     type(computed).__name__,
                 )
                 raise HTTPException(status_code=500, detail="Internal server error")
-            raw = json.dumps(computed).encode()
+            raw = orjson.dumps(computed)
 
         return Response(content=raw, media_type="application/json")
 
@@ -1878,6 +1904,14 @@ def _register_workflow_routes(
                 _workflow_config.app_name, None, unknown_ep_status=404
             )
         except HTTPException:
+            # Benign control-flow fallback: no default entrypoint resolvable
+            # (the only HTTPException _resolve_app_entrypoint raises), so the
+            # handler falls through to a 404. Debug-level to avoid noise.
+            logger.debug(
+                "No default entrypoint for app %s; serving manifest 404",
+                _workflow_config.app_name,
+                exc_info=True,
+            )
             ep = None
         if ep is not None:
             try:
@@ -1951,7 +1985,7 @@ def _register_workflow_routes(
             )
 
         return Response(
-            content=json.dumps(input_type.model_json_schema()),
+            content=orjson.dumps(input_type.model_json_schema()),
             media_type="application/json",
         )
 
@@ -2047,7 +2081,8 @@ def create_app_handler_service(
     if state_store is not None:
         warnings.warn(
             "state_store parameter is deprecated and ignored. "
-            "Credential resolution now uses DaprCredentialVault exclusively. "
+            "Use DaprCredentialVault, now the exclusive credential-resolution "
+            "path; stop passing state_store. "
             "Will be removed in v3.2.0.",
             DeprecationWarning,
             stacklevel=2,
@@ -2195,6 +2230,7 @@ def create_app_handler_service(
                 # Remove once all connector subclasses raise typed AppError leaves.
                 # Tracked alongside the Handler abstract-method contract migration.
                 # See typed-error-prescription.md §5 (HandlerError row).
+                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
                     "Auth test failed for app %s (request %s): %s",
                     app_name,
@@ -2206,6 +2242,7 @@ def create_app_handler_service(
             except AppError as e:
                 # Forward-looking: typed AppError leaves from connectors that raise
                 # non-HandlerError typed errors (already migrated).
+                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
                     "Auth test failed for app %s (request %s): %s",
                     app_name,
@@ -2222,6 +2259,7 @@ def create_app_handler_service(
                 # through rather than masking them as a generic 500.
                 raise
             except Exception as e:
+                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
                     "Auth test failed unexpectedly for app %s (request %s): %s",
                     app_name,
@@ -2324,6 +2362,7 @@ def create_app_handler_service(
                 # Remove once all connector subclasses raise typed AppError leaves.
                 # Tracked alongside the Handler abstract-method contract migration.
                 # See typed-error-prescription.md §5 (HandlerError row).
+                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
                     "Preflight check failed for app %s (request %s): %s",
                     app_name,
@@ -2335,6 +2374,7 @@ def create_app_handler_service(
             except AppError as e:
                 # Forward-looking: typed AppError leaves from connectors that raise
                 # non-HandlerError typed errors (already migrated).
+                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
                     "Preflight check failed for app %s (request %s): %s",
                     app_name,
@@ -2351,6 +2391,7 @@ def create_app_handler_service(
                 # through rather than masking them as a generic 500.
                 raise
             except Exception as e:
+                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
                     "Preflight check failed unexpectedly for app %s (request %s): %s",
                     app_name,
@@ -2425,6 +2466,7 @@ def create_app_handler_service(
                 # Remove once all connector subclasses raise typed AppError leaves.
                 # Tracked alongside the Handler abstract-method contract migration.
                 # See typed-error-prescription.md §5 (HandlerError row).
+                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
                     "Metadata fetch failed for app %s (request %s): %s",
                     app_name,
@@ -2436,6 +2478,7 @@ def create_app_handler_service(
             except AppError as e:
                 # Forward-looking: typed AppError leaves from connectors that raise
                 # non-HandlerError typed errors (already migrated).
+                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
                     "Metadata fetch failed for app %s (request %s): %s",
                     app_name,
@@ -2452,6 +2495,7 @@ def create_app_handler_service(
                 # through rather than masking them as a generic 500.
                 raise
             except Exception as e:
+                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
                     "Metadata fetch failed unexpectedly for app %s (request %s): %s",
                     app_name,

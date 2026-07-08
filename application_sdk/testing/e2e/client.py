@@ -378,6 +378,7 @@ class AEWorkflowClient:
             is_retry = retryable(status, resp_body)
             if not is_retry and status < 300:
                 if attempt > 1:
+                    # conformance: ignore[L006] fires at most once per call (guarded by attempt>1, then returns), not per-iteration volume — a meaningful success-after-retry event
                     logger.info(
                         "%s succeeded on attempt %d/%d",
                         op_name,
@@ -622,6 +623,7 @@ class AEWorkflowClient:
             except AppError as e:
                 transient_streak += 1
                 if transient_streak >= max_transient_failures:
+                    # conformance: ignore[L009] adds caller-invisible loop state (consecutive-failure streak count) not carried by the re-raised exception; not a duplicate of the raise site
                     logger.error(
                         "native-status failed %d times in a row — giving up: %s",
                         transient_streak,
@@ -654,6 +656,7 @@ class AEWorkflowClient:
                 or (elapsed - last_log_elapsed) >= _HEARTBEAT_SECONDS
             )
             if should_log:
+                # conformance: ignore[L006] throttled to status-changes plus a heartbeat every _HEARTBEAT_SECONDS (see comment above), not per-iteration; demoting to DEBUG would hide long-running-stage progress in CI
                 logger.info(
                     "%s AE run [%3ds] %s — %s",
                     run_glyph,
@@ -710,9 +713,10 @@ class AEWorkflowClient:
                 request.dsl.size = 0
                 return int((await client.asset.search(request)).count) > 0
         except Exception:
-            logger.exception(
+            logger.error(
                 "Connection search for %s failed (treating as not-yet-visible)",
                 qualified_name,
+                exc_info=True,
             )
             return False
 
@@ -775,7 +779,7 @@ class AEWorkflowClient:
         del max_forbidden_attempts
         while elapsed < timeout_seconds:
             found = self.connection_exists_in_atlas_via_search(qualified_name)
-            logger.info(
+            logger.debug(
                 "Atlas Connection probe [%ds] qn=%s exists=%s",
                 elapsed,
                 qualified_name,
@@ -857,7 +861,7 @@ class AEWorkflowClient:
                 request.dsl.size = 0  # cheap response: only .count matters
                 return int((await client.asset.search(request)).count)
         except Exception:
-            logger.exception("Total-asset count under %s failed", prefix)
+            logger.error("Total-asset count under %s failed", prefix, exc_info=True)
             return 0
 
     def count_lineage_under_connection(
@@ -923,8 +927,11 @@ class AEWorkflowClient:
                 request.dsl.size = 0  # cheap response: we only want .count
                 return int((await client.asset.search(request)).count)
             except Exception:
-                logger.exception(
-                    "FluentSearch for %s under %s failed", type_name, prefix
+                logger.error(
+                    "FluentSearch for %s under %s failed",
+                    type_name,
+                    prefix,
+                    exc_info=True,
                 )
                 return 0
 
@@ -1009,8 +1016,11 @@ class AEWorkflowClient:
                 # floor. Hence the location assertion must be validated against a
                 # real tenant before adopters rely on it. Logged at exception
                 # level so the fault is at least visible in CI output.
-                logger.exception(
-                    "qualifiedName sample for %s under %s failed", type_name, prefix
+                logger.error(
+                    "qualifiedName sample for %s under %s failed",
+                    type_name,
+                    prefix,
+                    exc_info=True,
                 )
                 return []
 

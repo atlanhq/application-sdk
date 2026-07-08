@@ -263,7 +263,7 @@ def validate_with_pandera(
         }
 
         try:
-            logger.info("Validating %s data against %s", entity, schema_file)
+            logger.debug("Validating %s data against %s", entity, schema_file)
 
             # Load pandera schema from YAML
             schema = from_yaml(schema_file)
@@ -276,7 +276,7 @@ def validate_with_pandera(
             schema.validate(dataframe, lazy=True)
 
             result["success"] = True
-            logger.info(
+            logger.debug(
                 "Validation passed for %s: %d records validated",
                 entity,
                 result["record_count"],
@@ -296,6 +296,10 @@ def validate_with_pandera(
 
         results.append(result)
 
+    passed = sum(1 for r in results if r["success"])
+    logger.info(
+        "Pandera validation complete: %d/%d entities passed", passed, len(results)
+    )
     return results
 
 

@@ -122,8 +122,8 @@ class ParquetFileReader(Reader):
             import warnings as _warnings  # noqa: PLC0415
 
             _warnings.warn(
-                "DataframeType.daft is deprecated and will be removed in v4.0. "
-                "Routing to the pandas/pyarrow path.",
+                "DataframeType.daft is deprecated and will be removed in v4.0; "
+                "use DataframeType.pandas. Routing to the pandas/pyarrow path.",
                 DeprecationWarning,
                 stacklevel=2,
             )
@@ -434,8 +434,8 @@ class ParquetFileWriter(Writer):
             import warnings as _warnings  # noqa: PLC0415
 
             _warnings.warn(
-                "DataframeType.daft is deprecated and will be removed in v4.0. "
-                "Routing to the pandas/pyarrow path.",
+                "DataframeType.daft is deprecated and will be removed in v4.0; "
+                "use DataframeType.pandas. Routing to the pandas/pyarrow path.",
                 DeprecationWarning,
                 stacklevel=2,
             )
@@ -499,9 +499,9 @@ class ParquetFileWriter(Writer):
             )
         else:
             logger.info(
-                "Cleared existing parquet object-store prefix",
-                prefix=normalized_prefix,
-                deleted_count=deleted_count,
+                "Cleared existing parquet object-store prefix=%s deleted_count=%d",
+                normalized_prefix,
+                deleted_count,
             )
         self._prefix_replaced = True
 
@@ -556,10 +556,8 @@ class ParquetFileWriter(Writer):
             # Phase 3: Cleanup temp folders
             await self._cleanup_temp_folders()
 
+        # conformance: ignore[E004] immediate cleanup-then-bare-reraise loses no information (the original exception and traceback propagate unchanged); a log call here would be the exact log-before-raise duplicate L009 avoids
         except Exception:
-            logger.error(
-                "Error in batched dataframe writing with consolidation", exc_info=True
-            )
             await self._cleanup_temp_folders()  # Cleanup on error
             raise
 
@@ -705,6 +703,7 @@ class ParquetFileWriter(Writer):
             )
 
         except Exception:
+            # conformance: ignore[L009] adds caller-invisible partial state (temp_folder_index being consolidated) not carried by the propagating exception
             logger.error(
                 "Error consolidating folder %s",
                 self.temp_folder_index,

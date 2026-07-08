@@ -155,6 +155,7 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
         manifest = orjson.loads(path.read_bytes())
         inputs = ((manifest.get("dag") or {}).get("extract") or {}).get("inputs") or {}
         if not isinstance(inputs.get("args"), dict):
+            # conformance: ignore[E012] this is a test-authoring helper (BaseSDRIntegrationTest), not activity/task code with AppError plumbing; an existing test pins ValueError
             raise ValueError(
                 f"Manifest at {path} has no `dag.extract.inputs.args` object — "
                 "cannot derive the workflow input from it."

@@ -7,6 +7,10 @@ import importlib.util
 import sys
 from pathlib import Path
 
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 EXAMPLES_DIR = REPO_ROOT / "examples"
 
@@ -23,6 +27,7 @@ def _load_module(path: Path) -> tuple[object | None, str | None]:
         spec.loader.exec_module(mod)
         return mod, None
     except Exception as e:
+        logger.warning("Failed to import module %s: %s", path, e, exc_info=True)
         return None, f"import error: {e}"
 
 
@@ -30,16 +35,16 @@ def test_input(path: Path) -> bool:
     """Verify _input.py imports and exposes AppInputContract."""
     mod, err = _load_module(path)
     if mod is None:
-        print(f"FAIL: {path} — {err}")
+        logger.error("FAIL: %s — %s", path, err)
         return False
     if not hasattr(mod, "AppInputContract"):
-        print(f"FAIL: {path} — AppInputContract class not found")
+        logger.error("FAIL: %s — AppInputContract class not found", path)
         return False
     cls = mod.AppInputContract
     if not hasattr(cls, "model_fields"):
-        print(f"FAIL: {path} — AppInputContract is not a Pydantic model")
+        logger.error("FAIL: %s — AppInputContract is not a Pydantic model", path)
         return False
-    print(f"  OK: {path} ({len(cls.model_fields)} fields)")
+    logger.debug("  OK: %s (%d fields)", path, len(cls.model_fields))
     return True
 
 
@@ -54,7 +59,7 @@ def test_e2e(path: Path) -> bool:
     """Verify an _e2e_*.py file imports and exposes the expected generated class."""
     mod, err = _load_module(path)
     if mod is None:
-        print(f"FAIL: {path} — {err}")
+        logger.error("FAIL: %s — %s", path, err)
         return False
 
     suffix = _E2E_CLASS_SUFFIX.get(path.stem)
@@ -67,7 +72,7 @@ def test_e2e(path: Path) -> bool:
             reverse=True,
         )
         if not matches:
-            print(f"FAIL: {path} — no class ending in '{suffix}' found")
+            logger.error("FAIL: %s — no class ending in '%s' found", path, suffix)
             return False
         cls = getattr(mod, matches[0])
         if path.stem == "_e2e_base":
@@ -78,16 +83,23 @@ def test_e2e(path: Path) -> bool:
                 "argo_template_name",
             ):
                 if not hasattr(cls, attr):
-                    print(f"FAIL: {path} — {matches[0]} missing required attr '{attr}'")
+                    logger.error(
+                        "FAIL: %s — %s missing required attr '%s'",
+                        path,
+                        matches[0],
+                        attr,
+                    )
                     return False
-            print(f"  OK: {path} ({matches[0]})")
+            logger.debug("  OK: %s (%s)", path, matches[0])
         else:
             if not hasattr(cls, "model_fields"):
-                print(f"FAIL: {path} — {matches[0]} is not a Pydantic model")
+                logger.error("FAIL: %s — %s is not a Pydantic model", path, matches[0])
                 return False
-            print(f"  OK: {path} ({matches[0]}, {len(cls.model_fields)} fields)")
+            logger.debug(
+                "  OK: %s (%s, %d fields)", path, matches[0], len(cls.model_fields)
+            )
     else:
-        print(f"  OK: {path}")
+        logger.debug("  OK: %s", path)
     return True
 
 
@@ -96,27 +108,26 @@ def main() -> int:
 
     input_files = sorted(EXAMPLES_DIR.rglob("_input.py"))
     if not input_files:
-        print("ERROR: no _input.py files found")
+        logger.error("ERROR: no _input.py files found")
         return 1
-    print(f":: Testing {len(input_files)} _input.py files against SDK...")
+    logger.info(":: Testing %d _input.py files against SDK...", len(input_files))
     for path in input_files:
         if not test_input(path):
             failed += 1
 
     e2e_files = sorted(p for p in EXAMPLES_DIR.rglob("_e2e_*.py"))
     if e2e_files:
-        print(f"\n:: Testing {len(e2e_files)} _e2e_*.py files against SDK...")
+        logger.info(":: Testing %d _e2e_*.py files against SDK...", len(e2e_files))
         for path in e2e_files:
             if not test_e2e(path):
                 failed += 1
 
-    print()
     total = len(input_files) + len(e2e_files)
     if failed:
-        print(f"{failed}/{total} files failed import test.")
+        logger.error("%d/%d files failed import test.", failed, total)
         return 1
 
-    print(f"All {total} files imported successfully.")
+    logger.info("All %d files imported successfully.", total)
     return 0
 
 

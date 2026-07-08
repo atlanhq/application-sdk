@@ -6,9 +6,9 @@ including databases, schemas, tables, columns, functions, and tag attachments.
 
 from __future__ import annotations
 
-import json
 from typing import Any, TypeVar, overload
 
+import orjson
 from pyatlan.model import assets
 from pyatlan.model.enums import AtlanConnectorType
 from pyatlan.utils import init_guid, validate_required_fields
@@ -1207,16 +1207,16 @@ class TagAttachment(assets.TagAttachment):
                         matching_defs, key=lambda x: x.get("createTime", float("inf"))
                     )
                     tag_attachment_attributes["mapped_classification_name"] = (
-                        json.dumps(oldest_def.get("name"))
+                        orjson.dumps(oldest_def.get("name")).decode()
                     )
                 else:
                     tag_attachment_attributes["mapped_classification_name"] = (
-                        json.dumps(obj.get("mappedClassificationName", ""))
+                        orjson.dumps(obj.get("mappedClassificationName", "")).decode()
                     )
             else:
-                tag_attachment_attributes["mapped_classification_name"] = json.dumps(
+                tag_attachment_attributes["mapped_classification_name"] = orjson.dumps(
                     obj.get("mappedClassificationName", "")
-                )
+                ).decode()
 
             return {
                 "attributes": tag_attachment_attributes,

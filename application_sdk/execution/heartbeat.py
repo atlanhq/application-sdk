@@ -210,8 +210,15 @@ async def auto_heartbeat_loop(
                         and _ratio < _MEMORY_WARN_THRESHOLD - _MEMORY_WARN_HYSTERESIS
                     ):
                         _memory_warn_active = False
-            except Exception:  # noqa: S110 — best-effort; must never interrupt the heartbeat loop
-                pass
+            # conformance: ignore[E004] best-effort memory sampling must never interrupt the heartbeat loop; logged at DEBUG (not warning/error) since transient sampling failures are expected and non-actionable
+            except Exception as e:
+                # Best-effort; must never interrupt the heartbeat loop.
+                logger.debug(
+                    "Memory sampling failed for task '%s': %s",
+                    task_name,
+                    e,
+                    exc_info=True,
+                )
 
 
 async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:

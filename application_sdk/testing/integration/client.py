@@ -9,10 +9,10 @@ It wraps the existing APIServerClient and provides:
 3. Support for dynamic workflow endpoints
 """
 
-import json
 from typing import Any
 from urllib.parse import urljoin
 
+import orjson
 import requests
 
 from application_sdk.observability.logger_adaptor import get_logger
@@ -53,7 +53,7 @@ def _to_v3_credentials(
             str_v = (
                 v
                 if isinstance(v, str)
-                else json.dumps(v)
+                else orjson.dumps(v).decode()
                 if isinstance(v, (dict, list, bool))
                 else str(v)
             )
@@ -65,7 +65,7 @@ def _to_v3_credentials(
                 str_v = (
                     v
                     if isinstance(v, str)
-                    else json.dumps(v)
+                    else orjson.dumps(v).decode()
                     if isinstance(v, (dict, list, bool))
                     else str(v)
                 )

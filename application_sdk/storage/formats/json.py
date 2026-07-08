@@ -120,8 +120,8 @@ class JsonFileReader(Reader):
             import warnings as _warnings  # noqa: PLC0415
 
             _warnings.warn(
-                "DataframeType.daft is deprecated and will be removed in v4.0. "
-                "Routing to the pandas/orjson path.",
+                "DataframeType.daft is deprecated and will be removed in v4.0; "
+                "use DataframeType.pandas. Routing to the pandas/orjson path.",
                 DeprecationWarning,
                 stacklevel=2,
             )
@@ -367,8 +367,8 @@ class JsonFileWriter(Writer):
             import warnings as _warnings  # noqa: PLC0415
 
             _warnings.warn(
-                "DataframeType.daft is deprecated and will be removed in v4.0. "
-                "Routing to the pandas/orjson path.",
+                "DataframeType.daft is deprecated and will be removed in v4.0; "
+                "use DataframeType.pandas. Routing to the pandas/orjson path.",
                 DeprecationWarning,
                 stacklevel=2,
             )

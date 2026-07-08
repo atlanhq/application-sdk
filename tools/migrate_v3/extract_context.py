@@ -22,17 +22,20 @@ CLI::
 
 from __future__ import annotations
 
-import json
 import re
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import libcst as cst
+import orjson
 
+from application_sdk.observability.logger_adaptor import get_logger
 from tools.migrate_v3.check_migration import _is_test_path
 from tools.migrate_v3.contract_mapping import _CONTRACT_TABLE
 from tools.migrate_v3.fingerprint import fingerprint_connector
+
+logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -299,12 +302,19 @@ def extract_context(root: Path) -> ConnectorContext:
             continue
         try:
             source = path.read_text(encoding="utf-8")
-        except OSError:
+        except OSError as e:
+            logger.debug("Skipping unreadable file %s: %s", path, e, exc_info=True)
             continue
 
         try:
             rel = str(path.relative_to(scan_root))
-        except ValueError:
+        except ValueError as e:
+            logger.warning(
+                "Could not compute path relative to scan root for %s: %s",
+                path,
+                e,
+                exc_info=True,
+            )
             rel = path.name
 
         # Non-empty, non-comment lines
@@ -319,8 +329,9 @@ def extract_context(root: Path) -> ConnectorContext:
             extractor = _ClassExtractor()
             cst.parse_module(source).visit(extractor)
             all_classes.extend(extractor.classes)
-        except cst.ParserSyntaxError:
-            pass
+        except cst.ParserSyntaxError as e:
+            # Best-effort: unparseable source is skipped for class inventory.
+            logger.debug("Could not parse %s with libcst: %s", rel, e, exc_info=True)
 
         # Infrastructure patterns (text-based)
         all_infra.extend(_scan_infra(source, rel))
@@ -436,14 +447,17 @@ def main(argv: list[str] | None = None) -> int:
 
     root = Path(args.path)
     if not root.exists():
+        # conformance: ignore[L005] CLI usage error written to stderr from a __main__ entry point; stdout/stderr is the tool's output contract, not framework logging
         print(f"error: path does not exist: {root}", file=sys.stderr)
         return 2
 
     ctx = extract_context(root)
 
     if args.json:
-        print(json.dumps(ctx.to_dict(), indent=2))
+        # conformance: ignore[L005] CLI result emitted to stdout from a __main__ entry point for piping; not framework logging
+        print(orjson.dumps(ctx.to_dict(), option=orjson.OPT_INDENT_2).decode())
     else:
+        # conformance: ignore[L005] CLI result emitted to stdout from a __main__ entry point for piping; not framework logging
         print(context_summary(ctx))
 
     return 0

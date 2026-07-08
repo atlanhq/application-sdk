@@ -375,7 +375,7 @@ class PushGatewayClient:
                     timeout=self._http_timeout_s,
                 )
                 deleted += 1
-                logger.info(
+                logger.debug(
                     "Swept stale Pushgateway group: job=%s instance=%s stale_for_seconds=%.1f",
                     self._job,
                     labels.get("instance", "?"),

@@ -11,6 +11,8 @@ import os
 import re
 from typing import Any, TypeAlias
 
+import orjson
+
 from application_sdk.common.sql_filters_errors import InvalidSqlFilterError
 from application_sdk.errors import AppError
 from application_sdk.observability.logger_adaptor import get_logger
@@ -160,7 +162,7 @@ def validate_filter_no_sql_injection(v: Any) -> Any:
         stripped = v.strip()
         if stripped.startswith("{") and stripped.endswith("}"):
             try:
-                parsed = json.loads(stripped)
+                parsed = orjson.loads(stripped)
             except json.JSONDecodeError:  # conformance: ignore[E009] JSON parse probe; None signals "not a dict filter", handled below
                 parsed = None
             if isinstance(parsed, dict):
@@ -531,7 +533,7 @@ def parse_filter_input(
         if not filter_input.strip():
             return {}
         try:
-            return json.loads(filter_input)
+            return orjson.loads(filter_input)
         except json.JSONDecodeError as e:
             raise InvalidSqlFilterError(cause=e) from e
 

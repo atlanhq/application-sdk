@@ -141,7 +141,7 @@ class BaseSQLClient(ClientInterface):
             # No exc_info here: SQLAlchemy errors embed the full connection
             # string (including the password) in their message, and the
             # traceback would print it verbatim into logs.
-            logger.error(  # conformance: ignore[E005,L004] exc_info would expose SQLAlchemy password in traceback; cause sanitized above
+            logger.error(  # conformance: ignore[E005,L004,L009] exc_info would expose SQLAlchemy password; logs sanitized cause at failure site — raised typed error wraps only the raw unsanitized cause
                 "Error loading SQL client: %s", sanitize_cause_repr(e)
             )
             if self.engine:
@@ -617,7 +617,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
             # No exc_info here: SQLAlchemy errors embed the full connection
             # string (including the password) in their message, and the
             # traceback would print it verbatim into logs.
-            logger.error(  # conformance: ignore[E005,L004] exc_info would expose SQLAlchemy password in traceback; cause sanitized above
+            logger.error(  # conformance: ignore[E005,L004,L009] exc_info would expose SQLAlchemy password; logs sanitized cause at failure site — raised typed error wraps only the raw unsanitized cause
                 "Error establishing database connection: %s", sanitize_cause_repr(e)
             )
             if self.engine:

@@ -1,9 +1,10 @@
 """Concurrency utilities — CPU detection and thread pool sizing."""
 
-import logging
 import os
 
-logger = logging.getLogger(__name__)
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
 
 
 def get_actual_cpu_count() -> int:

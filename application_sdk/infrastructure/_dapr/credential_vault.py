@@ -6,10 +6,11 @@ references via the Dapr secret store.
 
 import copy
 import hashlib
-import json
 import re
 from enum import Enum
 from typing import Any
+
+import orjson
 
 from application_sdk.errors.leaves import ColdStartRaceError
 from application_sdk.infrastructure._dapr.client import (
@@ -256,7 +257,7 @@ class DaprCredentialVault:
         )
         normalized_key = normalize_key(raw_path)
 
-        data = json.dumps({"key": normalized_key}).encode("utf-8")
+        data = orjson.dumps({"key": normalized_key})
         metadata = {
             "key": normalized_key,
             "fileName": normalized_key,
@@ -287,7 +288,7 @@ class DaprCredentialVault:
                 credential_guid=credential_guid,
             )
 
-        return json.loads(response.data)
+        return orjson.loads(response.data)
 
     async def _get_secret(
         self,
@@ -347,6 +348,10 @@ class DaprCredentialVault:
                 component=DAPR_SECRET_STORE_COMPONENT,
             )
         except SecretNotFoundError:
+            logger.debug(
+                "Secret %s definitively absent from store; returning empty credential",
+                log_label or secret_key,
+            )
             return {}
         return process_secret_data(result)
 
@@ -363,7 +368,7 @@ class DaprCredentialVault:
             logger.debug("No local secrets file found")
             return {}
         try:
-            all_secrets = json.loads(secrets_file.read_text())
+            all_secrets = orjson.loads(secrets_file.read_text())
             secret = all_secrets.get(secret_key, {})
             if not secret:
                 logger.debug("No local secret for key %s", secret_key)

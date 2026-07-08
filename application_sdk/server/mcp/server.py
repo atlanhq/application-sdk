@@ -71,7 +71,7 @@ class MCPServer:
                 continue
 
             if mcp_metadata.visible:
-                self.logger.info(
+                self.logger.debug(
                     "Registering MCP tool %s: %s",
                     mcp_metadata.name,
                     mcp_metadata.description,
@@ -84,7 +84,7 @@ class MCPServer:
                     **mcp_metadata.kwargs,
                 )
             else:
-                self.logger.info(
+                self.logger.debug(
                     "Tool is marked as not visible, skipping registration: %s",
                     mcp_metadata.name,
                 )

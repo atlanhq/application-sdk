@@ -312,6 +312,7 @@ workflows = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "atlan-application-sdk-conformance" },
     { name = "boto3-stubs" },
     { name = "isort" },
     { name = "libcst" },
@@ -397,6 +398,7 @@ provides-extras = ["workflows", "sql", "daft", "storage", "incremental", "iam-au
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "atlan-application-sdk-conformance", specifier = ">=0.12.0" },
     { name = "boto3-stubs", specifier = ">=1.38.6,<2.0.0" },
     { name = "isort", specifier = ">=8.0.1,<8.1.0" },
     { name = "libcst", specifier = ">=1.4.0,<2.0.0" },
@@ -426,6 +428,20 @@ test = [
     { name = "pytest-timeout", specifier = ">=2.3.0,<3.0.0" },
     { name = "semver", specifier = ">=3.0.2,<4.0.0" },
     { name = "trustme", specifier = ">=1.2.1,<2.0.0" },
+]
+
+[[package]]
+name = "atlan-application-sdk-conformance"
+version = "0.12.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "jinja2" },
+    { name = "jsonschema" },
+    { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d0/e0/3729e683d336711ec64788d5af7c4a0f6b4951743f81c11b35fd623b5bfc/atlan_application_sdk_conformance-0.12.0.tar.gz", hash = "sha256:2595a791877553f86907314494182fa460ba2f5f4f4ebf365732a79ff7e69ec4", size = 782769, upload-time = "2026-07-07T03:23:23.556Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/43/c1/b216847058bb4c37f44307ad63da244ad82a25eab2747c5d0f8deb90c756/atlan_application_sdk_conformance-0.12.0-py3-none-any.whl", hash = "sha256:3d65423e64e31f2d31ffb5aa4878746948165e09e3ba8142b17224081aa83bff", size = 604786, upload-time = "2026-07-07T03:23:22.004Z" },
 ]
 
 [[package]]

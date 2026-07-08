@@ -53,7 +53,7 @@ class BaseMetadataExtractor(App):
         )
 
     @deprecated(
-        "upload_to_atlan is deprecated and will be removed in the next major SDK release. "
+        "upload_to_atlan is deprecated and will be removed in v4.0.0. "
         "Migrate to App.upload(UploadInput(local_path=..., tier=StorageTier.RETAINED)). "
         "See docs/concepts/file-reference.md for migration guidance."
     )

@@ -1,6 +1,5 @@
 """Dapr client implementations."""
 
-import json
 from typing import Any
 
 import httpx
@@ -78,7 +77,7 @@ class DaprStateStore:
                 key=key,
             )
             if data:
-                return json.loads(data)
+                return orjson.loads(data)
             return None
         # conformance: ignore[E004] re-raises as typed StateStoreError with cause chain; traceback preserved
         except Exception as e:
@@ -169,7 +168,11 @@ def _dapr_secrets_error_code(exc: httpx.HTTPStatusError) -> str | None:
     """
     try:
         body = exc.response.json()
-    except Exception:
+    # conformance: ignore[E004] best-effort error-body parse; logged at DEBUG since a non-JSON body is an expected "unknown errorCode" outcome, not a failure worth warning on
+    except Exception as e:
+        logger.debug(
+            "Could not parse Dapr secrets error body as JSON: %s", e, exc_info=True
+        )
         return None
     return body.get("errorCode") if isinstance(body, dict) else None
 

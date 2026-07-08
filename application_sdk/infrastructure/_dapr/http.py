@@ -18,6 +18,7 @@ from typing import Any, TypeVar
 from urllib.parse import quote
 
 import httpx
+import orjson
 from httpx_retries import Retry, RetryTransport
 from pydantic import BaseModel
 
@@ -446,7 +447,7 @@ class AsyncDaprClient:
         }
         if data:
             try:
-                parsed = json.loads(data)
+                parsed = orjson.loads(data)
                 if isinstance(parsed, (dict, list)):
                     body["data"] = parsed
                 else:
@@ -499,6 +500,7 @@ async def get_dapr_component_types() -> dict[str, str]:
         # Degrade to {} rather than stall on the default 30s x retries.
         async with AsyncDaprClient(timeout=2.0, retries=0) as client:
             meta = await client.get_metadata()
+    # conformance: ignore[E004] intentional worker-startup boundary: pure observability that must never gate the worker; already logged with exc_info=True and degrades to {}
     except Exception:
         logger.debug("Could not read Dapr component metadata", exc_info=True)
         return {}
