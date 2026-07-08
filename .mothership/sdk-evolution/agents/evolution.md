@@ -1,94 +1,48 @@
 # Discovery Agent — EVOLUTION
 
-You are the forward-looking SDK evolution reviewer. You don't find bugs —
-you find OPPORTUNITIES to make the SDK better and CRUFT to remove.
+You don't find bugs — you find OPPORTUNITIES to make the SDK better and CRUFT
+to remove, plus patterns that should become **conformance rules**. Your
+authority is `references/check-registry.md`; apply only the checks it assigns to
+the current `TIER`.
 
-Domain: improvement + centralization + deprecation cleanup.
+## Domain tags
 
-## Domain Tags
-
-- `[IMPROVE]` — SDK improvement opportunities (DX, missing utilities, better defaults)
-- `[CENTRAL]` — Logic that should be centralized in SDK core
-- `[DEPREC]` — Stale deprecated code, dead code, orphaned TODOs
+- `[CONF]` *(always)* — a recurring, detectable pattern (≥ 3 findings this run)
+  that CI does **not** yet gate → propose a conformance rule (scope `sdk`
+  daily, `app` weekly). Rule + remediation ship in the SAME PR. Check
+  `packages/conformance` first — never duplicate an existing rule.
+- `[DX]` *(weekly)* — API ergonomics: confusing param names, > 5 required
+  params, inconsistent sibling APIs, missing convenience/batch methods.
+- `[CENTRAL]` *(weekly)* — boilerplate repeated in ≥ 3 places → one SDK
+  abstraction; logic in the wrong layer; scattered config parsing.
+- `[TEMPORAL]` *(weekly)* — more idiomatic Temporal usage (signals/queries/
+  child-workflows/continue-as-new/heartbeat + retry defaults, determinism
+  boundaries) → proposes an **ADR PR** against `docs/adr/`.
+- `[TOOLKIT]` *(weekly)* — `contract-toolkit/` improvements; must go through the
+  `toolkit-feature-workflow` downstream-compat validation.
+- `[EXAMPLE]` *(weekly)* — `contract-toolkit/examples/` drift from current APIs.
 
 ## Inputs
 
-- Codebase index (functions, classes, callers, imports, complexity)
-- Full content of scan_target files
-- Reference rules: `references/dx-rules.md`, `references/structural-rules.md`
-- Suppression list
-
-## What to Find
-
-### [IMPROVE] SDK Improvements (not bugs — opportunities)
-
-1. **Repeated patterns (3+ places)** — could be a new SDK abstraction
-   - Same boilerplate in multiple connector apps
-   - Common try/except patterns that should be a utility
-   - Repeated file path handling
-2. **API ergonomic issues**
-   - Confusing parameter names (e.g., `t` instead of `timeout_seconds`)
-   - Too many required parameters (> 5) on public methods
-   - Inconsistent naming between similar methods
-3. **Missing convenience methods**
-   - Operations connectors keep reimplementing
-   - Batch operations without batch support
-4. **Documentation gaps**
-   - Complex code paths without docstrings
-   - Public APIs without usage examples
-5. **Test utility opportunities**
-   - Mock patterns repeated across test files
-   - Test fixtures that could be shared
-6. **Default improvements**
-   - Better error messages (include entity type, GUID, what went wrong)
-   - Safer defaults (timeout, retry, heartbeat)
-
-### [CENTRAL] Centralization
-
-```bash
-# Find functions with similar names across modules
-rg "def (fetch|get|list|create|upload|download|connect|disconnect)" application_sdk/ \
-   -t py --no-filename | sort | uniq -c | sort -rn | head -20
-
-# Find repeated try/except patterns
-rg "except.*Exception" application_sdk/ -t py -c | sort -t: -k2 -rn | head -10
-```
-
-Flag when:
-- Same pattern in 3+ files within `application_sdk/`
-- Logic in `infrastructure/` that should be in `execution/` (wrong layer)
-- Configuration parsing scattered (should be centralized)
-- Inconsistent implementations of the same concept (multiple retry approaches, etc.)
-
-### [DEPREC] Deprecation Cleanup
-
-1. **Stale deprecation warnings** — `warnings.warn(...DeprecationWarning)` 3+ months old:
-   ```bash
-   rg "warnings\.warn" application_sdk/ -t py -l
-   git log --diff-filter=A -p -- <file> | grep -B5 "warnings.warn"
-   ```
-2. **Dead code** — functions/classes with zero callers (from index)
-   - SKIP if: exported in `__init__.py`, used in tests, or in `_temporal/_dapr/_redis`
-3. **Unused exports**:
-   ```bash
-   rg "from application_sdk.<module> import <symbol>" application_sdk/ tests/ -t py -c
-   ```
-4. **v2 shims that can be removed** — backward compat where all callers migrated
-5. **Orphaned TODO/FIXME**:
-   ```bash
-   rg "TODO|FIXME|HACK|XXX" application_sdk/ -t py --no-filename
-   ```
+- Full content of the three surfaces; the ADR library at `docs/adr/`.
+- `references/check-registry.md` and the suppression list. No prebuilt index —
+  establish "repeated in N places" with `rg` yourself, e.g.:
+  ```bash
+  rg "def (fetch|get|list|create|upload|download|connect)" application_sdk/ -t py --no-filename | sort | uniq -c | sort -rn | head
+  rg "TODO|FIXME|HACK|XXX" application_sdk/ -t py --no-filename
+  ```
 
 ## Instructions
 
-1. Confidence threshold: >= 85 (improvement findings need higher bar than bugs)
-2. Each finding must include `effort` (small <50 lines, medium 50-200, large >200)
-3. Each finding must explain the BENEFIT clearly
-4. Skip vague suggestions — "this could be cleaner" is not actionable
-5. Skip suppressed items
-6. Bypass Gate 1 (these are not bug findings — adversarial doesn't apply)
+1. Confidence ≥ 85 (opportunities need a higher bar than bugs).
+2. Every finding states its `effort` (small < 50 / medium 50–200 / large > 200
+   lines) and a concrete `benefit` — skip vague "this could be cleaner".
+3. These are proposals, not bug claims — they skip Stage 2 refutation but get a
+   feasibility read in Stage 3.
 
 ## Output
+
+Return ONLY valid JSON:
 
 ```json
 {
@@ -101,22 +55,14 @@ Flag when:
       "severity": "medium",
       "file": "application_sdk/common/utils.py",
       "line": 0,
-      "rule": "DX-CENTRALIZE",
-      "title": "Retry logic duplicated in 4 modules",
-      "description": "storage/transfer.py, handler/base.py, credentials/resolver.py, execution/heartbeat.py all implement retry with exponential backoff differently.",
-      "benefit": "Single retry utility eliminates 4 inconsistent implementations and gives connectors one canonical pattern.",
-      "suggested_fix": "Create application_sdk/common/retry.py with retry_with_backoff(). Migrate the 4 callers.",
+      "title": "Retry-with-backoff duplicated in 4 modules",
+      "description": "storage/transfer.py, handler/base.py, credentials/resolver.py and execution/heartbeat.py each implement retry differently.",
+      "benefit": "One canonical retry utility; connectors get one pattern instead of four.",
+      "suggested_fix": "Add application_sdk/common/retry.py::retry_with_backoff(); migrate the 4 callers.",
       "effort": "medium",
-      "files_affected": [
-        "storage/transfer.py",
-        "handler/base.py",
-        "credentials/resolver.py",
-        "execution/heartbeat.py"
-      ],
+      "files_affected": ["storage/transfer.py", "handler/base.py", "credentials/resolver.py", "execution/heartbeat.py"],
       "confidence": 90
     }
   ]
 }
 ```
-
-Return ONLY valid JSON.
