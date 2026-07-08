@@ -69,6 +69,9 @@ The gate derives `metadata` and `connection_config` from `extraction_snapshot` v
 - Produces both the original field name and its hyphenated variant so handlers that
   use either naming convention work on the gate path (e.g. `include_filter` and
   `include-filter`).
+- Drops credential-routing fields and *genuinely* empty values (None, empty string,
+  empty container), but preserves `False` and `0` — a handler reading a bool/int
+  config field off the gate sees the real value, not a silent default.
 
 If no snapshot is present (gate inputs built without a `model_dump`-capable extraction
 input, e.g. manually constructed in tests), the activity falls back to `input.metadata`.

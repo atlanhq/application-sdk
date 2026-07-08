@@ -315,6 +315,23 @@ class TestPreflightGateActivity:
         assert config.get("connection_timeout") == 30
         assert config.get("connection-timeout") == 30
 
+    def test_config_from_snapshot_preserves_false_and_zero_drops_empties(self) -> None:
+        snapshot = {
+            "strict_mode": False,  # falsy but meaningful — must survive
+            "retry_budget": 0,  # falsy but meaningful — must survive
+            "temp_table_regex": "",  # genuinely empty — dropped
+            "include_filter": {},  # genuinely empty — dropped
+            "exclude_list": [],  # genuinely empty — dropped
+            "scope": "public",  # truthy — survives
+        }
+        config = _config_from_snapshot(snapshot)
+        assert config.get("strict_mode") is False
+        assert config.get("strict-mode") is False
+        assert config.get("retry_budget") == 0
+        assert config.get("scope") == "public"
+        for dropped in ("temp_table_regex", "include_filter", "exclude_list"):
+            assert dropped not in config
+
     async def test_activity_uses_snapshot_to_build_preflight_metadata(self) -> None:
         # When extraction_snapshot is populated, the activity must derive metadata
         # from it (activity frame), not from input.metadata (workflow frame).

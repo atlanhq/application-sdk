@@ -179,6 +179,9 @@ _ROUTING_KEYS: frozenset[str] = frozenset(
 )
 
 
+_EMPTY_CONFIG_VALUES: tuple[Any, ...] = (None, "", (), [], {})
+
+
 def _config_from_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     """Extract preflight form config from a raw extraction-input snapshot.
 
@@ -186,10 +189,15 @@ def _config_from_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     field reads by the app never run in a deterministic context on replay.
     Produces both the original field name and its hyphenated equivalent so
     handlers that use either naming convention work on the gate path.
+
+    Drops credential-routing fields and *genuinely* empty values (None, empty
+    string, empty container) — but preserves ``False`` and ``0`` so a handler
+    reading a bool/int config field off ``PreflightInput.metadata`` sees the
+    real value, not a silent default.
     """
     config: dict[str, Any] = {}
     for k, v in snapshot.items():
-        if not v or k in _ROUTING_KEYS:
+        if k in _ROUTING_KEYS or v in _EMPTY_CONFIG_VALUES:
             continue
         config[k] = v
         if "_" in k:
