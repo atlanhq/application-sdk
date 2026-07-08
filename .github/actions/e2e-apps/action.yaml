@@ -39,42 +39,15 @@ inputs:
       SDR path to forward application_sdk_ref so the connector can pin
       atlan-application-sdk to the apps-sdk PR's head SHA. Defaults to
       an empty object so codex-/return-dispatch always sees valid JSON.
-  wait-mode:
-    required: false
-    default: poll
-    description: |
-      'poll' (default, legacy): dispatch, then busy-poll the dispatched
-      run's status via the REST API every 60s for up to 2h, all against
-      the shared org PAT. 'callback': create an in_progress GitHub check
-      run on this repo's own SHA (github-token's own rate-limit bucket),
-      dispatch, and exit immediately — the connector's own workflow
-      completes the check run directly when it finishes (see
-      tests-reusable.yaml's report-to-sdk job), so there is no polling
-      and no wait at all on this side. Requires check-run-name + check-sha.
-  check-run-name:
-    required: false
-    default: ""
-    description: Required when wait-mode is 'callback'. Name of the check run to create, e.g. "Connector E2E / atlan-mysql-app".
-  check-sha:
-    required: false
-    default: ""
-    description: Required when wait-mode is 'callback'. SHA on this repo to attach the check run to (the PR head or merge-queue SHA).
 
 runs:
   using: "composite"
   steps:
-    # Only callback mode needs the repo on disk (it runs .github/scripts/*.py
-    # directly). Poll mode's steps (codex-/return-dispatch, curl, gh api,
-    # github-script) never touch local files, and the calling job has
-    # already checked out the repo before invoking this local composite
-    # action anyway — so this would be a pure no-op there.
     - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      if: inputs.wait-mode == 'callback'
       with:
         ref: ${{ github.ref }}
 
     - name: Get the application-sdk commit SHA
-      if: inputs.wait-mode != 'callback'
       shell: bash
       run: |
         if [ "${{ github.event.pull_request.head.sha }}" ]; then
@@ -89,55 +62,7 @@ runs:
           echo "base_branch=${{ github.ref }}" >> $GITHUB_ENV
         fi
 
-    # ── callback mode: create the check, dispatch, exit — no polling ──────
-    - name: Validate callback-mode inputs
-      if: inputs.wait-mode == 'callback'
-      shell: bash
-      env:
-        CHECK_RUN_NAME: ${{ inputs.check-run-name }}
-        CHECK_SHA: ${{ inputs.check-sha }}
-      run: |
-        if [ -z "$CHECK_RUN_NAME" ] || [ -z "$CHECK_SHA" ]; then
-          echo "::error::wait-mode=callback requires both check-run-name and check-sha"
-          exit 1
-        fi
-
-    - name: Create pending check run
-      if: inputs.wait-mode == 'callback'
-      shell: bash
-      env:
-        GH_TOKEN: ${{ github.token }}
-        REPO: ${{ github.repository }}
-        SHA: ${{ inputs.check-sha }}
-        NAME: ${{ inputs.check-run-name }}
-        REPO_NAME: ${{ inputs.repo-name }}
-      run: |
-        python3 .github/scripts/create_check_run.py \
-          --repo "$REPO" \
-          --sha "$SHA" \
-          --name "$NAME" \
-          --details-url "https://github.com/atlanhq/${REPO_NAME}/actions" \
-          --summary "Dispatched to ${REPO_NAME}; awaiting results — this check completes when that run finishes."
-
-    - name: Dispatch connector workflow
-      if: inputs.wait-mode == 'callback'
-      shell: bash
-      env:
-        GH_TOKEN: ${{ inputs.github-token }}
-        REPO_NAME: ${{ inputs.repo-name }}
-        WORKFLOW: ${{ inputs.workflow }}
-        TARGET_BRANCH: ${{ inputs.target-branch }}
-        WORKFLOW_INPUTS: ${{ inputs.workflow-inputs }}
-      run: |
-        python3 .github/scripts/dispatch_workflow.py \
-          --repo "atlanhq/${REPO_NAME}" \
-          --workflow "$WORKFLOW" \
-          --ref "$TARGET_BRANCH" \
-          --inputs "$WORKFLOW_INPUTS"
-
-    # ── poll mode (legacy): dispatch, busy-poll, fetch artifact, comment ──
     - name: Trigger E2E Integrations Tests
-      if: inputs.wait-mode != 'callback'
       uses: codex-/return-dispatch@16fa9d14771c4d56ae0196bbda1d3c17f7f3650f # v3
       id: return_dispatch
       with:
@@ -156,14 +81,12 @@ runs:
         workflow_inputs: ${{ inputs.workflow-inputs }}
 
     - name: Check the test logs using the below run URL
-      if: inputs.wait-mode != 'callback'
       shell: bash
       run: |
         echo ${{steps.return_dispatch.outputs.run_id}}
         echo ${{steps.return_dispatch.outputs.run_url}}
 
     - name: Check Workflow Status
-      if: inputs.wait-mode != 'callback'
       id: status
       shell: bash
       run: |
@@ -242,7 +165,7 @@ runs:
     # (dispatch failed, run cancelled before tests, etc.).
     - name: Fetch dispatched-run report body
       id: dispatched_summary
-      if: always() && inputs.wait-mode != 'callback' && steps.return_dispatch.outputs.run_id != ''
+      if: always() && steps.return_dispatch.outputs.run_id != ''
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
@@ -273,7 +196,7 @@ runs:
     # connector run. Uses updateComment in-place when a prior marker
     # exists so re-pushes don't spam the PR thread.
     - name: Post dispatched-run status to SDK PR
-      if: always() && inputs.wait-mode != 'callback' && github.event_name == 'pull_request'
+      if: always() && github.event_name == 'pull_request'
       uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
       env:
         REPO_NAME: ${{ inputs.repo-name }}
@@ -378,11 +301,8 @@ runs:
 
     # Re-emit the failure exit code AFTER the comment lands, so the job
     # still fails the PR check but the reviewer sees a comment either way.
-    # Only applies to poll mode: in callback mode this job's own success
-    # means "dispatched OK" — the actual pass/fail comes later via the
-    # check run the connector completes directly (report-to-sdk).
     - name: Fail job if dispatched run did not succeed
-      if: always() && inputs.wait-mode != 'callback'
+      if: always()
       shell: bash
       env:
         DISPATCHED_CONCLUSION: ${{ steps.status.outputs.conclusion }}
