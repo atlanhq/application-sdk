@@ -5,7 +5,7 @@
 
 # Contract-Toolkit Conformance Rules (K-series)
 
-**5 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``)
+**6 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -20,6 +20,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [K003](#k003) | `ContractLockDrift` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
 | [K004](#k004) | `MissingGeneratedArtifact` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
 | [K005](#k005) | `GeneratedArtifactBannerStripped` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
+| [K006](#k006) | `ManifestContractFieldMismatch` | `warn` | `app` | `contract-toolkit` | — | 0.13.0 |
 
 ---
 
@@ -242,5 +243,54 @@ proves full freshness.
 
 **Suppress** with `# conformance: ignore[K005] <reason>` on the first line of the file
 (or the line above it) for an app that deliberately hand-maintains this artifact.
+
+---
+
+## K006 — `ManifestContractFieldMismatch` {#k006}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.13.0
+
+> app/generated/**/manifest.json references an $.extract.outputs.<field> the entrypoint's Output contract does not declare
+
+**Rationale:** App.pkl's pipeline nodes (e.g. PublishNode) unconditionally wire a downstream node's
+args to the entrypoint's runtime output via a JSONPath such as
+$.extract.outputs.publish_state_prefix. Pkl compiles this before any Python runs and has
+zero visibility into the app's Output model; the B005 contract-ledger checker only knows
+a field 'was tracked and disappeared,' with no knowledge of the manifest's JSONPath
+requirements. An app can therefore silently delete a field the manifest depends on, and
+nothing static catches it — only a rarely-run, non-deterministic full-DAG e2e run
+against a real Automation Engine does. This is exactly what happened when
+OpenAPIConnectorOutput lost publish_state_prefix and current_state_prefix in an
+unrelated conformance-cleanup PR and went undetected for about 12 days (BLDX-1527). K006
+closes the loop with a structural manifest-vs-contract diff, computed once both
+artifacts exist, without either layer needing visibility into the other's language.
+
+A `$.extract.outputs.<field>` JSONPath reference in a committed
+`app/generated/**/manifest.json` DAG node's `inputs.args` names a field that the
+corresponding entrypoint's Python `Output` contract does not declare — not directly, and
+not via any inherited base class or SDK mixin.
+
+The Automation Engine resolves this JSONPath at runtime against the object the
+entrypoint's workflow actually returned. A missing field means the reference never
+resolves, and the dependent pipeline step (most commonly the default `publish` step)
+fails at runtime with an unresolved-JSONPath error — the one signal that would have
+caught this is a rarely-run, opt-in-labeled, non-deterministic full-DAG e2e test.
+
+**Fix:** declare the missing field(s) on the entrypoint's `Output` model, or mix in the
+SDK contract base that already supplies them. For the publish-state fields specifically
+(`connection_qualified_name`, `transformed_data_prefix`, `publish_state_prefix`,
+`current_state_prefix`), mix in `application_sdk.contracts.base.PublishInputMixin`
+rather than hand-declaring each field — it also derives the values correctly from
+`connection_qualified_name`.
+
+**Never hand-edit** `app/generated/manifest.json` to work around a finding — it is a
+`pkl eval` output (K004/K005 and the generated-artifact freshness gate catch a
+hand-edited manifest). If the referenced field is genuinely not needed (e.g. the
+pipeline step that consumes it should not be enabled), remove or reconfigure that step
+in `contract/app.pkl` and re-run `pkl eval -m . contract/app.pkl` instead.
+
+**Suppress** with `# conformance: ignore[K006] <reason>` on the `Output` class
+definition (or the comment-only line directly above it) when a mismatch is understood
+and deliberately deferred.
 
 ---

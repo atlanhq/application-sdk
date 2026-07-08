@@ -293,6 +293,9 @@ jobs:
           portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
           password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+          # Probe the actual dispatch target so the VPN step verifies the tunnel
+          # reaches mothership, not an unrelated host.
+          mothership-url: ${{ vars.MOTHERSHIP_URL }}
           max-attempts: '1'
 
       - name: Connect to VPN (attempt 2/3)
@@ -305,6 +308,9 @@ jobs:
           portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
           password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+          # Probe the actual dispatch target so the VPN step verifies the tunnel
+          # reaches mothership, not an unrelated host.
+          mothership-url: ${{ vars.MOTHERSHIP_URL }}
           max-attempts: '1'
 
       - name: Connect to VPN (attempt 3/3)
@@ -317,6 +323,9 @@ jobs:
           portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
           password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+          # Probe the actual dispatch target so the VPN step verifies the tunnel
+          # reaches mothership, not an unrelated host.
+          mothership-url: ${{ vars.MOTHERSHIP_URL }}
           max-attempts: '1'
 
       # If all three VPN attempts failed, post a comment on the PR so the
