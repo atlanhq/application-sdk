@@ -198,6 +198,37 @@ runs:
       with:
         python-version: ${{ inputs.python-version }}
 
+    # SDR-readiness static gate. P029 (agent manifest must surface agent_json +
+    # extraction_method at the extract-args top level — the MSSQL/Tableau silent
+    # agent-misroute class) is BLOCK-tier and fails the job; P030 (an SDR app
+    # should call self.upload) is WARN-tier and is surfaced only. Both self-skip
+    # unless the app declares `self_deployed_runtime: true` in atlan.yaml, so
+    # this no-ops on non-SDR connectors. The published CLI has no rule-level
+    # selector, so we run the whole P series then filter to P029/P030 by ruleId
+    # — unrelated P-series debt (P013/P025/…) never blocks. `uvx` runs the tool
+    # in an isolated env, independent of the app's locked deps, so there is no
+    # uv.lock / SDK-version coupling. Placed before the heavy runtime setup so a
+    # violation fails fast. Reaches every connector calling this action @main
+    # with zero connector-repo change.
+    - name: SDR conformance gate (P029/P030)
+      shell: bash
+      run: |
+        sarif="${RUNNER_TEMP:-/tmp}/sdr-conformance.sarif"
+        uvx atlan-application-sdk-conformance@0.12.0 detect \
+          --repo . --series P --output "$sarif" --exit-zero
+        sel='.runs[].results[] | select(.ruleId=="P029" or .ruleId=="P030")'
+        block=$(jq "[$sel | select(.level==\"error\")] | length" "$sarif")
+        warn=$(jq "[$sel | select(.level==\"warning\")] | length" "$sarif")
+        jq -r "$sel | \"\(.ruleId) [\(.level)] \(.locations[0].physicalLocation.artifactLocation.uri // \"?\"): \(.message.text)\"" "$sarif" || true
+        if [ "${warn:-0}" -gt 0 ]; then
+          echo "::warning title=SDR conformance::${warn} P030 (missing self.upload) warning(s) — see log"
+        fi
+        if [ "${block:-0}" -gt 0 ]; then
+          echo "::error title=SDR conformance::${block} P029 agent-routing violation(s) — agent_json/extraction_method must be at the top level of dag.extract.inputs.args"
+          exit 1
+        fi
+        echo "SDR conformance (P029/P030): OK"
+
     - name: Pin application-sdk to dispatched ref
       if: inputs.application-sdk-ref != ''
       shell: bash
