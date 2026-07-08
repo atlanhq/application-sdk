@@ -57,8 +57,8 @@ def _count(base: str, subdir: str) -> tuple[list[str], int]:
                 records += len(json.loads(txt))  # JSON array
             else:
                 records += sum(1 for ln in txt.splitlines() if ln.strip())  # JSONL
-        except Exception:
-            records += 1  # unparseable but present — count the file itself
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"::warning::SDR asset guard — unparseable data file {f}: {e}")
     return files, records
 
 
