@@ -47,7 +47,7 @@ jobs:
         # `claude install` exits 0 without placing the binary at
         # ~/.local/bin/claude on Ubuntu 24.04 runners.
         # Tracking: https://github.com/anthropics/claude-code-action/issues/1290
-        uses: anthropics/claude-code-action@ba0aafd4308cbba7165f9f2cdb0cfbed5a3c99ce  # v1.0.168
+        uses: anthropics/claude-code-action@37b464ce72700f7b2c5ff8d2db7fa7b15df792f5  # v1.0.169
         with:
           anthropic_api_key: ${{ secrets.AI_GATEWAY_KEY }}
           model: ${{ inputs.model }}
