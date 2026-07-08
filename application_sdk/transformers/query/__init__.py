@@ -9,6 +9,7 @@ import yaml
 from pyatlan.model.enums import AtlanConnectorType
 
 if TYPE_CHECKING:
+    import pandas as pd
     import pyarrow as pa
 
 from application_sdk.observability.logger_adaptor import get_logger
@@ -315,17 +316,22 @@ class QueryBasedTransformer(TransformerInterface):
     def transform_metadata(  # type: ignore
         self,
         typename: str,
-        dataframe: pa.Table | list[dict[str, Any]],
+        dataframe: pa.Table | pd.DataFrame | list[dict[str, Any]],
         workflow_id: str,
         workflow_run_id: str,
         entity_class_definitions: dict[str, type[Any]] | None = None,
         **kwargs: Any,
     ) -> list[dict[str, Any]] | None:
         """Transform records using SQL executed through DuckDB"""
+        import pandas as pd  # noqa: PLC0415 — optional dep: pandas
         import pyarrow as pa  # noqa: PLC0415 — optional dep: pyarrow
 
         if isinstance(dataframe, list):
             dataframe = pa.Table.from_pylist(dataframe) if dataframe else None
+        elif isinstance(dataframe, pd.DataFrame):
+            # Readers (e.g. ParquetFileReader) return pandas; bridge it to the
+            # pyarrow Table this transformer operates on.
+            dataframe = pa.Table.from_pandas(dataframe, preserve_index=False)
         if dataframe is None or len(dataframe) == 0:
             return None
 

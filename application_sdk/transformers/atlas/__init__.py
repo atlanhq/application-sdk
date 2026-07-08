@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 from pyatlan.model.enums import AtlanConnectorType, EntityStatus
 
 if TYPE_CHECKING:
+    import pandas as pd
     import pyarrow as pa
 
 from application_sdk.observability.logger_adaptor import get_logger
@@ -113,7 +114,7 @@ class AtlasTransformer(TransformerInterface):
     def transform_metadata(
         self,
         typename: str,
-        dataframe: pa.Table | list[dict[str, Any]],
+        dataframe: pa.Table | pd.DataFrame | list[dict[str, Any]],
         workflow_id: str,
         workflow_run_id: str,
         entity_class_definitions: dict[str, type[Any]] | None = None,
@@ -126,9 +127,18 @@ class AtlasTransformer(TransformerInterface):
         connection_qualified_name = kwargs.get("connection", {}).get(
             "connection_qualified_name", None
         )
-        rows: list[dict[str, Any]] = (
-            dataframe if isinstance(dataframe, list) else dataframe.to_pylist()
-        )
+        if isinstance(dataframe, list):
+            rows: list[dict[str, Any]] = dataframe
+        else:
+            import pandas as pd  # noqa: PLC0415 — optional dep: pandas
+
+            if isinstance(dataframe, pd.DataFrame):
+                # Readers (e.g. ParquetFileReader) return pandas; bridge it to
+                # the pyarrow Table this transformer operates on.
+                import pyarrow as pa  # noqa: PLC0415 — optional dep: pyarrow
+
+                dataframe = pa.Table.from_pandas(dataframe, preserve_index=False)
+            rows = dataframe.to_pylist()
         transformed_metadata_list = []
         for row in rows:
             try:
