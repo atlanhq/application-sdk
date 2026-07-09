@@ -450,7 +450,12 @@ async def materialize_file_reference(
             # Otherwise (no stored sidecar OR hash mismatch) fall through
             # to re-download — conservative since we cannot verify.
 
-        # Determine output path.
+        # Determine output path. owns_temp: a fresh mkstemp name per call
+        # means a resume checkpoint could never be reused on retry — disable
+        # resume and clean up the partial + sidecar on failure. A stable
+        # ref.local_path keeps the default (env-driven) resume behaviour so a
+        # Temporal retry on the same pod fetches only the missing ranges.
+        owns_temp = ref.local_path is None
         if ref.local_path is not None:
             out_path = ref.local_path
             Path(out_path).parent.mkdir(parents=True, exist_ok=True)
@@ -522,6 +527,7 @@ async def materialize_file_reference(
                     # second time and its range GETs are version-pinned.
                     file_size=remote_size,
                     etag=remote_etag,
+                    resume=False if owns_temp else None,
                 )
             else:
                 sha256 = await download_file(
@@ -558,6 +564,14 @@ async def materialize_file_reference(
                 bytes_transferred_before_failure=0,
                 exc_info=True,
             )
+            if owns_temp:
+                # A fresh-named temp can never be resumed — don't strand the
+                # partial file or its checkpoint sidecar (best-effort).
+                try:
+                    Path(out_path).unlink(missing_ok=True)
+                    Path(str(out_path) + ".transfer-state").unlink(missing_ok=True)
+                except OSError:  # conformance: ignore[E002] best-effort cleanup of an unusable temp; original error re-raised below
+                    pass
             raise
 
         _log(
