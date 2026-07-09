@@ -340,20 +340,19 @@ jobs:
         env:
           PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
           GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          PORTAL_URL: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const prNumber = parseInt(process.env.PR_NUMBER, 10);
             const runUrl = process.env.GHA_RUN_URL;
             const body = [
-              `⚠️ **SDK Review failed: could not connect to VPN.**`,
+              `⚠️ **SDK Review couldn't start due to a transient infrastructure issue.**`,
               ``,
-              `All 3 VPN connection attempts to \`${process.env.PORTAL_URL || 'the VPN portal'}\` failed. This is usually a transient infrastructure issue.`,
+              `The review environment was temporarily unreachable. This is usually transient.`,
               ``,
               `[View workflow logs](${runUrl})`,
               ``,
-              `Please retry by commenting \`@sdk-review\` again. If it keeps failing, flag it in \`#bu-platform-engineering\`.`,
+              `Please retry by commenting \`@sdk-review\` again. If it keeps failing, reach out to the platform team.`,
             ].join('\n');
             await github.rest.issues.createComment({
               owner: context.repo.owner,
