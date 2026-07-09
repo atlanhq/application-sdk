@@ -667,7 +667,7 @@ class TestClassifyTransferError:
         ],
     )
     def test_families(self, error_class, family) -> None:
-        from application_sdk.storage.ops import _classify_transfer_error
+        from application_sdk.storage._telemetry import _classify_transfer_error
 
         assert _classify_transfer_error(error_class, "") == family
 
@@ -1160,6 +1160,131 @@ class TestResumableChunkedDownload:
         # The hung sibling was cancelled (and drained) rather than orphaned.
         assert sibling_cancelled.is_set()
 
+    async def test_cancellation_drains_siblings_and_closes_fd(
+        self, store, tmp_path
+    ) -> None:
+        # CancelledError is a BaseException: Temporal activity cancellation
+        # must get the same sibling-drain + fd close as a chunk failure —
+        # otherwise a long-lived worker leaks an fd (and an orphaned writer)
+        # per cancelled download.
+        import asyncio
+
+        await _put("res/s.bin", self.CONTENT, store, normalize=False)
+        out = tmp_path / "s.bin"
+        real_get = __import__("obstore").get_async
+        real_open, real_close = os.open, os.close
+        hang_started = asyncio.Event()
+        sibling_cancelled = asyncio.Event()
+        opened_fds: list[int] = []
+        closed_fds: list[int] = []
+
+        def recording_open(p, *a, **kw):
+            fd = real_open(p, *a, **kw)
+            if str(p) == str(out):
+                opened_fds.append(fd)
+            return fd
+
+        def recording_close(fd):
+            closed_fds.append(fd)
+            real_close(fd)
+
+        async def hanging_get(st, key, **kw):
+            rng = (kw.get("options") or {}).get("range")
+            if rng and rng[0] == 0:
+                hang_started.set()
+                try:
+                    await asyncio.sleep(60)
+                except asyncio.CancelledError:
+                    sibling_cancelled.set()
+                    raise
+            return await real_get(st, key, **kw)
+
+        with (
+            patch("application_sdk.storage.ops.obstore.get_async", new=hanging_get),
+            patch("os.open", new=recording_open),
+            patch("os.close", new=recording_close),
+        ):
+            task = asyncio.create_task(
+                download_file_chunked(
+                    "res/s.bin",
+                    out,
+                    store,
+                    chunk_size_bytes=8,
+                    max_concurrent_chunks=2,
+                    normalize=False,
+                )
+            )
+            await hang_started.wait()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        assert sibling_cancelled.is_set()
+        assert opened_fds and all(fd in closed_fds for fd in opened_fds)
+        # Partial file stays on disk — a later retry resumes from checkpoint.
+        assert out.exists()
+
+    async def test_50gb_equivalent_chunk_count_mechanics(self, store, tmp_path) -> None:
+        # 50 GiB at the production 16 MiB chunk size is 3200 chunks. Validate
+        # the mechanics AT that chunk count — checkpoint growth, semaphore
+        # fan-out, interrupt + resume-only-missing — without moving 50 GiB,
+        # by shrinking the chunk to 8 bytes.
+        n_chunks = 3200
+        chunk = 8
+        content = os.urandom(n_chunks * chunk - 3)  # ragged final chunk
+        await _put("res/big50.bin", content, store, normalize=False)
+        out = tmp_path / "big50.bin"
+        real_get = __import__("obstore").get_async
+
+        calls = {"n": 0}
+        fail_after = 2000  # die at ~60% like a mid-transfer egress collapse
+
+        async def dying_get(st, key, **kw):
+            calls["n"] += 1
+            if calls["n"] > fail_after:
+                raise RuntimeError("simulated egress death")
+            return await real_get(st, key, **kw)
+
+        with (
+            patch("application_sdk.storage.ops.obstore.get_async", new=dying_get),
+            pytest.raises(StorageError),
+        ):
+            await download_file_chunked(
+                "res/big50.bin",
+                out,
+                store,
+                chunk_size_bytes=chunk,
+                max_concurrent_chunks=16,
+                normalize=False,
+            )
+
+        state = orjson.loads(self._state_path(out).read_bytes())
+        done_before = len(state["done"])
+        assert 0 < done_before <= fail_after
+
+        fetched: list[int] = []
+
+        async def counting_get(st, key, **kw):
+            fetched.append(1)
+            return await real_get(st, key, **kw)
+
+        with patch("application_sdk.storage.ops.obstore.get_async", new=counting_get):
+            digest = await download_file_chunked(
+                "res/big50.bin",
+                out,
+                store,
+                chunk_size_bytes=chunk,
+                max_concurrent_chunks=16,
+                compute_hash=True,
+                normalize=False,
+            )
+
+        # The retry fetched ONLY the ranges the checkpoint didn't cover.
+        assert len(fetched) == n_chunks - done_before
+        assert out.read_bytes() == content
+        assert digest == hashlib.sha256(content).hexdigest()
+        assert not self._state_path(out).exists()
+
 
 class TestTransferMetrics:
     """Transfers emit metrics via the SDK metrics rail (BLDX-1513)."""
@@ -1250,9 +1375,9 @@ class TestTransferMetrics:
 
 class TestTransferProgressHeartbeat:
     def test_emits_info_with_structured_fields(self) -> None:
-        from application_sdk.storage.ops import _log_transfer_progress
+        from application_sdk.storage._telemetry import _log_transfer_progress
 
-        with patch("application_sdk.storage.ops.logger") as mock_logger:
+        with patch("application_sdk.storage._telemetry.logger") as mock_logger:
             _log_transfer_progress(
                 "download",
                 "big/f.bin",
@@ -1273,9 +1398,9 @@ class TestTransferProgressHeartbeat:
         assert kwargs["throughput_mibps"] == pytest.approx(1.0, rel=0.05)
 
     def test_no_total_omits_percentage(self) -> None:
-        from application_sdk.storage.ops import _log_transfer_progress
+        from application_sdk.storage._telemetry import _log_transfer_progress
 
-        with patch("application_sdk.storage.ops.logger") as mock_logger:
+        with patch("application_sdk.storage._telemetry.logger") as mock_logger:
             _log_transfer_progress("upload", "k", bytes_so_far=10, elapsed_ms=1000.0)
         args, _ = mock_logger.log.call_args
         assert "%" not in args[1]
@@ -1291,7 +1416,7 @@ class TestTransferProgressHeartbeat:
                 "application_sdk.constants.STORAGE_PROGRESS_LOG_INTERVAL_SECONDS",
                 1e-9,  # every chunk crosses the interval boundary
             ),
-            patch("application_sdk.storage.ops._log_transfer_progress") as mock_hb,
+            patch("application_sdk.storage.chunked._log_transfer_progress") as mock_hb,
         ):
             await download_file_chunked(
                 "hb/f.bin",
@@ -1309,7 +1434,7 @@ class TestTransferProgressHeartbeat:
         out = tmp_path / "g.bin"
         with (
             patch("application_sdk.constants.STORAGE_PROGRESS_LOG_INTERVAL_SECONDS", 0),
-            patch("application_sdk.storage.ops._log_transfer_progress") as mock_hb,
+            patch("application_sdk.storage.chunked._log_transfer_progress") as mock_hb,
         ):
             await download_file_chunked(
                 "hb/g.bin",
