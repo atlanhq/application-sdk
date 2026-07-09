@@ -1220,20 +1220,11 @@ jobs:
           echo "Pushed to DockerHub: ${DOCKERHUB_IMAGE}"
 
           # Mirror the release version-tag ladder (e.g. :2.0.1, :2.0, :2, :latest)
-          # onto Docker Hub too. GHCR already got these tags in the merge step, but
-          # self-deployed-runtime (SDR) pulls apps by their semver tag from Docker
-          # Hub — without this only the branch-sha tag lands there, and an SDR pull
-          # of :<version> 404s with "manifest unknown". The image already exists on
-          # Docker Hub from the copy above, so each entry is a server-side tag op
-          # against the same digest (crane tag) — no blob re-upload.
-          if [ -n "${RELEASE_TAGS}" ]; then
-            while IFS= read -r ref; do
-              [ -n "$ref" ] || continue
-              tag="${ref##*:}"          # ghcr.io/atlanhq/<app>:2.0.1 -> 2.0.1
-              crane tag "${DOCKERHUB_IMAGE}" "${tag}"
-              echo "Tagged on DockerHub: ${DOCKERHUB_IMAGE%:*}:${tag}"
-            done <<< "${RELEASE_TAGS}"
-          fi
+          # onto Docker Hub. Branching logic lives in a tested script per
+          # docs/standards/ci.md.
+          python3 .github/scripts/mirror_tags_dockerhub.py \
+            --dockerhub-image "${DOCKERHUB_IMAGE}" \
+            --release-tags "${RELEASE_TAGS}"
 
           # Resolve the pushed manifest digest so we can sign by digest (immutable)
           # rather than by tag (mutable). `${DOCKERHUB_IMAGE%%:*}` strips the tag.
