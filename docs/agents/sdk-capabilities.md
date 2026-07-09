@@ -1,6 +1,6 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.21.1
+sdk-version:   3.21.2
 source-sha:    03ec5e0bf2cc8ea8d88aa69b356b902ef95b7b10
 source-date:   2026-07-10T04:12:46+05:30
 do-not-edit:   re-run the skill instead of hand-editing
@@ -30,7 +30,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 11 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 26 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 29 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 5 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 15 |
 
@@ -2130,6 +2130,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Summary:** Stream-download *key* from the store to a local file.
 - **Defined in:** `application_sdk/storage/ops.py`
 
+#### `download_file_chunked`
+
+- **Import:** `from application_sdk.storage import download_file_chunked`
+- **Signature:** `download_file_chunked(key: str, ...)`
+- **Summary:** Download *key* using parallel range GETs, writing chunks at fixed offsets.
+- **Defined in:** `application_sdk/storage/chunked.py`
+
 #### `download_prefix`
 
 - **Import:** `from application_sdk.storage import download_prefix`
@@ -2144,11 +2151,25 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Summary:** Return ``True`` if *key* exists in the store.
 - **Defined in:** `application_sdk/storage/ops.py`
 
+#### `get_file_meta`
+
+- **Import:** `from application_sdk.storage import get_file_meta`
+- **Signature:** `get_file_meta(key: str, store: BoundStore | ObjectStore | None = None, *, normalize: bool = True)`
+- **Summary:** Return ``(size_bytes, e_tag)`` for *key*, or ``None`` if not found.
+- **Defined in:** `application_sdk/storage/ops.py`
+
 #### `list_keys`
 
 - **Import:** `from application_sdk.storage import list_keys`
 - **Signature:** `list_keys(prefix: str = '', ...)`
 - **Summary:** List all object keys under *prefix*.
+- **Defined in:** `application_sdk/storage/batch.py`
+
+#### `list_keys_with_meta`
+
+- **Import:** `from application_sdk.storage import list_keys_with_meta`
+- **Signature:** `list_keys_with_meta(prefix: str = '', ...)`
+- **Summary:** Like :func:`list_keys`, but return ``(key, size_bytes, e_tag)`` tuples.
 - **Defined in:** `application_sdk/storage/batch.py`
 
 #### `normalize_key`

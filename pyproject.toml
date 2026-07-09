@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "3.21.1"
+version = "3.21.2"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
@@ -185,6 +185,9 @@ stop-deps.shell = "lsof -ti:3000,3500,7233,8233,50001 | xargs kill -9 2>/dev/nul
 # `temporal server start-dev` or daprd needed. Set TEMPORAL_HOST to point at
 # an already-running server instead.
 test-integration = "pytest tests/integration/ -m integration -v --timeout=120"
+# Opt-in large-file storage load tests (real bytes, LocalStore, no CI).
+# Size via ATLAN_LOAD_TEST_SIZE_MIB (default 1024; 51200 = 50 GiB). See tests/load/README.md.
+load-test-storage = "pytest tests/load -m load -v -s --timeout=0"
 test-scripts = "bats .github/scripts/tests"  # requires: bats-core (apt-get install -y bats)
 
 # API docs — must be before any sub-table header ([tool.poe.tasks.*])
@@ -254,8 +257,9 @@ reportInvalidTypeForm = "warning"
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
-addopts = "-m 'not integration and not e2e and not s3_integration and not azure_integration and not gcs_integration and not storage_emulator'"
+addopts = "-m 'not integration and not e2e and not s3_integration and not azure_integration and not gcs_integration and not storage_emulator and not load'"
 markers = [
+    "load: opt-in large-file storage load tests — real bytes at ATLAN_LOAD_TEST_SIZE_MIB (50 GiB-class); run via `poe load-test-storage`, never in CI",
     "integration: tests requiring local Temporal server",
     "e2e: tests requiring a live K8s cluster",
     "s3_integration: tests requiring keyless AWS access (S3_BUCKET + ambient AWS credentials, e.g. OIDC role)",

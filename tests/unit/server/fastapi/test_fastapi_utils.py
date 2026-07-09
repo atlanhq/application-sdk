@@ -523,7 +523,7 @@ class TestUploadFileToObjectStore:
 class TestDownloadFileFromUploadResponse:
     """Test cases for download_file_from_upload_response utility function."""
 
-    @patch("application_sdk.common.utils.download_file")
+    @patch("application_sdk.common.utils.download_file_chunked")
     async def test_download_with_dict_input(self, mock_objectstore):
         """Test download with a dict containing 'key'."""
 
@@ -537,7 +537,7 @@ class TestDownloadFileFromUploadResponse:
 
         assert result.endswith("workflow_file_upload/abc123.csv")
 
-    @patch("application_sdk.common.utils.download_file")
+    @patch("application_sdk.common.utils.download_file_chunked")
     async def test_download_with_string_input(self, mock_objectstore):
         """Test download with a JSON string."""
 
@@ -550,7 +550,7 @@ class TestDownloadFileFromUploadResponse:
         assert call_args[1]["key"] == "workflow_file_upload/abc123.csv"
         assert result.endswith("workflow_file_upload/abc123.csv")
 
-    @patch("application_sdk.common.utils.download_file")
+    @patch("application_sdk.common.utils.download_file_chunked")
     async def test_download_with_file_upload_response(self, mock_objectstore):
         """Test download with a FileUploadResponse object."""
 
@@ -589,7 +589,7 @@ class TestDownloadFileFromUploadResponse:
         with pytest.raises(JsonParseError):
             await download_file_from_upload_response("not valid json")
 
-    @patch("application_sdk.common.utils.download_file")
+    @patch("application_sdk.common.utils.download_file_chunked")
     async def test_download_error_propagation(self, mock_objectstore):
         """Test that ObjectStore download errors propagate."""
         mock_objectstore.side_effect = Exception("Download failed")

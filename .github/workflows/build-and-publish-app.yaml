@@ -1183,6 +1183,19 @@ jobs:
             while IFS= read -r tag; do [ -n "$tag" ] && echo "    ${tag}"; done <<< "${RELEASE_TAGS}"
           fi
 
+      - name: Checkout SDK helper scripts
+        # mirror_tags_dockerhub.py lives in the SDK repo, not the caller repo —
+        # this job has no checkout of its own (unlike prepare/certify/leak-scan),
+        # so the script must be pulled in explicitly before it's invoked below.
+        if: needs.prepare.outputs.enable_sdr == 'true'
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: atlanhq/application-sdk
+          ref: main
+          path: .sdk-entrypoint
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
       - name: Install crane
         if: needs.prepare.outputs.enable_sdr == 'true'
         uses: imjasonh/setup-crane@feee3b6bb0d4c68370f256a4502498c9227e5c6b # v0.7
@@ -1205,6 +1218,7 @@ jobs:
         env:
           GHCR_IMAGE:      ${{ needs.prepare.outputs.ghcr_image }}
           DOCKERHUB_IMAGE: ${{ needs.prepare.outputs.dockerhub_image }}
+          RELEASE_TAGS:    ${{ needs.prepare.outputs.release_tags }}
         run: |
           set -euo pipefail
           # Use `crane copy`, not `docker buildx imagetools create`, for the
@@ -1217,6 +1231,13 @@ jobs:
           # login steps above.
           crane copy "${GHCR_IMAGE}" "${DOCKERHUB_IMAGE}"
           echo "Pushed to DockerHub: ${DOCKERHUB_IMAGE}"
+
+          # Mirror the release version-tag ladder (e.g. :2.0.1, :2.0, :2, :latest)
+          # onto Docker Hub. Branching logic lives in a tested script per
+          # docs/standards/ci.md.
+          python3 .sdk-entrypoint/.github/scripts/mirror_tags_dockerhub.py \
+            --dockerhub-image "${DOCKERHUB_IMAGE}" \
+            --release-tags "${RELEASE_TAGS}"
 
           # Resolve the pushed manifest digest so we can sign by digest (immutable)
           # rather than by tag (mutable). `${DOCKERHUB_IMAGE%%:*}` strips the tag.
