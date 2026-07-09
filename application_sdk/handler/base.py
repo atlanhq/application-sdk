@@ -24,7 +24,6 @@ from application_sdk.handler.contracts import (
     MetadataOutput,
     PreflightInput,
     PreflightOutput,
-    PreflightStatus,
     SqlMetadataOutput,
 )
 
@@ -101,7 +100,9 @@ class Handler(ABC):
                 return AuthOutput(status=AuthStatus.FAILED, message="Connection refused")
 
             async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-                return PreflightOutput(status=PreflightStatus.READY)
+                return PreflightOutput(
+                    checks=[PreflightCheck(name="connectivity", passed=True)]
+                )
 
             async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
                 return SqlMetadataOutput(objects=[])
@@ -206,9 +207,7 @@ class DefaultHandler(Handler):
         """Returns a non-gating no-op result when no handler is registered.
 
         No checks → no required checks → ``should_block`` is ``False``."""
-        return PreflightOutput(
-            status=PreflightStatus.READY, message="No preflight handler registered"
-        )
+        return PreflightOutput(message="No preflight handler registered")
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
         """Always returns empty metadata."""

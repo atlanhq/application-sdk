@@ -26,7 +26,6 @@ from application_sdk.handler.contracts import (
     MetadataOutput,
     PreflightInput,
     PreflightOutput,
-    PreflightStatus,
 )
 
 # ---------------------------------------------------------------------------
@@ -99,7 +98,7 @@ class _ContextCapturingHandler(Handler):
         return AuthOutput(status=AuthStatus.SUCCESS)
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        return PreflightOutput(status=PreflightStatus.READY)
+        return PreflightOutput()
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
         return MetadataOutput(objects=[], total_count=0)
@@ -112,7 +111,7 @@ class _ErrorHandler(Handler):
         raise HandlerError("forbidden", http_status=403)
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        return PreflightOutput(status=PreflightStatus.READY)
+        return PreflightOutput()
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
         return MetadataOutput(objects=[], total_count=0)

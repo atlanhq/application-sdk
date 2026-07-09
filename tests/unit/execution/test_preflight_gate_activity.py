@@ -44,7 +44,7 @@ class _StubHandler(Handler):
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
         self.preflight_input = input
-        return PreflightOutput(status=PreflightStatus.READY, checks=[])
+        return PreflightOutput(checks=[])
 
     async def fetch_metadata(self, input: MetadataInput) -> SqlMetadataOutput:
         return SqlMetadataOutput(objects=[])
@@ -148,7 +148,6 @@ class TestPreflightGateActivity:
         class _SoftFailHandler(DefaultHandler):
             async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
                 return PreflightOutput(
-                    status=PreflightStatus.NOT_READY,
                     checks=[PreflightCheck(name="auth", passed=False, required=False)],
                 )
 
@@ -168,7 +167,6 @@ class TestPreflightGateActivity:
         class _BlockHandler(DefaultHandler):
             async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
                 return PreflightOutput(
-                    status=PreflightStatus.NOT_READY,
                     checks=[PreflightCheck(name="auth", passed=False, required=True)],
                 )
 
@@ -384,3 +382,29 @@ class TestInputTypeSupportsGate:
 
     def test_non_model_type_is_not_eligible(self) -> None:
         assert input_type_supports_gate(str) is False
+
+
+class TestPreflightOutputTemporalRoundTrip:
+    """PreflightOutput is an activity result (gate) and a workflow result (SDR),
+    so it must survive Temporal's pydantic converter with derived fields intact."""
+
+    async def test_verdict_survives_the_wire(self) -> None:
+        from temporalio.contrib.pydantic import pydantic_data_converter
+
+        from application_sdk.errors.leaves import AuthError
+
+        out = PreflightOutput(
+            checks=[
+                PreflightCheck.from_error("auth", AuthError(message="Login rejected")),
+                PreflightCheck(name="version", passed=False),
+            ],
+        )
+        payloads = await pydantic_data_converter.encode([out])
+        # The computed status ships on the wire for Temporal UI visibility...
+        assert b'"status"' in payloads[0].data
+        (restored,) = await pydantic_data_converter.decode(payloads, [PreflightOutput])
+        # ...and the re-injected key is ignored on validation; everything derives.
+        assert restored.status is PreflightStatus.NOT_READY
+        assert restored.should_block is True
+        assert restored.checks[0].error is not None
+        assert restored.checks[0].error.code == AuthError.code

@@ -25,7 +25,6 @@ from application_sdk.handler.contracts import (
     MetadataOutput,
     PreflightInput,
     PreflightOutput,
-    PreflightStatus,
     SqlMetadataObject,
     SqlMetadataOutput,
     SubscriptionConfig,
@@ -49,7 +48,7 @@ class _TestHandler(Handler):
         return AuthOutput(status=AuthStatus.SUCCESS, message="auth ok")
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        return PreflightOutput(status=PreflightStatus.READY, message="ready")
+        return PreflightOutput(message="ready")
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
         return SqlMetadataOutput(objects=[])
@@ -69,7 +68,7 @@ class _ConfigCapture(_TestHandler):
                 "connection_config": dict(input.connection_config),
             }
         )
-        return PreflightOutput(status=PreflightStatus.READY, message="ready")
+        return PreflightOutput(message="ready")
 
 
 class _ApiTreeHandler(Handler):
@@ -79,7 +78,7 @@ class _ApiTreeHandler(Handler):
         return AuthOutput(status=AuthStatus.SUCCESS, message="auth ok")
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        return PreflightOutput(status=PreflightStatus.READY, message="ready")
+        return PreflightOutput(message="ready")
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
         return ApiMetadataOutput(
@@ -97,7 +96,7 @@ class _AuthFailedHandler(Handler):
         return AuthOutput(status=AuthStatus.FAILED, message="bad credentials")
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        return PreflightOutput(status=PreflightStatus.READY, message="ready")
+        return PreflightOutput(message="ready")
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
         return SqlMetadataOutput(objects=[])
@@ -110,7 +109,7 @@ class _AuthExpiredHandler(Handler):
         return AuthOutput(status=AuthStatus.EXPIRED, message="token expired")
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        return PreflightOutput(status=PreflightStatus.READY, message="ready")
+        return PreflightOutput(message="ready")
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
         return SqlMetadataOutput(objects=[])
@@ -123,7 +122,7 @@ class _AuthInvalidCredsHandler(Handler):
         return AuthOutput(status=AuthStatus.INVALID_CREDENTIALS, message="wrong key")
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        return PreflightOutput(status=PreflightStatus.READY, message="ready")
+        return PreflightOutput(message="ready")
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
         return SqlMetadataOutput(objects=[])
@@ -136,7 +135,7 @@ class _AuthUnhandledExceptionHandler(Handler):
         raise RuntimeError("unexpected db connection error")
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        return PreflightOutput(status=PreflightStatus.READY, message="ready")
+        return PreflightOutput(message="ready")
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
         return SqlMetadataOutput(objects=[])
@@ -440,7 +439,7 @@ class TestPreflightEndpoint:
         class _MetadataCapture(_TestHandler):
             async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
                 received.append(dict(input.metadata))
-                return PreflightOutput(status=PreflightStatus.READY, message="ready")
+                return PreflightOutput(message="ready")
 
         client = _make_client(handler=_MetadataCapture())
         response = client.post(
@@ -531,7 +530,7 @@ class TestPreflightEndpoint:
         class _MetadataCapture(_TestHandler):
             async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
                 received.append(dict(input.metadata))
-                return PreflightOutput(status=PreflightStatus.READY, message="ready")
+                return PreflightOutput(message="ready")
 
         client = _make_client(handler=_MetadataCapture())
         response = client.post(
@@ -560,7 +559,6 @@ class TestPreflightEndpoint:
                 from application_sdk.handler.contracts import PreflightCheck
 
                 return PreflightOutput(
-                    status=PreflightStatus.READY,
                     checks=[
                         PreflightCheck(
                             name="apiVersion",
@@ -591,7 +589,6 @@ class TestPreflightEndpoint:
                 from application_sdk.handler.contracts import PreflightCheck
 
                 return PreflightOutput(
-                    status=PreflightStatus.NOT_READY,
                     checks=[
                         PreflightCheck(
                             name="metadataAPI",
@@ -608,7 +605,9 @@ class TestPreflightEndpoint:
         assert entry["message"] == "Metadata GraphQL API returned no sites"
         assert entry["failureMessage"] == "Metadata GraphQL API returned no sites"
         assert entry["successMessage"] == ""
-        assert body["preflight"]["status"] == "not_ready"
+        # An advisory-only failure derives PARTIAL (status can no longer be
+        # hand-set to NOT_READY while nothing blocks).
+        assert body["preflight"]["status"] == "partial"
         assert body["preflight"]["should_block"] is False
         assert "status" not in body["data"]
 
@@ -618,7 +617,6 @@ class TestPreflightEndpoint:
                 from application_sdk.handler.contracts import PreflightCheck
 
                 return PreflightOutput(
-                    status=PreflightStatus.NOT_READY,
                     message="Credentials are invalid",
                     checks=[
                         PreflightCheck(
@@ -650,7 +648,6 @@ class TestPreflightEndpoint:
                 from application_sdk.handler.contracts import PreflightCheck
 
                 return PreflightOutput(
-                    status=PreflightStatus.PARTIAL,
                     checks=[
                         PreflightCheck(
                             name="apiVersion",
@@ -695,7 +692,6 @@ class TestPreflightEndpoint:
                 from application_sdk.handler.contracts import PreflightCheck
 
                 return PreflightOutput(
-                    status=PreflightStatus.NOT_READY,
                     checks=[PreflightCheck(name="connectivity", passed=False)],
                 )
 
@@ -727,7 +723,6 @@ class TestPreflightEndpoint:
                 from application_sdk.handler.contracts import PreflightCheck
 
                 return PreflightOutput(
-                    status=PreflightStatus.READY,
                     checks=[
                         PreflightCheck(name="apiVersion", passed=True, message="ok")
                     ],
@@ -754,7 +749,6 @@ class TestPreflightEndpoint:
                 from application_sdk.handler.contracts import PreflightCheck
 
                 return PreflightOutput(
-                    status=PreflightStatus.NOT_READY,
                     checks=[
                         PreflightCheck(
                             name="apiVersion",
@@ -788,7 +782,6 @@ class TestPreflightEndpoint:
                 from application_sdk.handler.contracts import PreflightCheck
 
                 return PreflightOutput(
-                    status=PreflightStatus.PARTIAL,
                     checks=[
                         PreflightCheck(name="apiVersion", passed=True, message="ok"),
                         PreflightCheck(
@@ -820,7 +813,6 @@ class TestPreflightEndpoint:
         class _ZeroChecks(_TestHandler):
             async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
                 return PreflightOutput(
-                    status=PreflightStatus.NOT_READY,
                     checks=[],
                     message="couldn't build client",
                 )
@@ -832,7 +824,10 @@ class TestPreflightEndpoint:
         )
         assert body["success"] is False
         assert body["data"] == {}
-        assert body["preflight"]["status"] == "not_ready"
+        # Zero checks derive READY (vacuous); the envelope success=False is
+        # what signals the preflight-system failure. A handler that couldn't
+        # execute should report that as a failing check (from_error) instead.
+        assert body["preflight"]["status"] == "ready"
         assert body["preflight"]["should_block"] is False
 
 
@@ -5846,7 +5841,6 @@ class TestPerEntrypointHandlerHook:
             assert input.entrypoint == "csa-hello-b"
             assert ctx.app_name == "test-app"
             return PreflightOutput(
-                status=PreflightStatus.NOT_READY,
                 checks=[
                     PreflightCheck(
                         name="recipientCheck",

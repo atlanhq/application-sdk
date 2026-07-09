@@ -18,7 +18,7 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, computed_field
 from pydantic.alias_generators import to_camel
 
 from application_sdk.contracts.base import SerializableEnum
@@ -306,13 +306,12 @@ class AuthOutput(BaseModel):
 
 
 class PreflightStatus(SerializableEnum):
-    """Advisory result of a preflight check — for display/diagnostics only.
+    """Advisory display status of a preflight result — derived, never supplied.
 
     Surfaced to the Sage UI, the connector-pulse dashboard, and the Automation
-    Engine event. It does **not** decide whether a run is blocked: that is the
-    gate's job, driven by per-check :attr:`PreflightCheck.required` and folded
-    into :attr:`PreflightOutput.should_block`. Keeping status purely advisory
-    avoids overloading one field with two concerns (display vs gate decision).
+    Engine event. Computed by :attr:`PreflightOutput.status` from the per-check
+    outcomes, so it can never contradict the checks; the gate decision is the
+    separately derived :attr:`PreflightOutput.should_block`.
     """
 
     READY = "ready"
@@ -482,14 +481,13 @@ class PreflightInput(BaseModel):
 
 
 class PreflightOutput(BaseModel):
-    """Output from the preflight_check handler operation."""
+    """Output from the preflight_check handler operation.
 
-    status: PreflightStatus
-    """Advisory result for display (Sage UI / connector-pulse / AE event).
-
-    This is **not** the gate decision — see :attr:`should_block`. Set it to
-    reflect what a human should see (e.g. ``READY`` on a clean pass,
-    ``NOT_READY`` when something is off)."""
+    ``status`` and ``should_block`` are **derived** from ``checks`` — handlers
+    only report what each check observed; the SDK computes the aggregates. A
+    ``status=`` argument from an older caller is accepted and ignored
+    (``extra="ignore"``), which also swallows the ``status`` key that the
+    computed field re-injects on Temporal round-trips."""
 
     checks: list[PreflightCheck] = []
     """Individual check results. A check's :attr:`PreflightCheck.required` flag
@@ -500,6 +498,25 @@ class PreflightOutput(BaseModel):
 
     total_duration_ms: float = 0.0
     """Total time for all checks in milliseconds."""
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def status(self) -> PreflightStatus:
+        """Advisory display status (Sage UI / connector-pulse / AE event),
+        derived from the checks so it can never contradict them.
+
+        ``READY`` — every check passed (vacuously true with no checks);
+        ``NOT_READY`` — a required check failed (the run is blocked);
+        ``PARTIAL`` — only advisory checks failed (the run proceeds).
+
+        A ``computed_field`` (not a plain property) so ``"status"`` stays in
+        every serialized payload — Temporal UI visibility and the ``/check``
+        runtime-summary wire key are unchanged."""
+        if all(check.passed for check in self.checks):
+            return PreflightStatus.READY
+        if any(check.required and not check.passed for check in self.checks):
+            return PreflightStatus.NOT_READY
+        return PreflightStatus.PARTIAL
 
     @property
     def should_block(self) -> bool:

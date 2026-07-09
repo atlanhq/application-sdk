@@ -176,44 +176,83 @@ class TestPreflightCheckFromError:
 
 
 class TestPreflightOutput:
-    def test_required_status(self):
-        out = PreflightOutput(status=PreflightStatus.READY)
-        assert out.status == PreflightStatus.READY
-        assert out.checks == []
-        assert out.should_block is False
-
     def test_with_checks(self):
         checks = [
             PreflightCheck(name="conn", passed=True),
             PreflightCheck(name="perms", passed=False, message="No read access"),
         ]
-        out = PreflightOutput(status=PreflightStatus.PARTIAL, checks=checks)
+        out = PreflightOutput(checks=checks)
         assert len(out.checks) == 2
 
-    def test_should_block_only_on_failed_blocking_check(self):
+    def test_should_block_only_on_failed_required_check(self):
         # advisory failure (required=False) does NOT block
         advisory = PreflightOutput(
-            status=PreflightStatus.NOT_READY,
             checks=[PreflightCheck(name="version", passed=False, required=False)],
         )
         assert advisory.should_block is False
 
-        # a failed blocking check blocks
+        # a failed required check blocks
         blocked = PreflightOutput(
-            status=PreflightStatus.NOT_READY,
             checks=[PreflightCheck(name="auth", passed=False, required=True)],
         )
         assert blocked.should_block is True
 
-        # a passing blocking check does not block
+        # a passing required check does not block
         ok = PreflightOutput(
-            status=PreflightStatus.READY,
             checks=[PreflightCheck(name="auth", passed=True, required=True)],
         )
         assert ok.should_block is False
 
     def test_no_checks_never_blocks(self):
-        assert PreflightOutput(status=PreflightStatus.NOT_READY).should_block is False
+        assert PreflightOutput().should_block is False
+
+    @pytest.mark.parametrize(
+        ("checks", "expected"),
+        [
+            ([], PreflightStatus.READY),
+            (
+                [PreflightCheck(name="a", passed=True)],
+                PreflightStatus.READY,
+            ),
+            (
+                [PreflightCheck(name="a", passed=False)],
+                PreflightStatus.PARTIAL,
+            ),
+            (
+                [PreflightCheck(name="a", passed=False, required=True)],
+                PreflightStatus.NOT_READY,
+            ),
+            (
+                [
+                    PreflightCheck(name="a", passed=False),
+                    PreflightCheck(name="b", passed=False, required=True),
+                ],
+                PreflightStatus.NOT_READY,
+            ),
+        ],
+    )
+    def test_status_is_derived_from_checks(self, checks, expected):
+        assert PreflightOutput(checks=checks).status is expected
+
+    def test_supplied_status_is_ignored(self):
+        # Clean break: status is derived; a caller-supplied value is dropped
+        # (extra="ignore"), which also swallows the key computed_field
+        # re-injects on Temporal round-trips.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[PreflightCheck(name="a", passed=True)],
+        )
+        assert out.status is PreflightStatus.READY
+
+    def test_round_trip_keeps_status_key_and_revalidates(self):
+        out = PreflightOutput(
+            checks=[PreflightCheck(name="auth", passed=False, required=True)],
+        )
+        dumped = out.model_dump(mode="json")
+        assert dumped["status"] == "not_ready"
+        restored = PreflightOutput.model_validate(dumped)
+        assert restored.status is PreflightStatus.NOT_READY
+        assert restored.should_block is True
 
 
 class TestMetadataOutput:

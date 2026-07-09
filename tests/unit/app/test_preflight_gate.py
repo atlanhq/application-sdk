@@ -48,7 +48,6 @@ class _NonResolvableInput:
 def _blocking() -> PreflightOutput:
     """A failed blocking check → should_block is True."""
     return PreflightOutput(
-        status=PreflightStatus.NOT_READY,
         checks=[
             PreflightCheck(
                 name="auth",
@@ -62,13 +61,12 @@ def _blocking() -> PreflightOutput:
 
 def _proceeding() -> PreflightOutput:
     """No blocking failure → should_block is False."""
-    return PreflightOutput(status=PreflightStatus.READY, checks=[])
+    return PreflightOutput(checks=[])
 
 
 def _advisory_failure() -> PreflightOutput:
     """A failed NON-blocking check → should_block is False (advisory only)."""
     return PreflightOutput(
-        status=PreflightStatus.NOT_READY,
         checks=[PreflightCheck(name="version", passed=False, required=False)],
     )
 
@@ -110,7 +108,6 @@ class TestRunPreflightGate:
         # Only blocking-and-failed checks contribute to the surfaced reason;
         # a failed advisory check must not leak into the abort message.
         verdict = PreflightOutput(
-            status=PreflightStatus.NOT_READY,
             checks=[
                 PreflightCheck(
                     name="auth", passed=False, required=True, message="auth blocked"
@@ -130,7 +127,6 @@ class TestRunPreflightGate:
     async def test_abort_reason_falls_back_when_no_check_message(self) -> None:
         # A blocking failure with no message still aborts with the generic reason.
         verdict = PreflightOutput(
-            status=PreflightStatus.NOT_READY,
             checks=[PreflightCheck(name="auth", passed=False, required=True)],
         )
         exec_mock, exec_patch = _exec(verdict)
@@ -143,7 +139,6 @@ class TestRunPreflightGate:
         # Multiple blocking failures are joined with "; " — pin the separator so
         # a switch to newline/comma output is caught.
         verdict = PreflightOutput(
-            status=PreflightStatus.NOT_READY,
             checks=[
                 PreflightCheck(
                     name="auth", passed=False, required=True, message="auth down"
@@ -165,7 +160,6 @@ class TestRunPreflightGate:
         # Precedence: an explicit PreflightOutput.message takes priority over the
         # folded per-check reasons (result.message or reasons or generic).
         verdict = PreflightOutput(
-            status=PreflightStatus.NOT_READY,
             message="Summary: 3 of 5 checks failed",
             checks=[
                 PreflightCheck(
@@ -185,7 +179,6 @@ class TestRunPreflightGate:
         # (and its canonical code/audience) to AE via structured FailureDetails,
         # while the "PreflightFailed" type marker is preserved.
         verdict = PreflightOutput(
-            status=PreflightStatus.NOT_READY,
             checks=[
                 PreflightCheck(
                     name="auth",
@@ -222,7 +215,6 @@ class TestRunPreflightGate:
     async def test_abort_uses_first_classified_blocking_failure(self) -> None:
         # When multiple blocking checks fail, the first classified one wins.
         verdict = PreflightOutput(
-            status=PreflightStatus.NOT_READY,
             checks=[
                 PreflightCheck(
                     name="a",
