@@ -208,13 +208,16 @@ async def _download_one(
     skip_if_exists: bool,
     file_size: int | None = None,
     etag: str | None = None,
+    resume: bool | None = None,
 ) -> tuple[bool, str]:
     """Download a single file.  Returns ``(transferred, reason)``.
 
     *file_size* / *etag* (when known from a prior listing) are threaded to the
     chunked path so large objects fetch via bounded, version-pinned range GETs
     without a per-file HEAD; ``None`` lets the chunked path HEAD once
-    (single-file case). (BLDX-1513 / BLDX-1523)
+    (single-file case). Pass ``resume=False`` when *local_file* is a
+    fresh-named temp file — its checkpoint sidecar could never be reused, so
+    it would only be stranded on failure. (BLDX-1513 / BLDX-1523)
     """
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         download_file_chunked,
@@ -235,6 +238,7 @@ async def _download_one(
         normalize=False,
         file_size=file_size,
         etag=etag,
+        resume=resume,
     )
     return True, "downloaded"
 
@@ -744,8 +748,16 @@ async def download(
             owns_temp = True
 
         try:
+            # resume=False for owned temps: mkstemp yields a fresh name per
+            # call, so a checkpoint sidecar could never be reused — it would
+            # only be stranded under /tmp on failure. Caller-supplied stable
+            # destinations keep the default (env-driven) resume behaviour.
             transferred, reason = await _download_one(
-                resolved, norm_path, dest, skip_if_exists=skip_if_exists
+                resolved,
+                norm_path,
+                dest,
+                skip_if_exists=skip_if_exists,
+                resume=False if owns_temp else None,
             )
         # conformance: ignore[E004] cleanup-only handler that always re-raises; no logging needed here
         except BaseException:
@@ -754,6 +766,9 @@ async def download(
             if owns_temp:
                 try:
                     dest.unlink(missing_ok=True)
+                    # Belt-and-braces: never strand a checkpoint sidecar for
+                    # a temp file either.
+                    Path(str(dest) + ".transfer-state").unlink(missing_ok=True)
                 except OSError:  # conformance: ignore[E002] best-effort cleanup of partial download; original error re-raised below
                     pass
             raise
