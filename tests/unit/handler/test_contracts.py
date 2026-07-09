@@ -3,6 +3,9 @@
 import pytest
 from pydantic import ConfigDict, Field, ValidationError
 
+from application_sdk.errors.categories import Audience, FailureCategory
+from application_sdk.errors.leaves import AuthError
+from application_sdk.errors.wire import FailureDetails
 from application_sdk.handler.contracts import (
     ApiMetadataObject,
     ApiMetadataOutput,
@@ -78,9 +81,8 @@ class TestPreflightStatus:
         assert PreflightStatus.NOT_READY == "not_ready"
         assert PreflightStatus.PARTIAL == "partial"
 
-    def test_advisory_only_no_gate_values(self):
-        # status is advisory; the gate decision is PreflightOutput.should_block,
-        # so there are no success/failed status values to overlap the legacy set.
+    def test_status_values(self):
+        # status decides the gate: NOT_READY blocks; READY/PARTIAL proceed.
         assert {s.value for s in PreflightStatus} == {"ready", "not_ready", "partial"}
 
 
@@ -89,24 +91,60 @@ class TestPreflightCheck:
         check = PreflightCheck(name="connectivity")
         assert check.name == "connectivity"
         assert check.passed is False
-        assert check.blocking is False
         assert check.message == ""
+        assert check.error is None
         assert check.duration_ms == 0.0
 
     def test_passed(self):
-        check = PreflightCheck(
-            name="connectivity",
-            passed=True,
-            blocking=True,
-            duration_ms=50.0,
-        )
+        check = PreflightCheck(name="connectivity", passed=True, duration_ms=50.0)
         assert check.passed is True
-        assert check.blocking is True
         assert check.duration_ms == 50.0
 
     def test_empty_name_rejected(self):
         with pytest.raises(ValidationError):
             PreflightCheck(name="")
+
+    def test_error_coerced_from_app_error(self):
+        check = PreflightCheck(
+            name="auth",
+            passed=False,
+            error=AuthError(message="x", cause=ValueError("y")),
+        )
+        assert isinstance(check.error, FailureDetails)
+        assert check.error.category == FailureCategory.AUTH
+        assert check.error.cause_repr.startswith("ValueError: y")
+
+    def test_error_instance_overrides_flow_through(self):
+        check = PreflightCheck(
+            name="auth",
+            passed=False,
+            error=AuthError(message="m", suggested_action="s"),
+        )
+        assert check.error.message == "m"
+        assert check.error.suggested_action == "s"
+        assert check.error.code == "AUTH"
+        assert check.error.audience == Audience.USER
+
+    def test_error_accepts_ready_failure_details_and_none(self):
+        details = AuthError(message="boom").to_failure_details()
+        check = PreflightCheck(name="auth", passed=False, error=details)
+        assert check.error == details
+
+        assert PreflightCheck(name="auth", passed=False, error=None).error is None
+
+    def test_error_json_round_trip(self):
+        check = PreflightCheck(
+            name="auth",
+            passed=False,
+            error=AuthError(message="boom", suggested_action="fix it"),
+        )
+        restored = PreflightCheck.model_validate_json(check.model_dump_json())
+        assert restored.error == check.error
+
+    def test_removed_fields_absent(self):
+        assert "blocking" not in PreflightCheck.model_fields
+        assert "category" not in PreflightCheck.model_fields
+        assert "suggested_action" not in PreflightCheck.model_fields
 
 
 class TestPreflightOutput:
@@ -114,7 +152,6 @@ class TestPreflightOutput:
         out = PreflightOutput(status=PreflightStatus.READY)
         assert out.status == PreflightStatus.READY
         assert out.checks == []
-        assert out.should_block is False
 
     def test_with_checks(self):
         checks = [
@@ -124,30 +161,8 @@ class TestPreflightOutput:
         out = PreflightOutput(status=PreflightStatus.PARTIAL, checks=checks)
         assert len(out.checks) == 2
 
-    def test_should_block_only_on_failed_blocking_check(self):
-        # advisory failure (blocking=False) does NOT block
-        advisory = PreflightOutput(
-            status=PreflightStatus.NOT_READY,
-            checks=[PreflightCheck(name="version", passed=False, blocking=False)],
-        )
-        assert advisory.should_block is False
-
-        # a failed blocking check blocks
-        blocked = PreflightOutput(
-            status=PreflightStatus.NOT_READY,
-            checks=[PreflightCheck(name="auth", passed=False, blocking=True)],
-        )
-        assert blocked.should_block is True
-
-        # a passing blocking check does not block
-        ok = PreflightOutput(
-            status=PreflightStatus.READY,
-            checks=[PreflightCheck(name="auth", passed=True, blocking=True)],
-        )
-        assert ok.should_block is False
-
-    def test_no_checks_never_blocks(self):
-        assert PreflightOutput(status=PreflightStatus.NOT_READY).should_block is False
+    def test_no_should_block_attribute(self):
+        assert not hasattr(PreflightOutput, "should_block")
 
 
 class TestMetadataOutput:

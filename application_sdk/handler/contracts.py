@@ -18,11 +18,12 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
 from application_sdk.contracts.base import SerializableEnum
-from application_sdk.errors.categories import FailureCategory
+from application_sdk.errors.base import AppError
+from application_sdk.errors.wire import FailureDetails
 
 
 class _DictLikeConfigBase(BaseModel):
@@ -304,13 +305,12 @@ class AuthOutput(BaseModel):
 
 
 class PreflightStatus(SerializableEnum):
-    """Advisory result of a preflight check — for display/diagnostics only.
+    """Overall preflight verdict — decides the gate.
 
-    Surfaced to the Sage UI, the connector-pulse dashboard, and the Automation
-    Engine event. It does **not** decide whether a run is blocked: that is the
-    gate's job, driven by per-check :attr:`PreflightCheck.blocking` and folded
-    into :attr:`PreflightOutput.should_block`. Keeping status purely advisory
-    avoids overloading one field with two concerns (display vs gate decision).
+    ``NOT_READY`` blocks the run; ``READY`` and ``PARTIAL`` proceed. ``PARTIAL``
+    is display-only (some advisory check failed but the run may continue). Also
+    surfaced to the Sage UI, the connector-pulse dashboard, and the Automation
+    Engine event.
     """
 
     READY = "ready"
@@ -327,45 +327,29 @@ class PreflightCheck(BaseModel):
     passed: bool = False
     """Whether the check passed."""
 
-    blocking: bool = False
-    """Whether failing this check must stop the run before extraction.
-
-    Advisory checks (e.g. server version, optional permissions) leave this
-    ``False`` — they surface in the UI but never block. A failed check with
-    ``blocking=True`` aborts the run via :attr:`PreflightOutput.should_block`.
-    Defaults to ``False`` so blocking is always an explicit, per-check opt-in.
-    """
-
     message: str = ""
-    """What happened — a clean, single-sentence description of the check result.
+    """Deprecated: prefer :attr:`error`. Human-facing line shown when ``error``
+    is unset. If ``error`` is set, its ``message``/``suggested_action`` win and
+    this is ignored. Kept for handlers not yet migrated to typed errors."""
 
-    This is the human-facing line the UI shows and the abort reason folds in, so
-    keep it self-contained and safe (no stack traces, no host/credential detail).
-    Says *what* went wrong, not what to do — see :attr:`suggested_action`."""
+    error: FailureDetails | None = None
+    """Typed failure for a failed check — set only on failed checks.
 
-    category: FailureCategory | None = None
-    """Typed failure category for a blocking failure.
-
-    When this check is the one that blocks the run, the gate carries this category
-    to the Automation Engine (via the canonical wire ``FailureDetails``) so the
-    abort is attributed — ``AUTH`` / ``SOURCE_UNAVAILABLE`` / ``PERMISSION`` / … —
-    instead of an opaque preflight failure. The category also fixes the canonical
-    ``code`` / ``audience`` / retryability of the leaf it maps to. ``None`` → the
-    gate defaults to ``PRECONDITION``. Ignored unless the check is blocking and
-    failed; a raise from the handler no longer blocks (the gate fails open), so
-    this is how a handler expresses a *typed* block."""
-
-    suggested_action: str = ""
-    """Optional remediation — what the reader should DO about a failure.
-
-    Distinct from :attr:`message` (what happened): set this only when there is a
-    concrete, audience-appropriate next step, and only for **user-fixable**
-    failures. Leave empty for internal/unexpected failures the reader can't act on
-    (a "verify your credentials" hint on an app bug is misleading). Flows into the
-    abort's ``FailureDetails.suggested_action`` for a blocking failure."""
+    Pass an SDK ``AppError`` (e.g. ``AuthError(message=..., suggested_action=...,
+    cause=exc)``); it is converted to the wire ``FailureDetails``, which carries
+    category / code / audience / retryable / suggested_action and a redacted,
+    capped ``cause_repr``. Takes precedence over :attr:`message`. Ignored on a
+    passed check."""
 
     duration_ms: float = 0.0
     """How long the check took in milliseconds."""
+
+    @field_validator("error", mode="before")
+    @classmethod
+    def _coerce_error(cls, value: Any) -> Any:
+        if isinstance(value, AppError):
+            return value.to_failure_details()
+        return value
 
 
 class PreflightInput(BaseModel):
@@ -426,31 +410,17 @@ class PreflightOutput(BaseModel):
     """Output from the preflight_check handler operation."""
 
     status: PreflightStatus
-    """Advisory result for display (Sage UI / connector-pulse / AE event).
-
-    This is **not** the gate decision — see :attr:`should_block`. Set it to
-    reflect what a human should see (e.g. ``READY`` on a clean pass,
-    ``NOT_READY`` when something is off)."""
+    """Overall verdict — decides the gate. ``NOT_READY`` blocks the run;
+    ``READY``/``PARTIAL`` proceed. The handler computes this itself."""
 
     checks: list[PreflightCheck] = []
-    """Individual check results. A check's :attr:`PreflightCheck.blocking` flag
-    decides whether failing it stops the run."""
+    """Individual check results (display + failure attribution)."""
 
     message: str = ""
-    """Human-readable summary."""
+    """Human-readable summary. Seeds the gate's abort reason when set."""
 
     total_duration_ms: float = 0.0
     """Total time for all checks in milliseconds."""
-
-    @property
-    def should_block(self) -> bool:
-        """Whether the gate must abort the run (a blocking check failed).
-
-        ``True`` iff a check with ``blocking=True`` failed. Advisory failures
-        (``blocking=False``) never block, and a handler with no blocking checks
-        — the default — never blocks. Blocking is strictly opt-in: an app marks
-        the checks that gate extraction and the SDK derives the rest."""
-        return any(check.blocking and not check.passed for check in self.checks)
 
 
 # PreflightGateInput lives in application_sdk.execution._temporal.preflight_gate —

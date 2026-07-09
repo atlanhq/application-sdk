@@ -145,18 +145,12 @@ class Handler(ABC):
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
         """Run preflight checks (connectivity, permissions, etc.).
 
-        One method, two surfaces:
-
-        * **HTTP ``/check`` (Sage UI).** A raised ``AppError`` surfaces as an
-          HTTP error (``HandlerError`` → 500).
-        * **The injected pre-extraction gate.** To *abort a run*, return a
-          :class:`~application_sdk.handler.contracts.PreflightOutput` whose
-          failing check is marked ``blocking=True`` (put the reason in the
-          check's ``message``, and optionally set its ``category`` for typed
-          attribution). A **raise does NOT reliably block at the gate** — the
-          gate fails open on any error it can't turn into a verdict, so a raised
-          error is treated as "couldn't verify → proceed". Express blocking
-          through the returned verdict, not by raising.
+        One method, two surfaces: the HTTP ``/check`` endpoint (Sage UI) and the
+        injected pre-extraction gate. To abort a run, return
+        ``status=PreflightStatus.NOT_READY``; ``READY``/``PARTIAL`` proceed.
+        Express a blocking failure through the returned status, not by raising —
+        the gate fails open on any error it cannot turn into a verdict (handler
+        bug, secret store down, timeout), so a raise does not reliably block.
 
         Args:
             input: Credentials, connection config, and checks to run. On the gate
@@ -164,8 +158,7 @@ class Handler(ABC):
                 ``connection_config``/form ``metadata`` on that path).
 
         Returns:
-            PreflightOutput with per-check results and overall status; a failed
-            ``blocking=True`` check aborts extraction at the gate.
+            PreflightOutput whose ``status`` decides the gate.
         """
         ...
 
@@ -201,9 +194,7 @@ class DefaultHandler(Handler):
         )
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        """Returns a non-blocking no-op result when no handler is registered.
-
-        No checks → no blocking checks → ``should_block`` is ``False``."""
+        """Returns READY (no checks) when no handler is registered."""
         return PreflightOutput(
             status=PreflightStatus.READY, message="No preflight handler registered"
         )
