@@ -146,6 +146,10 @@ project **App SDK v3.0**, milestone **Autonomous SDK Evolution** (create if
 absent). Put the GHA run link at the top of the description:
 `**Run:** [logs + cost](<GHA_RUN_URL>)`. Every finding becomes a child.
 
+**Tag the reviewers** (see tools.md → Reviewers): add both **Vaibhav Chopra**
+and **Chris** as subscribers on this parent and @-mention both in an opening
+comment, so they get one ping per run.
+
 ### 4c. FIX PRs (atomic, one finding at a time)
 
 **Ticket first, then PR.** For each finding: create a **child Linear ticket**
@@ -183,6 +187,12 @@ labels `Autonomous SDK Evolution` + `needs-design-review`, and the body MUST
 include **Problem / Why it matters / Approaches considered (A/B/C) /
 Recommendation / How to review**. `[CONF]` proposals additionally carry the
 rule **and its remediation counterpart in this same PR** + the catalog entry.
+
+**Tag the reviewers on every `needs-design-review` ticket** (see tools.md →
+Reviewers): add both **Vaibhav Chopra** and **Chris** as subscribers and
+@-mention both in a comment asking them to review the approach. This applies to
+DESIGN tickets here and the ADR tickets in 4e — anything needing human sign-off.
+Routine FIX tickets are NOT tagged (they go to `@sdk-review`).
 
 ### 4e. Weekly-only work
 - **TEMPORAL** → open an **ADR PR** against `docs/adr/` (prototype diff where

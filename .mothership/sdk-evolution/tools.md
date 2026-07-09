@@ -63,6 +63,25 @@ curl -s "$PROXY_BASE/proxy/linear" \
 # Update status / add comment — see IssueUpdateInput / CommentCreateInput mutations
 ```
 
+## Reviewers (human sign-off)
+
+Two humans sign off on design-level work: **Vaibhav Chopra**
+(`vaibhav.chopra@atlan.com`) and **Chris** (SDK maintainer — confirm the exact
+Linear handle on first run). Resolve their Linear user IDs once per run:
+
+```bash
+curl -s "$PROXY_BASE/proxy/linear" \
+  -H "Authorization: Bearer $PROXY_JWT" -H "Content-Type: application/json" \
+  -d '{"query":"{ users(filter:{ name:{ containsIgnoreCase:\"Vaibhav\" }}){ nodes{ id name email } } }"}'
+```
+
+Tag **both**: add them as `subscriberIds` on the ticket (IssueCreate/IssueUpdate
+input) AND @-mention both in a comment so Linear pings them. Apply on:
+- the run **parent** ticket (one ping per run), and
+- every **`needs-design-review`** ticket (DESIGN + ADR).
+
+Do NOT tag them on routine FIX tickets — those go to `@sdk-review`.
+
 ## Handoff — single review pass (Stage 6)
 
 ```bash
