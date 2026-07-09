@@ -171,9 +171,7 @@ def bind_invocation_context(
 
     Shared by the SDR activities and the injected preflight gate so each handler
     invocation runs with the same ContextVar-backed context the HTTP path builds
-    (app name, credentials, and the worker's secret store when present). Kept
-    here — next to :func:`bind_handler_context` — rather than in any one caller,
-    since it is generic handler-context binding, not an SDR/gate concern.
+    (app name, credentials, and the worker's secret store when present).
     """
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — lazy: avoid import cycle at module load
         get_infrastructure,

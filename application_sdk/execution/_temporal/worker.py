@@ -368,14 +368,9 @@ def create_worker(
         else (service_name or task_queue)
     )
 
-    # The preflight gate is a CORE extraction-lifecycle activity dispatched by
-    # every generated workflow's _run — register it UNCONDITIONALLY, independent
-    # of the SDR opt-out, so the mandatory gate is always dispatchable. The gate
-    # name is app-namespaced ({app}:preflight), so register one per registered
-    # app to match each workflow's own app_name (single entry for single-app
-    # workers, the common case). Dedupe names: an app registered under multiple
-    # versions appears once per version in list_all(), and building the gate
-    # twice under one name is a boot-time duplicate-activity crash.
+    # Registered independent of the SDR opt-out — the gate is mandatory. Names
+    # deduped: an app registered under multiple versions appears once per version,
+    # and two activities under one name crash boot.
     gate_app_names = list(dict.fromkeys(m.name for m in sdr_registered_apps)) or [
         resolved_app_name
     ]
@@ -383,10 +378,8 @@ def create_worker(
         preflight_gate_activity_name(name) for name in gate_app_names
     ]
 
-    # An app @task literally named `preflight` registers as `{app}:preflight` —
-    # byte-identical to the gate. Temporal rejects the duplicate with an opaque
-    # "More than one activity named ..." ValueError at Worker construction;
-    # surface a descriptive error naming the collision and the fix instead.
+    # Temporal's own duplicate-activity rejection is an opaque ValueError; surface
+    # a descriptive collision error naming the offending task and the fix instead.
     task_activity_names = {
         get_activity_name(tm.app_name, tm.name)
         for tasks in TaskRegistry.get_instance().get_all_tasks().values()

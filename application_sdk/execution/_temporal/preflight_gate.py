@@ -85,25 +85,15 @@ if TYPE_CHECKING:
 
 
 class PreflightGateInput(BaseModel):
-    """Secret-free routing envelope the injected gate threads from the extraction
-    input into the gate activity.
+    """Secret-free routing envelope threaded from the extraction input into the
+    gate activity.
 
     Built deterministically inside the generated workflow ``_run`` from the
     extraction ``input_data`` (which satisfies
     :class:`~application_sdk.credentials.ref.CredentialResolvable`). Carries only
     references — resolution happens inside the gate activity, never in the
-    deterministic workflow. Declares the
-    ``extraction_method``/``credential_guid``/``agent_json`` triple so it
-    satisfies ``CredentialResolvable`` and ``CredentialRef.resolve`` works on it
-    directly.
-
-    Lives beside the gate (not in ``handler/contracts``) because handlers never
-    see it — it is the workflow-to-activity envelope, not a handler contract.
-
-    No ``connection_config`` is threaded: the extraction input carries none
-    (``connection_config`` is a UI-form field on the HTTP ``/check`` path only).
-    On the gate path a handler reads connectivity from the resolved
-    ``credentials`` the activity injects into :class:`PreflightInput`.
+    deterministic workflow. Lives beside the gate (not in ``handler/contracts``)
+    because handlers never see it — it is the workflow-to-activity envelope.
     """
 
     extraction_method: str = ""
@@ -172,10 +162,9 @@ class PreflightGateInput(BaseModel):
 def preflight_gate_activity_name(app_name: str) -> str:
     """Activity name for the gate: ``{app}:preflight``.
 
-    App-namespaced (like the app's own ``{app}:<task>`` activities) so the gate
-    reads as a native step of the workflow in the Temporal UI, rather than a
-    foreign ``sdr:``/``preflight:`` activity. The workflow's ``_run`` and the
-    worker registration must derive the name from the same ``app_name``.
+    App-namespaced like the app's own ``{app}:<task>`` activities. The workflow's
+    ``_run`` and the worker registration must derive the name from the same
+    ``app_name``.
     """
     from application_sdk.app.registry import (  # noqa: PLC0415 — avoid import cycle at module load
         get_activity_name,
