@@ -535,6 +535,72 @@ def test_assets_landed_allows_connection_asset_itself(
         suite._assert_assets_landed(workflow_scenario, _RESP)  # no raise
 
 
+def _typed(qn: str, type_name: str) -> dict[str, Any]:
+    return {"typeName": type_name, "attributes": {"qualifiedName": qn}}
+
+
+class _CountSuite(_WfSuite):
+    # SDR-QA item 7: per-type floors on top of the non-zero + location guards.
+    expected_min_asset_counts = {"Database": 1, "Schema": 1, "Table": 2}
+
+
+def test_assets_landed_passes_when_per_type_floors_met(
+    workflow_scenario: Scenario,
+) -> None:
+    suite = _CountSuite()
+    with patch(
+        _LOAD,
+        return_value=[
+            _typed("default/mssql/1700/db", "Database"),
+            _typed("default/mssql/1700/db/sch", "Schema"),
+            _typed("default/mssql/1700/db/sch/t1", "Table"),
+            _typed("default/mssql/1700/db/sch/t2", "Table"),
+        ],
+    ):
+        suite._assert_assets_landed(workflow_scenario, _RESP)  # no raise
+
+
+def test_assets_landed_fails_when_a_type_is_below_floor(
+    workflow_scenario: Scenario,
+) -> None:
+    """Non-zero + location pass, but a whole type is short — the item-7 catch."""
+    suite = _CountSuite()
+    with patch(
+        _LOAD,
+        return_value=[
+            _typed("default/mssql/1700/db", "Database"),
+            _typed("default/mssql/1700/db/sch", "Schema"),
+            _typed("default/mssql/1700/db/sch/t1", "Table"),  # only 1 Table, floor is 2
+        ],
+    ):
+        with pytest.raises(AssertionError, match="per-type minimum counts"):
+            suite._assert_assets_landed(workflow_scenario, _RESP)
+
+
+def test_assets_landed_fails_when_expected_type_entirely_missing(
+    workflow_scenario: Scenario,
+) -> None:
+    class _ColSuite(_WfSuite):
+        expected_min_asset_counts = {"Table": 1, "Column": 5}
+
+    suite = _ColSuite()
+    with patch(
+        _LOAD,
+        return_value=[_typed("default/mssql/1700/db/sch/t1", "Table")],  # 0 Columns
+    ):
+        with pytest.raises(AssertionError, match="Column: expected >= 5, got 0"):
+            suite._assert_assets_landed(workflow_scenario, _RESP)
+
+
+def test_assets_landed_skips_per_type_check_when_unset(
+    workflow_scenario: Scenario,
+) -> None:
+    """Default (empty expected_min_asset_counts) leaves existing suites unaffected."""
+    suite = _WfSuite()  # no expected_min_asset_counts
+    with patch(_LOAD, return_value=[_typed("default/mssql/1700/db/t1", "Table")]):
+        suite._assert_assets_landed(workflow_scenario, _RESP)  # no raise
+
+
 def test_execute_scenario_warns_when_guard_enabled_but_expected_data_set(
     tmp_path, monkeypatch
 ) -> None:
@@ -768,3 +834,71 @@ def test_upstream_base_path_read_from_env(
     with patch(_LOAD, return_value=[_asset("default/mssql/1700/db/t")]) as m:
         _EnvUpstream()._assert_upstream_assets_landed(workflow_scenario, _RESP)
         assert m.call_args.args[0] == "data-upstream/out"  # env path was used
+
+
+# --- SDR-QA item 3: multi-entrypoint agent-routing discovery -----------------
+
+
+def _write_entrypoint_manifest(
+    root, wire_name: str | None, extract_args: dict[str, Any]
+) -> None:
+    """Write {root}/app/generated/[<wire_name>/]manifest.json with extract_args."""
+    generated = root / "app" / "generated"
+    target = generated if wire_name is None else generated / wire_name
+    target.mkdir(parents=True, exist_ok=True)
+    manifest = {"dag": {"extract": {"inputs": {"args": extract_args}}}}
+    (target / "manifest.json").write_bytes(orjson.dumps(manifest))
+
+
+def test_discover_multi_entrypoint_keeps_only_agent_entrypoints(tmp_path) -> None:
+    # crawler + miner carry {{agent-json}}; clean does not.
+    _write_entrypoint_manifest(tmp_path, "crawler", dict(_ARGS_WITH_AGENT_JSON))
+    _write_entrypoint_manifest(tmp_path, "miner", dict(_ARGS_WITH_AGENT_JSON))
+    _write_entrypoint_manifest(tmp_path, "clean", dict(_ARGS_MISSING_AGENT_JSON))
+
+    found = _Suite.discover_agent_entrypoints(root=str(tmp_path))
+
+    wire_names = {e["workflow_type"] for e in found}
+    assert wire_names == {"crawler", "miner"}  # clean excluded (no agent routing)
+    # each entry points at that entrypoint's own manifest
+    for e in found:
+        assert e["manifest_path"].endswith(
+            f"app/generated/{e['workflow_type']}/manifest.json"
+        )
+
+
+def test_discover_single_entrypoint_has_none_workflow_type(tmp_path) -> None:
+    _write_entrypoint_manifest(tmp_path, None, dict(_ARGS_WITH_AGENT_JSON))
+    found = _Suite.discover_agent_entrypoints(root=str(tmp_path))
+    assert len(found) == 1
+    assert found[0]["workflow_type"] is None
+    assert found[0]["manifest_path"].endswith("app/generated/manifest.json")
+
+
+def test_discover_single_entrypoint_excluded_when_no_agent_routing(tmp_path) -> None:
+    _write_entrypoint_manifest(tmp_path, None, dict(_ARGS_MISSING_AGENT_JSON))
+    assert _Suite.discover_agent_entrypoints(root=str(tmp_path)) == []
+
+
+def test_discover_empty_when_no_generated_dir(tmp_path) -> None:
+    assert _Suite.discover_agent_entrypoints(root=str(tmp_path)) == []
+
+
+def test_discover_uses_manifest_root_classvar_by_default(tmp_path, monkeypatch) -> None:
+    _write_entrypoint_manifest(tmp_path, "miner", dict(_ARGS_WITH_AGENT_JSON))
+
+    class _RootedSuite(_Suite):
+        manifest_root = str(tmp_path)
+
+    found = _RootedSuite.discover_agent_entrypoints()  # no explicit root
+    assert {e["workflow_type"] for e in found} == {"miner"}
+
+
+def test_discover_skips_unreadable_manifest(tmp_path) -> None:
+    _write_entrypoint_manifest(tmp_path, "crawler", dict(_ARGS_WITH_AGENT_JSON))
+    # a second entrypoint dir with a non-JSON manifest must be skipped, not crash
+    bad = tmp_path / "app" / "generated" / "broken"
+    bad.mkdir(parents=True, exist_ok=True)
+    (bad / "manifest.json").write_bytes(b"{ not json ")
+    found = _Suite.discover_agent_entrypoints(root=str(tmp_path))
+    assert {e["workflow_type"] for e in found} == {"crawler"}

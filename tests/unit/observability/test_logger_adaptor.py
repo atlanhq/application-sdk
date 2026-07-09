@@ -18,6 +18,8 @@ from application_sdk.observability.context import (
     set_execution_context,
 )
 from application_sdk.observability.logger_adaptor import (
+    _KNOWN_EXTRA_KEYS,
+    _PREFIXES_PASSTHROUGH,
     AtlanLoggerAdapter,
     _build_extra_dict,
     _extract_exception_attributes,
@@ -1673,6 +1675,54 @@ class TestBuildExtraDict:
         # without it, the loguru-bridged log doesn't carry the status into CH.
         out = _build_extra_dict({"otel.status_code": "ERROR"})
         assert out["otel.status_code"] == "ERROR"
+
+    # ── No resolved source credential in the (SDR-)uploaded log record ──────
+    # In SDR mode observability logs are uploaded to the *upstream* (Atlan)
+    # object store, so a customer's resolved SOURCE credential must never
+    # survive into a log record. The gate is this same allowlist: credential-
+    # bearing kwarg keys are not in ``_KNOWN_EXTRA_KEYS`` and match no
+    # passthrough prefix, so ``_build_extra_dict`` drops them before a record is
+    # buffered for upload. These two tests pin that guard against the specific
+    # credential key names — distinct from ``test_unknown_key_dropped`` above,
+    # which only proves an *arbitrary* key is dropped: if someone later added
+    # e.g. ``credential`` to the allowlist, that generic test would still pass
+    # while a resolved secret started shipping to Atlan-side logs; these fail.
+    _SOURCE_CREDENTIAL_KEYS = (
+        "password",
+        "credential",
+        "credentials",
+        "credential_guid",
+        "secret",
+        "client_secret",
+        "token",
+        "api_key",
+        "private_key",
+        "agent_json",
+        "authorization",
+    )
+
+    def test_source_credential_keys_never_allowlisted(self):
+        for key in self._SOURCE_CREDENTIAL_KEYS:
+            assert key not in _KNOWN_EXTRA_KEYS, (
+                f"credential key {key!r} is allowlisted — a resolved source "
+                "credential would reach OTLP and the SDR upstream (Atlan) logs"
+            )
+            assert not key.startswith(_PREFIXES_PASSTHROUGH), (
+                f"credential key {key!r} matches a passthrough prefix — it would "
+                "bypass the allowlist and leak into uploaded logs"
+            )
+
+    def test_resolved_source_credential_dropped_from_extra(self):
+        secret = "s3cr3t-source-password"
+        record_extra = {key: secret for key in self._SOURCE_CREDENTIAL_KEYS}
+        # A legitimate, allowlisted field alongside them proves the filter is
+        # selective (drops creds, keeps the safe field) rather than blanket.
+        record_extra["workflow_id"] = "wf-1"
+
+        out = _build_extra_dict(record_extra)
+
+        assert out == {"workflow_id": "wf-1"}
+        assert secret not in repr(out), "resolved credential value survived filtering"
 
 
 class TestCreateLogRecord:
