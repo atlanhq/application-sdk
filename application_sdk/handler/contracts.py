@@ -328,12 +328,13 @@ class PreflightCheck(BaseModel):
     name: str = Field(..., min_length=1)
     """Check name (e.g., 'connectivity', 'permissions')."""
 
-    passed: bool
-    """Whether the check passed — the observed outcome, stated explicitly.
+    passed: bool = False
+    """Whether the check passed — the observed outcome.
 
-    No default: an outcome must be declared, never inherited. A silent default
-    would report failure (or success) for a check whose author simply forgot
-    to set it."""
+    Defaults to ``False`` for compatibility with pre-gate constructors (the
+    field has always defaulted to failure), but state it explicitly in new
+    code — :meth:`from_error` always does. A check whose author forgot the
+    outcome reports failure, never a silent pass."""
 
     blocking: bool = False
     """Declared severity — failing this check must stop the run.

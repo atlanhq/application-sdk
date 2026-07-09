@@ -95,10 +95,11 @@ class TestPreflightCheck:
         assert check.error is None
         assert check.blocking is False
 
-    def test_passed_must_be_stated(self):
-        # passed is the observed outcome — no silent default in either direction.
-        with pytest.raises(ValidationError):
-            PreflightCheck(name="connectivity")
+    def test_passed_defaults_to_failure(self):
+        # Compat with pre-gate constructors: omitting passed has always meant
+        # failure, never a silent pass. New code states it explicitly.
+        check = PreflightCheck(name="connectivity")
+        assert check.passed is False
 
     def test_blocking_is_a_real_field_but_required_is_ignored(self):
         # ``blocking`` is the per-check gate flag now — a real, declared field.

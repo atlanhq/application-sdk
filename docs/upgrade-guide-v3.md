@@ -392,6 +392,31 @@ class MyHandler(Handler):
 
 The `load()` method is removed — handler context (secrets, state) is injected automatically via `self.context`. Access credentials in handler methods with `await self.context.get_secret(name)`.
 
+### Preflight gate: what changes for an existing handler
+
+Every extraction workflow whose input is gate-eligible (toolkit
+`ExtractionInput` contracts) now runs your `preflight_check` as a mandatory
+`{app}:preflight` activity before extraction — including handlers written only
+for the HTTP `/check` path. Three consequences to review when upgrading:
+
+- **Your handler must be gate-safe.** On the gate path, `connection_config` /
+  `metadata` are built from the extraction-input snapshot, not the UI form —
+  read optional keys with `.get()`, never `[...]`, and don't revalidate into a
+  strict config subclass. **The gate is fail-closed: any raise from your
+  handler blocks the run** (`PreflightUnavailable`), where the old `/check`
+  path only returned a 500.
+- **The verdict is derived, not hand-set.** `status=` on `PreflightOutput` is
+  ignored; the run blocks iff a check with `blocking=True` failed. A legacy
+  handler that signalled failure via `status=NOT_READY` or `passed=False`
+  without `blocking=True` no longer blocks anything, and the derived `status`
+  reads `ready` — per-check red rows still render on the `/check` UI, but the
+  roll-up flips. Mark your gating checks `blocking=True`
+  (`PreflightCheck.from_error` defaults it).
+- **Credentials are resolved by the SDK inside the gate activity** before your
+  handler is called. If your app carries the credential-routing fields but
+  resolves credentials its own way, the SDK resolution now also runs — a
+  resolution failure blocks the run.
+
 ---
 
 ## Step 5: Upgrade the Application Entry Point
