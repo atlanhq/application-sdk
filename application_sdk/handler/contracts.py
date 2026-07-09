@@ -351,6 +351,20 @@ class PreflightCheck(BaseModel):
             return value.to_failure_details()
         return value
 
+    @property
+    def resolved_message(self) -> str:
+        """Message under the precedence rule: a failed check's ``error`` wins."""
+        if self.error is not None and not self.passed:
+            return self.error.message
+        return self.message
+
+    @property
+    def resolved_suggested_action(self) -> str:
+        """Suggested action from a failed check's ``error``; empty otherwise."""
+        if self.error is not None and not self.passed:
+            return self.error.suggested_action or ""
+        return ""
+
 
 class PreflightInput(BaseModel):
     """Input for the preflight_check handler operation."""

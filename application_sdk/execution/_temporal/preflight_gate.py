@@ -209,11 +209,10 @@ def _config_from_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     return config
 
 
-def _check_message(check: Any) -> str:
-    """Resolve a check's message under the precedence rule: ``error`` wins."""
-    if check.error is not None:
-        return check.error.message
-    return check.message
+def _dump_check(check: Any) -> dict[str, Any]:
+    dumped = check.model_dump(mode="json", exclude_none=True)
+    dumped["message"] = check.resolved_message
+    return dumped
 
 
 def _build_block_error(result: PreflightOutput, app_name: str) -> Any:
@@ -231,20 +230,18 @@ def _build_block_error(result: PreflightOutput, app_name: str) -> Any:
     if primary is not None:
         details = primary.error
     else:
-        fallback = _check_message(failed[0]) if failed else ""
+        fallback = failed[0].resolved_message if failed else ""
         details = PreconditionError(
             message=fallback or "Preflight check failed",
             app_name=app_name,
             retryable=False,
         ).to_failure_details()
 
-    joined = "; ".join(m for m in (_check_message(c) for c in failed) if m)
+    joined = "; ".join(m for m in (c.resolved_message for c in failed) if m)
     reason = (
         result.message or joined or "Preflight check failed; aborting before extraction"
     )
-    checks_payload = {
-        "checks": [c.model_dump(mode="json", exclude_none=True) for c in result.checks]
-    }
+    checks_payload = {"checks": [_dump_check(c) for c in result.checks]}
     return ApplicationError(
         f"Preflight failed: {reason}",
         details,

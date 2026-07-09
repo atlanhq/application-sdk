@@ -146,6 +146,31 @@ class TestPreflightCheck:
         assert "category" not in PreflightCheck.model_fields
         assert "suggested_action" not in PreflightCheck.model_fields
 
+    def test_resolved_prefers_error_on_failed_check(self):
+        check = PreflightCheck(
+            name="auth",
+            passed=False,
+            message="fallback",
+            error=AuthError(message="from error", suggested_action="do x"),
+        )
+        assert check.resolved_message == "from error"
+        assert check.resolved_suggested_action == "do x"
+
+    def test_resolved_uses_message_when_no_error(self):
+        check = PreflightCheck(name="auth", passed=False, message="fallback")
+        assert check.resolved_message == "fallback"
+        assert check.resolved_suggested_action == ""
+
+    def test_resolved_ignores_error_on_passed_check(self):
+        check = PreflightCheck(
+            name="auth",
+            passed=True,
+            message="ok",
+            error=AuthError(message="from error", suggested_action="do x"),
+        )
+        assert check.resolved_message == "ok"
+        assert check.resolved_suggested_action == ""
+
 
 class TestPreflightOutput:
     def test_required_status(self):
