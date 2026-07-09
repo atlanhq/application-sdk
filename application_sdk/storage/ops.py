@@ -1357,6 +1357,19 @@ async def download_file_chunked(
             raise StorageError(
                 f"Chunked download failed for '{key}'", key=key, cause=exc
             ) from exc
+        # conformance: ignore[E004] cancellation pass-through; drains siblings, closes fd, re-raises immediately with no swallow
+        except BaseException:
+            # Task cancellation (e.g. Temporal activity cancel / worker
+            # shutdown) is a BaseException, so the handler above never sees
+            # it — but an orphaned chunk task writing into a reused fd does
+            # not care WHY we exited. Same drain + close as the failure path;
+            # the partial file + checkpoint stay on disk for resume. Re-raise
+            # to preserve cancellation semantics.
+            for _t in chunk_tasks:
+                _t.cancel()
+            await asyncio.gather(*chunk_tasks, return_exceptions=True)
+            os.close(fd)
+            raise
 
         os.close(fd)
         # Success: the checkpoint's existence means "incomplete" — remove it so
