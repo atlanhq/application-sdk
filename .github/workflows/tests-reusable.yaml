@@ -167,7 +167,8 @@ jobs:
   # one reusable (the fleet standard: one tests.yaml + one Tests Gate). Each
   # app's tests.yaml calls a single reusable instead of nesting a second one,
   # and this lets us retire e2e-full-reusable once its other callers converge.
-  # Behaviour is preserved 1:1 with the old delegation:
+  # Behaviour matches the old delegation (the only intentional drop is the dead
+  # "Resolve agent-name" step — see the NOTE by the sdr-e2e step below):
   #   - 120-min job timeout (> ae_poll + atlas_poll + build/setup overhead —
   #     see BaseFullDAGE2ETest poll budgets; NOT inputs.timeout-minutes, which
   #     defaults to 60 and only sizes the unit/integration tier).
@@ -232,16 +233,13 @@ jobs:
           version: "0.11.28"
           enable-cache: true
 
-      - name: Resolve agent-name
-        id: agent
-        run: |
-          if [ -n "${{ inputs.agent-name-override }}" ]; then
-            echo "name=${{ inputs.agent-name-override }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "name=ci-${{ github.run_id }}" >> "$GITHUB_OUTPUT"
-          fi
-          echo "Using agent-name=$(grep '^name=' "$GITHUB_OUTPUT" | cut -d= -f2)"
-
+      # NOTE: e2e-full-reusable.yaml had a "Resolve agent-name" step here that
+      # wrote a `name` output — but nothing consumed it (the sdr-e2e action has
+      # no agent-name input and reads no AGENT_NAME env; the worker's queue name
+      # is resolved inside the action/compose overlay). It was dead on arrival,
+      # so it is intentionally NOT carried over. The `agent-name-override` input
+      # is kept declared for caller compatibility but is currently inert until
+      # sdr-e2e grows a real agent-name input.
       - uses: atlanhq/application-sdk/.github/actions/sdr-e2e@main
         with:
           app-name: ${{ inputs.app-name }}
