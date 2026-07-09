@@ -8,9 +8,9 @@ database operations, supporting batch processing and server-side cursors.
 import asyncio
 import concurrent
 import hashlib
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
-from typing import TYPE_CHECKING, Any, Union, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Union, cast
 from urllib.parse import quote_plus
 
 from application_sdk.clients._interface import ClientInterface
@@ -33,7 +33,7 @@ from application_sdk.common.aws_utils import (
 )
 from application_sdk.constants import AWS_SESSION_NAME, USE_SERVER_SIDE_CURSOR
 from application_sdk.credentials.utils import parse_credentials_extra
-from application_sdk.errors import AppError, sanitize_cause_repr
+from application_sdk.errors import AppError, errno_classifier, sanitize_cause_repr
 from application_sdk.execution.heartbeat import run_in_thread
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -66,6 +66,34 @@ class BaseSQLClient(ClientInterface):
     use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR
     DB_CONFIG: DatabaseConfig | None = None
 
+    ERROR_MAP: ClassVar[Mapping[int, type[AppError]]] = {}
+    """Driver errno → typed :class:`AppError` leaf, declared by a subclass.
+
+    Maps a source driver's DBAPI-style error codes (from ``exc.args[0]`` or
+    ``exc.errno``) to the app's typed leaves — the one place a connector states
+    "code 1045 means bad credentials, code 1049 means unknown database", each
+    with its curated message / category / suggested action. Empty by default,
+    which keeps error handling **byte-identical** to today: every raw driver
+    error falls through to the generic wrapper (``SqlClientAuthFailedError`` /
+    ``SqlPandasResultError``).
+
+    Declaring it once types errors on **both** surfaces a connector exposes:
+
+    * **Preflight gate** — a ``preflight_check`` catch site can call
+      ``PreflightCheck.from_error(name, e)`` bare: ``e`` already arrives as the
+      typed leaf, so the check carries the app-specific code with no per-site
+      classification.
+    * **Runtime activities** — a raised leaf is an :class:`AppError`, so the
+      activity wrapper in ``activities.py`` forwards its ``code`` / ``category``
+      / ``audience`` to the Automation Engine, same as any typed activity raise.
+
+    Classification lives here, at the boundary where the driver error occurs —
+    **not** at the reporting bridge. ``PreflightCheck.from_error`` has no
+    implicit/global classifier hook by design: an app opts in explicitly via
+    this map (or by calling :func:`~application_sdk.errors.errno_classifier`
+    directly for a non-SQL source), so the SDK never guesses a classification.
+    """
+
     def __init__(
         self,
         use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR,
@@ -85,6 +113,10 @@ class BaseSQLClient(ClientInterface):
         self.credentials = credentials if credentials is not None else {}
         self.resolved_credentials = {}
         self.chunk_size = chunk_size
+        # Built once per instance from the subclass's ERROR_MAP; consulted at
+        # each driver-error wrap point below. Empty map → always returns None →
+        # the generic wrapper is raised, unchanged.
+        self._classify_driver_error = errno_classifier(self.ERROR_MAP)
 
     async def load(self, credentials: dict[str, Any]) -> None:
         """Load credentials and prepare engine for lazy connections.
@@ -150,6 +182,9 @@ class BaseSQLClient(ClientInterface):
             if self.engine:
                 self.engine.dispose()
                 self.engine = None
+            typed = self._classify_driver_error(e)
+            if typed is not None:
+                raise typed from e
             raise SqlClientAuthFailedError(cause=e) from e
 
     async def close(self) -> None:
@@ -527,6 +562,9 @@ class BaseSQLClient(ClientInterface):
             raise
         # conformance: ignore[E004] exception re-raised immediately as typed SqlPandasResultError; cause chain preserved via `from e`
         except Exception as e:
+            typed = self._classify_driver_error(e)
+            if typed is not None:
+                raise typed from e
             raise SqlPandasResultError(
                 message="Error reading batched data from SQL", cause=e
             ) from e
@@ -554,6 +592,9 @@ class BaseSQLClient(ClientInterface):
             raise
         # conformance: ignore[E004] exception re-raised immediately as typed SqlPandasResultError; cause chain preserved via `from e`
         except Exception as e:
+            typed = self._classify_driver_error(e)
+            if typed is not None:
+                raise typed from e
             raise SqlPandasResultError(cause=e) from e
 
 
@@ -626,6 +667,9 @@ class AsyncBaseSQLClient(BaseSQLClient):
             if self.engine:
                 await self.engine.dispose()
                 self.engine = None
+            typed = self._classify_driver_error(e)
+            if typed is not None:
+                raise typed from e
             raise SqlClientAuthFailedError(cause=e) from e
 
     async def close(self) -> None:
@@ -698,6 +742,9 @@ class AsyncBaseSQLClient(BaseSQLClient):
                 raise
             # conformance: ignore[E004] exception re-raised immediately as typed SqlPandasResultError; cause chain preserved via `from e`
             except Exception as e:
+                typed = self._classify_driver_error(e)
+                if typed is not None:
+                    raise typed from e
                 raise SqlPandasResultError(
                     message="Error executing SQL query", cause=e
                 ) from e

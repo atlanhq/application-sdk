@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -20,6 +22,7 @@ from application_sdk.clients.redis_errors import (
     RedisProtocolError,
 )
 from application_sdk.clients.sql_errors import SqlClientAuthFailedError
+from application_sdk.errors.leaves import AuthError
 
 # ---------------------------------------------------------------------------
 # BLDX-1180 — async SQL load() raises SqlClientAuthFailedError, not ValueError
@@ -54,6 +57,98 @@ class TestAsyncSqlLoadErrorContract:
             patch(
                 "sqlalchemy.ext.asyncio.create_async_engine",
                 side_effect=RuntimeError("boom"),
+            ),
+            pytest.raises(SqlClientAuthFailedError) as exc_info,
+        ):
+            await client.load({"username": "u", "password": "p"})
+
+        assert exc_info.value.code == "AUTH_SQL_CLIENT_FAILED"
+
+
+# ---------------------------------------------------------------------------
+# HYP-1883 — ERROR_MAP client-boundary error typing
+# ---------------------------------------------------------------------------
+
+
+@dataclass(kw_only=True)
+class _BadCredentialsError(AuthError):
+    code: ClassVar[str] = "AUTH_SOURCE_BAD_CREDENTIALS"
+    message: str = "The source rejected the credentials"
+
+
+def _configured_async_client(cls):
+    from application_sdk.clients.models import DatabaseConfig
+
+    client = cls()
+    client.DB_CONFIG = DatabaseConfig(
+        template="test://{username}:{password}@{host}:{port}/{database}",
+        required=["username", "password", "host", "port", "database"],
+        connect_args={},
+    )
+    client.get_sqlalchemy_connection_string = lambda: "test://x"  # type: ignore[method-assign]
+    return client
+
+
+class TestErrorMapBoundaryTyping:
+    """A SQL client subclass that declares ``ERROR_MAP`` gets its driver errors
+    typed at the client boundary; the default (empty map) is unchanged."""
+
+    @pytest.mark.asyncio
+    async def test_declared_errno_raises_typed_leaf_chaining_driver_error(self):
+        from application_sdk.clients.sql import AsyncBaseSQLClient
+
+        class _TypedClient(AsyncBaseSQLClient):
+            ERROR_MAP = {1045: _BadCredentialsError}
+
+        client = _configured_async_client(_TypedClient)
+        driver_error = Exception(1045, "Access denied for user")
+
+        with (
+            patch(
+                "sqlalchemy.ext.asyncio.create_async_engine",
+                side_effect=driver_error,
+            ),
+            pytest.raises(_BadCredentialsError) as exc_info,
+        ):
+            await client.load({"username": "u", "password": "p"})
+
+        # The typed leaf replaces the generic wrapper, and the raw driver error
+        # is preserved on the cause chain (`raise typed from exc`).
+        assert exc_info.value.code == "AUTH_SOURCE_BAD_CREDENTIALS"
+        assert exc_info.value.__cause__ is driver_error
+
+    @pytest.mark.asyncio
+    async def test_unmapped_errno_falls_through_to_generic_wrapper(self):
+        from application_sdk.clients.sql import AsyncBaseSQLClient
+
+        class _TypedClient(AsyncBaseSQLClient):
+            ERROR_MAP = {1045: _BadCredentialsError}
+
+        client = _configured_async_client(_TypedClient)
+
+        with (
+            patch(
+                "sqlalchemy.ext.asyncio.create_async_engine",
+                side_effect=Exception(9999, "some unmapped driver failure"),
+            ),
+            pytest.raises(SqlClientAuthFailedError) as exc_info,
+        ):
+            await client.load({"username": "u", "password": "p"})
+
+        assert exc_info.value.code == "AUTH_SQL_CLIENT_FAILED"
+
+    @pytest.mark.asyncio
+    async def test_default_empty_map_is_byte_identical(self):
+        # The stock client declares no ERROR_MAP: even an errno that a subclass
+        # *could* map falls through to the generic wrapper — no classification.
+        from application_sdk.clients.sql import AsyncBaseSQLClient
+
+        client = _configured_async_client(AsyncBaseSQLClient)
+
+        with (
+            patch(
+                "sqlalchemy.ext.asyncio.create_async_engine",
+                side_effect=Exception(1045, "Access denied for user"),
             ),
             pytest.raises(SqlClientAuthFailedError) as exc_info,
         ):

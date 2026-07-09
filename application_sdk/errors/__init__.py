@@ -27,6 +27,7 @@ from dataclasses import dataclass
 # ── New canonical hierarchy ──────────────────────────────────────────────────
 from application_sdk.errors.base import AppError, redact_secrets, sanitize_cause_repr
 from application_sdk.errors.categories import Audience, FailureCategory
+from application_sdk.errors.classify import causal_chain, errno_classifier
 from application_sdk.errors.leaves import (
     WORKER_EVICTED_TYPE,
     AlreadyExistsError,
@@ -144,6 +145,8 @@ __all__ = [
     "ResourceExhaustedError",
     "UnimplementedError",
     "WORKER_EVICTED_TYPE",
+    "causal_chain",
+    "errno_classifier",
     # Legacy (deprecated — removed in v4.0)
     "ErrorCode",
     "APP_ERROR",

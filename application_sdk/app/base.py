@@ -63,6 +63,7 @@ from application_sdk.errors import (
 )
 from application_sdk.errors.base import AppError as _NewAppError
 from application_sdk.errors.categories import FailureCategory
+from application_sdk.errors.classify import causal_chain
 from application_sdk.errors.leaves import LEAF_BY_CATEGORY
 from application_sdk.errors.leaves import InternalError as _InternalError
 from application_sdk.errors.leaves import InvalidInputError as _InvalidInputError
@@ -1547,9 +1548,6 @@ def _collect_interaction_relays(
     return relays
 
 
-_PREFLIGHT_CHAIN_WALK = 50
-
-
 def _raise_preflight_unavailable(
     gate_exc: BaseException, app_name: str, error_type: str
 ) -> Never:
@@ -1579,16 +1577,7 @@ def _raise_preflight_unavailable(
 
     reason = "Preflight gate could not produce a verdict"
     recovered: FailureDetails | None = None
-    seen: set[int] = set()
-    current: BaseException | None = gate_exc
-    depth = 0
-    while (
-        current is not None
-        and id(current) not in seen
-        and depth < _PREFLIGHT_CHAIN_WALK
-    ):
-        seen.add(id(current))
-        depth += 1
+    for current in causal_chain(gate_exc):
         if isinstance(current, _NewAppError):
             recovered = current.to_failure_details()
             break
@@ -1604,7 +1593,6 @@ def _raise_preflight_unavailable(
                     break
         if recovered is not None:
             break
-        current = current.__cause__ or current.__context__
 
     if recovered is not None:
         details = recovered.model_copy(

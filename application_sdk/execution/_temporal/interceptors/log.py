@@ -40,6 +40,7 @@ from temporalio.worker import (
 )
 
 from application_sdk.errors.base import AppError
+from application_sdk.errors.classify import causal_chain
 from application_sdk.errors.wire import FailureDetails
 from application_sdk.execution._temporal.preflight_gate import (
     PREFLIGHT_FAILED_ERROR_TYPE,
@@ -64,8 +65,10 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-# Must match _MAX_CHAIN_DEPTH in activities.py: an AppError sitting between the
-# walk cap and the sever cap would be silently invisible to OTel attributes.
+# Must match _MAX_CHAIN_DEPTH in activities.py (the sever cap) and
+# classify._CAUSAL_CHAIN_LIMIT (the shared walk, which _extract_failure_attrs now
+# uses): an AppError sitting past this depth is already severed off the wire, so
+# walking further would only find nodes no consumer ever sees.
 _MAX_CHAIN_WALK = 50
 
 
@@ -90,12 +93,7 @@ def _extract_failure_attrs(exc: BaseException | None) -> dict[str, str]:
     """
     if exc is None:
         return {}
-    seen: set[int] = set()
-    current: BaseException | None = exc
-    depth = 0
-    while current is not None and id(current) not in seen and depth < _MAX_CHAIN_WALK:
-        seen.add(id(current))
-        depth += 1
+    for current in causal_chain(exc):
         if isinstance(current, AppError):
             return {
                 "failure.category": current.category.value,
@@ -107,7 +105,6 @@ def _extract_failure_attrs(exc: BaseException | None) -> dict[str, str]:
                 attrs = _failure_details_from_detail(detail)
                 if attrs:
                     return attrs
-        current = current.__cause__ or current.__context__
     return {}
 
 
