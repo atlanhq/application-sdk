@@ -62,6 +62,7 @@ class LogMiddleware(BaseHTTPMiddleware):
 
         except Exception as exc:
             duration = time.time() - start_time
+            # conformance: ignore[L009] request-scoped context (duration_ms, request_id, path, method) is not carried by the re-raised exception; the caller's handler cannot reconstruct it.
             self.logger.error(
                 "Request failed: method=%s path=%s duration_ms=%.2f request_id=%s error_type=%s",
                 request.method,

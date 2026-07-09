@@ -289,9 +289,9 @@ class WorkerHealthServer:
             status: HTTP status code.
             body: JSON body to send.
         """
-        import json  # noqa: PLC0415 — stdlib json; lazy use only on health metrics
+        import orjson  # noqa: PLC0415 — orjson; lazy use only on health metrics
 
-        body_bytes = json.dumps(body).encode("utf-8")
+        body_bytes = orjson.dumps(body)
         response = (
             f"HTTP/1.1 {status.value} {status.phrase}\r\n"
             f"Content-Type: application/json\r\n"

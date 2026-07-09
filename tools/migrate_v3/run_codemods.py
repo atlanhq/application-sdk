@@ -31,7 +31,6 @@ Programmatic API
 from __future__ import annotations
 
 import argparse
-import json
 import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
@@ -39,7 +38,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import libcst as cst
+import orjson
 
+from application_sdk.observability.logger_adaptor import get_logger
 from tools.migrate_v3.check_migration import _is_test_path
 from tools.migrate_v3.codemods import AddImportTransformer, BaseCodemod
 from tools.migrate_v3.codemods.remove_activities_cls import RemoveActivitiesClsCodemod
@@ -53,6 +54,8 @@ from tools.migrate_v3.codemods.rewrite_handlers import RewriteHandlersCodemod
 from tools.migrate_v3.codemods.rewrite_returns import RewriteReturnsCodemod
 from tools.migrate_v3.codemods.rewrite_signatures import RewriteSignaturesCodemod
 from tools.migrate_v3.fingerprint import fingerprint_connector
+
+logger = get_logger(__name__)
 
 # Ordered codemod IDs — dependency order must be preserved.
 _CODEMOD_ORDER = ["A1", "A3", "A4", "A5", "A2", "A6", "A7"]
@@ -93,7 +96,10 @@ class RunResult:
 
     def write_report(self, path: Path) -> None:
         """Write a ``migration_report.json`` to *path*."""
-        path.write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
+        path.write_text(
+            orjson.dumps(self.to_dict(), option=orjson.OPT_INDENT_2).decode(),
+            encoding="utf-8",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -114,15 +120,22 @@ def _run_pyright(root: Path) -> list[str]:
             text=True,
             timeout=120,
         )
-    except FileNotFoundError:
+    except FileNotFoundError as exc:
+        logger.warning("pyright not found: %s", exc, exc_info=True)
         return ["pyright not found — install with: uv add pyright --dev"]
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
+        logger.warning("pyright timed out after 120 s: %s", exc, exc_info=True)
         return ["pyright timed out after 120 s"]
 
     try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError:
+        data = orjson.loads(result.stdout)
+    except orjson.JSONDecodeError as exc:
         # Pyright may not support --outputjson; fall back to stderr text
+        logger.debug(
+            "pyright --outputjson not parseable, falling back to stderr: %s",
+            exc,
+            exc_info=True,
+        )
         return [
             line
             for line in (result.stdout + result.stderr).splitlines()
@@ -200,11 +213,13 @@ def _run_file(
     try:
         source = path.read_text(encoding="utf-8")
     except OSError as exc:
+        logger.warning("Read error for %s: %s", path, exc, exc_info=True)
         return None, {"error": [f"Read error: {exc}"]}
 
     try:
         tree = cst.parse_module(source)
     except cst.ParserSyntaxError as exc:
+        logger.warning("Parse error for %s: %s", path, exc, exc_info=True)
         return None, {"error": [f"Parse error: {exc}"]}
 
     all_changes: dict[str, list[str]] = {}
@@ -288,7 +303,13 @@ def run_codemods(
 
         try:
             rel = path.relative_to(root.parent if root.is_file() else root).as_posix()
-        except ValueError:
+        except ValueError as exc:
+            logger.warning(
+                "Could not relativise %s against root; using basename: %s",
+                path,
+                exc,
+                exc_info=True,
+            )
             rel = path.name
 
         result.changes_by_file[rel] = file_changes
@@ -368,7 +389,7 @@ def main(argv: list[str] | None = None) -> int:
 
     root = Path(args.path)
     if not root.exists():
-        print(f"error: path does not exist: {root}", file=sys.stderr)
+        logger.error("Path does not exist: %s", root)
         return 2
 
     skip = [s.strip() for s in args.skip.split(",") if s.strip()]
@@ -386,38 +407,48 @@ def main(argv: list[str] | None = None) -> int:
 
     # Header
     dry_tag = " (dry-run)" if args.dry_run else ""
+    # conformance: ignore[L005] direct dev-mode CLI report; ANSI color codes and blank-line grouping between file sections would be lost through the logging pipeline
     print(
         f"Fingerprint: {result.connector_type}"
         f" (confidence={result.confidence:.1f}){dry_tag}"
     )
     if not result.changes_by_file and not result.errors:
+        # conformance: ignore[L005] direct dev-mode CLI report; see rationale above
         print("No changes.")
         return 0
 
+    # conformance: ignore[L005] direct dev-mode CLI report; blank-line group separator
     print()
 
     for file_path, file_changes in result.changes_by_file.items():
+        # conformance: ignore[L005] direct dev-mode CLI report; ANSI color codes would be lost through the logging pipeline
         print(f"  {_color(file_path, '1', no_color=no_color)}")
         for codemod_id, changes in file_changes.items():
             for change in changes:
                 prefix = "SKIPPED" if change.startswith("SKIPPED") else codemod_id
                 color_code = "33" if change.startswith("SKIPPED") else "32"
                 line = f"    {_color(prefix, color_code, no_color=no_color)}: {change}"
+                # conformance: ignore[L005] direct dev-mode CLI report; ANSI color codes would be lost through the logging pipeline
                 print(line)
+        # conformance: ignore[L005] direct dev-mode CLI report; blank-line group separator
         print()
 
     for err in result.errors:
+        # conformance: ignore[L005] direct dev-mode CLI report; ANSI color codes would be lost through the logging pipeline
         print(f"  {_color('ERROR', '31', no_color=no_color)}: {err}", file=sys.stderr)
 
     if result.type_errors:
+        # conformance: ignore[L005] direct dev-mode CLI report; blank-line group separator
         print()
         for te in result.type_errors:
+            # conformance: ignore[L005] direct dev-mode CLI report; ANSI color codes would be lost through the logging pipeline
             print(
                 f"  {_color('TYPE ERROR', '35', no_color=no_color)}: {te}",
                 file=sys.stderr,
             )
 
     if output_json is not None:
+        # conformance: ignore[L005] direct dev-mode CLI report; see rationale above
         print(f"\nReport written to: {output_json}")
 
     # Summary
@@ -428,6 +459,7 @@ def main(argv: list[str] | None = None) -> int:
     type_err_str = (
         f", {len(result.type_errors)} type error(s)" if result.type_errors else ""
     )
+    # conformance: ignore[L005] direct dev-mode CLI report; see rationale above
     print(
         f"Summary: {result.files_changed} file(s) changed"
         f"{todo_str}{err_str}{type_err_str}"

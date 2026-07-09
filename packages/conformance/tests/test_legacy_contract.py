@@ -283,13 +283,18 @@ def test_k002_config_import(tmp_path: Path) -> None:
     assert "re-exports widget types" in k002[0].message
 
 
-def test_k002_connectors_import(tmp_path: Path) -> None:
-    """K002 fires for ``import "…Connectors.pkl"``."""
+def test_k002_connectors_import_is_legitimate(tmp_path: Path) -> None:
+    """K002 must NOT fire for ``import "…Connectors.pkl"``.
+
+    Unlike Config/Credential/Renderers, the Connectors registry is still imported
+    explicitly by App.pkl consumers (App.pkl does not re-export its constants),
+    so flagging it would be a false positive — verified against every current
+    toolkit example, which imports it and uses ``Connectors.*``.
+    """
     content = 'amends "@app-contract-toolkit/App.pkl"\nimport "@app-contract-toolkit/Connectors.pkl"\n'
     findings = _scan_all(tmp_path, {"contract/app.pkl": content})
     k002 = [f for f in findings if f.rule_id == "K002"]
-    assert len(k002) == 1
-    assert "Connectors.pkl" in k002[0].message
+    assert k002 == [], f"Unexpected K002 firing on a legitimate import: {k002}"
 
 
 def test_k002_credential_import(tmp_path: Path) -> None:
@@ -369,8 +374,9 @@ def test_k001_and_k002_together(tmp_path: Path) -> None:
     k001 = [f for f in findings if f.rule_id == "K001"]
     k002 = [f for f in findings if f.rule_id == "K002"]
     assert len(k001) == 1
-    # flatManifestArgs + workflowTypeOverride + Config.pkl import + Connectors.pkl import
-    assert len(k002) == 4
+    # flatManifestArgs + workflowTypeOverride + Config.pkl import (Connectors.pkl
+    # is a legitimate import and must NOT fire).
+    assert len(k002) == 3
     # All unsuppressed
     assert all(not f.suppressed for f in k001 + k002)
 

@@ -4,6 +4,8 @@ import asyncio
 import json
 import time
 
+import orjson
+
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -33,7 +35,7 @@ async def get_pods(namespace: str, label_selector: str = "") -> list[dict]:  # t
         logger.warning("get_pods failed: %s", stderr)
         return []
     try:
-        return json.loads(stdout).get("items", [])
+        return orjson.loads(stdout).get("items", [])
     except json.JSONDecodeError:
         logger.warning("get_pods: failed to parse JSON output", exc_info=True)
         return []

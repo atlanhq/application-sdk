@@ -2,6 +2,34 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.13.0] - 2026-07-08
+
+### Features
+
+- default two-store: true in the tests.yaml bootstrap template (#2593) ([4b68806](https://github.com/atlanhq/application-sdk/commit/4b68806))
+- add contract-toolkit hygiene rules and fix K002 false positive (#2584) ([8181eca](https://github.com/atlanhq/application-sdk/commit/8181eca))
+- add K006 rule for manifest-vs-contract field validation (#2560) ([7114ceb](https://github.com/atlanhq/application-sdk/commit/7114ceb))
+
+### Bug fixes
+
+- remediate error-handling, logging, and optimization findings (#2573) ([460d7f2](https://github.com/atlanhq/application-sdk/commit/460d7f2))
+- add opt-in two-store SDR posture to the full-DAG suite (#2586) ([bf87f36](https://github.com/atlanhq/application-sdk/commit/bf87f36))
+- include S-series (security) in default remediation scope (#2570) ([269730b](https://github.com/atlanhq/application-sdk/commit/269730b))
+- resolve B005/B006 contract fields across inheritance (#2557) ([ad9fddf](https://github.com/atlanhq/application-sdk/commit/ad9fddf))
+- add P031 rule for shared-default-executor offload (#2556) ([76d92b2](https://github.com/atlanhq/application-sdk/commit/76d92b2))
+
+### Other changes
+
+- chore(deps): lock file maintenance (#2591) ([4736ccd](https://github.com/atlanhq/application-sdk/commit/4736ccd))
+- chore(deps): lock file maintenance (#2582) ([d7e773a](https://github.com/atlanhq/application-sdk/commit/d7e773a))
+- chore(deps): lock file maintenance (#2581) ([c7dc3e9](https://github.com/atlanhq/application-sdk/commit/c7dc3e9))
+- chore(deps): lock file maintenance (#2578) ([c29599b](https://github.com/atlanhq/application-sdk/commit/c29599b))
+- chore(deps): lock file maintenance (#2569) ([8ab4b65](https://github.com/atlanhq/application-sdk/commit/8ab4b65))
+- chore(deps): lock file maintenance (#2562) ([5ef50d6](https://github.com/atlanhq/application-sdk/commit/5ef50d6))
+- chore(deps): lock file maintenance (#2559) ([8b938d1](https://github.com/atlanhq/application-sdk/commit/8b938d1))
+- chore(deps): lock file maintenance (#2558) ([e25500d](https://github.com/atlanhq/application-sdk/commit/e25500d))
+- chore(deps): lock file maintenance (#2546) ([dd263ff](https://github.com/atlanhq/application-sdk/commit/dd263ff))
+
 ## [0.12.0] - 2026-07-07
 
 ### Features

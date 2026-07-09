@@ -225,6 +225,7 @@ async def persist_file_reference(
         # using the dedicated pool rather than asyncio's default executor.
         files = await run_in_thread(safe_list_directory, local)
         _t0 = time.monotonic()
+        # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
         logger.info(
             "file_ref.persist.start",
             local_path=ref.local_path,
@@ -259,6 +260,7 @@ async def persist_file_reference(
             sem = asyncio.Semaphore(MAX_CONCURRENT_STORAGE_TRANSFERS)
             await _gather_with_semaphore([_upload_one(fp) for fp in files], sem)
         except Exception as exc:
+            # conformance: ignore[L018,L009] structured failure event; keys promoted to indexed OTLP attributes via _KNOWN_EXTRA_KEYS; distinct transfer-boundary telemetry not re-emitted by caller
             logger.error(
                 "file_ref.persist.failed",
                 storage_path=prefix,
@@ -268,6 +270,7 @@ async def persist_file_reference(
             )
             raise
 
+        # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
         logger.info(
             "file_ref.persist.complete",
             storage_path=prefix,
@@ -329,6 +332,7 @@ async def persist_file_reference(
                 )
             _write_local_sidecar(ref.local_path, sha256)
         except Exception as exc:
+            # conformance: ignore[L018,L009] structured failure event; keys promoted to indexed OTLP attributes via _KNOWN_EXTRA_KEYS; distinct transfer-boundary telemetry not re-emitted by caller
             logger.error(
                 "file_ref.persist.failed",
                 storage_path=storage_path,
@@ -435,6 +439,7 @@ async def materialize_file_reference(
             if stored_hash is not None and local_hash == stored_hash:
                 # File is intact — stamp local sidecar and reuse.
                 _write_local_sidecar(ref.local_path, local_hash)
+                # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
                 logger.debug(
                     "file_ref.materialize.skipped",
                     storage_path=ref.storage_path,
@@ -545,6 +550,7 @@ async def materialize_file_reference(
 
             _write_local_sidecar(out_path, sha256)
         except Exception as exc:
+            # conformance: ignore[L018,L009] structured failure event; keys promoted to indexed OTLP attributes via _KNOWN_EXTRA_KEYS; distinct transfer-boundary telemetry not re-emitted by caller
             logger.error(
                 "file_ref.materialize.failed",
                 storage_path=ref.storage_path,
@@ -583,6 +589,7 @@ async def materialize_file_reference(
         Path(local_directory).mkdir(parents=True, exist_ok=True)
 
         _t0 = time.monotonic()
+        # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
         logger.info(
             "file_ref.materialize.start",
             storage_path=ref.storage_path,
@@ -610,6 +617,7 @@ async def materialize_file_reference(
                 try:
                     local_hash = await _sha256_hex_file_async(dest_path)
                     if local_hash == dest_sidecar.read_text().strip():
+                        # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
                         logger.debug(
                             "file_ref.materialize.skipped",
                             storage_path=key,
@@ -619,6 +627,7 @@ async def materialize_file_reference(
                         return True
                 # conformance: ignore[E004] sidecar integrity probe; failure is benign and logged at debug before falling through to re-download
                 except Exception:
+                    # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
                     logger.debug(
                         "file_ref.materialize.sidecar_check_failed",
                         storage_path=key,
@@ -663,6 +672,7 @@ async def materialize_file_reference(
             )
             skipped = sum(results)
         except Exception as exc:
+            # conformance: ignore[L018,L009] structured failure event; keys promoted to indexed OTLP attributes via _KNOWN_EXTRA_KEYS; distinct transfer-boundary telemetry not re-emitted by caller
             logger.error(
                 "file_ref.materialize.failed",
                 storage_path=ref.storage_path,
@@ -672,6 +682,7 @@ async def materialize_file_reference(
             )
             raise
 
+        # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
         logger.info(
             "file_ref.materialize.complete",
             storage_path=ref.storage_path,

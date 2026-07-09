@@ -7,8 +7,9 @@ Most functions previously in this module have been moved to more logical homes:
 - CPU/threading → ``common.concurrency``
 """
 
-import json
 import os
+
+import orjson
 
 from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.observability.logger_adaptor import get_logger
@@ -40,8 +41,8 @@ async def download_file_from_upload_response(
     """
     if isinstance(response, str):
         try:
-            response = json.loads(response)
-        except json.JSONDecodeError as e:
+            response = orjson.loads(response)
+        except orjson.JSONDecodeError as e:
             from application_sdk.common.errors import JsonParseError  # noqa: PLC0415
 
             raise JsonParseError(cause=e) from e

@@ -20,10 +20,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
 import time
 from datetime import UTC, datetime, timedelta
 from typing import ClassVar
+
+import orjson
 
 from application_sdk.credentials.types import OAuthClientCredential
 from application_sdk.errors.leaves import AuthError
@@ -46,7 +47,7 @@ def _parse_jwt_exp(token: str) -> float | None:
         if len(parts) != 3:
             return None
         padded = parts[1] + "=" * (-len(parts[1]) % 4)
-        claims: dict[str, object] = json.loads(base64.urlsafe_b64decode(padded))
+        claims: dict[str, object] = orjson.loads(base64.urlsafe_b64decode(padded))
         exp = claims.get("exp")
         return float(exp) if exp is not None else None  # type: ignore[arg-type]
     # conformance: ignore[E004] probe that decodes opaque/non-JWT tokens; None return is the intended fallback for any parse failure
@@ -201,7 +202,7 @@ class OAuthTokenService:
             if len(parts) != 3:
                 return
             padded = parts[1] + "=" * (-len(parts[1]) % 4)
-            claims: dict[str, object] = json.loads(base64.urlsafe_b64decode(padded))
+            claims: dict[str, object] = orjson.loads(base64.urlsafe_b64decode(padded))
             iat = claims.get("iat")
             if iat is not None:
                 local_midpoint = (t_before + t_after) / 2

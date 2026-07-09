@@ -70,11 +70,24 @@ def parse_pod_memory_limit(raw: str) -> int:
         if raw.endswith(suffix):
             try:
                 return int(raw[: -len(suffix)]) * multiplier
-            except ValueError:
+            except ValueError as e:
+                _logger.warning(
+                    "Could not parse pod memory limit %r (suffix %r): %s",
+                    raw,
+                    suffix,
+                    e,
+                    exc_info=True,
+                )
                 return 0
     try:
         return int(raw)
-    except ValueError:
+    except ValueError as e:
+        _logger.warning(
+            "Could not parse pod memory limit %r as integer bytes: %s",
+            raw,
+            e,
+            exc_info=True,
+        )
         return 0
 
 

@@ -1,0 +1,24 @@
+# ADR-0014 two-store SDR posture (docs/adr/0014-two-store-storage-architecture.md).
+#
+# Applied only when the sdr-e2e composite's `enable-two-store` input is
+# true, and layered LAST in the compose -f chain (see
+# build_compose_chain.py) so these env vars always win over anything an
+# app-level compose overlay sets.
+#
+# ENABLE_ATLAN_UPLOAD activates SDR mode: the connector's boot-time
+# `verify_object_store_access` preflight now runs and requires the
+# `atlan-objectstore` component (asserted present by
+# select_dapr_components.py before this container ever starts) —
+# hard-failing at boot rather than surfacing as a later, harder-to-diagnose
+# test failure if that component is somehow missing.
+#
+# ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE=required makes a deployment-store
+# (localstorage) write failure fatal to the run — a stricter signal than
+# the SDK's `best_effort` default, appropriate for a CI gate whose whole
+# purpose is to catch storage hand-off bugs loudly.
+
+services:
+  atlan-app:
+    environment:
+      - ENABLE_ATLAN_UPLOAD=true
+      - ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE=required

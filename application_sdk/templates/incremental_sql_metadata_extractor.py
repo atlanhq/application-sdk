@@ -443,7 +443,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         Returns counts of batches, changed tables, and backfill tables.
         Zero batches means no incremental column extraction is needed.
         """
-        import json  # noqa: PLC0415 — stdlib json; lazy use only
+        import orjson  # noqa: PLC0415 — orjson; lazy use only
 
         from application_sdk.common.incremental.column_extraction import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
             get_backfill_tables,
@@ -559,14 +559,14 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
 
             if len(current_batch) >= batch_size:
                 batch_file = batches_dir / f"batch-{batch_idx}.json"
-                batch_file.write_text(json.dumps(current_batch), encoding="utf-8")
+                batch_file.write_bytes(orjson.dumps(current_batch))
                 batch_idx += 1
                 total_tables_batched += len(current_batch)
                 current_batch = []
 
         if current_batch:
             batch_file = batches_dir / f"batch-{batch_idx}.json"
-            batch_file.write_text(json.dumps(current_batch), encoding="utf-8")
+            batch_file.write_bytes(orjson.dumps(current_batch))
             batch_idx += 1
             total_tables_batched += len(current_batch)
 
@@ -608,8 +608,9 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         The SDK handles all orchestration; the connector only needs to implement
         ``build_incremental_column_sql()``.
         """
-        import json  # noqa: PLC0415 — stdlib json; lazy use only
         import pathlib  # noqa: PLC0415 — stdlib pathlib; lazy use only
+
+        import orjson  # noqa: PLC0415 — orjson; lazy use only
 
         from application_sdk.execution import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
             get_object_store_prefix,
@@ -659,7 +660,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                 status="not_found",
             )
 
-        table_ids = json.loads(batch_file.read_text(encoding="utf-8"))
+        table_ids = orjson.loads(batch_file.read_bytes())
 
         logger.info(
             "Executing column batch %d/%d: %d tables",
