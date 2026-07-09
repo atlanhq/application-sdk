@@ -49,7 +49,7 @@ jobs:
       github.event_name == 'workflow_dispatch'
       || (
         github.event.issue.pull_request
-        && contains(github.event.comment.body, '@sdk-resolve')
+        && startsWith(github.event.comment.body, '@sdk-resolve')
         && (
           github.event.comment.author_association == 'OWNER'
           || github.event.comment.author_association == 'MEMBER'
