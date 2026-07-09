@@ -24,6 +24,7 @@ from application_sdk.app.task import TaskMetadata
 from application_sdk.constants import LOCAL_WORKFLOW_ID, TRACKED_FILE_REFS_KEY
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import FileReference
+from application_sdk.errors.classify import CAUSAL_CHAIN_LIMIT
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -39,7 +40,10 @@ logger = get_logger(__name__)
 # stack is ~30–50 frames; at depth 50 we reach ~150 frames total vs. Python's
 # default limit of 1000.  Each stack trace is typically 1–5 KB, so 50 levels ≈
 # 50–250 KB — well inside Temporal's default 2 MB payload limit.
-_MAX_CHAIN_DEPTH = 50
+#
+# Shares the SDK-wide chain-depth cap: read-walks (errors.classify.causal_chain)
+# stop where this sever cap cuts, so nothing walks past what ships on the wire.
+_MAX_CHAIN_DEPTH = CAUSAL_CHAIN_LIMIT
 
 
 def _sever_cause_chain(exc: BaseException) -> None:

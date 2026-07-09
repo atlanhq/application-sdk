@@ -24,12 +24,15 @@ from collections.abc import Callable, Iterator, Mapping
 
 from application_sdk.errors.base import AppError
 
-# Max nodes walked before the chain is abandoned. Must stay equal to
-# ``activities._MAX_CHAIN_DEPTH`` (the sever cap) and
-# ``interceptors.log._MAX_CHAIN_WALK``: an AppError sitting past this depth is
-# already severed off the wire, so walking further would only find nodes that
-# never reach a consumer.
-_CAUSAL_CHAIN_LIMIT = 50
+# Max nodes walked before the chain is abandoned — the single source of truth
+# for cause-chain depth across the SDK. The activity wrapper's sever cap
+# (``activities._MAX_CHAIN_DEPTH``) imports this value: an AppError sitting past
+# this depth is severed off the wire, so walking further would only find nodes
+# that never reach a consumer.
+CAUSAL_CHAIN_LIMIT = 50
+
+# Backward-compatible private alias (pre-existing tests import it).
+_CAUSAL_CHAIN_LIMIT = CAUSAL_CHAIN_LIMIT
 
 
 def causal_chain(exc: BaseException) -> Iterator[BaseException]:
@@ -37,7 +40,7 @@ def causal_chain(exc: BaseException) -> Iterator[BaseException]:
 
     Follows ``__cause__`` first, falling back to ``__context__`` — the same
     precedence Python uses when printing a traceback. Bounded to
-    ``_CAUSAL_CHAIN_LIMIT`` nodes and cycle-safe via an identity set, so a
+    ``CAUSAL_CHAIN_LIMIT`` nodes and cycle-safe via an identity set, so a
     self-referential or pathologically deep chain terminates instead of looping.
     """
     seen: set[int] = set()
@@ -45,7 +48,7 @@ def causal_chain(exc: BaseException) -> Iterator[BaseException]:
     while (
         current is not None
         and id(current) not in seen
-        and len(seen) < _CAUSAL_CHAIN_LIMIT
+        and len(seen) < CAUSAL_CHAIN_LIMIT
     ):
         seen.add(id(current))
         yield current

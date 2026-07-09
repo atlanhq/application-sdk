@@ -43,6 +43,18 @@ PREFLIGHT_FAILED_ERROR_TYPE = "PreflightFailed"
 PREFLIGHT_UNAVAILABLE_ERROR_TYPE = "PreflightUnavailable"
 
 
+def is_preflight_verdict_block(exc: object) -> bool:
+    """Whether ``exc`` is the deliberate gate verdict block (``PreflightFailed``).
+
+    The one predicate behind the two-type logging split: a verdict block is an
+    expected, typed outcome and logs terse (warning, no stack); everything else
+    — including the fail-closed ``PreflightUnavailable`` — keeps the full ERROR
+    traceback. Shared by the workflow catch and the log interceptor so the
+    split can't drift between them.
+    """
+    return getattr(exc, "type", None) == PREFLIGHT_FAILED_ERROR_TYPE
+
+
 def input_type_supports_gate(input_type: type) -> bool:
     """Whether an entrypoint's input type is gate-eligible.
 

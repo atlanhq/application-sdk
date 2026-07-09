@@ -22,14 +22,12 @@ import pytest
 from application_sdk.contracts.base import Input, Output
 from application_sdk.errors.base import AppError
 from application_sdk.errors.categories import Audience, FailureCategory
+from application_sdk.errors.classify import CAUSAL_CHAIN_LIMIT as _MAX_CHAIN_WALK
 from application_sdk.execution._temporal.activities import (
     _MAX_CHAIN_DEPTH,
     _sever_cause_chain,
 )
-from application_sdk.execution._temporal.interceptors.log import (
-    _MAX_CHAIN_WALK,
-    _extract_failure_attrs,
-)
+from application_sdk.execution._temporal.interceptors.log import _extract_failure_attrs
 
 # ---------------------------------------------------------------------------
 # Minimal AppError subclass used throughout

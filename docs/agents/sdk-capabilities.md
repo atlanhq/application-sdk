@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.21.1
-source-sha:    b6e520f609df37fdb309ad94d565a5c6424c2a0b
-source-date:   2026-07-09T17:33:37+05:30
+source-sha:    a8d98a1f9c80721adc17659d29382f7a61678435
+source-date:   2026-07-09T17:57:59+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2671,7 +2671,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Summary:** Result of a single preflight check.
 - **Fields:**
   - `name: str` `= Field(..., min_length=1)` — Check name (e.g., 'connectivity', 'permissions').
-  - `passed: bool` — Whether the check passed — the observed outcome, stated explicitly.
+  - `passed: bool` `= False` — Whether the check passed — the observed outcome.
   - `blocking: bool` `= False` — Declared severity — failing this check must stop the run.
   - `message: str` `= ''` — What happened — a clean, single-sentence description of the check result.
   - `category: FailureCategory | None` — Typed failure category for a failing check.

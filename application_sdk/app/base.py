@@ -1883,14 +1883,14 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
         except Exception as e:
             with workflow.unsafe.imports_passed_through():
                 from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
-                    PREFLIGHT_FAILED_ERROR_TYPE,
+                    is_preflight_verdict_block,
                 )
             # A deliberate preflight-gate block (PreflightFailed) is an expected,
             # typed outcome — log it terse (one line, no stack) so it doesn't read
             # like an unexpected crash. Its classification already rides on the
             # error's FailureDetails. Every other failure keeps the full ERROR
             # traceback (the diagnostic evidence a real crash needs).
-            if getattr(e, "type", None) == PREFLIGHT_FAILED_ERROR_TYPE:
+            if is_preflight_verdict_block(e):
                 _safe_log(
                     "warning",
                     "App blocked by preflight gate",

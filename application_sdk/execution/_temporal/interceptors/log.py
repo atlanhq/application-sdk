@@ -43,7 +43,7 @@ from application_sdk.errors.base import AppError
 from application_sdk.errors.classify import causal_chain
 from application_sdk.errors.wire import FailureDetails
 from application_sdk.execution._temporal.preflight_gate import (
-    PREFLIGHT_FAILED_ERROR_TYPE,
+    is_preflight_verdict_block,
 )
 from application_sdk.observability.context import (
     ExecutionContext,
@@ -63,13 +63,6 @@ if TYPE_CHECKING:
     from temporalio.api.common.v1 import Payload
 
 logger = get_logger(__name__)
-
-
-# Must match _MAX_CHAIN_DEPTH in activities.py (the sever cap) and
-# classify._CAUSAL_CHAIN_LIMIT (the shared walk, which _extract_failure_attrs now
-# uses): an AppError sitting past this depth is already severed off the wire, so
-# walking further would only find nodes no consumer ever sees.
-_MAX_CHAIN_WALK = 50
 
 
 def _extract_failure_attrs(exc: BaseException | None) -> dict[str, str]:
@@ -395,7 +388,7 @@ class _LogWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                     #     verdict (fail-closed block). This is a real failure of
                     #     the gate's plumbing, so it falls through to the ERROR
                     #     branch and keeps the full traceback, like any crash.
-                    if getattr(exc_caught, "type", None) == PREFLIGHT_FAILED_ERROR_TYPE:
+                    if is_preflight_verdict_block(exc_caught):
                         logger.warning("workflow.ended", **ended_attrs)
                     else:
                         logger.error("workflow.ended", exc_info=True, **ended_attrs)
