@@ -1,38 +1,48 @@
-"""K003/K004/K005 — generated-artifact freshness (BLDX-1414).
+"""K003–K010 — generated-artifact freshness and toolkit hygiene.
 
 A repo-level (``scan_all``) check under the **K** series that guards the *outputs*
-of ``pkl eval`` (``atlan.yaml``, ``app/generated/**``) rather than the ``.pkl``
-source that ``legacy_contract`` (K001/K002) scans.  Multiple check modules under
-one series letter is the established pattern (P = ``prescriptions`` +
-``determinism``); this registration rides the existing ``K`` CI matrix leg.
+of ``pkl eval`` (``atlan.yaml``, ``app/generated/**``) and the toolkit dependency
+declaration, rather than the ``.pkl`` source that ``legacy_contract`` (K001/K002)
+scans.  Multiple check modules under one series letter is the established pattern
+(P = ``prescriptions`` + ``determinism``); this rides the existing ``K`` CI leg.
 
 What each rule catches — all **deterministic, no pkl toolchain required**:
 
 * **K003 ContractLockDrift** — ``contract/PklProject`` pins a dependency at an
   exact ``@<version>`` that the resolved lock ``contract/PklProject.deps.json``
-  does not match (or the lock is missing / lacks the dependency).  A stale lock
-  means ``pkl eval`` regenerates from the wrong toolkit version.
+  does not match (or the lock is missing / lacks the dependency).
 * **K004 MissingGeneratedArtifact** — ``contract/app.pkl`` exists but an expected
   output (``atlan.yaml``, ``app/generated/manifest.json``,
   ``app/generated/_input.py``) is absent — the contract was never generated.
-* **K005 GeneratedArtifactBannerStripped** — a generated text artifact
-  (``atlan.yaml`` / ``app.yaml`` / ``app/generated/*.py`` other than
-  ``__init__.py``) is missing its ``… DO NOT EDIT …`` provenance banner — a
-  heuristic hand-edit signal.  Content-level hand-edits that keep the banner are
-  invisible here; only the CI regenerate-and-diff gate proves full freshness.
+* **K005 GeneratedArtifactBannerStripped** — a generated text artifact is missing
+  its ``… DO NOT EDIT …`` provenance banner — a heuristic hand-edit signal.
+* **K007 ToolkitVersionOutdated** — the app's ``app-contract-toolkit`` dependency
+  resolves (per the lock) to a version below the latest published one.
+* **K008 ToolkitSourceNonCanonical** — the toolkit dependency is sourced from a
+  base URI other than the canonical SDK-published package.
+* **K009 UnresolvedScaffoldPlaceholder** — a generated artifact still contains a
+  single-brace scaffold token (``{app_name}``, ``{name}``, …); ``{{…}}`` E2E
+  runtime tokens are intentional and excluded.
+* **K010 E2EScaffoldingMissing** — a single-entrypoint app is missing the
+  generated ``app/generated/_e2e_base.py`` the toolkit always emits for it.
+
+K007/K008 read the canonical base + latest version from the baked-in
+``data/toolkit_baseline.json`` (``_toolkit_baseline``): the SDK's toolkit source
+is not present in a consumer repo, so the value ships with the wheel and a
+drift-guard test keeps it fresh.
 
 Scope
 -----
-All three are ``APP``-scoped and gated on the relevant ``contract/`` file being
-present, so they no-op on the SDK (no ``contract/`` at its root) and on any repo
-that excludes ``contract/`` from the scan.
+All are ``APP``-scoped and gated on the relevant ``contract/`` file being present,
+so they no-op on the SDK (no ``contract/`` at its root) and on any repo that
+excludes ``contract/`` from the scan.
 
 Suppression
 -----------
-K003/K004 anchor on pkl source (``PklProject`` / ``app.pkl``) and reuse the
-``// conformance: ignore[...]`` parser from ``legacy_contract``.  K005 anchors on
-the artifact file (``#`` comments in both ``.yaml`` and ``.py``) and uses the
-``# conformance: ignore[K005] <reason>`` form.
+Rules anchored on pkl source (``PklProject`` / ``app.pkl``: K003/K004/K007/K008/
+K010) reuse the ``// conformance: ignore[...]`` parser from ``legacy_contract``.
+Rules anchored on the artifact file (K005/K009) use the ``# conformance:
+ignore[...] <reason>`` form (both ``.yaml`` and ``.py`` use ``#``).
 """
 
 from __future__ import annotations
@@ -43,6 +53,8 @@ import sys
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import TOOL_VERSION, make_cli_main
+from conformance.suite.checks._toolkit_baseline import ToolkitBaseline, load_baseline
+from conformance.suite.checks._version import parse_version, version_reached
 from conformance.suite.checks.legacy_contract._directives_pkl import (
     _make_pkl_finding_suppressed,
     _parse_pkl_directives,
@@ -72,11 +84,41 @@ _BANNER_GENERATED_RE = re.compile(r"generated", re.IGNORECASE)
 _BANNER_DONOTEDIT_RE = re.compile(r"do not edit", re.IGNORECASE)
 _BANNER_SCAN_LINES = 5
 
-# ``#``-comment suppression (K005 — both YAML and Python use ``#``).
+# ``#``-comment suppression (K005/K009 — both YAML and Python use ``#``).
 _HASH_SUPPRESS_RE = re.compile(
     r"#\s*conformance\s*:\s*ignore\s*(?:\[([^\]]*)\])?\s*(.*)",
     re.IGNORECASE,
 )
+
+# The pkl dependency-block key an app uses for the toolkit: ``["app-contract-toolkit"]``.
+_TOOLKIT_DEP_KEY = "app-contract-toolkit"
+_DEP_KEY_RE = re.compile(r'\["([^"]+)"\]')
+
+# K009 — unresolved scaffold placeholder tokens left in a generated artifact.
+# Single-brace ``{token}`` the current toolkit resolves at ``pkl eval`` time; a
+# literal leftover means the artifact was generated by an outdated toolkit (or a
+# legacy base) that never rendered it — e.g. ``{app_name}``, which 0.18.0+ resolves
+# to the app's literal name.
+#
+# Two things are deliberately NOT flagged and must stay out of this set:
+#   * ``{{...}}`` — Automation-Engine runtime-substitution tokens (credential,
+#     connection, …), resolved at run time. Excluded by the ``(?<!\{)``/``(?!\})``
+#     guards.
+#   * ``{deployment_name}`` — a deploy-time token the current toolkit STILL emits
+#     verbatim into every manifest (task_queue), so it is legitimate, not a
+#     leftover. It is absent from the alternation below; do not add it.
+_SCAFFOLD_PLACEHOLDER_RE = re.compile(
+    r"(?<!\{)\{(?:app_name|app-name|name|entrypoint_name|entrypoint-kebab-name"
+    r"|fetch_task_name|connection_name)\}(?!\})"
+)
+
+# K010 — E2E scaffolding module that ``pkl eval`` emits for a single-entrypoint app.
+_E2E_BASE_OUTPUT = "app/generated/_e2e_base.py"
+
+# A contract that declares an ``entrypoints`` block is a multi-entrypoint bundle;
+# its E2E scaffolding lands in per-entrypoint subfolders, so K010 (which requires
+# the single-entrypoint _e2e_base.py path) does not apply.
+_ENTRYPOINTS_RE = re.compile(r"(?m)^\s*entrypoints\b")
 
 
 # ---------------------------------------------------------------------------
@@ -104,19 +146,37 @@ def _split_uri(uri: str) -> tuple[str, str] | None:
     return base, version
 
 
-def _parse_pkl_project_pins(text: str) -> list[tuple[str, str, int]]:
-    """Return ``[(base, version, lineno)]`` for every versioned dependency URI
-    pinned in a ``PklProject`` file."""
-    pins: list[tuple[str, str, int]] = []
+def _parse_pkl_project_deps(
+    text: str,
+) -> list[tuple[str | None, str, str | None, int]]:
+    """Return ``[(dep_key, base, version, uri_lineno)]`` for every dependency URI
+    in a ``PklProject`` — the single parser behind K003 (version drift) and
+    K007/K008 (toolkit floor / source).
+
+    ``dep_key`` is the ``["…"]`` mapping key most recently preceding the ``uri =``
+    line (``None`` if the URI has no enclosing key), used to identify the toolkit
+    even when its URI points at a non-canonical source.  ``base`` is scheme-less
+    (so a ``package://`` pin and a ``projectpackage://`` lock entry compare
+    equal); ``version`` is ``None`` for an unversioned URI (e.g. a local
+    ``file://`` fork).
+    """
+    deps: list[tuple[str | None, str, str | None, int]] = []
+    current_key: str | None = None
     for lineno, line in enumerate(text.splitlines(), start=1):
-        m = _URI_RE.search(line)
-        if m is None:
+        key_m = _DEP_KEY_RE.search(line)
+        if key_m is not None:
+            current_key = key_m.group(1)
+        uri_m = _URI_RE.search(line)
+        if uri_m is None:
             continue
-        split = _split_uri(m.group(1))
-        if split is None:
-            continue
-        pins.append((split[0], split[1], lineno))
-    return pins
+        split = _split_uri(uri_m.group(1))
+        if split is not None:
+            base, version = split
+        else:
+            base, version = uri_m.group(1).split("://", 1)[-1], None
+        deps.append((current_key, base, version, lineno))
+        current_key = None
+    return deps
 
 
 def _parse_deps_lock(text: str) -> dict[str, str] | None:
@@ -156,6 +216,123 @@ def _version_satisfied(pin: str, resolved: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Toolkit dependency selection (K007/K008)
+# ---------------------------------------------------------------------------
+
+
+def _find_toolkit_dep(
+    deps: list[tuple[str | None, str, str | None, int]],
+) -> tuple[str, str | None, int] | None:
+    """Return ``(base, version, lineno)`` for the app-contract-toolkit dependency.
+
+    Identified by the ``["app-contract-toolkit"]`` mapping key first (the name an
+    app amends via ``@app-contract-toolkit/App.pkl``), falling back to any URI
+    whose path segment is ``app-contract-toolkit`` — so a dep pointed at a fork
+    under a different key is still recognised as the toolkit.
+    """
+    for key, base, version, lineno in deps:
+        if key == _TOOLKIT_DEP_KEY or base.rstrip("/").endswith(f"/{_TOOLKIT_DEP_KEY}"):
+            return base, version, lineno
+    return None
+
+
+def _resolved_toolkit_version(root: Path, base: str) -> str | None:
+    """Return the version the lock resolved for *base*, or ``None`` when the lock
+    is absent/unparseable/does not carry the dependency."""
+    deps_path = root / "contract" / "PklProject.deps.json"
+    if not deps_path.is_file():
+        return None
+    try:
+        lock = _parse_deps_lock(deps_path.read_text(encoding="utf-8"))
+    except OSError:
+        return None
+    if not lock:
+        return None
+    return lock.get(base)
+
+
+def _scan_toolkit_dependency(
+    root: Path, present: set[str], baseline: ToolkitBaseline | None
+) -> list[Finding]:
+    """K007/K008 — the app's toolkit dependency must come from the canonical
+    source (K008) and be at/above the latest published version (K007)."""
+    if baseline is None or "contract/PklProject" not in present:
+        return []
+    pkl_project = root / "contract" / "PklProject"
+    try:
+        text = pkl_project.read_text(encoding="utf-8")
+    except OSError:
+        return []
+
+    toolkit = _find_toolkit_dep(_parse_pkl_project_deps(text))
+    if toolkit is None:
+        return []
+    base, _pin_version, lineno = toolkit
+
+    directives = _parse_pkl_directives(text)
+    rel = "contract/PklProject"
+
+    if base != baseline.canonical_base:
+        suppressed, justification = _make_pkl_finding_suppressed(
+            rule_id="K008", line=lineno, directives=directives
+        )
+        return [
+            Finding(
+                rule_id="K008",
+                file=rel,
+                line=lineno,
+                column=1,
+                message=(
+                    f"app-contract-toolkit is sourced from '{base}' instead of the "
+                    f"canonical '{baseline.canonical_base}'. Point the dependency at "
+                    f"the SDK-published package "
+                    f"'package://{baseline.canonical_base}@{baseline.latest_version}' "
+                    f"and re-run 'pkl project resolve'. "
+                    f"Suppress with: // conformance: ignore[K008] <reason>"
+                ),
+                snippet=None,
+                suppressed=suppressed,
+                suppression_justification=justification,
+            )
+        ]
+
+    # Canonical source: use the resolved lock as the ground truth for the version
+    # actually in use.  A missing/stale lock is K003's concern, so K007 stays quiet
+    # rather than guessing from a broad pin (e.g. ``@0``).
+    resolved = _resolved_toolkit_version(root, base)
+    if resolved is None:
+        return []
+    current = parse_version(resolved)
+    latest = parse_version(baseline.latest_version)
+    if current is None or latest is None or version_reached(latest, current):
+        return []
+
+    suppressed, justification = _make_pkl_finding_suppressed(
+        rule_id="K007", line=lineno, directives=directives
+    )
+    return [
+        Finding(
+            rule_id="K007",
+            file=rel,
+            line=lineno,
+            column=1,
+            message=(
+                f"app-contract-toolkit resolves to '{resolved}' but the latest "
+                f"published version is '{baseline.latest_version}'. Bump the pin in "
+                f"contract/PklProject, run 'pkl project resolve', then regenerate "
+                f"with 'pkl eval -m . contract/app.pkl'. An outdated toolkit is the "
+                f"usual root cause of stale generated artifacts and leftover "
+                f"placeholders (K009). "
+                f"Suppress with: // conformance: ignore[K007] <reason>"
+            ),
+            snippet=None,
+            suppressed=suppressed,
+            suppression_justification=justification,
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # K005 banner / suppression helpers
 # ---------------------------------------------------------------------------
 
@@ -174,22 +351,33 @@ def _has_banner(text: str) -> bool:
     )
 
 
+def _match_hash_directive(line: str, rule_id: str) -> str | None:
+    """Return the justification for a ``# conformance: ignore`` directive on *line*
+    that applies to *rule_id*, or ``None``.
+
+    Searches the whole line rather than anchoring on the first ``#`` so a directive
+    following an earlier ``#`` (e.g. a URL fragment in a YAML value) is still
+    honoured. A directive with no justification text is rejected — it never
+    silently suppresses.
+    """
+    m = _HASH_SUPPRESS_RE.search(line)
+    if m is None:
+        return None
+    justification = m.group(2).strip()
+    if not justification:
+        return None
+    ids = {s.strip() for s in (m.group(1) or "").split(",") if s.strip()}
+    if not ids or rule_id in ids:
+        return justification
+    return None
+
+
 def _hash_suppressed(text: str, rule_id: str) -> tuple[bool, str | None]:
     """Return ``(suppressed, justification)`` for a ``#``-comment directive in the
     file header (K005 anchors on line 1, so only the header can suppress it)."""
     for line in text.splitlines()[: _BANNER_SCAN_LINES + 1]:
-        idx = line.find("#")
-        if idx == -1:
-            continue
-        m = _HASH_SUPPRESS_RE.match(line[idx:])
-        if m is None:
-            continue
-        ids_blob = (m.group(1) or "").strip()
-        justification = m.group(2).strip()
-        if not justification:
-            continue
-        ids = {s.strip() for s in ids_blob.split(",") if s.strip()}
-        if not ids or rule_id in ids:
+        justification = _match_hash_directive(line, rule_id)
+        if justification is not None:
             return True, justification
     return False, None
 
@@ -208,7 +396,11 @@ def _scan_lock_drift(root: Path, present: set[str]) -> list[Finding]:
         text = pkl_project.read_text(encoding="utf-8")
     except OSError:
         return []
-    pins = _parse_pkl_project_pins(text)
+    pins = [
+        (base, version, lineno)
+        for _key, base, version, lineno in _parse_pkl_project_deps(text)
+        if version is not None
+    ]
     if not pins:
         return []
 
@@ -347,7 +539,7 @@ def _scan_banners(root: Path, present: set[str]) -> list[Finding]:
             continue
         try:
             text = (root / rel).read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             continue
         if _has_banner(text):
             continue
@@ -375,12 +567,127 @@ def _scan_banners(root: Path, present: set[str]) -> list[Finding]:
 
 
 # ---------------------------------------------------------------------------
+# K009 placeholder / K010 E2E scaffolding
+# ---------------------------------------------------------------------------
+
+
+def _line_hash_suppressed(
+    lines: list[str], lineno: int, rule_id: str
+) -> tuple[bool, str | None]:
+    """Return ``(suppressed, justification)`` for a ``#``-comment directive on the
+    finding's own line or the comment-only line directly above it."""
+    for check_line in (lineno, lineno - 1):
+        if check_line < 1 or check_line > len(lines):
+            continue
+        raw = lines[check_line - 1]
+        if check_line == lineno - 1 and raw.lstrip()[:1] != "#":
+            # A trailing inline directive on a content line must not absorb the
+            # finding on the following line.
+            continue
+        justification = _match_hash_directive(raw, rule_id)
+        if justification is not None:
+            return True, justification
+    return False, None
+
+
+def _is_generated_artifact(rel: str) -> bool:
+    """True for a committed ``pkl eval`` output that should never carry a
+    leftover scaffold placeholder — ``atlan.yaml`` / ``app.yaml`` and anything
+    under ``app/generated/``."""
+    return rel in ("atlan.yaml", "app.yaml") or rel.startswith("app/generated/")
+
+
+def _scan_placeholders(root: Path, present: set[str]) -> list[Finding]:
+    """K009 — flag unresolved scaffold placeholder tokens in generated artifacts."""
+    if "contract/app.pkl" not in present:
+        return []
+    findings: list[Finding] = []
+    for rel in sorted(present):
+        if "__pycache__" in rel or not _is_generated_artifact(rel):
+            continue
+        try:
+            text = (root / rel).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            # ``app/generated/`` can hold non-text blobs (e.g. a stray binary or
+            # .DS_Store); skip them rather than crash the whole suite run.
+            continue
+        lines = text.splitlines()
+        for i, line in enumerate(lines, start=1):
+            for m in _SCAFFOLD_PLACEHOLDER_RE.finditer(line):
+                suppressed, justification = _line_hash_suppressed(lines, i, "K009")
+                findings.append(
+                    Finding(
+                        rule_id="K009",
+                        file=rel,
+                        line=i,
+                        column=m.start() + 1,
+                        message=(
+                            f"Generated artifact '{rel}' contains the unresolved "
+                            f"scaffold placeholder '{m.group(0)}' — the current toolkit "
+                            f"renders this to a literal value, so the artifact was "
+                            f"generated by an outdated toolkit or a legacy NativeApp.pkl "
+                            f"base and is wrong as shipped. Upgrade app-contract-toolkit "
+                            f"to the latest version (and migrate to App.pkl if still on "
+                            f"NativeApp.pkl), then regenerate with "
+                            f"'pkl eval -m . contract/app.pkl'. "
+                            f"Suppress with: # conformance: ignore[K009] <reason>"
+                        ),
+                        snippet=None,
+                        suppressed=suppressed,
+                        suppression_justification=justification,
+                    )
+                )
+    return findings
+
+
+def _scan_e2e_scaffolding(root: Path, present: set[str]) -> list[Finding]:
+    """K010 — a single-entrypoint app must ship the generated ``_e2e_base.py``."""
+    if "contract/app.pkl" not in present:
+        return []
+    app_pkl = root / "contract" / "app.pkl"
+    try:
+        text = app_pkl.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    if _ENTRYPOINTS_RE.search(text):
+        # Multi-entrypoint bundle: E2E scaffolding lands per-entrypoint, not at the
+        # single-entrypoint _e2e_base.py path — out of scope for K010.
+        return []
+    if _E2E_BASE_OUTPUT in present:
+        return []
+
+    directives = _parse_pkl_directives(text)
+    anchor = _amends_line(text)
+    suppressed, justification = _make_pkl_finding_suppressed(
+        rule_id="K010", line=anchor, directives=directives
+    )
+    return [
+        Finding(
+            rule_id="K010",
+            file="contract/app.pkl",
+            line=anchor,
+            column=1,
+            message=(
+                f"contract/app.pkl exists but the generated E2E scaffolding "
+                f"'{_E2E_BASE_OUTPUT}' is missing. The toolkit emits it for every "
+                f"single-entrypoint app; regenerate with "
+                f"'pkl eval -m . contract/app.pkl' and commit the result. "
+                f"Suppress with: // conformance: ignore[K010] <reason>"
+            ),
+            snippet=None,
+            suppressed=suppressed,
+            suppression_justification=justification,
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Scan API
 # ---------------------------------------------------------------------------
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:
-    """Run K003/K004/K005 over the discovered *paths*.
+    """Run the K003–K010 generated-artifact / toolkit rules over *paths*.
 
     ``paths`` is the post-exclusion discovery list; membership gates each rule so
     excluding ``contract/`` disables the whole check for a repo.
@@ -391,10 +698,14 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
             present.add(p.relative_to(root).as_posix())
         except ValueError:
             continue
+    baseline = load_baseline()
     findings: list[Finding] = []
     findings.extend(_scan_lock_drift(root, present))
     findings.extend(_scan_missing_outputs(root, present))
     findings.extend(_scan_banners(root, present))
+    findings.extend(_scan_toolkit_dependency(root, present, baseline))
+    findings.extend(_scan_placeholders(root, present))
+    findings.extend(_scan_e2e_scaffolding(root, present))
     return findings
 
 

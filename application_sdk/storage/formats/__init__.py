@@ -357,8 +357,8 @@ class Writer(ABC):
             import warnings as _warnings  # noqa: PLC0415
 
             _warnings.warn(
-                "DataframeType.daft is deprecated and will be removed in v4.0. "
-                "Routing to the pandas path.",
+                "DataframeType.daft is deprecated and will be removed in v4.0; "
+                "use DataframeType.pandas instead. Routing to the pandas path.",
                 DeprecationWarning,
                 stacklevel=3,
             )
@@ -396,8 +396,8 @@ class Writer(ABC):
             import warnings as _warnings  # noqa: PLC0415
 
             _warnings.warn(
-                "DataframeType.daft is deprecated and will be removed in v4.0. "
-                "Routing to the pandas path.",
+                "DataframeType.daft is deprecated and will be removed in v4.0; "
+                "use DataframeType.pandas instead. Routing to the pandas path.",
                 DeprecationWarning,
                 stacklevel=3,
             )

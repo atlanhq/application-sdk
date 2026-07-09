@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import base64
-import logging
 from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
 
-logger = logging.getLogger(__name__)
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
 
 # TODO(credentials): Add AwsCredential and migrate SQL client IAM auth to typed
 # credentials to eliminate the v2 fallback entirely.

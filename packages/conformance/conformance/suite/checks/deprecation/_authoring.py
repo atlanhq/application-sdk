@@ -26,8 +26,8 @@ from dataclasses import dataclass
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.schema.findings import Finding
 
+from .._version import parse_version, version_reached
 from ._extractor import extract_notices, extract_sites
-from ._version import parse_version, version_reached
 
 
 @dataclass(frozen=True)

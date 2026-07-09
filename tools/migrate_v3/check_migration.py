@@ -27,6 +27,10 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
+
 # ---------------------------------------------------------------------------
 # Check definitions
 # ---------------------------------------------------------------------------
@@ -163,7 +167,8 @@ _RE_LOGGING_GETLOGGER = re.compile(r"\blogging\.getLogger\s*\(")
 def _iter_lines(path: Path) -> list[str]:
     try:
         return path.read_text(encoding="utf-8").splitlines()
-    except OSError:
+    except OSError as e:
+        logger.warning("Could not read %s: %s", path, e, exc_info=True)
         return []
 
 
@@ -438,7 +443,8 @@ def _is_test_path(path: Path, root: Path | None = None) -> bool:
     if root is not None:
         try:
             parts = path.relative_to(root).parts
-        except ValueError:
+        except ValueError as e:
+            logger.debug("%s not under root %s: %s", path, root, e, exc_info=True)
             parts = path.parts
     else:
         parts = path.parts
@@ -472,8 +478,8 @@ def check_directory(
             combined_text += content
             if not is_test:
                 prod_text += content
-        except OSError:
-            pass
+        except OSError as e:
+            logger.warning("Skipping unreadable file %s: %s", path, e, exc_info=True)
 
     # Extra text for entry-point detection: Dockerfile and pyproject.toml may
     # contain `application-sdk --mode combined` in CMD or [project.scripts].
@@ -484,8 +490,10 @@ def check_directory(
             if f.exists():
                 try:
                     extra_entry_point_text += f.read_text(encoding="utf-8") + "\n"
-                except OSError:
-                    pass
+                except OSError as e:
+                    logger.warning(
+                        "Skipping unreadable file %s: %s", f, e, exc_info=True
+                    )
 
     advisories: list[str] = []
 
@@ -570,6 +578,7 @@ def print_report(
     warn_count = sum(1 for r in results if r.level == WARN) + len(advisories)
 
     if not results and not advisories:
+        # conformance: ignore[L005] CLI report is the tool's stdout contract; a logger would reformat/reroute it
         print(_color("✓ All migration checks passed.", PASS, use_color=use_color))
         return True
 
@@ -579,26 +588,33 @@ def print_report(
         by_file.setdefault(r.file, []).append(r)
 
     for path, file_results in sorted(by_file.items()):
+        # conformance: ignore[L005] CLI report is the tool's stdout contract; a logger would reformat/reroute it
         print(f"\n{path}")
         for r in file_results:
             tag = _color(f"[{r.level}]", r.level, use_color=use_color)
             loc = f"line {r.line}: " if r.line else ""
+            # conformance: ignore[L005] CLI report is the tool's stdout contract; a logger would reformat/reroute it
             print(f"  {tag} [{r.rule}] {loc}{r.message}")
             if r.excerpt:
+                # conformance: ignore[L005] CLI report is the tool's stdout contract; a logger would reformat/reroute it
                 print(f"        {r.excerpt}")
 
     if advisories:
+        # conformance: ignore[L005] CLI report is the tool's stdout contract; a logger would reformat/reroute it
         print()
         for advisory in advisories:
             level = WARN if advisory.startswith("WARN") else FAIL
+            # conformance: ignore[L005] CLI report is the tool's stdout contract; a logger would reformat/reroute it
             print(_color(advisory, level, use_color=use_color))
 
+    # conformance: ignore[L005] CLI report is the tool's stdout contract; a logger would reformat/reroute it
     print()
     status = (
         _color("PASS", PASS, use_color=use_color)
         if fail_count == 0
         else _color("FAIL", FAIL, use_color=use_color)
     )
+    # conformance: ignore[L005] CLI report is the tool's stdout contract; a logger would reformat/reroute it
     print(
         f"Result: {status}  "
         f"({_color(str(fail_count) + ' failure(s)', FAIL, use_color=use_color)}, "
@@ -662,16 +678,20 @@ def main(argv: list[str] | None = None) -> int:
         for raw in args.targets:
             target = Path(raw)
             if not target.exists():
+                # conformance: ignore[L005] CLI error message to stderr; must not route through the logging framework
                 print(f"ERROR: path does not exist: {target}", file=sys.stderr)
                 return 2
             result = fingerprint_connector(target)
             migrated_note = " [already migrated]" if result.already_migrated else ""
+            # conformance: ignore[L005] CLI report is the tool's stdout contract; a logger would reformat/reroute it
             print(
                 f"Connector type: {result.connector_type}{migrated_note} "
                 f"(confidence={result.confidence:.0%})"
             )
             for ev in result.evidence:
+                # conformance: ignore[L005] CLI report is the tool's stdout contract; a logger would reformat/reroute it
                 print(f"  Evidence: {ev}")
+        # conformance: ignore[L005] CLI report is the tool's stdout contract; a logger would reformat/reroute it
         print()
 
     all_results: list[CheckResult] = []
@@ -680,6 +700,7 @@ def main(argv: list[str] | None = None) -> int:
     for raw in args.targets:
         target = Path(raw)
         if not target.exists():
+            # conformance: ignore[L005] CLI error message to stderr; must not route through the logging framework
             print(f"ERROR: path does not exist: {target}", file=sys.stderr)
             return 2
 

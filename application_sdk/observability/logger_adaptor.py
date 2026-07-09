@@ -520,6 +520,7 @@ class _LazyLoggerProxy:
 
     def critical(self, msg: str, **kwargs: Any) -> None:
         try:
+            # conformance: ignore[L007] this *is* the proxy's own .critical() definition (loguru's bound-opt logger natively supports it), not a deprecated call site — downgrading to .error() would change emitted severity
             self._logger.critical(msg, **kwargs)
         except Exception:
             logging.error("Error in lazy critical logging", exc_info=True)
@@ -908,6 +909,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         try:
             return level_no >= self.logger._core.min_level
         except TypeError:
+            # conformance: ignore[E007] fail-open level guard on the hot per-log path; logging the benign loguru-internals TypeError here would recurse, so it defaults to enabled
             return True
 
     def debug(self, msg: str, *args: Any, **kwargs: Any):

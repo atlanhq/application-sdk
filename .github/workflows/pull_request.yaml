@@ -351,6 +351,14 @@ jobs:
           workflow: sdr-k8s-e2e.yaml
           workflow-inputs: ${{ github.event_name == 'merge_group' && format('{{"application_sdk_ref":"{0}"}}', github.sha) || format('{{"application_sdk_ref":"{0}"}}', github.event.pull_request.head.sha) }}
 
+  # (No dedicated two-store-e2e job: mysql's own tests.yaml hardcodes
+  # `two-store: true` unconditionally, so its EXISTING full-DAG run —
+  # already dispatched by connector-tests below via the 'e2e' label —
+  # regression-guards the ADR-0014 two-store posture with no extra SDK-
+  # side dispatch glue. A standalone per-connector job here would repeat
+  # the exact mistake sdr-matrix-builder / sdr-e2e-apps / e2e-full-mysql
+  # were removed for — see the comment near the bottom of this file.)
+
   # ── The single required check for the connector e2e area ────────────────────
   # Always runs and always concludes, so branch protection / the merge queue can
   # require exactly this one stable context instead of the matrix legs
