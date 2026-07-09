@@ -8,7 +8,11 @@ from unittest.mock import MagicMock, patch
 import orjson
 import pytest
 
-from application_sdk.testing.integration import BaseIntegrationTest, Scenario
+from application_sdk.testing.integration import (
+    BaseIntegrationTest,
+    IntegrationTestClient,
+    Scenario,
+)
 from application_sdk.testing.sdr import BaseSDRIntegrationTest
 
 
@@ -452,7 +456,7 @@ def test_load_manifest_prefers_live_endpoint(tmp_path) -> None:
 
     suite = _Suite()
     live = {"dag": {"extract": {"inputs": {"args": {"live_marker": "from-endpoint"}}}}}
-    suite.client = MagicMock()
+    suite.client = MagicMock(spec=IntegrationTestClient)
     suite.client.get_manifest.return_value = live
 
     args = suite._manifest_extract_inputs()
@@ -468,7 +472,7 @@ def test_load_manifest_forwards_workflow_type_as_entrypoint(tmp_path) -> None:
         scenarios = []
 
     suite = _Suite()
-    suite.client = MagicMock()
+    suite.client = MagicMock(spec=IntegrationTestClient)
     suite.client.get_manifest.return_value = {
         "dag": {"extract": {"inputs": {"args": {"x": 1}}}}
     }
@@ -484,7 +488,7 @@ def test_load_manifest_falls_back_to_file_when_live_unreachable(tmp_path) -> Non
         scenarios = []
 
     suite = _Suite()
-    suite.client = MagicMock()
+    suite.client = MagicMock(spec=IntegrationTestClient)
     suite.client.get_manifest.return_value = None
 
     args = suite._manifest_extract_inputs()
@@ -511,7 +515,7 @@ def test_sdk_level_unreachable_raises(tmp_path, monkeypatch) -> None:
         scenarios = []
 
     suite = _Suite()
-    suite.client = MagicMock()
+    suite.client = MagicMock(spec=IntegrationTestClient)
     suite.client.get_manifest.return_value = None
     monkeypatch.setenv("ATLAN_E2E_REQUIRE_LIVE_MANIFEST", "true")
     with pytest.raises(RuntimeError, match="ATLAN_E2E_REQUIRE_LIVE_MANIFEST"):
@@ -541,7 +545,7 @@ def test_load_manifest_memoizes_per_instance(tmp_path) -> None:
         scenarios = []
 
     suite = _Suite()
-    suite.client = MagicMock()
+    suite.client = MagicMock(spec=IntegrationTestClient)
     suite.client.get_manifest.return_value = {
         "dag": {"extract": {"inputs": {"args": {"x": 1}}}}
     }

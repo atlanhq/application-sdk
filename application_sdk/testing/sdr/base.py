@@ -64,6 +64,7 @@ from application_sdk.testing._mustache import (
 )
 from application_sdk.testing.integration import (
     BaseIntegrationTest,
+    IntegrationTestClient,
     Scenario,
     ScenarioResult,
 )
@@ -217,8 +218,20 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
     def _fetch_manifest_uncached(self) -> dict[str, Any]:
         client = getattr(self, "client", None)
         live = None
-        if client is not None and hasattr(client, "get_manifest"):
+        # isinstance (not hasattr): a capable client is IntegrationTestClient
+        # by construction. hasattr accepts any object with a `get_manifest`
+        # attribute (a stub, a typo-shadowed field), which on app-level runs
+        # would silently fall back to the committed manifest — the false-green
+        # BLDX-1493 exists to prevent.
+        if isinstance(client, IntegrationTestClient):
             live = client.get_manifest(entrypoint=self.workflow_type or None)
+        elif client is not None:
+            logger.warning(
+                "SDR client %r is not an IntegrationTestClient — cannot fetch "
+                "the live /manifest; falling back to the committed file (a "
+                "Contract Toolkit change may go untested).",
+                type(client).__name__,
+            )
         if live is not None:
             logger.info(
                 "Using the live manifest served by the running app (BLDX-1493)."
