@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import re
+import traceback
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -18,6 +19,7 @@ _BASE_FIELDS: frozenset[str] = frozenset(
 )
 
 _CAUSE_MAX_LEN = 500
+_TRACEBACK_MAX_LEN = 8000
 # Matches userinfo in URLs for any scheme: https://user:pass@host → https://***@host,
 # postgresql://user:pass@host → postgresql://***@host (SQLAlchemy/JDBC-style
 # connection strings embed credentials the same way http URLs do).
@@ -55,6 +57,23 @@ def sanitize_cause_repr(exc: BaseException) -> str:
     if len(text) > _CAUSE_MAX_LEN:
         text = text[:_CAUSE_MAX_LEN] + "…"
     return f"{type(exc).__name__}: {text}"
+
+
+def safe_traceback(exc: BaseException | None, max_len: int = _TRACEBACK_MAX_LEN) -> str:
+    """Return a secret-redacted, length-capped full-frame traceback.
+
+    For logging a traceback whose frames are worth keeping but whose driver
+    messages may embed connection-string passwords. Redacts URL userinfo and
+    known secret params, then caps the total length with an ellipsis marker.
+    Returns ``""`` for ``None``; an exception never raised (no ``__traceback__``)
+    yields just its formatted type/message line.
+    """
+    if exc is None:
+        return ""
+    text = redact_secrets("".join(traceback.format_exception(exc)))
+    if len(text) > max_len:
+        text = text[:max_len] + "…"
+    return text
 
 
 # Backward-compat alias: the helper is load-bearing across clients/sql.py and
