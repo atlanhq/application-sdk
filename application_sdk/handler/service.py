@@ -211,12 +211,14 @@ def _normalize_preflight_request(body: dict[str, Any]) -> dict[str, Any]:
 def _preflight_runtime_summary(result: PreflightOutput) -> dict[str, Any]:
     """Runtime metadata kept outside the SageV2 ``data`` map.
 
-    ``should_block`` is the gate signal: ``True`` iff the app-supplied verdict
-    is a block (``PreflightOutput.passed`` is ``False``). ``status`` carries the
-    derived display status (``ready`` / ``not_ready``) — downstream consumers
+    ``should_block`` is the gate signal: ``True`` iff some check the app marked
+    ``blocking`` did not pass (SDK-derived, not app-supplied). ``status`` carries
+    the derived display status (``ready`` / ``not_ready``) — downstream consumers
     (Heracles, the Automation Engine event, the connector-pulse dashboard) read
-    it to distinguish a block from a clean pass. Keep these key names in sync
-    with those consumers if ever renamed.
+    it to distinguish a block from a clean pass. Each entry in ``checks`` carries
+    its per-check ``blocking`` flag so consumers can tell advisory failures from
+    the ones that gated. Keep these key names in sync with those consumers if
+    ever renamed.
     """
     return {
         "status": result.status.value,

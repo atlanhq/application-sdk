@@ -93,22 +93,20 @@ class TestPreflightCheck:
         assert check.message == ""
         assert check.duration_ms == 0.0
         assert check.error is None
+        assert check.blocking is False
 
     def test_passed_must_be_stated(self):
         # passed is the observed outcome — no silent default in either direction.
         with pytest.raises(ValidationError):
             PreflightCheck(name="connectivity")
 
-    def test_stray_gating_kwargs_are_silently_ignored(self):
-        # ``required`` (and the older pre-release ``blocking``) are gone —
-        # gating is the app's single PreflightOutput.passed verdict now.
-        # extra="ignore" drops either stray kwarg: construction neither errors
-        # nor resurrects a per-check gate field. Pinned so the removal stays a
-        # clean break.
+    def test_blocking_is_a_real_field_but_required_is_ignored(self):
+        # ``blocking`` is the per-check gate flag now — a real, declared field.
+        # The older pre-release ``required`` is gone; extra="ignore" drops it.
         check = PreflightCheck(
             name="auth", passed=False, **{"blocking": True, "required": True}
         )
-        assert not hasattr(check, "blocking")
+        assert check.blocking is True
         assert not hasattr(check, "required")
 
     def test_passed(self):
@@ -172,68 +170,82 @@ class TestPreflightCheckFromError:
         )
         assert check.suggested_action == "from the caller"
 
+    def test_blocking_defaults_true(self):
+        # The blessed failure path gates by default — both the typed and the
+        # untyped arm produce a blocking check unless the caller opts out.
+        assert PreflightCheck.from_error("auth", AuthError(message="nope")).blocking
+        assert PreflightCheck.from_error("conn", ValueError("boom")).blocking
+
+    def test_blocking_opt_out_is_respected(self):
+        typed = PreflightCheck.from_error(
+            "auth", AuthError(message="nope"), blocking=False
+        )
+        untyped = PreflightCheck.from_error("conn", ValueError("boom"), blocking=False)
+        assert typed.blocking is False
+        assert untyped.blocking is False
+
 
 class TestPreflightOutput:
-    def test_passed_is_mandatory(self):
-        # No default: a handler that returns no verdict fails validation, which
-        # the gate treats as "no answer" and blocks (fail-closed).
-        with pytest.raises(ValidationError):
-            PreflightOutput(checks=[PreflightCheck(name="a", passed=True)])
-
-    def test_with_checks(self):
-        checks = [
-            PreflightCheck(name="conn", passed=True),
-            PreflightCheck(name="perms", passed=False, message="No read access"),
-        ]
-        out = PreflightOutput(passed=True, checks=checks)
-        assert len(out.checks) == 2
-
-    def test_should_block_is_inverse_of_passed(self):
-        assert PreflightOutput(passed=True).should_block is False
-        assert PreflightOutput(passed=False).should_block is True
-
     @pytest.mark.parametrize(
-        ("passed", "expected"),
+        ("checks", "expected_block"),
         [
-            (True, PreflightStatus.READY),
-            (False, PreflightStatus.NOT_READY),
+            # advisory failure never blocks
+            ([PreflightCheck(name="c", passed=False, blocking=False)], False),
+            # a failing blocking check blocks
+            ([PreflightCheck(name="c", passed=False, blocking=True)], True),
+            # a passing blocking check does not block (it only declares severity)
+            ([PreflightCheck(name="c", passed=True, blocking=True)], False),
+            # no checks -> nothing can gate
+            ([], False),
         ],
     )
-    def test_status_is_derived_from_verdict(self, passed, expected):
-        assert PreflightOutput(passed=passed).status is expected
+    def test_should_block_folds_over_blocking_flags(self, checks, expected_block):
+        assert PreflightOutput(checks=checks).should_block is expected_block
 
-    def test_partial_is_never_emitted(self):
-        # A failed per-check row under a passed=True verdict is advisory: the
-        # derived status is READY, never PARTIAL. PARTIAL survives on the enum
-        # only so historical wire values still deserialize.
-        out = PreflightOutput(
-            passed=True,
-            checks=[PreflightCheck(name="a", passed=False)],
+    def test_status_is_ready_unless_should_block(self):
+        # A passing blocking check plus a failing advisory check: nothing the app
+        # marked blocking failed, so the run is READY (never PARTIAL).
+        ready = PreflightOutput(
+            checks=[
+                PreflightCheck(name="auth", passed=True, blocking=True),
+                PreflightCheck(name="conn", passed=False, blocking=False),
+            ]
         )
-        assert out.status is PreflightStatus.READY
-        assert out.status is not PreflightStatus.PARTIAL
+        assert ready.should_block is False
+        assert ready.status is PreflightStatus.READY
+        assert ready.status is not PreflightStatus.PARTIAL
 
-    def test_supplied_status_is_ignored(self):
-        # Clean break: status is derived from the verdict; a caller-supplied
-        # value is dropped (extra="ignore"), which also swallows the key the
-        # computed_field re-injects on Temporal round-trips.
-        out = PreflightOutput(
-            passed=True,
-            status=PreflightStatus.NOT_READY,
-            checks=[PreflightCheck(name="a", passed=True)],
+        blocked = PreflightOutput(
+            checks=[PreflightCheck(name="auth", passed=False, blocking=True)]
         )
-        assert out.status is PreflightStatus.READY
+        assert blocked.status is PreflightStatus.NOT_READY
 
-    def test_round_trip_keeps_status_key_and_revalidates(self):
+    def test_stray_verdict_kwargs_are_silently_ignored(self):
+        # Clean break: the verdict is derived from the per-check blocking flags.
+        # Older callers' passed=/status=/required= kwargs are dropped
+        # (extra="ignore"), which also swallows the status key the computed_field
+        # re-injects on Temporal round-trips.
         out = PreflightOutput(
             passed=False,
-            checks=[PreflightCheck(name="auth", passed=False)],
+            status=PreflightStatus.NOT_READY,
+            required=True,
+            checks=[PreflightCheck(name="a", passed=True, blocking=True)],
+        )
+        assert not hasattr(out, "passed")
+        assert not hasattr(out, "required")
+        assert out.should_block is False
+        assert out.status is PreflightStatus.READY
+
+    def test_round_trip_keeps_status_key_and_drops_passed(self):
+        out = PreflightOutput(
+            checks=[PreflightCheck(name="auth", passed=False, blocking=True)]
         )
         dumped = out.model_dump(mode="json")
         assert dumped["status"] == "not_ready"
-        assert dumped["passed"] is False
+        assert "passed" not in dumped
+        assert dumped["checks"][0]["blocking"] is True
         restored = PreflightOutput.model_validate(dumped)
-        assert restored.passed is False
+        assert restored.checks[0].blocking is True
         assert restored.status is PreflightStatus.NOT_READY
         assert restored.should_block is True
 

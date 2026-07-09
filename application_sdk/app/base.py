@@ -1631,8 +1631,9 @@ async def _run_preflight_gate(
     """Run the SDK-owned pre-extraction preflight gate (HYP-1883).
 
     Dispatches the connector's preflight handler as a mandatory first activity
-    and aborts before extraction when the app-supplied verdict blocks
-    (``should_block``). **Fail-closed**: if the gate cannot produce a verdict at
+    and aborts before extraction when a blocking check fails — the SDK derives
+    the verdict (``should_block``) from the per-check ``blocking`` flags.
+    **Fail-closed**: if the gate cannot produce a verdict at
     all — an activity timeout, a secret-store/transport failure, or a handler
     crash — the run is blocked too, not waved through ("couldn't verify" is not
     a pass). Called at the head of every generated workflow's ``_run``.
@@ -1708,23 +1709,23 @@ async def _run_preflight_gate(
     if not result.should_block:
         return
 
-    # Fold every failed check's message into the abort reason (the app already
-    # decided these gate — should_block is its verdict) and carry typed
-    # attribution to the Automation Engine. A check with full typed evidence
-    # (check.error, built via PreflightCheck.from_error) wins outright — its
-    # app-specific code / audience / evidence are forwarded verbatim. Otherwise
-    # fall back to the first classified category (default PRECONDITION), rebuilt
-    # as the canonical category-level leaf.
-    failed_checks = [check for check in result.checks if not check.passed]
+    # Fold only the blocking-failed checks into the abort reason (they are what
+    # drove should_block; advisory failures stay out of the reason) and carry
+    # typed attribution to the Automation Engine. A check with full typed
+    # evidence (check.error, built via PreflightCheck.from_error) wins outright —
+    # its app-specific code / audience / evidence are forwarded verbatim.
+    # Otherwise fall back to the first classified category (default PRECONDITION),
+    # rebuilt as the canonical category-level leaf.
+    blocking_failures = [c for c in result.checks if c.blocking and not c.passed]
     reason = (
         result.message
-        or "; ".join(c.message for c in failed_checks if c.message)
+        or "; ".join(c.message for c in blocking_failures if c.message)
         or "Preflight check failed; aborting before extraction"
     )
     suggested = next(
-        (c.suggested_action for c in failed_checks if c.suggested_action), ""
+        (c.suggested_action for c in blocking_failures if c.suggested_action), ""
     )
-    winner = next((c.error for c in failed_checks if c.error is not None), None)
+    winner = next((c.error for c in blocking_failures if c.error is not None), None)
     if winner is not None:
         update: dict[str, Any] = {
             # matches the ApplicationError message and covers multi-check joins
@@ -1738,7 +1739,7 @@ async def _run_preflight_gate(
         details = winner.model_copy(update=update)
     else:
         category = next(
-            (c.category for c in failed_checks if c.category is not None),
+            (c.category for c in blocking_failures if c.category is not None),
             FailureCategory.PRECONDITION,
         )
         details = LEAF_BY_CATEGORY.get(category, _InternalError)(

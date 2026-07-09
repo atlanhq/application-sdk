@@ -3,8 +3,9 @@
 A core SDK extraction-lifecycle activity. Every generated workflow's ``_run``
 dispatches ``{app}:preflight`` as its first step (see
 :func:`application_sdk.app.base._run_preflight_gate`); the run aborts before
-extraction when the app-supplied verdict blocks (``should_block``) or when the
-gate cannot produce a verdict at all — a raise, a timeout, or a secret-store
+extraction when a blocking check fails (``should_block``, derived by the SDK
+from the per-check ``blocking`` flags) or when the gate cannot produce a verdict
+at all — a raise, a timeout, or a secret-store
 outage all block the run (fail-closed). Credential resolution happens *inside*
 the activity (mirrors ``templates/sql_app.py`` ``_init_sql_client``) — the
 deterministic workflow only forwards the secret-free :class:`PreflightGateInput`.
@@ -261,10 +262,23 @@ def build_preflight_gate_activity(
             result = await handler.preflight_check(preflight_input)
         # Verdict record for debuggability: the gate decision (should_block),
         # the derived display status, and the check count. (both should_block
-        # and status are computed from the app-supplied verdict.)
+        # and status are derived by the SDK from the per-check blocking flags.)
+        # When the run proceeds but some checks still failed, name them: a
+        # failing check that was NOT marked blocking is an advisory failure, and
+        # surfacing it here makes a forgotten blocking=True visible in logs
+        # instead of silently waving the run through.
+        if result.should_block:
+            verdict = "block"
+        else:
+            failed = [c.name for c in result.checks if not c.passed]
+            verdict = (
+                f"proceed (advisory failures: {', '.join(failed)})"
+                if failed
+                else "proceed"
+            )
         logger.info(
             "Preflight gate verdict: %s (entrypoint=%s, status=%s, checks=%d)",
-            "block" if result.should_block else "proceed",
+            verdict,
             input.entrypoint or "<implicit>",
             result.status.value,
             len(result.checks),

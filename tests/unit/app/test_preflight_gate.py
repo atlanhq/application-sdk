@@ -47,13 +47,13 @@ class _NonResolvableInput:
 
 
 def _blocking() -> PreflightOutput:
-    """The app's verdict blocks (passed=False) → should_block is True."""
+    """A failing blocking check → should_block is True."""
     return PreflightOutput(
-        passed=False,
         checks=[
             PreflightCheck(
                 name="auth",
                 passed=False,
+                blocking=True,
                 message="Auth failed: bad creds",
             )
         ],
@@ -61,15 +61,14 @@ def _blocking() -> PreflightOutput:
 
 
 def _proceeding() -> PreflightOutput:
-    """The app's verdict proceeds (passed=True) → should_block is False."""
-    return PreflightOutput(passed=True, checks=[])
+    """No failing blocking check → should_block is False."""
+    return PreflightOutput(checks=[])
 
 
 def _advisory_failure() -> PreflightOutput:
-    """A failed check under a passed=True verdict → advisory, does not block."""
+    """A failing check left advisory (blocking=False) → does not block."""
     return PreflightOutput(
-        passed=True,
-        checks=[PreflightCheck(name="version", passed=False)],
+        checks=[PreflightCheck(name="version", passed=False, blocking=False)],
     )
 
 
@@ -109,15 +108,19 @@ class TestRunPreflightGate:
         # fallback — so an automated run's failure says why.
         assert "Auth failed: bad creds" in excinfo.value.message
 
-    async def test_abort_reason_folds_all_failed_check_messages(self) -> None:
-        # Every failed check contributes to the surfaced reason: the app already
-        # decided the verdict blocks (passed=False), so there are no "advisory"
-        # failures to exclude — a failed check's message IS folded in.
+    async def test_abort_reason_folds_all_blocking_failed_messages(self) -> None:
+        # Every blocking-failed check contributes to the surfaced reason.
         verdict = PreflightOutput(
-            passed=False,
             checks=[
-                PreflightCheck(name="auth", passed=False, message="auth blocked"),
-                PreflightCheck(name="version", passed=False, message="old version"),
+                PreflightCheck(
+                    name="auth", passed=False, blocking=True, message="auth blocked"
+                ),
+                PreflightCheck(
+                    name="version",
+                    passed=False,
+                    blocking=True,
+                    message="old version",
+                ),
             ],
         )
         exec_mock, exec_patch = _exec(verdict)
@@ -127,12 +130,34 @@ class TestRunPreflightGate:
         assert "auth blocked" in excinfo.value.message
         assert "old version" in excinfo.value.message
 
-    async def test_abort_reason_falls_back_when_no_check_message(self) -> None:
-        # A blocking verdict whose failed check has no message still aborts with
-        # the generic reason.
+    async def test_advisory_messages_excluded_from_abort_reason(self) -> None:
+        # A blocking failure aborts the run; a co-occurring advisory failure
+        # (blocking=False) surfaces in the UI but its message must NOT leak into
+        # the abort reason — attribution is scoped to what actually gated.
         verdict = PreflightOutput(
-            passed=False,
-            checks=[PreflightCheck(name="auth", passed=False)],
+            checks=[
+                PreflightCheck(
+                    name="auth", passed=False, blocking=True, message="auth blocked"
+                ),
+                PreflightCheck(
+                    name="version",
+                    passed=False,
+                    blocking=False,
+                    message="advisory version drift",
+                ),
+            ],
+        )
+        exec_mock, exec_patch = _exec(verdict)
+        with _patched(True), exec_patch:
+            with pytest.raises(ApplicationError) as excinfo:
+                await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        assert "auth blocked" in excinfo.value.message
+        assert "advisory version drift" not in excinfo.value.message
+
+    async def test_abort_reason_falls_back_when_no_check_message(self) -> None:
+        # A blocking failure with no message still aborts with the generic reason.
+        verdict = PreflightOutput(
+            checks=[PreflightCheck(name="auth", passed=False, blocking=True)],
         )
         exec_mock, exec_patch = _exec(verdict)
         with _patched(True), exec_patch:
@@ -144,10 +169,16 @@ class TestRunPreflightGate:
         # Multiple failed checks are joined with "; " — pin the separator so a
         # switch to newline/comma output is caught.
         verdict = PreflightOutput(
-            passed=False,
             checks=[
-                PreflightCheck(name="auth", passed=False, message="auth down"),
-                PreflightCheck(name="net", passed=False, message="host unreachable"),
+                PreflightCheck(
+                    name="auth", passed=False, blocking=True, message="auth down"
+                ),
+                PreflightCheck(
+                    name="net",
+                    passed=False,
+                    blocking=True,
+                    message="host unreachable",
+                ),
             ],
         )
         exec_mock, exec_patch = _exec(verdict)
@@ -162,10 +193,11 @@ class TestRunPreflightGate:
         # Precedence: an explicit PreflightOutput.message takes priority over the
         # folded per-check reasons (result.message or reasons or generic).
         verdict = PreflightOutput(
-            passed=False,
             message="Summary: 3 of 5 checks failed",
             checks=[
-                PreflightCheck(name="auth", passed=False, message="auth down"),
+                PreflightCheck(
+                    name="auth", passed=False, blocking=True, message="auth down"
+                ),
             ],
         )
         exec_mock, exec_patch = _exec(verdict)
@@ -180,11 +212,11 @@ class TestRunPreflightGate:
         # (and its canonical code/audience) to AE via structured FailureDetails,
         # while the "PreflightFailed" type marker is preserved.
         verdict = PreflightOutput(
-            passed=False,
             checks=[
                 PreflightCheck(
                     name="auth",
                     passed=False,
+                    blocking=True,
                     message="Auth failed",
                     category=FailureCategory.AUTH,
                     suggested_action="Rotate the credential",
@@ -216,16 +248,17 @@ class TestRunPreflightGate:
     async def test_abort_uses_first_classified_failure(self) -> None:
         # When multiple checks fail, the first classified one wins.
         verdict = PreflightOutput(
-            passed=False,
             checks=[
                 PreflightCheck(
                     name="a",
                     passed=False,
+                    blocking=True,
                     category=FailureCategory.SOURCE_UNAVAILABLE,
                 ),
                 PreflightCheck(
                     name="b",
                     passed=False,
+                    blocking=True,
                     category=FailureCategory.PERMISSION,
                 ),
             ],
@@ -244,7 +277,6 @@ class TestRunPreflightGate:
             code = "PRECONDITION_SOURCE_VIEW_DEFINITION"
 
         verdict = PreflightOutput(
-            passed=False,
             checks=[
                 PreflightCheck.from_error(
                     "au_views",
@@ -275,11 +307,11 @@ class TestRunPreflightGate:
     ) -> None:
         # Typed evidence wins over a bare category, regardless of check order.
         verdict = PreflightOutput(
-            passed=False,
             checks=[
                 PreflightCheck(
                     name="a",
                     passed=False,
+                    blocking=True,
                     category=FailureCategory.SOURCE_UNAVAILABLE,
                 ),
                 PreflightCheck.from_error("b", AuthError(message="Login rejected")),
@@ -301,8 +333,8 @@ class TestRunPreflightGate:
         exec_mock.assert_awaited_once()
 
     async def test_advisory_failure_does_not_block(self) -> None:
-        # A failed check under a passed=True verdict is advisory — the app chose
-        # to proceed, so the gate must not abort the run.
+        # A failing check left blocking=False is advisory — nothing the app
+        # marked blocking failed, so the gate must not abort the run.
         exec_mock, exec_patch = _exec(_advisory_failure())
         with _patched(True), exec_patch:
             result = await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")

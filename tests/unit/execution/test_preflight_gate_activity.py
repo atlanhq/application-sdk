@@ -44,7 +44,7 @@ class _StubHandler(Handler):
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
         self.preflight_input = input
-        return PreflightOutput(passed=True, checks=[])
+        return PreflightOutput(checks=[])
 
     async def fetch_metadata(self, input: MetadataInput) -> SqlMetadataOutput:
         return SqlMetadataOutput(objects=[])
@@ -104,6 +104,30 @@ class TestPreflightGateActivity:
         assert seen == {"host": "db", "username": "u", "extra.role": "r"}
         assert handler.preflight_input.entrypoint == "crawl"
         resolver.resolve_raw.assert_awaited_once()
+
+    async def test_proceed_with_advisory_failures_names_them_in_log(self) -> None:
+        # Under-block observability: when the run proceeds but a check still
+        # failed (advisory, blocking=False), the verdict log must name it — a
+        # forgotten blocking=True should be visible in logs, not silent.
+        class _AdvisoryFail(_StubHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                self.preflight_input = input
+                return PreflightOutput(
+                    checks=[
+                        PreflightCheck(
+                            name="connectivity", passed=False, blocking=False
+                        )
+                    ]
+                )
+
+        gate = _gate(_AdvisoryFail())
+        with mock.patch(
+            "application_sdk.execution._temporal.preflight_gate.logger"
+        ) as log:
+            result = await gate(PreflightGateInput(entrypoint="crawl"))
+        assert result.should_block is False
+        verdict = log.info.call_args.args[1]
+        assert verdict == "proceed (advisory failures: connectivity)"
 
     async def test_gate_without_routing_skips_resolution(self) -> None:
         handler = _StubHandler()
@@ -356,19 +380,19 @@ class TestPreflightOutputTemporalRoundTrip:
         from application_sdk.errors.leaves import AuthError
 
         out = PreflightOutput(
-            passed=False,
             checks=[
                 PreflightCheck.from_error("auth", AuthError(message="Login rejected")),
-                PreflightCheck(name="version", passed=False),
+                PreflightCheck(name="version", passed=False, blocking=False),
             ],
         )
         payloads = await pydantic_data_converter.encode([out])
         # The computed status ships on the wire for Temporal UI visibility...
         assert b'"status"' in payloads[0].data
         (restored,) = await pydantic_data_converter.decode(payloads, [PreflightOutput])
-        # ...the verdict round-trips, and the re-injected status key is ignored on
-        # validation; status/should_block re-derive from the restored verdict.
-        assert restored.passed is False
+        # ...the per-check blocking flags round-trip, and the re-injected status
+        # key is ignored on validation; status/should_block re-derive from them.
+        assert restored.checks[0].blocking is True  # from_error defaults blocking
+        assert restored.checks[1].blocking is False  # advisory
         assert restored.status is PreflightStatus.NOT_READY
         assert restored.should_block is True
         assert restored.checks[0].error is not None

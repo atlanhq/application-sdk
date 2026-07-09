@@ -102,8 +102,13 @@ class Handler(ABC):
             async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
                 connectivity_ok = await client.ping()
                 return PreflightOutput(
-                    passed=connectivity_ok,
-                    checks=[PreflightCheck(name="connectivity", passed=connectivity_ok)],
+                    checks=[
+                        PreflightCheck(
+                            name="connectivity",
+                            passed=connectivity_ok,
+                            blocking=True,
+                        )
+                    ],
                 )
 
             async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
@@ -152,17 +157,18 @@ class Handler(ABC):
 
         * **HTTP ``/check`` (Sage UI).** A raised ``AppError`` surfaces as an
           HTTP error (``HandlerError`` → 500).
-        * **The injected pre-extraction gate.** The run proceeds iff the
-          returned :class:`~application_sdk.handler.contracts.PreflightOutput`
-          has ``passed=True`` — the app applies its own formula over its check
-          results and supplies that single verdict. Build failing checks with
-          :meth:`PreflightCheck.from_error
+        * **The injected pre-extraction gate.** The run is blocked iff a check
+          the app marked ``blocking=True`` did not pass — the SDK derives the
+          verdict from the per-check flags; the app never returns a single
+          boolean. Prefer blocking by **returning** a failing check marked
+          ``blocking=True`` (build it with :meth:`PreflightCheck.from_error
           <application_sdk.handler.contracts.PreflightCheck.from_error>` from a
-          caught exception so a typed ``AppError`` keeps its code-level
-          classification. The gate is **fail-closed**: a raise, a timeout, or a
-          missing verdict all block the run — "couldn't verify" is not a pass.
-          Still prefer the returned verdict over raising: it carries the curated
-          message, category, and suggested action the customer sees.
+          caught exception, which defaults ``blocking=True`` and keeps a typed
+          ``AppError``'s code-level classification) over raising: the returned
+          check carries the curated message, category, and suggested action the
+          customer sees, whereas a raise falls back to a generic block. The gate
+          is still **fail-closed**: a raise, a timeout, or a missing verdict all
+          block the run — "couldn't verify" is not a pass.
 
         Args:
             input: Credentials, connection config, and checks to run. On the gate
@@ -170,8 +176,9 @@ class Handler(ABC):
                 ``connection_config``/form ``metadata`` on that path).
 
         Returns:
-            PreflightOutput whose ``passed`` verdict decides the run; checks are
-            display rows and typed evidence for the abort.
+            PreflightOutput whose checks — via their ``blocking`` flags — decide
+            the run; the checks are also display rows and typed evidence for the
+            abort.
         """
         ...
 
@@ -209,8 +216,9 @@ class DefaultHandler(Handler):
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
         """Returns a proceed verdict when no handler is registered.
 
-        No handler means nothing to verify — the gate lets the run proceed."""
-        return PreflightOutput(passed=True, message="No preflight handler registered")
+        No handler means nothing to verify — no checks, so no blocking check can
+        fail and the gate lets the run proceed."""
+        return PreflightOutput(message="No preflight handler registered")
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
         """Always returns empty metadata."""
