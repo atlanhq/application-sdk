@@ -32,10 +32,10 @@ azure-core==1.41.0
     # via azure-identity
 azure-identity==1.25.3
     # via atlan-application-sdk
-boto3==1.43.43
+boto3==1.43.44
     # via atlan-application-sdk
-boto3-stubs==1.43.43
-botocore==1.43.43
+boto3-stubs==1.43.44
+botocore==1.43.44
     # via
     #   boto3
     #   s3transfer
@@ -268,7 +268,7 @@ protobuf==6.33.6
     #   googleapis-common-protos
     #   opentelemetry-proto
     #   temporalio
-pyasn1==0.6.3
+pyasn1==0.6.4
     # via pyasn1-modules
 pyasn1-modules==0.4.2
     # via google-auth
@@ -311,7 +311,7 @@ python-dateutil==2.9.0.post0
     # via
     #   botocore
     #   pyatlan
-python-discovery==1.4.3
+python-discovery==1.4.4
     # via virtualenv
 python-dotenv==1.2.2
     # via
