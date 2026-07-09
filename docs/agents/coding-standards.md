@@ -49,7 +49,7 @@ All I/O, network calls, and non-deterministic operations go in `@task` methods.
 
 Every extraction workflow runs a `{app}:preflight` Temporal activity as its first
 step. The activity resolves credentials, calls `handler.preflight_check(PreflightInput)`,
-and aborts before extraction if any check has `blocking=True` and `passed=False`.
+and aborts before extraction if any check has `required=True` and `passed=False`.
 
 ### What the gate does
 
@@ -91,18 +91,41 @@ is to put the input on `ExtractionInput` (via the toolkit) rather than hand-roll
 lift.
 
 **(ii) Block by returning a check, never by raising.** The handler blocks a run by
-**returning** a `PreflightCheck(passed=False, blocking=True, category=<FailureCategory>)`;
-the gate rebuilds typed `FailureDetails` from that category. A handler that **raises**
-does *not* block — the exception escapes to the gate, which fails open and proceeds
-(see below). So `preflight_check` must catch its own probe exceptions and convert them
-to returned blocking checks (reuse a raised SDK `AppError`'s `.category`).
+**returning** a failing check with `required=True`. A handler that **raises** does
+*not* block — the exception escapes to the gate, which fails open and proceeds (see
+below). So `preflight_check` catches its own probe exceptions and converts them to
+returned checks with `PreflightCheck.from_error`, the one blessed bridge from the
+typed-error system:
+
+```python
+checks: list[PreflightCheck] = []
+try:
+    await probe()
+    checks.append(PreflightCheck(name="connectivity", passed=True, required=True))
+except AppError as e:
+    checks.append(PreflightCheck.from_error("connectivity", e))
+except Exception as e:
+    logger.error("connectivity probe failed", exc_info=True)
+    checks.append(PreflightCheck.from_error("connectivity", e))
+return PreflightOutput(checks=checks)  # status is derived — never pass status=
+```
+
+A typed `AppError` keeps its full classification: `from_error` stores its
+`to_failure_details()` on `PreflightCheck.error`, and the gate forwards that
+verbatim — the app-specific `code` reaches the Automation Engine with the same
+fidelity a runtime activity raise has. An untyped exception yields an
+unclassified check (`category=None` → the gate defaults to `PRECONDITION`) with
+a sanitized message — the exception text never enters the check; log it with
+`exc_info=True` at the catch site instead. `PreflightOutput.status` and
+`should_block` are both derived from the checks; handlers only report per-check
+outcomes.
 
 ### Fail-open semantics
 
 Gate failures (infra errors, timeouts, handler crashes, activity dispatch errors) are
 **non-blocking**: the workflow logs at `error` and proceeds. Only a returned
-`PreflightOutput.should_block` verdict (a blocking check that failed) aborts the run.
-A gate failure is never treated as a blocking check.
+`PreflightOutput.should_block` verdict (a required check that failed) aborts the run.
+A gate failure is never treated as a failed required check.
 
 ### Logging contract
 

@@ -372,7 +372,7 @@ class MyHandler(HandlerInterface):
 from application_sdk.handler import Handler
 from application_sdk.handler.contracts import (
     AuthInput, AuthOutput, AuthStatus,
-    PreflightInput, PreflightOutput, PreflightStatus,
+    PreflightInput, PreflightOutput,
     MetadataInput, MetadataOutput,
 )
 
@@ -383,7 +383,7 @@ class MyHandler(Handler):
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
         # run preflight checks
-        return PreflightOutput(status=PreflightStatus.READY)
+        return PreflightOutput()
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
         # return connector config

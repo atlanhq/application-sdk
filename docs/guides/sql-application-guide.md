@@ -137,7 +137,6 @@ from application_sdk.handler.contracts import (
     AuthStatus,
     PreflightInput,
     PreflightOutput,
-    PreflightStatus,
     MetadataInput,
     MetadataOutput,
     SqlMetadataObject,
@@ -160,7 +159,7 @@ class PostgresHandler(Handler):
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
         """Run pre-extraction checks (connectivity, permissions, table counts)."""
-        return PreflightOutput(status=PreflightStatus.READY, message="All checks passed")
+        return PreflightOutput(message="All checks passed")
 
     async def fetch_metadata(self, input: MetadataInput) -> SqlMetadataOutput:
         """Return catalog/schema pairs for the Atlan UI filter tree."""
@@ -193,7 +192,7 @@ class PostgresHandler(Handler):
 | `preflight_check` | `PreflightInput` | `PreflightOutput` | Check connectivity, permissions, table counts |
 | `fetch_metadata` | `MetadataInput` | `SqlMetadataOutput` | Return catalog/schema tree for UI filters |
 
-`AuthOutput.status` uses `AuthStatus` (SUCCESS, FAILED, EXPIRED, INVALID_CREDENTIALS). `PreflightOutput.status` uses `PreflightStatus` (READY, NOT_READY, PARTIAL).
+`AuthOutput.status` uses `AuthStatus` (SUCCESS, FAILED, EXPIRED, INVALID_CREDENTIALS). `PreflightOutput.status` is derived from the checks (`PreflightStatus`: READY, NOT_READY, PARTIAL) — handlers never set it.
 
 ## Asset Mapper
 

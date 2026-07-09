@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.21.0
-source-sha:    8372eb11fe109e2c2d7eebdc76db4ea6e62b9ad1
-source-date:   2026-07-09T02:23:38+05:30
+sdk-version:   3.21.1
+source-sha:    27c0ebdad336623b9137e0966d516ba178f49c76
+source-date:   2026-07-09T13:39:46+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -1550,7 +1550,7 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 
 - **Import:** `from application_sdk.handler import PreflightStatus`
 - **Signature:** `class PreflightStatus`
-- **Summary:** Advisory result of a preflight check — for display/diagnostics only.
+- **Summary:** Advisory display status of a preflight result — derived, never supplied.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `SqlMetadataObject`
@@ -2581,6 +2581,23 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `event_filters: list[EventFilterRule]` `= []` — Additional CEL filter rules applied to the event.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
+#### `FailureDetails`
+
+- **Import:** `from application_sdk.handler.contracts import FailureDetails`
+- **Summary:** Pydantic envelope serialized into ``ApplicationError.details=[…]``.
+- **Fields:**
+  - `category: FailureCategory`
+  - `code: str`
+  - `retryable: bool`
+  - `audience: Audience` `= Audience.APP_OWNER`
+  - `message: str`
+  - `suggested_action: str | None`
+  - `evidence: dict[str, Any]` `= Field(default_factory=dict)`
+  - `app_name: str | None`
+  - `run_id: str | None`
+  - `cause_repr: str | None`
+- **Defined in:** `application_sdk/errors/wire.py`
+
 #### `FileUploadResponse`
 
 - **Import:** `from application_sdk.handler.contracts import FileUploadResponse`
@@ -2640,12 +2657,13 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Summary:** Result of a single preflight check.
 - **Fields:**
   - `name: str` `= Field(..., min_length=1)` — Check name (e.g., 'connectivity', 'permissions').
-  - `passed: bool` `= False` — Whether the check passed.
-  - `blocking: bool` `= False` — Whether failing this check must stop the run before extraction.
+  - `passed: bool` — Whether the check passed — the observed outcome, stated explicitly.
+  - `required: bool` `= False` — Declared severity: whether this check gates extraction.
   - `message: str` `= ''` — What happened — a clean, single-sentence description of the check result.
-  - `category: FailureCategory | None` — Typed failure category for a blocking failure.
+  - `category: FailureCategory | None` — Typed failure category for a required-check failure.
   - `suggested_action: str` `= ''` — Optional remediation — what the reader should DO about a failure.
   - `duration_ms: float` `= 0.0` — How long the check took in milliseconds.
+  - `error: FailureDetails | None` — Typed evidence for a failing check.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `PreflightInput`
@@ -2667,11 +2685,11 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.handler.contracts import PreflightOutput`
 - **Summary:** Output from the preflight_check handler operation.
 - **Fields:**
-  - `status: PreflightStatus` — Advisory result for display (Sage UI / connector-pulse / AE event).
-  - `checks: list[PreflightCheck]` `= []` — Individual check results. A check's :attr:`PreflightCheck.blocking` flag
+  - `checks: list[PreflightCheck]` `= []` — Individual check results. A check's :attr:`PreflightCheck.required` flag
   - `message: str` `= ''` — Human-readable summary.
   - `total_duration_ms: float` `= 0.0` — Total time for all checks in milliseconds.
-  - `should_block: bool` — Whether the gate must abort the run (a blocking check failed).
+  - `status: PreflightStatus` — Advisory display status (Sage UI / connector-pulse / AE event),
+  - `should_block: bool` — Whether the gate must abort the run (a required check failed).
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `SqlMetadataObject`
