@@ -185,7 +185,12 @@ async def _upload_from_store(
     try:
         # Chunk large source objects (bounded range GETs) so a big deployment-store
         # file survives slow egress on the cross-store copy path. (BLDX-1513)
-        await download_file_chunked(source_key, tmp, source_store, normalize=False)
+        # resume=False: mkstemp yields a fresh name per call, so a checkpoint
+        # sidecar could never be reused — without this, a failed copy strands
+        # a {tmp}.transfer-state file in /tmp until pod restart.
+        await download_file_chunked(
+            source_key, tmp, source_store, normalize=False, resume=False
+        )
         sha256 = await upload_file(target_key, tmp, target_store, normalize=False)
         await _put_remote_sha256(target_store, target_key, sha256)
         return True, "uploaded"
