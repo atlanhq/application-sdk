@@ -234,6 +234,23 @@ FILE_REF_CHUNK_SIZE_BYTES = int(
 #: Maximum concurrent range-GET chunks per file (default 4)
 FILE_REF_CHUNK_CONCURRENCY = int(os.getenv("ATLAN_FILE_REF_CHUNK_CONCURRENCY", "4"))
 
+#: Interval (seconds) between in-progress heartbeat logs during a long upload or
+#: download. A GB-class transfer at slow egress can run for minutes; without a
+#: heartbeat the only signals are start + finish, so a hung transfer is
+#: indistinguishable from a slow one. 0 disables heartbeats. (BLDX-1513)
+STORAGE_PROGRESS_LOG_INTERVAL_SECONDS = float(
+    os.getenv("ATLAN_STORAGE_PROGRESS_LOG_INTERVAL_SECONDS", "30")
+)
+
+#: Kill-switch for resumable chunked downloads (BLDX-1523). When enabled
+#: (default), an interrupted chunked download leaves its partial file plus a
+#: ``.transfer-state`` sidecar on disk, and a retry fetches only the missing
+#: ranges — valid only while the remote object's etag is unchanged. Set to
+#: "false" to restore delete-partial-on-failure behaviour fleet-wide.
+STORAGE_RESUME_DOWNLOADS = (
+    os.getenv("ATLAN_STORAGE_RESUME_DOWNLOADS", "true").strip().lower() != "false"
+)
+
 #: Build ID for worker versioning (injected by TWD controller via Kubernetes Downward API).
 #: When set, workers identify themselves with this build ID so the Temporal server can
 #: route tasks to the correct version during versioned deployments.

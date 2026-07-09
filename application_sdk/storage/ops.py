@@ -36,7 +36,6 @@ to target a specific store instead.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import logging
 import math
@@ -55,9 +54,11 @@ import orjson
 try:  # pragma: no cover — defensive import
     from obstore.exceptions import BaseError as _ObstoreBaseError
     from obstore.exceptions import NotFoundError as _ObstoreNotFoundError
+    from obstore.exceptions import PreconditionError as _ObstorePreconditionError
 except ImportError:  # conformance: ignore[E008,E009] optional dep obstore.exceptions; sentinel fallback for older versions  # pragma: no cover
     _ObstoreBaseError = None  # type: ignore[assignment,misc]
     _ObstoreNotFoundError = None  # type: ignore[assignment,misc]
+    _ObstorePreconditionError = None  # type: ignore[assignment,misc]
 
 
 if TYPE_CHECKING:
@@ -68,6 +69,19 @@ if TYPE_CHECKING:
     JsonValue = dict[str, Any] | list[Any] | str | int | float | bool | None
 
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.storage._telemetry import (
+    _log_transfer_progress,
+    _record_transfer_metric,
+    _throughput_mbps,
+)
+
+# Back-compat re-export: the chunked/resumable download path lives in
+# storage/chunked.py (BLDX-1513 follow-up split); existing
+# `from application_sdk.storage.ops import download_file_chunked` callers
+# keep working. chunked.py imports ops only lazily, so this is cycle-free.
+from application_sdk.storage.chunked import (  # noqa: F401 — re-export
+    download_file_chunked,
+)
 
 logger = get_logger(__name__)
 
@@ -316,11 +330,19 @@ def _exc_class_name(exc: BaseException) -> str:
     return type(exc).__name__
 
 
-def _throughput_mbps(size_bytes: int, elapsed_ms: float) -> float | None:
-    """Return MiB/s throughput, or ``None`` when unknown / instantaneous."""
-    if elapsed_ms <= 0 or size_bytes <= 0:
-        return None
-    return round((size_bytes / (1024 * 1024)) / (elapsed_ms / 1000.0), 3)
+def _is_precondition(exc: BaseException) -> bool:
+    """True when *exc* is an etag precondition failure (HTTP 412 / if_match miss).
+
+    Raised by version-pinned range GETs when the remote object was rewritten
+    between the initial HEAD/listing and the chunk fetch. Class-based detection
+    first (obstore ``PreconditionError``), substring fallback for older versions.
+    """
+    if _ObstorePreconditionError is not None and isinstance(
+        exc, _ObstorePreconditionError
+    ):
+        return True
+    msg = str(exc).lower()
+    return "precondition" in msg or "412" in msg
 
 
 def _log_storage_event(
@@ -344,6 +366,7 @@ def _log_storage_event(
         "store_path": store_path,
         "outcome": outcome,
     }
+    tput: float | None = None
     if elapsed_ms is not None:
         extra["elapsed_ms"] = round(elapsed_ms, 3)
     if size_bytes is not None:
@@ -359,13 +382,25 @@ def _log_storage_event(
     # attributes by _build_extra_dict in logger_adaptor (all are in _KNOWN_EXTRA_KEYS).
     logger.log(level, msg, **extra)
 
+    # Mirror the terminal event to metrics so throughput / failure rate are
+    # dashboardable + alertable across the fleet (only for actual transfers).
+    if op in ("download", "upload"):
+        _record_transfer_metric(
+            op,
+            outcome=outcome,
+            elapsed_ms=elapsed_ms,
+            size_bytes=size_bytes,
+            throughput_mibps=tput,
+            error_class=error_class,
+        )
+
 
 async def _list_items(
     store: ObjectStore,
     prefix: str | None,
     *,
     include_markers: bool = False,
-) -> list[tuple[str, int]]:
+) -> list[tuple[str, int, str | None]]:
     """Collect listing results under *prefix*, optionally filtering GCS directory markers.
 
     Makes a single listing operation (``obstore.list`` returns a native async
@@ -386,26 +421,27 @@ async def _list_items(
             objects are left behind on any store backend.
 
     Returns:
-        ``(path, size)`` tuples in listing order.  Directory markers are excluded
-        unless *include_markers* is ``True``.
+        ``(path, size, e_tag)`` tuples in listing order (``e_tag`` may be
+        ``None`` on stores that don't provide one).  Directory markers are
+        excluded unless *include_markers* is ``True``.
     """
-    all_items: list[tuple[str, int]] = []
+    all_items: list[tuple[str, int, str | None]] = []
     async for batch in obstore.list(store, prefix=prefix):  # native async ListStream
         for item in batch:
-            all_items.append((str(item["path"]), int(item["size"])))
+            all_items.append((str(item["path"]), int(item["size"]), item.get("e_tag")))
 
     if include_markers:
         return all_items
 
     parent_dirs: set[str] = set()
-    for path, _ in all_items:
+    for path, _, _ in all_items:
         parts = path.split("/")
         for i in range(1, len(parts)):
             parent_dirs.add("/".join(parts[:i]))
 
     return [
-        (path, size)
-        for path, size in all_items
+        (path, size, etag)
+        for path, size, etag in all_items
         if not (size == 0 and path in parent_dirs)
     ]
 
@@ -493,6 +529,12 @@ async def upload_file(
 
     h = hashlib.sha256() if compute_hash else None
     started = time.monotonic()
+    from application_sdk.constants import (  # noqa: PLC0415
+        STORAGE_PROGRESS_LOG_INTERVAL_SECONDS as _progress_interval,
+    )
+
+    last_progress = started
+    bytes_sent = 0
     try:
         async with obstore.open_writer_async(
             resolved, key, buffer_size=effective_chunk, attributes=put_attributes
@@ -505,6 +547,18 @@ async def upload_file(
                     if h is not None:
                         h.update(chunk)
                     await writer.write(chunk)
+                    bytes_sent += len(chunk)
+                    if _progress_interval > 0:
+                        now = time.monotonic()
+                        if now - last_progress >= _progress_interval:
+                            _log_transfer_progress(
+                                "upload",
+                                key,
+                                bytes_so_far=bytes_sent,
+                                elapsed_ms=(now - started) * 1000.0,
+                                total_bytes=file_size,
+                            )
+                            last_progress = now
     # conformance: ignore[E004] upload error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
     except BaseException as exc:
         # BaseException is the umbrella for Exception and its siblings
@@ -649,6 +703,11 @@ async def download_file(
         # them private. Mirrors the chunked pre-allocation path. (Mode applies
         # only when the file is newly created; pre-existing perms are untouched.)
         fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        from application_sdk.constants import (  # noqa: PLC0415
+            STORAGE_PROGRESS_LOG_INTERVAL_SECONDS as _progress_interval,
+        )
+
+        last_progress = started
         with os.fdopen(fd, "wb") as fh:
             async for chunk in result.stream(min_chunk_size=min_chunk_size):
                 raw = bytes(chunk)
@@ -656,6 +715,16 @@ async def download_file(
                 bytes_written += len(raw)
                 if h is not None:
                     h.update(raw)
+                if _progress_interval > 0:
+                    now = time.monotonic()
+                    if now - last_progress >= _progress_interval:
+                        _log_transfer_progress(
+                            "download",
+                            key,
+                            bytes_so_far=bytes_written,
+                            elapsed_ms=(now - started) * 1000.0,
+                        )
+                        last_progress = now
     # conformance: ignore[E004] file-write error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
     except Exception as exc:
         elapsed_ms = (time.monotonic() - started) * 1000.0
@@ -694,9 +763,9 @@ async def get_file_size(
 ) -> int | None:
     """Return the byte size of *key* via a HEAD request, or ``None`` if not found.
 
-    Uses a lightweight metadata-only request; the object body is never
-    transferred.  Raises :class:`~application_sdk.storage.errors.StorageError`
-    for non-404 errors (permission denied, I/O error, etc.).
+    Thin wrapper over :func:`get_file_meta` (same single HEAD request) that
+    discards the etag. Prefer :func:`get_file_meta` when you also need the
+    etag — e.g. to version-pin a subsequent chunked download.
 
     Args:
         key: Object key / path.  Normalised by default.
@@ -711,12 +780,32 @@ async def get_file_size(
         StorageError: For non-404 errors.
         ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
     """
+    meta = await get_file_meta(key, store, normalize=normalize)
+    return None if meta is None else meta[0]
+
+
+async def get_file_meta(
+    key: str,
+    store: BoundStore | ObjectStore | None = None,
+    *,
+    normalize: bool = True,
+) -> tuple[int, str | None] | None:
+    """Return ``(size_bytes, e_tag)`` for *key*, or ``None`` if not found.
+
+    Same single HEAD request as :func:`get_file_size`, but also surfaces the
+    object's etag so callers can version-pin subsequent range GETs
+    (:func:`download_file_chunked` ``etag=``) without a second HEAD.
+
+    Raises:
+        StorageError: For non-404 errors.
+        ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
+    """
     resolved = _resolve_store(store)
     if normalize:
         key = normalize_key(key)
     try:
         meta = await obstore.head_async(resolved, key)
-        return int(meta["size"])
+        return int(meta["size"]), meta.get("e_tag")
     # conformance: ignore[E004] not-found returns None as documented API contract; other exceptions re-raised via StorageError chain
     except Exception as exc:
         if _is_not_found(exc):
@@ -726,149 +815,6 @@ async def get_file_size(
         )
 
         raise StorageError(f"Failed to head key '{key}'", key=key, cause=exc) from exc
-
-
-async def download_file_chunked(
-    key: str,
-    local_path: str | Path,
-    store: BoundStore | ObjectStore | None = None,
-    *,
-    chunk_size_bytes: int = 16 * 1024 * 1024,
-    max_concurrent_chunks: int = 4,
-    compute_hash: bool = True,
-    normalize: bool = True,
-) -> str | None:
-    """Download *key* using parallel range GETs, writing chunks at fixed offsets.
-
-    For files larger than *chunk_size_bytes*, issues multiple independent
-    ``get_range_async`` requests (up to *max_concurrent_chunks* in flight at
-    once) and writes each chunk to the correct file offset via ``os.lseek`` +
-    ``os.write`` (``os.pwrite`` is unavailable on Windows).
-    Each chunk gets its own obstore retry budget, so a mid-stream stall only
-    retries the affected chunk — not the entire file.
-
-    Falls through to :func:`download_file` (single streaming GET) when the
-    remote object is smaller than *chunk_size_bytes*.
-
-    Args:
-        key: Source object key.  Normalised by default.
-        local_path: Destination path (created / overwritten).
-        store: Source store, or ``None`` to use the infrastructure store.
-        chunk_size_bytes: Size of each range-GET chunk (default 16 MiB).
-        max_concurrent_chunks: Maximum number of in-flight chunk requests
-            (default 4).
-        compute_hash: When ``True`` (default), compute and return a SHA-256
-            digest over the completed file.
-        normalize: When ``True`` (default), normalise *key* before use.
-
-    Returns:
-        Hex-encoded SHA-256 digest if *compute_hash* is ``True``, else ``None``.
-
-    Raises:
-        StorageNotFoundError: If *key* does not exist.
-        StorageError: If a chunk download or the disk write fails.
-        ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
-    """
-
-    resolved = _resolve_store(store)
-    if normalize:
-        key = normalize_key(key)
-
-    path = Path(local_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    # HEAD to get exact size before allocating; also serves as the existence check.
-    try:
-        meta = await obstore.head_async(resolved, key)
-        file_size = int(meta["size"])
-    # conformance: ignore[E004] not-found and errors both re-raised via StorageError chain; no silent swallow
-    except Exception as exc:
-        if _is_not_found(exc):
-            from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-                StorageNotFoundError,
-            )
-
-            raise StorageNotFoundError(
-                f"Key not found in store: {key}", key=key
-            ) from exc
-        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-            StorageError,
-        )
-
-        raise StorageError(f"Failed to head key '{key}'", key=key, cause=exc) from exc
-
-    # Small files: delegate to the single-stream path so they still use the
-    # streaming GET (avoids allocating the whole body in memory via get_range_async).
-    if file_size <= chunk_size_bytes:
-        return await download_file(
-            key, local_path, resolved, compute_hash=compute_hash, normalize=False
-        )
-
-    # Pre-allocate the file at the target size so lseek can address any offset.
-    # 0o600: owner-only — downloaded artifacts can contain extracted customer
-    # metadata; don't rely on the process umask to keep them private.
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    try:
-        os.ftruncate(fd, file_size)
-    # conformance: ignore[E004] cleanup-on-error guard; closes fd then re-raises immediately with no swallow
-    except Exception:
-        os.close(fd)
-        raise
-
-    sem = asyncio.Semaphore(max_concurrent_chunks)
-
-    async def _fetch_chunk(offset: int) -> None:
-        length = min(chunk_size_bytes, file_size - offset)
-        async with sem:
-            raw = bytes(
-                await obstore.get_range_async(
-                    resolved, key, start=offset, length=length
-                )
-            )
-            # lseek+write instead of pwrite (Windows lacks pwrite). Safe only
-            # because asyncio is single-threaded: no await between the two
-            # calls means no other coroutine can interleave on the fd position.
-            # WARNING: if _fetch_chunk is ever moved into a thread (e.g. via
-            # asyncio.to_thread), lseek+write becomes a data race — two threads
-            # could interleave their seeks and corrupt each other's writes.
-            # Use os.pwrite (or a per-thread fd) instead if that happens.
-            os.lseek(fd, offset, os.SEEK_SET)
-            os.write(fd, raw)
-
-    try:
-        await asyncio.gather(
-            *(_fetch_chunk(off) for off in range(0, file_size, chunk_size_bytes))
-        )
-    # conformance: ignore[E004] chunked-download error handler; closes fd and cleans up file, then re-raises via StorageError chain
-    except Exception as exc:
-        os.close(fd)
-        path.unlink(missing_ok=True)
-        if _is_not_found(exc):
-            from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-                StorageNotFoundError,
-            )
-
-            raise StorageNotFoundError(
-                f"Key not found during chunked download: {key}", key=key
-            ) from exc
-        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-            StorageError,
-        )
-
-        raise StorageError(
-            f"Chunked download failed for '{key}'", key=key, cause=exc
-        ) from exc
-
-    os.close(fd)
-
-    if not compute_hash:
-        return None
-
-    h = hashlib.sha256()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 async def _get_bytes(

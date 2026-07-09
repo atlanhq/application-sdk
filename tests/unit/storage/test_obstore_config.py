@@ -31,9 +31,13 @@ from application_sdk.storage._obstore_config import (
 class TestClientOptionsDefaults:
     """SDK defaults are never empty — every store must inherit sane values."""
 
-    def test_defaults_set_per_request_timeout_to_90_seconds(self, monkeypatch) -> None:
+    def test_defaults_set_progress_and_backstop_timeouts(self, monkeypatch) -> None:
+        # BLDX-1513: read_timeout (progress-based) is the primary liveness bound;
+        # the overall-request timeout is a generous backstop (30m), not 90s —
+        # a 90s overall cap killed slow-but-progressing GB-class downloads.
         for k in [
             "ATLAN_OBSTORE_TIMEOUT",
+            "ATLAN_OBSTORE_READ_TIMEOUT",
             "ATLAN_OBSTORE_CONNECT_TIMEOUT",
             "ATLAN_OBSTORE_POOL_IDLE_TIMEOUT",
             "ATLAN_OBSTORE_HTTP2_KEEP_ALIVE_TIMEOUT",
@@ -43,11 +47,17 @@ class TestClientOptionsDefaults:
             monkeypatch.delenv(k, raising=False)
 
         opts = obstore_client_options()
-        assert opts["timeout"] == "90s"
+        assert opts["timeout"] == "30m"
+        assert opts["read_timeout"] == "90s"
         assert opts["connect_timeout"] == "30s"
         assert opts["pool_idle_timeout"] == "90s"
         assert opts["http2_keep_alive_timeout"] == "30s"
         assert opts["user_agent"].startswith("atlan-application-sdk")
+
+    def test_read_timeout_can_be_overridden_via_env(self, monkeypatch) -> None:
+        monkeypatch.setenv("ATLAN_OBSTORE_READ_TIMEOUT", "120s")
+        opts = obstore_client_options()
+        assert opts["read_timeout"] == "120s"
 
     def test_pool_max_idle_per_host_omitted_by_default(self, monkeypatch) -> None:
         monkeypatch.delenv("ATLAN_OBSTORE_POOL_MAX_IDLE_PER_HOST", raising=False)
@@ -58,6 +68,7 @@ class TestClientOptionsDefaults:
 class TestClientOptionsOverrides:
     def test_each_field_can_be_overridden_via_env(self, monkeypatch) -> None:
         monkeypatch.setenv("ATLAN_OBSTORE_TIMEOUT", "1h")
+        monkeypatch.setenv("ATLAN_OBSTORE_READ_TIMEOUT", "150s")
         monkeypatch.setenv("ATLAN_OBSTORE_CONNECT_TIMEOUT", "10s")
         monkeypatch.setenv("ATLAN_OBSTORE_POOL_IDLE_TIMEOUT", "120s")
         monkeypatch.setenv("ATLAN_OBSTORE_HTTP2_KEEP_ALIVE_TIMEOUT", "45s")
@@ -70,6 +81,7 @@ class TestClientOptionsOverrides:
             opts = obstore_client_options()
         assert opts == {
             "timeout": "1h",
+            "read_timeout": "150s",
             "connect_timeout": "10s",
             "pool_idle_timeout": "120s",
             "http2_keep_alive_timeout": "45s",
