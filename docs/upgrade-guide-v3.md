@@ -383,7 +383,7 @@ class MyHandler(Handler):
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
         # run preflight checks
-        return PreflightOutput()
+        return PreflightOutput(passed=True)
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
         # return connector config

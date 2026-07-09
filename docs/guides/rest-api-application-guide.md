@@ -120,7 +120,7 @@ class MyConnectorHandler(Handler):
             await client.close()
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        return PreflightOutput(message="OK")
+        return PreflightOutput(passed=True, message="OK")
 
     async def fetch_metadata(self, input: MetadataInput) -> ApiMetadataOutput:
         # Metadata extraction is driven by the App, not the handler.

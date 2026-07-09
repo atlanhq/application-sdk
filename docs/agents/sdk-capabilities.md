@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.21.1
-source-sha:    27c0ebdad336623b9137e0966d516ba178f49c76
-source-date:   2026-07-09T13:39:46+05:30
+source-sha:    0a697629f66540b19dfb5093c3f392d72e014009
+source-date:   2026-07-09T15:08:03+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2658,9 +2658,8 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Fields:**
   - `name: str` `= Field(..., min_length=1)` — Check name (e.g., 'connectivity', 'permissions').
   - `passed: bool` — Whether the check passed — the observed outcome, stated explicitly.
-  - `required: bool` `= False` — Declared severity: whether this check gates extraction.
   - `message: str` `= ''` — What happened — a clean, single-sentence description of the check result.
-  - `category: FailureCategory | None` — Typed failure category for a required-check failure.
+  - `category: FailureCategory | None` — Typed failure category for a failing check.
   - `suggested_action: str` `= ''` — Optional remediation — what the reader should DO about a failure.
   - `duration_ms: float` `= 0.0` — How long the check took in milliseconds.
   - `error: FailureDetails | None` — Typed evidence for a failing check.
@@ -2685,11 +2684,12 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.handler.contracts import PreflightOutput`
 - **Summary:** Output from the preflight_check handler operation.
 - **Fields:**
-  - `checks: list[PreflightCheck]` `= []` — Individual check results. A check's :attr:`PreflightCheck.required` flag
-  - `message: str` `= ''` — Human-readable summary.
+  - `passed: bool` — The verdict: ``True`` → the run may proceed, ``False`` → block it.
+  - `checks: list[PreflightCheck]` `= []` — Individual check results — display rows and typed evidence for the
+  - `message: str` `= ''` — Human-readable summary. On a block this overrides the folded per-check
   - `total_duration_ms: float` `= 0.0` — Total time for all checks in milliseconds.
   - `status: PreflightStatus` — Advisory display status (Sage UI / connector-pulse / AE event),
-  - `should_block: bool` — Whether the gate must abort the run (a required check failed).
+  - `should_block: bool` — Whether the gate must abort the run — the inverse of :attr:`passed`,
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `SqlMetadataObject`

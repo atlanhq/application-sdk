@@ -21,7 +21,7 @@ class MyHandler(Handler):
         )
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        return PreflightOutput()
+        return PreflightOutput(passed=True)
 
     async def fetch_metadata(self, input: MetadataInput) -> SqlMetadataOutput:
         return SqlMetadataOutput(objects=[
@@ -65,11 +65,12 @@ class PreflightInput(BaseModel):
     timeout_seconds: int = 60                  # max wait time
 
 class PreflightOutput(BaseModel):
-    checks: list[PreflightCheck] = [] # individual check results
+    passed: bool                      # app-supplied verdict — decides the run
+    checks: list[PreflightCheck] = [] # individual check results (display + evidence)
     message: str = ""                 # human-readable summary
     total_duration_ms: float = 0.0    # total time for all checks
-    status: PreflightStatus           # derived from checks — READY, NOT_READY, or PARTIAL
-    should_block: bool                # derived — True iff a required check failed
+    status: PreflightStatus           # derived from passed — READY or NOT_READY
+    should_block: bool                # derived — the inverse of passed
 ```
 
 ### MetadataInput / MetadataOutput

@@ -159,7 +159,7 @@ class PostgresHandler(Handler):
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
         """Run pre-extraction checks (connectivity, permissions, table counts)."""
-        return PreflightOutput(message="All checks passed")
+        return PreflightOutput(passed=True, message="All checks passed")
 
     async def fetch_metadata(self, input: MetadataInput) -> SqlMetadataOutput:
         """Return catalog/schema pairs for the Atlan UI filter tree."""
