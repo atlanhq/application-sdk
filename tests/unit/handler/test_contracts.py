@@ -88,22 +88,34 @@ class TestPreflightStatus:
 
 class TestPreflightCheck:
     def test_defaults(self):
-        check = PreflightCheck(name="connectivity")
+        check = PreflightCheck(name="connectivity", passed=True)
         assert check.name == "connectivity"
-        assert check.passed is False
-        assert check.blocking is False
+        assert check.required is False
         assert check.message == ""
         assert check.duration_ms == 0.0
+        assert check.error is None
+
+    def test_passed_must_be_stated(self):
+        # passed is the observed outcome — no silent default in either direction.
+        with pytest.raises(ValidationError):
+            PreflightCheck(name="connectivity")
+
+    def test_removed_blocking_field_is_silently_ignored(self):
+        # Clean break from the pre-release field name: extra="ignore" drops it,
+        # so a stray blocking=True does NOT gate the run. Pinned so the sharp
+        # edge is documented; adopters must rename to required=.
+        check = PreflightCheck(name="auth", passed=False, **{"blocking": True})
+        assert check.required is False
 
     def test_passed(self):
         check = PreflightCheck(
             name="connectivity",
             passed=True,
-            blocking=True,
+            required=True,
             duration_ms=50.0,
         )
         assert check.passed is True
-        assert check.blocking is True
+        assert check.required is True
         assert check.duration_ms == 50.0
 
     def test_empty_name_rejected(self):
@@ -119,7 +131,7 @@ class TestPreflightCheckFromError:
         )
         check = PreflightCheck.from_error("auth", err)
         assert check.passed is False
-        assert check.blocking is True
+        assert check.required is True
         assert check.message == "Login was rejected by the source"
         assert check.category is FailureCategory.AUTH
         assert check.suggested_action == (
@@ -145,7 +157,7 @@ class TestPreflightCheckFromError:
             "connectivity", ValueError("password=hunter2 host=prod.internal")
         )
         assert check.passed is False
-        assert check.blocking is True
+        assert check.required is True
         assert check.category is None
         assert check.error is None
         assert "hunter2" not in check.message
@@ -159,7 +171,7 @@ class TestPreflightCheckFromError:
             required=False,
             suggested_action="from the caller",
         )
-        assert check.blocking is False
+        assert check.required is False
         assert check.suggested_action == "from the caller"
 
 
@@ -179,24 +191,24 @@ class TestPreflightOutput:
         assert len(out.checks) == 2
 
     def test_should_block_only_on_failed_blocking_check(self):
-        # advisory failure (blocking=False) does NOT block
+        # advisory failure (required=False) does NOT block
         advisory = PreflightOutput(
             status=PreflightStatus.NOT_READY,
-            checks=[PreflightCheck(name="version", passed=False, blocking=False)],
+            checks=[PreflightCheck(name="version", passed=False, required=False)],
         )
         assert advisory.should_block is False
 
         # a failed blocking check blocks
         blocked = PreflightOutput(
             status=PreflightStatus.NOT_READY,
-            checks=[PreflightCheck(name="auth", passed=False, blocking=True)],
+            checks=[PreflightCheck(name="auth", passed=False, required=True)],
         )
         assert blocked.should_block is True
 
         # a passing blocking check does not block
         ok = PreflightOutput(
             status=PreflightStatus.READY,
-            checks=[PreflightCheck(name="auth", passed=True, blocking=True)],
+            checks=[PreflightCheck(name="auth", passed=True, required=True)],
         )
         assert ok.should_block is False
 

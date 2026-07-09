@@ -310,7 +310,7 @@ class PreflightStatus(SerializableEnum):
 
     Surfaced to the Sage UI, the connector-pulse dashboard, and the Automation
     Engine event. It does **not** decide whether a run is blocked: that is the
-    gate's job, driven by per-check :attr:`PreflightCheck.blocking` and folded
+    gate's job, driven by per-check :attr:`PreflightCheck.required` and folded
     into :attr:`PreflightOutput.should_block`. Keeping status purely advisory
     avoids overloading one field with two concerns (display vs gate decision).
     """
@@ -326,17 +326,22 @@ class PreflightCheck(BaseModel):
     name: str = Field(..., min_length=1)
     """Check name (e.g., 'connectivity', 'permissions')."""
 
-    passed: bool = False
-    """Whether the check passed."""
+    passed: bool
+    """Whether the check passed — the observed outcome, stated explicitly.
 
-    blocking: bool = False
-    """Whether failing this check must stop the run before extraction.
+    No default: an outcome must be declared, never inherited. A silent default
+    would report failure (or success) for a check whose author simply forgot
+    to set it."""
+
+    required: bool = False
+    """Declared severity: whether this check gates extraction.
 
     Advisory checks (e.g. server version, optional permissions) leave this
     ``False`` — they surface in the UI but never block. A failed check with
-    ``blocking=True`` aborts the run via :attr:`PreflightOutput.should_block`.
-    Defaults to ``False`` so blocking is always an explicit, per-check opt-in.
-    """
+    ``required=True`` aborts the run via :attr:`PreflightOutput.should_block`.
+    Defaults to ``False`` so gating is always an explicit, per-check opt-in.
+    Meaningful on passing checks too: it declares what *would* block, not how
+    a failure was handled."""
 
     message: str = ""
     """What happened — a clean, single-sentence description of the check result.
@@ -346,16 +351,17 @@ class PreflightCheck(BaseModel):
     Says *what* went wrong, not what to do — see :attr:`suggested_action`."""
 
     category: FailureCategory | None = None
-    """Typed failure category for a blocking failure.
+    """Typed failure category for a required-check failure.
 
     When this check is the one that blocks the run, the gate carries this category
     to the Automation Engine (via the canonical wire ``FailureDetails``) so the
     abort is attributed — ``AUTH`` / ``SOURCE_UNAVAILABLE`` / ``PERMISSION`` / … —
     instead of an opaque preflight failure. The category also fixes the canonical
     ``code`` / ``audience`` / retryability of the leaf it maps to. ``None`` → the
-    gate defaults to ``PRECONDITION``. Ignored unless the check is blocking and
-    failed; a raise from the handler no longer blocks (the gate fails open), so
-    this is how a handler expresses a *typed* block."""
+    gate defaults to ``PRECONDITION``. Ignored unless the check is required and
+    failed; a raise from the handler does not block (the gate fails open), so
+    a returned check is how a handler expresses a *typed* block. Prefer
+    :attr:`error` (via :meth:`from_error`) for full code-level fidelity."""
 
     suggested_action: str = ""
     """Optional remediation — what the reader should DO about a failure.
@@ -364,7 +370,7 @@ class PreflightCheck(BaseModel):
     concrete, audience-appropriate next step, and only for **user-fixable**
     failures. Leave empty for internal/unexpected failures the reader can't act on
     (a "verify your credentials" hint on an app bug is misleading). Flows into the
-    abort's ``FailureDetails.suggested_action`` for a blocking failure."""
+    abort's ``FailureDetails.suggested_action`` for a required-check failure."""
 
     duration_ms: float = 0.0
     """How long the check took in milliseconds."""
@@ -406,7 +412,7 @@ class PreflightCheck(BaseModel):
             return cls(
                 name=name,
                 passed=False,
-                blocking=required,
+                required=required,
                 message=error.message,
                 category=error.category,
                 suggested_action=suggested_action or (error.suggested_action or ""),
@@ -415,7 +421,7 @@ class PreflightCheck(BaseModel):
         return cls(
             name=name,
             passed=False,
-            blocking=required,
+            required=required,
             message=f"{name} check failed ({type(error).__name__})",
             suggested_action=suggested_action,
         )
@@ -486,7 +492,7 @@ class PreflightOutput(BaseModel):
     ``NOT_READY`` when something is off)."""
 
     checks: list[PreflightCheck] = []
-    """Individual check results. A check's :attr:`PreflightCheck.blocking` flag
+    """Individual check results. A check's :attr:`PreflightCheck.required` flag
     decides whether failing it stops the run."""
 
     message: str = ""
@@ -497,13 +503,13 @@ class PreflightOutput(BaseModel):
 
     @property
     def should_block(self) -> bool:
-        """Whether the gate must abort the run (a blocking check failed).
+        """Whether the gate must abort the run (a required check failed).
 
-        ``True`` iff a check with ``blocking=True`` failed. Advisory failures
-        (``blocking=False``) never block, and a handler with no blocking checks
-        — the default — never blocks. Blocking is strictly opt-in: an app marks
+        ``True`` iff a check with ``required=True`` failed. Advisory failures
+        (``required=False``) never block, and a handler with no required checks
+        — the default — never blocks. Gating is strictly opt-in: an app marks
         the checks that gate extraction and the SDK derives the rest."""
-        return any(check.blocking and not check.passed for check in self.checks)
+        return any(check.required and not check.passed for check in self.checks)
 
 
 # PreflightGateInput lives in application_sdk.execution._temporal.preflight_gate —

@@ -143,13 +143,13 @@ class TestPreflightGateActivity:
 
     async def test_warns_when_not_ready_without_blocking_check(self) -> None:
         """A handler that reports not_ready but marks no check blocking lets the
-        run proceed — almost always a forgotten blocking=True. The gate warns."""
+        run proceed — almost always a forgotten required=True. The gate warns."""
 
         class _SoftFailHandler(DefaultHandler):
             async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
                 return PreflightOutput(
                     status=PreflightStatus.NOT_READY,
-                    checks=[PreflightCheck(name="auth", passed=False, blocking=False)],
+                    checks=[PreflightCheck(name="auth", passed=False, required=False)],
                 )
 
         gate = build_preflight_gate_activity(_SoftFailHandler(), app_name="myapp")
@@ -169,7 +169,7 @@ class TestPreflightGateActivity:
             async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
                 return PreflightOutput(
                     status=PreflightStatus.NOT_READY,
-                    checks=[PreflightCheck(name="auth", passed=False, blocking=True)],
+                    checks=[PreflightCheck(name="auth", passed=False, required=True)],
                 )
 
         gate_ready = _gate(_StubHandler())

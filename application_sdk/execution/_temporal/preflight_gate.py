@@ -261,16 +261,16 @@ def build_preflight_gate_activity(
             len(result.checks),
         )
         # Catch the un-migrated-handler trap: a handler that reports a problem via
-        # advisory status but marks no check blocking lets the run proceed — the
-        # backward-compat default, but almost always a forgotten blocking=True.
+        # advisory status but marks no check required lets the run proceed — the
+        # backward-compat default, but almost always a forgotten required=True.
         if not result.should_block and result.status in (
             PreflightStatus.NOT_READY,
             PreflightStatus.PARTIAL,
         ):
             logger.warning(
-                "Preflight reported %s but no check is marked blocking — the gate will "
+                "Preflight reported %s but no check is marked required — the gate will "
                 "NOT stop this run. If a failing check must abort extraction, set "
-                "blocking=True on it in Handler.preflight_check (entrypoint=%s, checks=%d).",
+                "required=True on it in Handler.preflight_check (entrypoint=%s, checks=%d).",
                 result.status.value,
                 input.entrypoint or "<implicit>",
                 len(result.checks),

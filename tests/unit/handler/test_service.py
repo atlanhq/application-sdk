@@ -624,7 +624,7 @@ class TestPreflightEndpoint:
                         PreflightCheck(
                             name="loginCheck",
                             passed=False,
-                            blocking=True,
+                            required=True,
                             message="Credentials are invalid",
                         )
                     ],
@@ -638,7 +638,7 @@ class TestPreflightEndpoint:
         assert body["data"]["loginCheck"]["success"] is False
         assert body["preflight"]["should_block"] is True
         assert body["preflight"]["status"] == "not_ready"
-        assert body["preflight"]["checks"][0]["blocking"] is True
+        assert body["preflight"]["checks"][0]["required"] is True
         assert "status" not in body["data"]
         assert "checks" not in body["data"]
 

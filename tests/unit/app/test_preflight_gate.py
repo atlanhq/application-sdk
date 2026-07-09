@@ -53,7 +53,7 @@ def _blocking() -> PreflightOutput:
             PreflightCheck(
                 name="auth",
                 passed=False,
-                blocking=True,
+                required=True,
                 message="Auth failed: bad creds",
             )
         ],
@@ -69,7 +69,7 @@ def _advisory_failure() -> PreflightOutput:
     """A failed NON-blocking check → should_block is False (advisory only)."""
     return PreflightOutput(
         status=PreflightStatus.NOT_READY,
-        checks=[PreflightCheck(name="version", passed=False, blocking=False)],
+        checks=[PreflightCheck(name="version", passed=False, required=False)],
     )
 
 
@@ -113,10 +113,10 @@ class TestRunPreflightGate:
             status=PreflightStatus.NOT_READY,
             checks=[
                 PreflightCheck(
-                    name="auth", passed=False, blocking=True, message="auth blocked"
+                    name="auth", passed=False, required=True, message="auth blocked"
                 ),
                 PreflightCheck(
-                    name="version", passed=False, blocking=False, message="old version"
+                    name="version", passed=False, required=False, message="old version"
                 ),
             ],
         )
@@ -131,7 +131,7 @@ class TestRunPreflightGate:
         # A blocking failure with no message still aborts with the generic reason.
         verdict = PreflightOutput(
             status=PreflightStatus.NOT_READY,
-            checks=[PreflightCheck(name="auth", passed=False, blocking=True)],
+            checks=[PreflightCheck(name="auth", passed=False, required=True)],
         )
         exec_mock, exec_patch = _exec(verdict)
         with _patched(True), exec_patch:
@@ -146,10 +146,10 @@ class TestRunPreflightGate:
             status=PreflightStatus.NOT_READY,
             checks=[
                 PreflightCheck(
-                    name="auth", passed=False, blocking=True, message="auth down"
+                    name="auth", passed=False, required=True, message="auth down"
                 ),
                 PreflightCheck(
-                    name="net", passed=False, blocking=True, message="host unreachable"
+                    name="net", passed=False, required=True, message="host unreachable"
                 ),
             ],
         )
@@ -169,7 +169,7 @@ class TestRunPreflightGate:
             message="Summary: 3 of 5 checks failed",
             checks=[
                 PreflightCheck(
-                    name="auth", passed=False, blocking=True, message="auth down"
+                    name="auth", passed=False, required=True, message="auth down"
                 ),
             ],
         )
@@ -190,7 +190,7 @@ class TestRunPreflightGate:
                 PreflightCheck(
                     name="auth",
                     passed=False,
-                    blocking=True,
+                    required=True,
                     message="Auth failed",
                     category=FailureCategory.AUTH,
                     suggested_action="Rotate the credential",
@@ -227,13 +227,13 @@ class TestRunPreflightGate:
                 PreflightCheck(
                     name="a",
                     passed=False,
-                    blocking=True,
+                    required=True,
                     category=FailureCategory.SOURCE_UNAVAILABLE,
                 ),
                 PreflightCheck(
                     name="b",
                     passed=False,
-                    blocking=True,
+                    required=True,
                     category=FailureCategory.PERMISSION,
                 ),
             ],

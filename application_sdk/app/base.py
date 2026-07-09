@@ -1630,7 +1630,7 @@ async def _run_preflight_gate(
     # PRECONDITION), rebuilt as canonical FailureDetails so AE attributes the
     # abort from structured details, not the opaque "PreflightFailed" type.
     blocking_failures = [
-        check for check in result.checks if check.blocking and not check.passed
+        check for check in result.checks if check.required and not check.passed
     ]
     reason = (
         result.message

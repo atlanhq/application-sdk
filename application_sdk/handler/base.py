@@ -151,11 +151,13 @@ class Handler(ABC):
           HTTP error (``HandlerError`` → 500).
         * **The injected pre-extraction gate.** To *abort a run*, return a
           :class:`~application_sdk.handler.contracts.PreflightOutput` whose
-          failing check is marked ``blocking=True`` (put the reason in the
-          check's ``message``, and optionally set its ``category`` for typed
-          attribution). A **raise does NOT reliably block at the gate** — the
+          failing check is marked ``required=True`` — build it with
+          :meth:`PreflightCheck.from_error
+          <application_sdk.handler.contracts.PreflightCheck.from_error>` from a
+          caught exception so a typed ``AppError`` keeps its code-level
+          classification. A **raise does NOT reliably block at the gate** — the
           gate fails open on any error it can't turn into a verdict, so a raised
-          error is treated as "couldn't verify → proceed". Express blocking
+          error is treated as "couldn't verify → proceed". Express a block
           through the returned verdict, not by raising.
 
         Args:
@@ -164,8 +166,8 @@ class Handler(ABC):
                 ``connection_config``/form ``metadata`` on that path).
 
         Returns:
-            PreflightOutput with per-check results and overall status; a failed
-            ``blocking=True`` check aborts extraction at the gate.
+            PreflightOutput with per-check results; a failed ``required=True``
+            check aborts extraction at the gate.
         """
         ...
 
@@ -201,9 +203,9 @@ class DefaultHandler(Handler):
         )
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        """Returns a non-blocking no-op result when no handler is registered.
+        """Returns a non-gating no-op result when no handler is registered.
 
-        No checks → no blocking checks → ``should_block`` is ``False``."""
+        No checks → no required checks → ``should_block`` is ``False``."""
         return PreflightOutput(
             status=PreflightStatus.READY, message="No preflight handler registered"
         )
