@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.21.1
-source-sha:    c36fa340d85acc23f19fcf338fa1c600fce82fb7
-source-date:   2026-07-08T20:11:44+05:30
+source-sha:    33d93ea18e33714011906c03d57cd2c91cb95894
+source-date:   2026-07-09T10:31:27+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2128,7 +2128,7 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Import:** `from application_sdk.storage import download_file_chunked`
 - **Signature:** `download_file_chunked(key: str, ...)`
 - **Summary:** Download *key* using parallel range GETs, writing chunks at fixed offsets.
-- **Defined in:** `application_sdk/storage/ops.py`
+- **Defined in:** `application_sdk/storage/chunked.py`
 
 #### `download_prefix`
 

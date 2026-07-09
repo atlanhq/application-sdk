@@ -667,7 +667,7 @@ class TestClassifyTransferError:
         ],
     )
     def test_families(self, error_class, family) -> None:
-        from application_sdk.storage.ops import _classify_transfer_error
+        from application_sdk.storage._telemetry import _classify_transfer_error
 
         assert _classify_transfer_error(error_class, "") == family
 
@@ -1375,9 +1375,9 @@ class TestTransferMetrics:
 
 class TestTransferProgressHeartbeat:
     def test_emits_info_with_structured_fields(self) -> None:
-        from application_sdk.storage.ops import _log_transfer_progress
+        from application_sdk.storage._telemetry import _log_transfer_progress
 
-        with patch("application_sdk.storage.ops.logger") as mock_logger:
+        with patch("application_sdk.storage._telemetry.logger") as mock_logger:
             _log_transfer_progress(
                 "download",
                 "big/f.bin",
@@ -1398,9 +1398,9 @@ class TestTransferProgressHeartbeat:
         assert kwargs["throughput_mibps"] == pytest.approx(1.0, rel=0.05)
 
     def test_no_total_omits_percentage(self) -> None:
-        from application_sdk.storage.ops import _log_transfer_progress
+        from application_sdk.storage._telemetry import _log_transfer_progress
 
-        with patch("application_sdk.storage.ops.logger") as mock_logger:
+        with patch("application_sdk.storage._telemetry.logger") as mock_logger:
             _log_transfer_progress("upload", "k", bytes_so_far=10, elapsed_ms=1000.0)
         args, _ = mock_logger.log.call_args
         assert "%" not in args[1]
@@ -1416,7 +1416,7 @@ class TestTransferProgressHeartbeat:
                 "application_sdk.constants.STORAGE_PROGRESS_LOG_INTERVAL_SECONDS",
                 1e-9,  # every chunk crosses the interval boundary
             ),
-            patch("application_sdk.storage.ops._log_transfer_progress") as mock_hb,
+            patch("application_sdk.storage.chunked._log_transfer_progress") as mock_hb,
         ):
             await download_file_chunked(
                 "hb/f.bin",
@@ -1434,7 +1434,7 @@ class TestTransferProgressHeartbeat:
         out = tmp_path / "g.bin"
         with (
             patch("application_sdk.constants.STORAGE_PROGRESS_LOG_INTERVAL_SECONDS", 0),
-            patch("application_sdk.storage.ops._log_transfer_progress") as mock_hb,
+            patch("application_sdk.storage.chunked._log_transfer_progress") as mock_hb,
         ):
             await download_file_chunked(
                 "hb/g.bin",

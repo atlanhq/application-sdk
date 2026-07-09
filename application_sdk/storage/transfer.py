@@ -196,6 +196,8 @@ async def _upload_from_store(
         return True, "uploaded"
     finally:
         tmp.unlink(missing_ok=True)
+        # Belt-and-braces: never strand a checkpoint sidecar for a temp file.
+        Path(str(tmp) + ".transfer-state").unlink(missing_ok=True)
 
 
 async def _download_one(
