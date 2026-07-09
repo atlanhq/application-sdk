@@ -418,6 +418,38 @@ class TestRequireLiveManifest:
         with pytest.raises(ManifestFileNotFoundError, match="use_live_manifest"):
             self.harness._seed_dag_from_live_or_committed_manifest("atlan-openapi-1")
 
+    def test_sdk_level_legacy_seed_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """manifest_path='' (hand-crafted legacy seed) never exercises the
+        manifest, so an SDK-level run must fail rather than green-light the
+        toolkit change."""
+        monkeypatch.setenv("ATLAN_E2E_REQUIRE_LIVE_MANIFEST", "true")
+        with pytest.raises(ManifestFileNotFoundError, match="manifest_path"):
+            self.harness._guard_legacy_seed_allowed()
+
+    def test_app_level_legacy_seed_allowed(self) -> None:
+        """Without the SDK-level flag, the legacy-seed path stays available."""
+        self.harness._guard_legacy_seed_allowed()  # no raise
+
+    def test_seed_from_dict_does_not_mutate_input(self, tmp_path: Path) -> None:
+        """The passed-in manifest dict must stay pristine (memoization safety)."""
+        live = {
+            "dag": {
+                "extract": {
+                    "inputs": {
+                        "task_queue": "atlan-openapi-{deployment_name}",
+                        "args": {},
+                    }
+                }
+            }
+        }
+        before = json.dumps(live, sort_keys=True)
+        harness = _ConcreteE2ETest()
+        harness.tenant_deployment_name = "production"  # type: ignore[attr-defined]
+        harness._seed_dag_from_manifest("atlan-openapi-1", manifest=live)
+        assert json.dumps(live, sort_keys=True) == before
+
 
 # ---------------------------------------------------------------------------
 # setup_method — two-store / RunMode.DIRECT warning

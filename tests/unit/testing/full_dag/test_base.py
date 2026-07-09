@@ -570,3 +570,16 @@ def test_sdk_level_opt_out_raises_instead_of_stale_fallback(
     monkeypatch.setenv("ATLAN_E2E_REQUIRE_LIVE_MANIFEST", "true")
     with pytest.raises(ManifestFileNotFoundError, match="use_live_manifest"):
         inst._seed_dag_from_live_or_committed_manifest("atlan-mysql-ci")
+
+
+def test_sdk_level_legacy_seed_raises(
+    manifest_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """manifest_path='' (hand-crafted legacy seed) never exercises the manifest,
+    so an SDK-level run must fail rather than green-light the toolkit change."""
+    from application_sdk.testing.full_dag._errors import ManifestFileNotFoundError
+
+    inst = _instance(manifest_file, monkeypatch)
+    monkeypatch.setenv("ATLAN_E2E_REQUIRE_LIVE_MANIFEST", "true")
+    with pytest.raises(ManifestFileNotFoundError, match="manifest_path"):
+        inst._guard_legacy_seed_allowed()

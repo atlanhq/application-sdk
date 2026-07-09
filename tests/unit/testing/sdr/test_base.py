@@ -532,6 +532,28 @@ def test_sdk_level_no_client_raises(tmp_path, monkeypatch) -> None:
         _Suite()._manifest_extract_inputs()
 
 
+def test_load_manifest_memoizes_per_instance(tmp_path) -> None:
+    """The manifest is invariant within a run — /manifest is hit once, and a
+    caller mutating its view must not pollute the cache."""
+
+    class _Suite(BaseSDRIntegrationTest):
+        manifest_path = _write_manifest(tmp_path, _committed_manifest_args())
+        scenarios = []
+
+    suite = _Suite()
+    suite.client = MagicMock()
+    suite.client.get_manifest.return_value = {
+        "dag": {"extract": {"inputs": {"args": {"x": 1}}}}
+    }
+
+    first = suite._load_manifest()
+    first["dag"]["extract"]["inputs"]["args"]["x"] = "mutated"
+    second = suite._load_manifest()
+
+    assert suite.client.get_manifest.call_count == 1
+    assert second["dag"]["extract"]["inputs"]["args"]["x"] == 1
+
+
 # ---------------------------------------------------------------------------
 # SDR readiness — dynamic assertions: assets landed (count + location) + floor
 # ---------------------------------------------------------------------------

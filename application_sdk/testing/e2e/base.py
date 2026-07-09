@@ -31,6 +31,7 @@ To skip the whole class when the harness env isn't configured::
 
 from __future__ import annotations
 
+import copy
 import os
 import time
 from dataclasses import dataclass, field
@@ -551,7 +552,9 @@ class BaseE2ETest:
         """
 
         if manifest is not None:
-            manifest_obj: Any = manifest
+            # Deep-copy: the substitutions below rewrite nodes in place, and
+            # the caller's dict must stay pristine (e.g. a memoized fetch).
+            manifest_obj: Any = copy.deepcopy(manifest)
             source = "the running app's live /manifest"
         else:
             path = Path(self.manifest_path)
@@ -664,6 +667,7 @@ class BaseE2ETest:
             # file when the endpoint is unreachable.
             seed_dag = self._seed_dag_from_live_or_committed_manifest(extract_queue)
         else:
+            self._guard_legacy_seed_allowed()
             logger.info("manifest_path empty — falling back to _build_legacy_seed_dag")
             seed_dag = self._build_legacy_seed_dag(extract_queue)
 
@@ -765,6 +769,27 @@ class BaseE2ETest:
         """
         return os.environ.get("ATLAN_E2E_REQUIRE_LIVE_MANIFEST", "").lower() == "true"
 
+    def _guard_legacy_seed_allowed(self) -> None:
+        """Fail an SDK-level run that would build a hand-crafted legacy seed.
+
+        A class with ``manifest_path=""`` never consumes a manifest at all, so
+        its passing run says nothing about the Contract Toolkit change under
+        test — the same false green the live-manifest guard exists to prevent
+        (BLDX-1493).
+        """
+        if self._require_live_manifest():
+            raise ManifestFileNotFoundError(
+                message=(
+                    "ATLAN_E2E_REQUIRE_LIVE_MANIFEST is set (SDK-level cross-repo "
+                    "run) but this test class sets manifest_path='' (hand-crafted "
+                    "legacy seed). Such a run never exercises the manifest and "
+                    "would give a false green for the Contract Toolkit change "
+                    "under test (BLDX-1493). Set manifest_path, or skip this test "
+                    "for SDK-level runs."
+                ),
+                resource_identifier=self.app_manifest_base_url,
+            )
+
     def _fetch_live_manifest(self) -> dict | None:
         """GET ``{app_manifest_base_url}/workflows/v1/manifest`` → dict or None.
 
@@ -785,7 +810,10 @@ class BaseE2ETest:
             )
             return None
         if resp.status_code != 200:
-            logger.warning("Live manifest %s returned HTTP %d", url, resp.status_code)
+            # 4xx is a permanent misconfiguration (endpoint disabled, wrong
+            # path on the new image) — surface it louder than a transient 5xx.
+            log = logger.error if 400 <= resp.status_code < 500 else logger.warning
+            log("Live manifest %s returned HTTP %d", url, resp.status_code)
             return None
         try:
             manifest = resp.json()

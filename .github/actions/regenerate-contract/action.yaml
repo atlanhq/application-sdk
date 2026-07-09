@@ -100,12 +100,16 @@ runs:
         SDK_REF: ${{ inputs.application-sdk-ref }}
       run: |
         set -euo pipefail
+        # Refs are branch names / SHAs: require a leading alphanumeric so a
+        # value like `--recurse-submodules=…` can never reach git as an option
+        # (grep -q fails the step on mismatch under pipefail — no if/else).
+        echo "$SDK_REF" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._/-]*$'
         SDK_DIR="$(mktemp -d)/application-sdk"
         "${{ github.action_path }}/../../scripts/with-retry.sh" \
           git clone --quiet --filter=blob:none --no-checkout https://github.com/atlanhq/application-sdk "$SDK_DIR"
         git -C "$SDK_DIR" sparse-checkout init --cone
         git -C "$SDK_DIR" sparse-checkout set contract-toolkit/src
-        git -C "$SDK_DIR" checkout --quiet "$SDK_REF"
+        git -C "$SDK_DIR" checkout --quiet "$SDK_REF" --
         echo "toolkit-src=${SDK_DIR}/contract-toolkit/src" >> "$GITHUB_OUTPUT"
         echo "Using SDK contract-toolkit/src from ${SDK_REF}"
 

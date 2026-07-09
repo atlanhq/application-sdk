@@ -165,12 +165,17 @@ def _format_generated(root: Path) -> None:
 def warn_on_drift() -> bool:
     """Warn (never fail) when the committed contract artifacts differ from the
     freshly-generated ones. Compares the working tree (just regenerated in
-    place) against HEAD. Returns True when drift was found."""
+    place) against HEAD via ``git status --porcelain`` — unlike ``git diff``,
+    that also surfaces a path the contract stopped emitting (deletion) or a
+    newly-emitted file (untracked). Returns True when drift was found."""
     drifted = [
         path
         for path in OUTPUT_PATHS
-        if os.path.exists(path)
-        and run(["git", "diff", "--quiet", "--", path]).returncode != 0
+        if subprocess.run(
+            ["git", "status", "--porcelain", "--", path],
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
     ]
     if drifted:
         print(

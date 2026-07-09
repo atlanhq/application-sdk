@@ -242,6 +242,27 @@ def test_sdk_level_empty_eval_output_is_fatal(repo, monkeypatch, tmp_path, capsy
     assert "::error::pkl eval" in capsys.readouterr().out
 
 
+def test_drift_warns_on_newly_emitted_untracked_file(repo, monkeypatch, capsys):
+    """A file the contract newly emits (untracked, invisible to `git diff`)
+    must still count as drift — `git status --porcelain` sees it."""
+    real_fake = _make_fake_run(repo)
+
+    def fake_run(cmd, *, check=False):
+        result = real_fake(cmd, check=check)
+        if cmd[0] == "pkl" and cmd[1] == "eval":
+            extra = repo / "app" / "generated" / "new-ep" / "manifest.json"
+            extra.parent.mkdir(exist_ok=True)
+            extra.write_text("{}\n")
+        return result
+
+    monkeypatch.setattr(mod, "run", fake_run)
+
+    assert mod.main(["--check-drift", "true"]) == 0
+
+    out = capsys.readouterr().out
+    assert "::warning::Committed contract artifacts are stale" in out
+
+
 def test_override_toolkit_rewrites_block_form(tmp_path):
     pkl_project = tmp_path / "PklProject"
     pkl_project.write_text(REMOTE_PKLPROJECT)

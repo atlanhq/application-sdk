@@ -48,6 +48,7 @@ Example:
 
 from __future__ import annotations
 
+import copy
 import os
 import shutil
 from pathlib import Path
@@ -169,6 +170,10 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
     #: Required for :pyattr:`require_upstream_assets_landed`.
     upstream_output_base_path: ClassVar[str | None] = None
 
+    #: Per-instance memo for :meth:`_load_manifest` (the manifest is invariant
+    #: within a test run). Class-level default None; set on the instance.
+    _cached_manifest: dict[str, Any] | None = None
+
     def _build_scenario_args(self, scenario: Scenario) -> dict[str, Any]:
         args = super()._build_scenario_args(scenario)
         if scenario.api.lower() != "workflow":
@@ -197,7 +202,19 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
         Raises if neither source yields a manifest — a manifest-driven SDR test
         with no usable manifest is a config error, not something to silently
         fall back on.
+
+        The result is memoized per test instance (the manifest is invariant
+        within a run, and this is called once per workflow scenario); a deep
+        copy is returned so a caller mutating its view cannot pollute the
+        cache.
         """
+        cached = getattr(self, "_cached_manifest", None)
+        if cached is not None:
+            return copy.deepcopy(cached)
+        self._cached_manifest = self._fetch_manifest_uncached()
+        return copy.deepcopy(self._cached_manifest)
+
+    def _fetch_manifest_uncached(self) -> dict[str, Any]:
         client = getattr(self, "client", None)
         live = None
         if client is not None and hasattr(client, "get_manifest"):
