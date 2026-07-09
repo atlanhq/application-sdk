@@ -1205,6 +1205,7 @@ jobs:
         env:
           GHCR_IMAGE:      ${{ needs.prepare.outputs.ghcr_image }}
           DOCKERHUB_IMAGE: ${{ needs.prepare.outputs.dockerhub_image }}
+          RELEASE_TAGS:    ${{ needs.prepare.outputs.release_tags }}
         run: |
           set -euo pipefail
           # Use `crane copy`, not `docker buildx imagetools create`, for the
@@ -1217,6 +1218,13 @@ jobs:
           # login steps above.
           crane copy "${GHCR_IMAGE}" "${DOCKERHUB_IMAGE}"
           echo "Pushed to DockerHub: ${DOCKERHUB_IMAGE}"
+
+          # Mirror the release version-tag ladder (e.g. :2.0.1, :2.0, :2, :latest)
+          # onto Docker Hub. Branching logic lives in a tested script per
+          # docs/standards/ci.md.
+          python3 .github/scripts/mirror_tags_dockerhub.py \
+            --dockerhub-image "${DOCKERHUB_IMAGE}" \
+            --release-tags "${RELEASE_TAGS}"
 
           # Resolve the pushed manifest digest so we can sign by digest (immutable)
           # rather than by tag (mutable). `${DOCKERHUB_IMAGE%%:*}` strips the tag.
