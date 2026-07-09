@@ -1578,9 +1578,6 @@ async def _run_preflight_gate(
             is_preflight_block,
             preflight_gate_activity_name,
         )
-        from application_sdk.handler.contracts import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
-            PreflightOutput,
-        )
 
     if not isinstance(input_data, CredentialResolvable):
         return
@@ -1591,7 +1588,6 @@ async def _run_preflight_gate(
         await workflow.execute_activity(
             preflight_gate_activity_name(app_name),
             gate_input,
-            result_type=PreflightOutput,
             schedule_to_close_timeout=GATE_SCHEDULE_TO_CLOSE,
             start_to_close_timeout=GATE_START_TO_CLOSE,
             retry_policy=GATE_RETRY,

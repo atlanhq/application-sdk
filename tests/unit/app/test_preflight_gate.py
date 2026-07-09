@@ -164,17 +164,6 @@ class TestRunPreflightGate:
             with pytest.raises(asyncio.CancelledError):
                 await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
 
-    async def test_dispatches_activity_with_preflight_output_result_type(
-        self, safe_log
-    ) -> None:
-        exec_mock, exec_patch = _exec(
-            PreflightOutput(status=PreflightStatus.READY, checks=[])
-        )
-        with _patched(True), exec_patch:
-            await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
-        _, kwargs = exec_mock.call_args
-        assert kwargs.get("result_type") is PreflightOutput
-
     async def test_forwards_routing_fields_to_activity(self, safe_log) -> None:
         exec_mock, exec_patch = _exec(
             PreflightOutput(status=PreflightStatus.READY, checks=[])

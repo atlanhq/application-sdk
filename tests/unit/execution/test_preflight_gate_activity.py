@@ -381,16 +381,18 @@ class TestPreflightGateActivity:
         # Minimal fallback: routing fields from the bad input are not present
         assert gate_input.credential_guid == ""
 
-    async def test_gate_mirrors_metadata_into_connection_config(self) -> None:
+    async def test_gate_mirrors_config_into_metadata_and_connection_config(
+        self,
+    ) -> None:
         # Handlers may read config from either metadata or connection_config; the
-        # gate mirrors metadata into both, matching the HTTP /check path.
+        # gate builds both from the snapshot, matching the HTTP /check path.
         handler = _StubHandler()
         gate = _gate(handler)
 
         await gate(
             PreflightGateInput(
                 entrypoint="crawl",
-                metadata={"include-filter": {"^db$": ["^s$"]}},
+                extraction_snapshot={"include-filter": {"^db$": ["^s$"]}},
             )
         )
 

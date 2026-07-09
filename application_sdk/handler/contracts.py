@@ -335,11 +335,13 @@ class PreflightCheck(BaseModel):
     error: FailureDetails | None = None
     """Typed failure for a failed check — set only on failed checks.
 
-    Pass an SDK ``AppError`` (e.g. ``AuthError(message=..., suggested_action=...,
-    cause=exc)``); it is converted to the wire ``FailureDetails``, which carries
-    category / code / audience / retryable / suggested_action and a redacted,
-    capped ``cause_repr``. Takes precedence over :attr:`message`. Ignored on a
-    passed check."""
+    Pass a wire ``FailureDetails``, e.g.
+    ``AuthError(message=..., suggested_action=..., cause=exc).to_failure_details()``
+    — the statically-typed form. A bare ``AppError`` instance is also accepted at
+    runtime (a field validator coerces it), but type-checkers require the explicit
+    ``.to_failure_details()`` call. Carries category / code / audience / retryable
+    / suggested_action and a redacted, capped ``cause_repr``. Takes precedence over
+    :attr:`message`. Ignored on a passed check."""
 
     duration_ms: float = 0.0
     """How long the check took in milliseconds."""
@@ -435,11 +437,6 @@ class PreflightOutput(BaseModel):
 
     total_duration_ms: float = 0.0
     """Total time for all checks in milliseconds."""
-
-
-# PreflightGateInput lives in application_sdk.execution._temporal.preflight_gate —
-# it is the gate's workflow-to-activity envelope, not a handler-facing contract,
-# and handlers never see it.
 
 
 # ---------------------------------------------------------------------------

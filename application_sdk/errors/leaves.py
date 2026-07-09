@@ -286,29 +286,3 @@ class UnimplementedError(AppError):
     default_retryable: ClassVar[bool] = False
     code: ClassVar[str] = "UNIMPLEMENTED"
     audience: ClassVar[Audience] = Audience.APP_OWNER
-
-
-# Canonical leaf per FailureCategory, keyed off each leaf's own ``category``
-# ClassVar so the map can't drift from the classes. Lets a caller that has only
-# a category (e.g. the preflight gate rebuilding a failure from a returned
-# verdict) reach the leaf that fixes the canonical code / audience / retryable.
-LEAF_BY_CATEGORY: dict[FailureCategory, type[AppError]] = {
-    cls.category: cls
-    for cls in (
-        CancelledError,
-        AppTimeoutError,
-        RateLimitedError,
-        AuthError,
-        AppPermissionDeniedError,
-        NotFoundError,
-        AlreadyExistsError,
-        InvalidInputError,
-        PreconditionError,
-        DependencyUnavailableError,
-        SourceUnavailableError,
-        ResourceExhaustedError,
-        DataIntegrityError,
-        InternalError,
-        UnimplementedError,
-    )
-}

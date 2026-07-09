@@ -224,14 +224,3 @@ def test_internal_error_classification_pending_set() -> None:
     e = InternalError(message="unclassified failure", classification_pending=True)
     fd = e.to_failure_details()
     assert fd.evidence["classification_pending"] is True
-
-
-def test_leaf_by_category_covers_every_category() -> None:
-    # Callers that hold only a category (e.g. the preflight gate) must be able to
-    # reach a leaf for ANY FailureCategory. If a category is added without a leaf,
-    # this fails loudly rather than KeyError-ing at runtime.
-    from application_sdk.errors.leaves import LEAF_BY_CATEGORY
-
-    assert set(LEAF_BY_CATEGORY) == set(FailureCategory)
-    for category, cls in LEAF_BY_CATEGORY.items():
-        assert cls.category is category

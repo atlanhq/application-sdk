@@ -33,6 +33,7 @@ with workflow.unsafe.imports_passed_through():
         BaseConnectionConfig,
         BaseMetadataConfig,
         HandlerCredential,
+        PreflightCheck,
         PreflightInput,
         PreflightOutput,
         PreflightStatus,
@@ -119,10 +120,6 @@ class PreflightGateInput(BaseModel):
 
     entrypoint: str = ""
     """Bare entry-point name of the gated workflow (for per-entrypoint checks)."""
-
-    metadata: BaseMetadataConfig = Field(default_factory=BaseMetadataConfig)
-    """Form-level metadata fallback for gate inputs built without a model_dump-capable
-    extraction input (e.g. manually constructed in tests or by an older caller)."""
 
     extraction_snapshot: dict[str, Any] = Field(default_factory=dict)
     """Raw ``model_dump(mode='json')`` of the extraction input.
@@ -227,7 +224,7 @@ def _config_from_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     return config
 
 
-def _dump_check(check: Any) -> dict[str, Any]:
+def _dump_check(check: PreflightCheck) -> dict[str, Any]:
     dumped = check.model_dump(mode="json", exclude_none=True)
     dumped["message"] = check.resolved_message
     return dumped
@@ -299,14 +296,9 @@ def build_preflight_gate_activity(
                 )
             raw = await CredentialResolver(secret_store).resolve_raw(ref) or {}
             credentials = HandlerCredential.list_from_raw(raw)
-        # Build form config from the extraction-input snapshot — runs here (activity
-        # frame) so any field reads by the app are outside the deterministic workflow.
-        # Falls back to the literal metadata field for gate inputs built without a
-        # model_dump-capable extraction input (e.g. manually constructed in tests).
-        if input.extraction_snapshot:
-            metadata_dump = _config_from_snapshot(input.extraction_snapshot)
-        else:
-            metadata_dump = input.metadata.model_dump() if input.metadata else {}
+        # Build form config from the extraction-input snapshot in the activity
+        # frame so app field reads stay outside the deterministic workflow.
+        metadata_dump = _config_from_snapshot(input.extraction_snapshot)
         preflight_input = PreflightInput(
             credentials=credentials,
             entrypoint=input.entrypoint,
