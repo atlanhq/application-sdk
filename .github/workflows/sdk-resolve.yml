@@ -54,6 +54,7 @@ jobs:
           github.event.comment.author_association == 'OWNER'
           || github.event.comment.author_association == 'MEMBER'
           || github.event.comment.author_association == 'COLLABORATOR'
+          || github.event.comment.user.login == 'atlan-ci'
         )
       )
     runs-on: ubuntu-latest
@@ -110,12 +111,51 @@ jobs:
           password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
 
       - name: Connect to VPN (attempt 3/3)
+        id: vpn3
         if: steps.vpn2.outcome == 'failure'
         uses: ./.github/actions/globalprotect-connect
+        continue-on-error: true
         with:
           portal-url: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
           username: ${{ secrets.GLOBALPROTECT_USERNAME }}
           password: ${{ secrets.GLOBALPROTECT_PASSWORD }}
+
+      # If all three VPN attempts failed, tell the PR author it died for an infra
+      # reason (not a resolver failure) so they can retry — mirrors sdk-review.yml.
+      - name: Notify PR if VPN failed after 3 attempts
+        if: steps.vpn3.outcome == 'failure'
+        env:
+          PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
+          GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PORTAL_URL: ${{ vars.GLOBALPROTECT_PORTAL_URL }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const prNumber = parseInt(process.env.PR_NUMBER, 10);
+            const runUrl = process.env.GHA_RUN_URL;
+            const body = [
+              `⚠️ **SDK Resolve failed: could not connect to VPN.**`,
+              ``,
+              `All 3 VPN connection attempts to \`${process.env.PORTAL_URL || 'the VPN portal'}\` failed. This is usually a transient infrastructure issue.`,
+              ``,
+              `[View workflow logs](${runUrl})`,
+              ``,
+              `Please retry by commenting \`@sdk-resolve\` again. If it keeps failing, flag it in \`#bu-platform-engineering\`.`,
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body,
+            });
+
+      # Explicit fail so the run flips red after the PR has been notified,
+      # instead of proceeding into a dispatch that would hang on a broken tunnel.
+      - name: Fail workflow after VPN failure notification
+        if: steps.vpn3.outcome == 'failure'
+        run: |
+          echo "::error::All 3 VPN connection attempts failed. PR has been notified — see comment posted above."
+          exit 1
 
       - name: Dispatch SDK Resolve to mothership Rover Direct API
         env:

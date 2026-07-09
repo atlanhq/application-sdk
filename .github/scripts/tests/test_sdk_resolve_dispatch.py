@@ -114,6 +114,20 @@ def test_mine_summary_from_delta_response():
     assert got["findings_fixed"] == "7" and got["merge_ready"] == "yes"
 
 
+def test_buffers_are_tail_capped_but_keep_the_trailing_summary():
+    # Simulate a long stream: lots of chatter, then the summary block at the end.
+    lines = []
+    for i in range(5000):
+        lines.append("event: thought")
+        lines.append(f'data: {{"noise": {i}}}')
+    for row in _SUMMARY_BLOCK.splitlines():
+        lines.append(f"data: {row}")
+    st = _stream(*lines)
+    assert len(st.raw_data) <= sr.BUFFER_CAP_BYTES
+    # The trailing summary survived the tail-cap.
+    assert sr.mine_summary(st)["merge_ready"] == "yes"
+
+
 def test_mine_summary_from_raw_when_not_response_event():
     lines = ["event: thought"]
     for row in _SUMMARY_BLOCK.splitlines():

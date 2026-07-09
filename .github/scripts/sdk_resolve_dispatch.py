@@ -37,6 +37,15 @@ from typing import Any
 HEALTH_RETRIES = 5
 HEALTH_BACKOFF_SECONDS = 5
 STREAM_TIMEOUT_SECONDS = 7200
+# Per-read socket idle watchdog: if no bytes arrive for this long the stream is
+# considered stalled and the runner is freed, instead of blocking the whole 2h.
+# Set just above mothership's own idle_timeout_seconds (1800) so we only fire
+# once mothership has itself given up on an idle session.
+READ_IDLE_TIMEOUT_SECONDS = 1900
+# Tail-cap for the mined buffers: over a 2h stream the raw/response text would
+# otherwise grow unbounded. The Phase 4 summary block sits at the very end, so
+# keeping the last N bytes always preserves it.
+BUFFER_CAP_BYTES = 65536
 DEFAULT_MAX_ROUNDS = 8
 
 SUMMARY_START = "=== SDK RESOLVE SUMMARY ==="
@@ -172,8 +181,9 @@ def process_line(line: str, st: SSEState) -> str | None:
         return None
 
     data = line[len("data: ") :]
-    # Event-agnostic capture so the Phase 4 block survives whichever event carries it.
-    st.raw_data += data + "\n"
+    # Event-agnostic capture so the Phase 4 block survives whichever event
+    # carries it. Tail-capped so a 2h stream can't grow the buffer unbounded.
+    st.raw_data = (st.raw_data + data + "\n")[-BUFFER_CAP_BYTES:]
     if st.event == "started":
         return f"[started]   session={_jget(data, 'session_id')} sandbox={_jget(data, 'sandbox_id')}"
     if st.event == "action":
@@ -182,8 +192,8 @@ def process_line(line: str, st: SSEState) -> str | None:
     if st.event == "thought":
         return None
     if st.event == "response":
-        # No separator — responses may stream as deltas.
-        st.response_text += _response_text(data)
+        # No separator — responses may stream as deltas. Tail-capped like raw_data.
+        st.response_text = (st.response_text + _response_text(data))[-BUFFER_CAP_BYTES:]
         return "[response]  (agent posted a response)"
     if st.event == "elicitation":
         st.errored = True
@@ -362,13 +372,16 @@ def main() -> int:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=STREAM_TIMEOUT_SECONDS) as resp:
+        # timeout is the per-read socket idle watchdog (not a whole-request cap):
+        # a silent stall frees the runner in ~READ_IDLE_TIMEOUT_SECONDS instead
+        # of blocking the full 2h. TimeoutError/OSError surface here too.
+        with urllib.request.urlopen(req, timeout=READ_IDLE_TIMEOUT_SECONDS) as resp:
             st = process_stream(raw.decode("utf-8", "replace") for raw in resp)
-    except urllib.error.URLError as e:
-        print(f"::error::Sandbox dispatch HTTP error: {e}")
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        print(f"::error::Sandbox dispatch stream error/stall: {e}")
         st = SSEState()
         st.errored = True
-        st.err_code = "http_error"
+        st.err_code = "stream_error"
         st.err_msg = str(e)
 
     write_step_summary(render_step_summary(st, pr_number, gha_run_url))

@@ -76,10 +76,22 @@ Repeat up to `MAX_ROUNDS`:
 
 ### 3a. Trigger the reviewer (its own sandbox)
 ```bash
-TRIGGER_URL=$(gh pr comment "$PR_NUMBER" --body "@sdk-review")
+TRIGGER_URL=$(gh pr comment "$PR_NUMBER" --body "@sdk-review") || TRIGGER_URL=""
+# Validate the comment actually landed — a swallowed gh failure here would make
+# 3b poll forever or latch onto a stale prior review.
+case "$TRIGGER_URL" in
+  *"#issuecomment-"*) : ;;
+  *) echo "::error::Failed to post the @sdk-review trigger comment"; exit 1 ;;
+esac
 TRIGGER_ID="${TRIGGER_URL##*issuecomment-}"
 TRIGGER_TIME=$(gh api "repos/atlanhq/application-sdk/issues/comments/$TRIGGER_ID" --jq '.created_at')
 ```
+
+> **Re-trigger identity:** `sdk-review.yml` only fires for comments from an
+> allowlisted author (OWNER/MEMBER/COLLABORATOR **or `atlan-ci`**). Your
+> `@sdk-review` comment must post as one of those — `atlan-ci` is the canonical
+> machine identity for programmatic re-triggers. If your sandbox token posts as
+> some other bot, the reviewer won't fire and 3b will time out.
 
 ### 3b. Wait for the reply
 Poll every ~30s (up to ~40 min) for a comment created **after** `TRIGGER_TIME`,
