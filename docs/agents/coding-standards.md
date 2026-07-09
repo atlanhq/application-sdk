@@ -49,7 +49,8 @@ All I/O, network calls, and non-deterministic operations go in `@task` methods.
 
 Every extraction workflow runs a `{app}:preflight` Temporal activity as its first
 step. The activity resolves credentials, calls `handler.preflight_check(PreflightInput)`,
-and aborts before extraction if any check has `blocking=True` and `passed=False`.
+and aborts before extraction when the returned `PreflightOutput.status` is `NOT_READY`
+(`READY` and `PARTIAL` proceed; `PARTIAL` is display-only).
 
 ### What the gate does
 
@@ -90,19 +91,21 @@ worker startup for any registered entrypoint whose input is not gate-eligible. T
 is to put the input on `ExtractionInput` (via the toolkit) rather than hand-rolling the
 lift.
 
-**(ii) Block by returning a check, never by raising.** The handler blocks a run by
-**returning** a `PreflightCheck(passed=False, blocking=True, category=<FailureCategory>)`;
-the gate rebuilds typed `FailureDetails` from that category. A handler that **raises**
-does *not* block — the exception escapes to the gate, which fails open and proceeds
-(see below). So `preflight_check` must catch its own probe exceptions and convert them
-to returned blocking checks (reuse a raised SDK `AppError`'s `.category`).
+**(ii) Block by returning `NOT_READY`, never by raising.** The handler blocks a run by
+**returning** `PreflightOutput(status=NOT_READY, ...)`. Attach a typed `error` to each
+failed check — `PreflightCheck(passed=False, error=AuthError(message=..., suggested_action=...,
+cause=exc))` — and the gate carries the primary failure's `FailureDetails` on the abort.
+A handler that **raises** does *not* reliably block: the exception escapes to the gate,
+which fails open and proceeds (see below). So `preflight_check` must catch its own probe
+exceptions and express the block through the returned status.
 
 ### Fail-open semantics
 
 Gate failures (infra errors, timeouts, handler crashes, activity dispatch errors) are
-**non-blocking**: the workflow logs at `error` and proceeds. Only a returned
-`PreflightOutput.should_block` verdict (a blocking check that failed) aborts the run.
-A gate failure is never treated as a blocking check.
+**non-blocking**: the workflow logs at `error` and proceeds. Only a deliberate
+`NOT_READY` verdict — surfaced as the activity raising `PreflightFailed` — aborts the
+run. Every gated run emits a structured `Preflight gate outcome` event
+(`outcome ∈ {proceeded, blocked, no_verdict}`).
 
 ### Logging contract
 
