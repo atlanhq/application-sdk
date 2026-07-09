@@ -79,3 +79,7 @@ class AppManifest(BaseModel):
     execution_mode: str
     dag: dict[str, DagNode]
     init_endpoint: str | None = None
+    # AE WorkflowOwnership ("SYSTEM" | "USER"). None when the app does not
+    # declare it — the orchestration layer then derives ownership from the app's
+    # is_system_app registry flag (and AE keeps an existing workflow's value).
+    ownership: str | None = None

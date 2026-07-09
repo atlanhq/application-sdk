@@ -1,0 +1,32 @@
+// Tests for the AE WorkflowOwnership contract field (App.ownership).
+//
+// ownership is written verbatim to manifest.json as `ownership` when set, and
+// omitted entirely when unset — so the orchestration layer applies its
+// is_system_app-derived default and AE keeps an existing workflow's ownership.
+
+amends "pkl:test"
+
+import "pkl:json"
+import "fixtures/system_ownership.pkl" as systemApp
+import "fixtures/default_pipeline.pkl" as defaultApp
+
+local systemManifest = new json.Parser { useMapping = true }.parse(
+  systemApp.output.files["app/generated/manifest.json"].text
+)
+local defaultManifest = new json.Parser { useMapping = true }.parse(
+  defaultApp.output.files["app/generated/manifest.json"].text
+)
+
+facts {
+  ["ownership = SYSTEM is emitted verbatim into the manifest"] {
+    systemManifest["ownership"] == "SYSTEM"
+  }
+
+  ["an app that omits ownership emits no ownership key (=> orchestration default)"] {
+    !defaultManifest.containsKey("ownership")
+  }
+
+  ["ownership does not disturb execution_mode"] {
+    systemManifest["execution_mode"] == "automation-engine"
+  }
+}

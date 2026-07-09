@@ -1,0 +1,8 @@
+/// Fixture: app that declares ownership = "SYSTEM".
+///
+/// Exercises the WorkflowOwnership contract field emitting into the generated
+/// manifest. Reuses the fully-defaulted default-pipeline fixture and only sets
+/// ownership, so the test isolates the ownership behaviour.
+amends "default_pipeline.pkl"
+
+ownership = "SYSTEM"

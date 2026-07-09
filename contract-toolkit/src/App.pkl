@@ -229,6 +229,14 @@ emitGeneratedArtifacts: Boolean = true
 /// can omit this property entirely.
 workflowType: String?
 
+/// AE WorkflowOwnership written to `manifest.json` as `ownership`.
+/// `"SYSTEM"` = Atlan-managed (hidden from the internal Workflow Center by
+/// default); `"USER"` = customer-managed (visible). When unset (the default),
+/// the orchestration layer resolves ownership from the app's `is_system_app`
+/// registry flag, so most apps omit this — set it only when an app's correct
+/// workflow ownership must differ from that flag.
+ownership: ("SYSTEM"|"USER")?
+
 /// Task queue prefix for the extract node in the AE manifest.
 taskQueuePrefix: String = "atlan-\(name)"
 
@@ -2156,6 +2164,11 @@ class ScheduleSpec {
 
 local manifestData: Mapping<String, Any> = new Mapping {
   ["execution_mode"] = "automation-engine"
+  // AE WorkflowOwnership; omitted when unset so the orchestration layer applies
+  // its is_system_app-derived default (and AE keeps an existing workflow's value).
+  when (ownership != null) {
+    ["ownership"] = ownership
+  }
   ["dag"] = generateDAG()
   // DISTR-815: emit triggers.schedules when the entrypoint declares schedules,
   // so the cron lives in the manifest itself (not a separate file).
