@@ -1553,8 +1553,8 @@ async def _run_preflight_gate(
 
     Dispatches the connector's preflight handler as a mandatory first activity
     and aborts before extraction when the verdict's ``should_block`` is set (a
-    failed blocking check). Called at
-    the head of every generated workflow's ``_run``.
+    failed required check). Called at the head of every generated workflow's
+    ``_run``.
 
     Guards:
       * ``workflow.patched("preflight-gate")`` — workflows started before this
@@ -1624,32 +1624,47 @@ async def _run_preflight_gate(
     if not result.should_block:
         return
 
-    # Fold the failed blocking checks' messages into the abort reason (advisory
-    # failures are excluded), and carry the block's typed category to the
-    # Automation Engine: the first classified blocking failure wins (default
-    # PRECONDITION), rebuilt as canonical FailureDetails so AE attributes the
-    # abort from structured details, not the opaque "PreflightFailed" type.
-    blocking_failures = [
+    # Fold the failed required checks' messages into the abort reason (advisory
+    # failures are excluded) and carry typed attribution to the Automation
+    # Engine. A check with full typed evidence (check.error, built via
+    # PreflightCheck.from_error) wins outright — its app-specific code /
+    # audience / evidence are forwarded verbatim. Otherwise fall back to the
+    # first classified category (default PRECONDITION), rebuilt as the
+    # canonical category-level leaf.
+    required_failures = [
         check for check in result.checks if check.required and not check.passed
     ]
     reason = (
         result.message
-        or "; ".join(c.message for c in blocking_failures if c.message)
+        or "; ".join(c.message for c in required_failures if c.message)
         or "Preflight check failed; aborting before extraction"
     )
-    category = next(
-        (c.category for c in blocking_failures if c.category is not None),
-        FailureCategory.PRECONDITION,
-    )
     suggested = next(
-        (c.suggested_action for c in blocking_failures if c.suggested_action), ""
+        (c.suggested_action for c in required_failures if c.suggested_action), ""
     )
-    details = LEAF_BY_CATEGORY.get(category, _InternalError)(
-        message=reason,
-        suggested_action=suggested or None,
-        retryable=False,
-        app_name=app_name,
-    ).to_failure_details()
+    winner = next((c.error for c in required_failures if c.error is not None), None)
+    if winner is not None:
+        update: dict[str, Any] = {
+            # matches the ApplicationError message and covers multi-check joins
+            "message": reason,
+            # a gate abort is never retryable; the app is the gate's identity
+            "retryable": False,
+            "app_name": app_name,
+        }
+        if suggested:
+            update["suggested_action"] = suggested
+        details = winner.model_copy(update=update)
+    else:
+        category = next(
+            (c.category for c in required_failures if c.category is not None),
+            FailureCategory.PRECONDITION,
+        )
+        details = LEAF_BY_CATEGORY.get(category, _InternalError)(
+            message=reason,
+            suggested_action=suggested or None,
+            retryable=False,
+            app_name=app_name,
+        ).to_failure_details()
 
     from application_sdk.execution.errors import (  # noqa: PLC0415 — circular: execution/__init__ imports app.base
         ApplicationError,

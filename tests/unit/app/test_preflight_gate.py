@@ -13,12 +13,9 @@ import pytest
 
 from application_sdk.app.base import _run_preflight_gate
 from application_sdk.errors.categories import Audience, FailureCategory
+from application_sdk.errors.leaves import AuthError, PreconditionError
 from application_sdk.execution.errors import ApplicationError
-from application_sdk.handler.contracts import (
-    PreflightCheck,
-    PreflightOutput,
-    PreflightStatus,
-)
+from application_sdk.handler.contracts import PreflightCheck, PreflightOutput
 
 
 class _ResolvableInput:
@@ -235,6 +232,62 @@ class TestRunPreflightGate:
             with pytest.raises(ApplicationError) as excinfo:
                 await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
         assert excinfo.value.details[0].category is FailureCategory.SOURCE_UNAVAILABLE
+
+    async def test_abort_forwards_typed_check_error_verbatim(self) -> None:
+        # A check built via from_error carries FailureDetails; the gate must
+        # forward the app-specific code/audience/evidence — not rebuild the
+        # canonical category-level leaf — with retryable/app_name gate-owned.
+        class _ViewDefinitionError(PreconditionError):
+            code = "PRECONDITION_SOURCE_VIEW_DEFINITION"
+
+        verdict = PreflightOutput(
+            checks=[
+                PreflightCheck.from_error(
+                    "au_views",
+                    _ViewDefinitionError(
+                        message="A referenced source view is broken",
+                        suggested_action="Repair or drop the broken view",
+                    ),
+                )
+            ],
+        )
+        _, exec_patch = _exec(verdict)
+        with _patched(True), exec_patch:
+            with pytest.raises(ApplicationError) as excinfo:
+                await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        err = excinfo.value
+        assert err.type == "PreflightFailed"
+        details = err.details[0]
+        assert details.code == "PRECONDITION_SOURCE_VIEW_DEFINITION"
+        assert details.category is FailureCategory.PRECONDITION
+        assert details.retryable is False
+        assert details.app_name == "myapp"
+        assert details.message == "A referenced source view is broken"
+        assert details.suggested_action == "Repair or drop the broken view"
+        assert details.message in err.message
+
+    async def test_error_bearing_check_outranks_earlier_category_only_check(
+        self,
+    ) -> None:
+        # Typed evidence wins over a bare category, regardless of check order.
+        verdict = PreflightOutput(
+            checks=[
+                PreflightCheck(
+                    name="a",
+                    passed=False,
+                    required=True,
+                    category=FailureCategory.SOURCE_UNAVAILABLE,
+                ),
+                PreflightCheck.from_error("b", AuthError(message="Login rejected")),
+            ],
+        )
+        _, exec_patch = _exec(verdict)
+        with _patched(True), exec_patch:
+            with pytest.raises(ApplicationError) as excinfo:
+                await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        details = excinfo.value.details[0]
+        assert details.code == AuthError.code
+        assert details.category is FailureCategory.AUTH
 
     async def test_proceeds_on_success(self) -> None:
         exec_mock, exec_patch = _exec(_proceeding())

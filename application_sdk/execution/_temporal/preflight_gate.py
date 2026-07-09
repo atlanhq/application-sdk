@@ -3,7 +3,7 @@
 A core SDK extraction-lifecycle activity. Every generated workflow's ``_run``
 dispatches ``{app}:preflight`` as its first step (see
 :func:`application_sdk.app.base._run_preflight_gate`); when the verdict's
-``should_block`` is set (a failed blocking check) the run aborts before
+``should_block`` is set (a failed required check) the run aborts before
 extraction. Credential resolution happens *inside* the activity (mirrors
 ``templates/sql_app.py`` ``_init_sql_client``) — the deterministic workflow only
 forwards the secret-free :class:`PreflightGateInput`.
@@ -31,7 +31,6 @@ with workflow.unsafe.imports_passed_through():
         HandlerCredential,
         PreflightInput,
         PreflightOutput,
-        PreflightStatus,
     )
     from application_sdk.infrastructure.context import get_infrastructure
     from application_sdk.observability.logger_adaptor import get_logger
@@ -252,7 +251,8 @@ def build_preflight_gate_activity(
         with bind_invocation_context(app_name, credentials):
             result = await handler.preflight_check(preflight_input)
         # Verdict record for debuggability: the gate decision (should_block),
-        # the advisory status, and the check count.
+        # the derived display status, and the check count. (status can no
+        # longer contradict the checks — it is computed from them.)
         logger.info(
             "Preflight gate verdict: %s (entrypoint=%s, status=%s, checks=%d)",
             "block" if result.should_block else "proceed",
@@ -260,21 +260,6 @@ def build_preflight_gate_activity(
             result.status.value,
             len(result.checks),
         )
-        # Catch the un-migrated-handler trap: a handler that reports a problem via
-        # advisory status but marks no check required lets the run proceed — the
-        # backward-compat default, but almost always a forgotten required=True.
-        if not result.should_block and result.status in (
-            PreflightStatus.NOT_READY,
-            PreflightStatus.PARTIAL,
-        ):
-            logger.warning(
-                "Preflight reported %s but no check is marked required — the gate will "
-                "NOT stop this run. If a failing check must abort extraction, set "
-                "required=True on it in Handler.preflight_check (entrypoint=%s, checks=%d).",
-                result.status.value,
-                input.entrypoint or "<implicit>",
-                len(result.checks),
-            )
         return result
 
     return preflight_gate
