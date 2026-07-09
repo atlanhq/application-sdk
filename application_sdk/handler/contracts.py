@@ -22,7 +22,9 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 from application_sdk.contracts.base import SerializableEnum
+from application_sdk.errors.base import AppError
 from application_sdk.errors.categories import FailureCategory
+from application_sdk.errors.wire import FailureDetails
 
 
 class _DictLikeConfigBase(BaseModel):
@@ -366,6 +368,57 @@ class PreflightCheck(BaseModel):
 
     duration_ms: float = 0.0
     """How long the check took in milliseconds."""
+
+    error: FailureDetails | None = None
+    """Typed evidence for a failing check.
+
+    When set on the check that blocks the run, the gate forwards it verbatim —
+    ``code`` / ``audience`` / ``evidence`` included — instead of rebuilding a
+    canonical category-level failure, so an app-specific code (e.g.
+    ``PRECONDITION_SOURCE_VIEW_DEFINITION``) reaches the Automation Engine with
+    the same fidelity a runtime activity raise has. Build it with
+    :meth:`from_error` rather than by hand."""
+
+    @classmethod
+    def from_error(
+        cls,
+        name: str,
+        error: BaseException,
+        *,
+        required: bool = True,
+        suggested_action: str = "",
+    ) -> PreflightCheck:
+        """Build a failing check from a caught exception.
+
+        The one blessed bridge from the typed-error system into a check: a
+        typed :class:`~application_sdk.errors.base.AppError` keeps its full
+        classification (``category`` plus a :class:`FailureDetails` on
+        :attr:`error` carrying the app-specific ``code``); any other exception
+        yields an unclassified check — ``category=None`` so the gate applies
+        its ``PRECONDITION`` default instead of the caller guessing.
+
+        The message never interpolates exception text: an ``AppError`` message
+        is authored and safe, while raw ``str(exc)`` from drivers can leak
+        hosts or credentials — log the exception with ``exc_info=True`` at the
+        catch site instead.
+        """
+        if isinstance(error, AppError):
+            return cls(
+                name=name,
+                passed=False,
+                blocking=required,
+                message=error.message,
+                category=error.category,
+                suggested_action=suggested_action or (error.suggested_action or ""),
+                error=error.to_failure_details(),
+            )
+        return cls(
+            name=name,
+            passed=False,
+            blocking=required,
+            message=f"{name} check failed ({type(error).__name__})",
+            suggested_action=suggested_action,
+        )
 
 
 class PreflightInput(BaseModel):

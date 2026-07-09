@@ -3,6 +3,8 @@
 import pytest
 from pydantic import ConfigDict, Field, ValidationError
 
+from application_sdk.errors.categories import FailureCategory
+from application_sdk.errors.leaves import AuthError, PreconditionError
 from application_sdk.handler.contracts import (
     ApiMetadataObject,
     ApiMetadataOutput,
@@ -107,6 +109,58 @@ class TestPreflightCheck:
     def test_empty_name_rejected(self):
         with pytest.raises(ValidationError):
             PreflightCheck(name="")
+
+
+class TestPreflightCheckFromError:
+    def test_app_error_keeps_full_classification(self):
+        err = AuthError(
+            message="Login was rejected by the source",
+            suggested_action="Rotate the credential in the connection settings",
+        )
+        check = PreflightCheck.from_error("auth", err)
+        assert check.passed is False
+        assert check.blocking is True
+        assert check.message == "Login was rejected by the source"
+        assert check.category is FailureCategory.AUTH
+        assert check.suggested_action == (
+            "Rotate the credential in the connection settings"
+        )
+        assert check.error is not None
+        assert check.error.code == AuthError.code
+        assert check.error.category is FailureCategory.AUTH
+
+    def test_app_subclass_code_is_preserved(self):
+        class WarehouseSuspendedError(PreconditionError):
+            code = "PRECONDITION_WAREHOUSE_SUSPENDED"
+
+        check = PreflightCheck.from_error(
+            "warehouse", WarehouseSuspendedError(message="Warehouse is suspended")
+        )
+        assert check.error is not None
+        assert check.error.code == "PRECONDITION_WAREHOUSE_SUSPENDED"
+        assert check.category is FailureCategory.PRECONDITION
+
+    def test_untyped_exception_is_unclassified_and_sanitized(self):
+        check = PreflightCheck.from_error(
+            "connectivity", ValueError("password=hunter2 host=prod.internal")
+        )
+        assert check.passed is False
+        assert check.blocking is True
+        assert check.category is None
+        assert check.error is None
+        assert "hunter2" not in check.message
+        assert "prod.internal" not in check.message
+        assert "ValueError" in check.message
+
+    def test_explicit_kwargs_win(self):
+        check = PreflightCheck.from_error(
+            "version",
+            AuthError(message="nope", suggested_action="from the error"),
+            required=False,
+            suggested_action="from the caller",
+        )
+        assert check.blocking is False
+        assert check.suggested_action == "from the caller"
 
 
 class TestPreflightOutput:
