@@ -1205,6 +1205,7 @@ jobs:
         env:
           GHCR_IMAGE:      ${{ needs.prepare.outputs.ghcr_image }}
           DOCKERHUB_IMAGE: ${{ needs.prepare.outputs.dockerhub_image }}
+          RELEASE_TAGS:    ${{ needs.prepare.outputs.release_tags }}
         run: |
           set -euo pipefail
           # Use `crane copy`, not `docker buildx imagetools create`, for the
@@ -1217,6 +1218,22 @@ jobs:
           # login steps above.
           crane copy "${GHCR_IMAGE}" "${DOCKERHUB_IMAGE}"
           echo "Pushed to DockerHub: ${DOCKERHUB_IMAGE}"
+
+          # Mirror the release version-tag ladder (e.g. :2.0.1, :2.0, :2, :latest)
+          # onto Docker Hub too. GHCR already got these tags in the merge step, but
+          # self-deployed-runtime (SDR) pulls apps by their semver tag from Docker
+          # Hub — without this only the branch-sha tag lands there, and an SDR pull
+          # of :<version> 404s with "manifest unknown". The image already exists on
+          # Docker Hub from the copy above, so each entry is a server-side tag op
+          # against the same digest (crane tag) — no blob re-upload.
+          if [ -n "${RELEASE_TAGS}" ]; then
+            while IFS= read -r ref; do
+              [ -n "$ref" ] || continue
+              tag="${ref##*:}"          # ghcr.io/atlanhq/<app>:2.0.1 -> 2.0.1
+              crane tag "${DOCKERHUB_IMAGE}" "${tag}"
+              echo "Tagged on DockerHub: ${DOCKERHUB_IMAGE%:*}:${tag}"
+            done <<< "${RELEASE_TAGS}"
+          fi
 
           # Resolve the pushed manifest digest so we can sign by digest (immutable)
           # rather than by tag (mutable). `${DOCKERHUB_IMAGE%%:*}` strips the tag.
