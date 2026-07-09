@@ -49,8 +49,9 @@ All I/O, network calls, and non-deterministic operations go in `@task` methods.
 
 Every extraction workflow runs a `{app}:preflight` Temporal activity as its first
 step. The activity resolves credentials, calls `handler.preflight_check(PreflightInput)`,
-and aborts before extraction when the app's `PreflightOutput.passed` verdict is
-`False` — or, fail-closed, when the gate cannot produce a verdict at all.
+and aborts before extraction when a check the app marked `blocking` fails — the SDK
+derives `PreflightOutput.should_block` from the per-check flags — or, fail-closed,
+when the gate cannot produce a verdict at all.
 
 ### What the gate does
 
@@ -91,68 +92,74 @@ worker startup for any registered entrypoint whose input is not gate-eligible. T
 is to put the input on `ExtractionInput` (via the toolkit) rather than hand-rolling the
 lift.
 
-**(ii) Supply the verdict; the SDK never arbitrates.** The handler returns one
-boolean — `PreflightOutput.passed` — computed with **its own formula** over its
-check results. Some checks gate, some are advisory, some only gate in
-combination; only the app knows which, so the app decides and reports the single
-verdict. Per-check `passed` values are display rows and typed evidence for the
-abort — they do not decide the run. Order gating probes first: on a block, the
-first failed check carrying `error` supplies the typed `FailureDetails`.
+**(ii) Declare per-check severity; the SDK derives the verdict.** Each check
+carries a `blocking` flag. The SDK folds them into the verdict: the run blocks iff
+some check the app marked `blocking` did not pass (`should_block`). The app never
+returns a single boolean — it declares which checks gate and lets the SDK
+arbitrate. Advisory checks (`blocking=False`, the default) surface in the UI but
+never stop the run. Order gating probes first: on a block, the first blocking-failed
+check carrying `error` supplies the typed `FailureDetails`.
 
 Build failing checks with `PreflightCheck.from_error`, the one blessed bridge
 from the typed-error system, and catch probe exceptions rather than letting them
 escape:
 
 ```python
-auth_ok = False
 checks: list[PreflightCheck] = []
 try:
     await probe_auth()
-    checks.append(PreflightCheck(name="auth", passed=True))
-    auth_ok = True
+    checks.append(PreflightCheck(name="auth", passed=True, blocking=True))
 except AppError as e:
-    checks.append(PreflightCheck.from_error("auth", e))
+    checks.append(PreflightCheck.from_error("auth", e))  # from_error defaults blocking=True
 except Exception as e:
     logger.error("auth probe failed", exc_info=True)
     checks.append(PreflightCheck.from_error("auth", e))
 try:
-    ...  # connectivity probe — advisory, does not gate
+    await probe_connectivity()
+    checks.append(PreflightCheck(name="connectivity", passed=True))
 except AppError as e:
-    checks.append(PreflightCheck.from_error("connectivity", e))
-return PreflightOutput(passed=auth_ok, checks=checks)  # status/should_block derived
+    # advisory: surface it, don't gate
+    checks.append(PreflightCheck.from_error("connectivity", e, blocking=False))
+return PreflightOutput(checks=checks)  # should_block / status derived from the flags
 ```
 
-Here auth gates the run but connectivity is advisory — the verdict is `auth_ok`
-alone, and a failed connectivity check surfaces in the UI without blocking. A
-typed `AppError` keeps its full classification: `from_error` stores its
-`to_failure_details()` on `PreflightCheck.error`, and on a block the gate
-forwards that verbatim — the app-specific `code` reaches the Automation Engine
-with the same fidelity a runtime activity raise has. An untyped exception yields
-an unclassified check (`category=None` → the gate defaults to `PRECONDITION`)
-with a sanitized message — the exception text never enters the check; log it with
-`exc_info=True` at the catch site instead. `PreflightOutput.status` and
-`should_block` both derive from `passed`; never pass `status=`.
+Here auth gates the run but connectivity is advisory — a failed connectivity check
+surfaces in the UI without blocking, and there is no bookkeeping boolean to keep in
+sync. The `blocking` flag is **data the app computes at return time**, so any
+formula is expressible: combination gating ("checks 1 and 2 gate only together") is
+just app logic that sets the flags before returning. `from_error` defaults
+`blocking=True` — the blessed failure path gates by default, so opting out
+(`blocking=False`) is the explicit act. A typed `AppError` keeps its full
+classification: `from_error` stores its `to_failure_details()` on
+`PreflightCheck.error`, and on a block the gate forwards that verbatim — the
+app-specific `code` reaches the Automation Engine with the same fidelity a runtime
+activity raise has. An untyped exception yields an unclassified check
+(`category=None` → the gate defaults to `PRECONDITION`) with a sanitized message —
+the exception text never enters the check; log it with `exc_info=True` at the catch
+site instead. `PreflightOutput.status` and `should_block` derive from the flags;
+never pass `passed=` or `status=`.
 
 ### Fail-closed semantics
 
-Any failure to produce a verdict blocks the run — "couldn't verify" is not a
+Any failure to *produce* a verdict blocks the run — "couldn't verify" is not a
 pass. A `preflight_check` that **raises**, a gate **timeout** (after the retry
-budget), a **secret-store outage**, or a **missing verdict** (the handler returns
-no `passed`, which fails validation) all abort extraction. There are no soft
-failures: the gate either gets a `passed=True` verdict or it blocks.
+budget), or a **secret-store outage** all abort extraction. This is separate from
+the derived verdict: once the handler returns, the run blocks only if a `blocking`
+check failed.
 
-Attribution on a block: every failed check's message folds into the abort reason
-(an explicit `PreflightOutput.message` overrides the fold), and the first failed
-check carrying `error` supplies the typed `FailureDetails` — so order gating
-probes first. When the gate itself could not evaluate and no typed detail is
-recoverable from the failure's cause chain, the block is attributed to
-`DEPENDENCY_UNAVAILABLE` (a dead dependency, never misattributed as bad auth).
+Attribution on a block: every blocking-failed check's message folds into the abort
+reason (an explicit `PreflightOutput.message` overrides the fold; advisory failures
+stay out of the reason), and the first blocking-failed check carrying `error`
+supplies the typed `FailureDetails` — so order gating probes first. When the gate
+itself could not evaluate and no typed detail is recoverable from the failure's
+cause chain, the block is attributed to `DEPENDENCY_UNAVAILABLE` (a dead dependency,
+never misattributed as bad auth).
 
 ### Logging contract
 
 Both outcomes hard-block; they differ only in log level:
 
-- **`PreflightFailed`** (the app produced a verdict that blocks) — `warning`, no
+- **`PreflightFailed`** (a blocking check failed) — `warning`, no
   stack trace. An expected, typed outcome, not a crash.
 - **`PreflightUnavailable`** (the gate could not evaluate) — `error` with
   `exc_info=True`. A real failure of the gate's plumbing, logged like any crash.

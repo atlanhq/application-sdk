@@ -21,7 +21,10 @@ class MyHandler(Handler):
         )
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        return PreflightOutput(passed=True)
+        ok = await probe_source()
+        return PreflightOutput(
+            checks=[PreflightCheck(name="connectivity", passed=ok, blocking=True)],
+        )
 
     async def fetch_metadata(self, input: MetadataInput) -> SqlMetadataOutput:
         return SqlMetadataOutput(objects=[
@@ -65,13 +68,17 @@ class PreflightInput(BaseModel):
     timeout_seconds: int = 60                  # max wait time
 
 class PreflightOutput(BaseModel):
-    passed: bool                      # app-supplied verdict — decides the run
-    checks: list[PreflightCheck] = [] # individual check results (display + evidence)
+    checks: list[PreflightCheck] = [] # check results; each carries a blocking flag
     message: str = ""                 # human-readable summary
     total_duration_ms: float = 0.0    # total time for all checks
-    status: PreflightStatus           # derived from passed — READY or NOT_READY
-    should_block: bool                # derived — the inverse of passed
+    status: PreflightStatus           # derived — NOT_READY iff should_block
+    should_block: bool                # derived — a blocking check failed
 ```
+
+Each `PreflightCheck` carries `passed: bool` and `blocking: bool = False`. The SDK
+derives the verdict: the run blocks iff some check the app marked `blocking` did not
+pass. Advisory checks (`blocking=False`) surface in the UI but never gate. Build
+failing checks with `PreflightCheck.from_error` (which defaults `blocking=True`).
 
 ### MetadataInput / MetadataOutput
 

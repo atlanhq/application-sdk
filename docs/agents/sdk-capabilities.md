@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.21.1
-source-sha:    0a697629f66540b19dfb5093c3f392d72e014009
-source-date:   2026-07-09T15:08:03+05:30
+source-sha:    5c79f7ff9bc53882d2778d1d5a488f2f50dc964b
+source-date:   2026-07-09T16:48:33+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2658,6 +2658,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Fields:**
   - `name: str` `= Field(..., min_length=1)` — Check name (e.g., 'connectivity', 'permissions').
   - `passed: bool` — Whether the check passed — the observed outcome, stated explicitly.
+  - `blocking: bool` `= False` — Declared severity — failing this check must stop the run.
   - `message: str` `= ''` — What happened — a clean, single-sentence description of the check result.
   - `category: FailureCategory | None` — Typed failure category for a failing check.
   - `suggested_action: str` `= ''` — Optional remediation — what the reader should DO about a failure.
@@ -2684,12 +2685,11 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.handler.contracts import PreflightOutput`
 - **Summary:** Output from the preflight_check handler operation.
 - **Fields:**
-  - `passed: bool` — The verdict: ``True`` → the run may proceed, ``False`` → block it.
-  - `checks: list[PreflightCheck]` `= []` — Individual check results — display rows and typed evidence for the
+  - `checks: list[PreflightCheck]` `= []` — Individual check results — display rows and typed evidence for the abort.
   - `message: str` `= ''` — Human-readable summary. On a block this overrides the folded per-check
   - `total_duration_ms: float` `= 0.0` — Total time for all checks in milliseconds.
   - `status: PreflightStatus` — Advisory display status (Sage UI / connector-pulse / AE event),
-  - `should_block: bool` — Whether the gate must abort the run — the inverse of :attr:`passed`,
+  - `should_block: bool` — Whether the gate must abort the run: ``True`` iff some check the app
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `SqlMetadataObject`

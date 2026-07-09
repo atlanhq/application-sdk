@@ -80,6 +80,7 @@ from application_sdk.handler.contracts import (
     AuthStatus,
     MetadataInput,
     MetadataOutput,
+    PreflightCheck,
     PreflightInput,
     PreflightOutput,
 )
@@ -101,7 +102,11 @@ class GitHubHandler(Handler):
         return AuthOutput(status=AuthStatus.SUCCESS, message="Authentication successful")
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        return PreflightOutput(passed=True, message="OK")
+        # Mark the checks that must gate the run with blocking=True; the SDK
+        # derives should_block / status from the flags.
+        return PreflightOutput(
+            checks=[PreflightCheck(name="connectivity", passed=True, blocking=True)],
+        )
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
         # Metadata extraction is driven by the App, not the handler.

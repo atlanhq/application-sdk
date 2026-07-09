@@ -382,8 +382,8 @@ class MyHandler(Handler):
         return AuthOutput(status=AuthStatus.SUCCESS)
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        # run preflight checks
-        return PreflightOutput(passed=True)
+        # run preflight checks; mark gating checks blocking=True (SDK derives the verdict)
+        return PreflightOutput(checks=[])
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
         # return connector config

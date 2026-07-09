@@ -95,7 +95,7 @@ from application_sdk.handler import Handler
 from application_sdk.handler.contracts import (
     AuthInput, AuthOutput, AuthStatus,
     MetadataInput, ApiMetadataOutput,
-    PreflightInput, PreflightOutput,
+    PreflightCheck, PreflightInput, PreflightOutput,
 )
 
 from app.clients import MyApiClient
@@ -120,7 +120,11 @@ class MyConnectorHandler(Handler):
             await client.close()
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        return PreflightOutput(passed=True, message="OK")
+        # blocking=True on the checks that must gate the run; the SDK derives
+        # should_block / status from the flags.
+        return PreflightOutput(
+            checks=[PreflightCheck(name="connectivity", passed=True, blocking=True)],
+        )
 
     async def fetch_metadata(self, input: MetadataInput) -> ApiMetadataOutput:
         # Metadata extraction is driven by the App, not the handler.

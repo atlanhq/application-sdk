@@ -135,6 +135,7 @@ from application_sdk.handler.contracts import (
     AuthInput,
     AuthOutput,
     AuthStatus,
+    PreflightCheck,
     PreflightInput,
     PreflightOutput,
     MetadataInput,
@@ -159,7 +160,11 @@ class PostgresHandler(Handler):
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
         """Run pre-extraction checks (connectivity, permissions, table counts)."""
-        return PreflightOutput(passed=True, message="All checks passed")
+        # blocking=True on the checks that must gate the run; the SDK derives
+        # should_block / status from the flags.
+        return PreflightOutput(
+            checks=[PreflightCheck(name="connectivity", passed=True, blocking=True)],
+        )
 
     async def fetch_metadata(self, input: MetadataInput) -> SqlMetadataOutput:
         """Return catalog/schema pairs for the Atlan UI filter tree."""
