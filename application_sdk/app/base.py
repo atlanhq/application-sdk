@@ -61,8 +61,6 @@ from application_sdk.errors import (
     ErrorCode,
 )
 from application_sdk.errors.base import AppError as _NewAppError
-from application_sdk.errors.categories import FailureCategory
-from application_sdk.errors.leaves import LEAF_BY_CATEGORY
 from application_sdk.errors.leaves import InternalError as _InternalError
 from application_sdk.errors.leaves import InvalidInputError as _InvalidInputError
 from application_sdk.observability.logger_adaptor import get_logger
@@ -1546,32 +1544,42 @@ def _collect_interaction_relays(
     return relays
 
 
+def _is_preflight_block(exc: BaseException | None, failed_type: str) -> bool:
+    """Whether ``exc`` (or any cause in its chain) is the deliberate gate block.
+
+    The activity raises ``ApplicationError(type="PreflightFailed")``; Temporal
+    wraps it in an ``ActivityError``, so the marker may sit on a cause rather
+    than the top-level error.
+    """
+    seen: set[int] = set()
+    current = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if getattr(current, "type", None) == failed_type:
+            return True
+        nxt = getattr(current, "cause", None)
+        current = nxt if nxt is not None else current.__cause__
+    return False
+
+
 async def _run_preflight_gate(
     input_data: Input, app_name: str, entrypoint: str
 ) -> None:
     """Run the SDK-owned pre-extraction preflight gate (HYP-1883).
 
-    Dispatches the connector's preflight handler as a mandatory first activity
-    and aborts before extraction when the verdict's ``should_block`` is set (a
-    failed blocking check). Called at
-    the head of every generated workflow's ``_run``.
+    Dispatches the app's preflight handler as a mandatory first activity. The
+    activity raises ``PreflightFailed`` when the verdict is ``NOT_READY``; this
+    re-raises only that deliberate block and aborts the run. Every other activity
+    failure (timeout, secret-store/transport error, handler crash) fails open —
+    logged loudly, run proceeds — because the gate is an injected guardrail the
+    app never opted into, so its own plumbing must not kill a run.
 
-    Guards:
-      * ``workflow.patched("preflight-gate")`` — workflows started before this
-        code shipped replay the pre-gate branch deterministically (no new
-        command in their history). New runs take the gated branch.
-      * ``isinstance(input_data, CredentialResolvable)`` — only inputs that
-        carry credential routing are gated; source-less apps skip entirely.
-
-    Credential resolution happens inside the activity, not here — the
-    deterministic workflow only forwards secret-free references.
-
-    Dispatch is to the single **app-level** handler (one gate per app), with
-    ``entrypoint`` threaded through so a handler can branch internally by entry
-    point. Unlike the HTTP ``/check`` path, the gate does not resolve
-    per-entrypoint handler modules (``service.py``'s ``_discover_handler_fn``);
-    a multi-entrypoint app that needs per-entrypoint preflight logic branches on
-    ``input.entrypoint`` inside its one handler.
+    Guards: ``workflow.patched("preflight-gate")`` keeps pre-gate runs replaying
+    deterministically; ``isinstance(input_data, CredentialResolvable)`` skips
+    source-less apps. Credential resolution happens inside the activity — the
+    deterministic workflow forwards only secret-free references. Dispatch is to
+    the one app-level handler, with ``entrypoint`` threaded through for internal
+    branching.
     """
     if not workflow.patched("preflight-gate"):
         return
@@ -1595,14 +1603,10 @@ async def _run_preflight_gate(
     if not isinstance(input_data, CredentialResolvable):
         return
 
-    # Fail-open (HYP-1883): the gate is an injected guardrail the app never opted
-    # into, so if it can't produce a verdict — an input that won't build, an
-    # activity timeout, a secret-store/transport failure, or a handler crash — log
-    # and PROCEED rather than kill a run over the gate's own plumbing. Blocking is
-    # expressed only by a returned should_block verdict; a raise does not block.
+    entry = entrypoint or "<implicit>"
     try:
         gate_input = PreflightGateInput.from_extraction_input(input_data, entrypoint)
-        result = await workflow.execute_activity(
+        await workflow.execute_activity(
             preflight_gate_activity_name(app_name),
             gate_input,
             result_type=PreflightOutput,
@@ -1610,56 +1614,40 @@ async def _run_preflight_gate(
             start_to_close_timeout=GATE_START_TO_CLOSE,
             retry_policy=GATE_RETRY,
         )
-    except Exception:
+    except Exception as e:
+        if _is_preflight_block(e, PREFLIGHT_FAILED_ERROR_TYPE):
+            _safe_log(
+                "info",
+                "Preflight gate outcome",
+                app_name=app_name,
+                entrypoint=entry,
+                outcome="blocked",
+            )
+            raise
         _safe_log(
             "error",
             "Preflight gate could not produce a verdict; proceeding without source "
             "verification (fail-open)",
             app_name=app_name,
-            entrypoint=entrypoint or "<implicit>",
+            entrypoint=entry,
             exc_info=True,
+        )
+        _safe_log(
+            "info",
+            "Preflight gate outcome",
+            app_name=app_name,
+            entrypoint=entry,
+            outcome="no_verdict",
+            error_type=type(e).__name__,
         )
         return
 
-    if not result.should_block:
-        return
-
-    # Fold the failed blocking checks' messages into the abort reason (advisory
-    # failures are excluded), and carry the block's typed category to the
-    # Automation Engine: the first classified blocking failure wins (default
-    # PRECONDITION), rebuilt as canonical FailureDetails so AE attributes the
-    # abort from structured details, not the opaque "PreflightFailed" type.
-    blocking_failures = [
-        check for check in result.checks if check.blocking and not check.passed
-    ]
-    reason = (
-        result.message
-        or "; ".join(c.message for c in blocking_failures if c.message)
-        or "Preflight check failed; aborting before extraction"
-    )
-    category = next(
-        (c.category for c in blocking_failures if c.category is not None),
-        FailureCategory.PRECONDITION,
-    )
-    suggested = next(
-        (c.suggested_action for c in blocking_failures if c.suggested_action), ""
-    )
-    details = LEAF_BY_CATEGORY.get(category, _InternalError)(
-        message=reason,
-        suggested_action=suggested or None,
-        retryable=False,
+    _safe_log(
+        "info",
+        "Preflight gate outcome",
         app_name=app_name,
-    ).to_failure_details()
-
-    from application_sdk.execution.errors import (  # noqa: PLC0415 — circular: execution/__init__ imports app.base
-        ApplicationError,
-    )
-
-    raise ApplicationError(
-        reason,
-        details,
-        type=PREFLIGHT_FAILED_ERROR_TYPE,
-        non_retryable=True,
+        entrypoint=entry,
+        outcome="proceeded",
     )
 
 
@@ -1803,8 +1791,10 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
             # typed outcome — log it terse (one line, no stack) so it doesn't read
             # like an unexpected crash. Its classification already rides on the
             # error's FailureDetails. Every other failure keeps the full ERROR
-            # traceback (the diagnostic evidence a real crash needs).
-            if getattr(e, "type", None) == PREFLIGHT_FAILED_ERROR_TYPE:
+            # traceback (the diagnostic evidence a real crash needs). The marker
+            # can arrive on a cause (Temporal wraps the activity's error), so walk
+            # the chain.
+            if _is_preflight_block(e, PREFLIGHT_FAILED_ERROR_TYPE):
                 _safe_log(
                     "warning",
                     "App blocked by preflight gate",

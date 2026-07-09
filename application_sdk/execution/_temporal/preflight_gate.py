@@ -2,11 +2,12 @@
 
 A core SDK extraction-lifecycle activity. Every generated workflow's ``_run``
 dispatches ``{app}:preflight`` as its first step (see
-:func:`application_sdk.app.base._run_preflight_gate`); when the verdict's
-``should_block`` is set (a failed blocking check) the run aborts before
-extraction. Credential resolution happens *inside* the activity (mirrors
-``templates/sql_app.py`` ``_init_sql_client``) — the deterministic workflow only
-forwards the secret-free :class:`PreflightGateInput`.
+:func:`application_sdk.app.base._run_preflight_gate`). The activity raises
+``ApplicationError(type="PreflightFailed")`` when the verdict is ``NOT_READY``
+so the abort shows red in Temporal and attributes to preflight; ``READY`` and
+``PARTIAL`` return normally. Credential resolution happens *inside* the activity
+— the deterministic workflow only forwards the secret-free
+:class:`PreflightGateInput`.
 """
 
 from __future__ import annotations
@@ -23,7 +24,10 @@ with workflow.unsafe.imports_passed_through():
     from application_sdk.credentials.ref import CredentialRef, CredentialResolvable
     from application_sdk.credentials.resolver import CredentialResolver
     from application_sdk.credentials.spec import AgentCredentialSpec
-    from application_sdk.errors.leaves import DependencyUnavailableError
+    from application_sdk.errors.leaves import (
+        DependencyUnavailableError,
+        PreconditionError,
+    )
     from application_sdk.handler.context import bind_invocation_context
     from application_sdk.handler.contracts import (
         BaseConnectionConfig,
@@ -205,6 +209,51 @@ def _config_from_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     return config
 
 
+def _check_message(check: Any) -> str:
+    """Resolve a check's message under the precedence rule: ``error`` wins."""
+    if check.error is not None:
+        return check.error.message
+    return check.message
+
+
+def _build_block_error(result: PreflightOutput, app_name: str) -> Any:
+    """Build the ``PreflightFailed`` ApplicationError for a NOT_READY verdict.
+
+    ``details[0]`` is the primary failure's typed ``FailureDetails`` (first failed
+    check with an ``error``; else the first failed check's message wrapped in
+    ``PreconditionError``). ``details[1]`` carries every check so the red activity
+    pane shows them — a failed activity has no result payload.
+    """
+    from application_sdk.execution.errors import ApplicationError  # noqa: PLC0415
+
+    failed = [c for c in result.checks if not c.passed]
+    primary = next((c for c in failed if c.error is not None), None)
+    if primary is not None:
+        details = primary.error
+    else:
+        fallback = _check_message(failed[0]) if failed else ""
+        details = PreconditionError(
+            message=fallback or "Preflight check failed",
+            app_name=app_name,
+            retryable=False,
+        ).to_failure_details()
+
+    joined = "; ".join(m for m in (_check_message(c) for c in failed) if m)
+    reason = (
+        result.message or joined or "Preflight check failed; aborting before extraction"
+    )
+    checks_payload = {
+        "checks": [c.model_dump(mode="json", exclude_none=True) for c in result.checks]
+    }
+    return ApplicationError(
+        f"Preflight failed: {reason}",
+        details,
+        checks_payload,
+        type=PREFLIGHT_FAILED_ERROR_TYPE,
+        non_retryable=True,
+    )
+
+
 def build_preflight_gate_activity(
     handler: Handler,
     app_name: str,
@@ -251,30 +300,16 @@ def build_preflight_gate_activity(
         )
         with bind_invocation_context(app_name, credentials):
             result = await handler.preflight_check(preflight_input)
-        # Verdict record for debuggability: the gate decision (should_block),
-        # the advisory status, and the check count.
+        blocked = result.status is PreflightStatus.NOT_READY
         logger.info(
             "Preflight gate verdict: %s (entrypoint=%s, status=%s, checks=%d)",
-            "block" if result.should_block else "proceed",
+            "block" if blocked else "proceed",
             input.entrypoint or "<implicit>",
             result.status.value,
             len(result.checks),
         )
-        # Catch the un-migrated-handler trap: a handler that reports a problem via
-        # advisory status but marks no check blocking lets the run proceed — the
-        # backward-compat default, but almost always a forgotten blocking=True.
-        if not result.should_block and result.status in (
-            PreflightStatus.NOT_READY,
-            PreflightStatus.PARTIAL,
-        ):
-            logger.warning(
-                "Preflight reported %s but no check is marked blocking — the gate will "
-                "NOT stop this run. If a failing check must abort extraction, set "
-                "blocking=True on it in Handler.preflight_check (entrypoint=%s, checks=%d).",
-                result.status.value,
-                input.entrypoint or "<implicit>",
-                len(result.checks),
-            )
+        if blocked:
+            raise _build_block_error(result, app_name)
         return result
 
     return preflight_gate

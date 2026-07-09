@@ -11,6 +11,8 @@ import pytest
 
 from application_sdk.app.base import AppContextError
 from application_sdk.credentials.ref import CredentialResolvable
+from application_sdk.errors.categories import Audience, FailureCategory
+from application_sdk.errors.leaves import AppPermissionDeniedError, AuthError
 from application_sdk.execution._temporal.preflight_gate import (
     PreflightGateInput,
     _config_from_snapshot,
@@ -18,6 +20,7 @@ from application_sdk.execution._temporal.preflight_gate import (
     input_type_supports_gate,
     preflight_gate_activity_name,
 )
+from application_sdk.execution.errors import ApplicationError
 from application_sdk.handler.base import DefaultHandler, Handler
 from application_sdk.handler.contracts import (
     AuthInput,
@@ -56,6 +59,20 @@ def _gate(handler: Handler):
     return activity
 
 
+class _VerdictHandler(DefaultHandler):
+    """Returns a fixed PreflightOutput, to drive the gate's block decision."""
+
+    def __init__(self, output: PreflightOutput) -> None:
+        self._output = output
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        return self._output
+
+
+def _verdict_gate(output: PreflightOutput):
+    return build_preflight_gate_activity(_VerdictHandler(output), app_name="myapp")
+
+
 class TestPreflightGateActivity:
     def test_activity_name_is_app_namespaced(self) -> None:
         # Reads as a native workflow step ({app}:preflight), like the app's own
@@ -66,10 +83,10 @@ class TestPreflightGateActivity:
     def test_gate_input_satisfies_credential_resolvable(self) -> None:
         assert isinstance(PreflightGateInput(), CredentialResolvable)
 
-    async def test_gate_with_default_handler_does_not_block(self) -> None:
+    async def test_gate_with_default_handler_proceeds(self) -> None:
         gate = _gate(DefaultHandler())
         result = await gate(PreflightGateInput())
-        assert result.should_block is False
+        assert result.status is PreflightStatus.READY
 
     async def test_gate_resolves_guid_and_calls_handler_with_flattened_creds(
         self,
@@ -141,48 +158,144 @@ class TestPreflightGateActivity:
         with pytest.raises(AppContextError):
             _ = handler.context
 
-    async def test_warns_when_not_ready_without_blocking_check(self) -> None:
-        """A handler that reports not_ready but marks no check blocking lets the
-        run proceed — almost always a forgotten blocking=True. The gate warns."""
+    async def test_ready_returns_without_raising(self) -> None:
+        out = PreflightOutput(status=PreflightStatus.READY, checks=[])
+        result = await _verdict_gate(out)(PreflightGateInput())
+        assert result is out
 
-        class _SoftFailHandler(DefaultHandler):
-            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-                return PreflightOutput(
-                    status=PreflightStatus.NOT_READY,
-                    checks=[PreflightCheck(name="auth", passed=False, blocking=False)],
-                )
+    async def test_partial_returns_without_raising(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.PARTIAL,
+            checks=[PreflightCheck(name="version", passed=False, message="old")],
+        )
+        result = await _verdict_gate(out)(PreflightGateInput())
+        assert result is out
 
-        gate = build_preflight_gate_activity(_SoftFailHandler(), app_name="myapp")
-        with mock.patch(
-            "application_sdk.execution._temporal.preflight_gate.logger"
-        ) as mock_logger:
-            result = await gate(PreflightGateInput())
+    async def test_not_ready_raises_with_typed_primary_and_all_checks(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(name="conn", passed=True),
+                PreflightCheck(
+                    name="auth",
+                    passed=False,
+                    error=AuthError(
+                        message="Auth failed", suggested_action="Rotate the credential"
+                    ),
+                ),
+            ],
+        )
+        with pytest.raises(ApplicationError) as excinfo:
+            await _verdict_gate(out)(PreflightGateInput(entrypoint="crawl"))
+        err = excinfo.value
+        assert err.type == "PreflightFailed"
+        assert err.non_retryable is True
+        details = err.details[0]
+        assert details.category is FailureCategory.AUTH
+        assert details.code == "AUTH"
+        assert details.audience is Audience.USER
+        assert details.message == "Auth failed"
+        assert details.suggested_action == "Rotate the credential"
+        # details[1] carries every check (a failed activity has no result payload).
+        names = [c["name"] for c in err.details[1]["checks"]]
+        assert names == ["conn", "auth"]
+        assert "Auth failed" in err.message
 
-        assert result.should_block is False
-        mock_logger.warning.assert_called_once()
+    async def test_not_ready_without_error_falls_back_to_precondition(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[PreflightCheck(name="auth", passed=False, message="bad creds")],
+        )
+        with pytest.raises(ApplicationError) as excinfo:
+            await _verdict_gate(out)(PreflightGateInput())
+        details = excinfo.value.details[0]
+        assert details.category is FailureCategory.PRECONDITION
+        assert "bad creds" in details.message
 
-    async def test_no_warning_on_ready_or_blocking_verdict(self) -> None:
-        """Clean pass (READY) and a real block (blocking check failed) are both
-        expected states — neither trips the missing-blocking warning."""
+    async def test_output_message_seeds_reason_over_per_check_join(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            message="Summary: 3 of 5 checks failed",
+            checks=[PreflightCheck(name="auth", passed=False, message="auth down")],
+        )
+        with pytest.raises(ApplicationError) as excinfo:
+            await _verdict_gate(out)(PreflightGateInput())
+        assert (
+            excinfo.value.message == "Preflight failed: Summary: 3 of 5 checks failed"
+        )
+        assert "auth down" not in excinfo.value.message
 
-        class _BlockHandler(DefaultHandler):
-            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-                return PreflightOutput(
-                    status=PreflightStatus.NOT_READY,
-                    checks=[PreflightCheck(name="auth", passed=False, blocking=True)],
-                )
+    async def test_reason_joins_failed_check_messages_via_precedence(self) -> None:
+        # error.message wins for the first check; check.message for the second.
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(
+                    name="auth", passed=False, error=AuthError(message="auth down")
+                ),
+                PreflightCheck(name="net", passed=False, message="host unreachable"),
+            ],
+        )
+        with pytest.raises(ApplicationError) as excinfo:
+            await _verdict_gate(out)(PreflightGateInput())
+        msg = excinfo.value.message
+        assert msg.startswith("Preflight failed: ")
+        assert "auth down" in msg
+        assert "host unreachable" in msg
+        assert "; " in msg
 
-        gate_ready = _gate(_StubHandler())
-        gate_block = build_preflight_gate_activity(_BlockHandler(), app_name="myapp")
-        with mock.patch(
-            "application_sdk.execution._temporal.preflight_gate.logger"
-        ) as mock_logger:
-            ready = await gate_ready(PreflightGateInput())
-            blocked = await gate_block(PreflightGateInput())
+    async def test_block_details_survive_data_converter_round_trip(self) -> None:
+        # details[1] is a new payload: a plain dict of per-check dumps whose nested
+        # error embeds enum-bearing FailureDetails. In production these cross the
+        # Temporal boundary through pydantic_data_converter; encode→decode here
+        # catches any raw model/enum that would only fail on a live worker.
+        from temporalio.contrib.pydantic import pydantic_data_converter
 
-        assert ready.should_block is False
-        assert blocked.should_block is True
-        mock_logger.warning.assert_not_called()
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(name="conn", passed=True),
+                PreflightCheck(
+                    name="auth",
+                    passed=False,
+                    error=AuthError(
+                        message="Auth failed", suggested_action="Rotate the credential"
+                    ),
+                ),
+            ],
+        )
+        with pytest.raises(ApplicationError) as excinfo:
+            await _verdict_gate(out)(PreflightGateInput())
+
+        pc = pydantic_data_converter.payload_converter
+        restored = pc.from_payloads(pc.to_payloads(excinfo.value.details))
+
+        auth = next(c for c in restored[1]["checks"] if c["name"] == "auth")
+        assert auth["error"]["category"] == FailureCategory.AUTH.value
+        assert auth["error"]["code"] == "AUTH"
+        assert auth["error"]["audience"] == Audience.USER.value
+        assert auth["error"]["message"] == "Auth failed"
+        assert auth["error"]["suggested_action"] == "Rotate the credential"
+
+    async def test_error_on_passed_check_not_selected_as_primary(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(
+                    name="ok", passed=True, error=AuthError(message="ignored")
+                ),
+                PreflightCheck(
+                    name="perm",
+                    passed=False,
+                    error=AppPermissionDeniedError(message="denied"),
+                ),
+            ],
+        )
+        with pytest.raises(ApplicationError) as excinfo:
+            await _verdict_gate(out)(PreflightGateInput())
+        details = excinfo.value.details[0]
+        assert details.category is FailureCategory.PERMISSION
+        assert details.message == "denied"
 
     def test_from_extraction_input_reads_routing_fields(self) -> None:
         class _Inp:
