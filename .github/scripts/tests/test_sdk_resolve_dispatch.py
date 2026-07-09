@@ -21,20 +21,41 @@ def _stream(*lines: str):
 
 
 def test_payload_shape():
-    p = sr.build_payload("1234", "http://run", 8, "2026-07-08")
+    p = sr.build_payload(
+        "1234", "http://run", 8, "2026-07-08", "cmgrote,vaibhavatlan", "octocat"
+    )
     assert p["mode"] == "direct" and p["stream"] is True
     assert p["source_id"] == "sdk-resolve-1234-2026-07-08"
     assert p["repositories"] == ["atlanhq/application-sdk"]
     assert p["metadata"]["pr_number"] == "1234"
     assert p["metadata"]["max_rounds"] == 8
+    assert p["metadata"]["reviewers"] == "cmgrote,vaibhavatlan"
+    assert p["metadata"]["requester"] == "octocat"
 
 
-def test_prompt_carries_pr_and_stop_line():
-    prompt = sr.build_prompt("42", "u", 8)
+def test_prompt_carries_pr_stop_line_and_review_request():
+    prompt = sr.build_prompt("42", "u", 8, "cmgrote,vaibhavatlan", "octocat")
     assert "PR_NUMBER:    42" in prompt
     assert "MERGE-READY" in prompt
     assert "Do NOT `gh pr merge`" in prompt  # human merges
     assert "pr-resolve/ORCHESTRATION.md" in prompt
+    # requests human review + tags reviewers AND the requester
+    assert "gh pr edit 42 --add-reviewer cmgrote,vaibhavatlan" in prompt
+    assert "@cmgrote" in prompt and "@vaibhavatlan" in prompt and "@octocat" in prompt
+
+
+def test_reviewer_handles_dedupe_and_strip():
+    # strips '@', de-dupes, appends requester, drops blanks
+    assert sr._reviewer_handles("@cmgrote, vaibhavatlan", "octocat") == [
+        "cmgrote",
+        "vaibhavatlan",
+        "octocat",
+    ]
+    # requester already in the reviewer list → not duplicated
+    assert sr._reviewer_handles("cmgrote,vaibhavatlan", "cmgrote") == [
+        "cmgrote",
+        "vaibhavatlan",
+    ]
 
 
 # ---------------------------------------------------------------------------

@@ -49,7 +49,7 @@ jobs:
       github.event_name == 'workflow_dispatch'
       || (
         github.event.issue.pull_request
-        && contains(github.event.comment.body, '@sdk-resolve')
+        && startsWith(github.event.comment.body, '@sdk-resolve')
         && (
           github.event.comment.author_association == 'OWNER'
           || github.event.comment.author_association == 'MEMBER'
@@ -68,7 +68,7 @@ jobs:
       - name: Checkout repo (for local globalprotect-connect action)
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - name: Resolve PR number
+      - name: Resolve PR number + requester
         id: parse
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
@@ -77,10 +77,19 @@ jobs:
             const prNumber = isDispatch
               ? context.payload.inputs.pr_number
               : String(context.payload.issue.number);
+            const requester = isDispatch
+              ? context.actor
+              : context.payload.comment.user.login;
             core.setOutput('pr_number', prNumber);
+            core.setOutput('requester', requester);
 
-      - name: React to comment
+      # Acknowledge with an eyes reaction AND a visible comment carrying the
+      # run link, so the requester has an immediate status handle to follow
+      # (the sandbox loop runs out-of-band for many minutes).
+      - name: Acknowledge + link the run
         if: github.event_name == 'issue_comment'
+        env:
+          GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
@@ -89,6 +98,20 @@ jobs:
               repo: context.repo.repo,
               comment_id: context.payload.comment.id,
               content: 'eyes',
+            });
+            const body = [
+              `<!-- SDK_RESOLVE_STARTED -->`,
+              `🤖 **SDK Resolve started.** Driving this PR toward merge-ready — fixing CI + every \`@sdk-review\` finding, then requesting human review.`,
+              ``,
+              `[Follow progress →](${process.env.GHA_RUN_URL})`,
+              ``,
+              `_This runs out-of-band and can take several minutes; I'll comment here when it finishes._`,
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: parseInt('${{ steps.parse.outputs.pr_number }}', 10),
+              body,
             });
 
       - name: Connect to VPN (attempt 1/3)
@@ -163,5 +186,9 @@ jobs:
           HARNESS_TOKEN: ${{ secrets.HARNESS_TOKEN }}
           PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
           MAX_ROUNDS: ${{ inputs.max_rounds || '8' }}
+          # Human reviewers to request + tag when the PR reaches merge-ready
+          # (Chris = cmgrote, Vaibhav = vaibhavatlan); the requester is added too.
+          REVIEWERS: cmgrote,vaibhavatlan
+          REQUESTER: ${{ steps.parse.outputs.requester }}
           GHA_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: python3 .github/scripts/sdk_resolve_dispatch.py

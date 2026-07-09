@@ -80,12 +80,13 @@ jobs:
       github.event_name == 'workflow_dispatch'
       || (
         github.event.issue.pull_request
-        && contains(github.event.comment.body, '@sdk-review')
+        && startsWith(github.event.comment.body, '@sdk-review')
         && (
           github.event.comment.author_association == 'OWNER'
           || github.event.comment.author_association == 'MEMBER'
           || github.event.comment.author_association == 'COLLABORATOR'
           || github.event.comment.user.login == 'atlan-ci'
+          || github.event.comment.user.login == 'mothership-ai[bot]'
         )
       )
     runs-on: ubuntu-latest

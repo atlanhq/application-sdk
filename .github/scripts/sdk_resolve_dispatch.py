@@ -17,6 +17,8 @@ Environment:
     HARNESS_TOKEN       bearer for /api/sandbox/execute
     PR_NUMBER           the open PR to drive to merge-ready
     MAX_ROUNDS          max @sdk-review rounds before stopping (default 8)
+    REVIEWERS           comma-separated GitHub handles to request + tag at the end
+    REQUESTER           login that invoked @sdk-resolve (also tagged)
     GHA_RUN_URL         this workflow run's URL
     RUN_DATE            ISO date (computed if absent)
     GITHUB_STEP_SUMMARY path GitHub Actions gives us to render the run summary
@@ -62,7 +64,12 @@ SUMMARY_ROWS = (
 )
 
 
-def build_prompt(pr_number: str, gha_run_url: str, max_rounds: int) -> str:
+def build_prompt(
+    pr_number: str, gha_run_url: str, max_rounds: int, reviewers: str, requester: str
+) -> str:
+    # Reviewers to request + the requester who triggered the run — tagged at the
+    # end so a human takes the merge from a green, review-requested PR.
+    tag_list = ", ".join(f"@{h}" for h in _reviewer_handles(reviewers, requester))
     return f"""You are running the SDK Resolver in a Cloudflare sandbox.
 
 Repository cloned at: /workspace/application-sdk.
@@ -76,22 +83,45 @@ Run metadata (use these verbatim):
   PR_NUMBER:    {pr_number}
   MAX_ROUNDS:   {max_rounds}
   GHA_RUN_URL:  {gha_run_url}
+  REVIEWERS:    {reviewers}          # GitHub handles to request as reviewers
+  REQUESTER:    {requester}          # who invoked @sdk-resolve
+  TAG_LIST:     {tag_list}           # @-mention these at the end
 
 GITHUB_TOKEN is pre-injected by the sandbox. Use `gh` for all GitHub operations.
 
 Drive PR #{pr_number} to MERGE-READY: green required CI + zero @sdk-review
 findings (nits included, unless proven false with a recorded rationale) +
 verdict READY_TO_MERGE. You are the only writer — the reviewer runs in its own
-separate sandbox; you trigger it with `@sdk-review` and consume its comment.
-Do NOT `gh pr merge` — stop at merge-ready and hand back to a human. Expect each
-push to reset the reviewer labels/status (reset-on-push) — that is normal; key
-the loop off findings + CI, not labels. Stop after MAX_ROUNDS rounds, or if a
-dismissed finding is re-raised, and report. At the very end print the
-`=== SDK RESOLVE SUMMARY ===` block from ORCHESTRATION Phase 4 verbatim."""
+separate sandbox; you trigger it with `@sdk-review` (post as-is; the reviewer
+workflow now accepts the sandbox bot identity) and consume its comment.
+Do NOT `gh pr merge` — stop at merge-ready and hand back to a human. When you
+finish (merge-ready OR NEEDS_HUMAN), REQUEST HUMAN REVIEW: run
+`gh pr edit {pr_number} --add-reviewer {reviewers}` (ignore "can't request from
+the author" errors) and post the final report @-mentioning {tag_list} so they
+know it's their turn. Expect each push to reset the reviewer labels/status
+(reset-on-push) — that is normal; key the loop off findings + CI, not labels.
+Stop after MAX_ROUNDS rounds, or if a dismissed finding is re-raised, and
+report. At the very end print the `=== SDK RESOLVE SUMMARY ===` block from
+ORCHESTRATION Phase 4 verbatim."""
+
+
+def _reviewer_handles(reviewers: str, requester: str) -> list[str]:
+    """Ordered, de-duplicated GitHub handles: configured reviewers + requester."""
+    handles: list[str] = []
+    for h in [*reviewers.split(","), requester]:
+        h = h.strip().lstrip("@")
+        if h and h not in handles:
+            handles.append(h)
+    return handles
 
 
 def build_payload(
-    pr_number: str, gha_run_url: str, max_rounds: int, run_date: str
+    pr_number: str,
+    gha_run_url: str,
+    max_rounds: int,
+    run_date: str,
+    reviewers: str,
+    requester: str,
 ) -> dict[str, Any]:
     return {
         "mode": "direct",
@@ -101,13 +131,17 @@ def build_payload(
         "repositories": ["atlanhq/application-sdk"],
         "base_branch": "main",
         "snapshot": "_base",
-        "prompt": build_prompt(pr_number, gha_run_url, max_rounds),
+        "prompt": build_prompt(
+            pr_number, gha_run_url, max_rounds, reviewers, requester
+        ),
         "max_timeout_seconds": STREAM_TIMEOUT_SECONDS,
         "idle_timeout_seconds": 1800,
         "metadata": {
             "pr_number": pr_number,
             "max_rounds": max_rounds,
             "run_date": run_date,
+            "reviewers": reviewers,
+            "requester": requester,
         },
     }
 
@@ -355,13 +389,17 @@ def main() -> int:
     gha_run_url = os.environ.get("GHA_RUN_URL", "")
     run_date = os.environ.get("RUN_DATE") or time.strftime("%Y-%m-%d", time.gmtime())
     max_rounds = _max_rounds()
+    reviewers = os.environ.get("REVIEWERS", "cmgrote,vaibhavatlan")
+    requester = os.environ.get("REQUESTER", "")
     print(f"Dispatching SDK Resolve: pr={pr_number} max_rounds={max_rounds}")
 
     if not check_health(base_url):
         print("::error::Cannot reach mothership after retries")
         return 1
 
-    payload = build_payload(pr_number, gha_run_url, max_rounds, run_date)
+    payload = build_payload(
+        pr_number, gha_run_url, max_rounds, run_date, reviewers, requester
+    )
     req = urllib.request.Request(
         f"{base_url}/api/sandbox/execute",
         data=json.dumps(payload).encode(),
