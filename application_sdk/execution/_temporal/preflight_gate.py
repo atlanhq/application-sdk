@@ -45,6 +45,24 @@ logger = get_logger(__name__)
 PREFLIGHT_FAILED_ERROR_TYPE = "PreflightFailed"
 
 
+def is_preflight_block(exc: BaseException | None) -> bool:
+    """Whether ``exc`` (or any cause in its chain) is the deliberate gate block.
+
+    The activity raises ``ApplicationError(type="PreflightFailed")``; Temporal
+    wraps it in an ``ActivityError``, so the marker may sit on a cause rather
+    than the top-level error.
+    """
+    seen: set[int] = set()
+    current = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if getattr(current, "type", None) == PREFLIGHT_FAILED_ERROR_TYPE:
+            return True
+        nxt = getattr(current, "cause", None)
+        current = nxt if nxt is not None else current.__cause__
+    return False
+
+
 def input_type_supports_gate(input_type: type) -> bool:
     """Whether an entrypoint's input type is gate-eligible.
 

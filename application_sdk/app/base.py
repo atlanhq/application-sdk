@@ -1544,24 +1544,6 @@ def _collect_interaction_relays(
     return relays
 
 
-def _is_preflight_block(exc: BaseException | None, failed_type: str) -> bool:
-    """Whether ``exc`` (or any cause in its chain) is the deliberate gate block.
-
-    The activity raises ``ApplicationError(type="PreflightFailed")``; Temporal
-    wraps it in an ``ActivityError``, so the marker may sit on a cause rather
-    than the top-level error.
-    """
-    seen: set[int] = set()
-    current = exc
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        if getattr(current, "type", None) == failed_type:
-            return True
-        nxt = getattr(current, "cause", None)
-        current = nxt if nxt is not None else current.__cause__
-    return False
-
-
 async def _run_preflight_gate(
     input_data: Input, app_name: str, entrypoint: str
 ) -> None:
@@ -1592,8 +1574,8 @@ async def _run_preflight_gate(
             GATE_RETRY,
             GATE_SCHEDULE_TO_CLOSE,
             GATE_START_TO_CLOSE,
-            PREFLIGHT_FAILED_ERROR_TYPE,
             PreflightGateInput,
+            is_preflight_block,
             preflight_gate_activity_name,
         )
         from application_sdk.handler.contracts import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
@@ -1615,7 +1597,7 @@ async def _run_preflight_gate(
             retry_policy=GATE_RETRY,
         )
     except Exception as e:
-        if _is_preflight_block(e, PREFLIGHT_FAILED_ERROR_TYPE):
+        if is_preflight_block(e):
             _safe_log(
                 "info",
                 "Preflight gate outcome",
@@ -1785,7 +1767,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
         except Exception as e:
             with workflow.unsafe.imports_passed_through():
                 from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
-                    PREFLIGHT_FAILED_ERROR_TYPE,
+                    is_preflight_block,
                 )
             # A deliberate preflight-gate block (PreflightFailed) is an expected,
             # typed outcome — log it terse (one line, no stack) so it doesn't read
@@ -1794,7 +1776,7 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
             # traceback (the diagnostic evidence a real crash needs). The marker
             # can arrive on a cause (Temporal wraps the activity's error), so walk
             # the chain.
-            if _is_preflight_block(e, PREFLIGHT_FAILED_ERROR_TYPE):
+            if is_preflight_block(e):
                 _safe_log(
                     "warning",
                     "App blocked by preflight gate",
