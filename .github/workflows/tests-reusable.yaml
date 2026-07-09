@@ -260,6 +260,11 @@ jobs:
           application-sdk-ref: ${{ inputs.application-sdk-ref }}
           base-image-ref: ${{ inputs.base-image-ref }}
           enable-two-store: ${{ inputs.two-store }}
+          # Push the test image with the org PAT (same identity build-and-publish
+          # uses) so it can write PAT-published connector packages — a plain
+          # GITHUB_TOKEN 403s on those (e.g. atlan-redshift-app). Available here
+          # because callers invoke this reusable with `secrets: inherit`.
+          ghcr-token: ${{ secrets.ORG_PAT_GITHUB }}
 
   # ── Aggregator gate (single required check for branch protection) ────────
   tests-passed:
