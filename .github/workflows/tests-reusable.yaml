@@ -25,15 +25,17 @@ name: tests-reusable
 #   - connector-integration-tests composite with services-script hook (no-op
 #     by default; used when source systems need CI-level startup rather than
 #     pytest fixtures — see openapi's .github/test/setup-services.sh)
-#   - Label/dispatch-gated e2e job via e2e-full-reusable
+#   - Label/dispatch-gated full-DAG e2e job (inlined here — see the `e2e` job;
+#     it was previously delegated to e2e-full-reusable.yaml, now folded in so
+#     the whole suite is one reusable + one Tests Gate)
 #
 # GitHub check name hierarchy (caller → tests-reusable):
 #   Tests / tests / Unit and integration  (pull_request)
-#   Tests / tests / e2e / End-to-end      (pull_request)  ← 4-deep; nested reusable
+#   Tests / tests / End-to-end            (pull_request)
 #   Tests / tests / Tests Gate            (pull_request)
 #
-# Nested reusable depth: caller → tests-reusable → e2e-full-reusable = 3
-# (GitHub max is 4).  secrets: inherit chains through both levels.
+# Nested reusable depth: caller → tests-reusable = 2 (GitHub max is 4).
+# secrets: inherit chains from the caller; the inlined e2e job reads secrets.*.
 #
 # Connectors that need OS-level native build deps (ODBC, SAP JCo, etc.) before
 # uv sync cannot use this reusable — they need a bespoke tests.yaml with the
@@ -123,10 +125,12 @@ on:
         type: boolean
         default: false
         description: |
-          Forwarded to e2e-full-reusable.yaml's `two-store` input — opt-in
-          ADR-0014 two-store SDR posture for the e2e job. See that
-          workflow's input description. Default false: existing callers
-          are unaffected.
+          Opt-in ADR-0014 two-store SDR posture for the e2e job — forwarded to
+          the sdr-e2e action's `enable-two-store` input. When true, objectstore
+          is forced to the CI-local binding while atlan-objectstore stays the
+          tenant blobstorage, so a connector that forgets to bridge an artifact
+          shows up as zero downstream assets instead of being masked by a shared
+          bucket. Default false: existing callers are unaffected.
 
 jobs:
 
@@ -159,8 +163,24 @@ jobs:
           application-sdk-ref: ${{ inputs.application-sdk-ref }}
 
   # ── Full-DAG e2e (system apps — extract→qi→publish→lineage) ─────────────
+  # Inlined from e2e-full-reusable.yaml so the whole test suite lives in this
+  # one reusable (the fleet standard: one tests.yaml + one Tests Gate). Each
+  # app's tests.yaml calls a single reusable instead of nesting a second one,
+  # and this lets us retire e2e-full-reusable once its other callers converge.
+  # Behaviour is preserved 1:1 with the old delegation:
+  #   - 120-min job timeout (> ae_poll + atlas_poll + build/setup overhead —
+  #     see BaseFullDAGE2ETest poll budgets; NOT inputs.timeout-minutes, which
+  #     defaults to 60 and only sizes the unit/integration tier).
+  #   - full-DAG sdr-e2e inputs (secrets-script / components-dir /
+  #     compose-overlay) kept explicit so the S3-objectstore + dynamic-agent
+  #     worker stack is used, not the SDR-pipeline component/compose fallback.
+  #   - SDR_* + ATLAN_API_KEY read from secrets.* here (callers invoke this
+  #     reusable with `secrets: inherit`); this job only runs behind the
+  #     label/dispatch gate below.
   e2e:
     name: End-to-end
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
     concurrency:
       group: tests-e2e-${{ github.ref }}
       cancel-in-progress: false
@@ -177,17 +197,71 @@ jobs:
           github.event.pull_request.user.login != 'dependabot[bot]'
         )
       )
-    uses: atlanhq/application-sdk/.github/workflows/e2e-full-reusable.yaml@main
-    with:
-      app-name: ${{ inputs.app-name }}
-      app-image-name: ${{ inputs.app-image-name }}
-      test-path: ${{ inputs.e2e-test-path }}
-      agent-name-override: ${{ inputs.agent-name-override }}
-      application-sdk-ref: ${{ inputs.application-sdk-ref }}
-      base-image-ref: ${{ inputs.base-image-ref }}
-      distinct-id: ${{ inputs.distinct-id }}
-      two-store: ${{ inputs.two-store }}
-    secrets: inherit
+    permissions:
+      pull-requests: write
+      contents: read
+      statuses: write
+      packages: write
+    env:
+      SDR_TEST_TENANT: ${{ secrets.SDR_TEST_TENANT }}
+      SDR_CLIENT_ID: ${{ secrets.SDR_CLIENT_ID }}
+      SDR_CLIENT_SECRET: ${{ secrets.SDR_CLIENT_SECRET }}
+      ATLAN_API_KEY: ${{ secrets.ATLAN_API_KEY }}
+      # Derived so ATLAN_BASE_URL is always the same tenant as SDR_TEST_TENANT.
+      ATLAN_BASE_URL: https://${{ secrets.SDR_TEST_TENANT }}
+    steps:
+      # codex-/return-dispatch on the apps-sdk side scans step *names* for
+      # "distinct-id <value>". Always-run, no-op; lets the SDK PR's dispatched
+      # e2e job locate this run via the GH Actions API.
+      - name: distinct-id ${{ inputs.distinct-id }}
+        if: inputs.distinct-id != ''
+        shell: bash
+        run: echo "Dispatched with distinct-id=${{ inputs.distinct-id }}"
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      # uv on the host for the sdr-e2e action's `uv run pytest` + summary steps.
+      # The action self-installs uv only when application-sdk-ref is set
+      # (SDK-PR dispatch); the plain-label path (empty ref) otherwise has no uv
+      # and fails with `uv: command not found`. Install it unconditionally here.
+      - name: Install uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.28"
+          enable-cache: true
+
+      - name: Resolve agent-name
+        id: agent
+        run: |
+          if [ -n "${{ inputs.agent-name-override }}" ]; then
+            echo "name=${{ inputs.agent-name-override }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=ci-${{ github.run_id }}" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Using agent-name=$(grep '^name=' "$GITHUB_OUTPUT" | cut -d= -f2)"
+
+      - uses: atlanhq/application-sdk/.github/actions/sdr-e2e@main
+        with:
+          app-name: ${{ inputs.app-name }}
+          app-image-name: ${{ inputs.app-image-name }}
+          test-path: ${{ inputs.e2e-test-path }}
+          # Full-DAG defaults carried over from e2e-full-reusable.yaml. The
+          # full-DAG pipeline lives alongside the SDR (testcontainer) pipeline
+          # in connector repos, so these must be explicit — otherwise the action
+          # falls back to the SDR component/compose set (wrong stack).
+          secrets-script: .github/e2e/make-secrets-e2e-full.py
+          components-dir: .github/e2e/e2e-full-components
+          compose-overlay: .github/e2e/e2e-full-docker-compose.yaml
+          # Bump the container-health wait because the worker has to establish
+          # the Temporal connection with TLS + auth before /server/health greens.
+          container-health-timeout-seconds: "120"
+          # `-s` streams the harness poll-loop output in real time.
+          pytest-extra-args: "-s"
+          application-sdk-ref: ${{ inputs.application-sdk-ref }}
+          base-image-ref: ${{ inputs.base-image-ref }}
+          enable-two-store: ${{ inputs.two-store }}
 
   # ── Aggregator gate (single required check for branch protection) ────────
   tests-passed:
