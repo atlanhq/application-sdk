@@ -49,7 +49,7 @@ class _StubHandler(Handler):
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
         self.preflight_input = input
         self.context_during_call = self.context
-        return PreflightOutput(checks=[])
+        return PreflightOutput(passed=True, checks=[])
 
     async def fetch_metadata(self, input: MetadataInput) -> SqlMetadataOutput:
         self.metadata_input = input
@@ -196,7 +196,7 @@ class TestBuildSdrActivities:
                 raise RuntimeError("boom")
 
             async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-                return PreflightOutput(checks=[])
+                return PreflightOutput(passed=True, checks=[])
 
             async def fetch_metadata(self, input: MetadataInput) -> SqlMetadataOutput:
                 return SqlMetadataOutput(objects=[])
@@ -272,7 +272,7 @@ class TestBuildSdrActivities:
                 return AuthOutput(status=AuthStatus.SUCCESS, message="ok")
 
             async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-                return PreflightOutput(checks=[])
+                return PreflightOutput(passed=True, checks=[])
 
             async def fetch_metadata(self, input: MetadataInput) -> SqlMetadataOutput:
                 return SqlMetadataOutput(objects=[])

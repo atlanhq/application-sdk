@@ -309,9 +309,11 @@ class PreflightStatus(SerializableEnum):
     """Advisory display status of a preflight result — derived, never supplied.
 
     Surfaced to the Sage UI, the connector-pulse dashboard, and the Automation
-    Engine event. Computed by :attr:`PreflightOutput.status` from the per-check
-    outcomes, so it can never contradict the checks; the gate decision is the
-    separately derived :attr:`PreflightOutput.should_block`.
+    Engine event. Computed by :attr:`PreflightOutput.status` strictly from the
+    app-supplied verdict: ``READY`` when the run may proceed, ``NOT_READY``
+    when it is blocked. ``PARTIAL`` is retained only so historical wire values
+    still deserialize — it is never emitted (a preflight verdict is boolean:
+    green or red, no amber).
     """
 
     READY = "ready"
@@ -332,16 +334,6 @@ class PreflightCheck(BaseModel):
     would report failure (or success) for a check whose author simply forgot
     to set it."""
 
-    required: bool = False
-    """Declared severity: whether this check gates extraction.
-
-    Advisory checks (e.g. server version, optional permissions) leave this
-    ``False`` — they surface in the UI but never block. A failed check with
-    ``required=True`` aborts the run via :attr:`PreflightOutput.should_block`.
-    Defaults to ``False`` so gating is always an explicit, per-check opt-in.
-    Meaningful on passing checks too: it declares what *would* block, not how
-    a failure was handled."""
-
     message: str = ""
     """What happened — a clean, single-sentence description of the check result.
 
@@ -350,17 +342,16 @@ class PreflightCheck(BaseModel):
     Says *what* went wrong, not what to do — see :attr:`suggested_action`."""
 
     category: FailureCategory | None = None
-    """Typed failure category for a required-check failure.
+    """Typed failure category for a failing check.
 
-    When this check is the one that blocks the run, the gate carries this category
-    to the Automation Engine (via the canonical wire ``FailureDetails``) so the
-    abort is attributed — ``AUTH`` / ``SOURCE_UNAVAILABLE`` / ``PERMISSION`` / … —
-    instead of an opaque preflight failure. The category also fixes the canonical
-    ``code`` / ``audience`` / retryability of the leaf it maps to. ``None`` → the
-    gate defaults to ``PRECONDITION``. Ignored unless the check is required and
-    failed; a raise from the handler does not block (the gate fails open), so
-    a returned check is how a handler expresses a *typed* block. Prefer
-    :attr:`error` (via :meth:`from_error`) for full code-level fidelity."""
+    When the run is blocked (:attr:`PreflightOutput.passed` is ``False``), the
+    gate carries the first failed check's classification to the Automation
+    Engine (via the canonical wire ``FailureDetails``) so the abort is
+    attributed — ``AUTH`` / ``SOURCE_UNAVAILABLE`` / ``PERMISSION`` / … —
+    instead of an opaque preflight failure. The category also fixes the
+    canonical ``code`` / ``audience`` / retryability of the leaf it maps to.
+    ``None`` → the gate defaults to ``PRECONDITION``. Prefer :attr:`error`
+    (via :meth:`from_error`) for full code-level fidelity."""
 
     suggested_action: str = ""
     """Optional remediation — what the reader should DO about a failure.
@@ -390,7 +381,6 @@ class PreflightCheck(BaseModel):
         name: str,
         error: BaseException,
         *,
-        required: bool = True,
         suggested_action: str = "",
     ) -> PreflightCheck:
         """Build a failing check from a caught exception.
@@ -405,13 +395,13 @@ class PreflightCheck(BaseModel):
         The message never interpolates exception text: an ``AppError`` message
         is authored and safe, while raw ``str(exc)`` from drivers can leak
         hosts or credentials — log the exception with ``exc_info=True`` at the
-        catch site instead.
+        catch site instead. Curate a per-exception ``suggested_action`` (or
+        author it on the ``AppError`` leaf) so the customer knows what to do.
         """
         if isinstance(error, AppError):
             return cls(
                 name=name,
                 passed=False,
-                required=required,
                 message=error.message,
                 category=error.category,
                 suggested_action=suggested_action or (error.suggested_action or ""),
@@ -420,7 +410,6 @@ class PreflightCheck(BaseModel):
         return cls(
             name=name,
             passed=False,
-            required=required,
             message=f"{name} check failed ({type(error).__name__})",
             suggested_action=suggested_action,
         )
@@ -483,18 +472,32 @@ class PreflightInput(BaseModel):
 class PreflightOutput(BaseModel):
     """Output from the preflight_check handler operation.
 
-    ``status`` and ``should_block`` are **derived** from ``checks`` — handlers
-    only report what each check observed; the SDK computes the aggregates. A
-    ``status=`` argument from an older caller is accepted and ignored
-    (``extra="ignore"``), which also swallows the ``status`` key that the
-    computed field re-injects on Temporal round-trips."""
+    ``passed`` is the **single, app-supplied verdict**: the app applies its own
+    formula over its check results (some checks gate, some are advisory, some
+    only gate in combination — the SDK cannot predict every formula) and
+    reports the one boolean that decides the run. The SDK never arbitrates.
+    ``status`` and ``should_block`` are derived from that verdict; a ``status=``
+    argument from an older caller is accepted and ignored (``extra="ignore"``),
+    which also swallows the ``status`` key the computed field re-injects on
+    Temporal round-trips."""
+
+    passed: bool
+    """The verdict: ``True`` → the run may proceed, ``False`` → block it.
+
+    Mandatory, no default — a handler that returns no verdict fails validation,
+    which the gate treats as "no answer" and blocks (fail-closed). Per-check
+    ``passed`` values are display and evidence; this field alone decides."""
 
     checks: list[PreflightCheck] = []
-    """Individual check results. A check's :attr:`PreflightCheck.required` flag
-    decides whether failing it stops the run."""
+    """Individual check results — display rows and typed evidence for the
+    abort. On a block, failed checks' messages fold into the abort reason
+    (unless :attr:`message` overrides) and the first failed check carrying
+    :attr:`PreflightCheck.error` supplies the typed details, so order gating
+    probes first."""
 
     message: str = ""
-    """Human-readable summary."""
+    """Human-readable summary. On a block this overrides the folded per-check
+    reasons as the abort message — set it when the fold would be imprecise."""
 
     total_duration_ms: float = 0.0
     """Total time for all checks in milliseconds."""
@@ -503,30 +506,19 @@ class PreflightOutput(BaseModel):
     @property
     def status(self) -> PreflightStatus:
         """Advisory display status (Sage UI / connector-pulse / AE event),
-        derived from the checks so it can never contradict them.
-
-        ``READY`` — every check passed (vacuously true with no checks);
-        ``NOT_READY`` — a required check failed (the run is blocked);
-        ``PARTIAL`` — only advisory checks failed (the run proceeds).
+        derived strictly from the verdict: ``READY`` when the run proceeds,
+        ``NOT_READY`` when it is blocked. ``PARTIAL`` is never emitted.
 
         A ``computed_field`` (not a plain property) so ``"status"`` stays in
         every serialized payload — Temporal UI visibility and the ``/check``
         runtime-summary wire key are unchanged."""
-        if all(check.passed for check in self.checks):
-            return PreflightStatus.READY
-        if any(check.required and not check.passed for check in self.checks):
-            return PreflightStatus.NOT_READY
-        return PreflightStatus.PARTIAL
+        return PreflightStatus.READY if self.passed else PreflightStatus.NOT_READY
 
     @property
     def should_block(self) -> bool:
-        """Whether the gate must abort the run (a required check failed).
-
-        ``True`` iff a check with ``required=True`` failed. Advisory failures
-        (``required=False``) never block, and a handler with no required checks
-        — the default — never blocks. Gating is strictly opt-in: an app marks
-        the checks that gate extraction and the SDK derives the rest."""
-        return any(check.required and not check.passed for check in self.checks)
+        """Whether the gate must abort the run — the inverse of :attr:`passed`,
+        kept as the established gate-signal key on the ``/check`` summary."""
+        return not self.passed
 
 
 # PreflightGateInput lives in application_sdk.execution._temporal.preflight_gate —

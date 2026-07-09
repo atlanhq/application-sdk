@@ -90,7 +90,6 @@ class TestPreflightCheck:
     def test_defaults(self):
         check = PreflightCheck(name="connectivity", passed=True)
         assert check.name == "connectivity"
-        assert check.required is False
         assert check.message == ""
         assert check.duration_ms == 0.0
         assert check.error is None
@@ -100,22 +99,25 @@ class TestPreflightCheck:
         with pytest.raises(ValidationError):
             PreflightCheck(name="connectivity")
 
-    def test_removed_blocking_field_is_silently_ignored(self):
-        # Clean break from the pre-release field name: extra="ignore" drops it,
-        # so a stray blocking=True does NOT gate the run. Pinned so the sharp
-        # edge is documented; adopters must rename to required=.
-        check = PreflightCheck(name="auth", passed=False, **{"blocking": True})
-        assert check.required is False
+    def test_stray_gating_kwargs_are_silently_ignored(self):
+        # ``required`` (and the older pre-release ``blocking``) are gone —
+        # gating is the app's single PreflightOutput.passed verdict now.
+        # extra="ignore" drops either stray kwarg: construction neither errors
+        # nor resurrects a per-check gate field. Pinned so the removal stays a
+        # clean break.
+        check = PreflightCheck(
+            name="auth", passed=False, **{"blocking": True, "required": True}
+        )
+        assert not hasattr(check, "blocking")
+        assert not hasattr(check, "required")
 
     def test_passed(self):
         check = PreflightCheck(
             name="connectivity",
             passed=True,
-            required=True,
             duration_ms=50.0,
         )
         assert check.passed is True
-        assert check.required is True
         assert check.duration_ms == 50.0
 
     def test_empty_name_rejected(self):
@@ -131,7 +133,6 @@ class TestPreflightCheckFromError:
         )
         check = PreflightCheck.from_error("auth", err)
         assert check.passed is False
-        assert check.required is True
         assert check.message == "Login was rejected by the source"
         assert check.category is FailureCategory.AUTH
         assert check.suggested_action == (
@@ -157,88 +158,67 @@ class TestPreflightCheckFromError:
             "connectivity", ValueError("password=hunter2 host=prod.internal")
         )
         assert check.passed is False
-        assert check.required is True
         assert check.category is None
         assert check.error is None
         assert "hunter2" not in check.message
         assert "prod.internal" not in check.message
         assert "ValueError" in check.message
 
-    def test_explicit_kwargs_win(self):
+    def test_explicit_suggested_action_wins(self):
         check = PreflightCheck.from_error(
             "version",
             AuthError(message="nope", suggested_action="from the error"),
-            required=False,
             suggested_action="from the caller",
         )
-        assert check.required is False
         assert check.suggested_action == "from the caller"
 
 
 class TestPreflightOutput:
+    def test_passed_is_mandatory(self):
+        # No default: a handler that returns no verdict fails validation, which
+        # the gate treats as "no answer" and blocks (fail-closed).
+        with pytest.raises(ValidationError):
+            PreflightOutput(checks=[PreflightCheck(name="a", passed=True)])
+
     def test_with_checks(self):
         checks = [
             PreflightCheck(name="conn", passed=True),
             PreflightCheck(name="perms", passed=False, message="No read access"),
         ]
-        out = PreflightOutput(checks=checks)
+        out = PreflightOutput(passed=True, checks=checks)
         assert len(out.checks) == 2
 
-    def test_should_block_only_on_failed_required_check(self):
-        # advisory failure (required=False) does NOT block
-        advisory = PreflightOutput(
-            checks=[PreflightCheck(name="version", passed=False, required=False)],
-        )
-        assert advisory.should_block is False
-
-        # a failed required check blocks
-        blocked = PreflightOutput(
-            checks=[PreflightCheck(name="auth", passed=False, required=True)],
-        )
-        assert blocked.should_block is True
-
-        # a passing required check does not block
-        ok = PreflightOutput(
-            checks=[PreflightCheck(name="auth", passed=True, required=True)],
-        )
-        assert ok.should_block is False
-
-    def test_no_checks_never_blocks(self):
-        assert PreflightOutput().should_block is False
+    def test_should_block_is_inverse_of_passed(self):
+        assert PreflightOutput(passed=True).should_block is False
+        assert PreflightOutput(passed=False).should_block is True
 
     @pytest.mark.parametrize(
-        ("checks", "expected"),
+        ("passed", "expected"),
         [
-            ([], PreflightStatus.READY),
-            (
-                [PreflightCheck(name="a", passed=True)],
-                PreflightStatus.READY,
-            ),
-            (
-                [PreflightCheck(name="a", passed=False)],
-                PreflightStatus.PARTIAL,
-            ),
-            (
-                [PreflightCheck(name="a", passed=False, required=True)],
-                PreflightStatus.NOT_READY,
-            ),
-            (
-                [
-                    PreflightCheck(name="a", passed=False),
-                    PreflightCheck(name="b", passed=False, required=True),
-                ],
-                PreflightStatus.NOT_READY,
-            ),
+            (True, PreflightStatus.READY),
+            (False, PreflightStatus.NOT_READY),
         ],
     )
-    def test_status_is_derived_from_checks(self, checks, expected):
-        assert PreflightOutput(checks=checks).status is expected
+    def test_status_is_derived_from_verdict(self, passed, expected):
+        assert PreflightOutput(passed=passed).status is expected
+
+    def test_partial_is_never_emitted(self):
+        # A failed per-check row under a passed=True verdict is advisory: the
+        # derived status is READY, never PARTIAL. PARTIAL survives on the enum
+        # only so historical wire values still deserialize.
+        out = PreflightOutput(
+            passed=True,
+            checks=[PreflightCheck(name="a", passed=False)],
+        )
+        assert out.status is PreflightStatus.READY
+        assert out.status is not PreflightStatus.PARTIAL
 
     def test_supplied_status_is_ignored(self):
-        # Clean break: status is derived; a caller-supplied value is dropped
-        # (extra="ignore"), which also swallows the key computed_field
-        # re-injects on Temporal round-trips.
+        # Clean break: status is derived from the verdict; a caller-supplied
+        # value is dropped (extra="ignore"), which also swallows the key the
+        # computed_field re-injects on Temporal round-trips.
         out = PreflightOutput(
+            passed=True,
             status=PreflightStatus.NOT_READY,
             checks=[PreflightCheck(name="a", passed=True)],
         )
@@ -246,11 +226,14 @@ class TestPreflightOutput:
 
     def test_round_trip_keeps_status_key_and_revalidates(self):
         out = PreflightOutput(
-            checks=[PreflightCheck(name="auth", passed=False, required=True)],
+            passed=False,
+            checks=[PreflightCheck(name="auth", passed=False)],
         )
         dumped = out.model_dump(mode="json")
         assert dumped["status"] == "not_ready"
+        assert dumped["passed"] is False
         restored = PreflightOutput.model_validate(dumped)
+        assert restored.passed is False
         assert restored.status is PreflightStatus.NOT_READY
         assert restored.should_block is True
 

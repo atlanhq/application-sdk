@@ -48,7 +48,7 @@ class _TestHandler(Handler):
         return AuthOutput(status=AuthStatus.SUCCESS, message="auth ok")
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        return PreflightOutput(message="ready")
+        return PreflightOutput(passed=True, message="ready")
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
         return SqlMetadataOutput(objects=[])
@@ -68,7 +68,7 @@ class _ConfigCapture(_TestHandler):
                 "connection_config": dict(input.connection_config),
             }
         )
-        return PreflightOutput(message="ready")
+        return PreflightOutput(passed=True, message="ready")
 
 
 class _ApiTreeHandler(Handler):
@@ -78,7 +78,7 @@ class _ApiTreeHandler(Handler):
         return AuthOutput(status=AuthStatus.SUCCESS, message="auth ok")
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        return PreflightOutput(message="ready")
+        return PreflightOutput(passed=True, message="ready")
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
         return ApiMetadataOutput(
@@ -96,7 +96,7 @@ class _AuthFailedHandler(Handler):
         return AuthOutput(status=AuthStatus.FAILED, message="bad credentials")
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        return PreflightOutput(message="ready")
+        return PreflightOutput(passed=True, message="ready")
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
         return SqlMetadataOutput(objects=[])
@@ -109,7 +109,7 @@ class _AuthExpiredHandler(Handler):
         return AuthOutput(status=AuthStatus.EXPIRED, message="token expired")
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        return PreflightOutput(message="ready")
+        return PreflightOutput(passed=True, message="ready")
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
         return SqlMetadataOutput(objects=[])
@@ -122,7 +122,7 @@ class _AuthInvalidCredsHandler(Handler):
         return AuthOutput(status=AuthStatus.INVALID_CREDENTIALS, message="wrong key")
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        return PreflightOutput(message="ready")
+        return PreflightOutput(passed=True, message="ready")
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
         return SqlMetadataOutput(objects=[])
@@ -135,7 +135,7 @@ class _AuthUnhandledExceptionHandler(Handler):
         raise RuntimeError("unexpected db connection error")
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        return PreflightOutput(message="ready")
+        return PreflightOutput(passed=True, message="ready")
 
     async def fetch_metadata(self, input: MetadataInput) -> MetadataOutput:
         return SqlMetadataOutput(objects=[])
@@ -439,7 +439,7 @@ class TestPreflightEndpoint:
         class _MetadataCapture(_TestHandler):
             async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
                 received.append(dict(input.metadata))
-                return PreflightOutput(message="ready")
+                return PreflightOutput(passed=True, message="ready")
 
         client = _make_client(handler=_MetadataCapture())
         response = client.post(
@@ -530,7 +530,7 @@ class TestPreflightEndpoint:
         class _MetadataCapture(_TestHandler):
             async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
                 received.append(dict(input.metadata))
-                return PreflightOutput(message="ready")
+                return PreflightOutput(passed=True, message="ready")
 
         client = _make_client(handler=_MetadataCapture())
         response = client.post(
@@ -559,6 +559,7 @@ class TestPreflightEndpoint:
                 from application_sdk.handler.contracts import PreflightCheck
 
                 return PreflightOutput(
+                    passed=True,
                     checks=[
                         PreflightCheck(
                             name="apiVersion",
@@ -589,6 +590,7 @@ class TestPreflightEndpoint:
                 from application_sdk.handler.contracts import PreflightCheck
 
                 return PreflightOutput(
+                    passed=True,
                     checks=[
                         PreflightCheck(
                             name="metadataAPI",
@@ -605,9 +607,10 @@ class TestPreflightEndpoint:
         assert entry["message"] == "Metadata GraphQL API returned no sites"
         assert entry["failureMessage"] == "Metadata GraphQL API returned no sites"
         assert entry["successMessage"] == ""
-        # An advisory-only failure derives PARTIAL (status can no longer be
-        # hand-set to NOT_READY while nothing blocks).
-        assert body["preflight"]["status"] == "partial"
+        # The check failed but the app's verdict is passed=True (advisory only) —
+        # the derived status is READY and nothing blocks. The red per-check row
+        # still surfaces in data.metadataAPI.
+        assert body["preflight"]["status"] == "ready"
         assert body["preflight"]["should_block"] is False
         assert "status" not in body["data"]
 
@@ -617,12 +620,12 @@ class TestPreflightEndpoint:
                 from application_sdk.handler.contracts import PreflightCheck
 
                 return PreflightOutput(
+                    passed=False,
                     message="Credentials are invalid",
                     checks=[
                         PreflightCheck(
                             name="loginCheck",
                             passed=False,
-                            required=True,
                             message="Credentials are invalid",
                         )
                     ],
@@ -636,7 +639,9 @@ class TestPreflightEndpoint:
         assert body["data"]["loginCheck"]["success"] is False
         assert body["preflight"]["should_block"] is True
         assert body["preflight"]["status"] == "not_ready"
-        assert body["preflight"]["checks"][0]["required"] is True
+        # ``required`` was removed from PreflightCheck — the per-check dict must
+        # no longer carry it (gating is the app's single ``passed`` verdict now).
+        assert "required" not in body["preflight"]["checks"][0]
         assert "status" not in body["data"]
         assert "checks" not in body["data"]
 
@@ -648,6 +653,7 @@ class TestPreflightEndpoint:
                 from application_sdk.handler.contracts import PreflightCheck
 
                 return PreflightOutput(
+                    passed=False,
                     checks=[
                         PreflightCheck(
                             name="apiVersion",
@@ -692,6 +698,7 @@ class TestPreflightEndpoint:
                 from application_sdk.handler.contracts import PreflightCheck
 
                 return PreflightOutput(
+                    passed=False,
                     checks=[PreflightCheck(name="connectivity", passed=False)],
                 )
 
@@ -723,6 +730,7 @@ class TestPreflightEndpoint:
                 from application_sdk.handler.contracts import PreflightCheck
 
                 return PreflightOutput(
+                    passed=True,
                     checks=[
                         PreflightCheck(name="apiVersion", passed=True, message="ok")
                     ],
@@ -749,6 +757,7 @@ class TestPreflightEndpoint:
                 from application_sdk.handler.contracts import PreflightCheck
 
                 return PreflightOutput(
+                    passed=False,
                     checks=[
                         PreflightCheck(
                             name="apiVersion",
@@ -770,8 +779,8 @@ class TestPreflightEndpoint:
             "Could not connect to Tableau"
         )
 
-    def test_preflight_envelope_success_true_on_partial_status(self) -> None:
-        """Status PARTIAL → envelope success TRUE.
+    def test_preflight_envelope_success_true_on_mixed_checks(self) -> None:
+        """Mixed pass/fail with a proceed verdict → envelope success TRUE.
 
         Mixed pass/fail must surface to the UI; a single failing check
         cannot collapse the entire response.
@@ -782,6 +791,7 @@ class TestPreflightEndpoint:
                 from application_sdk.handler.contracts import PreflightCheck
 
                 return PreflightOutput(
+                    passed=True,
                     checks=[
                         PreflightCheck(name="apiVersion", passed=True, message="ok"),
                         PreflightCheck(
@@ -813,6 +823,7 @@ class TestPreflightEndpoint:
         class _ZeroChecks(_TestHandler):
             async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
                 return PreflightOutput(
+                    passed=False,
                     checks=[],
                     message="couldn't build client",
                 )
@@ -824,11 +835,11 @@ class TestPreflightEndpoint:
         )
         assert body["success"] is False
         assert body["data"] == {}
-        # Zero checks derive READY (vacuous); the envelope success=False is
-        # what signals the preflight-system failure. A handler that couldn't
-        # execute should report that as a failing check (from_error) instead.
-        assert body["preflight"]["status"] == "ready"
-        assert body["preflight"]["should_block"] is False
+        # A handler that couldn't build the client reports passed=False — the
+        # derived status is NOT_READY and the run would block. The envelope
+        # success=False (zero checks) is the separate preflight-system signal.
+        assert body["preflight"]["status"] == "not_ready"
+        assert body["preflight"]["should_block"] is True
 
 
 class TestMetadataEndpoint:
@@ -5841,6 +5852,7 @@ class TestPerEntrypointHandlerHook:
             assert input.entrypoint == "csa-hello-b"
             assert ctx.app_name == "test-app"
             return PreflightOutput(
+                passed=False,
                 checks=[
                     PreflightCheck(
                         name="recipientCheck",
