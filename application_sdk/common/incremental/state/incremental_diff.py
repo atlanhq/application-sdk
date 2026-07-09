@@ -31,9 +31,10 @@ Output structure:
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
+
+import orjson
 
 from application_sdk.common.incremental.helpers import (
     copy_directory_parallel,
@@ -568,7 +569,9 @@ def _write_metadata(
     }
 
     metadata_path = incremental_diff_dir.joinpath("metadata.json")
-    metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    metadata_path.write_text(
+        orjson.dumps(metadata, option=orjson.OPT_INDENT_2).decode(), encoding="utf-8"
+    )
     logger.info("Wrote metadata.json: %s", metadata_path)
 
 

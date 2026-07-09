@@ -417,3 +417,77 @@ class TestRequireLiveManifest:
         monkeypatch.setenv("ATLAN_E2E_REQUIRE_LIVE_MANIFEST", "true")
         with pytest.raises(ManifestFileNotFoundError, match="use_live_manifest"):
             self.harness._seed_dag_from_live_or_committed_manifest("atlan-openapi-1")
+
+
+# ---------------------------------------------------------------------------
+# setup_method — two-store / RunMode.DIRECT warning
+# ---------------------------------------------------------------------------
+
+
+class _AgentModeE2ETest(_ConcreteE2ETest):
+    """Same as _ConcreteE2ETest but RunMode.AGENT — two-store is meaningful here."""
+
+    mode = RunMode.AGENT
+    # Skips the $admin-role AtlanClient network lookup in setup_method, which
+    # is irrelevant to this test and would otherwise also log a (harmless)
+    # warning against the fake tenant URL, muddying the assertion.
+    connection_admin_roles = ("test-admin-role-guid",)
+
+
+class TestTwoStoreDirectModeWarning:
+    """ADR-0014 two-store CI wiring only has an effect under RunMode.AGENT —
+    see the comment in BaseE2ETest.setup_method(). These tests exercise the
+    warning-vs-silent behavior without a real tenant (the $admin-role lookup
+    network call fails against the fake URL and is caught + logged
+    separately by setup_method(), so admin-role attrs are set here to keep
+    each test isolated to the one warning under test).
+    """
+
+    def _bootstrap_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ATLAN_BASE_URL", "https://test.example.invalid")
+        monkeypatch.setenv("ATLAN_API_KEY", "test-token")
+        monkeypatch.setenv("GITHUB_RUN_ID", "9999999")
+
+    def test_warns_when_two_store_enabled_and_mode_is_direct(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._bootstrap_env(monkeypatch)
+        monkeypatch.setenv("TWO_STORE", "true")
+        mock_logger = MagicMock()
+        monkeypatch.setattr("application_sdk.testing.e2e.base.logger", mock_logger)
+
+        class _DirectModeTest(_ConcreteE2ETest):
+            connection_admin_roles = ("test-admin-role-guid",)
+
+        _DirectModeTest().setup_method()
+
+        assert mock_logger.warning.called
+        message = mock_logger.warning.call_args[0][0]
+        assert "RunMode.DIRECT" in message
+
+    def test_no_warning_when_mode_is_agent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._bootstrap_env(monkeypatch)
+        monkeypatch.setenv("TWO_STORE", "true")
+        mock_logger = MagicMock()
+        monkeypatch.setattr("application_sdk.testing.e2e.base.logger", mock_logger)
+
+        _AgentModeE2ETest().setup_method()
+
+        mock_logger.warning.assert_not_called()
+
+    def test_no_warning_when_two_store_not_enabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._bootstrap_env(monkeypatch)
+        monkeypatch.delenv("TWO_STORE", raising=False)
+        mock_logger = MagicMock()
+        monkeypatch.setattr("application_sdk.testing.e2e.base.logger", mock_logger)
+
+        class _DirectModeTest(_ConcreteE2ETest):
+            connection_admin_roles = ("test-admin-role-guid",)
+
+        _DirectModeTest().setup_method()
+
+        mock_logger.warning.assert_not_called()

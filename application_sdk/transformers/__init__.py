@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any
 from application_sdk.transformers.errors import TransformerNotImplementedError
 
 if TYPE_CHECKING:
+    import pandas as pd
     import pyarrow as pa
 
 warnings.warn(
@@ -54,7 +55,7 @@ class TransformerInterface(ABC):
     def transform_metadata(
         self,
         typename: str,
-        dataframe: "pa.Table | list[dict[str, Any]]",
+        dataframe: "pa.Table | pd.DataFrame | list[dict[str, Any]]",
         workflow_id: str,
         workflow_run_id: str,
         entity_class_definitions: dict[str, type[Any]] | None = None,

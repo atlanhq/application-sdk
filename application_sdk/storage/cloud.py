@@ -42,12 +42,12 @@ Credential format (standard ``csa-connectors-objectstore``)::
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 from pathlib import Path
 from typing import Any
 
 import obstore as obs
+import orjson
 from obstore.store import ObjectStore
 
 from application_sdk.storage.errors import (
@@ -137,8 +137,8 @@ class CloudStore:
             extra = {}
         if isinstance(extra, str):
             try:
-                extra = json.loads(extra) if extra else {}
-            except json.JSONDecodeError as exc:
+                extra = orjson.loads(extra) if extra else {}
+            except orjson.JSONDecodeError as exc:
                 raise StorageConfigError(
                     f"Invalid JSON in 'extra' field: {exc}"
                 ) from exc

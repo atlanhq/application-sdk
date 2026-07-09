@@ -429,9 +429,10 @@ class BaseFullDAGE2ETest:
             RuntimeError: If ``manifest_path`` can't be read or doesn't
                 contain a top-level ``dag`` object.
         """
-        import json  # noqa: PLC0415 — cold path: only at bootstrap
         from pathlib import Path  # noqa: PLC0415 — cold path: only at bootstrap
         from typing import Any  # noqa: PLC0415 — cold path: only at bootstrap
+
+        import orjson  # noqa: PLC0415 — cold path: only at bootstrap
 
         if manifest is not None:
             manifest_obj: Any = manifest
@@ -450,7 +451,7 @@ class BaseFullDAGE2ETest:
                     ),
                     resource_identifier=str(path),
                 )
-            manifest_obj = json.loads(path.read_text())
+            manifest_obj = orjson.loads(path.read_text())
             source = str(path)
         dag = manifest_obj.get("dag")
         if not isinstance(dag, dict) or not dag:

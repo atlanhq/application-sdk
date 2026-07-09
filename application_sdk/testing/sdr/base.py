@@ -54,6 +54,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 import orjson
+import pytest
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing._mustache import PLACEHOLDER_RE as _PLACEHOLDER_RE
@@ -118,6 +119,55 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
     #: fails, instead of the test silently passing with a hand-supplied value.
     #: Empty string ("") keeps the legacy hand-written behaviour.
     manifest_path: ClassVar[str] = ""
+
+    #: When True, a workflow scenario that runs to completion must have written
+    #: NON-EMPTY extracted output at ``extracted_output_base_path`` — catching the
+    #: "COMPLETED with status success but zero assets" silent SDR failure (and,
+    #: because the output is read from the exact ``{base}/{workflow_id}/{run_id}``
+    #: path, an egress-path bug that writes to the wrong prefix).
+    #:
+    #: Default False (OPT-IN): reading the output requires the connector's SDR
+    #: object store to be bind-mounted to the host at ``extracted_output_base_path``.
+    #: The current CI SDR stack does NOT mount it — the deployment localstorage
+    #: (``bindings.localstorage`` rootPath ``/tmp/atlan-data``) lives inside the
+    #: container, so the host path is empty. Enabling this without that mount would
+    #: false-fail. Flip on per connector once the deployment store is mounted to the
+    #: host (see the two-store CI stack work). Skipped with a warning when no
+    #: ``extracted_output_base_path`` is set.
+    require_assets_landed: ClassVar[bool] = False
+
+    #: When True, EVERY landed asset's ``attributes.qualifiedName`` must be nested
+    #: under the connection's qualifiedName prefix — catching assets that landed
+    #: with a wrong/missing connection prefix (mis-parented / dropped prefix) even
+    #: when the count is right. Skipped (with a warning) when the connection QN
+    #: can't be resolved from ``default_connection``. Default True; set False to
+    #: opt out for a connector whose extracted QNs legitimately aren't
+    #: connection-prefixed.
+    require_asset_connection_prefix: ClassVar[bool] = True
+
+    #: When True, an agent-mode SDR suite that declares NO ``api="workflow"``
+    #: scenario fails the readiness floor (it never validates a real extraction).
+    #: Default False: the floor reports the gap as a skipped test rather than a
+    #: fleet-wide red. Flip on once the suite has a workflow-to-completion scenario.
+    enforce_workflow_floor: ClassVar[bool] = False
+
+    #: When True, additionally assert the UPSTREAM (atlan) object store's
+    #: ``transformed/`` is populated after the extraction — the store the
+    #: atlan-side Publish app actually reads. In SDR (two-store) mode the
+    #: connector must copy ``transformed/`` from the deployment store to the
+    #: upstream store (``upload_to_atlan`` / ``ENABLE_ATLAN_UPLOAD``). If it
+    #: doesn't, extraction is green and the deployment store has assets, but
+    #: Publish finds an empty ``transformed/`` and publishes ZERO assets — the
+    #: atlan-looker-app#134 class of bug, which the deployment-store check above
+    #: cannot see. Default False: needs a two-store CI stack + a set
+    #: ``upstream_output_base_path``; flip on per connector once it wires the
+    #: upstream upload.
+    require_upstream_assets_landed: ClassVar[bool] = False
+
+    #: Local path where the UPSTREAM (atlan) object store's output is mounted in
+    #: the two-store CI SDR stack (e.g. ``data-upstream/artifacts/apps/<app>/workflows``).
+    #: Required for :pyattr:`require_upstream_assets_landed`.
+    upstream_output_base_path: ClassVar[str | None] = None
 
     def _build_scenario_args(self, scenario: Scenario) -> dict[str, Any]:
         args = super()._build_scenario_args(scenario)
@@ -199,6 +249,7 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
         manifest = self._load_manifest()
         inputs = ((manifest.get("dag") or {}).get("extract") or {}).get("inputs") or {}
         if not isinstance(inputs.get("args"), dict):
+            # conformance: ignore[E012] this is a test-authoring helper (BaseSDRIntegrationTest), not activity/task code with AppError plumbing; an existing test pins ValueError
             raise ValueError(
                 "Manifest has no `dag.extract.inputs.args` object — "
                 "cannot derive the workflow input from it."
@@ -317,6 +368,18 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
             merged["workflow_type"] = self.workflow_type
         return merged
 
+    @staticmethod
+    def _sdr_flag(env_name: str, default: bool) -> bool:
+        """Effective boolean for a guard: an env override wins over the class
+        default. The ``sdr-e2e`` action sets these (e.g. from a fleet allowlist)
+        to enable a guard for a connector WITHOUT editing the connector's suite —
+        so the whole SDR harness stays SDK-side. Env unset → the class default.
+        """
+        val = os.environ.get(env_name)
+        if val is not None:
+            return val.strip().lower() in ("1", "true", "yes", "on")
+        return default
+
     def _execute_scenario(self, scenario: Scenario) -> ScenarioResult:
         result = super()._execute_scenario(scenario)
         # The base class only polls when expected_data or schema_base_path
@@ -333,6 +396,15 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
         ):
             try:
                 self._ensure_workflow_completed(scenario, result.response)
+                if self._sdr_flag(
+                    "SDR_REQUIRE_ASSETS_LANDED", self.require_assets_landed
+                ):
+                    self._assert_assets_landed(scenario, result.response)
+                if self._sdr_flag(
+                    "SDR_REQUIRE_UPSTREAM_ASSETS_LANDED",
+                    self.require_upstream_assets_landed,
+                ):
+                    self._assert_upstream_assets_landed(scenario, result.response)
             # conformance: ignore[E004] re-raises immediately; only mutates result object before propagation so caller boundary handles logging
             except Exception as exc:
                 # The parent's try/except/finally already appended `result`
@@ -343,7 +415,258 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
                 result.success = False
                 result.error = exc
                 raise
+        elif (
+            scenario.api.lower() == "workflow"
+            and result.success
+            and (
+                scenario.expected_data
+                or scenario.schema_base_path
+                or self.schema_base_path
+            )
+            and (
+                self._sdr_flag("SDR_REQUIRE_ASSETS_LANDED", self.require_assets_landed)
+                or self._sdr_flag(
+                    "SDR_REQUIRE_UPSTREAM_ASSETS_LANDED",
+                    self.require_upstream_assets_landed,
+                )
+            )
+        ):
+            # An assets-landed guard is requested, but this scenario validates
+            # via expected_data/schema_base_path — so the guard block above is
+            # skipped and the check silently does NOT run. Surface it so a green
+            # tick isn't mistaken for guard coverage.
+            logger.warning(
+                "SDR workflow scenario %r: an assets-landed guard is enabled "
+                "(SDR_REQUIRE_ASSETS_LANDED / SDR_REQUIRE_UPSTREAM_ASSETS_LANDED) but "
+                "the scenario validates via expected_data/schema_base_path, so the "
+                "guard is NOT applied here. Use a scenario without "
+                "expected_data/schema_base_path to enforce the assets-landed check.",
+                scenario.name,
+            )
         return result
+
+    # ------------------------------------------------------------------
+    # SDR readiness — dynamic assertions (assets actually landed, correctly)
+    # ------------------------------------------------------------------
+
+    def _sdr_connection_qn(self) -> str | None:
+        """The connection qualifiedName every extracted asset should be nested
+        under, from ``default_connection`` — the nested AE shape
+        (``{"attributes": {"qualifiedName": ...}}``) or a flat
+        ``{"connection_qualified_name": ...}``. ``None`` when unresolved.
+        """
+        conn = self.default_connection or {}
+        if not isinstance(conn, dict):
+            return None
+        attrs = conn.get("attributes")
+        if isinstance(attrs, dict) and attrs.get("qualifiedName"):
+            return str(attrs["qualifiedName"])
+        if conn.get("connection_qualified_name"):
+            return str(conn["connection_qualified_name"])
+        return None
+
+    def _assert_assets_landed(
+        self, scenario: Scenario, response: dict[str, Any]
+    ) -> None:
+        """After a workflow scenario reaches COMPLETED, assert the extraction
+        actually WROTE assets — at the expected output path, in non-zero count,
+        and (opt-in) nested under the connection's qualifiedName prefix.
+
+        A run that completes with status 'success' but writes zero assets — or
+        writes them to the wrong prefix — is the classic silent SDR failure the
+        dynamic run must catch (a static check can't see it). Only runs when an
+        ``extracted_output_base_path`` is known; otherwise warns.
+        """
+        base_path = (
+            os.environ.get("SDR_EXTRACTED_OUTPUT_BASE_PATH")
+            or scenario.extracted_output_base_path
+            or self.extracted_output_base_path
+        )
+        if not base_path:
+            logger.warning(
+                "SDR workflow scenario %r completed, but no extracted_output_base_path "
+                "is set — cannot verify assets landed. Set it (scenario or class) to "
+                "catch 'COMPLETED but zero assets' / wrong-path silent failures.",
+                scenario.name,
+            )
+            return
+
+        data = response.get("data", {})
+        workflow_id, run_id = data.get("workflow_id"), data.get("run_id")
+        # A COMPLETED run that doesn't return both IDs can't be located — surface
+        # the clean diagnostic here instead of a TypeError from os.path.join(...,
+        # None) downstream in load_actual_output.
+        if not workflow_id or not run_id:
+            raise AssertionError(
+                f"SDR workflow scenario '{scenario.name}' completed with status "
+                f"'success' but the response is missing workflow_id/run_id "
+                f"(workflow_id={workflow_id!r}, run_id={run_id!r}) — cannot locate "
+                f"the extracted output to verify assets landed."
+            )
+        from application_sdk.testing.integration.comparison import (  # noqa: PLC0415
+            load_actual_output,
+        )
+
+        # load_actual_output reads {base}/{workflow_id}/{run_id}/{subdirectory}/ and
+        # raises FileNotFoundError when that dir is missing/empty — so this single
+        # call asserts BOTH "assets landed" (count > 0) AND "at the right path" (a
+        # dropped {workflow_id}/{run_id} segment surfaces here as FileNotFoundError).
+        try:
+            records = load_actual_output(
+                base_path,
+                workflow_id,
+                run_id,
+                subdirectory=scenario.output_subdirectory,
+            )
+        # conformance: ignore[E004] re-raised as AssertionError carrying the diagnostic
+        except FileNotFoundError as exc:
+            raise AssertionError(
+                f"SDR workflow scenario '{scenario.name}' completed with status "
+                f"'success' but NO extracted assets landed at "
+                f"{base_path}/{workflow_id}/{run_id} — the classic SDR silent-success / "
+                f"zero-asset (or wrong-egress-path) failure. ({exc})"
+            ) from exc
+        if not records:
+            raise AssertionError(
+                f"SDR workflow scenario '{scenario.name}' completed but produced ZERO "
+                f"asset records under {base_path}/{workflow_id}/{run_id}."
+            )
+
+        # Correct location: every asset must be nested under the connection QN.
+        if self.require_asset_connection_prefix:
+            conn_qn = self._sdr_connection_qn()
+            if not conn_qn:
+                logger.warning(
+                    "SDR workflow scenario %r: %d assets landed, but the connection "
+                    "qualifiedName is unresolved (set default_connection) — skipping "
+                    "the asset-location (connection-prefix) check.",
+                    scenario.name,
+                    len(records),
+                )
+            else:
+                # Segment-boundary match: the connection asset itself (qn ==
+                # conn_qn) or a descendant (conn_qn + "/..."). A bare startswith
+                # would treat "default/oracle/17300" as nested under
+                # "default/oracle/1730".
+                misplaced = [
+                    qn
+                    for r in records
+                    for qn in [(r.get("attributes") or {}).get("qualifiedName")]
+                    if isinstance(qn, str)
+                    and qn
+                    and qn != conn_qn
+                    and not qn.startswith(conn_qn + "/")
+                ]
+                assert not misplaced, (
+                    f"SDR workflow scenario '{scenario.name}': {len(misplaced)} of "
+                    f"{len(records)} extracted assets are NOT nested under the "
+                    f"connection qualifiedName '{conn_qn}' — assets landed at the wrong "
+                    f"location (mis-parented / dropped connection prefix). Examples: "
+                    f"{misplaced[:3]}"
+                )
+        logger.info(
+            "SDR workflow scenario %r: %d asset record(s) landed at %s/%s/%s",
+            scenario.name,
+            len(records),
+            base_path,
+            workflow_id,
+            run_id,
+        )
+
+    def _assert_upstream_assets_landed(
+        self, scenario: Scenario, response: dict[str, Any]
+    ) -> None:
+        """After a workflow scenario reaches COMPLETED, assert the transformed
+        assets also reached the UPSTREAM (atlan) object store — the store the
+        atlan-side Publish app actually reads.
+
+        In SDR (two-store) mode the connector copies ``transformed/`` from the
+        deployment store to the upstream store (``upload_to_atlan`` /
+        ``ENABLE_ATLAN_UPLOAD``). A green extraction whose deployment store has
+        assets but whose upstream ``transformed/`` is empty makes Publish emit
+        ZERO assets (atlan-looker-app#134) — a failure the deployment-store check
+        cannot see. Only runs when ``upstream_output_base_path`` is set (the
+        two-store CI stack); otherwise warns.
+        """
+        base_path = (
+            os.environ.get("SDR_UPSTREAM_OUTPUT_BASE_PATH")
+            or self.upstream_output_base_path
+        )
+        if not base_path:
+            logger.warning(
+                "SDR workflow scenario %r: require_upstream_assets_landed is set but "
+                "upstream_output_base_path is not — cannot verify the upstream (atlan) "
+                "object store. Point it at the two-store CI stack's upstream mount.",
+                scenario.name,
+            )
+            return
+
+        data = response.get("data", {})
+        workflow_id, run_id = data.get("workflow_id"), data.get("run_id")
+        if not workflow_id or not run_id:
+            raise AssertionError(
+                f"SDR workflow scenario '{scenario.name}' completed but the response is "
+                f"missing workflow_id/run_id — cannot locate the upstream output."
+            )
+        from application_sdk.testing.integration.comparison import (  # noqa: PLC0415
+            load_actual_output,
+        )
+
+        try:
+            records = load_actual_output(
+                base_path,
+                workflow_id,
+                run_id,
+                subdirectory=scenario.output_subdirectory,
+            )
+        # conformance: ignore[E004] re-raised as AssertionError carrying the diagnostic
+        except FileNotFoundError as exc:
+            raise AssertionError(
+                f"SDR workflow scenario '{scenario.name}' completed and landed assets in "
+                f"the deployment store, but the UPSTREAM (atlan) object store's "
+                f"transformed/ at {base_path}/{workflow_id}/{run_id} is EMPTY — the "
+                f"atlan-side Publish app would publish ZERO assets. The connector's "
+                f"transformed output never reached the upstream store (missing/broken "
+                f"upload_to_atlan, or ENABLE_ATLAN_UPLOAD not honoured). ({exc})"
+            ) from exc
+        if not records:
+            raise AssertionError(
+                f"SDR workflow scenario '{scenario.name}': the upstream (atlan) object "
+                f"store's transformed/ under {base_path}/{workflow_id}/{run_id} has ZERO "
+                f"records — Publish would publish nothing."
+            )
+        logger.info(
+            "SDR workflow scenario %r: %d transformed record(s) reached the upstream "
+            "(atlan) object store at %s/%s/%s",
+            scenario.name,
+            len(records),
+            base_path,
+            workflow_id,
+            run_id,
+        )
+
+    def test_sdr_suite_runs_an_extraction(self) -> None:
+        """Readiness floor: an agent-mode SDR suite should validate a real
+        extraction, not just auth/preflight. A suite with no ``api="workflow"``
+        scenario never exercises the extract → transform → asset-landing path SDR
+        actually runs for a customer.
+
+        Advisory by default (skips with a message) so it can be adopted without a
+        fleet-wide red; set ``enforce_workflow_floor = True`` on the suite to make
+        it a hard failure once an extraction scenario exists.
+        """
+        if not self.agent_spec_template:
+            pytest.skip("not an agent-mode SDR suite (no agent_spec_template)")
+        if any(s.api.lower() == "workflow" for s in self.scenarios):
+            return
+        msg = (
+            "SDR suite declares no api='workflow' scenario — it validates auth / "
+            "preflight only and never runs a real extraction. Add a "
+            "workflow-to-completion scenario so SDR readiness reflects a real run."
+        )
+        if self.enforce_workflow_floor:
+            raise AssertionError(msg)
+        pytest.skip(msg + " (advisory; set enforce_workflow_floor=True to require it)")
 
     @classmethod
     def _write_summary(cls) -> str | None:

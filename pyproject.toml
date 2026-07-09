@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "3.21.0"
+version = "3.21.1"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
@@ -138,6 +138,7 @@ dev = [
     "boto3-stubs>=1.38.6,<2.0.0",
     "poethepoet>=0.48.0,<0.49.0",
     "libcst>=1.4.0,<2.0.0",
+    "atlan-application-sdk-conformance",
 ]
 test = [
     "mock>=5.1.0,<6.0.0",
@@ -342,6 +343,13 @@ constraint-dependencies = [
     "simpleeval>=1.0.5",         # CVE-2026-32640
     "python-dotenv>=1.2.2",      # CVE-2026-28684 (symlink file overwrite)
 ]
+
+[tool.uv.sources]
+# Source-pinned, not version-pinned: the conformance package's source lives
+# in this same repo (packages/conformance) and is published from it. Using
+# the local path means a packages/conformance change is picked up here
+# immediately, with no separate release-then-bump-the-pin cycle.
+atlan-application-sdk-conformance = { path = "packages/conformance" }
 
 # Uncomment the following section in case you want to publish to testpypi
 # [[tool.uv.index]]

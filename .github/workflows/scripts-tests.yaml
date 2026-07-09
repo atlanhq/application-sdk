@@ -15,6 +15,13 @@ on:
   pull_request:
     paths:
       - ".github/scripts/**"
+      # select_dapr_components.py / build_compose_chain.py live here (not
+      # under .github/scripts/) so the sdr-e2e composite can resolve them
+      # via github.action_path in every invocation context — see
+      # test_select_dapr_components.py's module docstring. Their tests
+      # still live under .github/scripts/tests/, so this path is only
+      # needed to make edits to the modules themselves trigger this gate.
+      - ".github/actions/sdr-e2e/*.py"
       - ".github/workflows/scripts-tests.yaml"
 
 permissions:
@@ -31,7 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
 
       - name: Run script tests
         run: uv run --extra workflows --with pytest python -m pytest .github/scripts/tests -q

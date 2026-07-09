@@ -56,8 +56,14 @@ _K002_PROP_RE = re.compile(
 )
 # Same (?:[^"]*/)? anchor as K001: "AppConfig.pkl" and "MyConfig.pkl" must not
 # match — only the exact legacy module names directly after a path separator.
+#
+# Connectors.pkl is deliberately NOT here: unlike Config/Credential/Renderers
+# (Argo-era, dropped by App.pkl), the Connectors registry is still imported
+# explicitly by consumers — App.pkl imports it internally and types `connector`
+# as `Connectors.Type`, but does not re-export the constants, so every current
+# toolkit example still `import`s it. Flagging it is a false positive.
 _K002_IMPORT_RE = re.compile(
-    r'\bimport\s+"(?:[^"]*/)?(?:Config|Connectors|Credential|Renderers)\.pkl"'
+    r'\bimport\s+"(?:[^"]*/)?(?:Config|Credential|Renderers)\.pkl"'
 )
 
 # ---------------------------------------------------------------------------
@@ -248,11 +254,6 @@ def _k002_import_hint(import_str: str) -> str:
             "App.pkl re-exports widget types as typealiases (UIConfig, TextInput, "
             "etc.) — remove this import and replace Config.* references with the "
             "unqualified names."
-        )
-    if "Connectors.pkl" in import_str:
-        return (
-            "App.pkl exposes connector constants as Connectors.* without an "
-            "explicit import — remove this import."
         )
     if "Credential.pkl" in import_str:
         return "Credential.pkl is an Argo-era module not used by App.pkl — remove this import."

@@ -443,6 +443,7 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
             self.add_record(trace_record)
 
         except Exception:
+            # conformance: ignore[L009] the ERROR record here is the operator-visible failure signal (add_record failures are otherwise silent) — an existing test pins it, not merely a re-raise duplicate
             logging.error("Error recording trace", exc_info=True)
             raise
 

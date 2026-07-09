@@ -8,6 +8,8 @@ import collections.abc
 import json
 from typing import Any
 
+import orjson
+
 
 def process_secret_data(secret_data: Any) -> dict[str, Any]:
     """Process raw Dapr secret data into a standardised dictionary.
@@ -29,7 +31,7 @@ def process_secret_data(secret_data: Any) -> dict[str, Any]:
         k, v = next(iter(secret_data.items()))
         if isinstance(v, str):
             try:
-                parsed = json.loads(v)
+                parsed = orjson.loads(v)
                 if isinstance(parsed, dict):
                     return parsed
             except json.JSONDecodeError:  # conformance: ignore[E002] value isn't JSON; return the raw string value

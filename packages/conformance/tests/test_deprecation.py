@@ -11,6 +11,7 @@ from __future__ import annotations
 import ast
 
 from conformance.suite.checks._ast_common import _parse_directives
+from conformance.suite.checks._version import parse_version, version_reached
 from conformance.suite.checks.deprecation._authoring import scan_authoring
 from conformance.suite.checks.deprecation._consumer import scan_consumer
 from conformance.suite.checks.deprecation._extractor import (
@@ -22,7 +23,6 @@ from conformance.suite.checks.deprecation._manifest import (
     Manifest,
     load_manifest,
 )
-from conformance.suite.checks.deprecation._version import parse_version, version_reached
 
 
 def _tree_and_directives(src: str) -> tuple[ast.Module, dict]:

@@ -18,7 +18,10 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from application_sdk.observability import get_logger
 from tools.migrate_v3.check_migration import _is_test_path
+
+logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Detection patterns (priority order matches the detection rules)
@@ -89,12 +92,20 @@ def fingerprint_connector(root: Path) -> FingerprintResult:
 
         try:
             text = path.read_text(encoding="utf-8")
-        except OSError:
+        except OSError as e:
+            logger.warning("Skipping unreadable file %s: %s", path, e, exc_info=True)
             continue
 
         try:
             rel = str(path.relative_to(scan_root))
-        except ValueError:
+        except ValueError as e:
+            logger.debug(
+                "Path %s not under scan root %s; using basename: %s",
+                path,
+                scan_root,
+                e,
+                exc_info=True,
+            )
             rel = path.name
 
         # Priority 1

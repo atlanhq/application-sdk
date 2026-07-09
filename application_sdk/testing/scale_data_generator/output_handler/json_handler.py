@@ -1,5 +1,6 @@
-import json
 from typing import Any, Dict
+
+import orjson
 
 from .base import OutputFormatHandler
 
@@ -16,7 +17,7 @@ class JsonFormatHandler(OutputFormatHandler):
     ) -> None:
         if table_name not in self.file_handlers:
             self.initialize_file(table_name)
-        self.file_handlers[table_name].write(json.dumps(record) + "\n")
+        self.file_handlers[table_name].write(orjson.dumps(record).decode() + "\n")
 
     def close_files(self) -> None:
         for handler in self.file_handlers.values():

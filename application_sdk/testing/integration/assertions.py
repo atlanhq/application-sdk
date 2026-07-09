@@ -24,13 +24,14 @@ Example:
     ... )
 """
 
-import logging
 import re
 from collections.abc import Callable
 from re import Pattern
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
 
 # Type alias for predicate functions
 Predicate = Callable[[Any], bool]

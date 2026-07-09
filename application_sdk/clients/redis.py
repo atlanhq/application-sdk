@@ -127,6 +127,7 @@ class BaseRedisClient:
             RedisProtocolError: If result type is unexpected or unknown.
         """
         if not isinstance(result, int):
+            # conformance: ignore[L009] adds caller-invisible context (resource_id, actual result type and value) that the raised RedisProtocolError message does not carry
             logger.error(
                 "Unexpected eval result type: resource_id=%s type=%s value=%s",
                 resource_id,
@@ -145,6 +146,7 @@ class BaseRedisClient:
         elif result == -2:
             return False, LockReleaseResult.WRONG_OWNER
         else:
+            # conformance: ignore[L009] adds caller-invisible context (resource_id, actual result value) that the raised RedisProtocolError message does not carry
             logger.error(
                 "Unknown Redis eval result: resource_id=%s result=%s",
                 resource_id,

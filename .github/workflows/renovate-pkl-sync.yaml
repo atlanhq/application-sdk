@@ -78,7 +78,7 @@ jobs:
           ref: ${{ github.ref }}
 
       # Provides `uvx ruff`, used by the driver to format generated Python.
-      - uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
 
       - name: Install pkl
         run: |
