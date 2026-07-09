@@ -86,6 +86,10 @@ jobs:
           || github.event.comment.author_association == 'MEMBER'
           || github.event.comment.author_association == 'COLLABORATOR'
           || github.event.comment.user.login == 'atlan-ci'
+          || (
+            github.event.comment.user.login == 'mothership-ai[bot]'
+            && !contains(github.event.comment.body, '<!-- SDK_REVIEW -->')
+          )
         )
       )
     runs-on: ubuntu-latest
