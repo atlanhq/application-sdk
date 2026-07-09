@@ -24,8 +24,8 @@ from application_sdk.constants import (
     TEMPORARY_PATH,
 )
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.storage.batch import list_keys
-from application_sdk.storage.ops import download_file
+from application_sdk.storage.batch import list_keys_with_meta
+from application_sdk.storage.ops import download_file, download_file_chunked
 
 logger = get_logger(__name__)
 
@@ -242,8 +242,10 @@ async def download_s3_prefix_with_structure(
     Raises:
         Exception: If listing or downloading fails
     """
-    # List files under the prefix from Object Store
-    file_list = await list_keys(
+    # List files under the prefix from Object Store. Sizes + etags from the
+    # listing let large files fetch via bounded, version-pinned range GETs
+    # without a per-file HEAD (BLDX-1513 / BLDX-1523).
+    items = await list_keys_with_meta(
         prefix=s3_prefix,
     )
 
@@ -252,7 +254,7 @@ async def download_s3_prefix_with_structure(
 
     sem = asyncio.Semaphore(max_concurrency)
 
-    async def _download_one(file_path: str) -> None:
+    async def _download_one(file_path: str, size: int, etag: str | None) -> None:
         # Strip source prefix to get relative path
         if file_path.startswith(source_prefix):
             relative_path = file_path[len(source_prefix) :].lstrip("/")
@@ -263,13 +265,15 @@ async def download_s3_prefix_with_structure(
         local_file_path.parent.mkdir(parents=True, exist_ok=True)
 
         async with sem:
-            await download_file(
+            await download_file_chunked(
                 key=file_path,
                 local_path=str(local_file_path),
+                file_size=size,
+                etag=etag,
             )
 
     # Download all files concurrently with bounded parallelism
-    await asyncio.gather(*[_download_one(fp) for fp in file_list])
+    await asyncio.gather(*[_download_one(fp, size, etag) for fp, size, etag in items])
 
 
 # =============================================================================

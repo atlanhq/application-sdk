@@ -397,7 +397,7 @@ async def materialize_file_reference(
         FILE_REF_CHUNKED_THRESHOLD_BYTES,
     )
     from application_sdk.storage.batch import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        list_keys,
+        list_keys_with_meta,
     )
     from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         StorageError,
@@ -407,15 +407,18 @@ async def materialize_file_reference(
         _safe_join_under,
         download_file,
         download_file_chunked,
-        get_file_size,
+        get_file_meta,
     )
 
     if not ref.is_durable or ref.storage_path is None:
         return ref  # nothing to materialise
 
     # Determine single-file vs directory by listing sub-keys under the path.
-    all_keys = await list_keys(ref.storage_path, store)
-    data_keys = [k for k in all_keys if not k.endswith(".sha256")]
+    # Sizes come back with the listing so the directory branch can chunk large
+    # files without a per-file HEAD (BLDX-1513).
+    all_items = await list_keys_with_meta(ref.storage_path, store)
+    data_items = [(k, s, e) for k, s, e in all_items if not k.endswith(".sha256")]
+    data_keys = [k for k, _, _ in data_items]
 
     # Structured kwargs in the logger calls below are intentional: every key used
     # (storage_path, local_path, file_size_bytes, bytes_downloaded,
@@ -447,7 +450,12 @@ async def materialize_file_reference(
             # Otherwise (no stored sidecar OR hash mismatch) fall through
             # to re-download — conservative since we cannot verify.
 
-        # Determine output path.
+        # Determine output path. owns_temp: a fresh mkstemp name per call
+        # means a resume checkpoint could never be reused on retry — disable
+        # resume and clean up the partial + sidecar on failure. A stable
+        # ref.local_path keeps the default (env-driven) resume behaviour so a
+        # Temporal retry on the same pod fetches only the missing ranges.
+        owns_temp = ref.local_path is None
         if ref.local_path is not None:
             out_path = ref.local_path
             Path(out_path).parent.mkdir(parents=True, exist_ok=True)
@@ -469,7 +477,10 @@ async def materialize_file_reference(
         # lists empty here, AND some stores (notably GCS with conditional
         # IAM) silently return an empty listing when the caller lacks
         # permission.
-        remote_size = await get_file_size(ref.storage_path, store, normalize=False)
+        remote_meta = await get_file_meta(ref.storage_path, store, normalize=False)
+        remote_size, remote_etag = (
+            remote_meta if remote_meta is not None else (None, None)
+        )
         if remote_size is None:
             raise StorageNotFoundError(
                 f"FileReference path '{ref.storage_path}' resolved to no "
@@ -511,6 +522,12 @@ async def materialize_file_reference(
                     max_concurrent_chunks=FILE_REF_CHUNK_CONCURRENCY,
                     compute_hash=True,
                     normalize=False,
+                    # remote_size/etag already fetched via get_file_meta (HEAD)
+                    # above; reuse both so the chunked path doesn't HEAD a
+                    # second time and its range GETs are version-pinned.
+                    file_size=remote_size,
+                    etag=remote_etag,
+                    resume=False if owns_temp else None,
                 )
             else:
                 sha256 = await download_file(
@@ -547,6 +564,14 @@ async def materialize_file_reference(
                 bytes_transferred_before_failure=0,
                 exc_info=True,
             )
+            if owns_temp:
+                # A fresh-named temp can never be resumed — don't strand the
+                # partial file or its checkpoint sidecar (best-effort).
+                try:
+                    Path(out_path).unlink(missing_ok=True)
+                    Path(str(out_path) + ".transfer-state").unlink(missing_ok=True)
+                except OSError:  # conformance: ignore[E002] best-effort cleanup of an unusable temp; original error re-raised below
+                    pass
             raise
 
         _log(
@@ -589,7 +614,7 @@ async def materialize_file_reference(
 
         prefix = ref.storage_path.rstrip("/") + "/"
 
-        async def _download_one(key: str) -> bool:
+        async def _download_one(key: str, size: int, etag: str | None) -> bool:
             """Download one file from the prefix. Returns True if skipped (cache hit)."""
             rel = key.removeprefix(prefix)
             # Reject keys whose resolved path escapes local_directory.
@@ -625,8 +650,23 @@ async def materialize_file_reference(
                     )
                     # fall through to re-download
 
-            sha256 = await download_file(
-                key, dest, store, compute_hash=True, normalize=False
+            # Chunk large files (bounded parallel range GETs, each with its own
+            # timeout / retry budget) and stream small ones — passing the
+            # listing's size so no per-file HEAD is issued. This is the same
+            # reliability the single-file branch already has (BLDX-1513); before
+            # this, a multi-hundred-MB file inside a directory ref (e.g. a
+            # connection-cache SQLite) streamed in one GET and died on the
+            # overall-request timeout.
+            sha256 = await download_file_chunked(
+                key,
+                dest,
+                store,
+                chunk_size_bytes=FILE_REF_CHUNK_SIZE_BYTES,
+                max_concurrent_chunks=FILE_REF_CHUNK_CONCURRENCY,
+                compute_hash=True,
+                normalize=False,
+                file_size=size,
+                etag=etag,
             )
             if sha256 is not None:
                 _write_local_sidecar(dest, sha256)
@@ -642,7 +682,7 @@ async def materialize_file_reference(
 
             sem = asyncio.Semaphore(MAX_CONCURRENT_STORAGE_TRANSFERS)
             results = await _gather_with_semaphore(
-                [_download_one(k) for k in data_keys], sem
+                [_download_one(k, s, e) for k, s, e in data_items], sem
             )
             skipped = sum(results)
         except Exception as exc:

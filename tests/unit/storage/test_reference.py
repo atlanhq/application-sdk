@@ -453,9 +453,9 @@ class TestMaterializeFileReference:
     ) -> None:
         """A listed key containing ``..`` must not write outside *local_path*.
 
-        obstore rejects ``..`` keys on put, so we patch ``list_keys`` to plant
-        a hostile listing and assert the containment guard fires before any
-        write happens (issue #1694).
+        obstore rejects ``..`` keys on put, so we patch ``list_keys_with_meta``
+        to plant a hostile listing and assert the containment guard fires before
+        any write happens (issue #1694).
         """
         from unittest.mock import AsyncMock
 
@@ -468,8 +468,8 @@ class TestMaterializeFileReference:
         )
         with (
             patch(
-                "application_sdk.storage.batch.list_keys",
-                new=AsyncMock(return_value=["dirkey/../../canary.txt"]),
+                "application_sdk.storage.batch.list_keys_with_meta",
+                new=AsyncMock(return_value=[("dirkey/../../canary.txt", 10, None)]),
             ),
             pytest.raises(StorageError, match="Path traversal"),
         ):

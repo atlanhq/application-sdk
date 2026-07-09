@@ -9,10 +9,14 @@ Public API:
     normalize_key(key)                                 → str  (path normalisation)
     upload_file(key, local_path)      → str  (streaming upload, returns sha256)
     download_file(key, local_path)    → str | None  (streaming download)
+    download_file_chunked(key, local_path) → str | None  (parallel range GETs for
+        large files; resumable + version-pinned — prefer for GB-class objects)
+    get_file_meta(key, store=None)    → (size, e_tag) | None  (single HEAD)
     delete(key, store=None)           → bool
     exists(key, store=None)           → bool
     delete_prefix(prefix, store=None) → int  (returns count deleted)
     list_keys(prefix, suffix=...)     → list[str]
+    list_keys_with_meta(prefix, ...)  → list[(key, size, e_tag)]
 
 For directory upload/download, use App.upload / App.download (framework tasks)
 or call application_sdk.storage.transfer.upload / .download directly.
@@ -31,6 +35,7 @@ from application_sdk.storage.batch import (
     delete_prefix,
     download_prefix,
     list_keys,
+    list_keys_with_meta,
     upload_file_from_bytes,
     upload_prefix,
 )
@@ -54,7 +59,9 @@ from application_sdk.storage.ops import (
     BoundStore,
     delete,
     download_file,
+    download_file_chunked,
     exists,
+    get_file_meta,
     normalize_key,
     put_json,
     upload_file,
@@ -76,11 +83,14 @@ __all__ = [
     "upload_file_from_bytes",
     "upload_prefix",
     "download_file",
+    "download_file_chunked",
     "download_prefix",
     "delete",
     "delete_prefix",
     "exists",
+    "get_file_meta",
     "list_keys",
+    "list_keys_with_meta",
     "normalize_key",
     "put_json",
     # Errors

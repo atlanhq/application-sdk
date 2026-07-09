@@ -14,7 +14,7 @@ import orjson
 from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.server.fastapi.models import FileUploadResponse
-from application_sdk.storage.ops import download_file
+from application_sdk.storage.ops import download_file_chunked
 
 logger = get_logger(__name__)
 
@@ -66,7 +66,9 @@ async def download_file_from_upload_response(
 
     local_path = os.path.join(TEMPORARY_PATH, key)
 
-    await download_file(
+    # Chunk large uploads (user-supplied files are uncapped) so a big artifact
+    # survives slow egress; small files still stream in a single GET. (BLDX-1513)
+    await download_file_chunked(
         key=key,
         local_path=local_path,
     )
