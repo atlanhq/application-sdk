@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.21.1
-source-sha:    5c79f7ff9bc53882d2778d1d5a488f2f50dc964b
-source-date:   2026-07-09T16:48:33+05:30
+source-sha:    b6e520f609df37fdb309ad94d565a5c6424c2a0b
+source-date:   2026-07-09T17:33:37+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -23,7 +23,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 9 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 55 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 57 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 20 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 37 |
@@ -1039,6 +1039,20 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Defined in:** `application_sdk/errors/leaves.py`
 
 ### Functions
+
+#### `causal_chain`
+
+- **Import:** `from application_sdk.errors import causal_chain`
+- **Signature:** `causal_chain(exc: BaseException)`
+- **Summary:** Yield ``exc`` then its ``__cause__`` / ``__context__`` chain.
+- **Defined in:** `application_sdk/errors/classify.py`
+
+#### `errno_classifier`
+
+- **Import:** `from application_sdk.errors import errno_classifier`
+- **Signature:** `errno_classifier(mapping: Mapping[int, type[AppError]])`
+- **Summary:** Build a classifier that maps a driver errno to a typed :class:`AppError`.
+- **Defined in:** `application_sdk/errors/classify.py`
 
 #### `redact_secrets`
 

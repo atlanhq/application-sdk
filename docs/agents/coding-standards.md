@@ -139,6 +139,43 @@ the exception text never enters the check; log it with `exc_info=True` at the ca
 site instead. `PreflightOutput.status` and `should_block` derive from the flags;
 never pass `passed=` or `status=`.
 
+When your SQL client declares an `ERROR_MAP` (below), the exception you catch here
+arrives **pre-typed**: the client already turned the raw driver error into the
+mapped `AppError` leaf, so `PreflightCheck.from_error("auth", e)` carries the
+app-specific `code` with no classification logic at the catch site.
+
+### Typing errors at the client boundary (`ERROR_MAP`)
+
+Classify raw source errors **where they occur — at the client boundary — not at the
+reporting bridge.** Don't hand-roll cause-walking and errno extraction in a
+`preflight_check`; declare the driver-code mapping once and let the SDK apply it.
+
+For a SQL source, set `ERROR_MAP` on your `BaseSQLClient` / `AsyncBaseSQLClient`
+subclass — a `{driver_errno: AppErrorLeaf}` map. Each wrap point in the client
+consults it before falling back to the generic wrapper, so one declaration types
+errors on **both** surfaces: the preflight gate (the catch site above gets a typed
+`e`) and runtime activities (a raised leaf is an `AppError`, so `activities.py`
+forwards its `code` to the Automation Engine).
+
+```python
+class MyClient(AsyncBaseSQLClient):
+    ERROR_MAP = {
+        1045: BadCredentialsError,   # each leaf carries its curated message /
+        1049: UnknownDatabaseError,  # category / suggested_action
+    }
+```
+
+The leaves must construct with no args (they carry a default `message`). An errno
+absent from the map falls through to the generic wrapper unchanged, and an empty
+map (the default) is byte-identical to no typing at all — the SDK never guesses.
+
+For a **non-SQL source**, use the factory directly:
+`classify = errno_classifier({errno: Leaf})`, then `typed = classify(exc)` at the
+boundary where you catch the driver error. `causal_chain(exc)` is the same bounded,
+cycle-safe walk if you need to inspect the chain yourself. `from_error` deliberately
+has **no** implicit global classifier hook — classification is always an explicit
+opt-in at the boundary.
+
 ### Fail-closed semantics
 
 Any failure to *produce* a verdict blocks the run — "couldn't verify" is not a
