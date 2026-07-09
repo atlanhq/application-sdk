@@ -82,7 +82,23 @@ def errno_classifier(
     ``mapping`` is app knowledge: the driver-specific error codes plus the leaf
     (and thus the curated message / category / suggested action) each maps to.
     This factory owns only the mechanics.
+
+    Every leaf is eagerly test-constructed here, at factory time, so a map
+    entry that cannot build with no arguments (e.g. a bare base leaf whose
+    ``message`` is required) fails at client init — loudly, in CI — instead of
+    raising a ``TypeError`` mid-error-handling the first time that errno fires
+    in production.
     """
+    for errno, leaf_cls in mapping.items():
+        try:
+            leaf_cls()  # type: ignore[call-arg]
+        except TypeError as exc:
+            raise ValueError(
+                f"errno_classifier mapping for errno {errno} is not usable: "
+                f"{leaf_cls.__name__} must construct with no arguments — give "
+                "the leaf a curated default message (bare base leaves like "
+                "AuthError require message and cannot be mapped directly)"
+            ) from exc
 
     def classify(exc: BaseException) -> AppError | None:
         if not mapping:

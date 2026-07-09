@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
+import pytest
+
 from application_sdk.errors import causal_chain, errno_classifier
 from application_sdk.errors.classify import _CAUSAL_CHAIN_LIMIT
 from application_sdk.errors.leaves import AuthError, PreconditionError
@@ -111,3 +113,12 @@ class TestErrnoClassifier:
         second = classify(Exception(1045))
         assert first is not second
         assert isinstance(first, _AuthLeaf)
+
+    def test_unbuildable_leaf_fails_at_factory_time(self) -> None:
+        # A bare base leaf (message required) must fail when the classifier is
+        # BUILT — at client init, loudly — not with a TypeError inside an
+        # except block the first time its errno fires in production.
+        from application_sdk.errors.leaves import AuthError
+
+        with pytest.raises(ValueError, match="AuthError must construct"):
+            errno_classifier({1045: AuthError})
