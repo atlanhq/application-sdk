@@ -137,13 +137,22 @@ Print at end: `[Phase 3 complete] rounds=<R>, converged=<yes|no>`
 
 ---
 
-## Phase 4: Stop at merge-ready + report (do NOT merge)
+## Phase 4: Hand to human review + report (do NOT merge)
 
-1. Post a final PR comment: rounds taken, findings fixed vs dismissed (with the
-   dismissal rationales), final CI + verdict, and — if stopped short — exactly
-   what remains and why (round cap / re-raised-after-dismiss / ambiguous fork).
-2. **Do NOT `gh pr merge`.** Leave the merge to a human.
-3. Emit this block verbatim (the dispatch script parses it):
+1. **Request human review** (from the prompt header: `REVIEWERS` handles +
+   `REQUESTER`). This runs whether the outcome is merge-ready OR `NEEDS_HUMAN` —
+   either way the PR is now a human's:
+   ```bash
+   gh pr edit <PR> --add-reviewer <REVIEWERS>   # ignore "can't request from the author"
+   ```
+2. Post a final PR comment that **@-mentions `TAG_LIST`** (the reviewers + the
+   requester) so they know it's their turn, and includes: rounds taken, findings
+   fixed vs dismissed (with dismissal rationales), final CI + verdict, and — if
+   stopped short — exactly what remains and why (round cap /
+   re-raised-after-dismiss / ambiguous fork). State plainly whether it's
+   merge-ready (green + zero findings + `READY_TO_MERGE`) or needs their call.
+3. **Do NOT `gh pr merge`.** Leave the merge to a human.
+4. Emit this block verbatim (the dispatch script parses it):
    ```
    === SDK RESOLVE SUMMARY ===
    pr: <N>
