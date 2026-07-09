@@ -399,7 +399,7 @@ class TestPreflightEndpoint:
         assert body["data"] == {}
         assert body["message"] == "ready"
         assert body["preflight"]["status"] == "ready"
-        assert body["preflight"]["should_block"] is False
+        assert "should_block" not in body["preflight"]
         assert body["preflight"]["checks"] == []
 
     def test_default_handler_reports_success_with_no_checks(self) -> None:
@@ -412,12 +412,12 @@ class TestPreflightEndpoint:
         assert response.status_code == 200
         body = response.json()
         # No checks emitted, so the SageV2 envelope is success=False (same as
-        # any zero-check handler); with no blocking checks should_block is False.
+        # any zero-check handler).
         assert body["success"] is False
         assert body["data"] == {}
         assert body["message"] == "No preflight handler registered"
         assert body["preflight"]["status"] == "ready"
-        assert body["preflight"]["should_block"] is False
+        assert "should_block" not in body["preflight"]
         assert body["preflight"]["checks"] == []
 
     def test_preflight_handler_error_returns_500(self) -> None:
@@ -609,10 +609,12 @@ class TestPreflightEndpoint:
         assert entry["failureMessage"] == "Metadata GraphQL API returned no sites"
         assert entry["successMessage"] == ""
         assert body["preflight"]["status"] == "not_ready"
-        assert body["preflight"]["should_block"] is False
+        assert "should_block" not in body["preflight"]
         assert "status" not in body["data"]
 
-    def test_preflight_blocking_failure_sets_should_block(self) -> None:
+    def test_preflight_not_ready_status_surfaced(self) -> None:
+        # Block-ness is derivable from status == not_ready — there is no
+        # per-check blocking flag or should_block signal anymore.
         class _OneCheck(_TestHandler):
             async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
                 from application_sdk.handler.contracts import PreflightCheck
@@ -624,7 +626,6 @@ class TestPreflightEndpoint:
                         PreflightCheck(
                             name="loginCheck",
                             passed=False,
-                            blocking=True,
                             message="Credentials are invalid",
                         )
                     ],
@@ -636,9 +637,9 @@ class TestPreflightEndpoint:
         assert body["success"] is True
         assert list(body["data"]) == ["loginCheck"]
         assert body["data"]["loginCheck"]["success"] is False
-        assert body["preflight"]["should_block"] is True
+        assert "should_block" not in body["preflight"]
         assert body["preflight"]["status"] == "not_ready"
-        assert body["preflight"]["checks"][0]["blocking"] is True
+        assert body["preflight"]["checks"][0]["name"] == "loginCheck"
         assert "status" not in body["data"]
         assert "checks" not in body["data"]
 
@@ -833,7 +834,67 @@ class TestPreflightEndpoint:
         assert body["success"] is False
         assert body["data"] == {}
         assert body["preflight"]["status"] == "not_ready"
-        assert body["preflight"]["should_block"] is False
+        assert "should_block" not in body["preflight"]
+
+    def test_flattening_and_summary_prefer_error_over_message(self) -> None:
+        # Precedence: when a check carries a typed error, its message and
+        # suggested_action win over the deprecated check.message.
+        class _OneCheck(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                from application_sdk.errors.leaves import AuthError
+                from application_sdk.handler.contracts import PreflightCheck
+
+                return PreflightOutput(
+                    status=PreflightStatus.NOT_READY,
+                    checks=[
+                        PreflightCheck(
+                            name="loginCheck",
+                            passed=False,
+                            message="stale deprecated text",
+                            error=AuthError(
+                                message="Credentials are invalid",
+                                suggested_action="Rotate the credential",
+                            ),
+                        )
+                    ],
+                )
+
+        body = (
+            _make_client(handler=_OneCheck())
+            .post("/workflows/v1/check", json={"credentials": []})
+            .json()
+        )
+        entry = body["data"]["loginCheck"]
+        assert entry["failureMessage"] == "Credentials are invalid"
+        assert entry["message"] == "Credentials are invalid"
+        summary_check = body["preflight"]["checks"][0]
+        assert summary_check["message"] == "Credentials are invalid"
+        assert summary_check["suggested_action"] == "Rotate the credential"
+
+    def test_flattening_uses_check_message_when_no_error(self) -> None:
+        class _OneCheck(_TestHandler):
+            async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+                from application_sdk.handler.contracts import PreflightCheck
+
+                return PreflightOutput(
+                    status=PreflightStatus.NOT_READY,
+                    checks=[
+                        PreflightCheck(
+                            name="loginCheck",
+                            passed=False,
+                            message="Credentials are invalid",
+                        )
+                    ],
+                )
+
+        body = (
+            _make_client(handler=_OneCheck())
+            .post("/workflows/v1/check", json={"credentials": []})
+            .json()
+        )
+        assert body["data"]["loginCheck"]["failureMessage"] == "Credentials are invalid"
+        assert body["preflight"]["checks"][0]["message"] == "Credentials are invalid"
+        assert "suggested_action" not in body["preflight"]["checks"][0]
 
 
 class TestMetadataEndpoint:

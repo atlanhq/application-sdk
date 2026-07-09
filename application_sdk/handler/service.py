@@ -67,6 +67,7 @@ from application_sdk.handler.contracts import (
     FileUploadResponse,
     HandlerCredential,
     MetadataInput,
+    PreflightCheck,
     PreflightInput,
     PreflightOutput,
     SubscriptionConfig,
@@ -208,24 +209,38 @@ def _normalize_preflight_request(body: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _resolved_check_message(check: PreflightCheck) -> tuple[str, str]:
+    """Apply the precedence rule: a check's ``error`` wins over ``message``.
+
+    Returns ``(message, suggested_action)``; ``suggested_action`` is empty
+    unless carried by the typed ``error``.
+    """
+    if check.error is not None:
+        return check.error.message, check.error.suggested_action or ""
+    return check.message, ""
+
+
+def _summarize_check(check: PreflightCheck) -> dict[str, Any]:
+    dumped = check.model_dump(mode="json", exclude_none=True)
+    message, suggested_action = _resolved_check_message(check)
+    dumped["message"] = message
+    if suggested_action:
+        dumped["suggested_action"] = suggested_action
+    return dumped
+
+
 def _preflight_runtime_summary(result: PreflightOutput) -> dict[str, Any]:
     """Runtime metadata kept outside the SageV2 ``data`` map.
 
-    ``should_block`` is the gate signal: ``True`` iff a blocking check failed.
-    ``status`` carries the advisory handler status (``ready`` / ``not_ready`` /
-    ``partial``) — downstream consumers (Heracles, the Automation Engine event,
-    the connector-pulse dashboard) read it to distinguish a soft-failure from a
-    clean pass. Per-check ``blocking`` flags are included in ``checks``. Keep
-    these key names in sync with those consumers if ever renamed.
+    ``status`` is the gate verdict (``ready`` / ``not_ready`` / ``partial``);
+    ``not_ready`` means blocked. Per-check ``message``/``suggested_action`` follow
+    the precedence rule (typed ``error`` wins). Consumed for display/diagnostics.
     """
     return {
         "status": result.status.value,
-        "should_block": result.should_block,
         "message": result.message,
         "total_duration_ms": result.total_duration_ms,
-        "checks": [
-            check.model_dump(mode="json", exclude_none=True) for check in result.checks
-        ],
+        "checks": [_summarize_check(check) for check in result.checks],
     }
 
 
@@ -2352,7 +2367,7 @@ def create_app_handler_service(
                 for check in result.checks:
                     # Convert check name to camelCase key (e.g. "AuthCheck" -> "authCheck")
                     key = check.name[0].lower() + check.name[1:]
-                    msg = check.message or ""
+                    msg = _resolved_check_message(check)[0] or ""
                     v2_data[key] = {
                         "success": check.passed,
                         "message": msg,
