@@ -212,6 +212,10 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
     DOC_FILES=$(grep -cE '^(docs/|contract-toolkit/docs/|.*README\.md$)' /tmp/PR_FILES.txt || true)
     CONFIG_FILES=$(grep -cE '^(pyproject\.toml|uv\.lock|\.pre-commit|\.github/|helm/)' /tmp/PR_FILES.txt || true)
     SOURCE_FILES=$((TOTAL_FILES - CONF_FILES - TEST_FILES - DOC_FILES - CONFIG_FILES))
+    CHANGED_LINES=$(grep -cE '^[+-]' /tmp/DIFF.patch 2>/dev/null || echo 0)
+    # Security-sensitive paths NEVER take the fast path (a 3-line auth/secret
+    # change is exactly where a subtle blocker hides).
+    SECURITY_PATHS=$(grep -cE '(credential|secret|auth|token|_dapr|_temporal)' /tmp/PR_FILES.txt || true)
     ```
    This file-list based classification includes deleted files; do not classify
    only from `+++ b/` diff headers. Apply in order; **first match wins**:
@@ -236,6 +240,13 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
      shell robustness, dependency/supply-chain, and `helm/**`.)
    - If `SOURCE_FILES <= 2 && TEST_FILES >= SOURCE_FILES * 3` → `review_scope=tests-focused`
      (QUALITY agent + lightweight CORRECTNESS — mostly tests with a few source changes)
+   - If `SOURCE_FILES >= 1 && TOTAL_FILES <= 2 && CHANGED_LINES < 50 && CONF_FILES == 0
+     && CT_FILES == 0 && CONFIG_FILES == 0 && SECURITY_PATHS == 0` → `review_scope=minor`
+     (**fast path** for a tiny source change: CORRECTNESS agent only — it always
+     keeps guardrail coverage G1-G5 — skipping the heavier QUALITY/STRUCTURE
+     waves and the adversarial Wave 2, on the Small time budget. NEVER matches
+     credential/secret/auth or `_dapr`/`_temporal` seam paths; those fall through
+     to `full`.)
    - Otherwise → `review_scope=full` (correctness + quality + structure)
 
 12. Check diff size for tier:
@@ -588,6 +599,7 @@ Based on `review_scope`, dispatch agents via the Agent tool:
 | review_scope | Agents dispatched |
 |---|---|
 | `full` | correctness.md + quality.md + structure.md (all 3) |
+| `minor` | correctness.md only (fast path — keeps guardrail coverage) |
 | `contract-toolkit` | toolkit-review.md only |
 | `mixed-sdk-toolkit` | correctness.md + quality.md + structure.md + toolkit-review.md |
 | `tests-only` | quality.md only |
@@ -636,7 +648,7 @@ Parse JSON findings from each agent response.
 After Wave 1, call GPT to challenge your findings.
 
 **Skip conditions** (no adversarial):
-- `review_scope` is tests-only, conformance-only, config-only, or docs-only
+- `review_scope` is tests-only, conformance-only, config-only, docs-only, or minor
 - `review_scope` is contract-toolkit and toolkit-review.md produced zero findings
 - `review_tier` is "staged" (massive PR — too much context for one GPT call)
 - Wave 1 produced zero findings (nothing to challenge)
