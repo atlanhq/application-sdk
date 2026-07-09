@@ -1,5 +1,14 @@
 # Changelog
 
+## v3.21.2 (July 09, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.21.1...v3.21.2
+
+### Bug Fixes
+
+- chunked, resumable, version-pinned object-store transfers on slow egress (BLDX-1513, BLDX-1523) (#2479) (by @vaibhavatlan in [87b0d5b](https://github.com/atlanhq/application-sdk/commit/87b0d5b))
+
+
 ## v3.21.1 (July 08, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.21.0...v3.21.1
