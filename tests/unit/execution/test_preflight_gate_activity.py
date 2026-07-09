@@ -44,7 +44,7 @@ class _StubHandler(Handler):
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
         self.preflight_input = input
-        return PreflightOutput(checks=[])
+        return PreflightOutput(passed=True, checks=[])
 
     async def fetch_metadata(self, input: MetadataInput) -> SqlMetadataOutput:
         return SqlMetadataOutput(objects=[])
@@ -118,8 +118,10 @@ class TestPreflightGateActivity:
 
     async def test_raises_when_secret_store_unavailable(self) -> None:
         # A ref exists but there is no secret store to resolve it — an infra
-        # failure. Raise (routes to the workflow's fail-open) rather than call the
-        # handler with empty creds and misattribute the block as AUTH.
+        # failure. Raise rather than call the handler with empty creds: the raise
+        # routes to the workflow's fail-closed path, where it becomes a
+        # DEPENDENCY_UNAVAILABLE block (correct attribution, run does not proceed
+        # on unverified credentials) instead of a misattributed AUTH failure.
         from application_sdk.errors.leaves import DependencyUnavailableError
 
         handler = _StubHandler()
@@ -154,7 +156,8 @@ class TestPreflightGateActivity:
 
     def test_from_extraction_input_degrades_on_unbuildable_metadata(self) -> None:
         # A custom input whose metadata can't fit the model must not raise —
-        # the gate has to fail open before dispatch, not only during it.
+        # from_extraction_input degrades to a minimal input so the gate still
+        # dispatches and reaches a verdict (it must not raise *before* dispatch).
         class _Inp:
             extraction_method = "direct"
             credential_guid = "g-9"
@@ -353,6 +356,7 @@ class TestPreflightOutputTemporalRoundTrip:
         from application_sdk.errors.leaves import AuthError
 
         out = PreflightOutput(
+            passed=False,
             checks=[
                 PreflightCheck.from_error("auth", AuthError(message="Login rejected")),
                 PreflightCheck(name="version", passed=False),
@@ -362,7 +366,9 @@ class TestPreflightOutputTemporalRoundTrip:
         # The computed status ships on the wire for Temporal UI visibility...
         assert b'"status"' in payloads[0].data
         (restored,) = await pydantic_data_converter.decode(payloads, [PreflightOutput])
-        # ...and the re-injected key is ignored on validation; everything derives.
+        # ...the verdict round-trips, and the re-injected status key is ignored on
+        # validation; status/should_block re-derive from the restored verdict.
+        assert restored.passed is False
         assert restored.status is PreflightStatus.NOT_READY
         assert restored.should_block is True
         assert restored.checks[0].error is not None

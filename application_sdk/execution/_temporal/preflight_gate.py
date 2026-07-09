@@ -2,11 +2,12 @@
 
 A core SDK extraction-lifecycle activity. Every generated workflow's ``_run``
 dispatches ``{app}:preflight`` as its first step (see
-:func:`application_sdk.app.base._run_preflight_gate`); when the verdict's
-``should_block`` is set (a failed required check) the run aborts before
-extraction. Credential resolution happens *inside* the activity (mirrors
-``templates/sql_app.py`` ``_init_sql_client``) — the deterministic workflow only
-forwards the secret-free :class:`PreflightGateInput`.
+:func:`application_sdk.app.base._run_preflight_gate`); the run aborts before
+extraction when the app-supplied verdict blocks (``should_block``) or when the
+gate cannot produce a verdict at all — a raise, a timeout, or a secret-store
+outage all block the run (fail-closed). Credential resolution happens *inside*
+the activity (mirrors ``templates/sql_app.py`` ``_init_sql_client``) — the
+deterministic workflow only forwards the secret-free :class:`PreflightGateInput`.
 """
 
 from __future__ import annotations
@@ -38,6 +39,7 @@ with workflow.unsafe.imports_passed_through():
 logger = get_logger(__name__)
 
 PREFLIGHT_FAILED_ERROR_TYPE = "PreflightFailed"
+PREFLIGHT_UNAVAILABLE_ERROR_TYPE = "PreflightUnavailable"
 
 
 def input_type_supports_gate(input_type: type) -> bool:
@@ -119,13 +121,15 @@ class PreflightGateInput(BaseModel):
         Collects only secret-free credential routing fields plus the raw
         ``model_dump`` snapshot so the gate activity can derive form config in the
         activity frame. If a field does not fit (an oddly-shaped custom input),
-        degrades to a minimal input — the gate must fail open *before* dispatch.
+        degrades to a minimal input so the gate still RUNS — degrading the input
+        is not fail-open: the gate still dispatches and reaches a verdict (or
+        blocks fail-closed). It just must not raise *before* dispatch.
         """
         snapshot: dict[str, Any] = {}
         if hasattr(input_data, "model_dump"):
             try:
                 snapshot = input_data.model_dump(mode="json")
-            except Exception:  # never raise — the gate must fail open before dispatch
+            except Exception:  # never raise here — degrade so the gate still runs
                 logger.debug(
                     "Could not snapshot extraction input; gate proceeds without form config",
                     exc_info=True,
@@ -165,12 +169,15 @@ def preflight_gate_activity_name(app_name: str) -> str:
 
 
 # Dispatched from the extraction workflow's _run. Bounded so a slow/unreachable
-# source can't stall extraction start indefinitely. start_to_close is sized so
-# two attempts (plus backoff) fit inside schedule_to_close — otherwise the retry
-# is cosmetic (the second attempt can't run before the schedule cap fires).
-GATE_SCHEDULE_TO_CLOSE = timedelta(seconds=60)
-GATE_START_TO_CLOSE = timedelta(seconds=25)
-GATE_RETRY = RetryPolicy(maximum_attempts=2, backoff_coefficient=2)
+# source can't stall extraction start indefinitely, but sized for the fail-closed
+# semantics: three attempts (plus exponential backoff) fit inside
+# schedule_to_close, so a transient blip is absorbed by retries rather than
+# blocking a run, while a genuinely dead source exhausts the budget and blocks in
+# ~2 minutes. schedule_to_close must stay >= start_to_close * attempts + backoff
+# or the later attempts are cosmetic (they can't run before the schedule cap).
+GATE_SCHEDULE_TO_CLOSE = timedelta(seconds=120)
+GATE_START_TO_CLOSE = timedelta(seconds=30)
+GATE_RETRY = RetryPolicy(maximum_attempts=3, backoff_coefficient=2)
 
 
 _ROUTING_KEYS: frozenset[str] = frozenset(
@@ -225,9 +232,11 @@ def build_preflight_gate_activity(
             secret_store = infra.secret_store if infra is not None else None
             if secret_store is None:
                 # A ref exists but there is no store to dereference it — an infra
-                # failure, not a valid empty-credential state. Raise so the
-                # workflow's fail-open path handles it, rather than calling the
-                # handler with empty creds and misattributing the block as AUTH.
+                # failure, not a valid empty-credential state. Raise so the gate
+                # blocks fail-closed with DEPENDENCY_UNAVAILABLE attribution,
+                # rather than calling the handler with empty creds and
+                # misattributing the block as AUTH. The point is precise: don't
+                # mislabel a dead store as bad auth, but don't proceed either.
                 raise DependencyUnavailableError(
                     message="No secret store available to resolve preflight credentials",
                     service="secret_store",
@@ -251,8 +260,8 @@ def build_preflight_gate_activity(
         with bind_invocation_context(app_name, credentials):
             result = await handler.preflight_check(preflight_input)
         # Verdict record for debuggability: the gate decision (should_block),
-        # the derived display status, and the check count. (status can no
-        # longer contradict the checks — it is computed from them.)
+        # the derived display status, and the check count. (both should_block
+        # and status are computed from the app-supplied verdict.)
         logger.info(
             "Preflight gate verdict: %s (entrypoint=%s, status=%s, checks=%d)",
             "block" if result.should_block else "proceed",

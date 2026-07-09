@@ -287,6 +287,46 @@ class TestLogWorkflowInboundInterceptor:
         assert not ended_error, "preflight block must not log workflow.ended at error"
         assert "exc_info" not in ended_warn[0].kwargs
 
+    async def test_preflight_unavailable_logs_error_with_stack(
+        self, interceptor, mock_next
+    ):
+        # A fail-closed block where the gate could NOT produce a verdict
+        # (type="PreflightUnavailable") is a real plumbing failure, not the
+        # app's typed verdict — it is NOT special-cased, so workflow.ended logs
+        # at ERROR with the full traceback (exc_info=True), unlike PreflightFailed.
+        mock_next.execute_workflow = AsyncMock(
+            side_effect=ApplicationError(
+                "Preflight gate could not produce a verdict",
+                type="PreflightUnavailable",
+                non_retryable=True,
+            )
+        )
+        with patch(
+            "application_sdk.execution._temporal.interceptors.log.workflow"
+        ) as mock_wf:
+            mock_wf.unsafe.is_replaying.return_value = False
+            mock_wf.info.return_value = MockWorkflowInfo()
+            mock_wf.memo.return_value = {}
+            with patch(
+                "application_sdk.execution._temporal.interceptors.log.logger"
+            ) as mock_logger:
+                with pytest.raises(ApplicationError):
+                    await interceptor.execute_workflow(MockExecuteWorkflowInput())
+
+        ended_warn = [
+            c
+            for c in mock_logger.warning.call_args_list
+            if c.args and c.args[0] == "workflow.ended"
+        ]
+        ended_error = [
+            c
+            for c in mock_logger.error.call_args_list
+            if c.args and c.args[0] == "workflow.ended"
+        ]
+        assert ended_error, "preflight-unavailable should log workflow.ended at error"
+        assert ended_error[0].kwargs.get("exc_info") is True
+        assert not ended_warn, "preflight-unavailable must not log terse at warning"
+
     async def test_unexpected_failure_logs_error_with_stack(
         self, interceptor, mock_next
     ):

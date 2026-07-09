@@ -1,6 +1,7 @@
 """App base class and decorators."""
 
 import asyncio
+import contextlib
 import importlib.metadata
 import inspect
 import os
@@ -1546,17 +1547,97 @@ def _collect_interaction_relays(
     return relays
 
 
+_PREFLIGHT_CHAIN_WALK = 50
+
+
+def _raise_preflight_unavailable(
+    gate_exc: BaseException, app_name: str, error_type: str
+) -> Never:
+    """Block the run when the gate could not produce a verdict (fail-closed).
+
+    Recovers typed attribution from the caught exception's ``__cause__`` /
+    ``__context__`` chain (bounded, cycle-safe) — Temporal wraps the activity's
+    ``ApplicationError`` in an ``ActivityError``, and the SDK's activity wrapper
+    already serialized the underlying :class:`AppError` into that
+    ``ApplicationError.details`` as a :class:`FailureDetails` (see
+    ``activities.py``). This mirrors the log interceptor's ``_extract_failure_attrs``
+    cause-walk, workflow-safely. A recovered detail is forwarded (retryable
+    forced ``False``, ``app_name`` stamped); otherwise the block is attributed
+    to a generic :class:`DependencyUnavailableError` so a dead dependency reads
+    as ``DEPENDENCY_UNAVAILABLE``, never misattributed. Always raises.
+    """
+    with workflow.unsafe.imports_passed_through():
+        from application_sdk.errors.leaves import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
+            DependencyUnavailableError,
+        )
+        from application_sdk.errors.wire import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
+            FailureDetails,
+        )
+    from application_sdk.execution.errors import (  # noqa: PLC0415 — circular: execution/__init__ imports app.base
+        ApplicationError,
+    )
+
+    reason = "Preflight gate could not produce a verdict"
+    recovered: FailureDetails | None = None
+    seen: set[int] = set()
+    current: BaseException | None = gate_exc
+    depth = 0
+    while (
+        current is not None
+        and id(current) not in seen
+        and depth < _PREFLIGHT_CHAIN_WALK
+    ):
+        seen.add(id(current))
+        depth += 1
+        if isinstance(current, _NewAppError):
+            recovered = current.to_failure_details()
+            break
+        for detail in getattr(current, "details", None) or ():
+            if isinstance(detail, FailureDetails):
+                recovered = detail
+                break
+            if isinstance(detail, dict):
+                # A non-FailureDetails detail mapping is expected — skip it.
+                with contextlib.suppress(Exception):
+                    recovered = FailureDetails.model_validate(detail)
+                if recovered is not None:
+                    break
+        if recovered is not None:
+            break
+        current = current.__cause__ or current.__context__
+
+    if recovered is not None:
+        details = recovered.model_copy(
+            update={"retryable": False, "app_name": app_name}
+        )
+    else:
+        details = DependencyUnavailableError(
+            message=reason,
+            retryable=False,
+            app_name=app_name,
+        ).to_failure_details()
+
+    raise ApplicationError(
+        reason,
+        details,
+        type=error_type,
+        non_retryable=True,
+    ) from gate_exc
+
+
 async def _run_preflight_gate(
     input_data: Input, app_name: str, entrypoint: str
 ) -> None:
     """Run the SDK-owned pre-extraction preflight gate (HYP-1883).
 
     Dispatches the connector's preflight handler as a mandatory first activity
-    and aborts before extraction when the verdict's ``should_block`` is set (a
-    failed required check). Called at the head of every generated workflow's
-    ``_run``.
+    and aborts before extraction when the app-supplied verdict blocks
+    (``should_block``). **Fail-closed**: if the gate cannot produce a verdict at
+    all — an activity timeout, a secret-store/transport failure, or a handler
+    crash — the run is blocked too, not waved through ("couldn't verify" is not
+    a pass). Called at the head of every generated workflow's ``_run``.
 
-    Guards:
+    Guards (gate *not applicable*, not a failure — these silently return):
       * ``workflow.patched("preflight-gate")`` — workflows started before this
         code shipped replay the pre-gate branch deterministically (no new
         command in their history). New runs take the gated branch.
@@ -1585,6 +1666,7 @@ async def _run_preflight_gate(
             GATE_SCHEDULE_TO_CLOSE,
             GATE_START_TO_CLOSE,
             PREFLIGHT_FAILED_ERROR_TYPE,
+            PREFLIGHT_UNAVAILABLE_ERROR_TYPE,
             PreflightGateInput,
             preflight_gate_activity_name,
         )
@@ -1595,11 +1677,12 @@ async def _run_preflight_gate(
     if not isinstance(input_data, CredentialResolvable):
         return
 
-    # Fail-open (HYP-1883): the gate is an injected guardrail the app never opted
-    # into, so if it can't produce a verdict — an input that won't build, an
-    # activity timeout, a secret-store/transport failure, or a handler crash — log
-    # and PROCEED rather than kill a run over the gate's own plumbing. Blocking is
-    # expressed only by a returned should_block verdict; a raise does not block.
+    # Fail-closed (HYP-1883): the gate verifies the source before extraction, so
+    # if it can't produce a verdict — an activity timeout (after the retry budget),
+    # a secret-store/transport failure, or a handler crash — BLOCK the run rather
+    # than proceed on an unverified source. "Couldn't verify" is not a pass. The
+    # retry budget (GATE_RETRY) already absorbs transient blips; reaching this
+    # branch means the gate genuinely could not evaluate.
     try:
         gate_input = PreflightGateInput.from_extraction_input(input_data, entrypoint)
         result = await workflow.execute_activity(
@@ -1610,39 +1693,38 @@ async def _run_preflight_gate(
             start_to_close_timeout=GATE_START_TO_CLOSE,
             retry_policy=GATE_RETRY,
         )
-    except Exception:
+    except Exception as gate_exc:
         _safe_log(
             "error",
-            "Preflight gate could not produce a verdict; proceeding without source "
-            "verification (fail-open)",
+            "Preflight gate could not produce a verdict; blocking run (fail-closed)",
             app_name=app_name,
             entrypoint=entrypoint or "<implicit>",
             exc_info=True,
         )
-        return
+        _raise_preflight_unavailable(
+            gate_exc, app_name, PREFLIGHT_UNAVAILABLE_ERROR_TYPE
+        )
 
     if not result.should_block:
         return
 
-    # Fold the failed required checks' messages into the abort reason (advisory
-    # failures are excluded) and carry typed attribution to the Automation
-    # Engine. A check with full typed evidence (check.error, built via
-    # PreflightCheck.from_error) wins outright — its app-specific code /
-    # audience / evidence are forwarded verbatim. Otherwise fall back to the
-    # first classified category (default PRECONDITION), rebuilt as the
-    # canonical category-level leaf.
-    required_failures = [
-        check for check in result.checks if check.required and not check.passed
-    ]
+    # Fold every failed check's message into the abort reason (the app already
+    # decided these gate — should_block is its verdict) and carry typed
+    # attribution to the Automation Engine. A check with full typed evidence
+    # (check.error, built via PreflightCheck.from_error) wins outright — its
+    # app-specific code / audience / evidence are forwarded verbatim. Otherwise
+    # fall back to the first classified category (default PRECONDITION), rebuilt
+    # as the canonical category-level leaf.
+    failed_checks = [check for check in result.checks if not check.passed]
     reason = (
         result.message
-        or "; ".join(c.message for c in required_failures if c.message)
+        or "; ".join(c.message for c in failed_checks if c.message)
         or "Preflight check failed; aborting before extraction"
     )
     suggested = next(
-        (c.suggested_action for c in required_failures if c.suggested_action), ""
+        (c.suggested_action for c in failed_checks if c.suggested_action), ""
     )
-    winner = next((c.error for c in required_failures if c.error is not None), None)
+    winner = next((c.error for c in failed_checks if c.error is not None), None)
     if winner is not None:
         update: dict[str, Any] = {
             # matches the ApplicationError message and covers multi-check joins
@@ -1656,7 +1738,7 @@ async def _run_preflight_gate(
         details = winner.model_copy(update=update)
     else:
         category = next(
-            (c.category for c in required_failures if c.category is not None),
+            (c.category for c in failed_checks if c.category is not None),
             FailureCategory.PRECONDITION,
         )
         details = LEAF_BY_CATEGORY.get(category, _InternalError)(
