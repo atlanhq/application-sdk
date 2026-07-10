@@ -38,9 +38,12 @@ _SECRET_PARAM_RE = re.compile(
 # MySQL: Access denied for user 'atlan'@'10.0.0.5' → 'atlan'@'***' (keeps user).
 _HOST_IN_IDENTITY_RE = re.compile(r"(@')[^']*(')")
 # Postgres/generic: host "db.internal" / host name "x" / server at "10.0.0.5".
-_HOST_KEYWORD_RE = re.compile(r'(?i)((?:host(?:\s*name)?|server at)\s+")[^"]*(")')
+# \b anchors avoid matching a "host" tail inside another word (ghost, localhost).
+_HOST_KEYWORD_RE = re.compile(r'(?i)(\b(?:host(?:\s*name)?|server at)\s+")[^"]*(")')
 # Any IPv4 literal, anywhere — the egress IP is the sharpest, cross-driver leak.
-# Octet-validated so version-like triples (8.0.32) and error codes don't match.
+# Octet-validated, so 3-part version-like triples (8.0.32) and error codes don't
+# match; a 4-part version with octets ≤255 is indistinguishable from an IPv4 and
+# is (harmlessly) masked — over-redaction is the safe direction here.
 _IPV4_RE = re.compile(
     r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b"
 )

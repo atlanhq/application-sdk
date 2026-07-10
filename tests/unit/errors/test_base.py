@@ -276,6 +276,16 @@ def test_redact_secrets_masks_postgres_host_prose() -> None:
     )
 
 
+def test_redact_secrets_host_keyword_is_word_anchored() -> None:
+    """The host/server keyword must not match a 'host' tail inside another word."""
+    from application_sdk.errors import redact_secrets
+
+    assert (
+        redact_secrets('the ghost "spooky" appeared') == 'the ghost "spooky" appeared'
+    )
+    assert redact_secrets('localhost "x" note') == 'localhost "x" note'
+
+
 def test_redact_secrets_keeps_postgres_username() -> None:
     """Postgres names the user in auth prose — kept, no host present to mask."""
     from application_sdk.errors import redact_secrets
