@@ -41,6 +41,14 @@ Client options (passed via ``S3Store(client_options=…)``):
   ``"atlan-application-sdk/{version}"`` so tenant operators can identify
   SDK traffic in S3 access logs.
 
+Proxy / TLS (obstore reads none of these itself, so we plumb them explicitly):
+
+* ``HTTPS_PROXY`` / ``HTTP_PROXY`` — obstore's ``proxy_url``.
+* ``NO_PROXY`` — obstore's ``proxy_excludes`` (only when a proxy is set).
+* ``SSL_CERT_DIR`` — custom CA certs for private-CA stores (e.g. self-hosted
+  MinIO), loaded into obstore's ``root_certificate``. Same env var httpx/aiohttp
+  and Temporal honor via ``clients/ssl_utils.py``.
+
 Retry config (passed via ``S3Store(retry_config=…)``):
 
 * ``ATLAN_OBSTORE_RETRY_MAX_RETRIES`` — overrides obstore's default of 10.
@@ -104,11 +112,20 @@ def _default_user_agent() -> str:
 def _obstore_proxy_url() -> str | None:
     """Return the proxy URL from HTTPS_PROXY/HTTP_PROXY, or None.
 
-    obstore doesn't read proxy env vars itself, so we pass ``proxy_url``
-    explicitly. NO_PROXY isn't honored — the binding has no per-host excludes.
+    obstore doesn't read proxy env vars itself, so we pass it explicitly.
     """
     proxies = urllib.request.getproxies()
     return proxies.get("https") or proxies.get("http") or None
+
+
+def _obstore_proxy_excludes() -> str | None:
+    """Return NO_PROXY (obstore's ``proxy_excludes``), or None.
+
+    Unlike Temporal — which knows its single target host and resolves the bypass
+    itself via ``proxy_bypass_environment`` — obstore matches NO_PROXY per-host
+    at request time, so we just hand it the raw list.
+    """
+    return urllib.request.getproxies_environment().get("no") or None
 
 
 def obstore_client_options() -> ClientConfig:
@@ -140,6 +157,17 @@ def obstore_client_options() -> ClientConfig:
     proxy_url = _obstore_proxy_url()
     if proxy_url:
         opts["proxy_url"] = proxy_url
+        proxy_excludes = _obstore_proxy_excludes()
+        if proxy_excludes:
+            opts["proxy_excludes"] = proxy_excludes
+
+    from application_sdk.clients.ssl_utils import (  # noqa: PLC0415
+        get_custom_ca_cert_bytes,
+    )
+
+    root_certificate = get_custom_ca_cert_bytes()
+    if root_certificate:
+        opts["root_certificate"] = root_certificate
     return opts
 
 
@@ -360,18 +388,22 @@ def log_obstore_config(
 
 
 def _redact_proxy_userinfo(client_options: ClientConfig) -> dict:
-    """Return a copy of *client_options* with any proxy_url credentials masked.
+    """Return a log-safe copy of *client_options* (the real config is untouched).
 
-    The real config keeps the userinfo (obstore needs it); only the log copy is
-    redacted so a `user:pass@` proxy never lands in logs.
+    Masks ``proxy_url`` credentials and shrinks ``root_certificate`` to a byte
+    count, so logs never carry a proxy password or a full PEM bundle.
     """
     opts = dict(client_options)
     proxy = opts.get("proxy_url")
-    if not isinstance(proxy, str):
-        return opts
-    p = urlsplit(proxy)
-    if p.username or p.password:
-        host = p.hostname or ""
-        netloc = f"***@{host}:{p.port}" if p.port else f"***@{host}"
-        opts["proxy_url"] = urlunsplit((p.scheme, netloc, p.path, p.query, p.fragment))
+    if isinstance(proxy, str):
+        p = urlsplit(proxy)
+        if p.username or p.password:
+            host = p.hostname or ""
+            netloc = f"***@{host}:{p.port}" if p.port else f"***@{host}"
+            opts["proxy_url"] = urlunsplit(
+                (p.scheme, netloc, p.path, p.query, p.fragment)
+            )
+    root_cert = opts.get("root_certificate")
+    if isinstance(root_cert, (bytes, str)):
+        opts["root_certificate"] = f"<{len(root_cert)} bytes>"
     return opts
