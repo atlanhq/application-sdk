@@ -504,7 +504,13 @@ class _LogActivityInboundInterceptor(ActivityInboundInterceptor):
             try:
                 if status == "ERROR":
                     ended_attrs.update(_extract_failure_attrs(exc_caught))
-                    logger.error("activity.ended", exc_info=True, **ended_attrs)
+                    # A deliberate preflight-gate block logs terse (no stack);
+                    # the activity's Temporal redness comes from the raise, not
+                    # the log. Every other failure keeps the ERROR traceback.
+                    if is_preflight_block(exc_caught):
+                        logger.warning("activity.ended", **ended_attrs)
+                    else:
+                        logger.error("activity.ended", exc_info=True, **ended_attrs)
                 else:
                     logger.info("activity.ended", **ended_attrs)
             # conformance: ignore[E004] best-effort observability guard in finally; logging failure must never block activity completion

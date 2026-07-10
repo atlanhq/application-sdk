@@ -231,8 +231,10 @@ def _build_block_error(result: PreflightOutput, app_name: str) -> Any:
 
     failed = [c for c in result.checks if not c.passed]
     primary = next((c for c in failed if c.error is not None), None)
-    if primary is not None:
+    if primary is not None and primary.error is not None:
         details = primary.error
+        if details.app_name is None:
+            details = details.model_copy(update={"app_name": app_name})
     else:
         fallback = failed[0].resolved_message if failed else ""
         details = PreconditionError(

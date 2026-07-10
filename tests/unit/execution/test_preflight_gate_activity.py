@@ -277,6 +277,32 @@ class TestPreflightGateActivity:
         assert auth["error"]["message"] == "Auth failed"
         assert auth["error"]["suggested_action"] == "Rotate the credential"
 
+    async def test_block_stamps_app_name_when_handler_error_omits_it(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(name="auth", passed=False, error=AuthError(message="x"))
+            ],
+        )
+        with pytest.raises(ApplicationError) as excinfo:
+            await _verdict_gate(out)(PreflightGateInput())
+        assert excinfo.value.details[0].app_name == "myapp"
+
+    async def test_block_preserves_handler_supplied_app_name(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(
+                    name="auth",
+                    passed=False,
+                    error=AuthError(message="x", app_name="custom-app"),
+                )
+            ],
+        )
+        with pytest.raises(ApplicationError) as excinfo:
+            await _verdict_gate(out)(PreflightGateInput())
+        assert excinfo.value.details[0].app_name == "custom-app"
+
     async def test_error_on_passed_check_not_selected_as_primary(self) -> None:
         out = PreflightOutput(
             status=PreflightStatus.NOT_READY,
