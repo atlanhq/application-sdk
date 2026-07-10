@@ -60,28 +60,20 @@ jobs:
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
           owner: atlanhq
 
+      - name: Checkout application-sdk scripts
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
       - name: Discover atlan-application-sdk consumers
         id: discover
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          set -euo pipefail
-          # Search for repos in the atlanhq org that list atlan-application-sdk
-          # as a dependency. gh search code returns up to 100 results per query;
-          # for a fleet > 100 repos, page through with --limit / --page.
-          repos=$(gh search code \
+          python3 .github/scripts/discover_org_consumers.py \
             --owner atlanhq \
-            "atlan-application-sdk filename:pyproject.toml" \
-            --json repository \
-            --jq '[.[].repository.nameWithOwner] | unique' \
-            --limit 100 2>/dev/null || echo "[]")
-
-          if [ "$repos" = "[]" ] || [ -z "$repos" ]; then
-            echo "::warning::No consumer repos discovered. Check the atlan-app-fleet App installation/permissions."
-          else
-            echo "Discovered $(echo "$repos" | jq '. | length') consumer repos"
-          fi
-          echo "repos=${repos}" >> "$GITHUB_OUTPUT"
+            --query "atlan-application-sdk filename:pyproject.toml"
 
   dispatch:
     name: Trigger ${{ matrix.repo }}

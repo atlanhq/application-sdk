@@ -45,8 +45,11 @@ on:
         type: string
     secrets:
       app_repo_token:
-        description: "Token with contents:read on the target repo"
-        required: true
+        description: >
+          Token with contents:read on the target repo. Optional — a fleet
+          App token is minted automatically and covers any repo the
+          atlan-app-fleet App is installed on; this is only a fallback.
+        required: false
 
 permissions:
   contents: read

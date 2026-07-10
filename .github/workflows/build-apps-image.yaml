@@ -34,6 +34,12 @@ on:
       ORG_PAT_GITHUB:
         required: true
         description: "Org-level PAT for GHCR login — needed to pull private base images from other repos in the org"
+      FLEET_APP_ID:
+        required: false
+        description: "atlan-app-fleet App ID (org secret). Not passed explicitly by the current caller — auto-available via 'secrets: inherit'. Declared here so the contract is self-documenting."
+      FLEET_APP_PRIVATE_KEY:
+        required: false
+        description: "atlan-app-fleet App private key (org secret). Same inherit-only availability as FLEET_APP_ID above."
       DOCKER_HUB_PAT_RW:
         required: false
         description: "DockerHub PAT (read/write) — only needed when atlan.yaml self_deployed_runtime=true"
