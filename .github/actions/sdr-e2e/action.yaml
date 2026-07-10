@@ -155,6 +155,22 @@ inputs:
       never sets this.
     required: false
     default: "false"
+  ghcr-token:
+    description: |
+      Optional token used to authenticate the GHCR login for the test-image
+      build/push (and the compose worker's subsequent pull). The connector's
+      `sdr-test-<sha>` image is pushed to `ghcr.io/atlanhq/<app-image-name>`,
+      and some connector packages are PAT-published (created by
+      build-and-publish via `ORG_PAT_GITHUB`) and are NOT writable by the
+      default `GITHUB_TOKEN` — so a plain-token push 403s for those apps.
+      Pass the org-scoped PAT here (typically `secrets.ORG_PAT_GITHUB`, the
+      same one build-and-publish uses) to push with the package-owning
+      identity, which works uniformly across every connector package.
+
+      When empty (the default), the login falls back to `github.token`, so
+      callers that don't wire this stay on the previous behaviour.
+    required: false
+    default: ""
 outputs:
   test-outcome:
     description: pytest exit outcome (success/failure)
@@ -174,7 +190,10 @@ runs:
       with:
         registry: ghcr.io
         username: ${{ github.actor }}
-        password: ${{ github.token }}
+        # Prefer the caller-supplied org PAT (writes PAT-published connector
+        # packages); fall back to github.token when unset (unchanged behaviour
+        # for callers that don't pass ghcr-token).
+        password: ${{ inputs.ghcr-token != '' && inputs.ghcr-token || github.token }}
 
     # Cross-repo dispatch from apps-sdk PRs hands us a specific SDK ref;
     # rewrite the [tool.uv.sources] entry so the Docker build's COPY +
@@ -220,6 +239,33 @@ runs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
         fi
         uv lock
+
+    # Regenerate app/generated/** (manifest.json et al.) from contract/app.pkl
+    # BEFORE the image build COPYs the tree (BLDX-1493). The connector image bakes
+    # app/generated/ at build time and the running app serves manifest.json at
+    # GET /workflows/v1/manifest. The full-DAG / SDR harnesses fetch that live
+    # manifest and build the AE seed DAG from it (mimicking how the Local
+    # Marketplace app rebuilds the DAG from the app's fresh manifest at install),
+    # so a Contract Toolkit change actually takes effect. On cross-repo dispatch
+    # (application-sdk-ref set) the @app-contract-toolkit dependency is overridden
+    # to the SDK PR's contract-toolkit/src so an SDK-level toolkit change is baked
+    # into the served manifest end-to-end. Self-skips when there is no
+    # contract/app.pkl.
+    #
+    # This is the ONLY regeneration in this action — it runs before the build so
+    # the IMAGE serves a fresh manifest. setup-deps' actions/checkout below
+    # restores the committed app/generated/ on the host, which is fine: the
+    # harness reads the manifest over HTTP from the running app, only falling back
+    # to the committed file when the endpoint is unreachable.
+    #
+    # check-drift=false: uv (hence ruff) isn't installed until setup-deps below,
+    # and the app-level warn-only drift gate lives in the always-run
+    # connector-integration-tests job.
+    - name: Regenerate contract artifacts (manifest.json) before image build
+      uses: atlanhq/application-sdk/.github/actions/regenerate-contract@main
+      with:
+        application-sdk-ref: ${{ inputs.application-sdk-ref }}
+        check-drift: "false"
 
     # Buildx is required for the GHA cache backend below. Set up once
     # per run, before the image build that uses `cache-from/cache-to`.
@@ -286,7 +332,7 @@ runs:
     # Must run before atlan-configurator generates ci-deploy/ — setup-deps
     # uses actions/checkout internally which would wipe generated files.
     - name: Setup Python and dependencies
-      uses: atlanhq/application-sdk/.github/actions/setup-deps@v3.21.1
+      uses: atlanhq/application-sdk/.github/actions/setup-deps@v3.21.2
 
     # setup-deps' actions/checkout wipes the pre-build re-pin above. Do
     # it again so the host pytest runtime resolves the dispatched SDK
@@ -522,6 +568,13 @@ runs:
       shell: bash
       env:
         ATLAN_APPLICATION_NAME: ${{ inputs.app-name }}
+        # BLDX-1493: on SDK-level cross-repo dispatch (application-sdk-ref set)
+        # the committed manifest was generated with the OLD toolkit, so the
+        # harness must fail hard rather than fall back to it if the live
+        # /manifest is unreachable (a fallback would give a false green for the
+        # toolkit change). App-level runs (ref empty → "false") keep the safe
+        # fallback.
+        ATLAN_E2E_REQUIRE_LIVE_MANIFEST: ${{ inputs.application-sdk-ref != '' }}
         # Read by BaseE2ETest.setup_method() to warn if two-store is on
         # but the test class runs in RunMode.DIRECT, where it has no effect.
         TWO_STORE: ${{ inputs.enable-two-store }}
