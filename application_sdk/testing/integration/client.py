@@ -429,54 +429,6 @@ class IntegrationTestClient:
         """
         return self._get(f"/status/{workflow_id}/{run_id}")
 
-    def get_manifest(self, entrypoint: str | None = None) -> dict[str, Any] | None:
-        """Fetch the manifest the running app serves (``GET .../manifest``).
-
-        This is the manifest Heracles / the Local Marketplace app consume in
-        production — sourcing SDR input from it (rather than the committed file)
-        is what makes a Contract Toolkit change actually exercised end-to-end
-        (BLDX-1493).
-
-        Args:
-            entrypoint: For multi-entrypoint apps, the entrypoint short name
-                (sent as ``?entrypoint=``). ``None`` requests the default/root
-                manifest.
-
-        Returns:
-            The parsed manifest dict, or ``None`` on connection error, non-200,
-            or non-JSON — so callers can fall back to the committed file.
-        """
-        url = f"{self.base_url}/manifest"
-        params = {"entrypoint": entrypoint} if entrypoint else None
-        logger.debug("GET %s params=%s", url, params)
-        try:
-            response = requests.get(url, params=params, timeout=self.timeout)
-        except requests.RequestException as e:
-            logger.warning(
-                "Could not fetch live manifest from %s: %s", url, e, exc_info=True
-            )
-            return None
-        if response.status_code != 200:
-            logger.warning(
-                "Live manifest %s returned HTTP %d", url, response.status_code
-            )
-            return None
-        try:
-            manifest = response.json()
-        except ValueError as e:
-            logger.warning(
-                "Live manifest %s did not return JSON: %s", url, e, exc_info=True
-            )
-            return None
-        if not isinstance(manifest, dict):
-            logger.warning(
-                "Live manifest %s returned a %s, expected an object",
-                url,
-                type(manifest).__name__,
-            )
-            return None
-        return manifest
-
     def _get(self, endpoint: str) -> dict[str, Any]:
         """Make a GET request to the API.
 
