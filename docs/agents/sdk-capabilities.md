@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.21.2
-source-sha:    0d4f06cc4c93840ab6ccdde7f1fe1e115f15e1d2
-source-date:   2026-07-10T13:30:35+05:30
+source-sha:    5b39dc2d31daf1b8d767949fc47d4bad6382e0db
+source-date:   2026-07-10T15:11:17+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -1044,7 +1044,7 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 
 - **Import:** `from application_sdk.errors import redact_secrets`
 - **Signature:** `redact_secrets(text: str)`
-- **Summary:** Redact URL userinfo, known secret query-params, and driver identity.
+- **Summary:** Redact URL userinfo, known secret query-params, and source identity.
 - **Defined in:** `application_sdk/errors/base.py`
 
 #### `sanitize_cause_repr`
