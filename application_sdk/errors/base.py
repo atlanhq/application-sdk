@@ -31,14 +31,29 @@ _URL_USERINFO_RE = re.compile(r"([a-z][a-z0-9+.-]*://)(?:[^@\s]+@)+", re.IGNOREC
 _SECRET_PARAM_RE = re.compile(
     r"(?i)((?:api_key|access_token|auth_token|password|passwd|secret|credential|private_key)=)[^\s&,;#]+",
 )
+# Driver auth-failure prose embeds the *connecting* identity — the client/egress
+# IP and the DB host — outside any URL, so _URL_USERINFO_RE misses it. Policy:
+# mask the host/IP (egress identity + topology), keep the username (the
+# actionable diagnostic on an auth failure).
+# MySQL: Access denied for user 'atlan'@'10.0.0.5' → 'atlan'@'***' (keeps user).
+_HOST_IN_IDENTITY_RE = re.compile(r"(@')[^']*(')")
+# Postgres/generic: host "db.internal" / host name "x" / server at "10.0.0.5".
+_HOST_KEYWORD_RE = re.compile(r'(?i)((?:host(?:\s*name)?|server at)\s+")[^"]*(")')
+# Any IPv4 literal, anywhere — the egress IP is the sharpest, cross-driver leak.
+# Octet-validated so version-like triples (8.0.32) and error codes don't match.
+_IPV4_RE = re.compile(
+    r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b"
+)
 
 
 def redact_secrets(text: str) -> str:
-    """Redact URL userinfo and known secret query-params from a string.
+    """Redact URL userinfo, known secret query-params, and driver identity.
 
-    Use this when logging strings that may embed credentials but are not a
-    single cause exception — e.g. a formatted traceback whose frames are worth
-    keeping but whose driver messages embed connection-string passwords.
+    Use this when logging strings that may embed credentials or source
+    identity but are not a single cause exception — e.g. a formatted traceback
+    whose frames are worth keeping but whose driver messages embed
+    connection-string passwords, or DBAPI auth-failure prose carrying the
+    connecting user/host/IP.
 
     ``text`` must be a ``str`` — callers holding an exception or other object
     should stringify first (the sibling :func:`sanitize_cause_repr` does this
@@ -46,6 +61,9 @@ def redact_secrets(text: str) -> str:
     """
     text = _URL_USERINFO_RE.sub(r"\1***@", text)
     text = _SECRET_PARAM_RE.sub(r"\1***", text)
+    text = _HOST_IN_IDENTITY_RE.sub(r"\1***\2", text)
+    text = _HOST_KEYWORD_RE.sub(r"\1***\2", text)
+    text = _IPV4_RE.sub("***", text)
     return text
 
 
