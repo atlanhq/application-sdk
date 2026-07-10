@@ -38,6 +38,18 @@ Example::
 SQL connectors are unchanged — they keep pushing regex to the database via
 :mod:`application_sdk.common.sql_filters`; this module serves connectors that must
 match in Python.
+
+Notes:
+    * Matching uses :meth:`re.Pattern.fullmatch` (anchored). For an *unanchored*
+      raw token this is stricter than the SQL POSIX ``~`` (substring): a
+      connector that historically substring-matched will scope more tightly.
+      Consistency with the SQL path holds because ``normalize_filters`` always
+      anchors; the tighter default is the safer choice — flag it for adopters.
+    * Default (regex) mode compiles caller/SDR-supplied patterns and runs
+      ``fullmatch`` per candidate in-process, and Python ``re`` has no timeout, so
+      a pathological pattern (e.g. ``(a+)+$``) can catastrophically backtrack.
+      Filter sources are trusted connection config, so this is low-risk; do not
+      feed untrusted patterns through it.
 """
 
 from __future__ import annotations
@@ -51,7 +63,7 @@ from application_sdk.common.sql_filters_errors import InvalidSqlFilterError
 # A filter as it arrives from a workflow spec / contract: a single pattern string,
 # a list of pattern strings, the hierarchical ``{"^db$": ["^schema$"]}`` map, a
 # JSON encoding of either, or nothing.
-FilterInput = str | list[str] | dict | None
+FilterInput = str | list[str] | dict[str, object] | None
 
 __all__ = ["FilterPattern", "filter_matches"]
 
@@ -66,13 +78,16 @@ def _compile(pattern: str, flags: int) -> re.Pattern[str]:
 def _to_patterns(filter_input: FilterInput, *, exact: bool) -> list[str]:
     """Normalise any supported filter shape into a list of regex pattern strings.
 
-    * ``None`` / empty → ``[]`` (no constraint).
+    * ``None`` / empty (``""``, ``{}``, ``[]``, and their JSON-string forms
+      ``"{}"`` / ``"[]"``) → ``[]`` (no constraint).
     * ``dict`` → the hierarchical ``db.schema`` map; reuse
       :func:`~application_sdk.common.sql_filters.normalize_filters`, which emits
-      fully-anchored ``^db\\.schema$`` segments (SQL-compatible). Already anchored,
-      so it is passed through verbatim.
-    * ``str`` → a JSON encoding of a dict/list is parsed and recursed; otherwise it
-      is treated as a single raw token.
+      fully-anchored ``^db\\.schema$`` segments (SQL-compatible). A **non-empty**
+      map that yields no patterns is malformed (see below) and raises.
+    * ``str`` (regex mode) → a JSON object/array literal is parsed and recursed;
+      otherwise treated as a single raw token.
+    * ``str`` (``exact``) → always a single literal token — never re-parsed as
+      JSON/regex, even if it looks like ``{...}`` / ``[...]``.
     * ``list`` / other iterable → a list of raw tokens.
 
     Raw tokens are ``re.escape``-d when ``exact`` is set, else used as-is (regex).
@@ -82,23 +97,42 @@ def _to_patterns(filter_input: FilterInput, *, exact: bool) -> list[str]:
 
     if isinstance(filter_input, dict):
         if not filter_input:
-            return []
-        # normalize_filters already returns fully-anchored regex segments.
-        return normalize_filters(filter_input, True)
+            return []  # empty map ⇒ no constraint (match-all for include)
+        patterns = normalize_filters(filter_input, True)
+        if not patterns:
+            # A non-empty map that normalises to zero patterns is malformed —
+            # almost always a scalar-string schema value (``{"^db$": "^sch$"}``)
+            # where a list is required (``{"^db$": ["^sch$"]}``). Silently
+            # emitting [] would make the include set empty ⇒ match EVERYTHING —
+            # the exact silent scope-leak this module exists to prevent (the
+            # Looker #131 class). Fail loudly instead.
+            raise ValueError(
+                f"Filter map {filter_input!r} produced no patterns — a schema "
+                f"value is likely a bare string instead of a list (use "
+                f"{{'^db$': ['^sch$']}}, not {{'^db$': '^sch$'}}). Refusing to "
+                f"silently match everything."
+            )
+        return patterns
 
     if isinstance(filter_input, str):
         stripped = filter_input.strip()
         if not stripped:
             return []
-        # Only attempt a JSON parse for object/array literals — a bare regex such
-        # as ``^prod_.*$`` is not JSON and parse_filter_input would raise on it.
+        if exact:
+            # An exact id is a literal — never reinterpreted as JSON or regex,
+            # even when it happens to look like an object/array literal.
+            return [re.escape(stripped)]
+        # Regex mode: parse a JSON object/array literal and recurse, so callers
+        # can forward the AE ``include-filter`` metadata verbatim — including the
+        # empty ``"{}"`` / ``"[]"`` default, which must resolve to match-all, NOT
+        # to a literal ``"{}"`` token. A bare regex (``^prod_.*$``) is not JSON,
+        # so parse_filter_input raises and we fall back to a single token.
         if stripped[0] in "{[":
             try:
                 parsed = parse_filter_input(stripped)
             except (InvalidSqlFilterError, ValueError, TypeError):
-                # Not valid JSON after all — fall back to a single raw token.
                 parsed = None
-            if isinstance(parsed, (dict, list)) and parsed:
+            if isinstance(parsed, (dict, list)):
                 return _to_patterns(parsed, exact=exact)
         tokens: list[str] = [stripped]
     elif isinstance(filter_input, Iterable):
@@ -106,7 +140,7 @@ def _to_patterns(filter_input: FilterInput, *, exact: bool) -> list[str]:
     else:
         tokens = [str(filter_input).strip()]
 
-    patterns: list[str] = []
+    patterns = []
     for token in tokens:
         if not token:
             continue
@@ -157,9 +191,15 @@ class FilterPattern:
         return cls(include, exclude)
 
     def matches(self, candidate: str) -> bool:
-        """Return whether ``candidate`` is in scope (included and not excluded)."""
+        """Return whether ``candidate`` is in scope (included and not excluded).
+
+        A ``None`` candidate is never in scope. Non-string candidates (e.g. a
+        numeric BI/Looker object id) are coerced with ``str()`` so connectors
+        iterating fetched objects can pass ``obj.value`` directly.
+        """
         if candidate is None:
             return False
+        candidate = str(candidate)
         included = (not self._include) or any(
             p.fullmatch(candidate) for p in self._include
         )

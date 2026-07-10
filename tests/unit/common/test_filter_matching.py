@@ -169,3 +169,55 @@ class TestProperties:
         for i in ids:
             assert pattern.matches(i) is True
         assert pattern.matches("".join(ids) + "_zzz_not_present") is False
+
+
+class TestReviewRegressions:
+    """Regressions for the #2608 review findings (empty JSON sentinels, malformed
+    dict scope-leak, exact-mode JSON reinterpretation, non-str candidates)."""
+
+    # #1 — JSON-string empty sentinels must resolve to match-all, not a literal.
+    def test_empty_json_object_string_matches_all(self):
+        p = FilterPattern.from_filters(include_filter="{}")
+        assert p.matches("sales.public") is True
+        assert p.matches("anything") is True
+
+    def test_empty_json_array_string_matches_all_and_no_crash(self):
+        # "[]" previously compiled to the regex "[]" → ValueError; must be match-all.
+        p = FilterPattern.from_filters(include_filter="[]")
+        assert p.matches("anything") is True
+
+    def test_empty_json_sentinels_as_exclude_exclude_nothing(self):
+        p = FilterPattern.from_filters(include_filter="^keep.*$", exclude_filter="{}")
+        assert p.matches("keep_me") is True
+
+    # #2 — malformed dict (scalar-string schema value) must raise, not leak-all.
+    def test_scalar_schema_value_dict_raises(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="produced no patterns"):
+            FilterPattern.from_filters(include_filter={"^sales$": "^public$"})
+
+    def test_scalar_schema_value_via_json_string_raises(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="produced no patterns"):
+            FilterPattern.from_filters(include_filter='{"^sales$": "^public$"}')
+
+    # #3 — exact=True must treat a JSON-looking string as a literal id.
+    def test_exact_json_object_string_is_literal(self):
+        assert filter_matches('{"a":"b"}', include_filter='{"a":"b"}', exact=True)
+        assert not filter_matches("other", include_filter='{"a":"b"}', exact=True)
+
+    def test_exact_json_array_string_is_literal(self):
+        assert filter_matches('["x","y"]', include_filter='["x","y"]', exact=True)
+        # must NOT be parsed as a 2-element list of ids
+        assert not filter_matches("x", include_filter='["x","y"]', exact=True)
+
+    # #4 — non-str candidates are coerced, not crashed.
+    def test_numeric_candidate_coerced(self):
+        assert filter_matches(123, include_filter="123") is True  # type: ignore[arg-type]
+        assert (
+            FilterPattern.from_filters(include_filter=["123"], exact=True).matches(123)  # type: ignore[arg-type]
+            is True
+        )
+        assert filter_matches(456, include_filter="123") is False  # type: ignore[arg-type]
