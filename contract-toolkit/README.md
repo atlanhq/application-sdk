@@ -255,6 +255,8 @@ pipeline {
 
 Dependencies between pipeline steps are **auto-wired** based on position — you do not write `dependsOn` for pipeline steps. Use `extraNodes` for custom nodes outside the typed pipeline.
 
+Every node ships with a default `errorHandling.startToCloseTimeoutSeconds`: **1 day (86400s)** for every node, except `publish` at **3 days (259200s)**. This keeps non-trivial extract/lineage/publish work from silently inheriting Automation Engine's tight 2h workflow default. The `errorHandling` overrides shown above win over the default; set `errorHandling = null` on a node to fall back to AE's own default.
+
 `PublishStep.connectionEntity` (also settable directly on `PublishNode`) controls the publish node's `connection_entity` arg — the full connection entity JSON used for connection creation. It defaults to the `"{{connection}}"` form placeholder. Setting it to `null` omits `connection_entity` from the generated args entirely, and because the field is **linked** to `connection_creation_enabled` (which defaults to `connectionEntity != null`), a `null` entity also disables connection creation — publish then targets an already-existing connection and creates nothing. Override `connectionCreationEnabled` explicitly on the node to disable creation even when an entity is present.
 
 The toolkit can append a run-level notification node when an app opts in:

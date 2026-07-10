@@ -1,0 +1,227 @@
+// Tests for the default `startToCloseTimeoutSeconds` applied to DAG nodes.
+//
+// The publish node keeps its established 3-day (259200s) default. Every other
+// node — extract, qi, popularity, lineage-app, lineage-publish, extraNodes, and
+// the run-completion notification node — defaults to 1 day (86400s). All values
+// stay overridable up to the 10-day cap (see `timeout_cap_test.pkl`).
+
+amends "pkl:test"
+
+import "pkl:json"
+import "../src/App.pkl" as App
+import "../src/Config.pkl"
+import "../src/Connectors.pkl"
+import "../src/NativeApp.pkl"
+
+local oneDaySeconds = 86400
+local threeDaySeconds = 259200
+
+// An app on all default timeouts: qi opted in (default-off step), a custom
+// extraNode, and notifications on. No `errorHandling` overrides anywhere.
+local defaultTimeoutApp = (App) {
+  name = "default-timeouts"
+  displayName = "Default Timeouts"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  notifications = true
+
+  pipeline {
+    parseQueries = new App.ParseQueriesStep {
+      vendorName = "athena"
+      sqlKey = "QUERY_TEXT"
+    }
+  }
+
+  extraNodes {
+    ["custom"] = new App.DAGNode {
+      displayName = "Custom"
+      workflowType = "CustomWorkflow"
+      args {}
+    }
+  }
+
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Configuration"] {
+        inputs {
+          ["connection"] = new App.ConnectionCreator {
+            placeholderText = "Connection Name"
+          }
+        }
+      }
+    }
+  }
+}
+
+local dag = new json.Parser { useMapping = true }.parse(
+  defaultTimeoutApp.output.files["app/generated/manifest.json"].text
+)["dag"]
+
+// An app that overrides extract and publish timeouts — proves per-node
+// overrides still win over the new defaults.
+local overriddenApp = (App) {
+  name = "override-timeouts"
+  displayName = "Override Timeouts"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+
+  pipeline {
+    extract {
+      errorHandling = new App.ErrorHandlingConfig {
+        startToCloseTimeoutSeconds = 7200
+      }
+    }
+    publish {
+      errorHandling = new App.ErrorHandlingConfig {
+        startToCloseTimeoutSeconds = 3600
+      }
+    }
+  }
+
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Configuration"] {
+        inputs {
+          ["connection"] = new App.ConnectionCreator {
+            placeholderText = "Connection Name"
+          }
+        }
+      }
+    }
+  }
+}
+
+local overriddenDag = new json.Parser { useMapping = true }.parse(
+  overriddenApp.output.files["app/generated/manifest.json"].text
+)["dag"]
+
+// A minimal NativeApp (legacy module) on default timeouts.
+local nativeDefaults = (NativeApp) {
+  name = "native-default-timeouts"
+  displayName = "Native Default Timeouts"
+  connector = Connectors.POSTGRES
+  icon = "https://example.com/icon.svg"
+  workflowType = "NativeDefaultTimeoutsWorkflow"
+  hasCredentialConfig = false
+
+  uiConfig = new Config.UIConfig {
+    tasks {
+      ["Configuration"] {
+        inputs {
+          ["connection"] = new Config.ConnectionCreator {
+            placeholderText = "Connection Name"
+          }
+        }
+      }
+    }
+  }
+}
+
+facts {
+  // ── App class-level defaults ──────────────────────────────────────────────
+  ["App.ExtractStep defaults to a 1-day timeout"] {
+    new App.ExtractStep {}.errorHandling.startToCloseTimeoutSeconds == oneDaySeconds
+  }
+
+  // DAGNode is the base for qi/popularity/lineage/lineage-publish/notifications
+  // and every extraNode — its default flows to all of them.
+  ["App.DAGNode defaults to a 1-day timeout (covers extraNodes)"] {
+    new App.DAGNode {
+      displayName = "n"
+      workflowType = "w"
+      args {}
+    }.errorHandling.startToCloseTimeoutSeconds == oneDaySeconds
+  }
+
+  ["App.QueryIntelligenceNode defaults to a 1-day timeout"] {
+    new App.QueryIntelligenceNode {
+      vendorName = "athena"
+      sqlKey = "QUERY_TEXT"
+    }.errorHandling.startToCloseTimeoutSeconds == oneDaySeconds
+  }
+
+  ["App.PopularityNode defaults to a 1-day timeout"] {
+    new App.PopularityNode {
+      tenantId = "t"
+      parsedDataPrefix = "p"
+      minedDataPrefix = "m"
+      connectionCachePath = "c"
+      outputPrefix = "o"
+    }.errorHandling.startToCloseTimeoutSeconds == oneDaySeconds
+  }
+
+  ["App.LineageNode defaults to a 1-day timeout"] {
+    new App.LineageNode {
+      connectorName = "athena"
+      sqlUnquotedCase = "preserve"
+      ignoreAllCase = false
+    }.errorHandling.startToCloseTimeoutSeconds == oneDaySeconds
+  }
+
+  ["App.LineagePublishNode defaults to a 1-day timeout"] {
+    new App.LineagePublishNode {}.errorHandling.startToCloseTimeoutSeconds == oneDaySeconds
+  }
+
+  ["App.NotificationNode defaults to a 1-day timeout"] {
+    new App.NotificationNode {}.errorHandling.startToCloseTimeoutSeconds == oneDaySeconds
+  }
+
+  ["App.PublishNode keeps its 3-day default timeout"] {
+    new App.PublishNode {}.errorHandling.startToCloseTimeoutSeconds == threeDaySeconds
+  }
+
+  ["App.PublishStep keeps its 3-day default timeout"] {
+    new App.PublishStep {}.errorHandling.startToCloseTimeoutSeconds == threeDaySeconds
+  }
+
+  // ── App rendered manifest (end-to-end) ────────────────────────────────────
+  ["Rendered extract node carries the 1-day default"] {
+    dag["extract"]["error_handling"]["start_to_close_timeout_seconds"] == oneDaySeconds
+  }
+
+  ["Rendered qi node carries the 1-day default"] {
+    dag["qi"]["error_handling"]["start_to_close_timeout_seconds"] == oneDaySeconds
+  }
+
+  ["Rendered extraNode carries the 1-day default"] {
+    dag["custom"]["error_handling"]["start_to_close_timeout_seconds"] == oneDaySeconds
+  }
+
+  ["Rendered notifications node carries the 1-day default"] {
+    dag["notifications"]["error_handling"]["start_to_close_timeout_seconds"] == oneDaySeconds
+  }
+
+  ["Rendered publish node carries the 3-day default"] {
+    dag["publish"]["error_handling"]["start_to_close_timeout_seconds"] == threeDaySeconds
+  }
+
+  // ── Overrides still win ───────────────────────────────────────────────────
+  ["Extract timeout override wins over the 1-day default"] {
+    overriddenDag["extract"]["error_handling"]["start_to_close_timeout_seconds"] == 7200
+  }
+
+  ["Publish timeout override wins over the 3-day default"] {
+    overriddenDag["publish"]["error_handling"]["start_to_close_timeout_seconds"] == 3600
+  }
+
+  // ── NativeApp (legacy) mirror ─────────────────────────────────────────────
+  ["NativeApp extract node defaults to a 1-day timeout"] {
+    nativeDefaults.extractNodeErrorHandling.startToCloseTimeoutSeconds == oneDaySeconds
+  }
+
+  ["NativeApp publish node keeps its 3-day default timeout"] {
+    nativeDefaults.publishNodeErrorHandling.startToCloseTimeoutSeconds == threeDaySeconds
+  }
+
+  ["NativeApp.DAGNode defaults to a 1-day timeout (covers extraNodes)"] {
+    new NativeApp.DAGNode {
+      displayName = "n"
+      workflowType = "w"
+      args {}
+    }.errorHandling.startToCloseTimeoutSeconds == oneDaySeconds
+  }
+
+  ["NativeApp.PublishNode keeps its 3-day default timeout"] {
+    new NativeApp.PublishNode {}.errorHandling.startToCloseTimeoutSeconds == threeDaySeconds
+  }
+}

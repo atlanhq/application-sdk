@@ -665,7 +665,15 @@ open class DAGNode {
 
   dependsOnCondition: DependencyCondition?
 
-  errorHandling: ErrorHandlingConfig?
+  /// Defaults to a 1-day `startToCloseTimeoutSeconds`. Automation Engine's
+  /// source-code default for workflow nodes is 2h, which is too tight for
+  /// non-trivial extraction/lineage work and has caused avoidable timeouts on
+  /// large tenants. `PublishNode` raises this to 3 days. Override on the
+  /// instance for a different value (up to the 10-day cap), or set to `null`
+  /// to fall back to AE's own default.
+  errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
+    startToCloseTimeoutSeconds = 86400
+  }
 
   hidden _errorHandlingCheck: Any =
     if (nodeType == "workflow" && errorHandling != null && errorHandling.heartbeatTimeoutSeconds != null)
@@ -1343,8 +1351,12 @@ class ExtractStep {
   /// Display name for the AE step. Defaults to "Extract <displayName> Metadata".
   displayName: String?
 
-  /// Error handling for the extract node.
-  errorHandling: ErrorHandlingConfig? = null
+  /// Error handling for the extract node. Defaults to a 1-day
+  /// `startToCloseTimeoutSeconds` (the base `DAGNode` default); override for a
+  /// different value, or set to `null` to fall back to AE's own default.
+  errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
+    startToCloseTimeoutSeconds = 86400
+  }
 }
 
 /// Query Intelligence step — opt-in. Extends `QueryIntelligenceNode` with no
