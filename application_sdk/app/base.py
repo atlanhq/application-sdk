@@ -1614,7 +1614,7 @@ async def _run_preflight_gate(
             app_name=app_name,
             entrypoint=entry,
             outcome="no_verdict",
-            error_type=type(e).__name__,
+            reason=type(e).__name__,
         )
         return
 

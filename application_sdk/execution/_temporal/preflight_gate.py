@@ -49,6 +49,13 @@ PREFLIGHT_FAILED_ERROR_TYPE = "PreflightFailed"
 # on. Pinned here so the string can't drift across the emission sites.
 PREFLIGHT_OUTCOME_EVENT = "Preflight gate outcome"
 
+# Contract sentinel stamped as the primary FailureDetails.code on a fallback block
+# (a handler that returned NOT_READY without a typed check error). It replaces the
+# generic PRECONDITION code so the outcome event's ``reason`` distinguishes an
+# un-migrated block from a typed one (whose reason is the handler error's own code,
+# e.g. AUTH). category/audience/retryable are unchanged.
+PREFLIGHT_FALLBACK_CODE = "PREFLIGHT_CHECK_FAILED"
+
 
 def is_preflight_block(exc: BaseException | None) -> bool:
     """Whether ``exc`` (or any cause in its chain) is the deliberate gate block.
@@ -223,16 +230,15 @@ def _dump_check(check: PreflightCheck) -> dict[str, Any]:
     return dumped
 
 
-def _build_block_error(result: PreflightOutput, app_name: str) -> tuple[Any, bool]:
+def _build_block_error(result: PreflightOutput, app_name: str) -> Any:
     """Build the ``PreflightFailed`` ApplicationError for a NOT_READY verdict.
 
-    Returns ``(error, typed)`` where ``typed`` is ``True`` when ``details[0]`` came
-    from a handler check's typed ``error`` and ``False`` for the ``PRECONDITION``
-    fallback (first failed check's message).
-
-    ``details[0]`` is the primary failure's typed ``FailureDetails`` (first failed
-    check with an ``error``; else the fallback). ``details[1]`` carries every check
-    so the red activity pane shows them — a failed activity has no result payload.
+    ``details[0]`` is the primary failure's ``FailureDetails``: the first failed
+    check's typed ``error`` when present, else the first failed check's message
+    wrapped in ``PreconditionError`` and stamped with the ``PREFLIGHT_FALLBACK_CODE``
+    sentinel ``code`` (so the outcome event's ``reason`` marks an un-migrated block).
+    ``details[1]`` carries every check so the red activity pane shows them — a failed
+    activity has no result payload.
     """
     from application_sdk.execution.errors import ApplicationError  # noqa: PLC0415
 
@@ -242,29 +248,30 @@ def _build_block_error(result: PreflightOutput, app_name: str) -> tuple[Any, boo
         details = primary.error
         if details.app_name is None:
             details = details.model_copy(update={"app_name": app_name})
-        typed = True
     else:
         fallback = failed[0].resolved_message if failed else ""
-        details = PreconditionError(
-            message=fallback or "Preflight check failed",
-            app_name=app_name,
-            retryable=False,
-        ).to_failure_details()
-        typed = False
+        details = (
+            PreconditionError(
+                message=fallback or "Preflight check failed",
+                app_name=app_name,
+                retryable=False,
+            )
+            .to_failure_details()
+            .model_copy(update={"code": PREFLIGHT_FALLBACK_CODE})
+        )
 
     joined = "; ".join(m for m in (c.resolved_message for c in failed) if m)
     reason = (
         result.message or joined or "Preflight check failed; aborting before extraction"
     )
     checks_payload = {"checks": [_dump_check(c) for c in result.checks]}
-    error = ApplicationError(
+    return ApplicationError(
         f"Preflight failed: {reason}",
         details,
         checks_payload,
         type=PREFLIGHT_FAILED_ERROR_TYPE,
         non_retryable=True,
     )
-    return error, typed
 
 
 def build_preflight_gate_activity(
@@ -312,15 +319,15 @@ def build_preflight_gate_activity(
         # The outcome event is the gate's queryable row (connector-pulse builds the
         # dashboard from it). The activity holds the verdict, so it emits the
         # proceeded/blocked rows; the workflow emits only no_verdict (fail-open).
-        # Activity execution is at-least-once, so a retry after a lost completion can
-        # re-emit — consumers dedupe on the auto-injected workflow_run_id.
+        # ``reason`` is the status on proceed, the primary FailureDetails.code on a
+        # block. Activity execution is at-least-once, so a retry after a lost
+        # completion can re-emit — consumers dedupe on (workflow_run_id, outcome).
         if result.status is PreflightStatus.NOT_READY:
-            block_error, typed = _build_block_error(result, app_name)
+            block_error = _build_block_error(result, app_name)
             logger.info(
                 PREFLIGHT_OUTCOME_EVENT,
                 outcome="blocked",
-                status=result.status.value,
-                typed=typed,
+                reason=block_error.details[0].code,
                 app_name=app_name,
                 entrypoint=entry,
                 checks=len(result.checks),
@@ -329,7 +336,7 @@ def build_preflight_gate_activity(
         logger.info(
             PREFLIGHT_OUTCOME_EVENT,
             outcome="proceeded",
-            status=result.status.value,
+            reason=result.status.value,
             app_name=app_name,
             entrypoint=entry,
             checks=len(result.checks),

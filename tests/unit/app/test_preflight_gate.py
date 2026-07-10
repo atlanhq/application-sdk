@@ -137,7 +137,8 @@ class TestRunPreflightGate:
 
     async def test_fail_open_on_other_activity_error(self, safe_log) -> None:
         # Any failure that is NOT a deliberate PreflightFailed block → proceed,
-        # log ERROR loudly, and emit a no_verdict outcome with the error type.
+        # log ERROR loudly, and emit a no_verdict outcome whose reason is the
+        # exception class name.
         from temporalio.exceptions import ApplicationError as TemporalApplicationError
 
         exec_mock, exec_patch = _exec(
@@ -155,7 +156,7 @@ class TestRunPreflightGate:
             for c in safe_log.call_args_list
             if c.kwargs.get("outcome") == "no_verdict"
         )
-        assert no_verdict_call.kwargs.get("error_type")
+        assert no_verdict_call.kwargs.get("reason") == "ApplicationError"
 
     async def test_non_failure_error_still_propagates(self) -> None:
         # Fail-open catches only Exception; control-flow BaseExceptions like

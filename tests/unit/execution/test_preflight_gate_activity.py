@@ -524,11 +524,12 @@ class TestPreflightGateOutcomeEvent:
         ev = _outcome_event(ml)
         assert ev is not None
         assert ev["outcome"] == "proceeded"
-        assert ev["status"] == "ready"
+        assert ev["reason"] == "ready"
         assert ev["app_name"] == "myapp"
         assert ev["entrypoint"] == "crawl"
         assert ev["checks"] == 1
-        assert "typed" not in ev and "error_type" not in ev
+        # status/typed/error_type are collapsed into reason
+        assert not ({"status", "typed", "error_type"} & ev.keys())
 
     async def test_proceeded_partial(self) -> None:
         out = PreflightOutput(
@@ -541,11 +542,10 @@ class TestPreflightGateOutcomeEvent:
         with mock.patch(_LOGGER) as ml:
             await _verdict_gate(out)(PreflightGateInput())
         ev = _outcome_event(ml)
-        assert ev["outcome"] == "proceeded" and ev["status"] == "partial"
+        assert ev["outcome"] == "proceeded" and ev["reason"] == "partial"
         assert ev["entrypoint"] == "<implicit>"
-        assert "typed" not in ev
 
-    async def test_blocked_typed(self) -> None:
+    async def test_blocked_typed_reason_is_error_code(self) -> None:
         out = PreflightOutput(
             status=PreflightStatus.NOT_READY,
             checks=[
@@ -556,20 +556,25 @@ class TestPreflightGateOutcomeEvent:
             await _verdict_gate(out)(PreflightGateInput(entrypoint="crawl"))
         ev = _outcome_event(ml)
         assert ev["outcome"] == "blocked"
-        assert ev["status"] == "not_ready"
-        assert ev["typed"] is True
-        assert "error_type" not in ev
+        # typed block → reason is the handler error's own code
+        assert ev["reason"] == "AUTH"
+        assert not ({"status", "typed", "error_type"} & ev.keys())
 
-    async def test_blocked_fallback_typed_false(self) -> None:
+    async def test_blocked_fallback_reason_is_sentinel(self) -> None:
         out = PreflightOutput(
             status=PreflightStatus.NOT_READY,
             checks=[PreflightCheck(name="auth", passed=False, message="bad creds")],
         )
-        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError) as excinfo:
             await _verdict_gate(out)(PreflightGateInput())
         ev = _outcome_event(ml)
         assert ev["outcome"] == "blocked"
-        assert ev["typed"] is False
+        # fallback block → reason is the sentinel code, distinguishing un-migrated
+        assert ev["reason"] == "PREFLIGHT_CHECK_FAILED"
+        # details[0] carries the sentinel code; category stays PRECONDITION
+        details = excinfo.value.details[0]
+        assert details.code == "PREFLIGHT_CHECK_FAILED"
+        assert details.category is FailureCategory.PRECONDITION
 
     async def test_verdict_log_replaced_by_outcome_event(self) -> None:
         out = PreflightOutput(status=PreflightStatus.READY, checks=[])

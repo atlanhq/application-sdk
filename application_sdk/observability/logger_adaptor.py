@@ -98,9 +98,9 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "error_class",
         "error_message",
         "stack_trace",
-        # ── Preflight gate outcome event (connector-pulse dashboard) ─────
+        # ── Gate outcome event + generic activity fields ─────────────────
+        "reason",
         "entrypoint",
-        "typed",
         "checks",
         # ── Misc SDK ─────────────────────────────────────────────────────
         "log_type",
