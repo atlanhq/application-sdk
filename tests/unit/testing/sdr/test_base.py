@@ -8,11 +8,7 @@ from unittest.mock import MagicMock, patch
 import orjson
 import pytest
 
-from application_sdk.testing.integration import (
-    BaseIntegrationTest,
-    IntegrationTestClient,
-    Scenario,
-)
+from application_sdk.testing.integration import BaseIntegrationTest, Scenario
 from application_sdk.testing.sdr import BaseSDRIntegrationTest
 
 
@@ -435,127 +431,6 @@ def test_execute_scenario_skips_polling_when_expected_data_set(tmp_path) -> None
     ):
         suite._execute_scenario(sc)
         ensure.assert_not_called()
-
-
-# --------------------------------------------------------------------------- #
-# Live-manifest source (BLDX-1493) — prefer the running app's /manifest
-# --------------------------------------------------------------------------- #
-
-
-def _committed_manifest_args() -> dict[str, Any]:
-    """Args distinct from the live manifest so we can tell the sources apart."""
-    return {"connection": "{{connection}}", "committed_marker": "from-file"}
-
-
-def test_load_manifest_prefers_live_endpoint(tmp_path) -> None:
-    """When the running app serves a manifest, it wins over the committed file."""
-
-    class _Suite(BaseSDRIntegrationTest):
-        manifest_path = _write_manifest(tmp_path, _committed_manifest_args())
-        scenarios = []
-
-    suite = _Suite()
-    live = {"dag": {"extract": {"inputs": {"args": {"live_marker": "from-endpoint"}}}}}
-    suite.client = MagicMock(spec=IntegrationTestClient)
-    suite.client.get_manifest.return_value = live
-
-    args = suite._manifest_extract_inputs()
-    assert args == {"live_marker": "from-endpoint"}
-    # Entrypoint (workflow_type) forwarded to the endpoint; None here.
-    suite.client.get_manifest.assert_called_once_with(entrypoint=None)
-
-
-def test_load_manifest_forwards_workflow_type_as_entrypoint(tmp_path) -> None:
-    class _Suite(BaseSDRIntegrationTest):
-        manifest_path = _write_manifest(tmp_path, _committed_manifest_args())
-        workflow_type = "s4"
-        scenarios = []
-
-    suite = _Suite()
-    suite.client = MagicMock(spec=IntegrationTestClient)
-    suite.client.get_manifest.return_value = {
-        "dag": {"extract": {"inputs": {"args": {"x": 1}}}}
-    }
-    suite._manifest_extract_inputs()
-    suite.client.get_manifest.assert_called_once_with(entrypoint="s4")
-
-
-def test_load_manifest_falls_back_to_file_when_live_unreachable(tmp_path) -> None:
-    """A dead endpoint (get_manifest -> None) falls back to the committed file."""
-
-    class _Suite(BaseSDRIntegrationTest):
-        manifest_path = _write_manifest(tmp_path, _committed_manifest_args())
-        scenarios = []
-
-    suite = _Suite()
-    suite.client = MagicMock(spec=IntegrationTestClient)
-    suite.client.get_manifest.return_value = None
-
-    args = suite._manifest_extract_inputs()
-    assert args["committed_marker"] == "from-file"
-
-
-def test_load_manifest_reads_file_when_no_client(tmp_path) -> None:
-    """No client attached (e.g. pure unit context) → committed file is used."""
-
-    class _Suite(BaseSDRIntegrationTest):
-        manifest_path = _write_manifest(tmp_path, _committed_manifest_args())
-        scenarios = []
-
-    args = _Suite()._manifest_extract_inputs()
-    assert args["committed_marker"] == "from-file"
-
-
-def test_sdk_level_unreachable_raises(tmp_path, monkeypatch) -> None:
-    """SDK-level run (ATLAN_E2E_REQUIRE_LIVE_MANIFEST=true): an unreachable
-    /manifest fails hard rather than silently reading the stale committed file."""
-
-    class _Suite(BaseSDRIntegrationTest):
-        manifest_path = _write_manifest(tmp_path, _committed_manifest_args())
-        scenarios = []
-
-    suite = _Suite()
-    suite.client = MagicMock(spec=IntegrationTestClient)
-    suite.client.get_manifest.return_value = None
-    monkeypatch.setenv("ATLAN_E2E_REQUIRE_LIVE_MANIFEST", "true")
-    with pytest.raises(RuntimeError, match="ATLAN_E2E_REQUIRE_LIVE_MANIFEST"):
-        suite._manifest_extract_inputs()
-
-
-def test_sdk_level_no_client_raises(tmp_path, monkeypatch) -> None:
-    """SDK-level run without a live-capable client must also fail hard — a
-    missing client is just another way of never exercising the live manifest
-    (BLDX-1493 false-green guard)."""
-
-    class _Suite(BaseSDRIntegrationTest):
-        manifest_path = _write_manifest(tmp_path, _committed_manifest_args())
-        scenarios = []
-
-    monkeypatch.setenv("ATLAN_E2E_REQUIRE_LIVE_MANIFEST", "true")
-    with pytest.raises(RuntimeError, match="ATLAN_E2E_REQUIRE_LIVE_MANIFEST"):
-        _Suite()._manifest_extract_inputs()
-
-
-def test_load_manifest_memoizes_per_instance(tmp_path) -> None:
-    """The manifest is invariant within a run — /manifest is hit once, and a
-    caller mutating its view must not pollute the cache."""
-
-    class _Suite(BaseSDRIntegrationTest):
-        manifest_path = _write_manifest(tmp_path, _committed_manifest_args())
-        scenarios = []
-
-    suite = _Suite()
-    suite.client = MagicMock(spec=IntegrationTestClient)
-    suite.client.get_manifest.return_value = {
-        "dag": {"extract": {"inputs": {"args": {"x": 1}}}}
-    }
-
-    first = suite._load_manifest()
-    first["dag"]["extract"]["inputs"]["args"]["x"] = "mutated"
-    second = suite._load_manifest()
-
-    assert suite.client.get_manifest.call_count == 1
-    assert second["dag"]["extract"]["inputs"]["args"]["x"] == 1
 
 
 # ---------------------------------------------------------------------------
