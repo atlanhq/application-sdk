@@ -672,15 +672,18 @@ jobs:
           VERDICT_POSTED=0
           RUN_STARTED_AT="${STARTER_STARTED_AT:-}"
           if [ -n "${PR_NUMBER}" ] && [ -n "${RUN_STARTED_AT}" ]; then
-            # --slurp collapses all pages into one array before --jq runs, so
-            # the filter emits a SINGLE count. Without it, `--paginate` runs
-            # the jq per page and prints one number per page — on a PR with
-            # >30 comments that multi-line output breaks `[ ... -gt 0 ]`.
+            # --slurp collapses all pages into one array so the jq filter emits a
+            # SINGLE count. NOTE: `gh api` rejects `--slurp` together with `--jq`
+            # ("the --slurp option is not supported with --jq"), so the slurped
+            # array is piped into a standalone `jq`. The prior `--slurp --jq` form
+            # errored, was swallowed by `2>/dev/null`, and `|| echo 0` forced a
+            # false "no verdict" -> every delivered-then-dropped review hard-failed
+            # (see RCA for run 29001242204).
             SUMMARY_COUNT=$(gh api "repos/${REPO_FULL_NAME}/issues/${PR_NUMBER}/comments" \
-              --paginate --slurp \
-              --jq "[.[][] | select(.body | contains(\"<!-- SDK_REVIEW -->\")) | select(.created_at >= \"${RUN_STARTED_AT}\")] | length" \
+              --paginate --slurp 2>/dev/null \
+              | jq "[.[][] | select(.body | contains(\"<!-- SDK_REVIEW -->\")) | select(.created_at >= \"${RUN_STARTED_AT}\")] | length" \
               2>/dev/null || echo "0")
-            if [ "${SUMMARY_COUNT}" -gt 0 ]; then
+            if [ "${SUMMARY_COUNT:-0}" -gt 0 ]; then
               VERDICT_POSTED=1
             fi
           fi
