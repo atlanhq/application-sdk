@@ -3263,6 +3263,10 @@ local function generateE2ETestClassPy(): FileOutput? =
     text =
       "# Generated from contract/app.pkl via contract-toolkit. DO NOT EDIT.\n" +
       "# Regenerate with: pkl eval -m . contract/app.pkl\n" +
+      // Generated file — its canonical import order is repo-context-dependent
+      // (`app` is first-party in the consuming connector repo, third-party in the
+      // toolkit repo), so exempt this DO-NOT-EDIT file from isort in every repo.
+      "# isort: skip_file\n" +
       "\"\"\"Full-DAG (AGENT / SDR) e2e test for \(name).\n\n" +
       "Submits the tenant's full system-apps DAG (extract → qi → publish →\n" +
       "lineage) against a CI-side worker that runs the connector code under test,\n" +

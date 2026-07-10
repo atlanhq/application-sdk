@@ -1,5 +1,6 @@
 # Generated from contract/app.pkl via contract-toolkit. DO NOT EDIT.
 # Regenerate with: pkl eval -m . contract/app.pkl
+# isort: skip_file
 """Full-DAG (AGENT / SDR) e2e test for full-featured.
 
 Submits the tenant's full system-apps DAG (extract → qi → publish →
