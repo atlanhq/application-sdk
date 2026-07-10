@@ -1574,6 +1574,7 @@ async def _run_preflight_gate(
             GATE_RETRY,
             GATE_SCHEDULE_TO_CLOSE,
             GATE_START_TO_CLOSE,
+            PREFLIGHT_OUTCOME_EVENT,
             PreflightGateInput,
             is_preflight_block,
             preflight_gate_activity_name,
@@ -1609,7 +1610,7 @@ async def _run_preflight_gate(
         )
         _safe_log(
             "info",
-            "Preflight gate outcome",
+            PREFLIGHT_OUTCOME_EVENT,
             app_name=app_name,
             entrypoint=entry,
             outcome="no_verdict",

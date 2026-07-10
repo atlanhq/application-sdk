@@ -45,6 +45,10 @@ logger = get_logger(__name__)
 
 PREFLIGHT_FAILED_ERROR_TYPE = "PreflightFailed"
 
+# Stable log body for the gate outcome event — the contract connector-pulse queries
+# on. Pinned here so the string can't drift across the emission sites.
+PREFLIGHT_OUTCOME_EVENT = "Preflight gate outcome"
+
 
 def is_preflight_block(exc: BaseException | None) -> bool:
     """Whether ``exc`` (or any cause in its chain) is the deliberate gate block.
@@ -308,10 +312,12 @@ def build_preflight_gate_activity(
         # The outcome event is the gate's queryable row (connector-pulse builds the
         # dashboard from it). The activity holds the verdict, so it emits the
         # proceeded/blocked rows; the workflow emits only no_verdict (fail-open).
+        # Activity execution is at-least-once, so a retry after a lost completion can
+        # re-emit — consumers dedupe on the auto-injected workflow_run_id.
         if result.status is PreflightStatus.NOT_READY:
             block_error, typed = _build_block_error(result, app_name)
             logger.info(
-                "Preflight gate outcome",
+                PREFLIGHT_OUTCOME_EVENT,
                 outcome="blocked",
                 status=result.status.value,
                 typed=typed,
@@ -321,7 +327,7 @@ def build_preflight_gate_activity(
             )
             raise block_error
         logger.info(
-            "Preflight gate outcome",
+            PREFLIGHT_OUTCOME_EVENT,
             outcome="proceeded",
             status=result.status.value,
             app_name=app_name,
