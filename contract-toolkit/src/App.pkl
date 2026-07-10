@@ -668,9 +668,9 @@ open class DAGNode {
   /// Defaults to a 1-day `startToCloseTimeoutSeconds`. Automation Engine's
   /// source-code default for workflow nodes is 2h, which is too tight for
   /// non-trivial extraction/lineage work and has caused avoidable timeouts on
-  /// large tenants. `PublishNode` raises this to 3 days. Override on the
-  /// instance for a different value (up to the 10-day cap), or set to `null`
-  /// to fall back to AE's own default.
+  /// large tenants. `PublishNode` and `LineagePublishNode` raise this to 3 days
+  /// (both write to Atlas). Override on the instance for a different value (up
+  /// to the 10-day cap), or set to `null` to fall back to AE's own default.
   errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
     startToCloseTimeoutSeconds = 86400
   }
@@ -1257,6 +1257,15 @@ open class LineageNode extends DAGNode {
 /// Pre-built lineage publish node.
 open class LineagePublishNode extends DAGNode {
   hidden upstream: String = "lineage-app"
+
+  /// Defaults to a 3-day `startToCloseTimeoutSeconds`, matching `PublishNode`.
+  /// Like the asset publish, lineage-publish writes to Atlas and can be heavy on
+  /// large tenants — lineage can produce very large numbers of
+  /// `Process`/`ColumnProcess` entities, each with many edges — so the 1-day
+  /// base default is too tight. Override on the instance for a different value.
+  errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
+    startToCloseTimeoutSeconds = 259200
+  }
 
   assetPublishNode: String = "publish"
 

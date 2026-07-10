@@ -196,7 +196,7 @@ The typed `pipeline` block replaces per-flag properties. Each step is nullable t
 | `pipeline.lineage` | LineageStep? | null | Lineage app node (default-off). |
 | `pipeline.publish` | PublishStep? | `new PublishStep {}` | Publish node (default-on). `errorHandling` defaults to 3-day (259200s) `startToCloseTimeoutSeconds`. Set null for utility apps. |
 
-Every non-publish node — `extract`, `qi`, `popularity`, `lineage-app`, `lineage-publish`, `extraNodes`, and the `notifications` node — inherits a **1-day (86400s) `startToCloseTimeoutSeconds`** default from `DAGNode`; only `publish` raises it to 3 days. AE's own default for workflow nodes is 2h, which is too tight for non-trivial work. Override `errorHandling` on any node for a different value (up to the 10-day cap), or set it to `null` to fall back to AE's default.
+`publish` and `lineage-publish` both default to a **3-day (259200s)** `startToCloseTimeoutSeconds` — both write to Atlas and can be heavy on large tenants. Every other node — `extract`, `qi`, `popularity`, `lineage-app`, `extraNodes`, and the `notifications` node — inherits a **1-day (86400s)** default from `DAGNode`. AE's own default for workflow nodes is 2h, which is too tight for non-trivial work. Override `errorHandling` on any node for a different value (up to the 10-day cap), or set it to `null` to fall back to AE's default.
 | `extraNodes` | Mapping<String, DAGNode> | `{}` | Custom nodes outside the typed pipeline. `"publish"` key replaces auto-generated publish. |
 
 **Pipeline step classes:**
@@ -249,7 +249,9 @@ class PublishStep {
 
 class LineagePublishStep {               // wraps LineagePublishNode
   // ... (see LineagePublishNode below for full field list)
-  errorHandling: ErrorHandlingConfig?    // inherits DAGNode's 1-day default
+  errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
+    startToCloseTimeoutSeconds = 259200  // 3-day default, matching publish
+  }
 }
 ```
 
@@ -1649,7 +1651,8 @@ for workflow nodes (default 2h) and `start_to_close_timeout` for activity nodes
 
 **Node defaults.** The toolkit does not leave `startToCloseTimeoutSeconds` unset.
 Every node defaults to **1 day (86400s)** via the base `DAGNode`, except
-`publish`, which defaults to **3 days (259200s)**. This keeps non-trivial
+`publish` and `lineage-publish`, which default to **3 days (259200s)** — both
+write to Atlas and can be heavy on large tenants. This keeps non-trivial
 extraction, lineage, and publish work from silently inheriting AE's tight 2h
 workflow default. Any per-node `errorHandling` you set overrides the default;
 set `errorHandling = null` to fall back to AE's own default.

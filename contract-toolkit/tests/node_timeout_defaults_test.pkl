@@ -1,9 +1,11 @@
 // Tests for the default `startToCloseTimeoutSeconds` applied to DAG nodes.
 //
-// The publish node keeps its established 3-day (259200s) default. Every other
-// node — extract, qi, popularity, lineage-app, lineage-publish, extraNodes, and
-// the run-completion notification node — defaults to 1 day (86400s). All values
-// stay overridable up to the 10-day cap (see `timeout_cap_test.pkl`).
+// The publish and lineage-publish nodes default to 3 days (259200s) — both
+// write to Atlas and can be heavy on large tenants (large tenants can produce
+// huge numbers of Process/ColumnProcess lineage entities). Every other node —
+// extract, qi, popularity, lineage-app, extraNodes, and the run-completion
+// notification node — defaults to 1 day (86400s). All values stay overridable
+// up to the 10-day cap (see `timeout_cap_test.pkl`).
 
 amends "pkl:test"
 
@@ -29,6 +31,9 @@ local defaultTimeoutApp = (App) {
     parseQueries = new App.ParseQueriesStep {
       vendorName = "athena"
       sqlKey = "QUERY_TEXT"
+    }
+    publish {
+      lineagePublish = new App.LineagePublishStep {}
     }
   }
 
@@ -158,8 +163,8 @@ facts {
     }.errorHandling.startToCloseTimeoutSeconds == oneDaySeconds
   }
 
-  ["App.LineagePublishNode defaults to a 1-day timeout"] {
-    new App.LineagePublishNode {}.errorHandling.startToCloseTimeoutSeconds == oneDaySeconds
+  ["App.LineagePublishNode defaults to a 3-day timeout (writes to Atlas like publish)"] {
+    new App.LineagePublishNode {}.errorHandling.startToCloseTimeoutSeconds == threeDaySeconds
   }
 
   ["App.NotificationNode defaults to a 1-day timeout"] {
@@ -193,6 +198,10 @@ facts {
 
   ["Rendered publish node carries the 3-day default"] {
     dag["publish"]["error_handling"]["start_to_close_timeout_seconds"] == threeDaySeconds
+  }
+
+  ["Rendered lineage-publish node carries the 3-day default"] {
+    dag["lineage-publish"]["error_handling"]["start_to_close_timeout_seconds"] == threeDaySeconds
   }
 
   // ── Overrides still win ───────────────────────────────────────────────────
