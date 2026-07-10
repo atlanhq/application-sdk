@@ -194,7 +194,9 @@ The typed `pipeline` block replaces per-flag properties. Each step is nullable t
 | `pipeline.parseQueries` | ParseQueriesStep? | null | Query Intelligence node (default-off). |
 | `pipeline.popularity` | PopularityStep? | null | Popularity node (default-off). |
 | `pipeline.lineage` | LineageStep? | null | Lineage app node (default-off). |
-| `pipeline.publish` | PublishStep? | `new PublishStep {}` | Publish node (default-on). `errorHandling` defaults to 72h `startToCloseTimeoutSeconds`. Set null for utility apps. |
+| `pipeline.publish` | PublishStep? | `new PublishStep {}` | Publish node (default-on). `errorHandling` defaults to 3-day (259200s) `startToCloseTimeoutSeconds`. Set null for utility apps. |
+
+`publish` and `lineage-publish` both default to a **3-day (259200s)** `startToCloseTimeoutSeconds` — both write to Atlas and can be heavy on large tenants. Every other node — `extract`, `qi`, `popularity`, `lineage-app`, `extraNodes`, and the `notifications` node — inherits a **1-day (86400s)** default from `DAGNode`. AE's own default for workflow nodes is 2h, which is too tight for non-trivial work. Override `errorHandling` on any node for a different value (up to the 10-day cap), or set it to `null` to fall back to AE's default.
 | `extraNodes` | Mapping<String, DAGNode> | `{}` | Custom nodes outside the typed pipeline. `"publish"` key replaces auto-generated publish. |
 
 **Pipeline step classes:**
@@ -203,7 +205,9 @@ The typed `pipeline` block replaces per-flag properties. Each step is nullable t
 class ExtractStep {
   name: String = "extract"               // override for non-extract apps (e.g. "apply")
   displayName: String = "Extract"        // compact AE step label
-  errorHandling: ErrorHandlingConfig?    // retry / timeout policy
+  errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
+    startToCloseTimeoutSeconds = 86400   // 1-day default (base DAGNode default)
+  }
 }
 
 class ParseQueriesStep {                 // wraps QueryIntelligenceNode
@@ -212,7 +216,7 @@ class ParseQueriesStep {                 // wraps QueryIntelligenceNode
   vendorKey: String?
   sqlKey: String                         // required
   // ... (see QueryIntelligenceNode below for full field list)
-  errorHandling: ErrorHandlingConfig?
+  errorHandling: ErrorHandlingConfig?    // inherits DAGNode's 1-day default
 }
 
 class PopularityStep {                   // wraps PopularityNode
@@ -222,7 +226,7 @@ class PopularityStep {                   // wraps PopularityNode
   connectionCachePath: String            // required
   outputPrefix: String                   // required
   // ... (see PopularityNode below for full field list)
-  errorHandling: ErrorHandlingConfig?
+  errorHandling: ErrorHandlingConfig?    // inherits DAGNode's 1-day default
 }
 
 class LineageStep {                      // wraps LineageNode
@@ -230,7 +234,7 @@ class LineageStep {                      // wraps LineageNode
   sqlUnquotedCase: String                // required
   ignoreAllCase: Boolean                 // required
   // ... (see LineageNode below for full field list)
-  errorHandling: ErrorHandlingConfig?
+  errorHandling: ErrorHandlingConfig?    // inherits DAGNode's 1-day default
 }
 
 class PublishStep {
@@ -245,7 +249,9 @@ class PublishStep {
 
 class LineagePublishStep {               // wraps LineagePublishNode
   // ... (see LineagePublishNode below for full field list)
-  errorHandling: ErrorHandlingConfig?
+  errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
+    startToCloseTimeoutSeconds = 259200  // 3-day default, matching publish
+  }
 }
 ```
 
@@ -551,7 +557,7 @@ Developers amend this module. It defines the app's identity, credentials, workfl
 | `publishTagAttachmentsPrefix` | String? | `$.extract.outputs.tag_attachments_prefix` when `publishTagPipelineEnabled` is not null; otherwise null | Value for `PublishNode`'s `tag_attachments_prefix` arg. The default matches native Databricks: extract returns the object-store prefix for connector-emitted `{output_path}/transformed/tag_attachments` payloads, and publish-app uses it for typedef resolution and classification enrichment. Override when the extract workflow emits a different output key. |
 | `extractActivityDisplayName` | String? | null | Optional override for the built-in extract node's `activity_display_name`. Defaults to `"Extract {displayName} Metadata"`. Use this for long app display names that need compact AE step labels. Only changes the human-readable step label; node id, workflow type, task queue, app name, and args are unchanged. |
 | `publishActivityDisplayName` | String? | null | Optional override for the built-in default publish node's `activity_display_name`. Defaults to `"Publish to Atlas"`. Applies only when the toolkit generates the default publish node; for `extraNodes["publish"]`, set `displayName` on that `PublishNode`. |
-| `extractNodeErrorHandling` | ErrorHandlingConfig? | null | Optional workflow-safe retry / timeout policy for the built-in extract node. Use `startToCloseTimeoutSeconds` to raise AE's child workflow execution timeout. `heartbeatTimeoutSeconds` is invalid because the built-in extract node renders `activity_name = "execute_workflow"` and AE treats it as a workflow node. |
+| `extractNodeErrorHandling` | ErrorHandlingConfig? | `startToCloseTimeoutSeconds = 86400` (1 day) | Workflow-safe retry / timeout policy for the built-in extract node. Defaults to 1 day so connectors don't silently inherit AE's 2h default; override as needed, or set to `null` to fall back to AE's default. `heartbeatTimeoutSeconds` is invalid because the built-in extract node renders `activity_name = "execute_workflow"` and AE treats it as a workflow node. |
 | `publishNodeErrorHandling` | ErrorHandlingConfig? | `startToCloseTimeoutSeconds = 259200` (72h) | Workflow-safe retry / timeout policy for the toolkit-generated default publish node. Defaults to 72h so connectors don't silently inherit AE's 2h default. Override as needed. For `extraNodes["publish"]`, set `errorHandling` on that `PublishNode` directly (it also defaults to 72h). `heartbeatTimeoutSeconds` is invalid for the default publish node. |
 | `credentialFieldName` | String? | `"{name}_credential"` | Credential ref field in Input class. Null to omit. |
 | `workflowConfigName` | String | `name` | Workflow configmap name / output filename. |
@@ -1513,7 +1519,9 @@ open class DAGNode {
   args: Mapping<String, Any>
   dependsOn: Listing<String>?
   dependsOnCondition: DependencyCondition?      // Explicit AE condition, mutually exclusive with dependsOn
-  errorHandling: ErrorHandlingConfig?           // Retry / timeout policy, see below
+  errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
+    startToCloseTimeoutSeconds = 86400          // 1-day default; PublishNode raises it to 3 days
+  }
 }
 ```
 
@@ -1640,6 +1648,14 @@ Enforced at `pkl eval` time:
 AE remaps `startToCloseTimeoutSeconds` server-side: it becomes `execution_timeout`
 for workflow nodes (default 2h) and `start_to_close_timeout` for activity nodes
 (default 30m).
+
+**Node defaults.** The toolkit does not leave `startToCloseTimeoutSeconds` unset.
+Every node defaults to **1 day (86400s)** via the base `DAGNode`, except
+`publish` and `lineage-publish`, which default to **3 days (259200s)** — both
+write to Atlas and can be heavy on large tenants. This keeps non-trivial
+extraction, lineage, and publish work from silently inheriting AE's tight 2h
+workflow default. Any per-node `errorHandling` you set overrides the default;
+set `errorHandling = null` to fall back to AE's own default.
 
 Example — override the default publish node with a 4-hour timeout and retry policy:
 

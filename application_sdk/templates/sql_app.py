@@ -62,7 +62,6 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-import traceback
 from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
@@ -82,7 +81,7 @@ from application_sdk.constants import TEMPORARY_PATH, WORKFLOW_OUTPUT_PATH_TEMPL
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.credentials import CredentialResolver, legacy_credential_ref
 from application_sdk.credentials.ref import CredentialRef
-from application_sdk.errors import redact_secrets
+from application_sdk.errors import safe_traceback
 from application_sdk.errors.leaves import (
     AppTimeoutError,
     AuthError,
@@ -333,17 +332,15 @@ class SqlApp(App):
             # (TLS negotiation, driver bugs, version skew) is only diagnosable
             # from the original frames. But exc_info=True would render the
             # SQLAlchemy cause's message verbatim, and that embeds the full
-            # connection string incl. password. So we format the traceback
-            # ourselves and redact secrets before logging — frames preserved,
-            # credentials stripped.
-            safe_traceback = redact_secrets("".join(traceback.format_exception(exc)))
-            logger.error(  # conformance: ignore[E005,L004] exc_info would expose SQLAlchemy password in traceback; safe_traceback built above with secrets redacted
+            # connection string incl. password. safe_traceback preserves the
+            # frames and strips credentials before logging.
+            logger.error(  # conformance: ignore[E005,L004] exc_info would expose SQLAlchemy password in traceback; safe_traceback redacts secrets from the frames
                 "SQL auth cache prime FAILED after %.1fms (%s) — short-circuiting "
                 "before parallel extract burst to avoid stacking failed_login_attempts "
                 "on the source.\n%s",
                 duration_ms,
                 type(exc).__name__,
-                safe_traceback,
+                safe_traceback(exc),
             )
             return PrimeAuthOutput(
                 duration_ms=duration_ms,
@@ -984,26 +981,13 @@ class SqlApp(App):
     def _resolve_credential_ref(self, input: ExtractionInput) -> CredentialRef | None:
         """Resolve credential ref from extraction input.
 
-        Handles both direct (credential_guid) and SDR (agent_json) modes
-        via :meth:`CredentialRef.resolve`, falling back to
-        ``legacy_credential_ref`` for older inputs.
+        Delegates to :meth:`CredentialRef.resolve_or_none` — prefers the input's
+        own ``credential_ref``, routes direct (credential_guid) / agent
+        (agent_json) modes, and degrades to a legacy GUID ref or ``None`` on a
+        routing edge case. Shared with the injected preflight gate so both paths
+        route identically.
         """
-        if hasattr(input, "credential_ref") and input.credential_ref:
-            return input.credential_ref
-        # CredentialRef.resolve handles both direct (credential_guid) and
-        # SDR (agent_json) modes — works on ExtractionInput which has the
-        # full set of routing fields. Per-task ExtractionTaskInput doesn't
-        # expose extraction_method/agent_json and isn't routed through here.
-        try:
-            return CredentialRef.resolve(input)
-        except (ValueError, TypeError):
-            logger.warning(
-                "CredentialRef.resolve failed; falling back to legacy_credential_ref or None",
-                exc_info=True,
-            )
-            if input.credential_guid:
-                return legacy_credential_ref(input.credential_guid)
-            return None
+        return CredentialRef.resolve_or_none(input)
 
     async def _extract_entity(
         self,

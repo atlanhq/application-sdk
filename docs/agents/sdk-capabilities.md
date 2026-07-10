@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.21.1
-source-sha:    73f04ed23d95714d883fa2612c4db45ebedc54db
-source-date:   2026-07-10T13:34:57+05:30
+sdk-version:   3.21.2
+source-sha:    dd4358b79c70bc2efd4414974d23bc984c8b9008
+source-date:   2026-07-10T05:58:10+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -23,7 +23,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 11 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 55 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 56 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 20 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 22 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 37 |
@@ -1061,6 +1061,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Summary:** Redact URL userinfo and known secret query-params from a string.
 - **Defined in:** `application_sdk/errors/base.py`
 
+#### `safe_traceback`
+
+- **Import:** `from application_sdk.errors import safe_traceback`
+- **Signature:** `safe_traceback(exc: BaseException | None, max_len: int = _TRACEBACK_MAX_LEN)`
+- **Summary:** Return a secret-redacted, length-capped full-frame traceback.
+- **Defined in:** `application_sdk/errors/base.py`
+
 #### `sanitize_cause_repr`
 
 - **Import:** `from application_sdk.errors import sanitize_cause_repr`
@@ -1564,7 +1571,7 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 
 - **Import:** `from application_sdk.handler import PreflightStatus`
 - **Signature:** `class PreflightStatus`
-- **Summary:** Overall result of a preflight check.
+- **Summary:** Overall preflight verdict — decides the gate.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `SqlMetadataObject`
@@ -2616,6 +2623,23 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `event_filters: list[EventFilterRule]` `= []` — Additional CEL filter rules applied to the event.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
+#### `FailureDetails`
+
+- **Import:** `from application_sdk.handler.contracts import FailureDetails`
+- **Summary:** Pydantic envelope serialized into ``ApplicationError.details=[…]``.
+- **Fields:**
+  - `category: FailureCategory`
+  - `code: str`
+  - `retryable: bool`
+  - `audience: Audience` `= Audience.APP_OWNER`
+  - `message: str`
+  - `suggested_action: str | None`
+  - `evidence: dict[str, Any]` `= Field(default_factory=dict)`
+  - `app_name: str | None`
+  - `run_id: str | None`
+  - `cause_repr: str | None`
+- **Defined in:** `application_sdk/errors/wire.py`
+
 #### `FileUploadResponse`
 
 - **Import:** `from application_sdk.handler.contracts import FileUploadResponse`
@@ -2676,8 +2700,11 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Fields:**
   - `name: str` `= Field(..., min_length=1)` — Check name (e.g., 'connectivity', 'permissions').
   - `passed: bool` `= False` — Whether the check passed.
-  - `message: str` `= ''` — Details about the check result.
+  - `message: str` `= ''` — Deprecated: prefer :attr:`error`. Human-facing line shown when ``error``
+  - `error: FailureDetails | None` — Typed failure for a failed check — set only on failed checks.
   - `duration_ms: float` `= 0.0` — How long the check took in milliseconds.
+  - `resolved_message: str` — Message under the precedence rule: a failed check's ``error`` wins.
+  - `resolved_suggested_action: str` — Suggested action from a failed check's ``error``; empty otherwise.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `PreflightInput`
@@ -2699,9 +2726,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.handler.contracts import PreflightOutput`
 - **Summary:** Output from the preflight_check handler operation.
 - **Fields:**
-  - `status: PreflightStatus` — Overall preflight result.
-  - `checks: list[PreflightCheck]` `= []` — Individual check results.
-  - `message: str` `= ''` — Human-readable summary.
+  - `status: PreflightStatus` — Overall verdict — decides the gate. ``NOT_READY`` blocks the run;
+  - `checks: list[PreflightCheck]` `= []` — Individual check results (display + failure attribution).
+  - `message: str` `= ''` — Human-readable summary. Seeds the gate's abort reason when set.
   - `total_duration_ms: float` `= 0.0` — Total time for all checks in milliseconds.
 - **Defined in:** `application_sdk/handler/contracts.py`
 

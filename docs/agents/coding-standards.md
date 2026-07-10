@@ -45,6 +45,74 @@ Code in `run()` and `@entrypoint` methods MUST be deterministic. Temporal replay
 
 All I/O, network calls, and non-deterministic operations go in `@task` methods.
 
+## Preflight Gate (HYP-1883)
+
+Every extraction workflow runs a `{app}:preflight` Temporal activity as its first
+step. The activity resolves credentials, calls `handler.preflight_check(PreflightInput)`,
+and aborts before extraction when the returned `PreflightOutput.status` is `NOT_READY`
+(`READY` and `PARTIAL` proceed; `PARTIAL` is display-only).
+
+### What the gate does
+
+- The **workflow** builds a `PreflightGateInput` — a secret-free envelope containing
+  credential references and a raw `model_dump()` snapshot of the extraction input.
+- The **activity** resolves credentials, converts the snapshot into `PreflightInput`
+  metadata, and calls the handler.
+- Field reads from the extraction input therefore happen **inside the activity** (not
+  in the deterministic workflow context), which is required for Temporal replay safety.
+
+### `PreflightInput.metadata` / `connection_config` on the gate path
+
+The gate derives `metadata` and `connection_config` from `extraction_snapshot` via
+`_config_from_snapshot()` (runs in the activity frame). That helper:
+
+- Excludes credential-routing fields (`extraction_method`, `credential_guid`, etc.).
+- Produces both the original field name and its hyphenated variant so handlers that
+  use either naming convention work on the gate path (e.g. `include_filter` and
+  `include-filter`).
+- Drops credential-routing fields and *genuinely* empty values (None, empty string,
+  empty container), but preserves `False` and `0` — a handler reading a bool/int
+  config field off the gate sees the real value, not a silent default.
+
+If no snapshot is present (gate inputs built without a `model_dump`-capable extraction
+input, e.g. manually constructed in tests), the activity falls back to `input.metadata`.
+
+### Adopting the gate — two clauses
+
+**(i) The input must be gate-eligible.** The gate only fires when the entrypoint's
+input is `CredentialResolvable` — it declares `extraction_method`, `credential_guid`,
+and `agent_json` as **top-level** fields. Declare them as real fields, not Pydantic
+extras or nested config: extras are not a portable way to satisfy the protocol (the
+`isinstance` check ignores them on Python 3.12+). A toolkit-generated `AppInputContract(ExtractionInput)`
+satisfies this automatically — `ExtractionInput` declares the fields and its
+`_normalize_ae_payload` lifts them out of the nested AE `metadata`. A hand-written input
+that omits them (or keeps them nested) is **silently skipped** — so the SDK warns at
+worker startup for any registered entrypoint whose input is not gate-eligible. The fix
+is to put the input on `ExtractionInput` (via the toolkit) rather than hand-rolling the
+lift.
+
+**(ii) Block by returning `NOT_READY`, never by raising.** The handler blocks a run by
+**returning** `PreflightOutput(status=NOT_READY, ...)`. Attach a typed `error` to each
+failed check — `PreflightCheck(passed=False, error=AuthError(message=..., suggested_action=...,
+cause=exc))` — and the gate carries the primary failure's `FailureDetails` on the abort.
+A handler that **raises** does *not* reliably block: the exception escapes to the gate,
+which fails open and proceeds (see below). So `preflight_check` must catch its own probe
+exceptions and express the block through the returned status.
+
+### Fail-open semantics
+
+Gate failures (infra errors, timeouts, handler crashes, activity dispatch errors) are
+**non-blocking**: the workflow logs at `error` and proceeds. Only a deliberate
+`NOT_READY` verdict — surfaced as the activity raising `PreflightFailed` — aborts the
+run. Every gated run emits a structured `Preflight gate outcome` event
+(`outcome ∈ {proceeded, blocked, no_verdict}`).
+
+### Logging contract
+
+- **Gate blocks** (`PreflightFailed` `ApplicationError`) — `warning`, no stack trace.
+  The block is an expected typed outcome, not a crash.
+- **Gate infra failures** (exception during dispatch) — `error` with `exc_info=True`.
+
 ## Contract Evolution
 
 - NEVER remove or rename fields on Input/Output classes

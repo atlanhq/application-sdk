@@ -16,6 +16,9 @@
           "agent_json": "{{agent-json}}",
           "credential_guid": "{{credential-guid}}"
         }
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 86400
       }
     },
     "publish": {
@@ -59,6 +62,9 @@
       },
       "depends_on": {
         "node_id": "extract"
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 86400
       }
     },
     "right": {
@@ -73,6 +79,9 @@
       },
       "depends_on": {
         "node_id": "extract"
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 86400
       }
     },
     "join": {
@@ -96,6 +105,9 @@
             "tag": "success"
           }
         ]
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 86400
       }
     },
     "recover": {
@@ -119,6 +131,9 @@
             "tag": "failure"
           }
         ]
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 86400
       }
     }
   }
