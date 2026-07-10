@@ -6,6 +6,13 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.18.1] - 2026-07-10
+
+### Bug fixes
+
+- default non-publish node timeout to 1 day (#2622) ([a448f6a](https://github.com/atlanhq/application-sdk/commit/a448f6a))
+- remediate error-handling, logging, and optimization findings (#2573) ([460d7f2](https://github.com/atlanhq/application-sdk/commit/460d7f2))
+
 ## [0.18.0] - 2026-07-06
 
 ### Features
