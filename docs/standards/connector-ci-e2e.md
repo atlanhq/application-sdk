@@ -24,18 +24,6 @@ This doc covers what the SDK ships — the composite action, the reusable workfl
 
 Both call the same composite action; difference is test target, Dapr components, compose overlay, and secret-bundle shape.
 
-## Manifest freshness — testing Contract Toolkit changes (BLDX-1493)
-
-`app/generated/manifest.json` is generated from `contract/app.pkl` by `pkl eval`. Historically nothing in these pipelines ran that step, so both pipelines exercised whatever manifest was **committed** — a Contract Toolkit change (app-level `contract/app.pkl`, or SDK-level `contract-toolkit/src`) was never actually tested. Two mechanisms close that gap:
-
-1. **Regenerate into the running app.** The `sdr-e2e` action regenerates `app/generated/**` from the contract **before the image build** (via the `regenerate-contract` composite → `.github/scripts/regenerate_contract.py`), so the image — and therefore the manifest the app serves at `GET /workflows/v1/manifest` — reflects the current contract + toolkit. `connector-integration-tests` does the same before starting the host app server, and `ae-full-dag-local-reusable` before its manifest-file-driven stack-up/registration. Regeneration removes the prior `app/generated/`, `atlan.yaml`, and `app.yaml` before `pkl eval` (mirroring `contract-toolkit/scripts/regenerate-all.sh`) so artifacts the new contract no longer emits don't linger; on an app-level eval failure the committed artifacts are restored from HEAD (prior behaviour). On cross-repo dispatch (`application-sdk-ref` set) the `@app-contract-toolkit` dependency is overridden to the SDK PR's `contract-toolkit/src`, so an **SDK-level** toolkit change is exercised against the real connector contract. App-level regeneration also emits a **warn-only** drift annotation (never fails) when the committed `app/generated/` is stale.
-
-2. **Consume the manifest from the running app.** Mirroring how the Local Marketplace app rebuilds a connector's AE DAG from the app's fresh `/manifest` at install time, the harnesses now source the manifest **from the running app over HTTP** rather than the committed file:
-   - **Full-DAG** (`BaseE2ETest` / `BaseFullDAGE2ETest` — the latter is the deprecated `testing.full_dag` alias of the current `testing.e2e`): builds the AE seed DAG from the live `/manifest` (rendering the run's identities — connection, `agent_json`, filters, `{{credentialGuid}}` — through the same substitution used for the committed file).
-   - **SDR** (`BaseSDRIntegrationTest`): derives the workflow input from the live `/manifest`'s extract node.
-   - Both fall back to the committed `manifest_path` file (prior behaviour) when the endpoint is unreachable, logging a WARNING so a skipped live check is never mistaken for a pass. Controlled on the full-DAG base by `use_live_manifest` (default `True`) and `app_manifest_base_url` (default `http://localhost:8000`).
-   - **SDK-level guard:** on cross-repo dispatch (`application-sdk-ref` set) the actions export `ATLAN_E2E_REQUIRE_LIVE_MANIFEST=true`, and the harness then **fails hard** instead of falling back — the committed manifest was generated with the *old* toolkit, so silently reading it would give a false green for the toolkit change under test. The guard covers every fallback route: an unreachable endpoint, a test class that sets `use_live_manifest = False`, and an SDR run without a live-capable client. App-level runs leave the flag unset (their committed manifest is the fresh one, so the fallback is safe). This mirrors `regenerate_contract.py`'s app-level-warn / SDK-level-fatal asymmetry.
-
 ## SDR composite action inputs
 
 ```yaml
