@@ -75,9 +75,15 @@ class TestClientOptionsOverrides:
         monkeypatch.setenv("ATLAN_OBSTORE_USER_AGENT", "custom-agent/1.0")
         monkeypatch.setenv("ATLAN_OBSTORE_POOL_MAX_IDLE_PER_HOST", "32")
 
-        # Pin no proxy so the exact-dict assertion is deterministic regardless
-        # of the host's proxy env / system settings.
-        with patch("urllib.request.getproxies", return_value={}):
+        # Pin no proxy and no custom CA so the exact-dict assertion is
+        # deterministic regardless of the host's proxy env / SSL_CERT_DIR.
+        with (
+            patch("urllib.request.getproxies", return_value={}),
+            patch(
+                "application_sdk.clients.ssl_utils.get_custom_ca_cert_bytes",
+                return_value=None,
+            ),
+        ):
             opts = obstore_client_options()
         assert opts == {
             "timeout": "1h",
@@ -131,6 +137,80 @@ class TestClientOptionsProxy:
         ):
             opts = obstore_client_options()
         assert opts["proxy_url"] == "http://secure.corp:8080"
+
+
+class TestClientOptionsProxyExcludes:
+    """NO_PROXY is forwarded as ``proxy_excludes`` — but only when a proxy URL is
+    resolved (obstore ignores it otherwise)."""
+
+    def test_no_proxy_excludes_forwarded_when_proxy_set(self, monkeypatch) -> None:
+        monkeypatch.setenv("NO_PROXY", "localhost,.svc.cluster.local,10.0.0.0/8")
+        with patch(
+            "urllib.request.getproxies",
+            return_value={"https": "http://proxy.corp:8080"},
+        ):
+            opts = obstore_client_options()
+        assert opts["proxy_excludes"] == "localhost,.svc.cluster.local,10.0.0.0/8"
+
+    def test_lowercase_no_proxy_is_honored(self, monkeypatch) -> None:
+        monkeypatch.delenv("NO_PROXY", raising=False)
+        monkeypatch.setenv("no_proxy", "internal.example.com")
+        with patch(
+            "urllib.request.getproxies",
+            return_value={"https": "http://proxy.corp:8080"},
+        ):
+            opts = obstore_client_options()
+        assert opts["proxy_excludes"] == "internal.example.com"
+
+    def test_excludes_omitted_without_proxy_url(self, monkeypatch) -> None:
+        # obstore only consults proxy_excludes when proxy_url is set, so don't
+        # emit a dangling exclude list when there's no proxy.
+        monkeypatch.setenv("NO_PROXY", "localhost")
+        with patch("urllib.request.getproxies", return_value={}):
+            opts = obstore_client_options()
+        assert "proxy_excludes" not in opts
+
+    def test_excludes_omitted_when_no_proxy_unset(self, monkeypatch) -> None:
+        monkeypatch.delenv("NO_PROXY", raising=False)
+        monkeypatch.delenv("no_proxy", raising=False)
+        with patch(
+            "urllib.request.getproxies",
+            return_value={"https": "http://proxy.corp:8080"},
+        ):
+            opts = obstore_client_options()
+        assert "proxy_excludes" not in opts
+
+
+# ---------------------------------------------------------------------------
+# root_certificate plumbing (custom CA from SSL_CERT_DIR → obstore)
+# ---------------------------------------------------------------------------
+
+
+class TestClientOptionsRootCertificate:
+    """SSL_CERT_DIR custom CAs are forwarded as obstore's ``root_certificate``."""
+
+    def test_root_certificate_set_when_custom_ca_present(self) -> None:
+        pem = b"-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----"
+        with (
+            patch("urllib.request.getproxies", return_value={}),
+            patch(
+                "application_sdk.clients.ssl_utils.get_custom_ca_cert_bytes",
+                return_value=pem,
+            ),
+        ):
+            opts = obstore_client_options()
+        assert opts["root_certificate"] == pem
+
+    def test_root_certificate_omitted_without_custom_ca(self) -> None:
+        with (
+            patch("urllib.request.getproxies", return_value={}),
+            patch(
+                "application_sdk.clients.ssl_utils.get_custom_ca_cert_bytes",
+                return_value=None,
+            ),
+        ):
+            opts = obstore_client_options()
+        assert "root_certificate" not in opts
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +292,22 @@ class TestLogObstoreConfig:
         formatted = fmt % tuple(args)
         assert "secretpass" not in formatted
         assert "***@proxy.corp:8080" in formatted
+
+    def test_summarizes_root_certificate_bytes(self) -> None:
+        """The full PEM bundle is noise — the log shows only a byte-count."""
+        pem = (
+            b"-----BEGIN CERTIFICATE-----\nsecretlookingcert\n-----END CERTIFICATE-----"
+        )
+        with patch("application_sdk.storage._obstore_config.logger") as mock_logger:
+            log_obstore_config(
+                "s3",
+                client_options={"root_certificate": pem},
+                retry_config=None,
+            )
+        fmt, *args = mock_logger.info.call_args.args
+        formatted = fmt % tuple(args)
+        assert "secretlookingcert" not in formatted
+        assert f"<{len(pem)} bytes>" in formatted
 
 
 # ---------------------------------------------------------------------------
