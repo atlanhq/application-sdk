@@ -259,6 +259,20 @@ def test_redact_secrets_masks_mysql_identity_hostname() -> None:
     assert "'svc'" in out
 
 
+def test_redact_secrets_masks_mysql_host_prefix_forms() -> None:
+    """MySQL 1130/1129 name the client source host without the @'...' anchor."""
+    from application_sdk.errors import redact_secrets
+
+    assert redact_secrets(
+        "Host '49.43.224.205' is not allowed to connect to this MySQL server"
+    ) == "Host '***' is not allowed to connect to this MySQL server"
+    assert redact_secrets("Host '10.0.0.5' is blocked because of many errors") == (
+        "Host '***' is blocked because of many errors"
+    )
+    # Case-sensitive, word-anchored: a lowercase/embedded "host" is untouched.
+    assert redact_secrets("the ghost 'x' spoke") == "the ghost 'x' spoke"
+
+
 def test_redact_secrets_keeps_destination_host_prose() -> None:
     """The destination host stays visible — it's the DNS/connectivity signal.
 

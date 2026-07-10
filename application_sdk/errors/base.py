@@ -31,17 +31,20 @@ _URL_USERINFO_RE = re.compile(r"([a-z][a-z0-9+.-]*://)(?:[^@\s]+@)+", re.IGNOREC
 _SECRET_PARAM_RE = re.compile(
     r"(?i)((?:api_key|access_token|auth_token|password|passwd|secret|credential|private_key)=)[^\s&,;#]+",
 )
-# MySQL auth-failure prose names the *source* (client/egress) identity outside
-# any URL: Access denied for user 'atlan'@'10.0.0.5' → 'atlan'@'***'. That IP is
-# where the connection came *from* — a customer VPC egress IP that must not land
-# in central logs — so we mask it and keep the username (the actionable auth
-# diagnostic). The `@'` anchor only matches the user@host identity form.
+# MySQL auth/access-failure prose names the *source* (client/egress) host in a
+# single-quoted form, outside any URL. That host is where the connection came
+# *from* — a customer VPC egress IP that must not land in central logs — so we
+# mask it and keep the username (the actionable auth diagnostic). Two shapes:
+#   1045 Access denied for user 'atlan'@'10.0.0.5'  → 'atlan'@'***'
+#   1130 Host '10.0.0.5' is not allowed to connect   → Host '***' ...
+#   1129 Host '10.0.0.5' is blocked ...              → Host '***' ...
+# Both are matched by anchoring on `@'` or the literal MySQL `Host '` prefix.
 #
 # We deliberately do NOT mask the *destination* host (connection-string host,
 # Postgres `server at "..."` / `could not translate host name "..."`): when the
 # problem is DNS resolution, the resolved destination host/IP is exactly the
 # signal an operator needs to debug their own connectivity.
-_HOST_IN_IDENTITY_RE = re.compile(r"(@')[^']*(')")
+_HOST_IN_IDENTITY_RE = re.compile(r"((?:@|\bHost )')[^']*(')")
 
 
 def redact_secrets(text: str) -> str:
