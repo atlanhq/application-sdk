@@ -89,56 +89,6 @@ def _collect_placeholders(obj: Any) -> set[str]:
     return found
 
 
-#: The credential-routing placeholder the Argo/AE template substitutes at
-#: dispatch. Its presence in an extract node's args marks that entrypoint as an
-#: *agent* extraction (needs source creds via the secret store) — vs. a miner/QI
-#: or "clean" entrypoint that never resolves source credentials and so is exempt
-#: from agent-routing coverage. Mirrors the conformance P029 signal (kept in sync
-#: here rather than imported — application_sdk must not depend on the conformance
-#: package).
-_AGENT_JSON_PLACEHOLDER = "{{agent-json}}"
-
-
-def _carries_agent_routing(obj: Any) -> bool:
-    """Whether the ``{{agent-json}}`` routing placeholder appears anywhere in
-    ``obj`` (at any depth) — the signal that an extract node is an agent extraction.
-    """
-    if isinstance(obj, dict):
-        return any(_carries_agent_routing(v) for v in obj.values())
-    if isinstance(obj, list):
-        return any(_carries_agent_routing(x) for x in obj)
-    return obj == _AGENT_JSON_PLACEHOLDER
-
-
-def _discover_manifests(generated_dir: Path) -> list[tuple[str | None, Path]]:
-    """Discover per-entrypoint manifests under an ``app/generated`` directory.
-
-    Returns ``(workflow_type, manifest_path)`` pairs:
-
-    * single-entrypoint app → ``app/generated/manifest.json`` → ``(None, path)``
-      (``workflow_type=None`` uses the connector's default entrypoint).
-    * multi-entrypoint app → ``app/generated/<wire-name>/manifest.json`` →
-      ``(<wire-name>, path)`` for each entrypoint subdir (e.g. ``crawler``,
-      ``miner``, ``lineage``). The subdir name IS the start-body ``workflow_type``
-      / ``?entrypoint=`` wire-name — never the manifest's sibling
-      ``inputs.workflow_type`` (the AE slug, which the SDK rejects on start).
-
-    Mirrors ``conformance.suite.checks.sdr._discover_manifests``.
-    """
-    if not generated_dir.is_dir():
-        return []
-    root_manifest = generated_dir / "manifest.json"
-    if root_manifest.is_file():
-        return [(None, root_manifest)]
-    pairs: list[tuple[str | None, Path]] = []
-    for child in sorted(generated_dir.iterdir()):
-        if child.is_dir():
-            m = child / "manifest.json"
-            if m.is_file():
-                pairs.append((child.name, m))
-    return pairs
-
-
 class BaseSDRIntegrationTest(BaseIntegrationTest):
     """Base class for SDR integration tests.
 
@@ -170,15 +120,6 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
     #: fails, instead of the test silently passing with a hand-supplied value.
     #: Empty string ("") keeps the legacy hand-written behaviour.
     manifest_path: ClassVar[str] = ""
-
-    #: Connector repo root (relative to the test's cwd, or absolute) under which
-    #: to discover per-entrypoint manifests at ``app/generated/[<wire-name>/]manifest.json``.
-    #: Used by :meth:`discover_agent_entrypoints` to enumerate ALL agent-capable
-    #: entrypoints (crawler / miner / lineage / …), so a suite can *run* each in SDR
-    #: mode instead of only the single hardcoded ``dag.extract`` node (SDR-QA gap
-    #: item 3 — miner/lineage entrypoints were checked statically by P029 but never
-    #: run). Default "." (the connector repo root).
-    manifest_root: ClassVar[str] = "."
 
     #: When True, a workflow scenario that runs to completion must have written
     #: NON-EMPTY extracted output at ``extracted_output_base_path`` — catching the
@@ -281,61 +222,6 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
                 "cannot derive the workflow input from it."
             )
         return inputs["args"]
-
-    @classmethod
-    def discover_agent_entrypoints(
-        cls, root: str | None = None
-    ) -> list[dict[str, str | None]]:
-        """Enumerate every agent-capable entrypoint of the connector under test.
-
-        Discovers ``{root}/app/generated/[<wire-name>/]manifest.json`` and keeps
-        only entrypoints whose ``dag.extract.inputs.args`` carries the
-        ``{{agent-json}}`` routing placeholder — i.e. entrypoints that resolve
-        source credentials via the secret store. A non-agent entrypoint (a
-        "clean"/QI stage with no ``{{agent-json}}`` slot) is excluded so a suite
-        never falsely expects agent creds for it.
-
-        This is the missing *enumerator* behind SDR-QA gap item 3: the harness
-        otherwise loads exactly one manifest and runs only its ``dag.extract``
-        node, so miner / lineage / clean entrypoints are covered statically by
-        conformance P029 but never actually *run* in SDR. A suite runs each by
-        pointing a workflow scenario at it — set ``manifest_path`` +
-        ``workflow_type`` from an entry — giving every agent entrypoint the same
-        run-to-completion + assets-landed coverage the crawler already gets.
-
-        Returns:
-            One ``{"workflow_type": <wire-name> | None, "manifest_path": <str>}``
-            per agent entrypoint. ``workflow_type`` is the entrypoint subdir's
-            wire-name (the start-body ``workflow_type`` / ``?entrypoint=`` value),
-            or ``None`` for a single-entrypoint app's default entrypoint.
-
-        Args:
-            root: Connector repo root; defaults to :pyattr:`manifest_root`.
-        """
-        base = Path(root if root is not None else cls.manifest_root)
-        if not base.is_absolute():
-            base = Path.cwd() / base
-        generated = base / "app" / "generated"
-
-        entrypoints: list[dict[str, str | None]] = []
-        for workflow_type, manifest_path in _discover_manifests(generated):
-            try:
-                manifest = orjson.loads(manifest_path.read_bytes())
-            except (OSError, orjson.JSONDecodeError):
-                # An unreadable/invalid manifest can't be enumerated; skip it
-                # (P029 flags the shape problem separately).
-                continue
-            args = (
-                ((manifest.get("dag") or {}).get("extract") or {}).get("inputs") or {}
-            ).get("args")
-            if _carries_agent_routing(args):
-                entrypoints.append(
-                    {
-                        "workflow_type": workflow_type,
-                        "manifest_path": str(manifest_path),
-                    }
-                )
-        return entrypoints
 
     def _workflow_args_from_manifest(self, base_args: dict[str, Any]) -> dict[str, Any]:
         """Build workflow input from the manifest's extract args + substitutions.
