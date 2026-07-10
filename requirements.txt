@@ -432,7 +432,7 @@ virtualenv==21.6.0
     # via pre-commit
 watchfiles==1.2.0
     # via uvicorn
-websockets==16.0
+websockets==16.1
     # via uvicorn
 win32-setctime==1.2.0 ; sys_platform == 'win32'
     # via loguru
