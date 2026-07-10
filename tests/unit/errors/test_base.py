@@ -223,6 +223,57 @@ def test_redact_secrets_consumes_at_in_password() -> None:
     assert out == "connect failed for postgresql://***@host:5432/db"
 
 
+def test_safe_traceback_formats_frames() -> None:
+    from application_sdk.errors import safe_traceback
+
+    try:
+        raise ValueError("boom")
+    except ValueError as exc:
+        out = safe_traceback(exc)
+    assert "ValueError: boom" in out
+    assert "test_safe_traceback_formats_frames" in out  # a frame line
+    assert 'raise ValueError("boom")' in out
+
+
+def test_safe_traceback_redacts_userinfo_and_secret_params() -> None:
+    from application_sdk.errors import safe_traceback
+
+    try:
+        raise ValueError(
+            "connect failed for postgresql://user:s3cret@db.internal/prod api_key=abc123"
+        )
+    except ValueError as exc:
+        out = safe_traceback(exc)
+    assert "s3cret" not in out
+    assert "abc123" not in out
+    assert "postgresql://***@db.internal/prod" in out
+    assert "api_key=***" in out
+
+
+def test_safe_traceback_caps_length_with_ellipsis() -> None:
+    from application_sdk.errors import safe_traceback
+
+    try:
+        raise ValueError("x" * 5000)
+    except ValueError as exc:
+        out = safe_traceback(exc, max_len=200)
+    assert len(out) == 201  # 200 chars + the "…" marker
+    assert out.endswith("…")
+
+
+def test_safe_traceback_handles_none() -> None:
+    from application_sdk.errors import safe_traceback
+
+    assert safe_traceback(None) == ""
+
+
+def test_safe_traceback_handles_exception_without_traceback() -> None:
+    from application_sdk.errors import safe_traceback
+
+    out = safe_traceback(ValueError("never raised"))
+    assert "ValueError: never raised" in out
+
+
 def test_redact_secrets_over_redacts_trailing_at_in_no_space_run() -> None:
     """Deliberate: the greedy userinfo match consumes to the last `@` in a
     whitespace-free run, so a trailing `@` after the host over-redacts. This
@@ -263,9 +314,12 @@ def test_redact_secrets_masks_mysql_host_prefix_forms() -> None:
     """MySQL 1130/1129 name the client source host without the @'...' anchor."""
     from application_sdk.errors import redact_secrets
 
-    assert redact_secrets(
-        "Host '49.43.224.205' is not allowed to connect to this MySQL server"
-    ) == "Host '***' is not allowed to connect to this MySQL server"
+    assert (
+        redact_secrets(
+            "Host '49.43.224.205' is not allowed to connect to this MySQL server"
+        )
+        == "Host '***' is not allowed to connect to this MySQL server"
+    )
     assert redact_secrets("Host '10.0.0.5' is blocked because of many errors") == (
         "Host '***' is blocked because of many errors"
     )

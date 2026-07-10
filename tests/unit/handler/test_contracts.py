@@ -3,6 +3,9 @@
 import pytest
 from pydantic import ConfigDict, Field, ValidationError
 
+from application_sdk.errors.categories import Audience, FailureCategory
+from application_sdk.errors.leaves import AuthError
+from application_sdk.errors.wire import FailureDetails
 from application_sdk.handler.contracts import (
     ApiMetadataObject,
     ApiMetadataOutput,
@@ -78,6 +81,10 @@ class TestPreflightStatus:
         assert PreflightStatus.NOT_READY == "not_ready"
         assert PreflightStatus.PARTIAL == "partial"
 
+    def test_status_values(self):
+        # status decides the gate: NOT_READY blocks; READY/PARTIAL proceed.
+        assert {s.value for s in PreflightStatus} == {"ready", "not_ready", "partial"}
+
 
 class TestPreflightCheck:
     def test_defaults(self):
@@ -85,6 +92,7 @@ class TestPreflightCheck:
         assert check.name == "connectivity"
         assert check.passed is False
         assert check.message == ""
+        assert check.error is None
         assert check.duration_ms == 0.0
 
     def test_passed(self):
@@ -95,6 +103,73 @@ class TestPreflightCheck:
     def test_empty_name_rejected(self):
         with pytest.raises(ValidationError):
             PreflightCheck(name="")
+
+    def test_error_coerced_from_app_error(self):
+        check = PreflightCheck(
+            name="auth",
+            passed=False,
+            error=AuthError(message="x", cause=ValueError("y")),
+        )
+        assert isinstance(check.error, FailureDetails)
+        assert check.error.category == FailureCategory.AUTH
+        assert check.error.cause_repr.startswith("ValueError: y")
+
+    def test_error_instance_overrides_flow_through(self):
+        check = PreflightCheck(
+            name="auth",
+            passed=False,
+            error=AuthError(message="m", suggested_action="s"),
+        )
+        assert check.error.message == "m"
+        assert check.error.suggested_action == "s"
+        assert check.error.code == "AUTH"
+        assert check.error.audience == Audience.USER
+
+    def test_error_accepts_ready_failure_details_and_none(self):
+        details = AuthError(message="boom").to_failure_details()
+        check = PreflightCheck(name="auth", passed=False, error=details)
+        assert check.error == details
+
+        assert PreflightCheck(name="auth", passed=False, error=None).error is None
+
+    def test_error_json_round_trip(self):
+        check = PreflightCheck(
+            name="auth",
+            passed=False,
+            error=AuthError(message="boom", suggested_action="fix it"),
+        )
+        restored = PreflightCheck.model_validate_json(check.model_dump_json())
+        assert restored.error == check.error
+
+    def test_removed_fields_absent(self):
+        assert "blocking" not in PreflightCheck.model_fields
+        assert "category" not in PreflightCheck.model_fields
+        assert "suggested_action" not in PreflightCheck.model_fields
+
+    def test_resolved_prefers_error_on_failed_check(self):
+        check = PreflightCheck(
+            name="auth",
+            passed=False,
+            message="fallback",
+            error=AuthError(message="from error", suggested_action="do x"),
+        )
+        assert check.resolved_message == "from error"
+        assert check.resolved_suggested_action == "do x"
+
+    def test_resolved_uses_message_when_no_error(self):
+        check = PreflightCheck(name="auth", passed=False, message="fallback")
+        assert check.resolved_message == "fallback"
+        assert check.resolved_suggested_action == ""
+
+    def test_resolved_ignores_error_on_passed_check(self):
+        check = PreflightCheck(
+            name="auth",
+            passed=True,
+            message="ok",
+            error=AuthError(message="from error", suggested_action="do x"),
+        )
+        assert check.resolved_message == "ok"
+        assert check.resolved_suggested_action == ""
 
 
 class TestPreflightOutput:
@@ -110,6 +185,9 @@ class TestPreflightOutput:
         ]
         out = PreflightOutput(status=PreflightStatus.PARTIAL, checks=checks)
         assert len(out.checks) == 2
+
+    def test_no_should_block_attribute(self):
+        assert not hasattr(PreflightOutput, "should_block")
 
 
 class TestMetadataOutput:
@@ -451,6 +529,11 @@ class TestPreflightInputFieldTypes:
         assert isinstance(inp.metadata, BaseMetadataConfig)
         assert inp.connection_config.model_extra == {}
         assert inp.metadata.model_extra == {}
+
+    def test_unknown_runtime_keys_are_dropped(self):
+        inp = PreflightInput.model_validate({"credentials": [], "tenant": "default"})
+        assert inp.model_extra is None
+        assert not hasattr(inp, "tenant")
 
 
 class TestMetadataInputFieldTypes:

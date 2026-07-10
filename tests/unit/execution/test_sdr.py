@@ -227,7 +227,7 @@ class TestBuildSdrActivities:
         fake_infra.secret_store = fake_secret_store
 
         with mock.patch(
-            "application_sdk.execution._temporal.sdr.get_infrastructure",
+            "application_sdk.infrastructure.context.get_infrastructure",
             return_value=fake_infra,
         ):
             await test_auth(AuthInput(credentials=[]))
@@ -246,7 +246,7 @@ class TestBuildSdrActivities:
         test_auth = by_name[SDR_TEST_AUTH_ACTIVITY]
 
         with mock.patch(
-            "application_sdk.execution._temporal.sdr.get_infrastructure",
+            "application_sdk.infrastructure.context.get_infrastructure",
             return_value=None,
         ):
             await test_auth(AuthInput(credentials=[]))
