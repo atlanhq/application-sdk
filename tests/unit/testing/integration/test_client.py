@@ -1,8 +1,9 @@
 """Unit tests for IntegrationTestClient credential conversion."""
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from application_sdk.errors.leaves import DependencyUnavailableError
 from application_sdk.testing.integration._errors import LocalVaultResponseInvariantError
@@ -273,3 +274,72 @@ class TestProvisionAndStartWorkflow:
 
         vault_body = post.call_args_list[0].kwargs["data"]
         assert vault_body == {"host": "db", "extra": {"ssl": "true"}}
+
+
+class TestGetManifest:
+    """get_manifest() — live manifest fetch used by the SDR harness (BLDX-1493)."""
+
+    def _client(self) -> IntegrationTestClient:
+        return IntegrationTestClient(host="http://app", version="v1")
+
+    def _resp(self, status: int, body):
+        resp = MagicMock()
+        resp.status_code = status
+        if isinstance(body, Exception):
+            resp.json.side_effect = body
+        else:
+            resp.json.return_value = body
+        return resp
+
+    def test_returns_dict_on_200(self):
+        client = self._client()
+        manifest = {"dag": {"extract": {}}}
+        with patch(
+            "application_sdk.testing.integration.client.requests.get",
+            return_value=self._resp(200, manifest),
+        ) as get:
+            assert client.get_manifest() == manifest
+        # Hits the versioned manifest route with no entrypoint param.
+        assert get.call_args.args[0] == f"{client.base_url}/manifest"
+        assert get.call_args.kwargs["params"] is None
+
+    def test_passes_entrypoint_param(self):
+        client = self._client()
+        with patch(
+            "application_sdk.testing.integration.client.requests.get",
+            return_value=self._resp(200, {"dag": {}}),
+        ) as get:
+            client.get_manifest(entrypoint="s4")
+        assert get.call_args.kwargs["params"] == {"entrypoint": "s4"}
+
+    def test_returns_none_on_non_200(self):
+        client = self._client()
+        with patch(
+            "application_sdk.testing.integration.client.requests.get",
+            return_value=self._resp(404, {"error": "nope"}),
+        ):
+            assert client.get_manifest() is None
+
+    def test_returns_none_on_connection_error(self):
+        client = self._client()
+        with patch(
+            "application_sdk.testing.integration.client.requests.get",
+            side_effect=requests.ConnectionError("down"),
+        ):
+            assert client.get_manifest() is None
+
+    def test_returns_none_on_non_json(self):
+        client = self._client()
+        with patch(
+            "application_sdk.testing.integration.client.requests.get",
+            return_value=self._resp(200, ValueError("not json")),
+        ):
+            assert client.get_manifest() is None
+
+    def test_returns_none_when_body_not_object(self):
+        client = self._client()
+        with patch(
+            "application_sdk.testing.integration.client.requests.get",
+            return_value=self._resp(200, ["not", "a", "dict"]),
+        ):
+            assert client.get_manifest() is None

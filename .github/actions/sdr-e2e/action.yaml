@@ -240,6 +240,33 @@ runs:
         fi
         uv lock
 
+    # Regenerate app/generated/** (manifest.json et al.) from contract/app.pkl
+    # BEFORE the image build COPYs the tree (BLDX-1493). The connector image bakes
+    # app/generated/ at build time and the running app serves manifest.json at
+    # GET /workflows/v1/manifest. The full-DAG / SDR harnesses fetch that live
+    # manifest and build the AE seed DAG from it (mimicking how the Local
+    # Marketplace app rebuilds the DAG from the app's fresh manifest at install),
+    # so a Contract Toolkit change actually takes effect. On cross-repo dispatch
+    # (application-sdk-ref set) the @app-contract-toolkit dependency is overridden
+    # to the SDK PR's contract-toolkit/src so an SDK-level toolkit change is baked
+    # into the served manifest end-to-end. Self-skips when there is no
+    # contract/app.pkl.
+    #
+    # This is the ONLY regeneration in this action — it runs before the build so
+    # the IMAGE serves a fresh manifest. setup-deps' actions/checkout below
+    # restores the committed app/generated/ on the host, which is fine: the
+    # harness reads the manifest over HTTP from the running app, only falling back
+    # to the committed file when the endpoint is unreachable.
+    #
+    # check-drift=false: uv (hence ruff) isn't installed until setup-deps below,
+    # and the app-level warn-only drift gate lives in the always-run
+    # connector-integration-tests job.
+    - name: Regenerate contract artifacts (manifest.json) before image build
+      uses: atlanhq/application-sdk/.github/actions/regenerate-contract@main
+      with:
+        application-sdk-ref: ${{ inputs.application-sdk-ref }}
+        check-drift: "false"
+
     # Buildx is required for the GHA cache backend below. Set up once
     # per run, before the image build that uses `cache-from/cache-to`.
     - name: Set up Docker Buildx
@@ -541,6 +568,13 @@ runs:
       shell: bash
       env:
         ATLAN_APPLICATION_NAME: ${{ inputs.app-name }}
+        # BLDX-1493: on SDK-level cross-repo dispatch (application-sdk-ref set)
+        # the committed manifest was generated with the OLD toolkit, so the
+        # harness must fail hard rather than fall back to it if the live
+        # /manifest is unreachable (a fallback would give a false green for the
+        # toolkit change). App-level runs (ref empty → "false") keep the safe
+        # fallback.
+        ATLAN_E2E_REQUIRE_LIVE_MANIFEST: ${{ inputs.application-sdk-ref != '' }}
         # Read by BaseE2ETest.setup_method() to warn if two-store is on
         # but the test class runs in RunMode.DIRECT, where it has no effect.
         TWO_STORE: ${{ inputs.enable-two-store }}

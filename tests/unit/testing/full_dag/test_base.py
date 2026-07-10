@@ -10,8 +10,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from application_sdk.testing.full_dag import BaseFullDAGE2ETest, RunMode
 from application_sdk.testing.full_dag._errors import (
@@ -440,3 +442,144 @@ def test_seed_dag_relative_path_resolved_against_cwd(
     dag = instance._seed_dag_from_manifest(extract_task_queue="atlan-mysql-test")
     assert "extract" in dag
     assert dag["extract"]["app_name"] == "mysql"
+
+
+# --------------------------------------------------------------------------- #
+# Live-manifest seed (BLDX-1493) — mimic LM's install-time upgrade
+# --------------------------------------------------------------------------- #
+
+
+def _resp(status: int, body):
+    r = MagicMock()
+    r.status_code = status
+    if isinstance(body, Exception):
+        r.json.side_effect = body
+    else:
+        r.json.return_value = body
+    return r
+
+
+def _instance(manifest_file: Path, monkeypatch: pytest.MonkeyPatch):
+    _bootstrap_env(monkeypatch)
+    inst = _make_test(str(manifest_file))()
+    inst.setup_method()
+    return inst
+
+
+def test_seed_from_manifest_dict_matches_file(
+    manifest_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rendering a manifest dict is identical to reading the same file — the
+    regression gate for routing the seed through the live endpoint."""
+    inst = _instance(manifest_file, monkeypatch)
+    from_file = inst._seed_dag_from_manifest("atlan-mysql-ci")
+    from_dict = inst._seed_dag_from_manifest("atlan-mysql-ci", manifest=dict(_MANIFEST))
+    assert from_file == from_dict
+
+
+def test_live_manifest_preferred_and_preserves_credential_guid(
+    manifest_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the app serves a manifest, the seed is built from it — and the
+    ``{{credentialGuid}}`` submit-time placeholder survives (regression guard
+    against the LM-strip trap)."""
+    inst = _instance(manifest_file, monkeypatch)
+    with patch(
+        "application_sdk.testing.full_dag.base.requests.get",
+        return_value=_resp(200, dict(_MANIFEST)),
+    ) as get:
+        seed = inst._seed_dag_from_live_or_committed_manifest("atlan-mysql-ci")
+    # Hit the versioned manifest route on the configured base URL.
+    assert get.call_args.args[0] == "http://localhost:8000/workflows/v1/manifest"
+    # credential_guid is the one placeholder AE fills at submit — must remain.
+    assert seed["extract"]["inputs"]["args"]["credential_guid"] == "{{credentialGuid}}"
+    # Extract routed to the CI/agent queue; no leftover template placeholders.
+    assert seed["extract"]["inputs"]["task_queue"] == "atlan-mysql-ci"
+    assert "{deployment_name}" not in json.dumps(seed)
+
+
+def test_live_manifest_unreachable_falls_back_to_committed(
+    manifest_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A dead endpoint falls back to the committed manifest file (prior behaviour)."""
+    inst = _instance(manifest_file, monkeypatch)
+    with patch(
+        "application_sdk.testing.full_dag.base.requests.get",
+        side_effect=requests.ConnectionError("app not up"),
+    ):
+        seed = inst._seed_dag_from_live_or_committed_manifest("atlan-mysql-ci")
+    # Equivalent to the committed-file path.
+    assert seed == inst._seed_dag_from_manifest("atlan-mysql-ci")
+
+
+def test_use_live_manifest_disabled_uses_committed(
+    manifest_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With the toggle off, the endpoint is never contacted."""
+    inst = _instance(manifest_file, monkeypatch)
+    inst.use_live_manifest = False
+    with patch(
+        "application_sdk.testing.full_dag.base.requests.get",
+        side_effect=AssertionError("must not fetch when disabled"),
+    ):
+        seed = inst._seed_dag_from_live_or_committed_manifest("atlan-mysql-ci")
+    assert seed == inst._seed_dag_from_manifest("atlan-mysql-ci")
+
+
+def test_fetch_live_manifest_none_on_non_200(
+    manifest_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inst = _instance(manifest_file, monkeypatch)
+    with patch(
+        "application_sdk.testing.full_dag.base.requests.get",
+        return_value=_resp(503, {"error": "warming up"}),
+    ):
+        assert inst._fetch_live_manifest() is None
+
+
+def test_sdk_level_unreachable_raises_instead_of_stale_fallback(
+    manifest_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SDK-level run (ATLAN_E2E_REQUIRE_LIVE_MANIFEST=true): an unreachable
+    /manifest FAILS hard rather than silently reading the stale committed file
+    (generated with the old toolkit) — BLDX-1493 false-green guard."""
+    from application_sdk.testing.full_dag._errors import ManifestFileNotFoundError
+
+    inst = _instance(manifest_file, monkeypatch)
+    monkeypatch.setenv("ATLAN_E2E_REQUIRE_LIVE_MANIFEST", "true")
+    with (
+        patch(
+            "application_sdk.testing.full_dag.base.requests.get",
+            side_effect=requests.ConnectionError("app not up"),
+        ),
+        pytest.raises(ManifestFileNotFoundError),
+    ):
+        inst._seed_dag_from_live_or_committed_manifest("atlan-mysql-ci")
+
+
+def test_sdk_level_opt_out_raises_instead_of_stale_fallback(
+    manifest_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """use_live_manifest=False must not silently disable the SDK-level
+    false-green guard — the committed manifest was generated with the OLD
+    toolkit (BLDX-1493)."""
+    from application_sdk.testing.full_dag._errors import ManifestFileNotFoundError
+
+    inst = _instance(manifest_file, monkeypatch)
+    inst.use_live_manifest = False
+    monkeypatch.setenv("ATLAN_E2E_REQUIRE_LIVE_MANIFEST", "true")
+    with pytest.raises(ManifestFileNotFoundError, match="use_live_manifest"):
+        inst._seed_dag_from_live_or_committed_manifest("atlan-mysql-ci")
+
+
+def test_sdk_level_legacy_seed_raises(
+    manifest_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """manifest_path='' (hand-crafted legacy seed) never exercises the manifest,
+    so an SDK-level run must fail rather than green-light the toolkit change."""
+    from application_sdk.testing.full_dag._errors import ManifestFileNotFoundError
+
+    inst = _instance(manifest_file, monkeypatch)
+    monkeypatch.setenv("ATLAN_E2E_REQUIRE_LIVE_MANIFEST", "true")
+    with pytest.raises(ManifestFileNotFoundError, match="manifest_path"):
+        inst._guard_legacy_seed_allowed()
