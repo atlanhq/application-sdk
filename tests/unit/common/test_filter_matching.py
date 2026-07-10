@@ -221,3 +221,24 @@ class TestReviewRegressions:
             is True
         )
         assert filter_matches(456, include_filter="123") is False  # type: ignore[arg-type]
+
+
+def test_mixed_dict_one_malformed_key_raises():
+    """A valid key + one bare-string schema value must raise (per-key check),
+    not silently drop the malformed key (under-match)."""
+    import pytest
+
+    with pytest.raises(ValueError, match=r"key\(s\).*\^db2\$"):
+        FilterPattern.from_filters(
+            include_filter={"^db1$": ["^s$"], "^db2$": "^scalar$"}
+        )
+
+
+def test_valid_multi_key_dict_matches_each():
+    p = FilterPattern.from_filters(
+        include_filter={"^db1$": ["^s1$"], "^db2$": ["^s2$"]}
+    )
+    assert p.matches("db1.s1") is True
+    assert p.matches("db2.s2") is True
+    assert p.matches("db1.s2") is False  # cross-product not allowed
+    assert p.matches("db3.s1") is False

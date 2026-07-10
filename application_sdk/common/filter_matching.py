@@ -80,10 +80,11 @@ def _to_patterns(filter_input: FilterInput, *, exact: bool) -> list[str]:
 
     * ``None`` / empty (``""``, ``{}``, ``[]``, and their JSON-string forms
       ``"{}"`` / ``"[]"``) → ``[]`` (no constraint).
-    * ``dict`` → the hierarchical ``db.schema`` map; reuse
-      :func:`~application_sdk.common.sql_filters.normalize_filters`, which emits
-      fully-anchored ``^db\\.schema$`` segments (SQL-compatible). A **non-empty**
-      map that yields no patterns is malformed (see below) and raises.
+    * ``dict`` → the hierarchical ``db.schema`` map; each key is normalised via
+      :func:`~application_sdk.common.sql_filters.normalize_filters` (fully-anchored
+      ``^db\\.schema$`` segments, SQL-compatible). Any key that yields no segments
+      is malformed (e.g. a bare-string schema value) and raises — no key is
+      silently dropped. ``exact`` does not apply to this shape (see below).
     * ``str`` (regex mode) → a JSON object/array literal is parsed and recursed;
       otherwise treated as a single raw token.
     * ``str`` (``exact``) → always a single literal token — never re-parsed as
@@ -98,21 +99,30 @@ def _to_patterns(filter_input: FilterInput, *, exact: bool) -> list[str]:
     if isinstance(filter_input, dict):
         if not filter_input:
             return []  # empty map ⇒ no constraint (match-all for include)
-        patterns = normalize_filters(filter_input, True)
-        if not patterns:
-            # A non-empty map that normalises to zero patterns is malformed —
-            # almost always a scalar-string schema value (``{"^db$": "^sch$"}``)
-            # where a list is required (``{"^db$": ["^sch$"]}``). Silently
-            # emitting [] would make the include set empty ⇒ match EVERYTHING —
-            # the exact silent scope-leak this module exists to prevent (the
-            # Looker #131 class). Fail loudly instead.
+        # Validate + normalise PER KEY so a single malformed key is caught, not
+        # only an all-malformed map. normalize_filters emits fully-anchored
+        # ^db\.schema$ segments; a key whose value is a bare string (instead of a
+        # list) or other junk yields zero segments. Silently dropping it would
+        # either leak the whole scope (every key bad ⇒ empty include ⇒ match-all,
+        # the Looker #131 class) or quietly under-match (one key bad ⇒ that db
+        # excluded). Both are silent-drop bugs this module exists to prevent —
+        # fail loudly, naming the offending key(s).
+        dict_patterns: list[str] = []
+        bad_keys: list[str] = []
+        for db, schemas in filter_input.items():
+            segment = normalize_filters({db: schemas}, True)
+            if segment:
+                dict_patterns.extend(segment)
+            else:
+                bad_keys.append(db)
+        if bad_keys:
             raise ValueError(
-                f"Filter map {filter_input!r} produced no patterns — a schema "
-                f"value is likely a bare string instead of a list (use "
+                f"Filter map produced no patterns for key(s) {bad_keys!r} — a "
+                f"schema value is likely a bare string instead of a list (use "
                 f"{{'^db$': ['^sch$']}}, not {{'^db$': '^sch$'}}). Refusing to "
-                f"silently match everything."
+                f"silently drop filters."
             )
-        return patterns
+        return dict_patterns
 
     if isinstance(filter_input, str):
         stripped = filter_input.strip()
@@ -178,7 +188,10 @@ class FilterPattern:
             include_filter: Patterns to include. Empty/None ⇒ include everything.
             exclude_filter: Patterns to exclude. Empty/None ⇒ exclude nothing.
             exact: When True, treat each token as an exact literal (``re.escape``)
-                rather than a regex — for dropdown-id selections.
+                rather than a regex — for dropdown-id selections. Applies only to
+                string / list-of-string tokens (the flat dropdown-id shape); the
+                hierarchical ``dict`` map is always matched as regex (``exact`` has
+                no effect on it, as those keys/values are inherently patterns).
             flags: Optional ``re`` flags (e.g. ``re.IGNORECASE``) applied to every
                 compiled pattern.
         """
