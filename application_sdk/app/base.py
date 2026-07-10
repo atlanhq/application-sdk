@@ -1593,15 +1593,12 @@ async def _run_preflight_gate(
             retry_policy=GATE_RETRY,
         )
     except Exception as e:
+        # The activity emits the blocked outcome event before it raises; the
+        # workflow only re-raises the deliberate block here.
         if is_preflight_block(e):
-            _safe_log(
-                "info",
-                "Preflight gate outcome",
-                app_name=app_name,
-                entrypoint=entry,
-                outcome="blocked",
-            )
             raise
+        # Fail-open: only the workflow knows a no-verdict failure happened, so it
+        # owns the no_verdict row (plus the loud ERROR line).
         _safe_log(
             "error",
             "Preflight gate could not produce a verdict; proceeding without source "
@@ -1620,13 +1617,7 @@ async def _run_preflight_gate(
         )
         return
 
-    _safe_log(
-        "info",
-        "Preflight gate outcome",
-        app_name=app_name,
-        entrypoint=entry,
-        outcome="proceeded",
-    )
+    # Success: the activity already emitted the proceeded outcome event.
 
 
 def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> type:

@@ -100,7 +100,8 @@ class TestRunPreflightGate:
             result = await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
         assert result is None
         exec_mock.assert_awaited_once()
-        assert _outcomes(safe_log) == ["proceeded"]
+        # The activity emits the proceeded outcome event now — the workflow emits none.
+        assert _outcomes(safe_log) == []
 
     async def test_proceeds_on_partial(self, safe_log) -> None:
         exec_mock, exec_patch = _exec(
@@ -109,7 +110,7 @@ class TestRunPreflightGate:
         with _patched(True), exec_patch:
             result = await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
         assert result is None
-        assert _outcomes(safe_log) == ["proceeded"]
+        assert _outcomes(safe_log) == []
 
     async def test_reraises_on_preflight_failed(self, safe_log) -> None:
         _, exec_patch = _exec(side_effect=_preflight_failed_error())
@@ -117,7 +118,9 @@ class TestRunPreflightGate:
             with pytest.raises(ApplicationError) as excinfo:
                 await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
         assert excinfo.value.type == "PreflightFailed"
-        assert "blocked" in _outcomes(safe_log)
+        # The activity emits the blocked outcome event before raising; the
+        # workflow only re-raises and emits nothing.
+        assert _outcomes(safe_log) == []
 
     async def test_reraises_when_preflight_failed_is_activity_error_cause(
         self, safe_log
@@ -130,7 +133,7 @@ class TestRunPreflightGate:
             with pytest.raises(_ActivityErrorStub) as excinfo:
                 await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
         assert excinfo.value is wrapper
-        assert "blocked" in _outcomes(safe_log)
+        assert _outcomes(safe_log) == []
 
     async def test_fail_open_on_other_activity_error(self, safe_log) -> None:
         # Any failure that is NOT a deliberate PreflightFailed block → proceed,
