@@ -39,6 +39,7 @@ from application_sdk.testing.e2e.payload import (
     ConnectionSpec,
     DatabaseSpec,
     RunMode,
+    build_ae_payload,
     build_agent_json,
     build_seed_dag,
 )
@@ -191,6 +192,79 @@ class SQLAppE2ETest(BaseE2ETest):
             agent=agent,
             database=self.database_spec(),
         )
+
+    def _build_ae_payload(self, slug: str) -> dict[str, Any]:
+        """Compose the AE submit payload, then graft on the flat params the
+        shared Argo cluster template still reads.
+
+        :func:`build_ae_payload` emits only the ``{{...}}`` mustache params and
+        ``connection.*`` attrs. The cluster WorkflowTemplate that every SQL
+        connector runs through additionally reads flat ``credential-guid.*``
+        params (always) and ``agent-json.*`` params (AGENT mode only). Inject
+        them here so the template sees the shape it expects — this is generic
+        across all SQL connectors, so it lives on the base rather than being
+        hand-copied into each connector's generated test class.
+
+        The ``agent-json.basic.*`` values are the *secret-store ref keys*
+        (``SDR_<APP>_USERNAME`` / ``SDR_<APP>_PASSWORD``), not the secrets
+        themselves — the agent resolves them from its Dapr secret store at run
+        time.
+        """
+        payload = build_ae_payload(
+            run_id=self.run_id,
+            mode=self.mode,
+            connector_short_name=self.connector_short_name,
+            argo_package_name=self.argo_package_name,
+            argo_template_name=self.argo_template_name,
+            app_service_url=self.app_service_url,
+            connection=self.connection_spec(),
+            mustache_subs=self._mustache_substitutions(),
+            credential_body=self._credential_body(),
+            ae_workflow_slug=slug,
+        )
+        db = self.database_spec()
+        agent = self.agent_spec()
+        extra_params: list[dict[str, Any]] = [
+            {
+                "name": "credential-guid.credential-type",
+                "value": db.connector_config_name
+                or f"atlan-connectors-{self.connector_short_name}",
+            },
+            {"name": "credential-guid.port", "value": db.port},
+            {"name": "credential-guid.auth-type", "value": db.auth_type},
+        ]
+        if agent is not None:
+            app = self.connector_short_name.upper()
+            extra_params.extend(
+                [
+                    {"name": "agent-json.host", "value": db.host},
+                    {"name": "agent-json.port", "value": db.port},
+                    {"name": "agent-json.auth-type", "value": db.auth_type},
+                    {"name": "agent-json.agent-name", "value": agent.agent_name},
+                    {"name": "agent-json.agent-type", "value": agent.agent_type},
+                    {"name": "agent-json.key-type", "value": agent.key_type},
+                    {
+                        "name": "agent-json.aws-auth-method",
+                        "value": agent.aws_auth_method,
+                    },
+                    {
+                        "name": "agent-json.azure-auth-method",
+                        "value": agent.azure_auth_method,
+                    },
+                    {
+                        "name": "agent-json.basic.username",
+                        "value": f"SDR_{app}_USERNAME",
+                    },
+                    {
+                        "name": "agent-json.basic.password",
+                        "value": f"SDR_{app}_PASSWORD",
+                    },
+                ]
+            )
+        payload["spec"]["templates"][0]["dag"]["tasks"][0]["arguments"][
+            "parameters"
+        ].extend(extra_params)
+        return payload
 
     @staticmethod
     def _resolve_admin_role_guid() -> str:

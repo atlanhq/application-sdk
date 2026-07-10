@@ -308,3 +308,21 @@ extraNodes {
     dependsOn { "publish" }
   }
 }
+
+// Opt-in full-DAG e2e test. Because this is set, `pkl eval` emits a complete,
+// runnable AGENT-mode (SDR) test at `tests/e2e/test_full_featured_full_dag.py` —
+// no per-app test authoring. The knobs below are all a SQL connector needs; the
+// AE-payload / credential / polling machinery lives in the SDK's SQLAppE2ETest.
+e2e = new E2EConfig {
+  // The hermetic source the CI-side worker reaches (compose service name).
+  host = "postgres"
+  port = 5432
+  // Scope the crawl to the seed's `public.e2e_*` objects.
+  includeFilter = #"^public\.e2e_.*$"#
+  expectedMinAssetCounts {
+    ["Database"] = 1
+    ["Schema"] = 1
+    ["Table"] = 2
+    ["Column"] = 8
+  }
+}

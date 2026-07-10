@@ -259,6 +259,17 @@ argoTemplateName: String = "atlan-\(name)"
 /// Default: `"http://<name>.<name>-app.svc.cluster.local"`.
 appServiceUrl: String = "http://\(name).\(name)-app.svc.cluster.local"
 
+/// (Opt-in) Full-DAG e2e test configuration. When set, the toolkit generates a
+/// complete, runnable AGENT-mode (SDR) full-DAG test at
+/// `tests/e2e/test_<name>_full_dag.py` — no per-app test authoring needed.
+/// Declare the connector-specific knobs here; the AE-payload / credential /
+/// polling machinery lives in the SDK's `SQLAppE2ETest`.
+///
+/// Currently supported for **single-entrypoint SQL-family connectors** only
+/// (category `warehouse`/`database`/`lake`/`queryengine`). Setting it on a
+/// non-SQL or multi-entrypoint app is a contract error (see `_e2eInvariant`).
+e2e: E2EConfig? = null
+
 // ── CREDENTIAL CONFIG ─────────────────────────────────────────────────────────
 
 /// Whether this app has a credential config.
@@ -436,6 +447,61 @@ entrypoints: Listing<Entrypoint> = new Listing {}
 typealias FieldType = "text"|"password"|"textarea"|"select"|"number"|"checkbox"|"url"|"email"|"inputRepeater"|"fileUpload"|"credentialFileInput"
 
 /// A single credential field definition.
+/// Opt-in full-DAG e2e test configuration (see the `e2e` property). Carries only
+/// the connector-specific knobs the generated test class sets; everything else
+/// is inherited from the SDK's `SQLAppE2ETest` / `<Cname>GeneratedE2EBase`.
+class E2EConfig {
+  /// DB host the CI-side worker reaches — typically the docker-compose service
+  /// name of the hermetic source (e.g. `"mysql"`, `"postgres"`). Flows into
+  /// `DatabaseSpec.host` and the AGENT-mode `agent-json.host` param.
+  host: String
+
+  /// DB port. Flows into `DatabaseSpec.port`, `credential-guid.port`, and
+  /// `agent-json.port`.
+  port: Int
+
+  /// Seed DB username — must match the source container's seed grant. In AGENT
+  /// (SDR) mode it is NOT sent on the wire (the agent resolves creds from its
+  /// secret store via `SDR_<APP>_USERNAME`); kept here so DIRECT-mode and local
+  /// runs work too.
+  username: String = "e2e_user"
+
+  /// Seed DB password (see `username`).
+  password: String = "e2e_pass"
+
+  /// `DatabaseSpec.connector_config_name`. Null → the app's `connectorConfigName`
+  /// (`"atlan-connectors-<name>"`).
+  connectorConfigName: String?
+
+  /// The connector's include-filter for the e2e run — scopes the crawl to the
+  /// hermetic seed. Shape is connector-specific: an anchored regex (e.g.
+  /// `^def\.e2e_main$`) for connectors whose SQL templates interpolate it into a
+  /// `REGEXP` clause, or the v3 dict-JSON (e.g. `{"^db$":["^schema$"]}`) otherwise.
+  includeFilter: String
+
+  /// Exclude-filter. Default empty.
+  excludeFilter: String = ""
+
+  /// Override for `qi_input_prefix_field` (SDK base default `"view_data_prefix"`).
+  /// Set when the connector folds view defs into the main transformed output
+  /// (e.g. mysql uses `"transformed_data_prefix"`). Null → inherit the base.
+  qiInputPrefixField: String?
+
+  /// Minimum asset counts per Atlas typeName the seed must yield (floors, `>=`).
+  /// e.g. `new Mapping { ["Database"] = 1; ["Schema"] = 1; ["Table"] = 2; ["Column"] = 10 }`.
+  expectedMinAssetCounts: Mapping<String, Int>
+
+  /// Whether the run must produce lineage (`Process`/`ColumnProcess`). Default true.
+  expectLineage: Boolean = true
+
+  /// AE / Atlas polling knobs. Null → SDK base defaults (10/600/30/1500s). Bump for
+  /// real-tenant runs where lineage-app can sit `Running` for 30+ min.
+  aePollIntervalSeconds: Int?
+  aePollTimeoutSeconds: Int?
+  atlasPollIntervalSeconds: Int?
+  atlasPollTimeoutSeconds: Int?
+}
+
 class FieldSpec {
   name: String
 
@@ -3147,6 +3213,116 @@ local function generateE2ECredentialPy(): FileOutput? =
       agentCredentialClass(cname, firstAuthKey)
   }
 
+// True when the connector is in the SQL family the full-DAG test codegen supports.
+local function isSqlFamilyE2E(): Boolean = e2eBaseClass() == "SQLAppE2ETest"
+
+// Contract guard for the opt-in `e2e {}` block. Full-DAG test codegen currently
+// requires a single-entrypoint SQL-family connector with a credential config
+// (the generated test imports `<Cname>AgentCredentialBody`).
+local _e2eInvariant: Any =
+  if (e2e == null) null
+  else if (!entrypoints.isEmpty)
+    throw("`e2e {}` full-DAG codegen is only supported for single-entrypoint apps. "
+      + "Declare `e2e` on each entrypoint's contract instead (per-entrypoint support is a follow-up).")
+  else if (!isSqlFamilyE2E())
+    throw("`e2e {}` full-DAG codegen currently supports SQL-family connectors "
+      + "(category warehouse/database/lake/queryengine) only; connector category is "
+      + "'\(connector?.category ?? "null")'. Remove the `e2e` block until non-SQL support lands.")
+  else if (!(hasCredentialConfig && credentialAuthOptions != null && !credentialAuthOptions!!.isEmpty))
+    throw("`e2e {}` requires a credential config: the generated test imports "
+      + "`<Cname>AgentCredentialBody` from `_e2e_credential.py`, which is only emitted "
+      + "when the app declares credential auth options.")
+  else null
+
+// Renders the `expected_min_asset_counts` dict body (one `"Type": N,` line each).
+local function renderE2EAssetCounts(counts: Mapping<String, Int>): String =
+  (new Listing {
+    for (k, v in counts) { "        \"\(escapePyStr(k))\": \(v),\n" }
+  }).toList().fold("", (acc: String, s: String) -> acc + s)
+
+// Generates the complete, runnable AGENT-mode (SDR) full-DAG e2e test. The class
+// extends `<Cname>GeneratedE2EBase` (→ SQLAppE2ETest) and sets ONLY the
+// connector-specific knobs declared in the `e2e {}` block — all AE-payload /
+// credential / polling machinery is inherited from the SDK base. Returns null
+// when `e2e` is unset. DO NOT hand-edit the emitted file — change `e2e {}` instead.
+local function generateE2ETestClassPy(): FileOutput? =
+  if (e2e == null) null
+  else new FileOutput {
+    local cfg = e2e!!
+    local cname = pascalCase(name)
+    local ccn = cfg.connectorConfigName ?? connectorConfigName
+    local qiLine =
+      if (cfg.qiInputPrefixField != null)
+        "    qi_input_prefix_field = \"\(escapePyStr(cfg.qiInputPrefixField!!))\"\n"
+      else ""
+    local pollLines =
+      (if (cfg.aePollIntervalSeconds != null) "    ae_poll_interval_seconds = \(cfg.aePollIntervalSeconds!!)\n" else "") +
+      (if (cfg.aePollTimeoutSeconds != null) "    ae_poll_timeout_seconds = \(cfg.aePollTimeoutSeconds!!)\n" else "") +
+      (if (cfg.atlasPollIntervalSeconds != null) "    atlas_poll_interval_seconds = \(cfg.atlasPollIntervalSeconds!!)\n" else "") +
+      (if (cfg.atlasPollTimeoutSeconds != null) "    atlas_poll_timeout_seconds = \(cfg.atlasPollTimeoutSeconds!!)\n" else "")
+    text =
+      "# Generated from contract/app.pkl via contract-toolkit. DO NOT EDIT.\n" +
+      "# Regenerate with: pkl eval -m . contract/app.pkl\n" +
+      "\"\"\"Full-DAG (AGENT / SDR) e2e test for \(name).\n\n" +
+      "Submits the tenant's full system-apps DAG (extract → qi → publish →\n" +
+      "lineage) against a CI-side worker that runs the connector code under test,\n" +
+      "then asserts assets + lineage land in Atlas. Extract is routed to the CI\n" +
+      "worker's Temporal queue via agent-json agent-name; artifacts move through\n" +
+      "the shared object store. Skips gracefully unless the harness env is set::\n\n" +
+      "    ATLAN_BASE_URL=... ATLAN_API_KEY=... GITHUB_RUN_ID=$(date +%s) uv run pytest tests/e2e/ -v\n" +
+      "\"\"\"\n\n" +
+      "from __future__ import annotations\n\n" +
+      "import os\n\n" +
+      "import pytest\n\n" +
+      "if not os.environ.get(\"ATLAN_BASE_URL\") or not os.environ.get(\"ATLAN_API_KEY\"):\n" +
+      "    pytest.skip(\n" +
+      "        \"Full-DAG e2e harness needs ATLAN_BASE_URL + ATLAN_API_KEY\",\n" +
+      "        allow_module_level=True,\n" +
+      "    )\n\n" +
+      "try:\n" +
+      "    from application_sdk.testing.e2e import RunMode\n" +
+      "    from application_sdk.testing.e2e.payload import DatabaseSpec\n" +
+      "    from app.generated._e2e_base import \(cname)GeneratedE2EBase\n" +
+      "    from app.generated._e2e_credential import \(cname)AgentCredentialBody\n" +
+      "except ImportError as _exc:\n" +
+      "    pytest.skip(\n" +
+      "        f\"SDK does not yet export new e2e harness: {_exc}\", allow_module_level=True\n" +
+      "    )\n\n\n" +
+      "class Test\(cname)FullDAG(\(cname)GeneratedE2EBase):\n" +
+      "    # AGENT mode: the connector runs on the CI-side worker (SDR path).\n" +
+      "    mode = RunMode.AGENT\n\n" +
+      "    include_filter = \"\(escapePyStr(cfg.includeFilter))\"\n" +
+      "    exclude_filter = \"\(escapePyStr(cfg.excludeFilter))\"\n" +
+      qiLine +
+      pollLines +
+      "\n    # Atlas inventory floors for the hermetic seed (>=; conservative to\n" +
+      "    # ride out transient indexer lag).\n" +
+      "    expected_min_asset_counts = {\n" +
+      renderE2EAssetCounts(cfg.expectedMinAssetCounts) +
+      "    }\n" +
+      "    expect_lineage = \(if (cfg.expectLineage) "True" else "False")\n\n" +
+      "    def database_spec(self) -> DatabaseSpec:\n" +
+      "        # host is the CI-side source (compose service name). In AGENT mode\n" +
+      "        # username/password are not sent on the wire — the agent resolves\n" +
+      "        # creds from its secret store via SDR_<APP>_* ref keys.\n" +
+      "        return DatabaseSpec(\n" +
+      "            host=\"\(escapePyStr(cfg.host))\",\n" +
+      "            port=\(cfg.port),\n" +
+      "            username=\"\(escapePyStr(cfg.username))\",\n" +
+      "            password=\"\(escapePyStr(cfg.password))\",\n" +
+      "            connector_config_name=\"\(escapePyStr(ccn))\",\n" +
+      "        )\n\n" +
+      "    def _credential_body(self) -> \(cname)AgentCredentialBody:\n" +
+      "        # Lightweight AGENT body — no inline host/user/pass (those would make\n" +
+      "        # the orchestrator treat the submit as DIRECT and skip credential\n" +
+      "        # creation). The GITHUB_RUN_ATTEMPT suffix avoids a unique-name\n" +
+      "        # collision when a run is re-attempted.\n" +
+      "        attempt = os.environ.get(\"GITHUB_RUN_ATTEMPT\", \"1\")\n" +
+      "        return \(cname)AgentCredentialBody(\n" +
+      "            name=f\"default-{self.connector_short_name}-{self.run_id}-{attempt}\",\n" +
+      "        )\n"
+  }
+
 // ── atlan.yaml generation ─────────────────────────────────────────────────────
 
 local function asMapping(value: Any): Mapping<String, Any>? =
@@ -3403,8 +3579,10 @@ output =
   let (_jdbcCheck = jdbcInvariant)
   let (_connectorCheck = connectorInvariant)
   let (_credCheck = _credentialConflictCheck)
+  let (_e2eCheck = _e2eInvariant)
   let (_e2eCredOutput = generateE2ECredentialPy())
   let (_e2eSubsOutput = generateE2ESubstitutionsPy())
+  let (_e2eTestOutput = generateE2ETestClassPy())
   new ModuleOutput {
     files = new Mapping {
 
@@ -3435,6 +3613,10 @@ output =
         }
         when (_e2eSubsOutput != null) {
           ["app/generated/_e2e_substitutions.py"] = _e2eSubsOutput!!
+        }
+        // opt-in generated full-DAG test (emitted only when `e2e {}` is set)
+        when (_e2eTestOutput != null) {
+          ["tests/e2e/test_\(name.replaceAll("-", "_"))_full_dag.py"] = _e2eTestOutput!!
         }
       }
 

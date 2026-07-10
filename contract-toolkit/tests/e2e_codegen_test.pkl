@@ -321,7 +321,29 @@ local conditionalEnumApp = (App) {
 }
 
 
+// SQL credential app WITH an opt-in `e2e {}` block → generates the full-DAG test.
+local e2eApp = (singleAuthApp) {
+  name = "e2e-sql"
+  displayName = "E2E SQL"
+  e2e = new App.E2EConfig {
+    host = "postgres"
+    port = 5432
+    includeFilter = #"^public\.e2e_.*$"#
+    qiInputPrefixField = "transformed_data_prefix"
+    aePollTimeoutSeconds = 5400
+    expectedMinAssetCounts {
+      ["Database"] = 1
+      ["Schema"] = 1
+      ["Table"] = 2
+      ["Column"] = 10
+    }
+  }
+}
+
 // ── Capture output text ────────────────────────────────────────────────────────
+
+local e2eTestPath: String = "tests/e2e/test_e2e_sql_full_dag.py"
+local e2eTest: String = e2eApp.output.files[e2eTestPath].text
 
 local apiBase: String = apiApp.output.files["app/generated/_e2e_base.py"].text
 local postgresBase: String = postgresApp.output.files["app/generated/_e2e_base.py"].text
@@ -670,6 +692,51 @@ facts {
 
   ["ConditionalInput Literal default falls back to first base value"] {
     condEnumSubs.contains("default=\"direct\"")
+  }
+
+  // ── tests/e2e/test_<name>_full_dag.py: opt-in full-DAG test codegen ───────────
+
+  ["e2e {} emits the generated full-DAG test file"] {
+    e2eApp.output.files.containsKey(e2eTestPath)
+  }
+
+  ["no test file emitted when the e2e block is unset"] {
+    !singleAuthApp.output.files.containsKey("tests/e2e/test_single_auth_full_dag.py")
+  }
+
+  ["generated test emits DO-NOT-EDIT banner"] {
+    e2eTest.contains("# Generated from contract/app.pkl via contract-toolkit. DO NOT EDIT.")
+  }
+
+  ["generated test extends the connector's GeneratedE2EBase in AGENT mode"] {
+    e2eTest.contains("class TestE2eSqlFullDAG(E2eSqlGeneratedE2EBase):")
+    e2eTest.contains("mode = RunMode.AGENT")
+  }
+
+  ["generated test imports + returns the agent credential body"] {
+    e2eTest.contains("from app.generated._e2e_credential import E2eSqlAgentCredentialBody")
+    e2eTest.contains("def _credential_body(self) -> E2eSqlAgentCredentialBody:")
+  }
+
+  ["generated test carries the declared include_filter (backslash-escaped)"] {
+    e2eTest.contains(#"include_filter = "^public\\.e2e_.*$""#)
+    e2eTest.contains("qi_input_prefix_field = \"transformed_data_prefix\"")
+  }
+
+  ["generated test carries the declared asset-count floors + poll override"] {
+    e2eTest.contains("\"Database\": 1,")
+    e2eTest.contains("\"Column\": 10,")
+    e2eTest.contains("ae_poll_timeout_seconds = 5400")
+  }
+
+  ["generated test builds DatabaseSpec from the e2e block"] {
+    e2eTest.contains("host=\"postgres\",")
+    e2eTest.contains("port=5432,")
+    e2eTest.contains("connector_config_name=\"atlan-connectors-e2e-sql\",")
+  }
+
+  ["generated test stays thin — no _build_ae_payload override (base handles it)"] {
+    !e2eTest.contains("def _build_ae_payload")
   }
 
 }

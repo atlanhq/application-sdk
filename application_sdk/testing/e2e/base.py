@@ -478,8 +478,11 @@ class BaseE2ETest:
     def _build_ae_payload(self, slug: str) -> dict[str, Any]:
         """Compose the AE submit payload from typed hook results.
 
-        Subclasses never override this method — they override the two
-        typed hooks above.
+        Connector authors never override this method — they override the two
+        typed hooks above. A family base (e.g.
+        :class:`~application_sdk.testing.e2e.sql_app.SQLAppE2ETest`) may override
+        it to graft on family-specific flat Argo params, but keeps this typed-hook
+        contract intact.
         """
         return build_ae_payload(
             run_id=self.run_id,

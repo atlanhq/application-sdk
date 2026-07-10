@@ -322,3 +322,58 @@ class TestSQLAppE2ETestHooks:
         t = self._make_test()
         dag = t._build_legacy_seed_dag("atlan-mysql-ci-agent-1")
         assert dag["extract"]["inputs"]["task_queue"] == "atlan-mysql-ci-agent-1"
+
+
+# ---------------------------------------------------------------------------
+# SQLAppE2ETest._build_ae_payload — flat-param injection
+#
+# The shared Argo cluster template reads flat ``credential-guid.*`` params
+# (always) and ``agent-json.*`` params (AGENT mode only) that build_ae_payload
+# does not emit. SQLAppE2ETest injects them so every SQL connector's generated
+# test class stays thin (no per-app _build_ae_payload override).
+# ---------------------------------------------------------------------------
+
+
+class TestSQLAppE2EBuildAEPayload:
+    def _make_test(self, mode: RunMode = RunMode.AGENT) -> _ConcreteSQLTest:
+        t = _ConcreteSQLTest()
+        t.run_id = 1
+        t.connection_qualified_name = "default/mysql/1"
+        t.connection_display_name = "mysql-1"
+        t._admin_role_guid = "role-guid-123"
+        t.__class__.mode = mode
+        return t
+
+    @staticmethod
+    def _params_by_name(payload: dict) -> dict:
+        params = payload["spec"]["templates"][0]["dag"]["tasks"][0]["arguments"][
+            "parameters"
+        ]
+        return {p["name"]: p["value"] for p in params}
+
+    def test_agent_mode_injects_credential_guid_params(self) -> None:
+        t = self._make_test(RunMode.AGENT)
+        params = self._params_by_name(t._build_ae_payload("slug-1"))
+        assert params["credential-guid.credential-type"] == "atlan-connectors-mysql"
+        assert params["credential-guid.port"] == 3306
+        assert params["credential-guid.auth-type"] == "basic"
+
+    def test_agent_mode_injects_agent_json_params(self) -> None:
+        t = self._make_test(RunMode.AGENT)
+        params = self._params_by_name(t._build_ae_payload("slug-1"))
+        assert params["agent-json.host"] == "db.example.com"
+        assert params["agent-json.port"] == 3306
+        assert params["agent-json.agent-type"] == "new-app-framework"
+        assert "agent-json.agent-name" in params
+
+    def test_agent_json_uses_sdr_secret_ref_keys(self) -> None:
+        t = self._make_test(RunMode.AGENT)
+        params = self._params_by_name(t._build_ae_payload("slug-1"))
+        assert params["agent-json.basic.username"] == "SDR_MYSQL_USERNAME"
+        assert params["agent-json.basic.password"] == "SDR_MYSQL_PASSWORD"
+
+    def test_direct_mode_injects_credential_guid_but_not_agent_json(self) -> None:
+        t = self._make_test(RunMode.DIRECT)
+        params = self._params_by_name(t._build_ae_payload("slug-1"))
+        assert params["credential-guid.port"] == 3306
+        assert not any(k.startswith("agent-json.") for k in params)
