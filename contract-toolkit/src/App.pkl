@@ -665,7 +665,15 @@ open class DAGNode {
 
   dependsOnCondition: DependencyCondition?
 
-  errorHandling: ErrorHandlingConfig?
+  /// Defaults to a 1-day `startToCloseTimeoutSeconds`. Automation Engine's
+  /// source-code default for workflow nodes is 2h, which is too tight for
+  /// non-trivial extraction/lineage work and has caused avoidable timeouts on
+  /// large tenants. `PublishNode` and `LineagePublishNode` raise this to 3 days
+  /// (both write to Atlas). Override on the instance for a different value (up
+  /// to the 10-day cap), or set to `null` to fall back to AE's own default.
+  errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
+    startToCloseTimeoutSeconds = 86400
+  }
 
   hidden _errorHandlingCheck: Any =
     if (nodeType == "workflow" && errorHandling != null && errorHandling.heartbeatTimeoutSeconds != null)
@@ -1250,6 +1258,15 @@ open class LineageNode extends DAGNode {
 open class LineagePublishNode extends DAGNode {
   hidden upstream: String = "lineage-app"
 
+  /// Defaults to a 3-day `startToCloseTimeoutSeconds`, matching `PublishNode`.
+  /// Like the asset publish, lineage-publish writes to Atlas and can be heavy on
+  /// large tenants — lineage can produce very large numbers of
+  /// `Process`/`ColumnProcess` entities, each with many edges — so the 1-day
+  /// base default is too tight. Override on the instance for a different value.
+  errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
+    startToCloseTimeoutSeconds = 259200
+  }
+
   assetPublishNode: String = "publish"
 
   waitForAssetPublish: Boolean = true
@@ -1343,8 +1360,12 @@ class ExtractStep {
   /// Display name for the AE step. Defaults to "Extract <displayName> Metadata".
   displayName: String?
 
-  /// Error handling for the extract node.
-  errorHandling: ErrorHandlingConfig? = null
+  /// Error handling for the extract node. Defaults to a 1-day
+  /// `startToCloseTimeoutSeconds` (the base `DAGNode` default); override for a
+  /// different value, or set to `null` to fall back to AE's own default.
+  errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
+    startToCloseTimeoutSeconds = 86400
+  }
 }
 
 /// Query Intelligence step — opt-in. Extends `QueryIntelligenceNode` with no

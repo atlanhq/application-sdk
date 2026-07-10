@@ -197,7 +197,14 @@ publishActivityDisplayName: String?
 /// as `startToCloseTimeoutSeconds` and retry policy fields. Do not set
 /// `heartbeatTimeoutSeconds`; AE only accepts heartbeat timeouts on activity
 /// nodes, and the toolkit rejects that at eval time.
-extractNodeErrorHandling: ErrorHandlingConfig?
+///
+/// Defaults to a 1-day `startToCloseTimeoutSeconds`. AE's source-code default
+/// for workflow nodes is 2h, which is too tight for non-trivial extraction on a
+/// large tenant. Override to a different value, or set to `null` to fall back
+/// to AE's own default.
+extractNodeErrorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
+  startToCloseTimeoutSeconds = 86400
+}
 
 /// Error handling / retry / timeout configuration for the toolkit-managed
 /// default publish node in `manifest.json`.
@@ -858,8 +865,14 @@ open class DAGNode {
   /// exclusive with `dependsOn`.
   dependsOnCondition: DependencyCondition?
 
-  /// Error handling / retry / timeout configuration for this node.
-  errorHandling: ErrorHandlingConfig?
+  /// Error handling / retry / timeout configuration for this node. Defaults to
+  /// a 1-day `startToCloseTimeoutSeconds`; AE's source-code default for workflow
+  /// nodes is 2h, which is too tight for non-trivial work. `PublishNode` raises
+  /// this to 3 days. Override on the instance, or set to `null` to fall back to
+  /// AE's own default.
+  errorHandling: ErrorHandlingConfig? = new ErrorHandlingConfig {
+    startToCloseTimeoutSeconds = 86400
+  }
 
   // Invariant: heartbeatTimeoutSeconds is activity-only. Mirrors AE's
   // _validate_error_handling_for_node_type (registry/workflows/models.py).
