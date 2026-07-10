@@ -203,3 +203,36 @@ class TestCredentialRefResolve:
         )
         with pytest.raises(CredentialRoutingError):
             CredentialRef.resolve(inp)
+
+
+class TestResolveOrNone:
+    """CredentialRef.resolve_or_none — graceful fallback shared by the
+    extraction path and the injected preflight gate."""
+
+    def test_source_credential_ref_preferred(self):
+        # When the input carries its own credential_ref, it wins over guid routing.
+        prebuilt = CredentialRef(name="x", credential_type="api_key")
+        src = ExtractionInput(credential_ref=prebuilt, credential_guid="g-1")
+        assert CredentialRef.resolve_or_none(src) == prebuilt
+
+    def test_no_routing_returns_none(self):
+        # Source-less input (no guid / agent) — gate skips resolution.
+        src = ExtractionInput()
+        assert CredentialRef.resolve_or_none(src) is None
+
+    def test_direct_guid_resolves(self):
+        src = ExtractionInput(extraction_method="direct", credential_guid="g-1")
+        ref = CredentialRef.resolve_or_none(src)
+        assert ref is not None
+        assert ref.credential_guid == "g-1"
+
+    def test_routing_error_with_guid_falls_back_to_legacy(self):
+        # B1 regression: resolve() raises CredentialRoutingError (method=agent
+        # but no populated agent spec). The catch must be the right type so the
+        # legacy-GUID fallback actually fires instead of escaping.
+        src = ExtractionInput(extraction_method="agent", credential_guid="g-1")
+        with pytest.raises(CredentialRoutingError):
+            CredentialRef.resolve(src)  # confirms resolve raises this type
+        ref = CredentialRef.resolve_or_none(src)
+        assert ref is not None
+        assert ref.credential_guid == "g-1"

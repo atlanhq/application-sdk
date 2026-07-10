@@ -477,7 +477,16 @@ class TaskRegistry:
         Returns:
             Activity name in format ``{app_name}:{task_name}``.
         """
-        return f"{app_name}:{task_name}"
+        return get_activity_name(app_name, task_name)
+
+
+def get_activity_name(app_name: str, task_name: str) -> str:
+    """Canonical ``{app_name}:{task_name}`` activity-name formatter.
+
+    The single home for the activity-naming rule so app tasks, the injected
+    preflight gate, and the worker's collision guard all agree byte-for-byte.
+    """
+    return f"{app_name}:{task_name}"
 
 
 def resolve_pool_queue(pool: str) -> str | None:

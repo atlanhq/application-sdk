@@ -64,3 +64,19 @@ class WorkerInterceptorDuplicateError(InvalidInputError):
     code: ClassVar[str] = "INVALID_INPUT_WORKER_INTERCEPTORS"
     message: str = "Duplicate built-in interceptor types supplied to create_worker"
     field: str | None = "interceptors"
+
+
+@dataclass(kw_only=True)
+class WorkerActivityNameCollisionError(InvalidInputError):
+    """An app task registers an activity name the SDK reserves for the preflight gate.
+
+    Raised at worker assembly with the offending name and the fix, instead of
+    letting Temporal reject the duplicate with an opaque ``ValueError`` at
+    ``Worker`` construction.
+    """
+
+    code: ClassVar[str] = "INVALID_INPUT_ACTIVITY_NAME_COLLISION"
+    message: str = (
+        "App task activity name collides with the reserved preflight gate activity"
+    )
+    field: str | None = "task_name"
