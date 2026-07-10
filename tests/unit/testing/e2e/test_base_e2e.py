@@ -10,9 +10,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from application_sdk.contracts.types import ConnectionRef
 from application_sdk.testing.e2e._errors import (
@@ -273,6 +274,181 @@ class TestSeedDagFromManifest:
         self.harness.manifest_path = str(_write_manifest(tmp_path, dag))  # type: ignore[attr-defined]
         result = self.harness._seed_dag_from_manifest("atlan-openapi-agent-1")
         assert set(result.keys()) == {"extract", "publish"}
+
+
+# ---------------------------------------------------------------------------
+# Live-manifest seed (BLDX-1493) — prefer the running app's /manifest
+# ---------------------------------------------------------------------------
+
+
+def _resp(status: int, body: Any) -> MagicMock:
+    r = MagicMock()
+    r.status_code = status
+    if isinstance(body, Exception):
+        r.json.side_effect = body
+    else:
+        r.json.return_value = body
+    return r
+
+
+class TestLiveManifestSeed:
+    """`_seed_dag_from_live_or_committed_manifest` + `_fetch_live_manifest`."""
+
+    def setup_method(self) -> None:
+        self.harness = _ConcreteE2ETest()
+        self.harness.tenant_deployment_name = "production"  # type: ignore[attr-defined]
+
+    def _committed(self, tmp_path: Path) -> None:
+        dag = {
+            "extract": {
+                "app_name": "{app_name}",
+                "inputs": {
+                    "task_queue": "atlan-openapi-{deployment_name}",
+                    "args": {"committed_marker": "from-file"},
+                },
+            }
+        }
+        self.harness.manifest_path = str(_write_manifest(tmp_path, dag))  # type: ignore[attr-defined]
+
+    def test_dict_matches_file(self, tmp_path: Path) -> None:
+        """Rendering a manifest dict is identical to reading the same file."""
+        self._committed(tmp_path)
+        manifest = json.loads(Path(self.harness.manifest_path).read_text())
+        from_file = self.harness._seed_dag_from_manifest("atlan-openapi-1")
+        from_dict = self.harness._seed_dag_from_manifest(
+            "atlan-openapi-1", manifest=manifest
+        )
+        assert from_file == from_dict
+
+    def test_live_manifest_preferred(self, tmp_path: Path) -> None:
+        self._committed(tmp_path)
+        live = {
+            "dag": {
+                "extract": {
+                    "inputs": {
+                        "task_queue": "atlan-openapi-{deployment_name}",
+                        "args": {"live_marker": "from-endpoint"},
+                    }
+                }
+            }
+        }
+        with patch(
+            "application_sdk.testing.e2e.base.requests.get",
+            return_value=_resp(200, live),
+        ) as get:
+            seed = self.harness._seed_dag_from_live_or_committed_manifest(
+                "atlan-openapi-1"
+            )
+        assert get.call_args.args[0] == "http://localhost:8000/workflows/v1/manifest"
+        assert seed["extract"]["inputs"]["args"] == {"live_marker": "from-endpoint"}
+        assert seed["extract"]["inputs"]["task_queue"] == "atlan-openapi-1"
+
+    def test_falls_back_to_committed_on_unreachable(self, tmp_path: Path) -> None:
+        self._committed(tmp_path)
+        with patch(
+            "application_sdk.testing.e2e.base.requests.get",
+            side_effect=requests.ConnectionError("app not up"),
+        ):
+            seed = self.harness._seed_dag_from_live_or_committed_manifest(
+                "atlan-openapi-1"
+            )
+        assert seed["extract"]["inputs"]["args"]["committed_marker"] == "from-file"
+
+    def test_disabled_never_fetches(self, tmp_path: Path) -> None:
+        self._committed(tmp_path)
+        self.harness.use_live_manifest = False  # type: ignore[attr-defined]
+        with patch(
+            "application_sdk.testing.e2e.base.requests.get",
+            side_effect=AssertionError("must not fetch when disabled"),
+        ):
+            seed = self.harness._seed_dag_from_live_or_committed_manifest(
+                "atlan-openapi-1"
+            )
+        assert seed["extract"]["inputs"]["args"]["committed_marker"] == "from-file"
+
+    def test_fetch_none_on_non_200(self, tmp_path: Path) -> None:
+        self._committed(tmp_path)
+        with patch(
+            "application_sdk.testing.e2e.base.requests.get",
+            return_value=_resp(503, {"error": "warming up"}),
+        ):
+            assert self.harness._fetch_live_manifest() is None
+
+
+class TestRequireLiveManifest:
+    """SDK-level runs must fail hard rather than fall back to a stale manifest."""
+
+    def setup_method(self) -> None:
+        self.harness = _ConcreteE2ETest()
+        self.harness.tenant_deployment_name = "production"  # type: ignore[attr-defined]
+
+    def test_sdk_level_unreachable_raises(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        dag = {
+            "extract": {
+                "inputs": {"task_queue": "atlan-openapi-{deployment_name}", "args": {}}
+            }
+        }
+        self.harness.manifest_path = str(_write_manifest(tmp_path, dag))  # type: ignore[attr-defined]
+        monkeypatch.setenv("ATLAN_E2E_REQUIRE_LIVE_MANIFEST", "true")
+        with (
+            patch(
+                "application_sdk.testing.e2e.base.requests.get",
+                side_effect=requests.ConnectionError("app not up"),
+            ),
+            pytest.raises(ManifestFileNotFoundError),
+        ):
+            self.harness._seed_dag_from_live_or_committed_manifest("atlan-openapi-1")
+
+    def test_sdk_level_opt_out_raises(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """use_live_manifest=False must not silently disable the SDK-level
+        false-green guard — the committed manifest was generated with the OLD
+        toolkit."""
+        dag = {
+            "extract": {
+                "inputs": {"task_queue": "atlan-openapi-{deployment_name}", "args": {}}
+            }
+        }
+        self.harness.manifest_path = str(_write_manifest(tmp_path, dag))  # type: ignore[attr-defined]
+        self.harness.use_live_manifest = False  # type: ignore[attr-defined]
+        monkeypatch.setenv("ATLAN_E2E_REQUIRE_LIVE_MANIFEST", "true")
+        with pytest.raises(ManifestFileNotFoundError, match="use_live_manifest"):
+            self.harness._seed_dag_from_live_or_committed_manifest("atlan-openapi-1")
+
+    def test_sdk_level_legacy_seed_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """manifest_path='' (hand-crafted legacy seed) never exercises the
+        manifest, so an SDK-level run must fail rather than green-light the
+        toolkit change."""
+        monkeypatch.setenv("ATLAN_E2E_REQUIRE_LIVE_MANIFEST", "true")
+        with pytest.raises(ManifestFileNotFoundError, match="manifest_path"):
+            self.harness._guard_legacy_seed_allowed()
+
+    def test_app_level_legacy_seed_allowed(self) -> None:
+        """Without the SDK-level flag, the legacy-seed path stays available."""
+        self.harness._guard_legacy_seed_allowed()  # no raise
+
+    def test_seed_from_dict_does_not_mutate_input(self, tmp_path: Path) -> None:
+        """The passed-in manifest dict must stay pristine (memoization safety)."""
+        live = {
+            "dag": {
+                "extract": {
+                    "inputs": {
+                        "task_queue": "atlan-openapi-{deployment_name}",
+                        "args": {},
+                    }
+                }
+            }
+        }
+        before = json.dumps(live, sort_keys=True)
+        harness = _ConcreteE2ETest()
+        harness.tenant_deployment_name = "production"  # type: ignore[attr-defined]
+        harness._seed_dag_from_manifest("atlan-openapi-1", manifest=live)
+        assert json.dumps(live, sort_keys=True) == before
 
 
 # ---------------------------------------------------------------------------

@@ -113,6 +113,20 @@ jobs:
         working-directory: ${{ inputs.app-name }}
         run: bash "${{ inputs.system-deps-script }}"
 
+      # Regenerate app/generated/** (manifest.json et al.) from contract/app.pkl
+      # BEFORE anything reads it (BLDX-1493). This pipeline is manifest-file-
+      # driven end to end — ae-stack-up decides which workers boot from the
+      # dag's queues, ae-workflow registers the DAG straight from the file, and
+      # the poll step counts its nodes — so a stale committed manifest would be
+      # what gets tested. App-level mode only (this reusable has no
+      # application-sdk-ref input); warn-only drift annotation; self-skips when
+      # there is no contract/app.pkl.
+      - name: Regenerate contract artifacts (manifest.json) before stack-up
+        uses: atlanhq/application-sdk/.github/actions/regenerate-contract@main
+        with:
+          working-directory: ${{ inputs.app-name }}
+          check-drift: "true"
+
       - name: Bring up AE stack (manifest-driven)
         id: stack
         uses: atlanhq/application-sdk/.github/actions/ae-stack-up@fix/ae-stack-up-local-vault

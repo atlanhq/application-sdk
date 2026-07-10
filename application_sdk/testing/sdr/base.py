@@ -48,6 +48,7 @@ Example:
 
 from __future__ import annotations
 
+import copy
 import os
 import shutil
 from pathlib import Path
@@ -63,6 +64,7 @@ from application_sdk.testing._mustache import (
 )
 from application_sdk.testing.integration import (
     BaseIntegrationTest,
+    IntegrationTestClient,
     Scenario,
     ScenarioResult,
 )
@@ -169,6 +171,10 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
     #: Required for :pyattr:`require_upstream_assets_landed`.
     upstream_output_base_path: ClassVar[str | None] = None
 
+    #: Per-instance memo for :meth:`_load_manifest` (the manifest is invariant
+    #: within a test run). Class-level default None; set on the instance.
+    _cached_manifest: dict[str, Any] | None = None
+
     def _build_scenario_args(self, scenario: Scenario) -> dict[str, Any]:
         args = super()._build_scenario_args(scenario)
         if scenario.api.lower() != "workflow":
@@ -184,16 +190,72 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
                 args["workflow_type"] = self.workflow_type
         return args
 
-    def _manifest_extract_inputs(self) -> dict[str, Any]:
-        """Load the connector's manifest and return its extract node's ``args``.
+    def _load_manifest(self) -> dict[str, Any]:
+        """Return the manifest to derive SDR workflow input from.
 
-        Raises if the manifest is missing or has no ``dag.extract.inputs.args``
-        — a manifest-driven SDR test with no usable extract node is a config
-        error, not something to silently fall back on.
+        Prefers the manifest the *running app* serves at
+        ``GET /workflows/v1/manifest`` (BLDX-1493) — the same source
+        Heracles / the Local Marketplace app use in production, so a Contract
+        Toolkit change (app- or SDK-level) is actually exercised. Falls back to
+        the committed ``manifest_path`` file when the endpoint is unreachable
+        (logged at WARNING so a fallback is never mistaken for a live check).
 
-        Note: the sibling ``inputs.workflow_type`` (the AE workflow-type slug) is
-        deliberately NOT read — see :meth:`_workflow_args_from_manifest`.
+        Raises if neither source yields a manifest — a manifest-driven SDR test
+        with no usable manifest is a config error, not something to silently
+        fall back on.
+
+        The result is memoized per test instance (the manifest is invariant
+        within a run, and this is called once per workflow scenario); a deep
+        copy is returned so a caller mutating its view cannot pollute the
+        cache.
         """
+        cached = getattr(self, "_cached_manifest", None)
+        if cached is not None:
+            return copy.deepcopy(cached)
+        self._cached_manifest = self._fetch_manifest_uncached()
+        return copy.deepcopy(self._cached_manifest)
+
+    def _fetch_manifest_uncached(self) -> dict[str, Any]:
+        client = getattr(self, "client", None)
+        live = None
+        # isinstance (not hasattr): a capable client is IntegrationTestClient
+        # by construction. hasattr accepts any object with a `get_manifest`
+        # attribute (a stub, a typo-shadowed field), which on app-level runs
+        # would silently fall back to the committed manifest — the false-green
+        # BLDX-1493 exists to prevent.
+        if isinstance(client, IntegrationTestClient):
+            live = client.get_manifest(entrypoint=self.workflow_type or None)
+        elif client is not None:
+            logger.warning(
+                "SDR client %r is not an IntegrationTestClient — cannot fetch "
+                "the live /manifest; falling back to the committed file (a "
+                "Contract Toolkit change may go untested).",
+                type(client).__name__,
+            )
+        if live is not None:
+            logger.info(
+                "Using the live manifest served by the running app (BLDX-1493)."
+            )
+            return live
+        # No live manifest — endpoint unreachable OR no capable client. The
+        # guard must cover BOTH: on an SDK-level cross-repo run the committed
+        # manifest was generated with the OLD toolkit, so falling back to it
+        # would give a false green for the toolkit change under test.
+        if os.environ.get("ATLAN_E2E_REQUIRE_LIVE_MANIFEST", "").lower() == "true":
+            raise RuntimeError(
+                "ATLAN_E2E_REQUIRE_LIVE_MANIFEST is set but no live manifest was "
+                "obtained (app's /manifest unreachable, or the test client does "
+                "not support get_manifest); refusing to fall back to the "
+                "committed manifest (it was generated with the old toolkit and "
+                "would give a false green — BLDX-1493)."
+            )
+        logger.warning(
+            "Live /manifest unavailable — falling back to the committed "
+            "manifest file at %s (a Contract Toolkit change may go "
+            "untested).",
+            self.manifest_path,
+        )
+
         path = Path(self.manifest_path)
         if not path.is_absolute():
             path = Path.cwd() / path
@@ -202,12 +264,24 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
                 f"SDR manifest not found at {path} — set `manifest_path` to the "
                 "connector's manifest.json, or '' to use agent_spec_template."
             )
-        manifest = orjson.loads(path.read_bytes())
+        return orjson.loads(path.read_bytes())
+
+    def _manifest_extract_inputs(self) -> dict[str, Any]:
+        """Load the connector's manifest and return its extract node's ``args``.
+
+        Raises if the manifest has no ``dag.extract.inputs.args`` — a
+        manifest-driven SDR test with no usable extract node is a config error,
+        not something to silently fall back on.
+
+        Note: the sibling ``inputs.workflow_type`` (the AE workflow-type slug) is
+        deliberately NOT read — see :meth:`_workflow_args_from_manifest`.
+        """
+        manifest = self._load_manifest()
         inputs = ((manifest.get("dag") or {}).get("extract") or {}).get("inputs") or {}
         if not isinstance(inputs.get("args"), dict):
             # conformance: ignore[E012] this is a test-authoring helper (BaseSDRIntegrationTest), not activity/task code with AppError plumbing; an existing test pins ValueError
             raise ValueError(
-                f"Manifest at {path} has no `dag.extract.inputs.args` object — "
+                "Manifest has no `dag.extract.inputs.args` object — "
                 "cannot derive the workflow input from it."
             )
         return inputs["args"]
