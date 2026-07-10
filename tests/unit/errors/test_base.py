@@ -177,11 +177,11 @@ def test_base_fields_sentinel() -> None:
 def test_sanitize_cause_repr_redacts_userinfo_for_any_url_scheme() -> None:
     from application_sdk.errors import sanitize_cause_repr
 
-    # Hostnames are preserved after userinfo redaction; an IPv4 host is
-    # additionally masked by the identity redactor (BLDX-1538 policy).
+    # The destination host (incl. an IPv4 host) is preserved after userinfo
+    # redaction — only the credentials before `@` are masked.
     cases = {
         "postgresql+psycopg://user:s3cret@db.internal:5432/prod": "postgresql+psycopg://***@db.internal:5432/prod",
-        "mysql://root:hunter2@10.0.0.5/app": "mysql://***@***/app",
+        "mysql://root:hunter2@10.0.0.5/app": "mysql://***@10.0.0.5/app",
         "https://alice:tok3n@api.example.com/v1": "https://***@api.example.com/v1",
         "snowflake://svc:pw@acct.snowflakecomputing.com": "snowflake://***@acct.snowflakecomputing.com",
     }
@@ -259,60 +259,30 @@ def test_redact_secrets_masks_mysql_identity_hostname() -> None:
     assert "'svc'" in out
 
 
-def test_redact_secrets_masks_postgres_host_prose() -> None:
-    """Postgres surfaces the host outside any URL — via host/server keywords."""
+def test_redact_secrets_keeps_destination_host_prose() -> None:
+    """The destination host stays visible — it's the DNS/connectivity signal.
+
+    Postgres surfaces the host the client is connecting *to*; unlike the MySQL
+    source-IP identity, this is the actionable datum when resolution is wrong,
+    so it is deliberately left intact.
+    """
     from application_sdk.errors import redact_secrets
 
-    assert (
-        redact_secrets('could not connect to server at "10.0.0.5" port 5432')
-        == 'could not connect to server at "***" port 5432'
-    )
-    assert (
-        redact_secrets('could not translate host name "db.internal" to address')
-        == 'could not translate host name "***" to address'
-    )
-    assert redact_secrets('connection to host "192.168.1.1" failed') == (
-        'connection to host "***" failed'
-    )
-
-
-def test_redact_secrets_host_keyword_is_word_anchored() -> None:
-    """The host/server keyword must not match a 'host' tail inside another word."""
-    from application_sdk.errors import redact_secrets
-
-    assert (
-        redact_secrets('the ghost "spooky" appeared') == 'the ghost "spooky" appeared'
-    )
-    assert redact_secrets('localhost "x" note') == 'localhost "x" note'
+    unchanged = [
+        'could not connect to server at "10.0.0.5" port 5432',
+        'could not translate host name "db.internal" to address',
+        "timeout connecting to 10.20.30.40:5432",
+    ]
+    for msg in unchanged:
+        assert redact_secrets(msg) == msg
 
 
 def test_redact_secrets_keeps_postgres_username() -> None:
-    """Postgres names the user in auth prose — kept, no host present to mask."""
+    """Postgres names the user in auth prose — kept, no source identity to mask."""
     from application_sdk.errors import redact_secrets
 
     out = redact_secrets('FATAL: password authentication failed for user "admin"')
     assert out == 'FATAL: password authentication failed for user "admin"'
-
-
-def test_redact_secrets_masks_bare_ipv4_anywhere() -> None:
-    """A bare client/egress IP in prose is masked regardless of surrounding text."""
-    from application_sdk.errors import redact_secrets
-
-    assert redact_secrets("timeout connecting to 10.20.30.40:5432") == (
-        "timeout connecting to ***:5432"
-    )
-
-
-def test_redact_secrets_does_not_mask_version_or_error_codes() -> None:
-    """Octet validation keeps version triples and non-IP dotted numbers intact."""
-    from application_sdk.errors import redact_secrets
-
-    # Three-octet version string is not a dotted quad.
-    assert redact_secrets("pymysql 8.0.32 driver error") == (
-        "pymysql 8.0.32 driver error"
-    )
-    # Out-of-range octet (>255) is not a valid IPv4 and must survive.
-    assert redact_secrets("code 999.1.1.1 seen") == "code 999.1.1.1 seen"
 
 
 def test_cause_repr_masks_mysql_identity_end_to_end() -> None:

@@ -31,32 +31,28 @@ _URL_USERINFO_RE = re.compile(r"([a-z][a-z0-9+.-]*://)(?:[^@\s]+@)+", re.IGNOREC
 _SECRET_PARAM_RE = re.compile(
     r"(?i)((?:api_key|access_token|auth_token|password|passwd|secret|credential|private_key)=)[^\s&,;#]+",
 )
-# Driver auth-failure prose embeds the *connecting* identity — the client/egress
-# IP and the DB host — outside any URL, so _URL_USERINFO_RE misses it. Policy:
-# mask the host/IP (egress identity + topology), keep the username (the
-# actionable diagnostic on an auth failure).
-# MySQL: Access denied for user 'atlan'@'10.0.0.5' → 'atlan'@'***' (keeps user).
+# MySQL auth-failure prose names the *source* (client/egress) identity outside
+# any URL: Access denied for user 'atlan'@'10.0.0.5' → 'atlan'@'***'. That IP is
+# where the connection came *from* — a customer VPC egress IP that must not land
+# in central logs — so we mask it and keep the username (the actionable auth
+# diagnostic). The `@'` anchor only matches the user@host identity form.
+#
+# We deliberately do NOT mask the *destination* host (connection-string host,
+# Postgres `server at "..."` / `could not translate host name "..."`): when the
+# problem is DNS resolution, the resolved destination host/IP is exactly the
+# signal an operator needs to debug their own connectivity.
 _HOST_IN_IDENTITY_RE = re.compile(r"(@')[^']*(')")
-# Postgres/generic: host "db.internal" / host name "x" / server at "10.0.0.5".
-# \b anchors avoid matching a "host" tail inside another word (ghost, localhost).
-_HOST_KEYWORD_RE = re.compile(r'(?i)(\b(?:host(?:\s*name)?|server at)\s+")[^"]*(")')
-# Any IPv4 literal, anywhere — the egress IP is the sharpest, cross-driver leak.
-# Octet-validated, so 3-part version-like triples (8.0.32) and error codes don't
-# match; a 4-part version with octets ≤255 is indistinguishable from an IPv4 and
-# is (harmlessly) masked — over-redaction is the safe direction here.
-_IPV4_RE = re.compile(
-    r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b"
-)
 
 
 def redact_secrets(text: str) -> str:
-    """Redact URL userinfo, known secret query-params, and driver identity.
+    """Redact URL userinfo, known secret query-params, and source identity.
 
-    Use this when logging strings that may embed credentials or source
-    identity but are not a single cause exception — e.g. a formatted traceback
-    whose frames are worth keeping but whose driver messages embed
+    Use this when logging strings that may embed credentials or the connecting
+    (source) identity but are not a single cause exception — e.g. a formatted
+    traceback whose frames are worth keeping but whose driver messages embed
     connection-string passwords, or DBAPI auth-failure prose carrying the
-    connecting user/host/IP.
+    client user@egress-IP. The destination host is intentionally preserved so
+    connectivity/DNS issues stay debuggable.
 
     ``text`` must be a ``str`` — callers holding an exception or other object
     should stringify first (the sibling :func:`sanitize_cause_repr` does this
@@ -65,8 +61,6 @@ def redact_secrets(text: str) -> str:
     text = _URL_USERINFO_RE.sub(r"\1***@", text)
     text = _SECRET_PARAM_RE.sub(r"\1***", text)
     text = _HOST_IN_IDENTITY_RE.sub(r"\1***\2", text)
-    text = _HOST_KEYWORD_RE.sub(r"\1***\2", text)
-    text = _IPV4_RE.sub("***", text)
     return text
 
 
