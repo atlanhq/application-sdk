@@ -191,12 +191,7 @@ class TestFromCredentials:
         config = call_kwargs.get("config") or {}
         assert "aws_role_arn" not in config
         assert "aws_role_session_name" not in config
-        # The bucket's region is for the S3 store's own config (avoids obstore's
-        # us-east-1 default/redirect) — it must NOT be forced onto the STS
-        # session used to assume the role. Opt-in AWS regions (e.g. me-central-1)
-        # reject ambient/IRSA credentials presented to their regional STS
-        # endpoint, so scoping the assume-role session to the bucket's region
-        # breaks cross-account access there (production incident: seon me-central-1).
+        # Region stays on the S3 store's config; must not reach the STS session.
         assert config.get("aws_region") == "us-east-1"
         session_kwargs = mock_session_cls.call_args.kwargs
         assert "region_name" not in session_kwargs
