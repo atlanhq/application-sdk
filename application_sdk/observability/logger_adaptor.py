@@ -98,6 +98,10 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "error_class",
         "error_message",
         "stack_trace",
+        # ── Gate outcome event + generic activity fields ─────────────────
+        "reason",
+        "entrypoint",
+        "checks",
         # ── Misc SDK ─────────────────────────────────────────────────────
         "log_type",
         "app_name",

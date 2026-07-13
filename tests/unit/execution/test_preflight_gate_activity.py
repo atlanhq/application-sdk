@@ -73,6 +73,17 @@ def _verdict_gate(output: PreflightOutput):
     return build_preflight_gate_activity(_VerdictHandler(output), app_name="myapp")
 
 
+def _outcome_event(mock_logger) -> dict | None:
+    """Return the kwargs of the single 'Preflight gate outcome' info call, if any."""
+    for c in mock_logger.info.call_args_list:
+        if c.args and c.args[0] == "Preflight gate outcome":
+            return c.kwargs
+    return None
+
+
+_LOGGER = "application_sdk.execution._temporal.preflight_gate.logger"
+
+
 class TestPreflightGateActivity:
     def test_activity_name_is_app_namespaced(self) -> None:
         # Reads as a native workflow step ({app}:preflight), like the app's own
@@ -498,6 +509,82 @@ class TestPreflightGateActivity:
         assert handler.preflight_input.metadata.model_dump().get("include-filter") == {
             "^db$": ["^s$"]
         }
+
+
+class TestPreflightGateOutcomeEvent:
+    """The activity emits the queryable 'Preflight gate outcome' event (connector-pulse)."""
+
+    async def test_proceeded_ready(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.READY,
+            checks=[PreflightCheck(name="auth", passed=True)],
+        )
+        with mock.patch(_LOGGER) as ml:
+            await _verdict_gate(out)(PreflightGateInput(entrypoint="crawl"))
+        ev = _outcome_event(ml)
+        assert ev is not None
+        assert ev["outcome"] == "proceeded"
+        assert ev["reason"] == "ready"
+        assert ev["app_name"] == "myapp"
+        assert ev["entrypoint"] == "crawl"
+        assert ev["checks"] == 1
+        # status/typed/error_type are collapsed into reason
+        assert not ({"status", "typed", "error_type"} & ev.keys())
+
+    async def test_proceeded_partial(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.PARTIAL,
+            checks=[
+                PreflightCheck(name="auth", passed=True),
+                PreflightCheck(name="tables", passed=False, message="advisory"),
+            ],
+        )
+        with mock.patch(_LOGGER) as ml:
+            await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(ml)
+        assert ev["outcome"] == "proceeded" and ev["reason"] == "partial"
+        assert ev["entrypoint"] == "<implicit>"
+
+    async def test_blocked_typed_reason_is_error_code(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(name="auth", passed=False, error=AuthError(message="x"))
+            ],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
+            await _verdict_gate(out)(PreflightGateInput(entrypoint="crawl"))
+        ev = _outcome_event(ml)
+        assert ev["outcome"] == "blocked"
+        # typed block → reason is the handler error's own code
+        assert ev["reason"] == "AUTH"
+        assert not ({"status", "typed", "error_type"} & ev.keys())
+
+    async def test_blocked_fallback_reason_is_sentinel(self) -> None:
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[PreflightCheck(name="auth", passed=False, message="bad creds")],
+        )
+        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError) as excinfo:
+            await _verdict_gate(out)(PreflightGateInput())
+        ev = _outcome_event(ml)
+        assert ev["outcome"] == "blocked"
+        # fallback block → reason is the sentinel code, distinguishing un-migrated
+        assert ev["reason"] == "PREFLIGHT_CHECK_FAILED"
+        # details[0] carries the sentinel code; category stays PRECONDITION
+        details = excinfo.value.details[0]
+        assert details.code == "PREFLIGHT_CHECK_FAILED"
+        assert details.category is FailureCategory.PRECONDITION
+
+    async def test_verdict_log_replaced_by_outcome_event(self) -> None:
+        out = PreflightOutput(status=PreflightStatus.READY, checks=[])
+        with mock.patch(_LOGGER) as ml:
+            await _verdict_gate(out)(PreflightGateInput())
+        assert not any(
+            c.args and "Preflight gate verdict" in str(c.args[0])
+            for c in ml.info.call_args_list
+        )
+        assert _outcome_event(ml) is not None
 
 
 class TestInputTypeSupportsGate:
