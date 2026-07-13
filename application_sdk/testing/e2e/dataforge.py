@@ -239,9 +239,13 @@ class DataForgeClient:
         inputs: dict[str, Any],
         reason: str,
         lifecycle_days: int = 4,
+        category: str = "development",
     ) -> str:
         if len(reason.strip()) < 10:
             raise DataForgeError("DataForge `reason` must be ≥10 chars (shown to approvers).")
+        # category=development for ephemeral e2e test infra: the `ai` category is
+        # gated behind DataForge admin approval, whereas `development` clears
+        # without an admin (`skip_approval` alone is role-gated for non-admins).
         resp = self._call(
             "POST",
             "/api/v1/resources",
@@ -252,7 +256,7 @@ class DataForgeClient:
                 "lifecycle_enabled": True,
                 "lifecycle_days": lifecycle_days,
                 "skip_approval": True,
-                "category": "ai",
+                "category": category,
             },
         )
         rid = (resp or {}).get("id")

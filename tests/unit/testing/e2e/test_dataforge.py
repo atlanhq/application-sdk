@@ -114,7 +114,7 @@ class TestLifecycle:
         assert rid == "r-new"
         body = t.calls[0][2]
         assert body["skip_approval"] is True
-        assert body["category"] == "ai"
+        assert body["category"] == "development"
         assert body["lifecycle_days"] == 3
         assert body["module_id"] == "m-1"
 
