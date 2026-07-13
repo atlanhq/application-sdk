@@ -17,7 +17,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "actions" / "sdr-e2
 
 from build_pytest_parallel_args import build_xdist_flags, main  # noqa: E402
 
-
 # --- sequential (default) --------------------------------------------------
 
 
