@@ -29,11 +29,7 @@ from unittest import mock
 
 import pytest
 
-from application_sdk.constants import (
-    LOG_FILE_NAME,
-    METRICS_FILE_NAME,
-    TRACES_FILE_NAME,
-)
+from application_sdk.constants import LOG_FILE_NAME, METRICS_FILE_NAME, TRACES_FILE_NAME
 from application_sdk.observability.observability import AtlanObservability
 
 
