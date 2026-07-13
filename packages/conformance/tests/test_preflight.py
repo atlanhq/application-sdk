@@ -103,6 +103,16 @@ def test_p032_silent_on_non_literal_name(tmp_path: Path) -> None:
     assert _ids(tmp_path, src) == []
 
 
+def test_p032_fires_on_aliased_sdk_task_import(tmp_path: Path) -> None:
+    src = (
+        "from application_sdk.app import App, task as t\n"
+        "class A(App):\n"
+        '    @t(name="preflight")\n'
+        "    async def anything(self): ...\n"
+    )
+    assert _ids(tmp_path, src) == ["P032"]
+
+
 def test_p032_suppressed(tmp_path: Path) -> None:
     src = (
         _APP_IMPORTS
@@ -173,6 +183,26 @@ def test_p033_silent_on_preflight_substring_non_token(tmp_path: Path) -> None:
         for f in _scan(tmp_path, {"app.py": app, "h.py": _handler_with_preflight()})
     )
     assert ids == []
+
+
+def test_p033_fires_via_transitive_handler_without_preflight_input_annotation(
+    tmp_path: Path,
+) -> None:
+    # Handler detected only through the transitive base chain (in-repo intermediate),
+    # with an un-annotated preflight_check — exercises _class_subclasses_handler.
+    handler = (
+        "from application_sdk.handler.base import Handler, DefaultHandler\n"
+        "class Base(DefaultHandler): ...\n"
+        "class Concrete(Base):\n"
+        "    async def preflight_check(self, request):\n"
+        "        return None\n"
+    )
+    app = (
+        _APP_IMPORTS
+        + "class A(App):\n    @task\n    async def run_preflight(self): ...\n"
+    )
+    ids = sorted(f.rule_id for f in _scan(tmp_path, {"app.py": app, "h.py": handler}))
+    assert ids == ["P033"]
 
 
 def test_p033_suppressed(tmp_path: Path) -> None:
@@ -251,6 +281,15 @@ def test_p034_silent_on_non_sdk_preflightcheck(tmp_path: Path) -> None:
     assert _ids(tmp_path, src) == []
 
 
+def test_p034_fires_via_module_alias_call(tmp_path: Path) -> None:
+    src = (
+        "import application_sdk.handler.contracts as c\n"
+        "def make():\n"
+        '    return c.PreflightCheck(name="x", passed=False)\n'
+    )
+    assert _ids(tmp_path, src) == ["P034"]
+
+
 def test_p034_suppressed(tmp_path: Path) -> None:
     src = (
         "from application_sdk.handler.contracts import PreflightCheck\n"
@@ -312,14 +351,16 @@ def test_p035_silent_on_hyphenated_alias_of_field(tmp_path: Path) -> None:
     assert [f.rule_id for f in _scan(tmp_path, files)] == []
 
 
-def test_p035_silent_on_declared_field_alias(tmp_path: Path) -> None:
+def test_p035_fires_on_differently_stemmed_alias(tmp_path: Path) -> None:
+    # model_dump emits field NAMES, not aliases, so a read via a differently-stemmed
+    # alias genuinely misses on the gate path and must fire.
     files = {
         "app.py": _app_with_input(
             '    object_filter: dict = Field(default_factory=dict, alias="type")\n'
         ),
         "h.py": _handler_reading('x = input.metadata.get("type")'),
     }
-    assert [f.rule_id for f in _scan(tmp_path, files)] == []
+    assert sorted(f.rule_id for f in _scan(tmp_path, files)) == ["P035"]
 
 
 def test_p035_silent_on_subscript_read_of_field(tmp_path: Path) -> None:
@@ -336,6 +377,43 @@ def test_p035_silent_on_dynamic_key(tmp_path: Path) -> None:
         "h.py": _handler_reading("k = 'x'", "y = input.metadata.get(k)"),
     }
     assert [f.rule_id for f in _scan(tmp_path, files)] == []
+
+
+def test_p035_silent_when_contract_allows_extra_keys(tmp_path: Path) -> None:
+    # model_config extra="allow" genuinely keeps undeclared keys → no parity claim.
+    app = (
+        _APP_IMPORTS
+        + "from pydantic import ConfigDict\n"
+        + "class ExtractInput(Input):\n"
+        + '    model_config = ConfigDict(extra="allow")\n'
+        + "    include_filter: dict = {}\n"
+        + "class A(App):\n"
+        + "    @entrypoint()\n"
+        + "    async def extract(self, input: ExtractInput) -> None: ...\n"
+    )
+    files = {
+        "app.py": app,
+        "h.py": _handler_reading('x = input.metadata.get("anything")'),
+    }
+    assert [f.rule_id for f in _scan(tmp_path, files)] == []
+
+
+def test_p035_fires_despite_allow_unbounded_fields(tmp_path: Path) -> None:
+    # allow_unbounded_fields only skips payload-safety type checks; the extra policy
+    # stays "ignore", so undeclared keys are still dropped and P035 must still fire.
+    app = (
+        _APP_IMPORTS
+        + "class ExtractInput(Input, allow_unbounded_fields=True):\n"
+        + "    include_filter: dict = {}\n"
+        + "class A(App):\n"
+        + "    @entrypoint()\n"
+        + "    async def extract(self, input: ExtractInput) -> None: ...\n"
+    )
+    files = {
+        "app.py": app,
+        "h.py": _handler_reading('x = input.metadata.get("unknown_key")'),
+    }
+    assert sorted(f.rule_id for f in _scan(tmp_path, files)) == ["P035"]
 
 
 def test_p035_silent_when_no_entrypoint_input(tmp_path: Path) -> None:

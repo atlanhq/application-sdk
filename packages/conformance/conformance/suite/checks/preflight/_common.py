@@ -167,7 +167,6 @@ def _class_subclasses_handler(
     handler_base_locals: frozenset[str],
 ) -> bool:
     """True if *cls* directly or transitively derives from an SDK Handler base."""
-    cache: dict[str, bool | None] = {}
     for base in cls.bases:
         bname = base.id if isinstance(base, ast.Name) else getattr(base, "attr", None)
         if bname is None:
@@ -175,9 +174,12 @@ def _class_subclasses_handler(
         bname = aliases.get(bname, bname)
         if bname in handler_base_locals:
             return True
-        # Transitive: an in-repo intermediate that itself derives from a handler base.
+        # Transitive: an in-repo intermediate that itself derives from a handler
+        # base. resolve_ancestor memoizes by class name only, so each target needs
+        # its own cache — a fresh dict per hb avoids a False cached under one
+        # target leaking to another.
         for hb in handler_base_locals:
-            if resolve_ancestor(bname, hb, by_name, cache, set()) is True:
+            if resolve_ancestor(bname, hb, by_name, {}, set()) is True:
                 return True
     return False
 

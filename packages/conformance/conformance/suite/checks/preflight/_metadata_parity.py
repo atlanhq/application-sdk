@@ -1,11 +1,14 @@
 """P035 PreflightMetadataContractParity.
 
 On the gate path ``PreflightInput.metadata`` is rebuilt from the extraction
-input's ``model_dump()``, so only fields declared on an entrypoint ``Input``
-contract survive. A metadata key read inside ``preflight_check`` that is absent
-from the union of every entrypoint Input contract's field names and aliases is
-silently missing there, and a defensive ``.get(key, default)`` read passes
-vacuously with the wrong config.
+input's ``model_dump()`` (``by_alias=False`` → field *names*, plus the
+underscore→hyphen variant added by ``_config_from_snapshot``). A metadata key
+read inside ``preflight_check`` that is absent from the union of every entrypoint
+Input contract's field names is silently missing there, and a defensive
+``.get(key, default)`` read passes vacuously with the wrong config. Field
+*aliases* are deliberately not treated as allowed: ``model_dump`` does not emit
+them, so a read via a differently-stemmed alias genuinely misses at runtime and
+should fire.
 """
 
 from __future__ import annotations
@@ -42,12 +45,11 @@ def scan(reg: Registry) -> list[Finding]:
             # Entrypoint input is an external/generated type we cannot resolve —
             # its field set is unknown, so we cannot make a parity claim.
             return []
-        if _opts_into_extras(name, reg, set()):
+        if _opts_into_extra_keys(name, reg, set()):
             return []
         aliases = reg.aliases_by_rel.get(rec.file, {})
         for fi in resolve_contract_fields(rec.node, aliases, reg.by_name):
             allowed.add(norm_key(fi.name))
-        allowed.update(norm_key(a) for a in _collect_field_aliases(name, reg, set()))
 
     findings: list[Finding] = []
     for src, func in find_preflight_check_sites(reg):
@@ -118,64 +120,21 @@ def _str_const(node: ast.expr) -> str | None:
     )
 
 
-def _collect_field_aliases(name: str, reg: Registry, seen: set[str]) -> set[str]:
-    """Field aliases declared on *name* and its in-repo ancestor contracts."""
-    if name in seen:
-        return set()
-    seen.add(name)
-    rec = reg.by_name.get(name)
-    if rec is None:
-        return set()
-    aliases: set[str] = set()
-    for stmt in rec.node.body:
-        if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.value, ast.Call):
-            aliases.update(_field_call_aliases(stmt.value))
-    for base in rec.bases:
-        aliases.update(_collect_field_aliases(base, reg, seen))
-    return aliases
+def _opts_into_extra_keys(name: str, reg: Registry, seen: set[str]) -> bool:
+    """True if *name* or an in-repo ancestor keeps undeclared keys (``extra="allow"``).
 
-
-def _field_call_aliases(call: ast.Call) -> set[str]:
-    if not _is_field_call(call):
-        return set()
-    out: set[str] = set()
-    for kw in call.keywords:
-        if kw.arg in ("alias", "serialization_alias"):
-            val = _str_const(kw.value)
-            if val is not None:
-                out.add(val)
-        elif kw.arg == "validation_alias":
-            if isinstance(kw.value, ast.Call):
-                out.update(a for a in map(_str_const, kw.value.args) if a is not None)
-            else:
-                val = _str_const(kw.value)
-                if val is not None:
-                    out.add(val)
-    return out
-
-
-def _is_field_call(call: ast.Call) -> bool:
-    func = call.func
-    return (isinstance(func, ast.Name) and func.id == "Field") or (
-        isinstance(func, ast.Attribute) and func.attr == "Field"
-    )
-
-
-def _opts_into_extras(name: str, reg: Registry, seen: set[str]) -> bool:
-    """True if *name* or an in-repo ancestor allows extra/unbounded fields."""
+    Only a genuine ``model_config = ConfigDict(extra="allow")`` counts. Note that
+    ``allow_unbounded_fields=True`` does NOT: it only skips payload-safety type
+    validation (``application_sdk/contracts/base.py`` ``__init_subclass__``); the
+    extra policy stays pydantic-default ``"ignore"``, so undeclared metadata keys
+    are still dropped — exactly the drift P035 must keep catching.
+    """
     if name in seen:
         return False
     seen.add(name)
     rec: ClassRecord | None = reg.by_name.get(name)
     if rec is None:
         return False
-    for kw in rec.node.keywords:
-        if (
-            kw.arg == "allow_unbounded_fields"
-            and isinstance(kw.value, ast.Constant)
-            and bool(kw.value.value)
-        ):
-            return True
     for stmt in rec.node.body:
         targets = (
             stmt.targets
@@ -195,4 +154,4 @@ def _opts_into_extras(name: str, reg: Registry, seen: set[str]) -> bool:
                     and kw.value.value == "allow"
                 ):
                     return True
-    return any(_opts_into_extras(base, reg, seen) for base in rec.bases)
+    return any(_opts_into_extra_keys(base, reg, seen) for base in rec.bases)

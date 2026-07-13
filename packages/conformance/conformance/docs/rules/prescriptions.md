@@ -1142,14 +1142,15 @@ The preflight gate does not forward the live UI form: it rebuilds
 (`_config_from_snapshot`), so only fields declared on an entrypoint `Input` contract
 survive. A key read inside `preflight_check` via `input.metadata.get("key", ...)` or
 `input.metadata["key"]` that is absent from the union of every entrypoint Input
-contract's fields (and their aliases) is silently missing on the gate path, so a
-defensive `.get(key, default)` read passes vacuously with the wrong configuration (e.g.
-database scoping silently dropped).
+contract's fields is silently missing on the gate path, so a defensive `.get(key,
+default)` read passes vacuously with the wrong configuration (e.g. database scoping
+silently dropped).
 
 Remediation: declare the key as a field on the extraction input contract (matching the
-UI form), or stop reading it in `preflight_check`. Keys and field aliases are compared
-with underscore/hyphen normalization. The rule does not fire when no entrypoint Input
-contract is resolvable or when a contract opts into extra fields (`extra="allow"` /
-`allow_unbounded_fields=True`).
+UI form), or stop reading it in `preflight_check`. Keys are compared to contract field
+names with underscore/hyphen normalization; field aliases are not treated as allowed
+because `model_dump` emits field names, not aliases. The rule does not fire when no
+entrypoint Input contract is resolvable or when a contract opts into extra keys
+(`model_config = ConfigDict(extra="allow")`).
 
 ---
