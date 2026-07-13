@@ -9,9 +9,11 @@ description: >
   fixes name collisions, audits the handler's status logic against the new
   semantics, runs an interactive check-design session with the developer
   (visualized as a decision tree: which checks block, which are advisory, what
-  is missing), adopts typed check errors, and updates tests. Interactive:
-  every blocking/advisory decision belongs to the developer; the skill
-  proposes, never imposes.
+  is missing), hunts for hidden preflight logic by behavior (not name) and
+  consolidates it into the handler so both surfaces run one implementation,
+  adopts typed check errors, and updates tests. Interactive: every
+  blocking/advisory/consolidation decision belongs to the developer; the
+  skill proposes, never imposes.
 mandatory_triggers:
   - "/adopt-preflight-gate"
   - "adopt the preflight gate"
@@ -22,14 +24,14 @@ optional_triggers:
   - "preflight gate migration"
   - "will this app break on SDK bump"
 owner: connector-platform-team
-last_updated: "2026-07-13"
+last_updated: "2026-07-14"
 staleness_days: 90
 inputs:
   - app_root: "auto-detected — the directory containing app/ and pyproject.toml"
 outputs:
   - pyproject.toml / uv.lock (SDK bumped to a gate-capable release)
   - app/handler.py (status logic per the agreed check tree; typed errors on failed checks)
-  - deleted app-owned preflight @task + call sites (collision class only)
+  - deleted app-owned preflight @task + call sites (collision class, plus any duplicate readiness activities the developer agrees to consolidate — always with a coverage diff)
   - contract/app.pkl + regenerated app/generated/ (only if form-only metadata keys must move onto the input contract)
   - updated unit tests covering every verdict path
 ---
@@ -68,6 +70,31 @@ status. Read its `app/handler.py` before proposing changes.
   start **blocking scheduled runs** on bump. That is usually the intent — but
   it is why phase 2 below exists.
 
+## The design principle every decision flows from
+
+**One implementation, two surfaces.** `Handler.preflight_check` is the single
+authority on "is this source ready" — the UI's Test-Connection button and the
+gate at the head of every run both execute the same function. Two copies of
+readiness logic (a handler AND an activity, or checks buried in extraction
+code) inevitably drift: the UI says ready while the run fails, or worse the
+inverse. Drift is the anti-pattern this whole feature exists to kill.
+
+Corollaries the skill acts on:
+
+1. **Consolidation always flows activity → handler**, never the other way.
+   The handler is reachable by both surfaces; an activity is reachable by one.
+2. **Anything that behaves like preflight IS preflight.** If code verifies
+   source readiness before extraction — regardless of what it is named or
+   where it lives — its natural home is the handler, where the UI benefits
+   from it too. Phase 0 hunts for these by behavior, not by name.
+3. **Deletion requires a coverage diff.** Consolidating or deleting duplicate
+   readiness logic must never lose a check: enumerate what the old code
+   verified, prove each item exists in the handler, fold gaps in first.
+
+Frame it to the developer as what they gain: write a check once, and the
+Test-Connection button, every scheduled run, the Temporal failure pane, and
+the failure dashboards all get it — with a typed, actionable error — for free.
+
 ## Phase 0 — Classify the app
 
 Run these detections and report the bucket(s) before changing anything:
@@ -78,19 +105,37 @@ Run these detections and report the bucket(s) before changing anything:
    SDK (`WorkerActivityNameCollisionError`). Known fleet members: atlan-presto-app,
    clickhouse, power-bi-app, qlik-sense-cloud-app, redshift-app, teradata-app,
    trino.
-2. **Coexistence class** — other `*preflight*`-named `@task`s (e.g.
+2. **Coexistence class (named)** — other `*preflight*`-named `@task`s (e.g.
    `miner_preflight_check`). Non-breaking: they keep running alongside the
-   gate. Flag for phase-4 cleanup; do not delete in this pass unless the
-   developer asks.
-3. **Gate eligibility** — the entrypoint input contract must carry the
+   gate. Each is a consolidation candidate for phase 2.
+3. **Hidden preflight (semantic hunt)** — readiness logic that is preflight in
+   behavior but not in name. Scan `@task` bodies and entrypoint code that runs
+   BEFORE the extraction fan-out for:
+   - connect-and-probe patterns (`SELECT 1`, ping, token validation, list-one
+     API call) whose result only gates whether to continue;
+   - tasks named `test_*`, `validate_*`, `check_*`, `verify_*`, `*_probe`;
+   - early-exit guards in `run()` that abort before any data is extracted.
+   Classify each hit with the developer in mind:
+   - **True preflight** — read-only source-readiness verification, no
+     side effects the extraction depends on → consolidation candidate:
+     it belongs in the handler so the UI check runs it too.
+   - **Execution guard owned by the SDK** (e.g. the sql template's
+     `prime_sql_auth` warm-up) → leave alone; it is infrastructure, not app
+     preflight, and the SDK maintains it.
+   - **Business logic wearing a check's clothes** (produces state extraction
+     consumes, seeds caches the run needs) → leave in the workflow; moving it
+     to the handler would make the UI path perform work.
+   When unsure which of the three, ask the developer — that is a phase-2
+   question, not a guess.
+4. **Gate eligibility** — the entrypoint input contract must carry the
    credential-routing triple (`extraction_method`, `credential_guid`,
    `agent_json`), normally by extending the toolkit `ExtractionInput`
    (check `app/generated/*_input.py` or `contract/`). Missing triple on a
    source-ful app = the gate silently skips; fix the contract.
-4. **Handler presence** — no `Handler.preflight_check` at all → the gate runs
+5. **Handler presence** — no `Handler.preflight_check` at all → the gate runs
    the SDK DefaultHandler no-op (never blocks). Valid state; offer to write a
    handler in phase 2 but do not require it.
-5. **Silent-drift audit** — list every `input.metadata` / `input.connection_config`
+6. **Silent-drift audit** — list every `input.metadata` / `input.connection_config`
    key read inside `preflight_check`, and cross-check each against the input
    contract's fields. On the gate path, metadata is rebuilt from the extraction
    input's `model_dump`; a UI-form-only key is **absent** — a hard `[...]` read
@@ -136,6 +181,28 @@ all pass ──> READY
 Annotate every place where the *implemented* behavior may not match intent —
 the classic bug is `status = READY if all(c.passed) else NOT_READY`, which
 promotes every advisory check to run-blocking.
+
+Include the phase-0 consolidation candidates in the same picture, marked as
+living outside the handler, so the developer sees the whole readiness surface
+at once:
+
+```
+outside the handler today (phase-0 findings):
+
+[crawler_preflight @task]     duplicates auth+tables    → consolidate?
+[validate_filters (in run())] read-only filter probe    → consolidate?
+[warm_cache @task]            seeds extraction state    → stays (business logic)
+```
+
+### 2a-bis. The consolidation question, per candidate
+
+For every named-coexistence activity and every "true preflight" semantic hit,
+ask: *"This verifies <X> before extraction, but only runs in the workflow —
+the UI Test-Connection never sees it. Move it into `preflight_check` so both
+surfaces run it, and delete the activity?"* On yes: fold the logic into the
+handler as a check in the tree below, then delete the activity **with the
+coverage diff** (north-star corollary 3). On no: record why in the phase
+report — it stays as accepted, documented duplication (phase-4 cleanup list).
 
 ### 2b. Ask the classification questions, per check
 
@@ -187,7 +254,7 @@ Compare against the family baseline and propose (never force) additions:
   the configured workspace/project/site; API version or tenant feature flags
   (advisory).
 - **Any source**: if the check uses filter/config metadata, it must come from
-  contract fields (phase 0.5 audit) — suggest adding missing fields to
+  contract fields (phase-0 silent-drift audit) — suggest adding missing fields to
   `contract/app.pkl` and regenerating, rather than reading form-only keys.
 
 ### 2e. Implement
@@ -291,7 +358,7 @@ Update or write unit tests so every verdict path is pinned. Minimum matrix:
    — those fields no longer exist on `PreflightCheck`).
 5. Gate-path input shape: `preflight_check` called with a `PreflightInput`
    built only from contract fields + credentials (no form-only keys) behaves
-   correctly — this is the regression test for the phase-0.5 audit.
+   correctly — this is the regression test for the phase-0 silent-drift audit.
 
 Then the full app suite green, pre-commit clean, and one final worker boot.
 Do not claim done with anything less.
@@ -310,6 +377,28 @@ Do not claim done with anything less.
   bug.
 - Skipping the boot check before pushing a bump → collision discovered as a
   prod crash-loop instead of locally.
+
+## Agent protocol — stop points and what to report at each
+
+The skill is a conversation with checkpoints, not a batch job. Three hard
+stops:
+
+1. **After phase 0** — report the bucket(s), the consolidation candidates
+   (with your three-way classification and reasoning), the eligibility
+   verdict, and the silent-drift key list. No edits yet. The developer may
+   already know some candidates are intentional; let them say so here.
+2. **After 2c/2a-bis** — the agreed target tree and consolidation decisions,
+   restated as the plan of record ("these checks, this order, these block,
+   these are advisory, these activities fold in, these stay"). Get an explicit
+   yes before writing code. This restatement goes verbatim into the PR
+   description later.
+3. **After phase 3** — the full verify evidence: test matrix results, suite +
+   pre-commit output, worker boot confirmation. Then hand off for PR review.
+
+Between stops, work autonomously. If anything contradicts these instructions
+(an SDK surface that moved, a pattern that doesn't fit the buckets), STOP and
+report rather than improvising — the buckets came from a fleet audit, but the
+fleet has ~80 apps and this skill has met seven of them.
 
 ## Done means
 
