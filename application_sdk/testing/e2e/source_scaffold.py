@@ -35,7 +35,11 @@ Implements rungs 1–2 of the source ladder (testcontainer / freely-available
 container) uniformly as a compose **service** — in this harness the *worker*
 container connects to the source by hostname, so the source must be a compose
 service, and "testcontainer available" reduces to "prefer the official image".
-Rung 3 (DataForge, for cloud-only sources with no container) is a follow-up.
+Rung 3 (DataForge, for cloud-only sources with no container — Redshift,
+Snowflake, BigQuery, …) is handled separately in
+:mod:`application_sdk.testing.e2e.dataforge`: it provisions a live instance via
+the DataForge API and applies the canonical ``seeds/<engine>.sql`` to it, rather
+than rendering a compose service here.
 
 Grounding: the ``sql``/``mysql`` path is validated against atlan-mysql-app's
 proven hand-written scaffold (parsed-YAML identical). ``object_store`` and
