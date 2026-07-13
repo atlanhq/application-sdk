@@ -24,7 +24,9 @@ package_name, etc.) are not flagged as drift — only structural changes are cau
 override that is normalised out of the on-disk file before comparison, so the
 choice is not flagged as drift (any *other* change still is).  Currently:
 ``renovate-pkl-sync.yaml`` tolerates a ``with: regenerate-contract: <bool>``
-opt-out on its reusable-workflow caller.
+opt-out on its reusable-workflow caller, and ``tests.yaml`` tolerates an
+``e2e-parallel-workers: <count|auto>`` input opting the e2e job into
+pytest-xdist parallelism (default is sequential).
 
 Remediation: run ``atlan-application-sdk-conformance bootstrap`` to re-sync.
 """
@@ -81,6 +83,21 @@ _REGEN_OVERRIDE_RE = re.compile(
 
 def _strip_regen_override(text: str) -> str:
     return _REGEN_OVERRIDE_RE.sub("", text)
+
+
+# tests.yaml runs the e2e suite sequentially by default; a connector whose e2e
+# test classes are mutually independent may opt into pytest-xdist parallelism by
+# adding an `e2e-parallel-workers` input to its tests-reusable caller. That is a
+# sanctioned per-repo choice, so strip it (and any single comment line directly
+# above it) before the drift comparison — only other structural changes should
+# flag C002. Matches a numeric worker count or "auto", quoted or bare.
+_E2E_PARALLEL_OVERRIDE_RE = re.compile(
+    r'\n(?:[ ]*#[^\n]*\n)?[ ]*e2e-parallel-workers:[ ]*"?(?:auto|[0-9]+)"?[ ]*'
+)
+
+
+def _strip_e2e_parallel_workers(text: str) -> str:
+    return _E2E_PARALLEL_OVERRIDE_RE.sub("", text)
 
 
 # ---------------------------------------------------------------------------
@@ -378,7 +395,10 @@ def _scan_tests_yaml(path: Path, root: Path) -> list[Finding]:
     params = _extract_tests_yaml_params(on_disk)
     canonical = render(_TESTS_WORKFLOW, **params)
 
-    if _strip_action_pins(on_disk) == _strip_action_pins(canonical):
+    # Opting into parallel e2e (e2e-parallel-workers) is a sanctioned per-repo
+    # choice — normalise it out so only other structural changes flag drift.
+    normalized = _strip_e2e_parallel_workers(on_disk)
+    if _strip_action_pins(normalized) == _strip_action_pins(canonical):
         return []
 
     return [

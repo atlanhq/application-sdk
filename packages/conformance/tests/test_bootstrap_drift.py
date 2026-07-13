@@ -409,6 +409,67 @@ def test_tests_yaml_active_services_script_not_flagged(tmp_path: pathlib.Path) -
     assert findings == []
 
 
+def _opt_into_parallel(canonical: str, value: str, *, comment: bool = False) -> str:
+    """Insert an e2e-parallel-workers input into the canonical tests.yaml."""
+    block = f'      e2e-parallel-workers: "{value}"\n'
+    if comment:
+        block = "      # run independent e2e classes concurrently\n" + block
+    return canonical.replace(
+        "      two-store: true\n", "      two-store: true\n" + block
+    )
+
+
+def test_tests_yaml_e2e_parallel_workers_not_flagged(tmp_path: pathlib.Path) -> None:
+    """Opting the e2e job into pytest-xdist (e2e-parallel-workers) is a
+    sanctioned per-repo choice — not structural drift."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "tests.yaml"
+    wf.write_text(_opt_into_parallel(render("tests.yaml"), "2"))
+    findings = scan_path(wf, tmp_path)
+    assert findings == [], [f.message for f in findings]
+
+
+def test_tests_yaml_e2e_parallel_workers_auto_not_flagged(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The 'auto' worker count is also sanctioned."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "tests.yaml"
+    wf.write_text(_opt_into_parallel(render("tests.yaml"), "auto"))
+    assert scan_path(wf, tmp_path) == []
+
+
+def test_tests_yaml_e2e_parallel_workers_with_comment_not_flagged(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A single explanatory comment directly above the input is stripped too."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "tests.yaml"
+    wf.write_text(_opt_into_parallel(render("tests.yaml"), "2", comment=True))
+    assert scan_path(wf, tmp_path) == []
+
+
+def test_tests_yaml_e2e_parallel_workers_does_not_mask_other_drift(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The strip is targeted: real structural drift alongside the sanctioned
+    e2e-parallel-workers input is still flagged."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "tests.yaml"
+    opted_in = _opt_into_parallel(render("tests.yaml"), "2")
+    drifted = opted_in.replace(
+        "  tests:", "  tests:\n    timeout-minutes: 999  # structural drift"
+    )
+    wf.write_text(drifted)
+    findings = scan_path(wf, tmp_path)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "C002"
+
+
 def test_tests_yaml_structural_drift_produces_finding(tmp_path: pathlib.Path) -> None:
     """Structural modification (not just param values) → one C002 finding."""
     wf_dir = tmp_path / ".github" / "workflows"
