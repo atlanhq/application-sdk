@@ -124,6 +124,9 @@ jobs:
           if [ -n "$EXISTING" ]; then
             echo "PR #${EXISTING} already exists for ${BRANCH}, skipping creation."
           else
+            gh label create "${{ inputs.release_label }}" \
+              --color 0e8a16 \
+              --description "Release version-bump PR" 2>/dev/null || true
             gh pr create \
               --base "${{ inputs.target_branch }}" \
               --title "Bump version to ${{ steps.bump.outputs.new }}" \
