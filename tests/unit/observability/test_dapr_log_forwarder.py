@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -170,6 +170,27 @@ class TestMain:
             dlf.main(["dapr_log_forwarder", "--", "daprd", "--app-id", "app"])
         exec_mock.assert_called_once_with(["daprd", "--app-id", "app"])
 
+    def test_active_forwarding_path_when_sdr_mode(self):
+        # In SDR mode (ENABLE_ATLAN_UPLOAD=true) main() must NOT exec daprd
+        # transparently; it runs the forwarder via asyncio.run(_run(child_cmd))
+        # and returns daprd's exit code.
+        captured: dict[str, list[str]] = {}
+
+        async def _fake_run(child_cmd: list[str]) -> int:
+            captured["child_cmd"] = child_cmd
+            return 7
+
+        with (
+            patch("application_sdk.constants.ENABLE_ATLAN_UPLOAD", True),
+            patch.object(dlf, "_exec_transparently") as exec_mock,
+            patch.object(dlf, "_run", _fake_run),
+        ):
+            rc = dlf.main(["dapr_log_forwarder", "--", "daprd", "--app-id", "app"])
+
+        exec_mock.assert_not_called()
+        assert captured["child_cmd"] == ["daprd", "--app-id", "app"]
+        assert rc == 7
+
 
 class TestRun:
     def test_forwards_each_line_and_returns_child_exit_code(self):
@@ -269,6 +290,48 @@ class TestRun:
 
         assert rc == 3
         assert flushed == [True]
+
+    def test_active_path_forwards_lines_through_sdk_logger_and_drains(self):
+        # SDR-active path: with a REAL _make_emitter (not stubbed), daprd's JSON
+        # log lines must be routed through the SDK ``dapr.runtime`` logger, and
+        # the loop must drain loguru's async sink + flush buffered records on
+        # exit so the lines actually reach the lakehouse upload buffer.
+        lines = [
+            (
+                json.dumps({"level": "warning", "msg": "w", "scope": "s"}) + "\n"
+            ).encode(),
+            (json.dumps({"level": "error", "msg": "e"}) + "\n").encode(),
+        ]
+        fake_proc = _FakeProc(lines, returncode=0)
+
+        fake_logger = MagicMock()
+        # ``_complete`` awaits ``logger.logger.complete()`` — make it awaitable.
+        fake_logger.logger.complete = AsyncMock()
+
+        async def _create(*_a, **_k):
+            return fake_proc
+
+        with (
+            patch(
+                "application_sdk.observability.logger_adaptor.get_logger",
+                return_value=fake_logger,
+            ),
+            patch.object(dlf.asyncio, "create_subprocess_exec", _create),
+            patch.object(dlf, "_install_signal_forwarding"),
+            patch(
+                "application_sdk.observability.observability.AtlanObservability.flush_all",
+                new_callable=AsyncMock,
+            ) as flush_all_mock,
+        ):
+            rc = asyncio.run(dlf._run(["daprd"]))
+
+        assert rc == 0
+        # Each line was forwarded to the matching SDK logger level method.
+        fake_logger.warning.assert_called_once_with("[s] w")
+        fake_logger.error.assert_called_once_with("e")
+        # On exit the async sink was drained and buffered records flushed.
+        fake_logger.logger.complete.assert_awaited()
+        flush_all_mock.assert_awaited()
 
 
 async def _async_noop(*_args, **_kwargs):
