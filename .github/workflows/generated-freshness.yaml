@@ -119,25 +119,32 @@ jobs:
             --contract-dir contract \
             --check-freshness "$CHECK_FRESHNESS"
 
-      - name: Post sticky comment on drift
+      - name: Post sticky comment on failure
         if: failure() && github.event.pull_request.head.repo.fork == false
         uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
           header: generated-artifact-freshness
           message: |
-            ### 🧬 Generated-artifact drift detected
+            ### 🧬 Generated artifacts are not verifiably fresh
 
             The committed generated artifacts (`app/generated/**`, `atlan.yaml`, `app.yaml`)
-            differ from a fresh `pkl eval -m . contract/app.pkl` — they are stale or were
-            hand-edited. See the job log for the exact files.
+            could not be confirmed current against `contract/app.pkl`. See the job log —
+            it is one of:
+
+            - **Drift** — a fresh `pkl eval` produced different output; the committed
+              artifacts are stale or were hand-edited.
+            - **Broken contract** — `contract/app.pkl` exists but `pkl eval` failed, so it
+              does not regenerate at all (a toolkit bump likely merged without regenerating).
 
             **To resolve, pick one:**
-            - Run `pkl eval -m . contract/app.pkl` (or `uv run poe generate`) locally and push.
+            - Run `pkl eval -m . contract/app.pkl` (or `uv run poe generate`) locally, fix any
+              eval error, and push the refreshed output.
             - If this app **intentionally** hand-maintains its generated config, opt out by
               setting `check-freshness: false` on the caller workflow.
 
-            This check is informational, not blocking. Reviewers should ensure artifacts are
-            current before approval so the generated diff is visible in **Files changed**.
+            This check is not a required status by default, so it flags the problem without
+            hard-blocking merge — but a red check here means the generated diff in
+            **Files changed** is missing or stale, so reviewers should not approve on it.
 
       - name: Clear sticky comment when fresh
         if: success() && github.event.pull_request.head.repo.fork == false

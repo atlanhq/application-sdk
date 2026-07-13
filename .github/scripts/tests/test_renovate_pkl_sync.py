@@ -194,6 +194,54 @@ def test_regenerate_eval_failure_falls_back_to_lock_only(repo, monkeypatch):
     )
 
 
+def test_regenerate_retries_transient_eval_failure(repo, monkeypatch):
+    """A transient `pkl eval` failure (e.g. a cold-runner package fetch) is
+    retried; a subsequent success yields a full regeneration + REGEN commit,
+    not a lock-only degrade. (Retry backoff is neutralised by the conftest.)"""
+    real_run = subprocess.run
+    calls = {"eval": 0}
+
+    def fake_run(cmd, *, check=False):
+        prog = cmd[0]
+        if prog == "pkl" and cmd[1:3] == ["project", "resolve"]:
+            (repo / "contract" / "PklProject.deps.json").write_text(
+                '{"resolved": "0.14.2"}\n'
+            )
+            return types.SimpleNamespace(returncode=0)
+        if prog == "pkl" and cmd[1] == "eval":
+            calls["eval"] += 1
+            if calls["eval"] == 1:
+                return types.SimpleNamespace(returncode=1)  # transient failure
+            out_dir = Path(cmd[cmd.index("-m") + 1])
+            gen = out_dir / "app" / "generated"
+            gen.mkdir(parents=True, exist_ok=True)
+            (gen / "manifest.json").write_text(FRESH_MANIFEST)
+            (gen / "_input.py").write_text("import os\n")
+            (out_dir / "atlan.yaml").write_text("deploy: true\n")
+            return types.SimpleNamespace(returncode=0)
+        if prog == "uvx":
+            return types.SimpleNamespace(returncode=0)
+        return real_run(cmd, check=check, text=True, capture_output=True)
+
+    monkeypatch.setattr(mod, "run", fake_run)
+    before = _commit_count(repo)
+
+    assert mod.main(["--regenerate", "true"]) == 0
+
+    assert calls["eval"] == 2, "eval must be retried after the transient failure"
+    assert (repo / "app" / "generated" / "manifest.json").read_text() == FRESH_MANIFEST
+    assert _commit_count(repo) == before + 1
+    assert (
+        mod.COMMIT_MESSAGE_REGEN
+        in subprocess.run(
+            ["git", "log", "-1", "--pretty=%s"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+        ).stdout
+    )
+
+
 def test_regenerate_eval_emits_no_generated_dir(repo, monkeypatch):
     """Partial eval (rc=0, only atlan.yaml, no app/generated/): the existing
     committed app/generated is left untouched (not deleted), the emitted
