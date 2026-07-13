@@ -153,6 +153,22 @@ class TestPollNativeStatusStallGuard:
                 )
         assert result.status == DAGRunStatus.RUNNING
 
+    def test_negative_grace_does_not_fire_on_first_poll(self):
+        """A negative grace is non-positive → disabled, NOT 'fire immediately'
+        (elapsed 0 >= -1 would otherwise trip the guard on the first poll)."""
+        client = _make_client()
+        stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
+
+        with patch.object(client, "get_native_status", return_value=stuck):
+            with patch("time.sleep"):
+                result = client.poll_native_status(
+                    _RUN_ID,
+                    interval_seconds=10,
+                    timeout_seconds=30,
+                    stall_grace_seconds=-1,
+                )
+        assert result.status == DAGRunStatus.RUNNING
+
 
 class TestPollNativeStatusTransientHandling:
     """poll_native_status must survive N < max_transient_failures blips."""

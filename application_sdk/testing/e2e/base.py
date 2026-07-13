@@ -174,6 +174,11 @@ class BaseE2ETest:
     # suite that runs against shared / KEDA-autoscaled infra (e.g. some
     # RunMode.DIRECT setups hitting a prod pod that may be scaled to zero),
     # where legitimate pickup can take longer than any fixed grace.
+    #
+    # The guard fires at the first poll where elapsed >= grace, so real
+    # detection latency is grace + up to one ae_poll_interval_seconds
+    # (negligible at the 180/10 defaults; only noticeable if a subclass sets a
+    # grace close to the interval).
     ae_stall_grace_seconds: ClassVar[int] = 180
     atlas_poll_interval_seconds: ClassVar[int] = 30
     atlas_poll_timeout_seconds: ClassVar[int] = 1500
@@ -264,6 +269,22 @@ class BaseE2ETest:
                 "the CI worker the two-store env vars were applied to, so a "
                 "missing App.upload() hand-off will NOT be caught by this run.",
                 type(self).__name__,
+            )
+
+        # The stall guard assumes a dedicated worker that picks work up within
+        # seconds. Under RunMode.DIRECT extraction runs on the tenant's own
+        # deployed pod, which may be KEDA-idle and cold-start slower than the
+        # grace — tripping a spurious NoWorkerOnTaskQueueError on an otherwise
+        # healthy run. Nudge the operator toward the opt-out rather than fail.
+        if self.mode is RunMode.DIRECT and self.ae_stall_grace_seconds > 0:
+            logger.warning(
+                "%s runs in RunMode.DIRECT with ae_stall_grace_seconds=%ds — "
+                "extraction runs on the tenant's own (possibly KEDA-idle) pod, "
+                "whose cold-start can exceed the grace and raise a spurious "
+                "NoWorkerOnTaskQueueError. Set ae_stall_grace_seconds = 0 on the "
+                "test class to disable the stall guard if you see false failures.",
+                type(self).__name__,
+                self.ae_stall_grace_seconds,
             )
 
         tenant_url = os.environ.get("ATLAN_BASE_URL", "").rstrip("/")
