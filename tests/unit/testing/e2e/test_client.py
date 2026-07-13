@@ -137,6 +137,22 @@ class TestPollNativeStatusStallGuard:
                 )
         assert result.status == DAGRunStatus.RUNNING
 
+    def test_guard_disabled_when_grace_zero(self):
+        """stall_grace_seconds=0 also disables the guard (base passes the int
+        attr directly, so 0 must be treated as off, not 'grace of 0')."""
+        client = _make_client()
+        stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
+
+        with patch.object(client, "get_native_status", return_value=stuck):
+            with patch("time.sleep"):
+                result = client.poll_native_status(
+                    _RUN_ID,
+                    interval_seconds=10,
+                    timeout_seconds=30,
+                    stall_grace_seconds=0,
+                )
+        assert result.status == DAGRunStatus.RUNNING
+
 
 class TestPollNativeStatusTransientHandling:
     """poll_native_status must survive N < max_transient_failures blips."""

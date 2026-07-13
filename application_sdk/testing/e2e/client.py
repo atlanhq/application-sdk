@@ -615,9 +615,10 @@ class AEWorkflowClient:
         consecutive errors we give up and re-raise — that's a
         sustained outage, not a blip, and there's no point waiting.
 
-        Fail-fast stall guard: when ``stall_grace_seconds`` is set and NO DAG
-        node has left the not-started set (``Pending`` / ``Scheduled``) within
-        that window, raise :class:`NoWorkerOnTaskQueueError` instead of hanging
+        Fail-fast stall guard: when ``stall_grace_seconds`` is a positive int
+        (``0`` or ``None`` disables it) and NO DAG node has left the not-started
+        set (``Pending`` / ``Scheduled``) within that window, raise
+        :class:`NoWorkerOnTaskQueueError` instead of hanging
         for the full ``timeout_seconds``. The parent AE workflow runs on the
         always-on automation-engine queue, so the top-level run flips to
         ``Running`` even when the connector's ``extract`` node is stuck because
@@ -694,7 +695,7 @@ class AEWorkflowClient:
             # run is live (parent on the AE queue) but no node has begun, which
             # almost always means no worker is polling the extract task queue.
             if (
-                stall_grace_seconds is not None
+                stall_grace_seconds  # truthy: > 0 (0 or None disables the guard)
                 and not any_node_started
                 and elapsed >= stall_grace_seconds
             ):

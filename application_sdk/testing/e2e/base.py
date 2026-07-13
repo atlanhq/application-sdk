@@ -674,7 +674,7 @@ class BaseE2ETest:
             run_id,
             interval_seconds=self.ae_poll_interval_seconds,
             timeout_seconds=self.ae_poll_timeout_seconds,
-            stall_grace_seconds=self.ae_stall_grace_seconds or None,
+            stall_grace_seconds=self.ae_stall_grace_seconds,
             stall_task_queue=self._extract_task_queue(),
         )
 
