@@ -250,6 +250,27 @@ class TestCloudStoreOps:
         with pytest.raises(StorageError, match="No files found"):
             await store.download(prefix="empty", output_dir=tmp_path / "out")
 
+    async def test_download_empty_prefix_preserves_subdirectories(self, tmp_path):
+        """A whole-bucket download (prefix="") must not flatten same-named files
+        from different subdirectories onto one path.
+
+        Regression test: list_prefix is "" for prefix="", and obj_key.startswith("")
+        is always True, so each key's full path — not just its basename — must be
+        kept. Before the fix, an `and list_prefix` guard forced every object here
+        onto the basename-only branch, so both manifest.json files below clobbered
+        onto a single downloaded file.
+        """
+        store = self._make_store(tmp_path)
+        await store.upload_bytes("client-a/manifest.json", b"client-a-manifest")
+        await store.upload_bytes("client-b/manifest.json", b"client-b-manifest")
+
+        out = tmp_path / "out"
+        downloaded = await store.download(prefix="", output_dir=out)
+
+        assert len(downloaded) == 2
+        contents = {p.read_bytes() for p in downloaded}
+        assert contents == {b"client-a-manifest", b"client-b-manifest"}
+
     async def test_path_traversal_guard_exists(self, tmp_path):
         """Verify the path traversal guard is in the download code path.
 

@@ -273,9 +273,14 @@ class CloudStore:
 
         async def _dl(obj_key: str, size: int, etag: str | None) -> Path:
             async with sem:
+                # No `list_prefix and` guard here: when list_prefix == "" (a
+                # whole-bucket download), startswith("") is always True, so the
+                # full key is kept instead of falling through to the basename-only
+                # branch below, which would clobber same-named files from
+                # different subdirectories onto one path.
                 rel = (
                     obj_key[len(list_prefix) :]
-                    if list_prefix and obj_key.startswith(list_prefix)
+                    if obj_key.startswith(list_prefix)
                     else Path(obj_key).name
                 )
                 # Reject keys whose resolved path escapes output (e.g. via ".." segments).
