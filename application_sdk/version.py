@@ -36,5 +36,5 @@ only to reconcile ahead of a release — and deliberately, since older Dapr
 releases drop off the CDN.
 """
 
-__version__ = "3.21.1"
+__version__ = "3.21.2"
 __dapr_version: str = "1.18.1"

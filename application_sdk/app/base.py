@@ -1544,6 +1544,91 @@ def _collect_interaction_relays(
     return relays
 
 
+async def _run_preflight_gate(
+    input_data: Input, app_name: str, entrypoint: str
+) -> None:
+    """Run the SDK-owned pre-extraction preflight gate (HYP-1883).
+
+    Dispatches the app's preflight handler as a mandatory first activity. The
+    activity raises ``PreflightFailed`` when the verdict is ``NOT_READY``; this
+    re-raises only that deliberate block and aborts the run. Every other activity
+    failure (timeout, secret-store/transport error, handler crash) fails open —
+    logged loudly, run proceeds — because the gate is an injected guardrail the
+    app never opted into, so its own plumbing must not kill a run.
+
+    Guards: ``workflow.patched("preflight-gate")`` keeps pre-gate runs replaying
+    deterministically; ``isinstance(input_data, CredentialResolvable)`` skips
+    source-less apps. Credential resolution happens inside the activity — the
+    deterministic workflow forwards only secret-free references. Dispatch is to
+    the one app-level handler, with ``entrypoint`` threaded through for internal
+    branching.
+    """
+    if not workflow.patched("preflight-gate"):
+        return
+
+    with workflow.unsafe.imports_passed_through():
+        from application_sdk.credentials.ref import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
+            CredentialResolvable,
+        )
+        from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
+            GATE_RETRY,
+            GATE_SCHEDULE_TO_CLOSE,
+            GATE_START_TO_CLOSE,
+            PreflightGateInput,
+            is_preflight_block,
+            preflight_gate_activity_name,
+        )
+
+    if not isinstance(input_data, CredentialResolvable):
+        return
+
+    entry = entrypoint or "<implicit>"
+    try:
+        gate_input = PreflightGateInput.from_extraction_input(input_data, entrypoint)
+        await workflow.execute_activity(
+            preflight_gate_activity_name(app_name),
+            gate_input,
+            schedule_to_close_timeout=GATE_SCHEDULE_TO_CLOSE,
+            start_to_close_timeout=GATE_START_TO_CLOSE,
+            retry_policy=GATE_RETRY,
+        )
+    except Exception as e:
+        if is_preflight_block(e):
+            _safe_log(
+                "info",
+                "Preflight gate outcome",
+                app_name=app_name,
+                entrypoint=entry,
+                outcome="blocked",
+            )
+            raise
+        _safe_log(
+            "error",
+            "Preflight gate could not produce a verdict; proceeding without source "
+            "verification (fail-open)",
+            app_name=app_name,
+            entrypoint=entry,
+            exc_info=True,
+        )
+        _safe_log(
+            "info",
+            "Preflight gate outcome",
+            app_name=app_name,
+            entrypoint=entry,
+            outcome="no_verdict",
+            error_type=type(e).__name__,
+        )
+        return
+
+    _safe_log(
+        "info",
+        "Preflight gate outcome",
+        app_name=app_name,
+        entrypoint=entry,
+        outcome="proceeded",
+    )
+
+
 def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> type:
     """Generate a Temporal workflow class for one entry point.
 
@@ -1565,10 +1650,28 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
         app_cls._app_name if ep.implicit else f"{app_cls._app_name}:{ep.name}"
     )
     entry_method_name = ep.method_name
+    entrypoint_name = ep.name
     input_type = ep.input_type
     output_type = ep.output_type
     app_name = app_cls._app_name
     app_version = app_cls._app_version
+
+    from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — boot-time (not in workflow sandbox); avoids a module-load cycle
+        input_type_supports_gate,
+    )
+
+    if not input_type_supports_gate(input_type):
+        _task_logger.warning(
+            "Preflight gate will not run for entrypoint '%s' (%s): input type %s does "
+            "not declare the credential-routing fields (extraction_method, "
+            "credential_guid, agent_json) top-level. Expected for source-less "
+            "entrypoints; if this entrypoint verifies a data source, declare those "
+            "fields (e.g. via the contract toolkit's ExtractionInput) so source "
+            "verification runs before extraction.",
+            entrypoint_name,
+            workflow_name,
+            input_type.__name__,
+        )
 
     async def _run(self, input_data: Input) -> Output:
         # deferred imports: inside Temporal sandbox (workflow.unsafe.imports_passed_through context)
@@ -1651,21 +1754,38 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
             _safe_log("warning", "Failed to log input summary", exc_info=True)
 
         try:
+            await _run_preflight_gate(input_data, app_name, entrypoint_name)
             entry_method = getattr(app_instance, entry_method_name)
             result = await entry_method(input_data)
             return cast("Output", result)
 
         # conformance: ignore[E004] top-level entrypoint handler; logged via _safe_log with exc_info=True and re-raised as typed ApplicationError
         except Exception as e:
-            _safe_log(
-                "error",
-                "App failed",
-                app_name=app_name,
-                run_id=str(run_id),
-                correlation_id=context.correlation_id,
-                error_type=type(e).__name__,
-                exc_info=True,
-            )
+            with workflow.unsafe.imports_passed_through():
+                from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
+                    is_preflight_block,
+                )
+            # A deliberate preflight-gate block logs terse (classification already
+            # on the error's FailureDetails); the marker may sit on a cause.
+            if is_preflight_block(e):
+                _safe_log(
+                    "warning",
+                    "App blocked by preflight gate",
+                    app_name=app_name,
+                    run_id=str(run_id),
+                    correlation_id=context.correlation_id,
+                    reason=str(e),
+                )
+            else:
+                _safe_log(
+                    "error",
+                    "App failed",
+                    app_name=app_name,
+                    run_id=str(run_id),
+                    correlation_id=context.correlation_id,
+                    error_type=type(e).__name__,
+                    exc_info=True,
+                )
             # deferred import: circular dependency
             # Raw Python exceptions (e.g. ValueError raised directly in an
             # entrypoint) must be wrapped in ApplicationError so Temporal

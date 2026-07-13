@@ -17,6 +17,9 @@
           "connection": "{{connection}}",
           "connections": "{{connections}}"
         }
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 86400
       }
     }
   }

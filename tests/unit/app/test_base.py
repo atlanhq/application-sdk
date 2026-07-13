@@ -356,6 +356,14 @@ class _BLDXOutput(Output, allow_unbounded_fields=True):
     result: str = ""
 
 
+class _GateEligibleInput(Input, allow_unbounded_fields=True):
+    """Declares the three CredentialResolvable fields top-level — gate-eligible."""
+
+    extraction_method: str = ""
+    credential_guid: str = ""
+    agent_json: _Any = None
+
+
 @pytest.fixture(autouse=True)
 def _reset_app_base_state(clean_app_registry, clean_task_registry):
     with _app_state_lock:
@@ -988,6 +996,51 @@ class TestGenerateWorkflowClass:
         assert wf_cls_a is wf_cls_b
 
     @pytest.mark.asyncio
+    async def test_warns_at_boot_when_input_not_gate_eligible(self) -> None:
+        # _BLDXInput is a bare Input — not credential-resolvable — so the gate
+        # would silently skip at runtime. Boot must surface that once, loudly.
+        class _NotResolvableApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+        ep = self._make_ep(_BLDXInput, _BLDXOutput)
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.run", side_effect=lambda f: f
+            ),
+            mock.patch(
+                "application_sdk.app.base.workflow.defn",
+                side_effect=lambda **_: lambda c: c,
+            ),
+            mock.patch("application_sdk.app.base._task_logger") as log,
+        ):
+            generate_workflow_class(_NotResolvableApp, ep)
+
+        assert log.warning.called
+        assert "Preflight gate will not run" in log.warning.call_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_no_boot_warn_when_input_gate_eligible(self) -> None:
+        class _ResolvableApp(App):
+            async def run(self, input: _GateEligibleInput) -> _BLDXOutput:
+                return _BLDXOutput(result="ok")
+
+        ep = self._make_ep(_GateEligibleInput, _BLDXOutput)
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.run", side_effect=lambda f: f
+            ),
+            mock.patch(
+                "application_sdk.app.base.workflow.defn",
+                side_effect=lambda **_: lambda c: c,
+            ),
+            mock.patch("application_sdk.app.base._task_logger") as log,
+        ):
+            generate_workflow_class(_ResolvableApp, ep)
+
+        assert not log.warning.called
+
+    @pytest.mark.asyncio
     async def test_run_happy_path_executes_entry_method(self) -> None:
         results: list[str] = []
 
@@ -1042,6 +1095,11 @@ class TestGenerateWorkflowClass:
         ipt.return_value.__exit__ = mock.MagicMock(return_value=False)
         stack.enter_context(
             mock.patch("application_sdk.app.base.workflow.info", return_value=info_mock)
+        )
+        # Preflight gate (HYP-1883) runs at the head of _run; these tests target
+        # the entry-method path, so disable the gate via the unpatched branch.
+        stack.enter_context(
+            mock.patch("application_sdk.app.base.workflow.patched", return_value=False)
         )
         stack.enter_context(mock.patch("application_sdk.app.base._safe_log"))
         stack.enter_context(
@@ -1227,6 +1285,78 @@ class TestGenerateWorkflowClass:
             out = await wf_cls.run(mock.MagicMock(), _BLDXInput())
 
         assert isinstance(out, _BLDXOutput)
+
+    @pytest.mark.asyncio
+    async def test_preflight_block_logs_warning_not_error(self) -> None:
+        """A PreflightFailed gate block must log at warning (no stack), not error."""
+
+        class BlockedApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput()
+
+        ep = self._make_ep(_BLDXInput, _BLDXOutput)
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.run", side_effect=lambda f: f
+            ),
+            mock.patch(
+                "application_sdk.app.base.workflow.defn",
+                side_effect=lambda **_: lambda c: c,
+            ),
+        ):
+            wf_cls = generate_workflow_class(BlockedApp, ep)
+
+        from application_sdk.execution._temporal.preflight_gate import (
+            PREFLIGHT_FAILED_ERROR_TYPE,
+        )
+        from application_sdk.execution.errors import ApplicationError
+
+        info_mock = mock.MagicMock(run_id="r", workflow_id="w")
+        safe_log_mock = mock.MagicMock()
+        preflight_error = ApplicationError(
+            "source unreachable",
+            type=PREFLIGHT_FAILED_ERROR_TYPE,
+            non_retryable=True,
+        )
+        with (
+            self._patched_workflow_layer(info_mock),
+            mock.patch("application_sdk.app.base._safe_log", safe_log_mock),
+            mock.patch.object(BlockedApp, "on_complete", new_callable=mock.AsyncMock),
+            mock.patch(
+                "application_sdk.observability.correlation.get_correlation_context",
+                return_value=None,
+            ),
+            mock.patch(
+                "application_sdk.app.base._run_preflight_gate",
+                side_effect=preflight_error,
+            ),
+            pytest.raises(ApplicationError),
+        ):
+            await wf_cls.run(mock.MagicMock(), _BLDXInput())
+
+        warning_calls = [
+            c
+            for c in safe_log_mock.call_args_list
+            if c.args
+            and c.args[0] == "warning"
+            and "blocked by preflight" in str(c.args[1] if len(c.args) > 1 else "")
+        ]
+        assert (
+            warning_calls
+        ), "_safe_log('warning', 'App blocked by preflight gate', ...) was not called"
+        for call in warning_calls:
+            assert not call.kwargs.get(
+                "exc_info"
+            ), "Preflight block must not include exc_info=True"
+        # Also confirm no error-level call was made for the gate block
+        error_calls = [
+            c
+            for c in safe_log_mock.call_args_list
+            if c.args
+            and c.args[0] == "error"
+            and "blocked by preflight" in str(c.args[1] if len(c.args) > 1 else "")
+        ]
+        assert not error_calls, "Preflight block must not log at error level"
 
 
 # =============================================================================

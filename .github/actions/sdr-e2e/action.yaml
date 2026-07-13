@@ -155,6 +155,22 @@ inputs:
       never sets this.
     required: false
     default: "false"
+  ghcr-token:
+    description: |
+      Optional token used to authenticate the GHCR login for the test-image
+      build/push (and the compose worker's subsequent pull). The connector's
+      `sdr-test-<sha>` image is pushed to `ghcr.io/atlanhq/<app-image-name>`,
+      and some connector packages are PAT-published (created by
+      build-and-publish via `ORG_PAT_GITHUB`) and are NOT writable by the
+      default `GITHUB_TOKEN` — so a plain-token push 403s for those apps.
+      Pass the org-scoped PAT here (typically `secrets.ORG_PAT_GITHUB`, the
+      same one build-and-publish uses) to push with the package-owning
+      identity, which works uniformly across every connector package.
+
+      When empty (the default), the login falls back to `github.token`, so
+      callers that don't wire this stay on the previous behaviour.
+    required: false
+    default: ""
 outputs:
   test-outcome:
     description: pytest exit outcome (success/failure)
@@ -174,7 +190,10 @@ runs:
       with:
         registry: ghcr.io
         username: ${{ github.actor }}
-        password: ${{ github.token }}
+        # Prefer the caller-supplied org PAT (writes PAT-published connector
+        # packages); fall back to github.token when unset (unchanged behaviour
+        # for callers that don't pass ghcr-token).
+        password: ${{ inputs.ghcr-token != '' && inputs.ghcr-token || github.token }}
 
     # Cross-repo dispatch from apps-sdk PRs hands us a specific SDK ref;
     # rewrite the [tool.uv.sources] entry so the Docker build's COPY +
@@ -286,7 +305,7 @@ runs:
     # Must run before atlan-configurator generates ci-deploy/ — setup-deps
     # uses actions/checkout internally which would wipe generated files.
     - name: Setup Python and dependencies
-      uses: atlanhq/application-sdk/.github/actions/setup-deps@v3.21.1
+      uses: atlanhq/application-sdk/.github/actions/setup-deps@v3.21.2
 
     # setup-deps' actions/checkout wipes the pre-build re-pin above. Do
     # it again so the host pytest runtime resolves the dispatched SDK

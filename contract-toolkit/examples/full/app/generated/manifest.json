@@ -57,6 +57,9 @@
       },
       "depends_on": {
         "node_id": "extract"
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 86400
       }
     },
     "publish": {
@@ -102,6 +105,9 @@
       },
       "depends_on": {
         "node_id": "publish"
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 86400
       }
     },
     "notifications": {
@@ -140,6 +146,9 @@
       },
       "depends_on": {
         "tag": "workflow_complete"
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 86400
       }
     }
   }
