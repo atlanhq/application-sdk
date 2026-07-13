@@ -54,6 +54,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 # Lock file produced by `pkl project resolve`.
@@ -62,6 +63,15 @@ LOCK_PATH = "contract/PklProject.deps.json"
 # Everything `pkl eval -m .` emits, relative to the repo root. Mirrors the
 # cleanup list in contract-toolkit/scripts/regenerate-all.sh.
 OUTPUT_PATHS = ["app/generated", "atlan.yaml", "app.yaml"]
+
+# `pkl eval` can fail transiently on a cold CI runner while fetching the remote
+# @app-contract-toolkit package — a network blip returns a non-zero code (not an
+# OSError). Retry a few times before giving up, so a transient fetch failure
+# neither degrades a renovate sync to lock-only nor turns the freshness gate
+# red. A deterministically-broken contract simply fails every attempt (a few
+# extra seconds) and still returns False. Shared by both callers on purpose.
+EVAL_MAX_ATTEMPTS = 3
+EVAL_RETRY_SLEEP_S = 5.0
 
 COMMIT_MESSAGE_REGEN = (
     "chore: sync Pkl deps and regenerate contract artifacts for app-contract-toolkit"
@@ -92,9 +102,10 @@ def regenerate(contract_dir: str) -> bool:
     killed run commits nothing and never publishes a half-regenerated tree.
 
     Returns True only when the working tree was actually updated with fresh
-    artifacts. Returns False (degrading to a lock-only sync) when there is no
-    contract to generate from or ``pkl eval`` fails — never raises on an eval
-    failure, so a bad regen cannot fail the job.
+    artifacts. Returns False when there is no contract to generate from, or when
+    ``pkl eval`` still fails after ``EVAL_MAX_ATTEMPTS`` attempts — never raises
+    on an eval failure, so a bad regen cannot fail the job. How to degrade
+    (lock-only sync, red gate) is the caller's decision, not this function's.
     """
     app_pkl = Path(contract_dir) / "app.pkl"
     if not app_pkl.exists():
@@ -110,13 +121,30 @@ def regenerate(contract_dir: str) -> bool:
         # project to resolve the `@app-contract-toolkit` import. The bare
         # `pkl eval contract/app.pkl` from the repo root finds no project and
         # fails. -m writes each output key relative to the output base.
-        result = run(
-            ["pkl", "eval", "--project-dir", contract_dir, "-m", str(tmp), str(app_pkl)]
-        )
+        eval_cmd = [
+            "pkl",
+            "eval",
+            "--project-dir",
+            contract_dir,
+            "-m",
+            str(tmp),
+            str(app_pkl),
+        ]
+        result = run(eval_cmd)
+        attempt = 1
+        while result.returncode != 0 and attempt < EVAL_MAX_ATTEMPTS:
+            print(
+                f"::warning::pkl eval failed (attempt {attempt}/{EVAL_MAX_ATTEMPTS}); "
+                f"retrying in {EVAL_RETRY_SLEEP_S:g}s — a cold runner may still be "
+                "fetching the remote @app-contract-toolkit package."
+            )
+            time.sleep(EVAL_RETRY_SLEEP_S)
+            attempt += 1
+            result = run(eval_cmd)
         if result.returncode != 0:
             print(
-                "::warning::pkl eval failed — falling back to lock-only sync "
-                "(generated artifacts left unchanged)."
+                f"::warning::pkl eval failed after {EVAL_MAX_ATTEMPTS} attempts "
+                "— generated artifacts left unchanged."
             )
             return False
 
