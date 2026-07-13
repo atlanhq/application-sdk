@@ -371,3 +371,18 @@ class TestExtractTaskQueue:
     def test_direct_mode_falls_back_to_connector_default(self) -> None:
         # _ConcreteE2ETest is RunMode.DIRECT → agent_spec() is None.
         assert _ConcreteE2ETest()._extract_task_queue() == "atlan-openapi-default"
+
+
+class TestStallGuardDefault:
+    """The stall guard is opt-in: off by default so KEDA/saturated tenants
+    (where a task can legitimately wait a long time) don't get false failures.
+    """
+
+    def test_disabled_by_default(self) -> None:
+        assert _ConcreteE2ETest.ae_stall_grace_seconds == 0
+
+    def test_subclass_can_opt_in(self) -> None:
+        class _OptedIn(_ConcreteE2ETest):
+            ae_stall_grace_seconds = 180
+
+        assert _OptedIn.ae_stall_grace_seconds == 180
