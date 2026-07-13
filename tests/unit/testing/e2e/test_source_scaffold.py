@@ -179,6 +179,18 @@ class TestObjectStoreAndQueryEngine:
         svc = yaml.safe_load(out[_COMPOSE])["services"]
         assert set(svc) == {"trino", "atlan-app"}
 
+    def test_gcs_has_no_healthcheck_and_uses_service_started(self) -> None:
+        # The fake-gcs-server image is a minimal Go binary (no curl/shell), so a
+        # CMD healthcheck can't run in-container — verified live. atlan-app must
+        # depend on service_started, not service_healthy.
+        compose = yaml.safe_load(
+            render(SourceConfig(app="gcs", kind="gcs", secrets={"S": "v"}))[_COMPOSE]
+        )["services"]
+        assert "healthcheck" not in compose["gcs"]
+        assert compose["atlan-app"]["depends_on"] == {
+            "gcs": {"condition": "service_started"}
+        }
+
 
 class TestErrors:
     def test_unknown_engine_raises_with_dataforge_hint(self) -> None:

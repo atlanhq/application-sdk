@@ -305,6 +305,10 @@ def _minio_build(cfg: SourceConfig, image: str) -> Scaffold:
 
 
 def _fake_gcs_build(cfg: SourceConfig, image: str) -> Scaffold:
+    # No healthcheck: the fake-gcs-server image is a minimal Go binary with no
+    # curl/wget/shell, so a CMD healthcheck can't run in-container (verified —
+    # curl-based checks never go healthy). It boots near-instantly and serves
+    # the fixtures dir as the bucket, so atlan-app waits on service_started.
     return Scaffold(
         services={
             "gcs": {
@@ -313,16 +317,10 @@ def _fake_gcs_build(cfg: SourceConfig, image: str) -> Scaffold:
                 "volumes": [
                     f"${{GITHUB_WORKSPACE}}/{_CONFIG_DIR}/fixtures:/data/{cfg.bucket}:ro"
                 ],
-                "healthcheck": _healthcheck(
-                    [
-                        "CMD-SHELL",
-                        "curl -f http://localhost:4443/storage/v1/b || exit 1",
-                    ]
-                ),
                 "expose": ["4443"],
             }
         },
-        depends_on={"gcs": "service_healthy"},
+        depends_on={"gcs": "service_started"},
         secrets=_require_declared_secrets(cfg),
         seed_file=None,
     )
