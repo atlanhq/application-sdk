@@ -148,6 +148,10 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # the SDK has neither, so this check is meaningless there (BLDX-1491).
     # P029/P030: SDR-readiness — only apps declare self_deployed_runtime; the SDK
     # itself never does, so these are APP-scoped (DISTR-752).
+    # P032–P035: preflight-gate authoring — only apps register @task activities,
+    # define Handler.preflight_check, construct PreflightCheck results, and declare
+    # the entrypoint Input contracts the gate rebuilds metadata from; the SDK
+    # publishes the gate, it is not a subject of these rules (BLDX-1545).
     # T002/T003: SDR test-quality — apps that declare SDR must have an SDR test
     # class; the SDK itself is not an SDR app (DISTR-752).
     # T004: dev-entrypoint delegation — only consumer apps have a root main.py
@@ -228,6 +232,10 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P028",
         "P029",
         "P030",
+        "P032",
+        "P033",
+        "P034",
+        "P035",
         "T002",
         "T003",
         "T004",
@@ -377,6 +385,9 @@ def test_catalog_p_series_present() -> None:
     P031 is SharedDefaultExecutorOffload — asyncio.to_thread(...) /
     run_in_executor(None, ...) bypass the SDK's dedicated run_in_thread() pool
     and land on asyncio's shared default executor instead (BLDX-1525).
+    P032–P035 are the preflight-gate rules — reserved gate-name collision,
+    duplicate in-workflow preflight, untyped check failures, and metadata /
+    input-contract parity (BLDX-1545).
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -414,6 +425,10 @@ def test_catalog_p_series_present() -> None:
         "P029",
         "P030",
         "P031",
+        "P032",
+        "P033",
+        "P034",
+        "P035",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"

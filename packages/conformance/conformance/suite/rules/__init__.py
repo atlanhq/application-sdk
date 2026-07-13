@@ -25,6 +25,7 @@ from conformance.suite.rules.error_handling import RULES as _E_RULES
 from conformance.suite.rules.logging import RULES as _L_RULES
 from conformance.suite.rules.optimizations import RULES as _O_RULES
 from conformance.suite.rules.orchestration import RULES as _ORCHESTRATION_RULES
+from conformance.suite.rules.preflight import RULES as _PREFLIGHT_RULES
 from conformance.suite.rules.prescriptions import RULES as _P_RULES
 from conformance.suite.rules.sdr import RULES as _SDR_RULES
 from conformance.suite.rules.security import RULES as _S_RULES
@@ -52,6 +53,7 @@ _ALL_SERIES: tuple[tuple[RuleDefinition, ...], ...] = (
     _I_RULES,
     _O_RULES,
     _P_RULES,
+    _PREFLIGHT_RULES,
     _ORCHESTRATION_RULES,
     _DETERMINISM_RULES,
     _ENTRYPOINT_RULES,

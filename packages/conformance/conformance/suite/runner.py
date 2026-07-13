@@ -46,6 +46,7 @@ from conformance.suite.checks import (
     manifest_contract,
     optimizations,
     orchestration,
+    preflight,
     prescriptions,
     security,
     test_quality,
@@ -182,6 +183,12 @@ _CHECKS: list[CheckRegistration] = [
         discover=app_name_alignment.discover,
         scan_path=app_name_alignment.scan_path,
         scan_all=app_name_alignment.scan_all,
+    ),
+    CheckRegistration(
+        series=preflight.SERIES,
+        discover=preflight.discover,
+        scan_path=preflight.scan_path,
+        scan_all=preflight.scan_all,
     ),
     CheckRegistration(
         series=legacy_contract.SERIES,
