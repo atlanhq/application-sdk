@@ -18,9 +18,10 @@ name: v3 Readiness Check
 #         app_repo_token: ${{ secrets.APP_REPO_READ_TOKEN }}
 #
 # Secret requirements:
-#   APP_REPO_READ_TOKEN — PAT (or GitHub App installation token) with
-#   `contents: read` access to the target app repo. Required for private
-#   repos; public repos can pass GITHUB_TOKEN instead.
+#   None, normally — a fleet App token is minted automatically (FLEET_APP_ID /
+#   FLEET_APP_PRIVATE_KEY org secrets) and covers any repo the atlan-app-fleet
+#   App is installed on. app_repo_token / APP_REPO_READ_TOKEN / GITHUB_TOKEN
+#   remain as fallbacks if that ever can't resolve.
 
 on:
   workflow_dispatch:
@@ -43,9 +44,18 @@ on:
         required: true
         type: string
     secrets:
+      FLEET_APP_ID:
+        required: false
+        description: "atlan-app-fleet App ID (org secret). Not passed explicitly by any current caller — auto-available via 'secrets: inherit'. Declared here so the contract is self-documenting."
+      FLEET_APP_PRIVATE_KEY:
+        required: false
+        description: "atlan-app-fleet App private key (org secret). Same availability as FLEET_APP_ID above."
       app_repo_token:
-        description: "Token with contents:read on the target repo"
-        required: true
+        description: >
+          Token with contents:read on the target repo. Optional — a fleet
+          App token is minted automatically and covers any repo the
+          atlan-app-fleet App is installed on; this is only a fallback.
+        required: false
 
 permissions:
   contents: read
@@ -86,16 +96,27 @@ jobs:
         with:
           path: sdk
 
+      - name: Mint fleet App token
+        id: app-token
+        continue-on-error: true # fall through to the old chain if this ever can't resolve
+        uses: actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b # v2
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+
       - name: Checkout target app
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ${{ steps.parse.outputs.repo }}
           ref: ${{ inputs.branch }}
           # Token fallback chain:
-          #   1. secrets.app_repo_token — passed by workflow_call callers
-          #   2. secrets.APP_REPO_READ_TOKEN — repo secret, used on workflow_dispatch
-          #   3. secrets.GITHUB_TOKEN — only works for public targets
-          token: ${{ secrets.app_repo_token || secrets.APP_REPO_READ_TOKEN || secrets.GITHUB_TOKEN }}
+          #   1. steps.app-token — minted atlan-app-fleet token, covers any repo
+          #      the App is installed on (the common case going forward)
+          #   2. secrets.app_repo_token — passed by workflow_call callers
+          #   3. secrets.APP_REPO_READ_TOKEN — repo secret, used on workflow_dispatch
+          #   4. secrets.GITHUB_TOKEN — only works for public targets
+          token: ${{ steps.app-token.outputs.token || secrets.app_repo_token || secrets.APP_REPO_READ_TOKEN || secrets.GITHUB_TOKEN }}
           path: app
           fetch-depth: 1
 

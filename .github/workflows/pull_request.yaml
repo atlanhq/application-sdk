@@ -304,9 +304,17 @@ jobs:
       matrix: ${{ fromJson(needs.matrix-builder.outputs.matrix) }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Mint fleet App token
+        id: app-token
+        uses: actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b # v2
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: ${{ matrix.repo_name }}
       - uses: "./.github/actions/e2e-apps"
         with:
-          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          github-token: ${{ steps.app-token.outputs.token }}
           repo-name: ${{ matrix.repo_name }}
           target-branch: "refs/heads/${{ matrix.target_branch }}"
           workflow: tests.yaml
@@ -343,9 +351,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Mint fleet App token
+        id: app-token
+        uses: actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b # v2
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: atlan-local-marketplace-app
       - uses: "./.github/actions/e2e-apps"
         with:
-          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          github-token: ${{ steps.app-token.outputs.token }}
           repo-name: atlan-local-marketplace-app
           target-branch: "refs/heads/main"
           workflow: sdr-k8s-e2e.yaml

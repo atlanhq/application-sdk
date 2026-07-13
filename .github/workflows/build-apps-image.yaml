@@ -34,6 +34,12 @@ on:
       ORG_PAT_GITHUB:
         required: true
         description: "Org-level PAT for GHCR login — needed to pull private base images from other repos in the org"
+      FLEET_APP_ID:
+        required: false
+        description: "atlan-app-fleet App ID (org secret). Not passed explicitly by the current caller — auto-available via 'secrets: inherit'. Declared here so the contract is self-documenting."
+      FLEET_APP_PRIVATE_KEY:
+        required: false
+        description: "atlan-app-fleet App private key (org secret). Same inherit-only availability as FLEET_APP_ID above."
       DOCKER_HUB_PAT_RW:
         required: false
         description: "DockerHub PAT (read/write) — only needed when atlan.yaml self_deployed_runtime=true"
@@ -297,6 +303,16 @@ jobs:
       actions: read            # codeql-action telemetry (GET /actions/workflow-runs)
 
     steps:
+      - name: Mint fleet App token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b # v2
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+
       - name: Checkout base allowlist from SDK
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -306,7 +322,7 @@ jobs:
             .security
             .github/scripts
           path: _sdk
-          token: ${{ secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
 
       - name: Log in to GHCR
         uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
@@ -317,9 +333,11 @@ jobs:
 
       - name: Install Trivy
         # Download the binary directly from GitHub releases — bypasses setup-trivy
-        # which fetches install.sh from trivy@main (currently broken).
+        # which fetches install.sh from trivy@main (currently broken). Any valid
+        # token works here (public repo, just needs the authenticated rate tier) —
+        # reusing the fleet App token keeps this off atlan-ci's shared budget too.
         env:
-          GITHUB_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
         run: |
           TRIVY_VERSION=$(curl -s -H "Authorization: Bearer ${GITHUB_TOKEN}" \
             https://api.github.com/repos/aquasecurity/trivy/releases/latest \
@@ -374,10 +392,20 @@ jobs:
       matrix:
         repo: ['atlanhq/atlan-apps-deployment']
     steps:
+      - name: Mint fleet App token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b # v2
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: atlan-apps-deployment
+
       - name: Repository Dispatch
         uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
         with:
-          token: ${{ secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
           repository: ${{ matrix.repo }}
           event-type: dispatch_app_builder_workflow
           client-payload: |-

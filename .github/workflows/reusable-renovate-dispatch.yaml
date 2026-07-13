@@ -10,8 +10,7 @@ name: Renovate Fan-out Dispatch (Reusable)
 #     name: Fan out Renovate to consumers
 #     needs: [publish]          # run after PyPI/gh-pages publish completes
 #     uses: atlanhq/application-sdk/.github/workflows/reusable-renovate-dispatch.yaml@main
-#     secrets:
-#       fleet-dispatch-token: ${{ secrets.FLEET_DISPATCH_TOKEN }}
+#     secrets: inherit
 #
 # Usage — same pattern in contract-toolkit-publish.yml (after Pages publish):
 #
@@ -19,14 +18,11 @@ name: Renovate Fan-out Dispatch (Reusable)
 #     name: Fan out Renovate to consumers
 #     needs: [publish]
 #     uses: atlanhq/application-sdk/.github/workflows/reusable-renovate-dispatch.yaml@main
-#     secrets:
-#       fleet-dispatch-token: ${{ secrets.FLEET_DISPATCH_TOKEN }}
+#     secrets: inherit
 #
-# FLEET_DISPATCH_TOKEN: store as a repo/org secret. Requires:
-#   - Personal Access Token (classic) with repo + workflow scope, OR
-#   - GitHub App installation token with contents:write + actions:write on each
-#     consumer repo.
-#   The token must have write access to every atlan-*-app repo you want to reach.
+# No secrets to configure: this mints its own atlan-app-fleet token internally
+# from the FLEET_APP_ID / FLEET_APP_PRIVATE_KEY org secrets (visible to every
+# atlanhq repo), so `secrets: inherit` is all any caller needs.
 #
 # Each consumer repo must have a .github/workflows/renovate.yaml that accepts
 # workflow_dispatch (see renovate-config/README.md for the template). If a
@@ -45,10 +41,6 @@ on:
         required: false
         default: "main"
         type: string
-    secrets:
-      fleet-dispatch-token:
-        description: PAT or GitHub App token with actions:write on consumer repos.
-        required: true
 
 permissions:
   contents: read
@@ -60,28 +52,37 @@ jobs:
     outputs:
       repos: ${{ steps.discover.outputs.repos }}
     steps:
+      - name: Mint fleet App token
+        id: app-token
+        uses: actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b # v2
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+
+      - name: Checkout application-sdk scripts
+        # Explicit repository/token: without these, actions/checkout defaults to
+        # the *caller's* repo (github.repository, in a workflow_call reusable),
+        # not application-sdk. Today's only documented callers ARE
+        # application-sdk (tag-and-publish.yaml / contract-toolkit-publish.yml),
+        # so that default happens to work -- but this is a published reusable,
+        # so an external caller would otherwise silently check out the wrong
+        # repo and fail the discover step with a confusing "file not found".
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: atlanhq/application-sdk
+          token: ${{ steps.app-token.outputs.token }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
       - name: Discover atlan-application-sdk consumers
         id: discover
         env:
-          GH_TOKEN: ${{ secrets['fleet-dispatch-token'] }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          set -euo pipefail
-          # Search for repos in the atlanhq org that list atlan-application-sdk
-          # as a dependency. gh search code returns up to 100 results per query;
-          # for a fleet > 100 repos, page through with --limit / --page.
-          repos=$(gh search code \
+          python3 .github/scripts/discover_org_consumers.py \
             --owner atlanhq \
-            "atlan-application-sdk filename:pyproject.toml" \
-            --json repository \
-            --jq '[.[].repository.nameWithOwner] | unique' \
-            --limit 100 2>/dev/null || echo "[]")
-
-          if [ "$repos" = "[]" ] || [ -z "$repos" ]; then
-            echo "::warning::No consumer repos discovered. Check FLEET_DISPATCH_TOKEN permissions."
-          else
-            echo "Discovered $(echo "$repos" | jq '. | length') consumer repos"
-          fi
-          echo "repos=${repos}" >> "$GITHUB_OUTPUT"
+            --query "atlan-application-sdk filename:pyproject.toml"
 
   dispatch:
     name: Trigger ${{ matrix.repo }}
@@ -94,9 +95,20 @@ jobs:
       fail-fast: false   # attempt all consumers even if some fail
       max-parallel: 10   # avoid GitHub API rate limits
     steps:
+      - name: Mint fleet App token
+        id: app-token
+        # Not scoped to matrix.repo: that's "owner/repo" but `repositories:`
+        # takes bare names, and this job dispatches to an arbitrary/dynamic
+        # set of consumer repos anyway (the whole point of a fleet fan-out).
+        uses: actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b # v2
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+
       - name: Trigger workflow_dispatch
         env:
-          GH_TOKEN: ${{ secrets['fleet-dispatch-token'] }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
           if gh workflow run "${{ inputs.workflow-file }}" \
