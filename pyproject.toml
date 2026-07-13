@@ -352,8 +352,11 @@ constraint-dependencies = [
 # Source-pinned, not version-pinned: the conformance package's source lives
 # in this same repo (packages/conformance) and is published from it. Using
 # the local path means a packages/conformance change is picked up here
-# immediately, with no separate release-then-bump-the-pin cycle.
-atlan-application-sdk-conformance = { path = "packages/conformance" }
+# immediately, with no separate release-then-bump-the-pin cycle. `editable`
+# so pyright (and tests) resolve against the working-tree source rather than a
+# built copy in site-packages that a warm uv build cache can leave stale — a
+# stale copy makes CI type-checking miss same-PR signature changes.
+atlan-application-sdk-conformance = { path = "packages/conformance", editable = true }
 
 # Uncomment the following section in case you want to publish to testpypi
 # [[tool.uv.index]]

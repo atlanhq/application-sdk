@@ -398,7 +398,7 @@ provides-extras = ["workflows", "sql", "daft", "storage", "incremental", "iam-au
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "atlan-application-sdk-conformance", directory = "packages/conformance" },
+    { name = "atlan-application-sdk-conformance", editable = "packages/conformance" },
     { name = "boto3-stubs", specifier = ">=1.38.6,<2.0.0" },
     { name = "isort", specifier = ">=8.0.1,<8.1.0" },
     { name = "libcst", specifier = ">=1.4.0,<2.0.0" },
@@ -433,7 +433,7 @@ test = [
 [[package]]
 name = "atlan-application-sdk-conformance"
 version = "0.13.0"
-source = { directory = "packages/conformance" }
+source = { editable = "packages/conformance" }
 dependencies = [
     { name = "jinja2" },
     { name = "jsonschema" },
