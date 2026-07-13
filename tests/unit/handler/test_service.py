@@ -2636,6 +2636,63 @@ class TestManifestEndpoint:
         finally:
             svc_module.CONTRACT_GENERATED_DIR = original
 
+    def test_manifest_falls_back_to_explicit_ep_when_implicit_run_is_default(
+        self, tmp_path: Path
+    ) -> None:
+        """Mixed run()+@entrypoint app: implicit run() default has no manifest.
+
+        A SQL-template connector (e.g. ``PostgresApp(SqlMetadataExtractor)``)
+        both implements ``run()`` AND declares explicit ``@entrypoint``s
+        (crawler, miner). The framework forces the implicit ``run()`` as the
+        default entrypoint and prohibits ``@entrypoint(default=True)`` elsewhere
+        (see ``_ep_registration._build_entry_points``) — but ``run()`` has no
+        generated manifest dir, so the no-``?entrypoint=`` route AE/Heracles use
+        for pre-flight validation would 404. The handler must instead fall back
+        to the explicit entrypoints alphabetically and serve ``crawler``
+        (c < m), the connector's primary path, rather than 404-ing.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+        from application_sdk.handler import service as svc_module
+
+        class _MixedRunApp(App):
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def crawler(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+            @entrypoint
+            async def miner(self, input: _AlphaInput) -> _AlphaOutput:
+                return _AlphaOutput()
+
+        # Only the explicit entrypoints have generated manifests; the implicit
+        # run() has no dir — exactly the postgres/bundle on-disk layout.
+        for ep_name in ("crawler", "miner"):
+            ep_dir = tmp_path / ep_name
+            ep_dir.mkdir()
+            (ep_dir / "manifest.json").write_text(
+                json.dumps({"execution_mode": "automation-engine", "ep": ep_name})
+            )
+
+        original = svc_module.CONTRACT_GENERATED_DIR
+        svc_module.CONTRACT_GENERATED_DIR = tmp_path
+        try:
+            # app_name= sets the task-queue name only; _resolve_app_entrypoint
+            # keys on _MixedRunApp._app_name (kebab of the class name).
+            svc = create_app_handler_service(
+                _TestHandler(), app_name="postgres", app_class=_MixedRunApp
+            )
+            client = TestClient(svc, raise_server_exceptions=False)
+            response = client.get("/workflows/v1/manifest")
+            assert response.status_code == 200
+            # Default (implicit run) has no manifest → alphabetically-first
+            # explicit entrypoint, i.e. crawler, NOT miner.
+            assert response.json()["ep"] == "crawler"
+        finally:
+            svc_module.CONTRACT_GENERATED_DIR = original
+
     def test_simple_app_manifest_lives_at_root_not_in_subdir(
         self, tmp_path: Path
     ) -> None:

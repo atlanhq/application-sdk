@@ -1924,7 +1924,7 @@ def _register_workflow_routes(
         # caller (e.g. Heracles/AE pre-validation) omits ?entrypoint=, fall
         # back to the app's default entrypoint instead of 404-ing.
         try:
-            _, ep = _resolve_app_entrypoint(
+            app_meta, default_ep = _resolve_app_entrypoint(
                 _workflow_config.app_name, None, unknown_ep_status=404
             )
         except HTTPException:
@@ -1938,15 +1938,36 @@ def _register_workflow_routes(
                 _workflow_config.app_name,
                 exc_info=True,
             )
-            ep = None
-        if ep is not None:
+            app_meta, default_ep = None, None
+
+        # Candidate order: the resolved default first, then every *explicit*
+        # (non-implicit) entrypoint alphabetically. The second group matters
+        # for a connector that both implements run() (via the
+        # SqlMetadataExtractor template) AND declares explicit @entrypoints:
+        # the framework forces the implicit run() as the default (see
+        # app/entrypoint.py — "run() + @entrypoint(s) → run() always"), but
+        # run() has no generated manifest dir, so serving it 404s. Rather than
+        # 404 the whole route, fall back to the explicit entrypoints, ordered
+        # alphabetically — the same tie-break the framework uses when multiple
+        # @entrypoints carry no marked default. For a SQL bundle app this
+        # resolves to `crawler` (c < m < …), the connector's primary path.
+        candidates: list[str] = []
+        if default_ep is not None:
+            candidates.append(default_ep.name)
+        if app_meta is not None:
+            candidates.extend(
+                ep.name
+                for ep in sorted(app_meta.entry_points.values(), key=lambda e: e.name)
+                if not ep.implicit and ep.name not in candidates
+            )
+
+        for cand in candidates:
             try:
-                return await _serve_entrypoint_manifest(ep.name, fe_inputs, deployment)
+                return await _serve_entrypoint_manifest(cand, fe_inputs, deployment)
             except HTTPException as exc:
                 if exc.status_code != 404:
                     raise
-                # Default entrypoint exists but has no manifest file on disk —
-                # fall through to the canonical 404 below.
+                # This candidate has no manifest file on disk — try the next.
 
         raise HTTPException(status_code=404, detail="No manifest available")
 
