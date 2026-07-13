@@ -135,7 +135,7 @@ def build_agent_json(
     connector_short_name: str,
 ) -> dict[str, Any]:
     """Build the agent_json routing block for AGENT-mode extract args."""
-    return {
+    block: dict[str, Any] = {
         "host": database.host,
         "port": database.port,
         "auth-type": database.auth_type,
@@ -147,6 +147,18 @@ def build_agent_json(
         "basic.username": f"SDR_{connector_short_name.upper()}_USERNAME",
         "basic.password": f"SDR_{connector_short_name.upper()}_PASSWORD",
     }
+    # Connector-specific connection fields ride as dotted ``extra.<k>`` keys.
+    # The prime case is ``database``: postgres (and any SQL client whose
+    # DB_CONFIG.required lists it) can't build a connection string without it,
+    # while mysql omits it entirely. ``transform_agent_credentials`` nests
+    # ``extra.<k>`` → ``credentials["extra"][k]``, which is exactly where the
+    # SQL client reads it — so a connector supplies its database (and any other
+    # extra) once via ``DatabaseSpec.extra`` and the harness wires it through,
+    # rather than each connector hand-patching its AE payload. Validated by a
+    # postgres full-DAG e2e run.
+    for key, value in database.extra.items():
+        block[f"extra.{key}"] = value
+    return block
 
 
 def build_seed_dag(

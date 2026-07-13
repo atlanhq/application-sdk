@@ -14,9 +14,12 @@ import orjson
 from application_sdk.contracts.types import ConnectionRef
 from application_sdk.testing.e2e.credential import CredentialBody
 from application_sdk.testing.e2e.payload import (
+    AgentSpec,
     ConnectionSpec,
+    DatabaseSpec,
     RunMode,
     build_ae_payload,
+    build_agent_json,
 )
 from application_sdk.testing.e2e.substitutions import (
     MustacheSubstitutions,
@@ -283,3 +286,39 @@ class TestSQLPayloadWithCredential:
         agent_json = orjson.loads(params["agent-json"])
         assert agent_json["host"] == "db.example.com"
         assert agent_json["agent-name"] == "mysql-e2e-ci-1234"
+
+
+class TestBuildAgentJson:
+    """build_agent_json wires DatabaseSpec.extra as dotted extra.* keys.
+
+    Regression guard for the postgres full-DAG proof: a SQL client whose
+    DB_CONFIG.required lists ``database`` (postgres, oracle, mssql, …) can't
+    build a connection string without it, while mysql omits it. The connector
+    supplies it once via DatabaseSpec.extra and the harness threads it through
+    as ``extra.database``, which transform_agent_credentials nests into
+    credentials["extra"]["database"].
+    """
+
+    _AGENT = AgentSpec(agent_name="postgres-e2e-ci-1234")
+
+    def test_extra_keys_emitted_as_dotted_extra(self) -> None:
+        db = DatabaseSpec(
+            host="postgres",
+            port=5432,
+            username="e2e_user",
+            password="e2e_pass",
+            extra={"database": "e2e_main"},
+        )
+        aj = build_agent_json(db, self._AGENT, "postgres")
+        assert aj["extra.database"] == "e2e_main"
+        # standard fields still present + unchanged
+        assert aj["host"] == "postgres"
+        assert aj["basic.username"] == "SDR_POSTGRES_USERNAME"
+
+    def test_empty_extra_emits_no_extra_keys(self) -> None:
+        # mysql parity: no database in DB_CONFIG.required → no extra.* keys.
+        db = DatabaseSpec(
+            host="mysql", port=3306, username="u", password="p"
+        )
+        aj = build_agent_json(db, self._AGENT, "mysql")
+        assert not any(k.startswith("extra.") for k in aj)
