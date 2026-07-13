@@ -273,9 +273,14 @@ class CloudStore:
 
         async def _dl(obj_key: str, size: int, etag: str | None) -> Path:
             async with sem:
+                # No `list_prefix and` guard here: when list_prefix == "" (a
+                # whole-bucket download), startswith("") is always True, so the
+                # full key is kept instead of falling through to the basename-only
+                # branch below, which would clobber same-named files from
+                # different subdirectories onto one path.
                 rel = (
                     obj_key[len(list_prefix) :]
-                    if list_prefix and obj_key.startswith(list_prefix)
+                    if obj_key.startswith(list_prefix)
                     else Path(obj_key).name
                 )
                 # Reject keys whose resolved path escapes output (e.g. via ".." segments).
@@ -529,7 +534,9 @@ def _create_s3_store(
             # two S3 auth paths are distinguishable in CloudTrail AssumeRole logs
             # (and preserves CloudStore's historical session name).
             session_name=extra.get("aws_role_session_name") or "cloud-store-session",
-            region=region or None,
+            # No region: scoping the STS session to the bucket's region breaks
+            # AssumeRole for opt-in regions (e.g. me-central-1); region belongs
+            # on the S3 store's own config below, not the STS call.
             base_access_key=base_access_key,
             base_secret_key=base_secret_key,
             base_session_token=(creds.get("token") or None)
