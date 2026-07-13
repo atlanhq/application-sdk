@@ -1,0 +1,51 @@
+name: Mutation tests (advisory)
+
+# Diff-scoped mutation testing pilot: mutmut seeds small faults ("mutants")
+# into the Python files a PR changes and reports which of them the unit
+# suite fails to detect. A surviving mutant is a bug class that would ship
+# without any test failing — a direct measure of test meaningfulness that
+# line coverage cannot provide.
+#
+# ADVISORY ONLY for the pilot: the job posts a scorecard to the run summary
+# and never blocks the PR (continue-on-error + the driver exits 0 on any
+# completed measurement). Graduation to a gate is a later, data-driven
+# decision — see the --min-score flag in mutation_diff.py.
+#
+# All conditional logic lives in .github/scripts/mutation_diff.py (tested by
+# scripts-tests.yaml) per docs/standards/ci.md; the run block below is
+# straight-line.
+
+on:
+  pull_request:
+    paths:
+      - "application_sdk/**/*.py"
+      - ".github/scripts/mutation_diff.py"
+      - ".github/workflows/mutation-tests.yaml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutation-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mutation:
+    name: Diff-scoped mutation testing
+    runs-on: ubuntu-latest
+    # Pilot is observe-only: never block the PR, even on infra failure.
+    continue-on-error: true
+    timeout-minutes: 45
+    steps:
+      # fetch-depth: 0 — the driver diffs against the merge-base with the
+      # PR base branch, which a shallow clone does not contain.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - uses: "./.github/actions/setup-deps"
+
+      - name: Run diff-scoped mutation testing
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: uv run --all-extras --all-groups python .github/scripts/mutation_diff.py --base-ref "origin/${BASE_REF}"

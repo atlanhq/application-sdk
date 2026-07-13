@@ -157,6 +157,12 @@ examples = [
     "snowflake-sqlalchemy>=1.7.0,<2.0.0",
     "psycopg[binary]>=3.2.7,<4.0.0",
 ]
+# Mutation testing (advisory) — run via `poe mutation-diff` locally or the
+# mutation-tests CI workflow. Separate group: mutmut requires fork support
+# (Linux/macOS only) and is not part of the regular test matrix.
+mutation = [
+    "mutmut>=3.6.0,<4.0.0",
+]
 docs = [
     "mkdocs>=1.6.1,<2.0.0",
     "mkdocs-material>=9.6.4,<10.0.0",
@@ -189,6 +195,9 @@ test-integration = "pytest tests/integration/ -m integration -v --timeout=120"
 # Size via ATLAN_LOAD_TEST_SIZE_MIB (default 1024; 51200 = 50 GiB). See tests/load/README.md.
 load-test-storage = "pytest tests/load -m load -v -s --timeout=0"
 test-scripts = "bats .github/scripts/tests"  # requires: bats-core (apt-get install -y bats)
+# Diff-scoped mutation testing (advisory): mutates only files changed vs
+# origin/main and reports which seeded bugs the unit suite fails to catch.
+mutation-diff = "python .github/scripts/mutation_diff.py"
 
 # API docs — must be before any sub-table header ([tool.poe.tasks.*])
 # or TOML nests it inside the sub-table rather than the parent tasks namespace
@@ -266,6 +275,40 @@ markers = [
     "azure_integration: tests requiring keyless Azure Workload Identity Federation (AZURE_STORAGE_ACCOUNT, AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_FEDERATED_TOKEN_FILE)",
     "gcs_integration: tests requiring keyless GCS access (GCS_BUCKET, GCS_PROJECT_ID + ambient ADC, e.g. Workload Identity Federation)",
     "storage_emulator: hermetic object-store tests against local emulators (MinIO/Azurite/storage-testbench); run in CI with emulator sidecars",
+]
+
+# Mutation testing (mutmut 3.x). Advisory-only: measures whether the unit
+# suite actually detects seeded faults ("mutants") in changed code. Run
+# diff-scoped via `poe mutation-diff` / the mutation-tests workflow; a full
+# run is `uv run --group mutation mutmut run` (slow — whole-SDK).
+# The do_not_mutate list mirrors the unit-coverage omit list below: those
+# subtrees ship test infrastructure exercised under other markers, so
+# mutating them only produces "no tests" noise.
+[tool.mutmut]
+source_paths = ["application_sdk"]
+# Never mutate __file__-based path derivation: mutating it to None inside a
+# default argument evaluates at import time and crashes collection (and such
+# mutants are unproductive noise anyway).
+do_not_mutate_patterns = ['__file__']
+do_not_mutate = [
+    "application_sdk/test_utils/*",
+    "application_sdk/testing/scale_data_generator/*",
+    "application_sdk/testing/integration/*",
+    "application_sdk/testing/e2e/*",
+    "application_sdk/testing/hypothesis/*",
+    "application_sdk/testing/parity/*",
+]
+# Restrict mutmut's test runs to the hermetic unit tier; integration/e2e
+# markers are deselected by addopts anyway, this just skips collection.
+pytest_add_cli_args_test_selection = ["tests/unit"]
+# mutmut executes tests inside its mutants/ sandbox; every repo file the
+# unit suite reads (Dapr component YAMLs, CI scripts under test, the
+# capability-manifest extractor) must be copied in or collection fails.
+also_copy = [
+    "components/",
+    "tools/",
+    ".github/scripts/",
+    ".claude/skills/capability-manifest/",
 ]
 
 [tool.coverage.run]

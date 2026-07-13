@@ -193,3 +193,6 @@ remediation/runs/
 
 # Renovate setup
 renovate-config/README.md
+
+# mutmut mutation-testing working directory (poe mutation-diff)
+mutants/
