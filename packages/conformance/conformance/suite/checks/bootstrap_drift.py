@@ -94,8 +94,10 @@ def _strip_regen_override(text: str) -> str:
 # (build_pytest_parallel_args.py): "auto" or a positive integer with no leading
 # zero, quoted or bare. An invalid value like "0"/"01" is deliberately NOT
 # stripped, so C002 flags it as drift before the driver rejects it at runtime.
+# A single comment line directly above, and a same-line trailing comment (like
+# _ACTION_PIN_RE consumes an inline "# v6.0.3"), are also normalised out.
 _E2E_PARALLEL_OVERRIDE_RE = re.compile(
-    r'\n(?:[ ]*#[^\n]*\n)?[ ]*e2e-parallel-workers:[ ]*"?(?:auto|[1-9][0-9]*)"?[ ]*'
+    r'\n(?:[ ]*#[^\n]*\n)?[ ]*e2e-parallel-workers:[ ]*"?(?:auto|[1-9][0-9]*)"?[ ]*(?:#[^\n]*)?'
 )
 
 

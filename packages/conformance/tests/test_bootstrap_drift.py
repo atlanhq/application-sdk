@@ -409,9 +409,18 @@ def test_tests_yaml_active_services_script_not_flagged(tmp_path: pathlib.Path) -
     assert findings == []
 
 
-def _opt_into_parallel(canonical: str, value: str, *, comment: bool = False) -> str:
+def _opt_into_parallel(
+    canonical: str,
+    value: str,
+    *,
+    comment: bool = False,
+    trailing_comment: bool = False,
+) -> str:
     """Insert an e2e-parallel-workers input into the canonical tests.yaml."""
-    block = f'      e2e-parallel-workers: "{value}"\n'
+    line = f'      e2e-parallel-workers: "{value}"'
+    if trailing_comment:
+        line += "  # tune to the runner's core count"
+    block = line + "\n"
     if comment:
         block = "      # run independent e2e classes concurrently\n" + block
     return canonical.replace(
@@ -466,6 +475,18 @@ def test_tests_yaml_invalid_e2e_parallel_workers_still_flagged(
     findings = scan_path(wf, tmp_path)
     assert len(findings) == 1
     assert findings[0].rule_id == "C002"
+
+
+def test_tests_yaml_e2e_parallel_workers_trailing_comment_not_flagged(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A same-line trailing comment after the input is normalised out too, so it
+    doesn't orphan and flag spurious drift."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "tests.yaml"
+    wf.write_text(_opt_into_parallel(render("tests.yaml"), "2", trailing_comment=True))
+    assert scan_path(wf, tmp_path) == []
 
 
 def test_tests_yaml_e2e_parallel_workers_does_not_mask_other_drift(
