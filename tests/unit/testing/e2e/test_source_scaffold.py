@@ -234,6 +234,26 @@ class TestCli:
     def test_main_errors_when_source_yaml_absent(self, tmp_path: Path) -> None:
         assert main([str(tmp_path)]) == 1
 
+    def test_main_prints_no_seed_note_for_unshipped_engine(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # A registered SQL engine that ships no canonical seed (clickhouse) — the
+        # main() note is the primary adopter signal that they must supply seed.sql.
+        (tmp_path / ".github/e2e").mkdir(parents=True)
+        (tmp_path / ".github/e2e/source.yaml").write_text("app: ch\nkind: clickhouse\n")
+        assert main([str(tmp_path)]) == 0
+        assert "no canonical seed shipped" in capsys.readouterr().out
+
+    def test_main_reports_missing_secrets_cleanly(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # query_engine kind with no `secrets:` → clean stderr line + exit 1
+        # (SecretsNotDeclaredError), not a raw traceback.
+        (tmp_path / ".github/e2e").mkdir(parents=True)
+        (tmp_path / ".github/e2e/source.yaml").write_text("app: trino\nkind: trino\n")
+        assert main([str(tmp_path)]) == 1
+        assert "secrets" in capsys.readouterr().err.lower()
+
     def test_secrets_script_executes_to_expected_bundle(self, tmp_path: Path) -> None:
         script = render(
             SourceConfig(app="mysql", kind="mysql", username="u", password="p")

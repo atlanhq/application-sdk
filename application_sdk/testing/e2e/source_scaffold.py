@@ -55,9 +55,10 @@ Usage (from a connector repo root)::
 
 from __future__ import annotations
 
+import shlex
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -207,7 +208,7 @@ def _mssql_build(cfg: SourceConfig, image: str) -> Scaffold:
                     [
                         "CMD-SHELL",
                         f"/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa "
-                        f"-P '{pw}' -Q 'SELECT 1' || exit 1",
+                        f"-P {shlex.quote(pw)} -Q 'SELECT 1' || exit 1",
                     ]
                 ),
                 "expose": ["1433"],
@@ -221,7 +222,7 @@ def _mssql_build(cfg: SourceConfig, image: str) -> Scaffold:
                 "entrypoint": [
                     "/bin/sh",
                     "-c",
-                    f"/opt/mssql-tools/bin/sqlcmd -S mssql -U sa -P '{pw}' "
+                    f"/opt/mssql-tools/bin/sqlcmd -S mssql -U sa -P {shlex.quote(pw)} "
                     f"-i /seed/{seed}",
                 ],
             },
@@ -289,8 +290,9 @@ def _minio_build(cfg: SourceConfig, image: str) -> Scaffold:
                 "entrypoint": [
                     "/bin/sh",
                     "-c",
-                    f"mc alias set local http://minio:9000 {cfg.username} "
-                    f"{cfg.password} && mc mb -p local/{cfg.bucket} && "
+                    f"mc alias set local http://minio:9000 "
+                    f"{shlex.quote(cfg.username)} {shlex.quote(cfg.password)} && "
+                    f"mc mb -p local/{cfg.bucket} && "
                     f"mc cp --recursive /fixtures/ local/{cfg.bucket}/",
                 ],
             },
@@ -327,6 +329,11 @@ def _fake_gcs_build(cfg: SourceConfig, image: str) -> Scaffold:
 
 
 def _dynamodb_build(cfg: SourceConfig, image: str) -> Scaffold:
+    # dynamodb has no canonical SDK seed (no SQL/JS dialect): the connector author
+    # MUST supply `.github/e2e/seed-dynamodb.sh` (aws-cli commands to create the
+    # tables + put items). `seed_file=None` below signals "not an SDK-materialised
+    # seed", so the compose references this script but render() won't write it —
+    # the author provides it, same as the minio/gcs fixtures dir.
     seed = cfg.seed_file or "seed-dynamodb.sh"
     return Scaffold(
         services={
@@ -630,13 +637,18 @@ print("Wrote .github/e2e/secrets/credentials.json (e2e-full bundle)")
 
 
 def canonical_seed(kind: str) -> str | None:
-    """Return the SDK-shipped canonical seed text for ``kind`` (or None)."""
-    asset = ENGINES[kind].seed_asset
-    if asset is None:
+    """Return the SDK-shipped canonical seed text for ``kind`` (or None).
+
+    ``None`` for an unknown ``kind`` or an engine that ships no seed — matching
+    the documented contract (no ``KeyError`` for a direct/future caller that
+    hasn't gone through ``_scaffold``'s validation).
+    """
+    engine = ENGINES.get(kind)
+    if engine is None or engine.seed_asset is None:
         return None
     return (
         resources.files("application_sdk.testing.e2e")
-        .joinpath("seeds", asset)
+        .joinpath("seeds", engine.seed_asset)
         .read_text()
     )
 
@@ -684,7 +696,7 @@ def load_config(path: Path) -> SourceConfig:
 
 
 def field_names() -> tuple[Any, ...]:
-    return tuple(SourceConfig.__dataclass_fields__.values())  # type: ignore[attr-defined]
+    return fields(SourceConfig)
 
 
 def write_scaffold(cfg: SourceConfig, root: Path = Path(".")) -> list[Path]:
@@ -708,10 +720,18 @@ def main(argv: list[str] | None = None) -> int:
             f"(see application_sdk.testing.e2e.source_scaffold docstring).\n"
         )
         return 1
-    cfg = load_config(config_path)
-    for path in write_scaffold(cfg, root):
+    # UnsupportedSourceEngineError + SecretsNotDeclaredError (both ValueError
+    # subclasses) and load_config's ValueErrors carry clear, actionable messages
+    # — surface them as a clean stderr line + exit 1, not a raw traceback.
+    try:
+        cfg = load_config(config_path)
+        written = write_scaffold(cfg, root)
+        _, scaffold = _scaffold(cfg)
+    except ValueError as exc:
+        sys.stderr.write(f"error: {exc}\n")
+        return 1
+    for path in written:
         sys.stdout.write(f"wrote {path}\n")
-    _, scaffold = _scaffold(cfg)
     if (
         scaffold.seed_file
         and cfg.seed_file is None
