@@ -317,8 +317,6 @@ class TestBuildAgentJson:
 
     def test_empty_extra_emits_no_extra_keys(self) -> None:
         # mysql parity: no database in DB_CONFIG.required → no extra.* keys.
-        db = DatabaseSpec(
-            host="mysql", port=3306, username="u", password="p"
-        )
+        db = DatabaseSpec(host="mysql", port=3306, username="u", password="p")
         aj = build_agent_json(db, self._AGENT, "mysql")
         assert not any(k.startswith("extra.") for k in aj)
