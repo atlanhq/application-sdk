@@ -156,27 +156,43 @@ async def wait_for_dapr_sidecar(
     url = f"{_dapr_base_url()}{_HEALTHZ_PATH}"
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
+    last_exc: Exception | None = None
     async with httpx.AsyncClient(timeout=2.0) as client:
         while True:
             try:
                 r = await client.get(url)
             # conformance: ignore[E004] sidecar health probe; connection errors are expected while daprd is still cold-booting and are logged at debug
-            except Exception:
+            except Exception as exc:
+                last_exc = exc
                 logger.debug("Dapr sidecar poll failed", exc_info=True)
             else:
                 if r.status_code == 204:
                     _dapr_sidecar_confirmed_ready = True
                     return
-                logger.debug(
-                    "Dapr sidecar HTTP API reachable (healthz=%d); "
-                    "proceeding without full-component wait",
+                # Reachable but not fully initialized: this is the load-bearing
+                # "proceed early" decision (the only path that fires whenever
+                # healthz never reaches 204, e.g. SDR / optional non-init
+                # components). INFO, not DEBUG, so it survives the prod INFO
+                # floor and leaves a breadcrumb; not WARNING, since this is an
+                # expected steady state and per-call cold-start retries cover
+                # component readiness.
+                # conformance: ignore[L006] not a per-iteration log — this INFO fires at most once and immediately returns; it is the single "proceeded early" decision, not loop-body volume
+                logger.info(
+                    "Dapr sidecar HTTP API reachable (healthz=%d) but not fully "
+                    "initialized; proceeding without the full-component wait — "
+                    "per-call cold-start retries cover component readiness",
                     r.status_code,
                 )
                 return
             if loop.time() >= deadline:
+                # Only the connection-error path can reach here (any HTTP
+                # response returns above), so surface the last error — a
+                # genuinely unreachable/misconfigured sidecar (wrong port, DNS,
+                # perms) should be diagnosable, not just "timed out".
                 logger.warning(
                     "Dapr sidecar not reachable after %.0fs — proceeding anyway",
                     timeout,
+                    exc_info=last_exc,
                 )
                 return
             await asyncio.sleep(interval)

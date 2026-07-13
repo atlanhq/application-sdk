@@ -480,6 +480,7 @@ class TestWaitForDaprSidecar:
             patch(
                 "application_sdk.infrastructure._dapr.http.httpx.AsyncClient"
             ) as mock_cls,
+            patch("application_sdk.infrastructure._dapr.http.logger") as mock_logger,
         ):
             mock_cls.return_value.__aenter__ = AsyncMock(
                 return_value=MagicMock(get=mock_get)
@@ -487,6 +488,13 @@ class TestWaitForDaprSidecar:
             mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
             await wait_for_dapr_sidecar(timeout=5.0, interval=0.01)
         mock_get.assert_called_once()
+        # The "proceeding without full-component wait" decision is INFO (not
+        # DEBUG) so it survives the prod INFO floor, and it carries the status
+        # code — not WARNING, since a reachable-but-not-204 sidecar is an
+        # expected steady state, not an anomaly.
+        mock_logger.info.assert_called_once()
+        assert 503 in mock_logger.info.call_args[0]
+        mock_logger.warning.assert_not_called()
 
     async def test_timeout_logs_warning(self):
         """Logs a warning and returns when daprd never accepts connections
@@ -508,6 +516,11 @@ class TestWaitForDaprSidecar:
             await wait_for_dapr_sidecar(timeout=0.05, interval=0.01)
         mock_logger.warning.assert_called_once()
         assert "not reachable" in mock_logger.warning.call_args[0][0]
+        # The terminal give-up must carry the last connection error so a
+        # genuinely unreachable/misconfigured sidecar is diagnosable.
+        assert isinstance(
+            mock_logger.warning.call_args.kwargs.get("exc_info"), _httpx.ConnectError
+        )
 
     async def test_connection_error_does_not_crash(self):
         """Poll loop survives connection errors and eventually times out cleanly."""
