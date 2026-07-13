@@ -83,6 +83,19 @@ inputs:
     description: Extra arguments appended to the pytest invocation.
     required: false
     default: ""
+  pytest-parallel-workers:
+    description: |
+      Opt-in pytest-xdist parallelism. Empty (default) runs the suite
+      sequentially — the historical behaviour. Set to a worker count
+      (e.g. "2") or "auto" to run test cases concurrently: the action
+      pulls in pytest-xdist on the fly (`uv run --with pytest-xdist`) and
+      appends `-n <value> --dist loadscope`. loadscope keeps a module's /
+      class's tests on one worker, so only independent suites parallelise —
+      safe for connectors with class-scoped fixtures. Only opt in when the
+      test classes are mutually independent (distinct connections + AE
+      workflow slugs).
+    required: false
+    default: ""
   application-sdk-ref:
     description: |
       Optional application-sdk commit SHA / ref. When supplied, the
@@ -552,10 +565,21 @@ runs:
         TWO_STORE: ${{ inputs.enable-two-store }}
       run: |
         mkdir -p results
+        # Opt-in pytest-xdist parallelism. Empty workers → sequential (default,
+        # unchanged). A worker count / "auto" pulls in xdist on the fly and
+        # distributes by loadscope (a module's tests stay on one worker).
+        UV_WITH=""
+        XDIST_ARGS=""
+        if [ -n "${{ inputs.pytest-parallel-workers }}" ]; then
+          UV_WITH="--with pytest-xdist"
+          XDIST_ARGS="-n ${{ inputs.pytest-parallel-workers }} --dist loadscope"
+          echo "Running e2e in parallel: ${XDIST_ARGS}"
+        fi
         set +e
-        uv run pytest "${{ inputs.test-path }}" -v \
+        uv run ${UV_WITH} pytest "${{ inputs.test-path }}" -v \
           --tb=short \
           --junit-xml=results/sdr-test-results.xml \
+          ${XDIST_ARGS} \
           ${{ inputs.pytest-extra-args }} \
           2>&1 | tee results/sdr-test-output.txt
         TEST_EXIT_CODE=${PIPESTATUS[0]}
