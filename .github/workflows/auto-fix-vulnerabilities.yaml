@@ -26,6 +26,12 @@ on:
     secrets:
       ORG_PAT_GITHUB:
         required: true
+      FLEET_APP_ID:
+        required: false
+        description: "atlan-app-fleet App ID (org secret). Not passed explicitly by any current caller — auto-available via 'secrets: inherit'. Declared here so the contract is self-documenting."
+      FLEET_APP_PRIVATE_KEY:
+        required: false
+        description: "atlan-app-fleet App private key (org secret). Same availability as FLEET_APP_ID above."
 
 permissions:
   contents: write
@@ -62,11 +68,21 @@ jobs:
               content: 'rocket',
             });
 
+      - name: Mint fleet App token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: ${{ github.event.repository.name }}
+
       - name: Checkout PR branch
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ steps.pr.outputs.branch }}
-          token: ${{ secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
 
       - name: Download latest scan artifacts
         env:

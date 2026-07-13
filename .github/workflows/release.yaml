@@ -76,15 +76,29 @@ jobs:
             exit 1
           fi
 
+      - name: Mint fleet App token
+        # A real (non-github-actions[bot]) identity is required so the push
+        # below re-fires the bump PR's required checks. This PR always needs
+        # human/codeowner review regardless of author identity (GitHub blocks
+        # self-approval, and no workflow auto-merges bump-version-* PRs), so
+        # there's no bypass-actor dependency here to preserve.
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+
       - name: Generate changelog
         id: changelog
         env:
-          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: python .github/scripts/update_changelog.py "${{ env.CURRENT_VERSION }}" "${{ env.NEW_VERSION }}"
 
       - name: Commit version bump and changelog
         env:
-          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           git config --global user.name 'atlan-ci'
           git config --global user.email 'it@atlan.com'

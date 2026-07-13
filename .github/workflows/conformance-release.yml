@@ -36,10 +36,23 @@ jobs:
         !startsWith(github.event.pull_request.head.ref, 'bump-version-conformance')
       )
     steps:
+      - name: Mint fleet App token
+        # A real (non-github-actions[bot]) identity is required so the push
+        # below re-fires the bump PR's required checks. No workflow auto-merges
+        # this PR (GitHub blocks self-approval regardless of author identity),
+        # so there's no bypass-actor dependency to preserve here.
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
-          token: ${{ secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token }}
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
@@ -53,7 +66,7 @@ jobs:
       - name: Compute version, bump pyproject + __init__, update CHANGELOG
         id: versions
         env:
-          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: python .github/scripts/conformance_release.py
 
@@ -64,7 +77,7 @@ jobs:
       - name: Push bump branch and open or update PR
         if: steps.versions.outputs.skip != 'true'
         env:
-          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
           new_version="${{ steps.versions.outputs.new }}"

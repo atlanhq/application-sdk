@@ -45,6 +45,12 @@ on:
       ORG_PAT_GITHUB:
         required: true
         description: "Org PAT for git push and gh pr create"
+      FLEET_APP_ID:
+        required: false
+        description: "atlan-app-fleet App ID (org secret). Not passed explicitly by any current caller — auto-available via 'secrets: inherit'. Declared here so the contract is self-documenting."
+      FLEET_APP_PRIVATE_KEY:
+        required: false
+        description: "atlan-app-fleet App private key (org secret). Same availability as FLEET_APP_ID above."
 
 permissions:
   contents: write
@@ -56,11 +62,24 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Mint fleet App token
+        # No workflow auto-merges the bump PR this opens (GitHub blocks
+        # self-approval regardless of author identity), so only the re-fire
+        # property matters here, not a specific bypass-actor identity.
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: ${{ github.event.repository.name }}
+
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
-          token: ${{ secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
 
       - name: Checkout SDK helper scripts
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -94,13 +113,13 @@ jobs:
 
       - name: Generate changelog
         env:
-          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: python3 .sdk-scripts/.github/scripts/update_changelog.py "${{ steps.versions.outputs.current }}" "${{ steps.bump.outputs.new }}"
 
       - name: Commit and open PR
         env:
-          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
         run: |
           set -euo pipefail
           git config --global user.name 'atlan-ci'
