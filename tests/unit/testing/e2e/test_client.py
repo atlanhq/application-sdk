@@ -13,7 +13,11 @@ from unittest.mock import patch
 
 import pytest
 
-from application_sdk.testing.e2e._errors import AtlanApiHttpError, AtlanApiTimeoutError
+from application_sdk.testing.e2e._errors import (
+    AtlanApiHttpError,
+    AtlanApiTimeoutError,
+    NoWorkerOnTaskQueueError,
+)
 from application_sdk.testing.e2e.client import (
     _REQUEST_MAX_ATTEMPTS,
     AEWorkflowClient,
@@ -55,6 +59,152 @@ def _http_error() -> AtlanApiHttpError:
         message="AE-COMMON-500-01: An unexpected error occurred",
         target="GET /api/service/package-workflows/native-status HTTP 500",
     )
+
+
+def _result(run_status: DAGRunStatus, node_status: DAGNodeStatus) -> DAGRunResult:
+    return DAGRunResult(
+        run_id=_RUN_ID,
+        workflow_slug="slug",
+        status=run_status,
+        nodes=[
+            DAGNodeResult(
+                name="extract",
+                status=node_status,
+                started_at_ms=None,
+                completed_at_ms=None,
+                error_message=None,
+            )
+        ],
+    )
+
+
+class TestPollNativeStatusStallGuard:
+    """poll_native_status must fail fast when no node starts (no worker)."""
+
+    def test_raises_when_no_node_starts_within_grace(self):
+        """Run is Running but the extract node stays Pending → the parent is on
+        the AE queue while no worker polls the extract queue. Must raise
+        NoWorkerOnTaskQueueError once the grace window elapses, not hang."""
+        client = _make_client()
+        stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
+
+        with patch.object(client, "get_native_status", return_value=stuck):
+            with patch("time.sleep"):
+                with pytest.raises(NoWorkerOnTaskQueueError) as exc:
+                    client.poll_native_status(
+                        _RUN_ID,
+                        interval_seconds=10,
+                        timeout_seconds=600,
+                        stall_grace_seconds=30,
+                        stall_task_queue="atlan-openapi-e2e-full-ci-42",
+                    )
+        # Message names the queue so the operator can spot the mismatch.
+        assert "atlan-openapi-e2e-full-ci-42" in str(exc.value)
+
+    def test_raises_when_node_stuck_in_scheduled(self):
+        """Symmetric to the Pending case: production treats both Pending AND
+        Scheduled as 'not started' (client.py), so a node stuck in Scheduled
+        must keep the guard armed and raise. Guards against a regression that
+        drops SCHEDULED from the not-started set."""
+        client = _make_client()
+        stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.SCHEDULED)
+
+        with patch.object(client, "get_native_status", return_value=stuck):
+            with patch("time.sleep"):
+                with pytest.raises(NoWorkerOnTaskQueueError):
+                    client.poll_native_status(
+                        _RUN_ID,
+                        interval_seconds=10,
+                        timeout_seconds=600,
+                        stall_grace_seconds=30,
+                        stall_task_queue="atlan-openapi-e2e-full-ci-42",
+                    )
+
+    def test_generic_queue_hint_when_stall_task_queue_empty(self):
+        """With no stall_task_queue supplied, the error falls back to the
+        generic 'the extract task queue' phrasing."""
+        client = _make_client()
+        stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
+
+        with patch.object(client, "get_native_status", return_value=stuck):
+            with patch("time.sleep"):
+                with pytest.raises(NoWorkerOnTaskQueueError) as exc:
+                    client.poll_native_status(
+                        _RUN_ID,
+                        interval_seconds=10,
+                        timeout_seconds=600,
+                        stall_grace_seconds=30,
+                        stall_task_queue="",
+                    )
+        assert "the extract task queue" in str(exc.value)
+
+    def test_no_raise_when_node_starts_before_grace(self):
+        """Once any node reaches Running the guard latches off — a long-running
+        node past the grace window must NOT trip it."""
+        client = _make_client()
+        running = _result(DAGRunStatus.RUNNING, DAGNodeStatus.RUNNING)
+        done = _succeeded_result()
+        # Node running for many polls (well past grace), then succeeds.
+        side_effects = [running] * 6 + [done]
+
+        with patch.object(client, "get_native_status", side_effect=side_effects):
+            with patch("time.sleep"):
+                result = client.poll_native_status(
+                    _RUN_ID,
+                    interval_seconds=10,
+                    timeout_seconds=600,
+                    stall_grace_seconds=5,
+                    stall_task_queue="atlan-openapi-e2e-full-ci-42",
+                )
+        assert result.status == DAGRunStatus.SUCCEEDED
+
+    def test_guard_disabled_when_grace_none(self):
+        """stall_grace_seconds=None disables the guard: a stuck run polls to the
+        timeout and returns the last observation instead of raising."""
+        client = _make_client()
+        stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
+
+        with patch.object(client, "get_native_status", return_value=stuck):
+            with patch("time.sleep"):
+                result = client.poll_native_status(
+                    _RUN_ID,
+                    interval_seconds=10,
+                    timeout_seconds=30,
+                    stall_grace_seconds=None,
+                )
+        assert result.status == DAGRunStatus.RUNNING
+
+    def test_guard_disabled_when_grace_zero(self):
+        """stall_grace_seconds=0 also disables the guard (base passes the int
+        attr directly, so 0 must be treated as off, not 'grace of 0')."""
+        client = _make_client()
+        stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
+
+        with patch.object(client, "get_native_status", return_value=stuck):
+            with patch("time.sleep"):
+                result = client.poll_native_status(
+                    _RUN_ID,
+                    interval_seconds=10,
+                    timeout_seconds=30,
+                    stall_grace_seconds=0,
+                )
+        assert result.status == DAGRunStatus.RUNNING
+
+    def test_negative_grace_does_not_fire_on_first_poll(self):
+        """A negative grace is non-positive → disabled, NOT 'fire immediately'
+        (elapsed 0 >= -1 would otherwise trip the guard on the first poll)."""
+        client = _make_client()
+        stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
+
+        with patch.object(client, "get_native_status", return_value=stuck):
+            with patch("time.sleep"):
+                result = client.poll_native_status(
+                    _RUN_ID,
+                    interval_seconds=10,
+                    timeout_seconds=30,
+                    stall_grace_seconds=-1,
+                )
+        assert result.status == DAGRunStatus.RUNNING
 
 
 class TestPollNativeStatusTransientHandling:

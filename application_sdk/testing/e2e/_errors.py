@@ -89,6 +89,24 @@ class AdminRoleNotResolvedError(PreconditionError):
 
 
 @dataclass(kw_only=True)
+class NoWorkerOnTaskQueueError(PreconditionError):
+    """No worker started any DAG node within the stall-grace window.
+
+    The AE run's parent workflow runs on the always-on automation-engine
+    queue, so the top-level run flips to ``Running`` even when the connector's
+    own ``extract`` node is stuck ``Pending`` because no worker is polling its
+    task queue. Rather than let the harness hang for the full
+    ``ae_poll_timeout_seconds`` (often 30 min), we fail fast here. The usual
+    cause is an agent-name / task-queue mismatch: the test's
+    ``agent_spec().agent_name`` must resolve to the same queue the deployed
+    worker polls (``atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}``).
+    """
+
+    code: ClassVar[str] = "PRECONDITION_NO_WORKER_ON_TASK_QUEUE"
+    expected_state: str | None = "a worker polling the extract task queue"
+
+
+@dataclass(kw_only=True)
 class AgentSpecRequiredError(InvalidInputError):
     """Agent mode requires an ``AgentSpec`` but none was provided."""
 
