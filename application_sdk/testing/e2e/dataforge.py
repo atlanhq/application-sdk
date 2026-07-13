@@ -101,9 +101,12 @@ def _urllib_transport(
         return exc.code, parsed
 
 
-def _load_session_token() -> str:
-    """Read the DataForge Bearer token from the CI secret or the session file."""
+def _load_session() -> tuple[str, str, Path | None]:
+    """Load ``(session_token, refresh_token, file_path)`` from the CI secret or
+    the session file. ``file_path`` is where a refreshed session is written back
+    (``None`` when the session came from the env, which can't be rewritten)."""
     inline = os.environ.get("DATAFORGE_SESSION")
+    path: Path | None = None
     if inline:
         raw: str | None = inline
     else:
@@ -111,6 +114,8 @@ def _load_session_token() -> str:
             os.environ.get("DATAFORGE_SESSION_FILE", _DEFAULT_SESSION_FILE)
         ).expanduser()
         raw = path.read_text() if path.is_file() else None
+        if raw is None:
+            path = None
     if not raw:
         raise DataForgeAuthError(
             "No DataForge session found. Run the `auth` command once "
@@ -119,23 +124,31 @@ def _load_session_token() -> str:
             "the file. See the internal DataForge developer docs."
         )
     try:
-        token = json.loads(raw).get("session_token")
+        d = json.loads(raw)
     except ValueError as exc:
         raise DataForgeAuthError(f"DataForge session is not valid JSON: {exc}") from exc
+    token = d.get("session_token")
     if not token:
         raise DataForgeAuthError("DataForge session JSON has no 'session_token'.")
-    return token
+    return token, d.get("refresh_token", ""), path
 
 
 @dataclass
 class DataForgeClient:
-    """Thin client over the DataForge resource-provisioning REST API."""
+    """Thin client over the DataForge resource-provisioning REST API.
+
+    The session token is short-lived (~15 min), while a provisioning poll can
+    run far longer — so a 401 mid-flight is expected and handled by exchanging
+    the refresh token for a fresh session and retrying once (see :meth:`_call`).
+    """
 
     api_url: str = field(
         default_factory=lambda: os.environ.get("DATAFORGE_API_URL", "").rstrip("/")
     )
     transport: Transport = _urllib_transport
     _token: str | None = None
+    _refresh_token: str = ""
+    _session_path: Path | None = None
 
     def _require_api_url(self) -> str:
         if not self.api_url:
@@ -147,20 +160,43 @@ class DataForgeClient:
 
     def _headers(self) -> dict[str, str]:
         if self._token is None:
-            self._token = _load_session_token()
+            self._token, self._refresh_token, self._session_path = _load_session()
         return {
             "Authorization": f"Bearer {self._token}",
             "Content-Type": "application/json",
         }
 
+    def _refresh(self) -> bool:
+        """Exchange the refresh token for a fresh session. Returns success."""
+        if not self._refresh_token:
+            return False
+        status, data = self.transport(
+            "POST",
+            f"{self._require_api_url()}/auth/refresh",
+            {"Content-Type": "application/json"},
+            json.dumps({"refresh_token": self._refresh_token}).encode(),
+        )
+        if status != 200 or not data or not data.get("session_token"):
+            return False
+        self._token = data["session_token"]
+        self._refresh_token = data.get("refresh_token", self._refresh_token)
+        if self._session_path is not None:
+            try:  # best-effort: keep the on-disk session current for reuse
+                _write_session(data, str(self._session_path))
+            except OSError:
+                pass
+        return True
+
     def _call(self, method: str, path: str, body: dict | None = None) -> Any:
         url = f"{self._require_api_url()}{path}"
         payload = json.dumps(body).encode() if body is not None else None
         status, data = self.transport(method, url, self._headers(), payload)
+        if status == 401 and self._refresh():
+            status, data = self.transport(method, url, self._headers(), payload)
         if status == 401:
             raise DataForgeAuthError(
-                "DataForge returned 401 — session expired. Re-run the device-code "
-                "flow and refresh the DATAFORGE_SESSION secret."
+                "DataForge returned 401 — session expired and refresh failed. "
+                "Re-run the `auth` command to mint a new session."
             )
         if status >= 400:
             detail = (data or {}).get("error") or (data or {}).get("code") or data

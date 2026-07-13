@@ -288,3 +288,33 @@ class TestDeviceLogin:
                 open_browser=False, write_path=str(tmp_path / "s.json"),
                 sleep=lambda _s: None, now=lambda: next(clock), echo=lambda _m: None,
             )
+
+
+class TestRefresh:
+    def test_401_then_refresh_then_retry_succeeds(self) -> None:
+        # GET 401 (expired) -> POST /auth/refresh 200 -> GET retry 200.
+        seq = [
+            (401, {"error": "unauthorized"}),
+            (200, {"session_token": "fresh-session", "refresh_token": "fresh-refresh"}),
+            (200, [{"id": "r-live", "status": "PROVISIONED"}]),
+        ]
+        seen = []
+
+        def transport(method, url, headers, body):
+            seen.append((method, url.rsplit("/", 2)[-2] + "/" + url.rsplit("/", 1)[-1]))
+            return seq.pop(0)
+
+        c = DataForgeClient(
+            transport=transport, api_url=_API,
+            _token="stale-session", _refresh_token="rt",
+        )
+        assert c.find_reusable("redshift") == "r-live"
+        assert c._token == "fresh-session"  # rotated
+        # the middle call hit the refresh endpoint
+        assert any("auth/refresh" in p for _m, p in seen)
+
+    def test_401_without_refresh_token_raises(self) -> None:
+        t = FakeTransport({("GET", "/api/v1/resources"): (401, {"error": "x"})})
+        # _client() sets no refresh token -> refresh() returns False -> raises
+        with pytest.raises(DataForgeAuthError, match="session expired"):
+            _client(t).find_reusable("redshift")
