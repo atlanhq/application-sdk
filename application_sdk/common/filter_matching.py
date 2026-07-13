@@ -49,16 +49,19 @@ Notes:
       ``fullmatch`` per candidate in-process, and Python ``re`` has no timeout, so
       a pathological pattern (e.g. ``(a+)+$``) can catastrophically backtrack.
       Filter sources are trusted connection config, so this is low-risk; do not
-      feed untrusted patterns through it.
+      feed untrusted patterns through it. This is a **trust-boundary assumption**:
+      a future consumer that forwards a filter originating from customer-editable
+      UI text (rather than connection config) must add a length/timeout bound
+      before compiling it here.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
 
-from application_sdk.common.sql_filters import normalize_filters, parse_filter_input
-from application_sdk.common.sql_filters_errors import InvalidSqlFilterError
+import orjson
+
+from application_sdk.common.sql_filters import normalize_filters
 
 # A filter as it arrives from a workflow spec / contract: a single pattern string,
 # a list of pattern strings, the hierarchical ``{"^db$": ["^schema$"]}`` map, a
@@ -136,16 +139,18 @@ def _to_patterns(filter_input: FilterInput, *, exact: bool) -> list[str]:
         # can forward the AE ``include-filter`` metadata verbatim — including the
         # empty ``"{}"`` / ``"[]"`` default, which must resolve to match-all, NOT
         # to a literal ``"{}"`` token. A bare regex (``^prod_.*$``) is not JSON,
-        # so parse_filter_input raises and we fall back to a single token.
+        # so the decode raises and we fall back to a single token. Decode locally
+        # rather than via ``parse_filter_input`` (declared ``dict`` but returns a
+        # ``list`` for a ``"[...]"`` input — relying on that mistype is fragile).
         if stripped[0] in "{[":
             try:
-                parsed = parse_filter_input(stripped)
-            except (InvalidSqlFilterError, ValueError, TypeError):
+                parsed = orjson.loads(stripped)
+            except orjson.JSONDecodeError:
                 parsed = None
             if isinstance(parsed, (dict, list)):
                 return _to_patterns(parsed, exact=exact)
         tokens: list[str] = [stripped]
-    elif isinstance(filter_input, Iterable):
+    elif isinstance(filter_input, (list, tuple, set)):
         tokens = [str(t).strip() for t in filter_input]
     else:
         tokens = [str(filter_input).strip()]
