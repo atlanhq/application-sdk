@@ -171,6 +171,23 @@ def test_na_when_git_diff_fails(repo, monkeypatch):
     assert mod.main([]) == 0
 
 
+def test_na_when_git_ls_files_fails(repo, monkeypatch):
+    # Symmetric to test_na_when_git_diff_fails: the untracked-file lookup
+    # (`git ls-files --others`) failing is also inconclusive, not "clean".
+    monkeypatch.setattr(sync, "run", _fake_run())
+    real_run = subprocess.run
+
+    def fake_subprocess_run(cmd, **kwargs):
+        if cmd[:2] == ["git", "ls-files"]:
+            return subprocess.CompletedProcess(
+                cmd, returncode=128, stdout="", stderr="fatal: boom"
+            )
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_subprocess_run)
+    assert mod.main([]) == 0
+
+
 def test_untracked_output_ignored_by_gitignore_still_caught(repo, monkeypatch):
     # A .gitignore rule covering the output path must not hide a brand-new
     # generated file from the freshness check (--exclude-standard is dropped).

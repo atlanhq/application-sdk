@@ -124,11 +124,9 @@ def check_freshness(contract_dir: str = "contract") -> tuple[str, list[str]]:
         # that `pkl eval` itself failed — the committed contract does not
         # regenerate. That is the exact silent-degrade this gate must catch, not
         # an inconclusive skip: fail red. regenerate() already logged the eval
-        # error; renovate_pkl_sync keeps degrading to a lock-only sync (a
-        # security bump must not be blocked), only this freshness gate goes red.
-        print(
-            "::error::contract/app.pkl exists but 'pkl eval' failed to regenerate it."
-        )
+        # error and main() emits the actionable ::error::, so no annotation here
+        # (avoids a duplicate). renovate_pkl_sync keeps degrading to a lock-only
+        # sync (a security bump must not be blocked); only this gate goes red.
         return ("eval_failed", [])
 
     changed = _changed_output_paths()
