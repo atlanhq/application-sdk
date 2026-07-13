@@ -1036,6 +1036,41 @@ def _collect_top_level_imports(py_files: Iterable[Path]) -> set[str]:
     return modules
 
 
+# A SQLAlchemy dialect string encodes the DBAPI driver as ``dialect+driver`` —
+# in a URL (``mysql+aiomysql://…``) or a ``drivername`` value
+# (``URL.create(drivername="mysql+aiomysql", …)``). SQLAlchemy imports that
+# driver package at runtime from the string, so it never appears as a Python
+# ``import`` — yet the package is genuinely used. Capture the ``driver`` half.
+_SQLALCHEMY_DIALECT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\+([A-Za-z_][A-Za-z0-9_]+)")
+
+
+def _collect_dialect_drivers(py_files: Iterable[Path]) -> set[str]:
+    """Return DBAPI driver names referenced in SQLAlchemy ``dialect+driver`` strings.
+
+    Scans string literals across *py_files* for the ``dialect+driver`` form and
+    keeps the ``driver`` component (``mysql+aiomysql`` -> ``aiomysql``). Used to
+    mark a dependency loaded dynamically by SQLAlchemy as used, so D003 does not
+    flag it as unimported. Deliberately biased toward matching (WARN-tier, zero
+    false positives): an over-captured token only ever suppresses a D003 finding
+    for a dependency literally named like that token.
+    """
+    drivers: set[str] = set()
+    for path in py_files:
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            continue
+        try:
+            tree = ast.parse(raw)
+        except (SyntaxError, ValueError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                for match in _SQLALCHEMY_DIALECT_RE.finditer(node.value):
+                    drivers.add(match.group(1))
+    return drivers
+
+
 def _dist_import_names(dist_name: str) -> set[str] | None:
     """Return the top-level import names a distribution provides, or ``None``.
 
@@ -1088,13 +1123,16 @@ def _scan_unused_dependencies(
     file: str,
     *,
     dist_import_map: Mapping[str, set[str] | None],
+    dialect_drivers: set[str],
 ) -> tuple[list[Finding], list[str]]:
     """Return (D003 findings, names of dependencies skipped as unresolvable).
 
     A dependency is flagged when the import names it provides are all absent
-    from *imported_modules*.  A dependency whose ``dist_import_map`` value is
-    ``None`` (not importable in this environment) is skipped and returned in the
-    second list so the caller can surface it — never silently dropped.
+    from *imported_modules* AND it is not referenced as a SQLAlchemy
+    ``dialect+driver`` (``dialect_drivers``).  A dependency whose
+    ``dist_import_map`` value is ``None`` (not importable in this environment) is
+    skipped and returned in the second list so the caller can surface it — never
+    silently dropped.
     """
     findings: list[Finding] = []
     unresolved: list[str] = []
@@ -1110,6 +1148,8 @@ def _scan_unused_dependencies(
             continue
         if provided & imported_modules:
             continue  # at least one provided module is imported -> used
+        if entry.name in dialect_drivers or provided & dialect_drivers:
+            continue  # loaded dynamically by SQLAlchemy via a dialect+driver string
         provided_list = ", ".join(sorted(provided))
         findings.append(
             _make_finding(
@@ -1139,6 +1179,7 @@ def scan_all(
     *,
     dist_import_map: Mapping[str, set[str] | None] | None = None,
     imported_modules: set[str] | None = None,
+    dialect_drivers: set[str] | None = None,
 ) -> list[Finding]:
     """Run the full D-series over *paths*: per-file D001/D002 + cross-file D003.
 
@@ -1185,6 +1226,8 @@ def scan_all(
         imported_modules = _collect_top_level_imports(py_files)
     if dist_import_map is None:
         dist_import_map = {e.name: _dist_import_names(e.name) for e in dep_entries}
+    if dialect_drivers is None:
+        dialect_drivers = _collect_dialect_drivers(py_files)
 
     try:
         rel = root_pyproject.relative_to(root)
@@ -1197,6 +1240,7 @@ def scan_all(
         parse_toml_suppressions(text),
         str(rel),
         dist_import_map=dist_import_map,
+        dialect_drivers=dialect_drivers,
     )
     findings.extend(d003_findings)
 
