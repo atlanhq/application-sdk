@@ -555,6 +555,23 @@ runs:
           sleep 1
         done
 
+    # Resolve opt-in pytest-xdist flags. Validation + the empty/sequential-vs-
+    # parallel decision live in a tested Python driver per docs/standards/ci.md
+    # (co-located with the action so it is checked out alongside sdr-e2e when
+    # consumed from another repo — never referenced from .github/scripts/, which
+    # is not present in consumer checkouts). Emits two outputs: uv_with and
+    # xdist_args (both empty ⇒ sequential, the default). This step is
+    # straight-line; the branching is inside the script.
+    - name: Resolve e2e parallelism flags
+      id: xdist
+      shell: bash
+      env:
+        SDR_E2E_ROOT: ${{ steps.action_root.outputs.path }}
+      run: |
+        OUT=$(python3 "$SDR_E2E_ROOT/build_pytest_parallel_args.py" \
+          --parallel-workers "${{ inputs.pytest-parallel-workers }}")
+        echo "$OUT" >> "$GITHUB_OUTPUT"
+
     - name: Run SDR integration tests
       id: tests
       shell: bash
@@ -565,21 +582,14 @@ runs:
         TWO_STORE: ${{ inputs.enable-two-store }}
       run: |
         mkdir -p results
-        # Opt-in pytest-xdist parallelism. Empty workers → sequential (default,
-        # unchanged). A worker count / "auto" pulls in xdist on the fly and
-        # distributes by loadscope (a module's tests stay on one worker).
-        UV_WITH=""
-        XDIST_ARGS=""
-        if [ -n "${{ inputs.pytest-parallel-workers }}" ]; then
-          UV_WITH="--with pytest-xdist"
-          XDIST_ARGS="-n ${{ inputs.pytest-parallel-workers }} --dist loadscope"
-          echo "Running e2e in parallel: ${XDIST_ARGS}"
-        fi
         set +e
-        uv run ${UV_WITH} pytest "${{ inputs.test-path }}" -v \
+        # uv_with / xdist_args are empty (sequential) unless the caller opted
+        # into parallelism via pytest-parallel-workers; the script validated
+        # the value so unquoted expansion here carries no shell metacharacters.
+        uv run ${{ steps.xdist.outputs.uv_with }} pytest "${{ inputs.test-path }}" -v \
           --tb=short \
           --junit-xml=results/sdr-test-results.xml \
-          ${XDIST_ARGS} \
+          ${{ steps.xdist.outputs.xdist_args }} \
           ${{ inputs.pytest-extra-args }} \
           2>&1 | tee results/sdr-test-output.txt
         TEST_EXIT_CODE=${PIPESTATUS[0]}
