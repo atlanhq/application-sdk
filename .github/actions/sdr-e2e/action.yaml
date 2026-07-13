@@ -71,8 +71,14 @@ inputs:
       How long to wait for the SDR container's /server/health endpoint to
       respond before failing. Connectors with heavy native deps (e.g. SAP
       JCo) may need 180s+; default fits most.
+
+      INVARIANT: keep this strictly greater than the SDK's max startup
+      sidecar wait (ATLAN_DAPR_SIDECAR_WAIT_TIMEOUT, default 60 in
+      application_sdk/infrastructure/_dapr/http.py). The health bind happens
+      after that wait, so an equal value makes the gate a coin-flip. See
+      CNCT-66.
     required: false
-    default: "60"
+    default: "120"
   pytest-extra-args:
     description: Extra arguments appended to the pytest invocation.
     required: false
