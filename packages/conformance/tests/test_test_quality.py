@@ -119,6 +119,18 @@ def test_t005_silent_on_scenario_helper() -> None:
     assert findings == []
 
 
+def test_t005_silent_on_underscore_assert_helper() -> None:
+    """A test whose only check is a project-local ``_assert_*`` helper is
+    recognised — this vocabulary is documented in the module docstring and the
+    T005 rule's ``full_description``, but a leading underscore defeats a bare
+    ``startswith("assert")``."""
+    findings = scan_text(
+        "def test_foo():\n    result = compute()\n    _assert_structure(result)\n",
+        "tests/unit/test_foo.py",
+    )
+    assert findings == []
+
+
 def test_t005_silent_on_trailing_no_raise_marker() -> None:
     findings = scan_text(
         "def test_foo():\n    compute()  # should not raise\n",

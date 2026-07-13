@@ -114,7 +114,7 @@ Dapr component names are read at module-import time (not at runtime) because the
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ATLAN_DAPR_SIDECAR_WAIT_TIMEOUT` | `60` | Seconds to poll `/v1.0/healthz` at startup before proceeding anyway. Increase for pathologically slow cold starts (image pull + daprd boot + component init). |
+| `ATLAN_DAPR_SIDECAR_WAIT_TIMEOUT` | `60` | Max seconds to poll `/v1.0/healthz` at startup for daprd to start accepting connections. Startup proceeds as soon as daprd answers the probe at all (per-component readiness is covered by each call site's cold-start retry budget); only connection errors poll to this deadline. Increase for pathologically slow cold starts (image pull + daprd boot). |
 | `ATLAN_DAPR_COLD_START_MAX_WAIT_SECONDS` | `120.0` | Seconds a Dapr-backed call (secret fetch, credential-vault config fetch, ...) may retry a cold-sidecar race before giving up. Shared by every call site that opts into `retry_past_dapr_cold_start`. Env-overridable for pathologically slow runners. |
 
 ---

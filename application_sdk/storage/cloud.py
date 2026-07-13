@@ -534,7 +534,9 @@ def _create_s3_store(
             # two S3 auth paths are distinguishable in CloudTrail AssumeRole logs
             # (and preserves CloudStore's historical session name).
             session_name=extra.get("aws_role_session_name") or "cloud-store-session",
-            region=region or None,
+            # No region: scoping the STS session to the bucket's region breaks
+            # AssumeRole for opt-in regions (e.g. me-central-1); region belongs
+            # on the S3 store's own config below, not the STS call.
             base_access_key=base_access_key,
             base_secret_key=base_secret_key,
             base_session_token=(creds.get("token") or None)
