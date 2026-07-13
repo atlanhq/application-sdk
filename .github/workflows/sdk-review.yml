@@ -886,9 +886,19 @@ jobs:
           # string. A naive `.[] | select(...) | .body | tail -1` truncates
           # the multiline body to its last line, which silently breaks the
           # verdict grep below.
+          #
+          # --slurp collapses all pages into one array so `last` picks the
+          # genuinely most-recent matching comment. Without it, `--paginate`
+          # runs the jq filter once PER PAGE, so on a PR whose comments span
+          # multiple API pages this would emit one body per matching page
+          # (concatenated) and the verdict grep below would read the verdict
+          # from the EARLIEST matching page rather than the latest — acting
+          # on a stale verdict. `gh api` rejects `--slurp` with `--jq`, so the
+          # slurped array (array-of-pages) is piped into a standalone `jq`,
+          # which flattens with `.[][]` (same idiom as the two guards above).
           SUMMARY=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/comments" \
-            --paginate \
-            --jq '[.[] | select((.body | contains("<!-- SDK_REVIEW -->")) or (.body | contains("<!-- TEST_SDK_REVIEW -->")))] | last | .body // ""')
+            --paginate --slurp 2>/dev/null \
+            | jq -r '[.[][] | select((.body | contains("<!-- SDK_REVIEW -->")) or (.body | contains("<!-- TEST_SDK_REVIEW -->")))] | last | .body // ""')
 
           if [ -z "$SUMMARY" ]; then
             echo "::warning::No SDK_REVIEW summary comment found on PR #${PR_NUMBER} — skipping approval (the sandbox may have errored before posting)"
