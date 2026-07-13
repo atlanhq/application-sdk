@@ -1,0 +1,49 @@
+# Throwaway — verifies that a push made with an atlan-app-fleet App
+# installation token re-triggers downstream workflow runs, the same way a
+# real user/PAT identity does and the default GITHUB_TOKEN does not. This is
+# the property several Category B workflows (release/tag automation) rely on.
+# Delete after confirmed.
+name: _throwaway Re-fire Test
+on:
+  push:
+    branches: ['_throwaway-refire-target']
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  observe:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "PUSH EVENT FIRED. actor=${{ github.actor }} sha=${{ github.sha }}"
+
+  push-with-app-token:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mint fleet App token
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          ref: main
+
+      - name: Push a trivial commit to the scratch branch with the App token
+        run: |
+          set -euo pipefail
+          git config user.name "atlan-app-fleet[bot]"
+          git config user.email "atlan-app-fleet[bot]@users.noreply.github.com"
+          git checkout -B _throwaway-refire-target
+          date > _throwaway-refire-marker.txt
+          git add _throwaway-refire-marker.txt
+          git commit -m "test: refire trigger $(date +%s)"
+          git push origin _throwaway-refire-target --force
