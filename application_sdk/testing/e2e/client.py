@@ -54,6 +54,7 @@ from application_sdk.testing.e2e._errors import (
     AtlanApiHttpError,
     AtlanApiResponseInvariantError,
     AtlanApiTimeoutError,
+    NoWorkerOnTaskQueueError,
 )
 
 logger = get_logger(__name__)
@@ -596,6 +597,8 @@ class AEWorkflowClient:
         interval_seconds: int = 10,
         timeout_seconds: int = 600,
         max_transient_failures: int = 5,
+        stall_grace_seconds: int | None = None,
+        stall_task_queue: str = "",
     ) -> DAGRunResult:
         """Poll until the run reaches a terminal top-level status.
 
@@ -611,12 +614,23 @@ class AEWorkflowClient:
         on a single bad response. After ``max_transient_failures``
         consecutive errors we give up and re-raise — that's a
         sustained outage, not a blip, and there's no point waiting.
+
+        Fail-fast stall guard: when ``stall_grace_seconds`` is set and NO DAG
+        node has left the not-started set (``Pending`` / ``Scheduled``) within
+        that window, raise :class:`NoWorkerOnTaskQueueError` instead of hanging
+        for the full ``timeout_seconds``. The parent AE workflow runs on the
+        always-on automation-engine queue, so the top-level run flips to
+        ``Running`` even when the connector's ``extract`` node is stuck because
+        no worker polls its task queue — hence the check is on node-level start,
+        not the run status. ``stall_task_queue`` is included in the error
+        message so the operator can see which queue had no worker.
         """
         elapsed = 0
         last_summary: str | None = None
         last_result: DAGRunResult | None = None
         transient_streak = 0
         last_log_elapsed = 0  # seconds since the last info log fired
+        any_node_started = False  # any node reached Running/terminal (stall guard)
         while elapsed < timeout_seconds:
             try:
                 result = self.get_native_status(run_id)
@@ -644,6 +658,14 @@ class AEWorkflowClient:
                 continue
             transient_streak = 0
             last_result = result
+            # Stall guard: a node has "started" once it leaves the not-started
+            # set. Tracked as a latch so a node that starts and finishes between
+            # polls still counts.
+            if any(
+                n.status not in (DAGNodeStatus.PENDING, DAGNodeStatus.SCHEDULED)
+                for n in result.nodes
+            ):
+                any_node_started = True
             summary = " ".join(_node_glyph(n) for n in result.nodes)
             run_glyph = _RUN_GLYPHS.get(result.status.value, "•")
             # Log on every status change. Also emit a heartbeat every
@@ -668,6 +690,31 @@ class AEWorkflowClient:
                 last_log_elapsed = elapsed
             if result.status.is_terminal:
                 return result
+            # Fail fast when nothing has started within the grace window: the
+            # run is live (parent on the AE queue) but no node has begun, which
+            # almost always means no worker is polling the extract task queue.
+            if (
+                stall_grace_seconds is not None
+                and not any_node_started
+                and elapsed >= stall_grace_seconds
+            ):
+                queue_hint = (
+                    f" task queue '{stall_task_queue}'"
+                    if stall_task_queue
+                    else " the extract task queue"
+                )
+                raise NoWorkerOnTaskQueueError(
+                    message=(
+                        f"No DAG node started within {stall_grace_seconds}s for run "
+                        f"{run_id} (top-level status={result.status.value}). This "
+                        f"almost always means no worker is polling{queue_hint}. "
+                        "Verify the test's agent_spec().agent_name resolves to the "
+                        "queue the deployed worker polls "
+                        "(atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}); a "
+                        "common cause is a second e2e test class using a different "
+                        "agent_name than the single worker the CI job started."
+                    ),
+                )
             time.sleep(interval_seconds)
             elapsed += interval_seconds
         # Timeout: return the last observation so callers can include

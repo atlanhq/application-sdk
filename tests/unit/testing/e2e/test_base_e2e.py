@@ -20,7 +20,7 @@ from application_sdk.testing.e2e._errors import (
     ManifestFileNotFoundError,
 )
 from application_sdk.testing.e2e.base import BaseE2ETest
-from application_sdk.testing.e2e.payload import RunMode
+from application_sdk.testing.e2e.payload import AgentSpec, RunMode
 from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
 
 
@@ -347,3 +347,27 @@ class TestTwoStoreDirectModeWarning:
         _DirectModeTest().setup_method()
 
         mock_logger.warning.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _extract_task_queue
+# ---------------------------------------------------------------------------
+
+
+class TestExtractTaskQueue:
+    """The extract task queue is the single source of truth shared by the seed
+    DAG and the stall-guard diagnostic (must match the deployed worker's queue).
+    """
+
+    def test_agent_mode_uses_agent_name(self) -> None:
+        class _AgentModeTest(_ConcreteE2ETest):
+            mode = RunMode.AGENT
+
+            def agent_spec(self) -> AgentSpec:
+                return AgentSpec(agent_name="openapi-e2e-full-ci-42")
+
+        assert _AgentModeTest()._extract_task_queue() == "atlan-openapi-e2e-full-ci-42"
+
+    def test_direct_mode_falls_back_to_connector_default(self) -> None:
+        # _ConcreteE2ETest is RunMode.DIRECT → agent_spec() is None.
+        assert _ConcreteE2ETest()._extract_task_queue() == "atlan-openapi-default"
