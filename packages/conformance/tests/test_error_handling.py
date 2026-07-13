@@ -345,6 +345,73 @@ except (KeyError, ValueError):
     )
 
 
+def test_p004_no_finding_when_reraised_chained() -> None:
+    # Broad catch that translates-and-chains into a typed error preserves the
+    # trace via `from e` — nothing is swallowed, so E004 must not fire.
+    assert "E004" not in _findings(
+        """\
+try:
+    run()
+except Exception as e:
+    raise MetadataFetchError("failed") from e
+"""
+    )
+
+
+def test_p004_no_finding_when_bare_reraise() -> None:
+    assert "E004" not in _findings(
+        """\
+try:
+    run()
+except Exception:
+    cleanup()
+    raise
+"""
+    )
+
+
+def test_p004_no_finding_when_all_branches_reraise() -> None:
+    # if/else where both branches raise → the handler always re-raises.
+    assert "E004" not in _findings(
+        """\
+try:
+    run()
+except Exception as e:
+    if isinstance(e, AppError):
+        raise
+    raise MetadataFetchError("failed") from e
+"""
+    )
+
+
+def test_p004_still_flags_reraise_from_none() -> None:
+    # `raise ... from None` deliberately discards the original context/trace —
+    # this is the trace-losing case E004 should still catch.
+    assert "E004" in _findings(
+        """\
+try:
+    run()
+except Exception as e:
+    raise MetadataFetchError("failed") from None
+"""
+    )
+
+
+def test_p004_still_flags_conditional_reraise_that_can_fall_through() -> None:
+    # A raise guarded by `if` with no else can be skipped — the fall-through path
+    # swallows, so E004 must still fire.
+    assert "E004" in _findings(
+        """\
+try:
+    run()
+except Exception as e:
+    if should_propagate(e):
+        raise
+    x = 1
+"""
+    )
+
+
 # ── P005 — ExceptBlockMissingExcInfo ─────────────────────────────────────────
 
 

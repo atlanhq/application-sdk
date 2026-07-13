@@ -225,3 +225,38 @@ def _iter_shallow(root: ast.AST) -> Iterator[ast.AST]:
         yield node
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             queue.extend(ast.iter_child_nodes(node))
+
+
+def _raise_preserves_trace(stmt: ast.Raise) -> bool:
+    """True when a ``raise`` keeps the original exception in the chain.
+
+    ``raise`` (bare), ``raise X(...)`` (implicit ``__context__`` chaining), and
+    ``raise X(...) from e`` (explicit ``__cause__``) all preserve the traceback.
+    Only ``raise X(...) from None`` deliberately discards the context, so it is
+    treated as trace-losing.
+    """
+    if isinstance(stmt.cause, ast.Constant) and stmt.cause.value is None:
+        return False
+    return True
+
+
+def _body_always_raises(body: list[ast.stmt]) -> bool:
+    """True when *body* is guaranteed to re-raise on every path (trace-preserving).
+
+    A top-level ``raise`` makes everything after it unreachable, so the block
+    always raises; an ``if``/``else`` whose branches both always-raise does too.
+    A ``raise`` that only appears inside a conditional without a matching ``else``
+    is not counted — the other path could still swallow. Any trace-losing
+    ``raise ... from None`` on the guaranteeing path disqualifies the body.
+    """
+    for stmt in body:
+        if isinstance(stmt, ast.Raise):
+            return _raise_preserves_trace(stmt)
+        if (
+            isinstance(stmt, ast.If)
+            and stmt.orelse
+            and _body_always_raises(stmt.body)
+            and _body_always_raises(stmt.orelse)
+        ):
+            return True
+    return False

@@ -7,6 +7,7 @@ import ast
 from ._constants import _BROAD_EXCEPT_TYPES, _OPTIONAL_IMPORT_TYPES
 from ._helpers import (
     _any_logging_in,
+    _body_always_raises,
     _body_is_only_loop_control_no_logging,
     _body_is_only_pass,
     _filter_body_wrapped,
@@ -89,6 +90,11 @@ class SilentSwallowMixin:
         if not broad:
             return
         exc_type = next(iter(broad))
+        # Pass if the handler unconditionally re-raises with the trace preserved
+        # (bare `raise`, `raise X(...)`, or `raise X(...) from e`): a broad catch
+        # that translates-and-chains into a typed error swallows nothing.
+        if _body_always_raises(node.body):
+            return
         # Pass if body has logger.exception() or any log call with exc_info=True
         for n in _iter_shallow(node):
             if not isinstance(n, ast.Expr):
