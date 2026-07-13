@@ -100,7 +100,7 @@ frozenlist==1.8.0
     # via
     #   aiohttp
     #   aiosignal
-google-auth==2.55.2
+google-auth==2.56.0
     # via atlan-application-sdk
 googleapis-common-protos==1.75.0
     # via
