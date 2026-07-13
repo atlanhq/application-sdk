@@ -20,7 +20,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 |---|---|---|
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 26 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 11 |
-| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 9 |
+| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 11 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 28 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 41 |
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 56 |
@@ -326,6 +326,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Enumeration of dataframe types.
 - **Defined in:** `application_sdk/common/types.py`
 
+#### `FilterPattern`
+
+- **Import:** `from application_sdk.common import FilterPattern`
+- **Signature:** `class FilterPattern(include: list[re.Pattern[str]], exclude: list[re.Pattern[str]])`
+- **Summary:** A compiled include/exclude filter with uniform regex-or-exact semantics.
+- **Defined in:** `application_sdk/common/filter_matching.py`
+
 #### `TaskResult`
 
 - **Import:** `from application_sdk.common import TaskResult`
@@ -341,6 +348,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Defined in:** `application_sdk/common/models.py`
 
 ### Functions
+
+#### `filter_matches`
+
+- **Import:** `from application_sdk.common import filter_matches`
+- **Signature:** `filter_matches(candidate: str, ...)`
+- **Summary:** Convenience one-shot: compile ``include``/``exclude`` and test ``candidate``.
+- **Defined in:** `application_sdk/common/filter_matching.py`
 
 #### `get_actual_cpu_count`
 
