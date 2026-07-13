@@ -101,6 +101,43 @@ class TestPollNativeStatusStallGuard:
         # Message names the queue so the operator can spot the mismatch.
         assert "atlan-openapi-e2e-full-ci-42" in str(exc.value)
 
+    def test_raises_when_node_stuck_in_scheduled(self):
+        """Symmetric to the Pending case: production treats both Pending AND
+        Scheduled as 'not started' (client.py), so a node stuck in Scheduled
+        must keep the guard armed and raise. Guards against a regression that
+        drops SCHEDULED from the not-started set."""
+        client = _make_client()
+        stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.SCHEDULED)
+
+        with patch.object(client, "get_native_status", return_value=stuck):
+            with patch("time.sleep"):
+                with pytest.raises(NoWorkerOnTaskQueueError):
+                    client.poll_native_status(
+                        _RUN_ID,
+                        interval_seconds=10,
+                        timeout_seconds=600,
+                        stall_grace_seconds=30,
+                        stall_task_queue="atlan-openapi-e2e-full-ci-42",
+                    )
+
+    def test_generic_queue_hint_when_stall_task_queue_empty(self):
+        """With no stall_task_queue supplied, the error falls back to the
+        generic 'the extract task queue' phrasing."""
+        client = _make_client()
+        stuck = _result(DAGRunStatus.RUNNING, DAGNodeStatus.PENDING)
+
+        with patch.object(client, "get_native_status", return_value=stuck):
+            with patch("time.sleep"):
+                with pytest.raises(NoWorkerOnTaskQueueError) as exc:
+                    client.poll_native_status(
+                        _RUN_ID,
+                        interval_seconds=10,
+                        timeout_seconds=600,
+                        stall_grace_seconds=30,
+                        stall_task_queue="",
+                    )
+        assert "the extract task queue" in str(exc.value)
+
     def test_no_raise_when_node_starts_before_grace(self):
         """Once any node reaches Running the guard latches off — a long-running
         node past the grace window must NOT trip it."""
