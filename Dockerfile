@@ -50,4 +50,16 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 
 COPY --chown=appuser:appuser CHANGELOG.md /opt/atlan/application-sdk/CHANGELOG.md
 
+# OpenShift/MKS (and other restricted platforms) run containers as an arbitrary,
+# non-1000 UID with GID 0 rather than the image's own USER. Make the app and home
+# directories group-root and group-writable (`g=u` mirrors the owner's perms onto
+# the group) so the assigned UID — which is a member of GID 0 — can write, and pin
+# HOME so tools that resolve `$HOME` don't fall back to "/" for a UID absent from
+# /etc/passwd. Harmless on standard Kubernetes: the container still runs as uid
+# 1000 (appuser), the owner.
+USER root
+ENV HOME=/home/appuser
+RUN chgrp -R 0 /app /home/appuser && chmod -R g=u /app /home/appuser
+USER appuser
+
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
