@@ -243,9 +243,12 @@ class DataForgeClient:
     ) -> str:
         if len(reason.strip()) < 10:
             raise DataForgeError("DataForge `reason` must be ≥10 chars (shown to approvers).")
-        # category=development for ephemeral e2e test infra: the `ai` category is
-        # gated behind DataForge admin approval, whereas `development` clears
-        # without an admin (`skip_approval` alone is role-gated for non-admins).
+        # category=development is the accurate bucket for e2e test infra (vs the
+        # default `ai`). NOTE: provisioning is admin-approval-gated regardless of
+        # category — a non-admin can't self-approve (skip_approval is role-gated),
+        # so a DataForge admin approves once. This is why the harness provisions a
+        # persistent instance and reuses it (find_reusable), rather than a fresh
+        # admin-gated provision per run.
         resp = self._call(
             "POST",
             "/api/v1/resources",
