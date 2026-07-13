@@ -374,15 +374,15 @@ class TestExtractTaskQueue:
 
 
 class TestStallGuardDefault:
-    """The stall guard is opt-in: off by default so KEDA/saturated tenants
-    (where a task can legitimately wait a long time) don't get false failures.
+    """The stall guard is on by default (test-harness only), and a suite that
+    runs against shared / autoscaled infra can disable it by setting 0.
     """
 
-    def test_disabled_by_default(self) -> None:
-        assert _ConcreteE2ETest.ae_stall_grace_seconds == 0
+    def test_enabled_by_default(self) -> None:
+        assert _ConcreteE2ETest.ae_stall_grace_seconds == 180
 
-    def test_subclass_can_opt_in(self) -> None:
-        class _OptedIn(_ConcreteE2ETest):
-            ae_stall_grace_seconds = 180
+    def test_subclass_can_opt_out(self) -> None:
+        class _OptedOut(_ConcreteE2ETest):
+            ae_stall_grace_seconds = 0
 
-        assert _OptedIn.ae_stall_grace_seconds == 180
+        assert _OptedOut.ae_stall_grace_seconds == 0

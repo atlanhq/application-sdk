@@ -160,20 +160,21 @@ class BaseE2ETest:
 
     ae_poll_interval_seconds: ClassVar[int] = 10
     ae_poll_timeout_seconds: ClassVar[int] = 600
-    # Fail-fast stall guard (OPT-IN, disabled by default): if set > 0 and no DAG
-    # node has started within this window, run_full_dag raises
-    # NoWorkerOnTaskQueueError instead of hanging for the full
-    # ae_poll_timeout_seconds — useful when a wedge means a real
-    # agent-name/task-queue mismatch (e.g. a second run_full_dag() in one test).
+    # Fail-fast stall guard (test-harness only — this module is never imported
+    # by the production execution path). If no DAG node has started within this
+    # window, run_full_dag raises NoWorkerOnTaskQueueError instead of hanging
+    # for the full ae_poll_timeout_seconds. Catches the common wedge where a
+    # test's agent_spec().agent_name doesn't match the deployed worker's queue
+    # (or a second run_full_dag() in one test targets a different agent_name).
     #
-    # Left OFF by default on purpose: against KEDA-autoscaled or saturated
-    # tenants a task can legitimately sit queued for a long time (cold-start
-    # scale-up, worker saturation — we've seen hours) before a worker picks it
-    # up, so a fixed grace would cause false failures. Only opt in on tests that
-    # run against a DEDICATED worker (e.g. the CI docker-compose container),
-    # where a stalled queue genuinely means "no worker on this queue", not
-    # "worker busy". The full ae_poll_timeout_seconds remains the real ceiling.
-    ae_stall_grace_seconds: ClassVar[int] = 0
+    # On by default at 180s: e2e runs against a dedicated worker (the CI
+    # docker-compose container) that long-polls and picks work up within
+    # seconds, so a healthy run never trips it, and the full
+    # ae_poll_timeout_seconds still bounds real work. Set to 0 to disable on a
+    # suite that runs against shared / KEDA-autoscaled infra (e.g. some
+    # RunMode.DIRECT setups hitting a prod pod that may be scaled to zero),
+    # where legitimate pickup can take longer than any fixed grace.
+    ae_stall_grace_seconds: ClassVar[int] = 180
     atlas_poll_interval_seconds: ClassVar[int] = 30
     atlas_poll_timeout_seconds: ClassVar[int] = 1500
     # Asset counts use a much shorter poll window: Elasticsearch is eventually
