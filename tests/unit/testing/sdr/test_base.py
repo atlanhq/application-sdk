@@ -535,6 +535,72 @@ def test_assets_landed_allows_connection_asset_itself(
         suite._assert_assets_landed(workflow_scenario, _RESP)  # no raise
 
 
+def _typed(qn: str, type_name: str) -> dict[str, Any]:
+    return {"typeName": type_name, "attributes": {"qualifiedName": qn}}
+
+
+class _CountSuite(_WfSuite):
+    # SDR-QA item 7: per-type floors on top of the non-zero + location guards.
+    expected_min_asset_counts = {"Database": 1, "Schema": 1, "Table": 2}
+
+
+def test_assets_landed_passes_when_per_type_floors_met(
+    workflow_scenario: Scenario,
+) -> None:
+    suite = _CountSuite()
+    with patch(
+        _LOAD,
+        return_value=[
+            _typed("default/mssql/1700/db", "Database"),
+            _typed("default/mssql/1700/db/sch", "Schema"),
+            _typed("default/mssql/1700/db/sch/t1", "Table"),
+            _typed("default/mssql/1700/db/sch/t2", "Table"),
+        ],
+    ):
+        suite._assert_assets_landed(workflow_scenario, _RESP)  # no raise
+
+
+def test_assets_landed_fails_when_a_type_is_below_floor(
+    workflow_scenario: Scenario,
+) -> None:
+    """Non-zero + location pass, but a whole type is short — the item-7 catch."""
+    suite = _CountSuite()
+    with patch(
+        _LOAD,
+        return_value=[
+            _typed("default/mssql/1700/db", "Database"),
+            _typed("default/mssql/1700/db/sch", "Schema"),
+            _typed("default/mssql/1700/db/sch/t1", "Table"),  # only 1 Table, floor is 2
+        ],
+    ):
+        with pytest.raises(AssertionError, match="per-type minimum counts"):
+            suite._assert_assets_landed(workflow_scenario, _RESP)
+
+
+def test_assets_landed_fails_when_expected_type_entirely_missing(
+    workflow_scenario: Scenario,
+) -> None:
+    class _ColSuite(_WfSuite):
+        expected_min_asset_counts = {"Table": 1, "Column": 5}
+
+    suite = _ColSuite()
+    with patch(
+        _LOAD,
+        return_value=[_typed("default/mssql/1700/db/sch/t1", "Table")],  # 0 Columns
+    ):
+        with pytest.raises(AssertionError, match="Column: expected >= 5, got 0"):
+            suite._assert_assets_landed(workflow_scenario, _RESP)
+
+
+def test_assets_landed_skips_per_type_check_when_unset(
+    workflow_scenario: Scenario,
+) -> None:
+    """Default (empty expected_min_asset_counts) leaves existing suites unaffected."""
+    suite = _WfSuite()  # no expected_min_asset_counts
+    with patch(_LOAD, return_value=[_typed("default/mssql/1700/db/t1", "Table")]):
+        suite._assert_assets_landed(workflow_scenario, _RESP)  # no raise
+
+
 def test_execute_scenario_warns_when_guard_enabled_but_expected_data_set(
     tmp_path, monkeypatch
 ) -> None:

@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import os
 import shutil
+from collections import Counter
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -144,6 +145,16 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
     #: opt out for a connector whose extracted QNs legitimately aren't
     #: connection-prefixed.
     require_asset_connection_prefix: ClassVar[bool] = True
+
+    #: Optional per-typeName minimum asset counts, e.g.
+    #: ``{"Database": 1, "Schema": 1, "Table": 3, "Column": 10}``. When set,
+    #: :meth:`_assert_assets_landed` additionally asserts each type meets its floor.
+    #: This closes SDR-QA gap item 7: partial / mis-typed extraction can land SOME
+    #: assets — passing the non-zero + location guards — while silently missing a
+    #: whole type (e.g. Columns never extracted). The non-zero guard cannot see
+    #: that; a per-type floor can. Empty (default) = only non-zero + location run,
+    #: so existing suites are unaffected until they opt in.
+    expected_min_asset_counts: ClassVar[dict[str, int]] = {}
 
     #: When True, an agent-mode SDR suite that declares NO ``api="workflow"``
     #: scenario fails the readiness floor (it never validates a real extraction).
@@ -520,6 +531,25 @@ class BaseSDRIntegrationTest(BaseIntegrationTest):
                     f"location (mis-parented / dropped connection prefix). Examples: "
                     f"{misplaced[:3]}"
                 )
+
+        # Per-type count floors (opt-in): partial / mis-typed extraction can land
+        # SOME assets — passing the non-zero + location guards above — yet miss a
+        # whole type (e.g. Tables land but Columns never do). Assert each expected
+        # typeName meets its floor. Records carry a top-level ``typeName`` (same
+        # shape the integration comparison groups on).
+        if self.expected_min_asset_counts:
+            counts = Counter(r.get("typeName") for r in records if r.get("typeName"))
+            shortfalls = [
+                f"{type_name}: expected >= {floor}, got {counts.get(type_name, 0)}"
+                for type_name, floor in self.expected_min_asset_counts.items()
+                if counts.get(type_name, 0) < floor
+            ]
+            assert not shortfalls, (
+                f"SDR workflow scenario '{scenario.name}': extracted assets do not meet "
+                f"the expected per-type minimum counts (partial / mis-typed extraction "
+                f"that the non-zero guard cannot catch). Shortfalls: {shortfalls}. "
+                f"Observed counts: {dict(counts)}"
+            )
         logger.info(
             "SDR workflow scenario %r: %d asset record(s) landed at %s/%s/%s",
             scenario.name,
