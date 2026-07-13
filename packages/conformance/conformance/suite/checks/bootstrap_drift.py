@@ -90,9 +90,12 @@ def _strip_regen_override(text: str) -> str:
 # adding an `e2e-parallel-workers` input to its tests-reusable caller. That is a
 # sanctioned per-repo choice, so strip it (and any single comment line directly
 # above it) before the drift comparison — only other structural changes should
-# flag C002. Matches a numeric worker count or "auto", quoted or bare.
+# flag C002. The accepted values mirror the runtime driver
+# (build_pytest_parallel_args.py): "auto" or a positive integer with no leading
+# zero, quoted or bare. An invalid value like "0"/"01" is deliberately NOT
+# stripped, so C002 flags it as drift before the driver rejects it at runtime.
 _E2E_PARALLEL_OVERRIDE_RE = re.compile(
-    r'\n(?:[ ]*#[^\n]*\n)?[ ]*e2e-parallel-workers:[ ]*"?(?:auto|[0-9]+)"?[ ]*'
+    r'\n(?:[ ]*#[^\n]*\n)?[ ]*e2e-parallel-workers:[ ]*"?(?:auto|[1-9][0-9]*)"?[ ]*'
 )
 
 

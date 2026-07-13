@@ -567,9 +567,14 @@ runs:
       shell: bash
       env:
         SDR_E2E_ROOT: ${{ steps.action_root.outputs.path }}
+        # Route the raw input through env (quoted below) rather than
+        # interpolating ${{ }} directly into the command string — the driver
+        # validates it, but the value must reach the driver intact, not be
+        # substituted into the run: line first. Mirrors "Build compose -f chain".
+        PARALLEL_WORKERS: ${{ inputs.pytest-parallel-workers }}
       run: |
         OUT=$(python3 "$SDR_E2E_ROOT/build_pytest_parallel_args.py" \
-          --parallel-workers "${{ inputs.pytest-parallel-workers }}")
+          --parallel-workers "${PARALLEL_WORKERS}")
         echo "$OUT" >> "$GITHUB_OUTPUT"
 
     - name: Run SDR integration tests

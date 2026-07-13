@@ -452,6 +452,22 @@ def test_tests_yaml_e2e_parallel_workers_with_comment_not_flagged(
     assert scan_path(wf, tmp_path) == []
 
 
+@pytest.mark.parametrize("bad_value", ["0", "01", "-1", "two"])
+def test_tests_yaml_invalid_e2e_parallel_workers_still_flagged(
+    tmp_path: pathlib.Path, bad_value: str
+) -> None:
+    """Only values the runtime driver accepts (auto / positive int, no leading
+    zero) are sanctioned. An invalid value flags drift so conformance catches
+    the typo before the driver rejects it at e2e runtime."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "tests.yaml"
+    wf.write_text(_opt_into_parallel(render("tests.yaml"), bad_value))
+    findings = scan_path(wf, tmp_path)
+    assert len(findings) == 1
+    assert findings[0].rule_id == "C002"
+
+
 def test_tests_yaml_e2e_parallel_workers_does_not_mask_other_drift(
     tmp_path: pathlib.Path,
 ) -> None:
