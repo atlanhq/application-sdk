@@ -7,7 +7,8 @@ Covers the CI freshness gate's decision logic:
   * regenerate matches commit  -> clean (exit 0)
   * regenerate changes a file  -> drift (exit 1)
   * regenerate adds a new file -> drift (exit 1, untracked caught)
-  * pkl eval fails             -> na / inconclusive (exit 0, non-blocking)
+  * pkl eval fails (contract present) -> eval_failed (exit 1, red)
+  * no contract / git failure  -> na (exit 0, genuinely inconclusive)
 
 `pkl` and `uvx` are stubbed (regeneration is reused from renovate_pkl_sync);
 `git` runs for real against a throwaway repo in tmp_path so the diff/untracked
@@ -134,9 +135,23 @@ def test_na_when_no_contract(tmp_path, monkeypatch):
     assert mod.main([]) == 0
 
 
-def test_na_when_eval_fails(repo, monkeypatch):
+def test_eval_failure_with_contract_fails_red(repo, monkeypatch):
     monkeypatch.setattr(sync, "run", _fake_run(eval_rc=1))
-    # eval failure is inconclusive, not a drift failure — non-blocking.
+    # contract/app.pkl exists but `pkl eval` fails → the contract does not
+    # regenerate. This is the silent-degrade the gate must catch: fail red
+    # (exit 1), not the old inconclusive exit 0.
+    assert mod.main([]) == 1
+
+
+def test_na_when_pkl_not_installed(repo, monkeypatch):
+    # OSError from spawning pkl (binary absent) is an infra gap, not a broken
+    # contract — stays inconclusive (exit 0), distinct from an eval failure.
+    def raise_oserror(cmd, *, check=False):
+        if cmd[0] == "pkl":
+            raise OSError("pkl: command not found")
+        return subprocess.run(cmd, check=check, text=True, capture_output=True)
+
+    monkeypatch.setattr(sync, "run", raise_oserror)
     assert mod.main([]) == 0
 
 
