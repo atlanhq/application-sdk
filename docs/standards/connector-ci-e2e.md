@@ -40,7 +40,7 @@ Both call the same composite action; difference is test target, Dapr components,
     secrets-script:     # OPTIONAL. Path to the script that writes
                         # <sdr-config-dir>/secrets/credentials.json from env vars.
                         # Default: .github/sdr-e2e/make-secrets.sh.
-    container-health-timeout-seconds:  # OPTIONAL. Default 60s. Bump for heavy native deps.
+    container-health-timeout-seconds:  # OPTIONAL. Default 120s. Bump for heavy native deps.
     pytest-extra-args:  # OPTIONAL. Appended to the pytest invocation.
     application-sdk-ref:               # OPTIONAL. Cross-repo dispatch: re-pin
                         # atlan-application-sdk in pyproject.toml to this ref

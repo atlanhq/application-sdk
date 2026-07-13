@@ -60,13 +60,16 @@ METADATA_PATH = f"{_API_PREFIX}/metadata"
 
 
 _HEALTHZ_PATH = "/v1.0/healthz"
-# How long to wait at startup for the Dapr sidecar's HTTP server to accept
-# connections + finish component init. The old 10s was too short for cold
-# starts (image pull + daprd boot + component init on a fresh CI runner
-# routinely exceed it); when we proceeded before the sidecar was up, the first
-# Dapr call — e.g. an agent secret-bundle fetch during a workflow's preflight —
-# failed with "ConnectError: All connection attempts failed". Overridable via
-# env for pathologically slow (or fast) environments.
+# How long to wait at startup for the Dapr sidecar's HTTP server to start
+# accepting connections. The old 10s was too short for cold starts (image
+# pull + daprd boot on a fresh CI runner routinely exceed it); when we
+# proceeded before daprd was up, the first Dapr call — e.g. an agent
+# secret-bundle fetch during a workflow's preflight — failed with
+# "ConnectError: All connection attempts failed". We do NOT hold startup for
+# full component init (a healthz 204): once daprd answers the probe at all the
+# connection race is over, and per-component readiness is covered by each call
+# site's retry_past_dapr_cold_start budget. Overridable via env for
+# pathologically slow (or fast) environments.
 _DEFAULT_SIDECAR_WAIT_TIMEOUT = float(
     os.environ.get("ATLAN_DAPR_SIDECAR_WAIT_TIMEOUT", "60")
 )
@@ -119,15 +122,26 @@ async def wait_for_dapr_sidecar(
     timeout: float = _DEFAULT_SIDECAR_WAIT_TIMEOUT,
     interval: float = _DEFAULT_SIDECAR_POLL_INTERVAL,
 ) -> None:
-    """Poll /v1.0/healthz until the Dapr sidecar is ready or timeout elapses.
+    """Poll /v1.0/healthz until the Dapr sidecar's HTTP API is reachable or
+    timeout elapses.
 
-    Dapr returns 204 when all components have finished initializing. On
-    success, arms :data:`_dapr_sidecar_confirmed_ready` so the first real
-    Dapr call skips :func:`retry_past_dapr_cold_start`'s own wait — this
-    probe already paid it. On timeout the function logs a warning and
-    returns without arming the gate — startup proceeds, and the first real
-    call still gets a full retry budget in case the sidecar needed a little
-    longer.
+    Returns as soon as daprd answers the probe at all:
+
+    * 204 — every component has finished initializing. Arms
+      :data:`_dapr_sidecar_confirmed_ready` so the first real Dapr call skips
+      :func:`retry_past_dapr_cold_start`'s own wait; this probe already paid
+      it.
+    * any other status — daprd's HTTP API is up but a component is still
+      initializing. Returns *without* arming the gate: the connection race
+      this probe exists to close (daprd not yet accepting connections on a
+      cold start) is over, and per-component readiness is already covered by
+      each call site's :func:`retry_past_dapr_cold_start` budget. Holding
+      startup for it would only delay the HTTP health bind.
+
+    Only connection errors keep the loop polling to the deadline — those mean
+    daprd's HTTP server has not come up yet. On timeout the function logs a
+    warning and returns without arming the gate, so the first real call still
+    gets a full retry budget.
 
     Skipped entirely in local dev — /v1.0/healthz returns 500 because
     AWS-backed components can't initialize without real credentials.
@@ -146,15 +160,23 @@ async def wait_for_dapr_sidecar(
         while True:
             try:
                 r = await client.get(url)
+            # conformance: ignore[E004] sidecar health probe; connection errors are expected while daprd is still cold-booting and are logged at debug
+            except Exception:
+                logger.debug("Dapr sidecar poll failed", exc_info=True)
+            else:
                 if r.status_code == 204:
                     _dapr_sidecar_confirmed_ready = True
                     return
-            # conformance: ignore[E004] sidecar health probe; network errors are expected during startup and logged at debug
-            except Exception:
-                logger.debug("Dapr sidecar poll failed", exc_info=True)
+                logger.debug(
+                    "Dapr sidecar HTTP API reachable (healthz=%d); "
+                    "proceeding without full-component wait",
+                    r.status_code,
+                )
+                return
             if loop.time() >= deadline:
                 logger.warning(
-                    "Dapr sidecar not ready after %.0fs — proceeding anyway", timeout
+                    "Dapr sidecar not reachable after %.0fs — proceeding anyway",
+                    timeout,
                 )
                 return
             await asyncio.sleep(interval)
