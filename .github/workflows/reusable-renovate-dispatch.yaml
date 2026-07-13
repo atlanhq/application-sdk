@@ -61,8 +61,17 @@ jobs:
           owner: atlanhq
 
       - name: Checkout application-sdk scripts
+        # Explicit repository/token: without these, actions/checkout defaults to
+        # the *caller's* repo (github.repository, in a workflow_call reusable),
+        # not application-sdk. Today's only documented callers ARE
+        # application-sdk (tag-and-publish.yaml / contract-toolkit-publish.yml),
+        # so that default happens to work -- but this is a published reusable,
+        # so an external caller would otherwise silently check out the wrong
+        # repo and fail the discover step with a confusing "file not found".
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          repository: atlanhq/application-sdk
+          token: ${{ steps.app-token.outputs.token }}
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
 

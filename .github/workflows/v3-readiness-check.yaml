@@ -44,6 +44,12 @@ on:
         required: true
         type: string
     secrets:
+      FLEET_APP_ID:
+        required: false
+        description: "atlan-app-fleet App ID (org secret). Not passed explicitly by any current caller — auto-available via 'secrets: inherit'. Declared here so the contract is self-documenting."
+      FLEET_APP_PRIVATE_KEY:
+        required: false
+        description: "atlan-app-fleet App private key (org secret). Same availability as FLEET_APP_ID above."
       app_repo_token:
         description: >
           Token with contents:read on the target repo. Optional — a fleet

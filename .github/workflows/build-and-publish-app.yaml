@@ -403,7 +403,13 @@ jobs:
       - name: Mint fleet App token
         # Not scoped to a single repo: also used below to authenticate git
         # config for the consumer app's own (arbitrary) private atlanhq deps.
+        # continue-on-error + the `|| secrets.ORG_PAT_GITHUB` fallback below:
+        # FLEET_APP_ID/FLEET_APP_PRIVATE_KEY are declared optional (every real
+        # caller uses secrets: inherit, so they're always available in
+        # practice) -- this is defense-in-depth so a caller that somehow
+        # doesn't provide them degrades to the old PAT instead of hard-failing.
         id: app-token
+        continue-on-error: true
         uses: actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b # v2
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
@@ -422,7 +428,7 @@ jobs:
           repository: atlanhq/application-sdk
           ref: main
           path: sdk
-          token: ${{ steps.app-token.outputs.token }}
+          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
@@ -454,7 +460,7 @@ jobs:
       - name: Configure git auth for private dependencies
         if: ${{ inputs.private_git_auth }}
         env:
-          GIT_TOKEN: ${{ steps.app-token.outputs.token }}
+          GIT_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
         run: |
           git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
           git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
@@ -664,6 +670,7 @@ jobs:
 
       - name: Mint fleet App token
         id: app-token
+        continue-on-error: true
         uses: actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b # v2
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
@@ -683,7 +690,7 @@ jobs:
           path: sdk
           sparse-checkout: .github/scripts/credential-leak-gate
           sparse-checkout-cone-mode: false
-          token: ${{ steps.app-token.outputs.token }}
+          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
 
       # ── Layer 1: deterministic hardcoded-secret scan (gitleaks) ───────────────
       - name: Install gitleaks
@@ -1324,6 +1331,7 @@ jobs:
     steps:
       - name: Mint fleet App token
         id: app-token
+        continue-on-error: true
         uses: actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b # v2
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
@@ -1334,7 +1342,7 @@ jobs:
       - name: Repository Dispatch
         uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
         with:
-          token: ${{ steps.app-token.outputs.token }}
+          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
           repository: ${{ matrix.repo }}
           event-type: dispatch_app_builder_workflow
           client-payload: |-

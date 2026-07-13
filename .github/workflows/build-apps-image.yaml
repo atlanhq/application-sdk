@@ -305,6 +305,7 @@ jobs:
     steps:
       - name: Mint fleet App token
         id: app-token
+        continue-on-error: true
         uses: actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b # v2
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
@@ -321,7 +322,7 @@ jobs:
             .security
             .github/scripts
           path: _sdk
-          token: ${{ steps.app-token.outputs.token }}
+          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
 
       - name: Log in to GHCR
         uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
@@ -336,7 +337,7 @@ jobs:
         # token works here (public repo, just needs the authenticated rate tier) —
         # reusing the fleet App token keeps this off atlan-ci's shared budget too.
         env:
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
         run: |
           TRIVY_VERSION=$(curl -s -H "Authorization: Bearer ${GITHUB_TOKEN}" \
             https://api.github.com/repos/aquasecurity/trivy/releases/latest \
@@ -393,6 +394,7 @@ jobs:
     steps:
       - name: Mint fleet App token
         id: app-token
+        continue-on-error: true
         uses: actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b # v2
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
@@ -403,7 +405,7 @@ jobs:
       - name: Repository Dispatch
         uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
         with:
-          token: ${{ steps.app-token.outputs.token }}
+          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
           repository: ${{ matrix.repo }}
           event-type: dispatch_app_builder_workflow
           client-payload: |-
