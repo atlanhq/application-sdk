@@ -1150,7 +1150,8 @@ Remediation: declare the key as a field on the extraction input contract (matchi
 UI form), or stop reading it in `preflight_check`. Keys are compared to contract field
 names with underscore/hyphen normalization; field aliases are not treated as allowed
 because `model_dump` emits field names, not aliases. The rule does not fire when no
-entrypoint Input contract is resolvable or when a contract opts into extra keys
-(`model_config = ConfigDict(extra="allow")`).
+entrypoint Input contract is resolvable or when a contract (or an in-repo ancestor) opts
+into extra keys via either `model_config` form: `ConfigDict(extra="allow")` or
+`{"extra": "allow"}`.
 
 ---

@@ -149,7 +149,7 @@ def _opts_into_extra_keys(name: str, reg: Registry, seen: set[str]) -> bool:
     """True if *name* or an in-repo ancestor keeps undeclared keys (``extra="allow"``).
 
     Only a genuine ``model_config`` opting into extras counts (``ConfigDict(extra="allow")``
-    or the dict-literal form). Note that ``allow_unbounded_fields=True`` does NOT: it only
+    or ``{"extra": "allow"}``). Note that ``allow_unbounded_fields=True`` does NOT: it only
     skips payload-safety type validation (``application_sdk/contracts/base.py``
     ``__init_subclass__``); the extra policy stays pydantic-default ``"ignore"``, so
     undeclared metadata keys are still dropped — exactly the drift P035 must keep catching.
