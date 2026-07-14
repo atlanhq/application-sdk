@@ -513,6 +513,10 @@ class BaseE2ETest:
         agent_name = (
             f"{self.connector_short_name}-{self.connection_name_prefix}-{self.run_id}"
         )
+        # The real Temporal queue is atlan-{agent_name} (_extract_task_queue
+        # prepends "atlan-"). Render that one consistent, fully-qualified queue
+        # everywhere in the message so a reader doesn't see the name two ways.
+        queue = f"atlan-{agent_name}"
         # Fire loud: in CI both vars are always exported, so reaching this branch
         # there means the env is mis-set and the worker will poll a different
         # queue → silent stall until the run-full-dag stall guard trips. Naming
@@ -520,16 +524,16 @@ class BaseE2ETest:
         # local run this is just an FYI that you must start the worker on this
         # queue.)
         logger.warning(
-            "AGENT-mode agent_spec fell back to the run-id queue %r because "
+            "AGENT-mode agent_spec fell back to extract queue %s because "
             "ATLAN_APPLICATION_NAME and/or ATLAN_DEPLOYMENT_NAME is unset "
             "(app=%r deployment=%r). In CI both are always exported, so a mis-set "
             "leg here will stall — the worker polls atlan-{app}-{deployment}, not "
-            "atlan-%s. Locally, start the connector worker on atlan-%s.",
-            agent_name,
+            "%s. Locally, start the connector worker on %s.",
+            queue,
             app_name,
             deployment_name,
-            agent_name,
-            agent_name,
+            queue,
+            queue,
         )
         return AgentSpec(agent_name=agent_name)
 
