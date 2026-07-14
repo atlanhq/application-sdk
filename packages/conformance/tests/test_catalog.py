@@ -27,9 +27,9 @@ def test_catalog_no_duplicate_ids() -> None:
     """Every rule ID in the catalog is unique."""
     rules = load_catalog()
     ids = [r.id for r in rules]
-    assert len(ids) == len(set(ids)), (
-        f"Duplicate rule IDs: {[x for x in ids if ids.count(x) > 1]}"
-    )
+    assert len(ids) == len(
+        set(ids)
+    ), f"Duplicate rule IDs: {[x for x in ids if ids.count(x) > 1]}"
 
 
 def test_catalog_ids_match_pattern() -> None:
@@ -46,12 +46,12 @@ def test_catalog_all_have_required_fields() -> None:
     for rule in rules:
         assert rule.id, f"Rule missing id: {rule}"
         assert rule.name, f"Rule {rule.id} missing name"
-        assert isinstance(rule.tier, EnforcementTier), (
-            f"Rule {rule.id} has invalid tier"
-        )
-        assert isinstance(rule.mechanism, RuleMechanism), (
-            f"Rule {rule.id} has invalid mechanism"
-        )
+        assert isinstance(
+            rule.tier, EnforcementTier
+        ), f"Rule {rule.id} has invalid tier"
+        assert isinstance(
+            rule.mechanism, RuleMechanism
+        ), f"Rule {rule.id} has invalid mechanism"
         assert rule.category, f"Rule {rule.id} missing category"
 
 
@@ -59,9 +59,9 @@ def test_catalog_all_have_rationale() -> None:
     """Every rule in the catalog must have a non-empty rationale."""
     rules = load_catalog()
     missing = [rule.id for rule in rules if not rule.rationale.strip()]
-    assert not missing, (
-        f"Rules missing rationale (add a rationale= to each RuleDefinition): {missing}"
-    )
+    assert (
+        not missing
+    ), f"Rules missing rationale (add a rationale= to each RuleDefinition): {missing}"
 
 
 def test_catalog_all_have_scope() -> None:
