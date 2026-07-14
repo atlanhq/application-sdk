@@ -2,6 +2,13 @@
 # works as a docker/login-action password for ghcr.io (a Docker Registry v2
 # auth flow, distinct from the GitHub REST API auth already proven). Delete
 # after confirmed.
+#
+# First attempt pushed a brand-new package name and got a 403
+# ("installation not allowed to Create organization package") — GitHub Apps
+# can't create a new org package. Real production images already exist as
+# packages (built regularly by build-image.yaml under ORG_PAT_GITHUB), so
+# this retest pushes a throwaway tag to that EXISTING package instead, which
+# is the actual migration scenario.
 name: _throwaway GHCR Auth Test
 on: workflow_dispatch
 
@@ -29,7 +36,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ steps.app-token.outputs.token }}
 
-      - name: Build and push a trivial scratch image
+      - name: Build and push a throwaway tag to an EXISTING package
         run: |
           set -euo pipefail
           mkdir -p /tmp/ghcr-test
@@ -38,6 +45,10 @@ jobs:
           COPY README.md /README.md
           DOCKERFILE
           cp README.md /tmp/ghcr-test/README.md 2>/dev/null || echo "test" > /tmp/ghcr-test/README.md
-          docker build -t ghcr.io/atlanhq/application-sdk/throwaway-ghcr-auth-test:latest /tmp/ghcr-test
-          docker push ghcr.io/atlanhq/application-sdk/throwaway-ghcr-auth-test:latest
+          # app-runtime-base-main is pushed regularly by build-image.yaml, so this
+          # package already exists and is linked to this repo -- pushing a
+          # clearly-scoped throwaway tag to it doesn't touch any real tag.
+          TAG="ghcr.io/atlanhq/app-runtime-base-main:throwaway-app-token-test"
+          docker build -t "$TAG" /tmp/ghcr-test
+          docker push "$TAG"
           echo "GHCR push succeeded with the App token."
