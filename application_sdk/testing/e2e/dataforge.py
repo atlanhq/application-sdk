@@ -5,9 +5,17 @@ the CI worker reaches by hostname (see :mod:`source_scaffold`). Cloud-only
 sources — Redshift, Snowflake, BigQuery, Databricks — have no container, so the
 full-DAG e2e instead provisions a **live instance** through DataForge, an
 internal Atlan provisioning service exposed as a REST API that stands up real
-source infrastructure via Terraform, hands back connection artifacts, and
-auto-expires the instance (``lifecycle_days``). Its base URL and credentials are
-supplied at runtime via env vars (below) — this module hardcodes no endpoint.
+source infrastructure via Terraform and hands back connection artifacts. Its
+base URL and credentials are supplied at runtime via env vars (below) — this
+module hardcodes no endpoint.
+
+Provisioning a new instance needs a one-time admin approval, so the harness
+treats these as **persistent shared fixtures**: one instance per engine, stood
+up (and approved) once, then reused across every run via ``find_reusable`` — no
+TTL, no per-run provision. ``create()`` therefore defaults to
+``lifecycle_enabled=False`` (never auto-expires); a throwaway instance with a
+hard TTL is available as an explicit opt-in (``lifecycle_enabled=True`` +
+``lifecycle_days``), but is not the default path.
 
 This module wraps that API for the harness, mirroring the internal
 provision-source flow:
@@ -227,7 +235,9 @@ class DataForgeClient:
     def find_reusable(self, datasource: str) -> str | None:
         """Return the id of an existing PROVISIONED instance, or None."""
         resources = self._call("GET", f"/api/v1/resources?q={datasource}")
-        items = resources if isinstance(resources, list) else resources.get("resources", [])
+        items = (
+            resources if isinstance(resources, list) else resources.get("resources", [])
+        )
         for r in items:
             if r.get("status") == _READY:
                 return r.get("id")
@@ -238,30 +248,35 @@ class DataForgeClient:
         module_id: str,
         inputs: dict[str, Any],
         reason: str,
-        lifecycle_days: int = 4,
+        *,
+        lifecycle_enabled: bool = False,
+        lifecycle_days: int | None = None,
         category: str = "development",
     ) -> str:
         if len(reason.strip()) < 10:
-            raise DataForgeError("DataForge `reason` must be ≥10 chars (shown to approvers).")
-        # category=development is the accurate bucket for e2e test infra (vs the
-        # default `ai`). NOTE: provisioning is admin-approval-gated regardless of
-        # category — a non-admin can't self-approve (skip_approval is role-gated),
-        # so a DataForge admin approves once. This is why the harness provisions a
-        # persistent instance and reuses it (find_reusable), rather than a fresh
-        # admin-gated provision per run.
-        resp = self._call(
-            "POST",
-            "/api/v1/resources",
-            {
-                "module_id": module_id,
-                "inputs": inputs,
-                "reason": reason,
-                "lifecycle_enabled": True,
-                "lifecycle_days": lifecycle_days,
-                "skip_approval": True,
-                "category": category,
-            },
-        )
+            raise DataForgeError(
+                "DataForge `reason` must be ≥10 chars (shown to approvers)."
+            )
+        # PERSISTENT posture (default): lifecycle_enabled=False → no TTL, the
+        # instance is NOT auto-deleted. Provisioning is admin-approval-gated
+        # regardless of category (a non-admin can't self-approve; skip_approval is
+        # role-gated), so a DataForge admin approves the shared fixture ONCE and
+        # every e2e run reuses it via find_reusable — never a per-run provision
+        # (that would re-hit the gate each PR). category=development is the
+        # accurate bucket for e2e infra (vs the default `ai`). Pass
+        # lifecycle_enabled=True + lifecycle_days only for a deliberately-ephemeral
+        # instance (not the shared-fixture path).
+        body: dict[str, Any] = {
+            "module_id": module_id,
+            "inputs": inputs,
+            "reason": reason,
+            "lifecycle_enabled": lifecycle_enabled,
+            "skip_approval": True,
+            "category": category,
+        }
+        if lifecycle_enabled and lifecycle_days is not None:
+            body["lifecycle_days"] = lifecycle_days
+        resp = self._call("POST", "/api/v1/resources", body)
         rid = (resp or {}).get("id")
         if not rid:
             raise DataForgeError(f"DataForge create returned no id: {resp}")
@@ -301,7 +316,9 @@ class DataForgeClient:
         try:
             self._call("DELETE", f"/api/v1/resources/{resource_id}")
         except DataForgeError as exc:
-            logger.warning("DataForge destroy of %s failed (non-fatal): %s", resource_id, exc)
+            logger.warning(
+                "DataForge destroy of %s failed (non-fatal): %s", resource_id, exc
+            )
 
     # ── interactive auth (OAuth device-code, RFC 8628) ──────────────────────────
 
@@ -370,10 +387,18 @@ class DataForgeClient:
         instance_name: str,
         reason: str,
         inputs: dict[str, Any] | None = None,
-        lifecycle_days: int = 4,
+        lifecycle_enabled: bool = False,
+        lifecycle_days: int | None = None,
         reuse: bool = True,
     ) -> tuple[str, dict[str, Any]]:
-        """Provision (or reuse) an instance and return ``(resource_id, creds)``.
+        """Reuse the persistent shared instance, or provision one if none exists.
+
+        The e2e model is a **persistent, shared-per-engine** fixture: one instance
+        per datasource is provisioned + admin-approved ONCE (``lifecycle_enabled``
+        defaults False → no TTL) and every run reuses it — so a PR never blocks on
+        the admin-approval gate. Hitting the provision path here means the shared
+        fixture is *missing* (never created, or deleted): it emits a WARNING and
+        needs a one-time approval, so it should be rare + alertable, not per-run.
 
         ``creds`` is the flat ``artifacts.data`` block (host / port / database /
         username / password) fetched on-demand — never cache it to disk.
@@ -381,12 +406,27 @@ class DataForgeClient:
         if reuse:
             existing = self.find_reusable(datasource)
             if existing:
-                logger.info("DataForge: reusing PROVISIONED %s %s", datasource, existing)
+                logger.info(
+                    "DataForge: reusing PROVISIONED %s %s", datasource, existing
+                )
                 resource = self._call("GET", f"/api/v1/resources/{existing}")
                 return existing, _artifacts(resource)
+        logger.warning(
+            "DataForge: no PROVISIONED %s fixture to reuse — provisioning a new "
+            "persistent instance %r. This needs a one-time admin approval and should "
+            "be rare; the shared fixture is meant to persist and be reused across runs.",
+            datasource,
+            instance_name,
+        )
         module_id = self.resolve_module_id(datasource, variant)
         merged = {"instance_name": instance_name, **(inputs or {})}
-        rid = self.create(module_id, merged, reason, lifecycle_days)
+        rid = self.create(
+            module_id,
+            merged,
+            reason,
+            lifecycle_enabled=lifecycle_enabled,
+            lifecycle_days=lifecycle_days,
+        )
         resource = self.poll(rid)
         return rid, _artifacts(resource)
 
@@ -482,15 +522,19 @@ def provision_source(
     *,
     instance_name: str,
     reason: str,
-    lifecycle_days: int = 4,
+    lifecycle_enabled: bool = False,
+    lifecycle_days: int | None = None,
     reuse: bool = True,
     client: DataForgeClient | None = None,
 ) -> tuple[str, DatabaseSpec]:
-    """Provision (or reuse) a cloud source for ``engine`` and return its DatabaseSpec.
+    """Reuse (or, if missing, provision) the shared cloud source for ``engine``.
 
-    The connector's full-DAG test calls this from ``database_spec()`` — the
-    cloud analog of pointing at a compose service. Apply :func:`load_seed`
-    (``engine``) to the instance before extraction.
+    The connector's full-DAG test calls this from ``database_spec()`` — the cloud
+    analog of pointing at a compose service. Defaults to the persistent shared
+    fixture (``lifecycle_enabled=False``, ``reuse=True``): one instance per engine,
+    admin-approved once, reused by every run. Apply :func:`load_seed` (``engine``)
+    to the instance idempotently before extraction so the shared fixture stays in
+    the canonical shape.
     """
     if engine not in _ENGINES:
         raise DataForgeError(
@@ -502,6 +546,7 @@ def provision_source(
         variant=variant,
         instance_name=instance_name,
         reason=reason,
+        lifecycle_enabled=lifecycle_enabled,
         lifecycle_days=lifecycle_days,
         reuse=reuse,
     )
@@ -522,7 +567,13 @@ def main(argv: list[str] | None = None, client: DataForgeClient | None = None) -
     p_prov.add_argument("engine", choices=sorted(_ENGINES))
     p_prov.add_argument("--instance-name", required=True)
     p_prov.add_argument("--reason", required=True)
-    p_prov.add_argument("--lifecycle-days", type=int, default=4)
+    p_prov.add_argument(
+        "--ephemeral-days",
+        type=int,
+        default=None,
+        help="opt-in TTL in days for a throwaway instance; omit for the default "
+        "persistent shared fixture (no TTL — approve once, reuse forever)",
+    )
     p_prov.add_argument("--no-reuse", action="store_true")
     p_del = sub.add_parser("destroy")
     p_del.add_argument("resource_id")
@@ -548,7 +599,8 @@ def main(argv: list[str] | None = None, client: DataForgeClient | None = None) -
         args.engine,
         instance_name=args.instance_name,
         reason=args.reason,
-        lifecycle_days=args.lifecycle_days,
+        lifecycle_enabled=args.ephemeral_days is not None,
+        lifecycle_days=args.ephemeral_days,
         reuse=not args.no_reuse,
         client=df,
     )

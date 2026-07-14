@@ -70,64 +70,95 @@ class TestSession:
 
 class TestLifecycle:
     def test_resolve_module_id_picks_variant(self) -> None:
-        t = FakeTransport({
-            ("GET", "/api/v1/modules/datasources/redshift/variants"): (
-                200,
-                [
-                    {"variant": "aws-managed", "module_id": "m-managed"},
-                    {"variant": "aws-serverless", "module_id": "m-serverless"},
-                ],
-            )
-        })
-        assert _client(t).resolve_module_id("redshift", "aws-serverless") == "m-serverless"
+        t = FakeTransport(
+            {
+                ("GET", "/api/v1/modules/datasources/redshift/variants"): (
+                    200,
+                    [
+                        {"variant": "aws-managed", "module_id": "m-managed"},
+                        {"variant": "aws-serverless", "module_id": "m-serverless"},
+                    ],
+                )
+            }
+        )
+        assert (
+            _client(t).resolve_module_id("redshift", "aws-serverless") == "m-serverless"
+        )
 
     def test_resolve_module_id_unknown_variant_raises(self) -> None:
-        t = FakeTransport({
-            ("GET", "/api/v1/modules/datasources/redshift/variants"): (
-                200, [{"variant": "aws-managed", "module_id": "m"}]
-            )
-        })
+        t = FakeTransport(
+            {
+                ("GET", "/api/v1/modules/datasources/redshift/variants"): (
+                    200,
+                    [{"variant": "aws-managed", "module_id": "m"}],
+                )
+            }
+        )
         with pytest.raises(DataForgeError, match="No DataForge variant"):
             _client(t).resolve_module_id("redshift", "aws-serverless")
 
     def test_find_reusable_returns_provisioned(self) -> None:
-        t = FakeTransport({
-            ("GET", "/api/v1/resources"): (
-                200,
-                [
-                    {"id": "r-old", "status": "DELETED"},
-                    {"id": "r-live", "status": "PROVISIONED"},
-                ],
-            )
-        })
+        t = FakeTransport(
+            {
+                ("GET", "/api/v1/resources"): (
+                    200,
+                    [
+                        {"id": "r-old", "status": "DELETED"},
+                        {"id": "r-live", "status": "PROVISIONED"},
+                    ],
+                )
+            }
+        )
         assert _client(t).find_reusable("redshift") == "r-live"
 
     def test_create_rejects_short_reason(self) -> None:
         with pytest.raises(DataForgeError, match="reason"):
             _client(FakeTransport({})).create("m", {"instance_name": "x"}, "short")
 
-    def test_create_posts_fixed_flags(self) -> None:
+    def test_create_defaults_to_persistent_no_ttl(self) -> None:
+        # Default posture is the persistent shared fixture: lifecycle_enabled=False
+        # and NO lifecycle_days key (no hard TTL — approve once, reuse forever).
         t = FakeTransport({("POST", "/api/v1/resources"): (201, {"id": "r-new"})})
         rid = _client(t).create(
-            "m-1", {"instance_name": "e2e"}, "SDR full-DAG e2e for redshift", 3
+            "m-1", {"instance_name": "e2e"}, "SDR full-DAG e2e for redshift"
         )
         assert rid == "r-new"
         body = t.calls[0][2]
         assert body["skip_approval"] is True
         assert body["category"] == "development"
-        assert body["lifecycle_days"] == 3
+        assert body["lifecycle_enabled"] is False
+        assert "lifecycle_days" not in body
         assert body["module_id"] == "m-1"
+
+    def test_create_ephemeral_opt_in_sets_ttl(self) -> None:
+        # Explicit throwaway instance: lifecycle_enabled=True carries a hard TTL.
+        t = FakeTransport({("POST", "/api/v1/resources"): (201, {"id": "r-tmp"})})
+        _client(t).create(
+            "m-1",
+            {"instance_name": "e2e"},
+            "throwaway ephemeral e2e instance",
+            lifecycle_enabled=True,
+            lifecycle_days=3,
+        )
+        body = t.calls[0][2]
+        assert body["lifecycle_enabled"] is True
+        assert body["lifecycle_days"] == 3
 
     def test_poll_returns_on_provisioned(self) -> None:
         seq = [
             (200, {"id": "r", "status": "PROVISIONING"}),
-            (200, {"id": "r", "status": "PROVISIONED", "artifacts": {"data": _ARTIFACTS}}),
+            (
+                200,
+                {"id": "r", "status": "PROVISIONED", "artifacts": {"data": _ARTIFACTS}},
+            ),
         ]
 
         def transport(method, url, headers, body):
             return seq.pop(0)
 
-        client = DataForgeClient(transport=transport, _token="fake-session", api_url=_API)
+        client = DataForgeClient(
+            transport=transport, _token="fake-session", api_url=_API
+        )
         got = client.poll("r", interval_s=0, sleep=lambda _s: None)
         assert got["status"] == "PROVISIONED"
 
@@ -137,24 +168,41 @@ class TestLifecycle:
             _client(t).poll("r", interval_s=0, sleep=lambda _s: None)
 
     def test_poll_times_out(self) -> None:
-        t = FakeTransport({("GET", "/api/v1/resources/r"): (200, {"status": "PROVISIONING"})})
+        t = FakeTransport(
+            {("GET", "/api/v1/resources/r"): (200, {"status": "PROVISIONING"})}
+        )
         clock = iter([0.0, 0.0, 999.0])
         with pytest.raises(DataForgeError, match="not PROVISIONED within"):
             _client(t).poll(
-                "r", timeout_s=10, interval_s=0, sleep=lambda _s: None,
+                "r",
+                timeout_s=10,
+                interval_s=0,
+                sleep=lambda _s: None,
                 now=lambda: next(clock),
             )
 
     def test_provision_or_reuse_reuses(self) -> None:
-        t = FakeTransport({
-            ("GET", "/api/v1/resources/r-live"): (
-                200, {"id": "r-live", "status": "PROVISIONED", "artifacts": {"data": _ARTIFACTS}}
-            ),
-            ("GET", "/api/v1/resources"): (200, [{"id": "r-live", "status": "PROVISIONED"}]),
-        })
+        t = FakeTransport(
+            {
+                ("GET", "/api/v1/resources/r-live"): (
+                    200,
+                    {
+                        "id": "r-live",
+                        "status": "PROVISIONED",
+                        "artifacts": {"data": _ARTIFACTS},
+                    },
+                ),
+                ("GET", "/api/v1/resources"): (
+                    200,
+                    [{"id": "r-live", "status": "PROVISIONED"}],
+                ),
+            }
+        )
         rid, creds = _client(t).provision_or_reuse(
-            datasource="redshift", variant="aws-serverless",
-            instance_name="e2e", reason="SDR full-DAG e2e for redshift",
+            datasource="redshift",
+            variant="aws-serverless",
+            instance_name="e2e",
+            reason="SDR full-DAG e2e for redshift",
         )
         assert rid == "r-live"
         assert creds["database"] == "e2e_main"
@@ -164,7 +212,9 @@ class TestLifecycle:
 
 class TestMapping:
     def test_creds_to_database_spec_puts_database_in_extra(self) -> None:
-        spec = creds_to_database_spec(_ARTIFACTS, connector_config_name="atlan-connectors-redshift")
+        spec = creds_to_database_spec(
+            _ARTIFACTS, connector_config_name="atlan-connectors-redshift"
+        )
         assert spec.host == "redshift.example.invalid"
         assert spec.port == 5439
         assert spec.username == "test_user"
@@ -173,7 +223,13 @@ class TestMapping:
 
     def test_creds_alt_key_spellings(self) -> None:
         spec = creds_to_database_spec(
-            {"endpoint": "h", "port": "5439", "dbname": "e2e_main", "user": "u", "password": "p"}
+            {
+                "endpoint": "h",
+                "port": "5439",
+                "dbname": "e2e_main",
+                "user": "u",
+                "password": "p",
+            }
         )
         assert spec.host == "h" and spec.port == 5439
         assert spec.username == "u" and spec.extra == {"database": "e2e_main"}
@@ -204,12 +260,22 @@ class TestCli:
     from application_sdk.testing.e2e.dataforge import main, provision_source
 
     def _reuse_transport(self) -> FakeTransport:
-        return FakeTransport({
-            ("GET", "/api/v1/resources/r-live"): (
-                200, {"id": "r-live", "status": "PROVISIONED", "artifacts": {"data": _ARTIFACTS}}
-            ),
-            ("GET", "/api/v1/resources"): (200, [{"id": "r-live", "status": "PROVISIONED"}]),
-        })
+        return FakeTransport(
+            {
+                ("GET", "/api/v1/resources/r-live"): (
+                    200,
+                    {
+                        "id": "r-live",
+                        "status": "PROVISIONED",
+                        "artifacts": {"data": _ARTIFACTS},
+                    },
+                ),
+                ("GET", "/api/v1/resources"): (
+                    200,
+                    [{"id": "r-live", "status": "PROVISIONED"}],
+                ),
+            }
+        )
 
     def test_provision_emits_source_env(self, monkeypatch, tmp_path) -> None:
         from application_sdk.testing.e2e.dataforge import main
@@ -217,8 +283,14 @@ class TestCli:
         env_file = tmp_path / "gh.env"
         monkeypatch.setenv("GITHUB_ENV", str(env_file))
         rc = main(
-            ["provision", "redshift", "--instance-name", "e2e",
-             "--reason", "SDR full-DAG e2e for redshift"],
+            [
+                "provision",
+                "redshift",
+                "--instance-name",
+                "e2e",
+                "--reason",
+                "SDR full-DAG e2e for redshift",
+            ],
             client=_client(self._reuse_transport()),
         )
         assert rc == 0
@@ -248,9 +320,16 @@ class TestDeviceLogin:
     def test_device_login_polls_then_writes_session(self, tmp_path) -> None:
         session_path = tmp_path / ".dataforge" / "session.json"
         responses = [
-            (200, {"device_code": "dc-1", "user_code": "ABCD-EFGH",
-                   "verification_url_complete": "https://dataforge.example.invalid/auth/device?user_code=ABCD-EFGH",
-                   "interval": 0, "expires_in": 600}),
+            (
+                200,
+                {
+                    "device_code": "dc-1",
+                    "user_code": "ABCD-EFGH",
+                    "verification_url_complete": "https://dataforge.example.invalid/auth/device?user_code=ABCD-EFGH",
+                    "interval": 0,
+                    "expires_in": 600,
+                },
+            ),
             (400, {"error": "authorization_pending"}),
             (200, {"session_token": "test-session", "refresh_token": "test-refresh"}),
         ]
@@ -262,8 +341,11 @@ class TestDeviceLogin:
         clock = iter([0.0, 0.0, 0.0, 0.0])
         prompts: list[str] = []
         out = client.device_login(
-            open_browser=False, write_path=str(session_path),
-            sleep=lambda _s: None, now=lambda: next(clock), echo=prompts.append,
+            open_browser=False,
+            write_path=str(session_path),
+            sleep=lambda _s: None,
+            now=lambda: next(clock),
+            echo=prompts.append,
         )
         assert out == str(session_path)
         saved = json.loads(session_path.read_text())
@@ -275,7 +357,10 @@ class TestDeviceLogin:
 
     def test_device_login_raises_on_access_denied(self, tmp_path) -> None:
         responses = [
-            (200, {"device_code": "dc", "user_code": "X", "interval": 0, "expires_in": 9}),
+            (
+                200,
+                {"device_code": "dc", "user_code": "X", "interval": 0, "expires_in": 9},
+            ),
             (400, {"error": "access_denied"}),
         ]
 
@@ -285,8 +370,11 @@ class TestDeviceLogin:
         clock = iter([0.0, 0.0, 0.0])
         with pytest.raises(DataForgeError, match="access_denied"):
             DataForgeClient(transport=transport, api_url=_API).device_login(
-                open_browser=False, write_path=str(tmp_path / "s.json"),
-                sleep=lambda _s: None, now=lambda: next(clock), echo=lambda _m: None,
+                open_browser=False,
+                write_path=str(tmp_path / "s.json"),
+                sleep=lambda _s: None,
+                now=lambda: next(clock),
+                echo=lambda _m: None,
             )
 
 
@@ -305,8 +393,10 @@ class TestRefresh:
             return seq.pop(0)
 
         c = DataForgeClient(
-            transport=transport, api_url=_API,
-            _token="stale-session", _refresh_token="rt",
+            transport=transport,
+            api_url=_API,
+            _token="stale-session",
+            _refresh_token="rt",
         )
         assert c.find_reusable("redshift") == "r-live"
         assert c._token == "fresh-session"  # rotated
