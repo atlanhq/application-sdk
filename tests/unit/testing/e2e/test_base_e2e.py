@@ -16,7 +16,6 @@ import pytest
 
 from application_sdk.contracts.types import ConnectionRef
 from application_sdk.testing.e2e._errors import (
-    HarnessMethodNotImplementedError,
     ManifestDagMissingError,
     ManifestFileNotFoundError,
 )
@@ -495,31 +494,41 @@ class TestAgentSpecDerivation:
 
         assert _T().agent_spec().agent_name == "pinned-name"
 
-    def test_agent_mode_without_deployment_env_raises(
+    def test_agent_mode_without_deployment_env_falls_back_to_run_id(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # APP set, DEPLOYMENT absent → the app-only queue shape isn't derivable.
+        # APP set, DEPLOYMENT absent (a local run without the CI action) → the
+        # two-var shape isn't derivable, so fall back to the run-id-keyed name
+        # {connector}-{connection_name_prefix}-{run_id} rather than raising. This
+        # is what lets connectors drop their agent_spec override entirely (T017).
         monkeypatch.setenv("ATLAN_APPLICATION_NAME", "openapi")
         monkeypatch.delenv("ATLAN_DEPLOYMENT_NAME", raising=False)
 
         class _T(_ConcreteE2ETest):
             mode = RunMode.AGENT
 
-        with pytest.raises(HarnessMethodNotImplementedError):
-            _T().agent_spec()
+        t = _T()
+        t.run_id = 42
+        spec = t.agent_spec()
+        assert spec is not None
+        assert spec.agent_name == "openapi-e2e-full-ci-42"
 
-    def test_agent_mode_without_application_env_raises(
+    def test_agent_mode_without_application_env_falls_back_to_run_id(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Symmetric branch: DEPLOYMENT set, APP absent → also not derivable.
+        # Symmetric branch: DEPLOYMENT set, APP absent → still not the two-var
+        # shape, so the same run-id fallback applies.
         monkeypatch.delenv("ATLAN_APPLICATION_NAME", raising=False)
         monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "e2e-full-ci-42-connection-create")
 
         class _T(_ConcreteE2ETest):
             mode = RunMode.AGENT
 
-        with pytest.raises(HarnessMethodNotImplementedError):
-            _T().agent_spec()
+        t = _T()
+        t.run_id = 42
+        spec = t.agent_spec()
+        assert spec is not None
+        assert spec.agent_name == "openapi-e2e-full-ci-42"
 
 
 class TestStallGuardDefault:

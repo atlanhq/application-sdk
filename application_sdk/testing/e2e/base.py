@@ -475,11 +475,18 @@ class BaseE2ETest:
         invisibility under the two-store posture). Subclasses may still override
         to pin an explicit agent identity.
 
-        Only the two-var shape is derivable here. A worker deployed with
-        ATLAN_APPLICATION_NAME set but ATLAN_DEPLOYMENT_NAME absent polls the
-        bare ``{app}`` queue (see _derive_task_queue's middle branch); the
-        harness can't reconstruct that from env alone, so such deployments must
-        override agent_spec() explicitly.
+        Only the two-var shape is derivable from env. When the deployment env is
+        absent — e.g. a developer running ``pytest`` locally without the CI
+        action's ``ATLAN_DEPLOYMENT_NAME`` — this falls back to
+        ``{connector_short_name}-{connection_name_prefix}-{run_id}`` (the same
+        run-id-keyed shape connectors used to hard-code in an override). That
+        keeps local runs working with no override while CI (which always exports
+        the per-leg ``ATLAN_DEPLOYMENT_NAME``) still gets the exact worker queue.
+
+        Subclasses should **not** override this to pin a hard-coded run-id name:
+        doing so drops the per-leg suffix the worker inherits and desyncs the two
+        queues (conformance rule T017). Override only to pin a genuinely
+        different agent identity (and then read the deployment env yourself).
         """
         if self.mode is RunMode.DIRECT:
             return None
@@ -487,13 +494,14 @@ class BaseE2ETest:
         deployment_name = os.environ.get("ATLAN_DEPLOYMENT_NAME", "")
         if app_name and deployment_name:
             return AgentSpec(agent_name=f"{app_name}-{deployment_name}")
-        raise HarnessMethodNotImplementedError(
-            message=(
-                "AGENT mode needs an agent_spec() override, or both "
-                "ATLAN_APPLICATION_NAME and ATLAN_DEPLOYMENT_NAME set in the "
-                "environment to derive the worker's task queue"
-            ),
-            operation="agent_spec",
+        # Local fallback: no CI-exported deployment env. Mirror the run-id-keyed
+        # shape (so a local run lands on its own queue) without requiring a
+        # per-connector override — the worker, started with the same missing env,
+        # derives the matching bare/run-id queue.
+        return AgentSpec(
+            agent_name=(
+                f"{self.connector_short_name}-{self.connection_name_prefix}-{self.run_id}"
+            )
         )
 
     def connection_spec(self) -> ConnectionSpec:
