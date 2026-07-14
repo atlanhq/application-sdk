@@ -38,6 +38,6 @@ jobs:
           COPY README.md /README.md
           DOCKERFILE
           cp README.md /tmp/ghcr-test/README.md 2>/dev/null || echo "test" > /tmp/ghcr-test/README.md
-          docker build -t ghcr.io/atlanhq/application-sdk/_throwaway-ghcr-auth-test:latest /tmp/ghcr-test
-          docker push ghcr.io/atlanhq/application-sdk/_throwaway-ghcr-auth-test:latest
+          docker build -t ghcr.io/atlanhq/application-sdk/throwaway-ghcr-auth-test:latest /tmp/ghcr-test
+          docker push ghcr.io/atlanhq/application-sdk/throwaway-ghcr-auth-test:latest
           echo "GHCR push succeeded with the App token."
