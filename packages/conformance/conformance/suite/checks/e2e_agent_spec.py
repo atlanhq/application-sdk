@@ -92,17 +92,26 @@ def _is_agentspec_call(node: ast.expr) -> bool:
 
 
 def _returns_hardcoded_agentspec(fn: ast.FunctionDef) -> bool:
-    """True when the function returns ``AgentSpec(agent_name=<literal>)``.
+    """True when the function returns ``AgentSpec`` with a hard-coded agent_name.
 
     A literal ``agent_name`` is a ``Constant`` (plain string) or ``JoinedStr``
     (f-string, e.g. ``f"...-{self.run_id}"``) — the hard-coded shape. A value
     built by a call or from the environment is not treated as hard-coded.
+
+    ``agent_name`` is ``AgentSpec``'s first (and only required) field, so both
+    the keyword form ``AgentSpec(agent_name="x")`` and the positional form
+    ``AgentSpec("x")`` / ``AgentSpec(f"...{self.run_id}")`` are inspected — the
+    positional form is valid Python and would otherwise escape detection.
     """
     for node in ast.walk(fn):
         if not isinstance(node, ast.Return) or not _is_agentspec_call(node.value):
             continue
         call = node.value
         assert isinstance(call, ast.Call)
+        # Positional: first arg is agent_name.
+        if call.args and isinstance(call.args[0], (ast.Constant, ast.JoinedStr)):
+            return True
+        # Keyword: agent_name=...
         for kw in call.keywords:
             if kw.arg == "agent_name" and isinstance(
                 kw.value, (ast.Constant, ast.JoinedStr)

@@ -109,6 +109,32 @@ def test_passes_plain_interpolation_without_default() -> None:
     assert scan_text(text, ".github/e2e/overlay.yaml") == []
 
 
+def test_passes_yaml_null_map_value() -> None:
+    # A null-valued compose env MAP entry means "pass the var through from the
+    # host/runner env" (inherit) — same semantics as the bare list pass-through.
+    for null_token in ("null", "Null", "NULL", "~"):
+        text = (
+            "services:\n"
+            "  atlan-app:\n"
+            "    environment:\n"
+            f"      ATLAN_DEPLOYMENT_NAME: {null_token}\n"
+        )
+        assert scan_text(text, ".github/e2e/overlay.yaml") == [], null_token
+
+
+def test_flags_list_form_null_literal() -> None:
+    # Asymmetry: in LIST form ``=null`` is a literal string assignment (not a
+    # pass-through), so it is correctly flagged — the null pass-through is
+    # map-form-only.
+    text = (
+        "services:\n"
+        "  atlan-app:\n"
+        "    environment:\n"
+        "      - ATLAN_DEPLOYMENT_NAME=null\n"
+    )
+    assert [f.rule_id for f in scan_text(text, ".github/e2e/overlay.yaml")] == ["T016"]
+
+
 # ── No-ops / scoping ─────────────────────────────────────────────────────────
 
 

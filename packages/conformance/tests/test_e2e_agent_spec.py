@@ -64,6 +64,20 @@ def test_flags_hardcoded_plain_string_agent_spec() -> None:
     assert [f.rule_id for f in findings] == ["T017"]
 
 
+def test_flags_positional_hardcoded_agent_spec() -> None:
+    # agent_name is AgentSpec's first field, so the positional form
+    # AgentSpec("x") / AgentSpec(f"...{run_id}") is equally hard-coded and must
+    # be flagged too — not just the agent_name= keyword form.
+    for body in (
+        '        return AgentSpec("pinned-name")\n',
+        '        return AgentSpec(f"metabase-e2e-full-ci-{self.run_id}")\n',
+    ):
+        text = "class T(Base):\n    def agent_spec(self):\n" + body
+        assert [f.rule_id for f in scan_text(text, "tests/e2e/test_x.py")] == [
+            "T017"
+        ], body
+
+
 # ── Compliant forms (no finding) ─────────────────────────────────────────────
 
 

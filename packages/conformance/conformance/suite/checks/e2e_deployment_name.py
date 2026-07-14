@@ -94,20 +94,24 @@ def _is_compose_file(text: str) -> bool:
     return _SERVICES_RE.search(text) is not None
 
 
-def _assignment_value(line: str) -> str | None:
-    """Return the assigned value for an ``ATLAN_DEPLOYMENT_NAME`` line.
+def _assignment(line: str) -> tuple[str, str] | None:
+    """Return ``(form, value)`` for an ``ATLAN_DEPLOYMENT_NAME`` line, else None.
 
-    Returns ``None`` when the line is not an ``ATLAN_DEPLOYMENT_NAME``
-    assignment, or is the bare pass-through list form (``- ATLAN_DEPLOYMENT_NAME``
-    with no ``=``) which inherits the value from the runner env and is always
-    compliant.
+    ``form`` is ``"list"`` (``- ATLAN_DEPLOYMENT_NAME=<value>``) or ``"map"``
+    (``ATLAN_DEPLOYMENT_NAME: <value>``). Returns ``None`` when the line is not
+    an ``ATLAN_DEPLOYMENT_NAME`` assignment, or is the bare pass-through list
+    form (``- ATLAN_DEPLOYMENT_NAME`` with no ``=``) which inherits the value
+    from the runner env and is always compliant. The form matters because a
+    null-valued *map* entry (``ATLAN_DEPLOYMENT_NAME: null``) is a compose
+    pass-through, whereas a *list* ``=null`` is a literal string assignment.
     """
     m = _LIST_RE.match(line)
     if m is not None:
-        return m.group("val")  # None => pass-through (no '='); compliant
+        val = m.group("val")
+        return None if val is None else ("list", val)  # no '=' => pass-through
     m = _MAP_RE.match(line)
     if m is not None:
-        return m.group("val")
+        return ("map", m.group("val"))
     return None
 
 
@@ -121,6 +125,14 @@ def _clean_value(value: str) -> str:
     if idx != -1:
         value = value[:idx]
     return value.strip().strip("'\"").strip()
+
+
+# YAML null scalars. In a docker-compose ``environment`` MAP, a null value
+# (``ATLAN_DEPLOYMENT_NAME: null`` / ``: ~``) means "pass the variable through
+# from the host/runner env" — i.e. inherit, the same semantics as the bare
+# pass-through list form. (In LIST form, ``=null`` is a literal string "null"
+# and is correctly flagged.)
+_YAML_NULL_TOKENS: frozenset[str] = frozenset({"null", "~"})
 
 
 def _is_inherited(value: str) -> bool:
@@ -152,12 +164,17 @@ def scan_text(text: str, file: str) -> list[Finding]:
     suppressions = parse_toml_suppressions(text)
     findings: list[Finding] = []
     for lineno, line in enumerate(text.splitlines(), start=1):
-        value = _assignment_value(line)
-        if value is None:
+        assignment = _assignment(line)
+        if assignment is None:
             continue
+        form, value = assignment
         cleaned = _clean_value(value)
         if not cleaned:
             # Empty value behaves like a pass-through: inherits the runner env.
+            continue
+        if form == "map" and cleaned.lower() in _YAML_NULL_TOKENS:
+            # A null-valued compose env MAP entry passes the var through from the
+            # runner env (inherit) — same as the bare list pass-through form.
             continue
         if _is_inherited(cleaned):
             continue

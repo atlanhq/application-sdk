@@ -5,7 +5,7 @@
 
 # Test-Quality Rules (T-series)
 
-**17 rules** · Checker: `suite.checks.integration_marking` (T001), `suite.checks.sdr_test_checks` (T002-T003), `suite.checks.dev_entrypoint` (T004), `suite.checks.test_quality` (T005-T009), `suite.checks.test_structure` (T010-T013), and `suite.checks.coverage_config` (T014-T015) (AST/TOML-based)
+**17 rules** · Checker: `suite.checks.integration_marking` (T001), `suite.checks.sdr_test_checks` (T002-T003), `suite.checks.dev_entrypoint` (T004), `suite.checks.test_quality` (T005-T009), `suite.checks.test_structure` (T010-T013), `suite.checks.coverage_config` (T014-T015), `suite.checks.e2e_deployment_name` (T016), and `suite.checks.e2e_agent_spec` (T017) (AST/TOML/YAML-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
