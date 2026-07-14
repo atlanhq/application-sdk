@@ -180,11 +180,11 @@ wheels = [
 
 [[package]]
 name = "asgiref"
-version = "3.11.1"
+version = "3.12.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/63/40/f03da1264ae8f7cfdbf9146542e5e7e8100a4c66ab48e791df9a03d3f6c0/asgiref-3.11.1.tar.gz", hash = "sha256:5f184dc43b7e763efe848065441eac62229c9f7b0475f41f80e207a114eda4ce", size = 38550, upload-time = "2026-02-03T13:30:14.33Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/73/9b/e1cda73c1b8050ec258f94b426f769f7f1b0835bd9644cb6d561e2e320ca/asgiref-3.12.0.tar.gz", hash = "sha256:37ef86a30c3549f1a469c78c4521a63b8c31c17ee42cf792a2b054af81e23c79", size = 41812, upload-time = "2026-07-14T07:24:44.963Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5c/0a/a72d10ed65068e115044937873362e6e32fab1b7dce0046aeb224682c989/asgiref-3.11.1-py3-none-any.whl", hash = "sha256:e8667a091e69529631969fd45dc268fa79b99c92c5fcdda727757e52146ec133", size = 24345, upload-time = "2026-02-03T13:30:13.039Z" },
+    { url = "https://files.pythonhosted.org/packages/62/a8/3c32efd053d022ef5a2b91dee5f547ae12fbb08728d6428c8b302ad274c4/asgiref-3.12.0-py3-none-any.whl", hash = "sha256:3d8d6471b12501782d78b513c1f207d613a4de34b8a67c0baa561f61deda1d22", size = 25398, upload-time = "2026-07-14T07:24:43.377Z" },
 ]
 
 [[package]]
