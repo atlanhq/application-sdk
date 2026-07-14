@@ -308,12 +308,16 @@ class TestEmbeddedDaprLifecycle:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A non-existent components_dir raises immediately, not as a slow,
-        misleading readiness timeout."""
+        misleading readiness timeout — and before any env mutation."""
         monkeypatch.chdir(tmp_path)
+        for k in ("DAPR_HTTP_PORT", "DAPR_GRPC_PORT", "DAPR_COMPONENTS_PATH"):
+            monkeypatch.delenv(k, raising=False)
         missing = tmp_path / "does-not-exist"
         with pytest.raises(DaprComponentsDirNotFoundError):
             async with embedded_dapr(components_dir=str(missing)):
                 pass
+        for k in ("DAPR_HTTP_PORT", "DAPR_GRPC_PORT", "DAPR_COMPONENTS_PATH"):
+            assert k not in os.environ
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("blank", ["", "   "])
@@ -321,11 +325,16 @@ class TestEmbeddedDaprLifecycle:
         self, blank: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A blank/whitespace components_dir must not slip past the guard —
-        Path("").is_dir() resolves to cwd and would boot daprd there."""
+        Path("").is_dir() resolves to cwd and would boot daprd there. Raises
+        before any env mutation."""
         monkeypatch.chdir(tmp_path)
+        for k in ("DAPR_HTTP_PORT", "DAPR_GRPC_PORT", "DAPR_COMPONENTS_PATH"):
+            monkeypatch.delenv(k, raising=False)
         with pytest.raises(DaprComponentsDirNotFoundError):
             async with embedded_dapr(components_dir=blank):
                 pass
+        for k in ("DAPR_HTTP_PORT", "DAPR_GRPC_PORT", "DAPR_COMPONENTS_PATH"):
+            assert k not in os.environ
 
     @pytest.mark.asyncio
     async def test_terminates_subprocess_on_exit(

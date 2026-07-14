@@ -333,10 +333,12 @@ async def embedded_dapr(
     value can't be told apart from the default and is silently ignored rather
     than erroring.
 
-    On entry the context manager sets ``DAPR_HTTP_PORT``, ``DAPR_GRPC_PORT``,
-    and ``DAPR_COMPONENTS_PATH`` so callers (and any background observability
-    flush that races with daprd startup) see the right values. The previous
-    values of those env vars are restored on exit.
+    Once arguments are validated and the sidecar is about to start, the context
+    manager sets ``DAPR_HTTP_PORT``, ``DAPR_GRPC_PORT``, and
+    ``DAPR_COMPONENTS_PATH`` so callers (and any background observability flush
+    that races with daprd startup) see the right values; the previous values are
+    restored on exit. An argument error (mutually-exclusive kwargs, or a
+    bad/blank *components_dir*) raises before any env var is touched.
     """
     if components_dir is not None and secrets_file is not None:
         raise DaprComponentsConfigError()
