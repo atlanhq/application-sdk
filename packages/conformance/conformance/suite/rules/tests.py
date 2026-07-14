@@ -1058,7 +1058,7 @@ RULES: tuple[RuleDefinition, ...] = (
         full_description=(
             "An ``agent_spec`` override under ``tests/`` returns a hard-coded\n"
             "``AgentSpec(agent_name=...)`` (a plain string or an f-string such as\n"
-            "``f\"myconn-e2e-full-ci-{self.run_id}\"``) without referencing\n"
+            '``f"myconn-e2e-full-ci-{self.run_id}"``) without referencing\n'
             "``ATLAN_DEPLOYMENT_NAME`` or calling ``super().agent_spec()``.\n"
             "\n"
             "The harness builds its extract-node Temporal queue as\n"
