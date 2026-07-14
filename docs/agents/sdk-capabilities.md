@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.22.0
-source-sha:    8bdaa81a4244445f68f68f20abbf00b1e9969904
-source-date:   2026-07-14T20:57:58+05:30
+source-sha:    289514284095389e4a076fdd00a856c5e6c5267c
+source-date:   2026-07-15T03:15:16+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2416,8 +2416,8 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.contracts import ContractValidationError`
 - **Summary:** Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0.
 - **Fields:**
-  - `DEFAULT_ERROR_CODE: ErrorCode` `= CONTRACT_VALIDATION`
-  - `code: str` `= 'INVALID_INPUT_CONTRACT_VALIDATION'`
+  - `DEFAULT_ERROR_CODE: ClassVar[ErrorCode]` `= CONTRACT_VALIDATION`
+  - `code: ClassVar[str]` `= 'INVALID_INPUT_CONTRACT_VALIDATION'`
   - `error_code: ErrorCode`
 - **Defined in:** `application_sdk/contracts/base.py`
 
@@ -2498,9 +2498,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.contracts import PublishInputMixin`
 - **Summary:** Mixin for apps whose workflow output feeds the Publish App.
 - **Fields:**
-  - `PUBLISH_STATE_PREFIX_TEMPLATE: str` `= 'persistent-artifacts/apps/atlan-publish-app/state/{connection_qn}/publish-state'`
-  - `STAGING_DATA_PREFIX_TEMPLATE: str` `= 'persistent-artifacts/apps/atlan-publish-app/state/{connection_qn}'`
-  - `CURRENT_STATE_PREFIX_TEMPLATE: str` `= 'argo-artifacts/{connection_qn}/current-state'`
+  - `PUBLISH_STATE_PREFIX_TEMPLATE: ClassVar[str]` `= 'persistent-artifacts/apps/atlan-publish-app/state/{connection_qn}/publish-state'`
+  - `STAGING_DATA_PREFIX_TEMPLATE: ClassVar[str]` `= 'persistent-artifacts/apps/atlan-publish-app/state/{connection_qn}'`
+  - `CURRENT_STATE_PREFIX_TEMPLATE: ClassVar[str]` `= 'argo-artifacts/{connection_qn}/current-state'`
   - `output_path: str` `= ''` — SDK output path. Used to derive ``transformed_data_prefix``.
   - `output_prefix: str` `= ''` — Prefix to strip from ``output_path`` before deriving transformed prefix.
   - `transformed_data_prefix: str` `= ''` — Object-store-relative path to transformed data files.
@@ -2793,7 +2793,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import ExtractionInput`
 - **Summary:** Top-level input for a SQL metadata extraction run.
 - **Fields:**
-  - `preflight_credential_refs: dict[str, str]` `= {}` — Opt-in map of ``{ref_name: guid_field}`` for multi-credential apps.
+  - `preflight_credential_refs: ClassVar[dict[str, str]]` `= {}` — Opt-in map of ``{ref_name: guid_field}`` for multi-credential apps.
   - `workflow_id: str` `= ''` — Temporal workflow ID for this run.
   - `connection: ConnectionRef` `= Field(default_factory=ConnectionRef)` — Typed connection reference (qualified name, name, admin users, etc.).
   - `credential_guid: str` `= ''` — GUID of credentials stored in the secret store.
