@@ -494,6 +494,17 @@ class TestAgentSpecDerivation:
 
         assert _T().agent_spec().agent_name == "pinned-name"
 
+    # The fallback branch fires under three env conditions — deployment-only,
+    # application-only, and both-absent — all resolving to the same run-id-keyed
+    # name. Each is asserted separately so a future split of the branch can't
+    # silently regress one. run_id is normally set by setup_method() from
+    # GITHUB_RUN_ID; these minimal instances deliberately bypass setup_method
+    # (see _ConcreteE2ETest), so they pin run_id as a class attribute rather than
+    # mutating the instance post-construction.
+    class _AgentModeFixed(_ConcreteE2ETest):
+        mode = RunMode.AGENT
+        run_id = 42
+
     def test_agent_mode_without_deployment_env_falls_back_to_run_id(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -504,12 +515,7 @@ class TestAgentSpecDerivation:
         monkeypatch.setenv("ATLAN_APPLICATION_NAME", "openapi")
         monkeypatch.delenv("ATLAN_DEPLOYMENT_NAME", raising=False)
 
-        class _T(_ConcreteE2ETest):
-            mode = RunMode.AGENT
-
-        t = _T()
-        t.run_id = 42
-        spec = t.agent_spec()
+        spec = self._AgentModeFixed().agent_spec()
         assert spec is not None
         assert spec.agent_name == "openapi-e2e-full-ci-42"
 
@@ -521,12 +527,20 @@ class TestAgentSpecDerivation:
         monkeypatch.delenv("ATLAN_APPLICATION_NAME", raising=False)
         monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "e2e-full-ci-42-connection-create")
 
-        class _T(_ConcreteE2ETest):
-            mode = RunMode.AGENT
+        spec = self._AgentModeFixed().agent_spec()
+        assert spec is not None
+        assert spec.agent_name == "openapi-e2e-full-ci-42"
 
-        t = _T()
-        t.run_id = 42
-        spec = t.agent_spec()
+    def test_agent_mode_without_any_env_falls_back_to_run_id(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Both vars absent — a fully local run with no CI context at all. The
+        # third and last trigger of the fallback branch; asserted explicitly so
+        # the branch's coverage is complete, not just the two one-var cases.
+        monkeypatch.delenv("ATLAN_APPLICATION_NAME", raising=False)
+        monkeypatch.delenv("ATLAN_DEPLOYMENT_NAME", raising=False)
+
+        spec = self._AgentModeFixed().agent_spec()
         assert spec is not None
         assert spec.agent_name == "openapi-e2e-full-ci-42"
 
