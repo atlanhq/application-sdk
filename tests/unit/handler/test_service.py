@@ -5092,6 +5092,26 @@ class TestRunAppHandlerService:
         assert kwargs.get("port") == 9000
         assert kwargs.get("log_level") == "warning"
 
+    def test_run_passes_log_config_none_to_avoid_startup_deadlock(self) -> None:
+        """Regression (CNCT-67): SERVER/handler mode must pass ``log_config=None``.
+
+        Uvicorn's ``Config.load()`` calls ``logging.config.dictConfig()`` before
+        the socket is bound; that grabs the global ``logging._lock``. A background
+        thread mid-emit while holding the lock (e.g. the OTel gRPC exporter)
+        deadlocks startup, the port never opens, and k8s liveness probes kill the
+        pod. Passing ``log_config=None`` skips the dictConfig call entirely.
+        """
+        from unittest.mock import patch
+
+        from application_sdk.handler.service import run_app_handler_service
+
+        with patch("uvicorn.run") as mock_run:
+            run_app_handler_service(
+                _TestHandler(), host="127.0.0.1", port=9000, log_level="warning"
+            )
+        _, kwargs = mock_run.call_args
+        assert kwargs.get("log_config") is None
+
 
 class TestWorkflowClientConfig:
     """Tests for WorkflowClientConfig.is_configured()."""

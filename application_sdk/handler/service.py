@@ -2674,4 +2674,18 @@ def run_app_handler_service(
     import uvicorn  # noqa: PLC0415 — cold path: uvicorn only when starting standalone server
 
     app = create_app_handler_service(handler, **kwargs)
-    uvicorn.run(app, host=host, port=port, log_level=log_level)
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        log_level=log_level,
+        # Skip uvicorn's logging.config.dictConfig() call — it runs inside
+        # Config.load() before the socket is bound and grabs the global
+        # logging._lock. A background thread mid-emit while holding that lock
+        # (e.g. the OTel gRPC exporter, or the Temporal SDK) deadlocks startup,
+        # so the port never opens and k8s liveness probes kill the pod. This
+        # mirrors the combined-mode guard in main.py. Uvicorn logs still flow
+        # through Python's root logger to our structlog/loguru setup via the
+        # installed InterceptHandler.
+        log_config=None,
+    )
