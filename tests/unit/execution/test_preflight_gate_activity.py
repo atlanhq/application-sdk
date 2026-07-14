@@ -5,15 +5,25 @@ Separate from the SDR activity tests — the gate is its own module/concern.
 
 from __future__ import annotations
 
+import warnings
+from contextlib import ExitStack, contextmanager
+from typing import Any
 from unittest import mock
 
 import pytest
 
 from application_sdk.app.base import AppContextError
+from application_sdk.credentials.errors import CredentialNotFoundError
 from application_sdk.credentials.ref import CredentialResolvable
 from application_sdk.errors.categories import Audience, FailureCategory
-from application_sdk.errors.leaves import AppPermissionDeniedError, AuthError
+from application_sdk.errors.leaves import (
+    AppPermissionDeniedError,
+    AuthError,
+    ColdStartRaceError,
+    DependencyUnavailableError,
+)
 from application_sdk.execution._temporal.preflight_gate import (
+    GATE_START_TO_CLOSE,
     PreflightGateInput,
     _config_from_snapshot,
     build_preflight_gate_activity,
@@ -33,6 +43,9 @@ from application_sdk.handler.contracts import (
     PreflightStatus,
     SqlMetadataOutput,
 )
+from application_sdk.infrastructure.credential_vault import CredentialVaultError
+
+_UNSET = object()
 
 
 class _StubHandler(Handler):
@@ -83,6 +96,44 @@ def _outcome_event(mock_logger) -> dict | None:
 
 _LOGGER = "application_sdk.execution._temporal.preflight_gate.logger"
 
+_GATE = "application_sdk.execution._temporal.preflight_gate"
+
+
+def _resolver_by_guid(mapping: dict) -> mock.MagicMock:
+    """Resolver whose resolve_raw returns/raises per the ref's credential_guid.
+
+    A dict value is returned as the raw creds; an Exception value is raised
+    (drives the not-found / outage taxonomy branches).
+    """
+
+    def _resolve(ref):
+        result = mapping[ref.credential_guid]
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    resolver = mock.MagicMock()
+    resolver.resolve_raw = mock.AsyncMock(side_effect=_resolve)
+    return resolver
+
+
+@contextmanager
+def _infra_patches(resolver: mock.MagicMock | None, *, secret_store: Any = _UNSET):
+    """Patch get_infrastructure (with the given secret_store) and CredentialResolver."""
+    fake_infra = mock.MagicMock()
+    fake_infra.secret_store = (
+        mock.MagicMock(name="SecretStore") if secret_store is _UNSET else secret_store
+    )
+    with ExitStack() as stack:
+        stack.enter_context(
+            mock.patch(f"{_GATE}.get_infrastructure", return_value=fake_infra)
+        )
+        if resolver is not None:
+            stack.enter_context(
+                mock.patch(f"{_GATE}.CredentialResolver", return_value=resolver)
+            )
+        yield
+
 
 class TestPreflightGateActivity:
     def test_activity_name_is_app_namespaced(self) -> None:
@@ -109,19 +160,7 @@ class TestPreflightGateActivity:
         resolver.resolve_raw = mock.AsyncMock(
             return_value={"host": "db", "username": "u", "extra": {"role": "r"}}
         )
-        fake_infra = mock.MagicMock()
-        fake_infra.secret_store = mock.MagicMock(name="SecretStore")
-
-        with (
-            mock.patch(
-                "application_sdk.execution._temporal.preflight_gate.get_infrastructure",
-                return_value=fake_infra,
-            ),
-            mock.patch(
-                "application_sdk.execution._temporal.preflight_gate.CredentialResolver",
-                return_value=resolver,
-            ),
-        ):
+        with _infra_patches(resolver):
             result = await gate(
                 PreflightGateInput(credential_guid="guid-123", entrypoint="crawl")
             )
@@ -144,20 +183,27 @@ class TestPreflightGateActivity:
         assert handler.preflight_input is not None
         assert handler.preflight_input.credentials == []
 
+    async def test_gate_passes_enforced_per_attempt_timeout_budget(self) -> None:
+        # timeout_seconds must carry the real per-attempt cap (start_to_close),
+        # not the misleading 60s default — a handler sizing checks to the field
+        # value would otherwise silently overrun and degrade to no_verdict.
+        handler = _StubHandler()
+        gate = _gate(handler)
+        await gate(PreflightGateInput())
+        assert handler.preflight_input is not None
+        assert handler.preflight_input.timeout_seconds == int(
+            GATE_START_TO_CLOSE.total_seconds()
+        )
+        # Legacy single-credential path leaves the named-group map empty.
+        assert handler.preflight_input.credentials_by_name == {}
+
     async def test_raises_when_secret_store_unavailable(self) -> None:
         # A ref exists but there is no secret store to resolve it — an infra
         # failure. Raise (routes to the workflow's fail-open) rather than call the
         # handler with empty creds and misattribute the block as AUTH.
-        from application_sdk.errors.leaves import DependencyUnavailableError
-
         handler = _StubHandler()
         gate = _gate(handler)
-        fake_infra = mock.MagicMock()
-        fake_infra.secret_store = None
-        with mock.patch(
-            "application_sdk.execution._temporal.preflight_gate.get_infrastructure",
-            return_value=fake_infra,
-        ):
+        with _infra_patches(None, secret_store=None):
             with pytest.raises(DependencyUnavailableError):
                 await gate(PreflightGateInput(credential_guid="guid-123"))
         assert handler.preflight_input is None  # bailed before calling the handler
@@ -344,6 +390,27 @@ class TestPreflightGateActivity:
         gate_input = PreflightGateInput.from_extraction_input(_Inp(), "crawl")
         assert gate_input.credential_guid == "g-9"
         assert gate_input.entrypoint == "crawl"
+        # No declared named refs -> empty mapping (legacy single-triple path).
+        assert gate_input.credential_ref_fields == {}
+
+    def test_from_extraction_input_reads_declared_credential_ref_fields(self) -> None:
+        # A multi-credential app declares its named guid fields as a class
+        # attribute; the gate carries them onto the envelope (secret-free).
+        class _MultiInp:
+            preflight_credential_refs = {
+                "api": "api_credential_guid",
+                "object_store": "object_store_credential_guid",
+            }
+            extraction_method = "direct"
+            credential_guid = ""
+            agent_json = None
+            credential_ref = None
+
+        gate_input = PreflightGateInput.from_extraction_input(_MultiInp(), "crawl")
+        assert gate_input.credential_ref_fields == {
+            "api": "api_credential_guid",
+            "object_store": "object_store_credential_guid",
+        }
 
     def test_from_extraction_input_degrades_on_unbuildable_metadata(self) -> None:
         # A custom input whose metadata can't fit the model must not raise —
@@ -484,6 +551,21 @@ class TestPreflightGateActivity:
         for dropped in ("temp_table_regex", "include_filter", "exclude_list"):
             assert dropped not in config
 
+    def test_config_from_snapshot_drops_named_credential_guid_fields(self) -> None:
+        # Named-credential guid fields are refs, not form config — they must not
+        # leak into metadata/connection_config the way the top-level triple can't.
+        snapshot = {
+            "api_credential_guid": "guid-a",
+            "object_store_credential_guid": "guid-o",
+            "scope": "public",
+        }
+        config = _config_from_snapshot(
+            snapshot, ("api_credential_guid", "object_store_credential_guid")
+        )
+        assert "api_credential_guid" not in config
+        assert "object_store_credential_guid" not in config
+        assert config.get("scope") == "public"
+
     async def test_activity_uses_snapshot_to_build_preflight_metadata(self) -> None:
         # When extraction_snapshot is populated, the activity must derive metadata
         # from it (activity frame), not from input.metadata (workflow frame).
@@ -612,3 +694,135 @@ class TestInputTypeSupportsGate:
 
     def test_non_model_type_is_not_eligible(self) -> None:
         assert input_type_supports_gate(str) is False
+
+
+class TestPreflightGateMultiCredential:
+    """Named-credential resolution on the gate path (multi-credential apps).
+
+    The gate resolves each declared guid and applies ONE fail-open taxonomy:
+    a confirmed outage propagates (workflow fails open); a genuinely absent
+    credential becomes an empty group so the handler decides.
+    """
+
+    _FIELDS = {
+        "api": "api_credential_guid",
+        "object_store": "object_store_credential_guid",
+    }
+    _SNAPSHOT = {
+        "api_credential_guid": "guid-a",
+        "object_store_credential_guid": "guid-o",
+    }
+
+    def _input(self, **overrides) -> PreflightGateInput:
+        return PreflightGateInput(
+            entrypoint="crawl",
+            credential_ref_fields=self._FIELDS,
+            extraction_snapshot={**self._SNAPSHOT, **overrides},
+        )
+
+    async def test_resolves_each_named_ref_into_its_own_group(self) -> None:
+        handler = _StubHandler()
+        gate = _gate(handler)
+        resolver = _resolver_by_guid(
+            {"guid-a": {"token": "t"}, "guid-o": {"bucket": "b"}}
+        )
+        with _infra_patches(resolver):
+            result = await gate(self._input())
+
+        assert result.status is PreflightStatus.READY
+        pi = handler.preflight_input
+        assert pi is not None
+        assert {c.key: c.value for c in pi.credentials_by_name["api"]} == {"token": "t"}
+        assert {c.key: c.value for c in pi.credentials_by_name["object_store"]} == {
+            "bucket": "b"
+        }
+        # Named path leaves the flat legacy list empty — handlers read the map.
+        assert pi.credentials == []
+        assert resolver.resolve_raw.await_count == 2
+
+    async def test_not_found_group_is_empty_and_handler_still_runs(self) -> None:
+        # A genuinely missing guid must not fail open and must not abort the gate;
+        # the handler receives an empty group and decides the verdict itself.
+        handler = _StubHandler()
+        gate = _gate(handler)
+        resolver = _resolver_by_guid(
+            {"guid-a": {"token": "t"}, "guid-o": CredentialNotFoundError("guid-o")}
+        )
+        with _infra_patches(resolver):
+            await gate(self._input())
+
+        pi = handler.preflight_input
+        assert pi is not None  # handler ran — not fail-open
+        assert pi.credentials_by_name["object_store"] == []
+        assert {c.key: c.value for c in pi.credentials_by_name["api"]} == {"token": "t"}
+
+    async def test_outage_propagates_and_handler_is_not_called(self) -> None:
+        # A confirmed dependency outage must propagate (→ workflow fail-open),
+        # never be read as a bad credential and reach the handler.
+        handler = _StubHandler()
+        gate = _gate(handler)
+        resolver = _resolver_by_guid(
+            {"guid-a": DependencyUnavailableError(message="down", service="vault")}
+        )
+        with _infra_patches(resolver):
+            with pytest.raises(DependencyUnavailableError):
+                await gate(self._input())
+        assert handler.preflight_input is None
+
+    async def test_credential_vault_outage_propagates(self) -> None:
+        # The only outage shape that escapes _resolve_by_guid is a
+        # CredentialVaultError whose cause is a ColdStartRaceError (resolver.py):
+        # it must propagate out of the activity, not be swallowed to an empty
+        # group and reach the handler as if the credential were merely absent.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            outage = CredentialVaultError(
+                "vault unreachable", cause=ColdStartRaceError(message="cold start")
+            )
+        handler = _StubHandler()
+        gate = _gate(handler)
+        resolver = _resolver_by_guid({"guid-a": outage, "guid-o": {"bucket": "b"}})
+        with _infra_patches(resolver):
+            with pytest.raises(CredentialVaultError):
+                await gate(self._input())
+        assert handler.preflight_input is None
+
+    async def test_named_path_redacts_every_group_secret(self) -> None:
+        # Redaction must be additive: bind_invocation_context receives the secret
+        # from every named group, not just one source (pins the concatenation).
+        handler = _StubHandler()
+        gate = _gate(handler)
+        resolver = _resolver_by_guid(
+            {"guid-a": {"token": "t"}, "guid-o": {"bucket": "b"}}
+        )
+        with (
+            _infra_patches(resolver),
+            mock.patch(f"{_GATE}.bind_invocation_context") as bind,
+        ):
+            await gate(self._input())
+        bound_values = {c.value for c in bind.call_args.args[1]}
+        assert {"t", "b"} <= bound_values
+
+    async def test_no_secret_store_raises_before_resolving(self) -> None:
+        handler = _StubHandler()
+        gate = _gate(handler)
+        with _infra_patches(None, secret_store=None):
+            with pytest.raises(DependencyUnavailableError):
+                await gate(self._input())
+        assert handler.preflight_input is None
+
+    async def test_absent_guids_skip_resolution_with_empty_groups(self) -> None:
+        # Fields declared but no guids in the snapshot (e.g. automation-trigger
+        # empty metadata) — resolve nothing, hand the handler empty groups.
+        handler = _StubHandler()
+        gate = _gate(handler)
+        with _infra_patches(None):
+            await gate(
+                PreflightGateInput(
+                    credential_ref_fields=self._FIELDS,
+                    extraction_snapshot={},
+                )
+            )
+        pi = handler.preflight_input
+        assert pi is not None
+        assert pi.credentials_by_name == {"api": [], "object_store": []}

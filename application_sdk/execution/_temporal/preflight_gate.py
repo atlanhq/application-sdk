@@ -12,7 +12,7 @@ so the abort shows red in Temporal and attributes to preflight; ``READY`` and
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -21,6 +21,7 @@ from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
+    from application_sdk.credentials.errors import CredentialNotFoundError
     from application_sdk.credentials.ref import CredentialRef, CredentialResolvable
     from application_sdk.credentials.resolver import CredentialResolver
     from application_sdk.credentials.spec import AgentCredentialSpec
@@ -122,6 +123,12 @@ class PreflightGateInput(BaseModel):
     entrypoint: str = ""
     """Bare entry-point name of the gated workflow (for per-entrypoint checks)."""
 
+    credential_ref_fields: dict[str, str] = Field(default_factory=dict)
+    """Named credential refs to resolve on the gate path, ``{ref_name: guid_field}``
+    — copied secret-free from the input's
+    ``ExtractionInput.preflight_credential_refs`` (which documents the shape and
+    when it applies). Resolved from :attr:`extraction_snapshot` in the activity."""
+
     extraction_snapshot: dict[str, Any] = Field(default_factory=dict)
     """Raw ``model_dump(mode='json')`` of the extraction input.
 
@@ -151,12 +158,29 @@ class PreflightGateInput(BaseModel):
                     "Could not snapshot extraction input; gate proceeds without form config",
                     exc_info=True,
                 )
+        input_type = type(input_data)
+        credential_ref_fields = dict(
+            getattr(input_type, "preflight_credential_refs", {}) or {}
+        )
+        if not credential_ref_fields and "preflight_credential_refs" in getattr(
+            input_type, "model_fields", {}
+        ):
+            # Declared as a pydantic field, not a ClassVar: the class-level read
+            # above returns {}, so a real multi-credential app would silently fall
+            # back to single-credential resolution and block healthy runs.
+            logger.warning(
+                "preflight_credential_refs is declared as a model field, not a "
+                "ClassVar; the gate cannot read it and falls back to "
+                "single-credential resolution — declare it as ClassVar[dict[str, str]]",
+                input_type=input_type.__name__,
+            )
         base_kw: dict[str, Any] = dict(
             extraction_method=getattr(input_data, "extraction_method", "") or "",
             credential_guid=getattr(input_data, "credential_guid", "") or "",
             agent_json=getattr(input_data, "agent_json", None),
             credential_ref=getattr(input_data, "credential_ref", None),
             entrypoint=entrypoint,
+            credential_ref_fields=credential_ref_fields,
             extraction_snapshot=snapshot,
         )
         try:
@@ -201,7 +225,9 @@ _ROUTING_KEYS: frozenset[str] = frozenset(
 _EMPTY_CONFIG_VALUES: tuple[Any, ...] = (None, "", (), [], {})
 
 
-def _config_from_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+def _config_from_snapshot(
+    snapshot: dict[str, Any], drop_keys: Iterable[str] = ()
+) -> dict[str, Any]:
     """Extract preflight form config from a raw extraction-input snapshot.
 
     Called inside the gate activity (activity frame, not workflow) so any
@@ -209,14 +235,16 @@ def _config_from_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     Produces both the original field name and its hyphenated equivalent so
     handlers that use either naming convention work on the gate path.
 
-    Drops credential-routing fields and *genuinely* empty values (None, empty
-    string, empty container) — but preserves ``False`` and ``0`` so a handler
-    reading a bool/int config field off ``PreflightInput.metadata`` sees the
-    real value, not a silent default.
+    Drops credential-routing fields, any ``drop_keys`` (the named-credential
+    guid fields, which are refs not form config), and *genuinely* empty values
+    (None, empty string, empty container) — but preserves ``False`` and ``0`` so
+    a handler reading a bool/int config field off ``PreflightInput.metadata``
+    sees the real value, not a silent default.
     """
+    dropped = _ROUTING_KEYS | set(drop_keys)
     config: dict[str, Any] = {}
     for k, v in snapshot.items():
-        if k in _ROUTING_KEYS or v in _EMPTY_CONFIG_VALUES:
+        if k in dropped or v in _EMPTY_CONFIG_VALUES:
             continue
         config[k] = v
         if "_" in k:
@@ -274,6 +302,80 @@ def _build_block_error(result: PreflightOutput, app_name: str) -> Any:
     )
 
 
+def _require_secret_store() -> Any:
+    """Return the secret store, or raise so the gate fails open.
+
+    A credential ref exists but there is no store to dereference it — an infra
+    failure, not a valid empty-credential state. Raising routes to the workflow's
+    fail-open path rather than calling the handler with empty creds and having a
+    real block misattributed as AUTH.
+    """
+    infra = get_infrastructure()
+    secret_store = infra.secret_store if infra is not None else None
+    if secret_store is None:
+        raise DependencyUnavailableError(
+            message="No secret store available to resolve preflight credentials",
+            service="secret_store",
+        )
+    return secret_store
+
+
+async def _resolve_named_refs(
+    input: PreflightGateInput,
+) -> dict[str, list[HandlerCredential]]:
+    """Resolve the app's named credential guids, grouped by ref name.
+
+    One fail-open taxonomy, drawn from the resolver's own typed errors: a
+    confirmed dependency outage (``CredentialVaultError`` /
+    ``DependencyUnavailableError``) propagates so the workflow fails open — a
+    Dapr blip must never read as a bad credential and block a healthy run. A
+    genuinely absent credential (``CredentialNotFoundError``, which the resolver
+    also uses for collapsed unexpected vault errors) becomes an empty group, so
+    the handler — not the gate — decides whether a missing credential is
+    ``NOT_READY``.
+    """
+    grouped: dict[str, list[HandlerCredential]] = {
+        name: [] for name in input.credential_ref_fields
+    }
+    present = {
+        name: guid
+        for name, field in input.credential_ref_fields.items()
+        if (guid := input.extraction_snapshot.get(field))
+    }
+    if not present:
+        return grouped
+
+    resolver = CredentialResolver(_require_secret_store())
+    for name, guid in present.items():
+        ref = CredentialRef(name=guid, credential_type="unknown", credential_guid=guid)
+        try:
+            raw = await resolver.resolve_raw(ref) or {}
+        except CredentialNotFoundError:
+            raw = {}
+        grouped[name] = HandlerCredential.list_from_raw(raw)
+    return grouped
+
+
+async def _resolve_gate_credentials(
+    input: PreflightGateInput,
+) -> tuple[list[HandlerCredential], dict[str, list[HandlerCredential]]]:
+    """Resolve credentials for the gate, in the activity frame.
+
+    Returns ``(credentials, credentials_by_name)``. Apps that declare
+    ``credential_ref_fields`` take the named path (``credentials`` stays empty,
+    handlers read ``credentials_by_name``); every other app takes the unchanged
+    single-triple path (any resolution error propagates → the workflow fails
+    open, exactly as before this envelope carried named refs).
+    """
+    if input.credential_ref_fields:
+        return [], await _resolve_named_refs(input)
+    ref = CredentialRef.resolve_or_none(input)
+    if ref is None:
+        return [], {}
+    raw = await CredentialResolver(_require_secret_store()).resolve_raw(ref) or {}
+    return HandlerCredential.list_from_raw(raw), {}
+
+
 def build_preflight_gate_activity(
     handler: Handler,
     app_name: str,
@@ -288,32 +390,30 @@ def build_preflight_gate_activity(
     @activity.defn(name=preflight_gate_activity_name(app_name))
     async def preflight_gate(input: PreflightGateInput) -> PreflightOutput:
         # Resolve inside the activity (the workflow forwarded only references).
-        ref = CredentialRef.resolve_or_none(input)
-        credentials: list[HandlerCredential] = []
-        if ref is not None:
-            infra = get_infrastructure()
-            secret_store = infra.secret_store if infra is not None else None
-            if secret_store is None:
-                # A ref exists but there is no store to dereference it — an infra
-                # failure, not a valid empty-credential state. Raise so the
-                # workflow's fail-open path handles it, rather than calling the
-                # handler with empty creds and misattributing the block as AUTH.
-                raise DependencyUnavailableError(
-                    message="No secret store available to resolve preflight credentials",
-                    service="secret_store",
-                )
-            raw = await CredentialResolver(secret_store).resolve_raw(ref) or {}
-            credentials = HandlerCredential.list_from_raw(raw)
+        credentials, credentials_by_name = await _resolve_gate_credentials(input)
         # Build form config from the extraction-input snapshot in the activity
         # frame so app field reads stay outside the deterministic workflow.
-        metadata_dump = _config_from_snapshot(input.extraction_snapshot)
+        metadata_dump = _config_from_snapshot(
+            input.extraction_snapshot, input.credential_ref_fields.values()
+        )
         preflight_input = PreflightInput(
             credentials=credentials,
+            credentials_by_name=credentials_by_name,
             entrypoint=input.entrypoint,
             metadata=BaseMetadataConfig(**metadata_dump),
             connection_config=BaseConnectionConfig(**metadata_dump),
+            # The enforced per-attempt budget, so a handler that sizes its checks
+            # to input.timeout_seconds stays inside the real deadline (not the 60s
+            # default, which would silently time out to no_verdict).
+            timeout_seconds=int(GATE_START_TO_CLOSE.total_seconds()),
         )
-        with bind_invocation_context(app_name, credentials):
+        # Redact every resolved secret from logs — the single-triple list and
+        # every named group, without assuming which path populated which.
+        all_creds = [
+            *credentials,
+            *(c for group in credentials_by_name.values() for c in group),
+        ]
+        with bind_invocation_context(app_name, all_creds):
             result = await handler.preflight_check(preflight_input)
         entry = input.entrypoint or "<implicit>"
         # The outcome event is the gate's queryable row (connector-pulse builds the
