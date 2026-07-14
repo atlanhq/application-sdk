@@ -520,6 +520,24 @@ for item in items:
     )
 
 
+def test_p004_still_flags_swallow_in_except_star_handler() -> None:
+    # A `return` inside an `except*` handler (PEP 654, ast.TryStar — not an
+    # ast.Try subclass) swallows before the trailing re-raise; must still fire.
+    assert "E004" in _findings(
+        """\
+def f():
+    try:
+        run()
+    except Exception as e:
+        try:
+            work()
+        except* ValueError:
+            return None
+        raise AppError("f") from e
+"""
+    )
+
+
 # ── P005 — ExceptBlockMissingExcInfo ─────────────────────────────────────────
 
 

@@ -317,7 +317,10 @@ def _child_stmt_blocks(stmt: ast.stmt) -> list[list[ast.stmt]]:
         value = getattr(stmt, field, None)
         if isinstance(value, list):
             blocks.append(value)
-    if isinstance(stmt, ast.Try):
+    # ast.TryStar (``except*``, PEP 654) is a separate node, not an ast.Try
+    # subclass — include its handlers too, or a swallow inside an except* group
+    # is invisible.
+    if isinstance(stmt, (ast.Try, ast.TryStar)):
         blocks.extend(handler.body for handler in stmt.handlers)
     if isinstance(stmt, ast.Match):
         blocks.extend(case.body for case in stmt.cases)
