@@ -19,7 +19,7 @@ anyio==4.14.2
     #   httpx
     #   starlette
     #   watchfiles
-asgiref==3.12.0
+asgiref==3.12.1
     # via opentelemetry-instrumentation-asgi
 attrs==26.1.0
     # via
@@ -86,7 +86,7 @@ fastapi==0.139.0
     # via atlan-application-sdk
 fastapi-cli==0.0.29
     # via fastapi
-fastapi-cloud-cli==0.22.1
+fastapi-cloud-cli==0.22.2
     # via fastapi-cli
 fastar==0.11.0
     # via
