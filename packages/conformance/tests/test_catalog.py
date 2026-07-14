@@ -187,6 +187,13 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # hiding app/ product code) — only connector apps have an app/ product-code
     # tree with a ratcheting coverage floor; the SDK's own coverage config is a
     # different, already-enforced policy (BLDX-1400).
+    # T016: e2e CI compose overlay must inherit ATLAN_DEPLOYMENT_NAME — only
+    # connector apps ship a .github/e2e/ docker-compose overlay for the full-DAG
+    # worker; the SDK has no such overlay to grade (the sdr-e2e action that
+    # derives the per-leg value lives here, but it is not a compose overlay).
+    # T017: e2e agent_spec() override must inherit the per-leg deployment queue —
+    # only connector apps subclass the e2e harness and (may) override agent_spec;
+    # the SDK ships the env-derived default, it doesn't hard-code a connector queue.
     assert app_scoped == {
         "B001",
         "C002",
@@ -236,6 +243,8 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "T012",
         "T014",
         "T015",
+        "T016",
+        "T017",
         "O002",
         "O003",
         "O004",
@@ -431,12 +440,17 @@ def test_catalog_o_series_present() -> None:
 
 
 def test_catalog_t_series_present() -> None:
-    """The T-series test-quality rules are all present."""
+    """The T-series test-quality rules are all present: T001 (integration
+    marking), T002/T003 (SDR test-quality), T004 (dev-entrypoint), T005-T009
+    (assertion/collection quality), T010-T013 (tier structure), T014/T015
+    (coverage-config), and T016/T017 (e2e-CI queue isolation)."""
     rules = load_catalog()
     t_ids = {r.id for r in rules if r.id.startswith("T")}
-    expected = {f"T{n:03d}" for n in range(1, 16)}
+    expected = {f"T{n:03d}" for n in range(1, 18)}
     missing = expected - t_ids
     assert not missing, f"Missing T-series rules: {missing}"
+    extra = t_ids - expected
+    assert not extra, f"Unexpected T-series rules: {extra}"
 
 
 def test_catalog_b_series_present() -> None:

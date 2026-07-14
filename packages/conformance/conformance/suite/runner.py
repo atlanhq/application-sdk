@@ -37,6 +37,8 @@ from conformance.suite.checks import (
     determinism,
     dev_entrypoint,
     dockerfile_conformance,
+    e2e_agent_spec,
+    e2e_deployment_name,
     entrypoint_alignment,
     error_handling,
     generated_freshness,
@@ -159,6 +161,16 @@ _CHECKS: list[CheckRegistration] = [
         series=coverage_config.SERIES,
         discover=coverage_config.discover,
         scan_path=coverage_config.scan_path,
+    ),
+    CheckRegistration(
+        series=e2e_deployment_name.SERIES,
+        discover=e2e_deployment_name.discover,
+        scan_path=e2e_deployment_name.scan_path,
+    ),
+    CheckRegistration(
+        series=e2e_agent_spec.SERIES,
+        discover=e2e_agent_spec.discover,
+        scan_path=e2e_agent_spec.scan_path,
     ),
     CheckRegistration(
         series=dockerfile_conformance.SERIES,
