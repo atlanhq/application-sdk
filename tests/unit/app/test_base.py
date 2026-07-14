@@ -32,6 +32,7 @@ from application_sdk.app.base import (
     _safe_now,
     _safe_uuid,
     _scan_entrypoints,
+    _validate_workflow_input,
     _workflow_class_cache,
     _wrap_instance_tasks,
     generate_workflow_class,
@@ -1080,6 +1081,103 @@ class TestGenerateWorkflowClass:
         assert isinstance(out, _BLDXOutput)
         assert results == ["ran:hi"]
         on_complete.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_run_raw_dict_payload_is_validated_into_typed_model(self) -> None:
+        """A raw wire payload (dict) is validated into the typed contract before the
+        entry method runs — the entry point still receives a typed model, so the
+        permissive Any annotation is not a bypass of the typed contract."""
+        seen: list[object] = []
+
+        class DictApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                seen.append(input)
+                return _BLDXOutput(result="ok")
+
+        ep = self._make_ep(_BLDXInput, _BLDXOutput)
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.run", side_effect=lambda f: f
+            ),
+            mock.patch(
+                "application_sdk.app.base.workflow.defn",
+                side_effect=lambda **_: lambda c: c,
+            ),
+        ):
+            wf_cls = generate_workflow_class(DictApp, ep)
+
+        info_mock = mock.MagicMock(run_id="r", workflow_id="w")
+        with (
+            self._patched_workflow_layer(info_mock),
+            mock.patch.object(DictApp, "on_complete", new_callable=mock.AsyncMock),
+            mock.patch(
+                "application_sdk.observability.correlation.get_correlation_context",
+                return_value=None,
+            ),
+        ):
+            # Pass a dict, as Temporal's data converter yields under the Any annotation.
+            out = await wf_cls.run(mock.MagicMock(), {"value": "hi"})
+
+        assert isinstance(out, _BLDXOutput)
+        assert len(seen) == 1
+        # Entry method received a fully typed, validated model — not the raw dict.
+        assert isinstance(seen[0], _BLDXInput)
+        assert seen[0].value == "hi"
+
+    @pytest.mark.asyncio
+    async def test_run_invalid_payload_fails_fast_non_retryable(self) -> None:
+        """An invalid payload fails as a non-retryable workflow *execution* error
+        (fast) rather than an unvalidated decode failure that Temporal would retry
+        as a Workflow Task indefinitely."""
+        ran: list[object] = []
+
+        class StrictApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                ran.append(input)
+                return _BLDXOutput(result="ok")
+
+        ep = self._make_ep(_BLDXInput, _BLDXOutput)
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.run", side_effect=lambda f: f
+            ),
+            mock.patch(
+                "application_sdk.app.base.workflow.defn",
+                side_effect=lambda **_: lambda c: c,
+            ),
+        ):
+            wf_cls = generate_workflow_class(StrictApp, ep)
+
+        from application_sdk.execution.errors import ApplicationError
+
+        info_mock = mock.MagicMock(run_id="r", workflow_id="w")
+        with (
+            self._patched_workflow_layer(info_mock),
+            mock.patch.object(StrictApp, "on_complete", new_callable=mock.AsyncMock),
+            mock.patch(
+                "application_sdk.observability.correlation.get_correlation_context",
+                return_value=None,
+            ),
+            pytest.raises(ApplicationError) as exc,
+        ):
+            # A bare string where an object is required — mirrors the observed
+            # "Input should be an object [input_value='', input_type=str]" failure.
+            await wf_cls.run(mock.MagicMock(), "not-an-object")
+
+        # Direct attribute access (not getattr-with-default): a contract-drift
+        # rename should surface as an AttributeError, not a silent None mismatch.
+        assert exc.value.non_retryable is True
+        assert exc.value.type == "InputValidationError"
+        # The entry method never ran — we failed before any app code.
+        assert ran == []
+
+    def test_validate_workflow_input_returns_typed_instance_unchanged(self) -> None:
+        """An already-typed instance is returned as the same object (fast-path),
+        not re-validated into a copy. Guards against a future refactor silently
+        dropping the ``isinstance`` early return."""
+        instance = _BLDXInput(value="hi")
+        result = _validate_workflow_input(instance, _BLDXInput)
+        assert result is instance
 
     def _patched_workflow_layer(self, info_mock: mock.MagicMock):
         """Returns a contextlib.ExitStack wired with the patches every _run test needs."""
