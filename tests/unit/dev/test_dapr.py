@@ -22,6 +22,7 @@ from application_sdk.dev._dapr import (
     embedded_dapr,
 )
 from application_sdk.dev._dapr_errors import (
+    DaprComponentsConfigError,
     UnsupportedArchitectureError,
     UnsupportedOsError,
 )
@@ -260,6 +261,37 @@ class TestEmbeddedDaprLifecycle:
             assert components_dir.is_dir()
 
         assert not components_dir.exists()
+
+    @pytest.mark.asyncio
+    async def test_custom_components_dir_is_used_and_preserved(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A caller-supplied components_dir is used verbatim, exposed via env +
+        the dataclass, and left in place on exit (the caller owns it)."""
+        monkeypatch.chdir(tmp_path)
+        custom = tmp_path / "my-components"
+        custom.mkdir()
+        (custom / "statestore.yaml").write_text("kind: Component\n")
+
+        async with embedded_dapr(components_dir=str(custom)) as dapr:
+            assert Path(dapr.components_dir) == custom
+            assert os.environ["DAPR_COMPONENTS_PATH"] == str(custom)
+
+        # Not deleted — and the SDK did not overwrite it with its own YAMLs.
+        assert custom.is_dir()
+        assert (custom / "statestore.yaml").exists()
+        assert not (custom / "pubsub.yaml").exists()
+
+    @pytest.mark.asyncio
+    async def test_custom_components_dir_conflicts_with_secrets_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(DaprComponentsConfigError, match="not both"):
+            async with embedded_dapr(
+                components_dir=str(tmp_path), secrets_file=str(tmp_path / "s.json")
+            ):
+                pass
 
     @pytest.mark.asyncio
     async def test_terminates_subprocess_on_exit(

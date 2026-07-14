@@ -34,6 +34,16 @@ class DaprdBinaryMissingError(InternalError):
 
 
 @dataclass(kw_only=True)
+class DaprComponentsConfigError(InternalError):
+    code: ClassVar[str] = "INTERNAL_DAPR_COMPONENTS_CONFIG"
+    message: str = (
+        "embedded_dapr: pass either secrets_file or components_dir, not both — "
+        "a caller-supplied components_dir already defines its own secret store."
+    )
+    component: str | None = "embedded_dapr"
+
+
+@dataclass(kw_only=True)
 class DaprReadinessTimeoutError(AppTimeoutError):
     code: ClassVar[str] = "TIMEOUT_DAPR_READINESS"
     message: str = "Embedded Dapr did not become ready within deadline"
