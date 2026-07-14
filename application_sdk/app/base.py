@@ -1643,6 +1643,13 @@ def _validate_workflow_input(raw_input: Any, input_type: type[Input]) -> Input:
     permissive annotation is confined to this generated wire boundary; there is no
     path by which a raw payload reaches app code, and app authors cannot opt into it.
 
+    Note that this validates in pydantic's python/lax mode (``model_validate`` on a
+    decoded dict) rather than the json mode the removed typed annotation gave Temporal's
+    data converter. The two are equivalent for every field type a permitted ``Input``
+    tree allows — ``bytes``/``bytearray``, the one genuinely mode-divergent type, is
+    forbidden by ``validate_payload_safety`` (contracts/base.py). A maintainer adding a
+    custom, mode-sensitive pydantic type to a contract should re-check that equivalence.
+
     Args:
         raw_input: The decoded payload — a dict from the wire, or (unit tests / the
             in-process ``/start`` path) an already-constructed ``input_type``.
