@@ -191,6 +191,10 @@ class TestFromCredentials:
         config = call_kwargs.get("config") or {}
         assert "aws_role_arn" not in config
         assert "aws_role_session_name" not in config
+        # Region stays on the S3 store's config; must not reach the STS session.
+        assert config.get("aws_region") == "us-east-1"
+        session_kwargs = mock_session_cls.call_args.kwargs
+        assert "region_name" not in session_kwargs
 
     def test_adls_account_key_auth(self):
         # Azure requires base64-encoded account keys

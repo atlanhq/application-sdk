@@ -79,7 +79,7 @@ on:
         default: 120
     secrets:
       ORG_PAT_GITHUB:
-        description: "PAT to clone the private sibling app repos."
+        description: "Fallback PAT to clone the private sibling app repos, used if the fleet App token can't be minted."
         required: true
       ATLAN_BASE_URL:
         description: "Tenant URL for the publish app's OAuth (only if the DAG publishes)."
@@ -88,6 +88,12 @@ on:
         required: false
       ATLAN_CLIENT_SECRET:
         required: false
+      FLEET_APP_ID:
+        required: false
+        description: "atlan-app-fleet App ID (org secret). Not passed explicitly by any current caller — auto-available via 'secrets: inherit'. Declared here so the contract is self-documenting."
+      FLEET_APP_PRIVATE_KEY:
+        required: false
+        description: "atlan-app-fleet App private key (org secret). Same availability as FLEET_APP_ID above."
 
 jobs:
   ae-full-dag:
@@ -113,6 +119,19 @@ jobs:
         working-directory: ${{ inputs.app-name }}
         run: bash "${{ inputs.system-deps-script }}"
 
+      - name: Mint fleet App token
+        # Scoped to the fixed set of sibling repos ae-stack-up.sh clones
+        # (atlan-automation-engine-app, plus whichever of
+        # atlan-{publish,query-intelligence,lineage}-app the DAG references).
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: atlan-automation-engine-app,atlan-publish-app,atlan-query-intelligence-app,atlan-lineage-app
+
       - name: Bring up AE stack (manifest-driven)
         id: stack
         uses: atlanhq/application-sdk/.github/actions/ae-stack-up@fix/ae-stack-up-local-vault
@@ -121,7 +140,7 @@ jobs:
           deployment: ${{ inputs.deployment }}
           app-module: ${{ inputs.app-module }}
           handler-module: ${{ inputs.handler-module }}
-          org-pat-github: ${{ secrets.ORG_PAT_GITHUB }}
+          org-pat-github: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
           atlan-base-url: ${{ secrets.ATLAN_BASE_URL }}
           atlan-client-id: ${{ secrets.ATLAN_CLIENT_ID }}
           atlan-client-secret: ${{ secrets.ATLAN_CLIENT_SECRET }}

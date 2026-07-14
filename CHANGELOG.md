@@ -1,5 +1,25 @@
 # Changelog
 
+## v3.22.0 (July 13, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.21.2...v3.22.0
+
+### Features
+
+- SDK-native pre-extraction gate (HYP-1883) (#2361) (by @fyzanshaik-atlan in [a6335e6](https://github.com/atlanhq/application-sdk/commit/a6335e6))
+- SDR-QA gap coverage — obs upload + per-type asset counts (#2609) (by @adityachoudhury-cloud in [929cf18](https://github.com/atlanhq/application-sdk/commit/929cf18))
+- enrich gate outcome event for connector-pulse dashboard (#2626) (by @fyzanshaik-atlan in [15acae0](https://github.com/atlanhq/application-sdk/commit/15acae0))
+- app-agnostic filter matching (regex vs exact) (DISTR-855) (#2608) (by @adityachoudhury-cloud in [326b889](https://github.com/atlanhq/application-sdk/commit/326b889))
+
+### Bug Fixes
+
+- plumb custom CA and NO_PROXY into obstore (#2627) (by @louisnow in [7fa79cf](https://github.com/atlanhq/application-sdk/commit/7fa79cf))
+- preserve full key path for empty-prefix CloudStore downloads (#2637) (by @chaitanyaatlan in [1c8db3f](https://github.com/atlanhq/application-sdk/commit/1c8db3f))
+- don't scope the S3 cross-account STS session to the bucket region (#2636) (by @chaitanyaatlan in [6c9db25](https://github.com/atlanhq/application-sdk/commit/6c9db25))
+- return from startup sidecar wait once daprd HTTP API is reachable (#2641) (by @fyzanshaik-atlan in [ede5f24](https://github.com/atlanhq/application-sdk/commit/ede5f24))
+- SqlApp docstring teaches pyatlan_v9 .creator(), not a hand-built qualifiedName (#2651) (by @vaibhavatlan in [24a9735](https://github.com/atlanhq/application-sdk/commit/24a9735))
+
+
 ## v3.21.2 (July 09, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.21.1...v3.21.2
