@@ -405,6 +405,10 @@ class AEWorkflowClient:
                 and 2xx responses with an unexpected body shape.  Return
                 False to accept the response and return it to the caller.
             op_name: Human-readable label used in log / error messages.
+            retry_network_errors: When False, a network timeout is never
+                re-POSTed (nor re-issued at the ``_request`` layer) — required
+                for non-idempotent writes like submit, where a retry after the
+                server already accepted the request spawns a duplicate run.
         """
         last: tuple[int, dict[str, Any] | str] = (0, {})
         for attempt in range(1, total_attempts + 1):
@@ -430,7 +434,10 @@ class AEWorkflowClient:
                     time.sleep(sleep_seconds)
                     continue
                 raise AtlanApiTimeoutError(
-                    message=f"{op_name} timed out after {total_attempts} attempts",
+                    # `attempt` is the actual count made — 1 when retries are
+                    # disabled (submit), up to total_attempts otherwise — so a
+                    # no-retry submit timeout doesn't misreport total_attempts.
+                    message=f"{op_name} timed out after {attempt} attempt(s)",
                     operation=path,
                 ) from exc
             last = (status, resp_body)
@@ -617,10 +624,9 @@ class AEWorkflowClient:
                 message=(
                     "AE rejected the submit to "
                     "POST /api/service/package-workflows?submit=true: a run for "
-                    "this workflow is already active (AE-WF-409-03). The initial "
-                    "submit was accepted server-side but its response was lost "
-                    "(AE latency / gateway timeout), and Heracles masks the AE "
-                    "409 as HTTP 500. A run IS executing, but its run_id is "
+                    "this workflow is already active (AE-WF-409-03) — AE returned "
+                    "409 directly, or Heracles masked it as HTTP 500 "
+                    f"(status={status}). A run IS executing, but its run_id is "
                     "unrecoverable via native-status (keyed by run_id). Not "
                     "retrying — a retry would spawn a duplicate Skipped run.\n"
                     f"response={body!r}"

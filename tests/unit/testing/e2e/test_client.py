@@ -575,14 +575,15 @@ class TestSubmitWorkflowIdempotency:
 
     def test_network_timeout_is_not_reposted(self):
         """A read-timeout on submit is ambiguous (server may have accepted it),
-        so submit_workflow must surface it without re-POSTing."""
+        so submit_workflow must surface it without re-POSTing — and report the
+        one attempt actually made, not total_attempts."""
         client = _make_client()
         with (
             patch.object(
                 client, "_request", side_effect=TimeoutError("read timed out")
             ) as mock_req,
             patch("time.sleep"),
-            pytest.raises(AtlanApiTimeoutError),
+            pytest.raises(AtlanApiTimeoutError, match=r"after 1 attempt"),
         ):
             client.submit_workflow({"any": "payload"})
         assert mock_req.call_count == 1
