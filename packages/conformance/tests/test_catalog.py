@@ -187,6 +187,10 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # hiding app/ product code) — only connector apps have an app/ product-code
     # tree with a ratcheting coverage floor; the SDK's own coverage config is a
     # different, already-enforced policy (BLDX-1400).
+    # T016: e2e CI compose overlay must inherit ATLAN_DEPLOYMENT_NAME — only
+    # connector apps ship a .github/e2e/ docker-compose overlay for the full-DAG
+    # worker; the SDK has no such overlay to grade (the sdr-e2e action that
+    # derives the per-leg value lives here, but it is not a compose overlay).
     assert app_scoped == {
         "B001",
         "C002",
@@ -236,6 +240,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "T012",
         "T014",
         "T015",
+        "T016",
         "O002",
         "O003",
         "O004",

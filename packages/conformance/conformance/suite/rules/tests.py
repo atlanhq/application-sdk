@@ -107,6 +107,16 @@ the code that ships:
 * ``T015`` — CoverageOmitsProductCode: ``[tool.coverage.run].omit`` (or a
   narrowed ``source``) excludes real product code under ``app/`` — inflating
   the reported percentage by hiding uncovered code from the denominator.
+
+e2e-CI queue-isolation rule:
+
+* ``T016`` — E2EDeploymentNameNotInherited: an e2e CI docker-compose overlay
+  under ``.github/`` hard-codes ``ATLAN_DEPLOYMENT_NAME`` in a service's
+  ``environment`` instead of inheriting the per-leg value the SDK's ``sdr-e2e``
+  action exports to ``$GITHUB_ENV``. A hard-coded value overrides the inherited
+  env, so the worker container polls a different Temporal queue than the harness
+  dispatches to (dropping the matrix-leg suffix) → ``No Workers Running`` and a
+  ~20-min CI hang (observed on atlan-mysql-app).
 """
 
 from __future__ import annotations
@@ -937,6 +947,72 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t015"
+        ),
+    ),
+    RuleDefinition(
+        id="T016",
+        scope=RuleScope.APP,
+        name="E2EDeploymentNameNotInherited",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="e2e-ci",
+        autofixable=False,
+        since="0.13.0",
+        rationale=(
+            "The full-DAG e2e worker derives its Temporal task queue as "
+            "atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}, and the harness "
+            "(BaseE2ETest.agent_spec) derives the extract-node queue it dispatches to "
+            "from the same two env vars. To keep worker and harness on one queue when "
+            "the e2e suite fans out across parallel matrix legs, the SDK's sdr-e2e "
+            "composite action derives a per-leg ATLAN_DEPLOYMENT_NAME (base + "
+            "sanitised matrix-leg suffix) and exports it to $GITHUB_ENV; both sides "
+            "then read that one value. A connector's e2e compose overlay that "
+            "hard-codes ATLAN_DEPLOYMENT_NAME in a service's environment overrides "
+            "that inherited value: the worker container drops the leg suffix and polls "
+            "atlan-<app>-e2e-full-ci-<run_id> while the harness still dispatches to "
+            "atlan-<app>-e2e-full-ci-<run_id>-<leg>. Two different queues means no "
+            "worker polls the harness's queue, so the top-level AE run flips to "
+            "Running (its parent lives on the always-on automation-engine queue) and "
+            "then hangs until timeout — observed on atlan-mysql-app, ~20 min of dead "
+            "CI per run, before this rule existed."
+        ),
+        short_description=(
+            "e2e CI compose overlay hard-codes ATLAN_DEPLOYMENT_NAME instead of "
+            "inheriting the sdr-e2e per-leg value"
+        ),
+        full_description=(
+            "An e2e CI docker-compose overlay under ``.github/`` (discovered as a\n"
+            "``*.yml``/``*.yaml`` with a top-level ``services:`` key that mentions\n"
+            "``ATLAN_DEPLOYMENT_NAME``) assigns ``ATLAN_DEPLOYMENT_NAME`` in a\n"
+            "service's ``environment`` to a literal that does not reference the\n"
+            "inherited ``${ATLAN_DEPLOYMENT_NAME...}`` env var.\n"
+            "\n"
+            "The SDK's ``sdr-e2e`` composite action derives a per-leg\n"
+            "``ATLAN_DEPLOYMENT_NAME`` (``e2e-full-ci-<run_id>[-<leg>]``, see\n"
+            "``derive_deployment_name.py``) and exports it to ``$GITHUB_ENV`` so the\n"
+            "worker container and the pytest harness land on the same Temporal queue.\n"
+            "A hard-coded overlay value overrides that inherited env, desynchronising\n"
+            "the two — the worker polls one queue, the harness dispatches to another,\n"
+            "and the run hangs with ``No Workers Running``.\n"
+            "\n"
+            "**Remediation:** inherit the derived value, with a bare-shape fallback\n"
+            "for local ``docker compose`` runs where the CI action hasn't exported it::\n"
+            "\n"
+            "    services:\n"
+            "      atlan-app:\n"
+            "        environment:\n"
+            "          - ATLAN_DEPLOYMENT_NAME=${ATLAN_DEPLOYMENT_NAME:-e2e-full-ci-${GITHUB_RUN_ID}}\n"
+            "\n"
+            "A bare pass-through list entry (``- ATLAN_DEPLOYMENT_NAME`` with no\n"
+            "``=``) is also accepted — it inherits the runner env directly.\n"
+            "\n"
+            "Suppress with ``# conformance: ignore[T016] <reason>`` on the assignment\n"
+            "line only when the overlay is intentionally single-queue (never fans out\n"
+            "across matrix legs) and the hard-coded name is deliberate.\n"
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/tests.md#t016"
         ),
     ),
 )
