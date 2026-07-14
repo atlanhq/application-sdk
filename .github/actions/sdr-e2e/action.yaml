@@ -409,6 +409,26 @@ runs:
           echo "APP_YAML_PATH=$APP_YAML"
         } >> "$GITHUB_ENV"
 
+    # Give each matrix leg its own worker + Temporal queue. The queue is
+    # atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}; parallel legs
+    # share the run id, so without a per-leg suffix their workers co-serve one
+    # queue and Temporal splits a single workflow's activities across them —
+    # which, under the two-store posture (per-container localstorage), makes a
+    # FileReference written by one leg's worker invisible to the other. Derive a
+    # per-leg ATLAN_DEPLOYMENT_NAME (base + sanitised artifact-suffix) here, so
+    # both the worker (compose reads it below) and the harness (agent_spec reads
+    # the same env) land on the same isolated queue. Empty suffix (single-suite
+    # callers) keeps the original e2e-full-ci-<run_id> shape.
+    - name: Derive per-leg deployment name
+      shell: bash
+      env:
+        SDR_E2E_ROOT: ${{ steps.action_root.outputs.path }}
+        ARTIFACT_SUFFIX: ${{ inputs.artifact-suffix }}
+      run: |
+        python3 "$SDR_E2E_ROOT/derive_deployment_name.py" \
+          --run-id "${GITHUB_RUN_ID}" \
+          --suffix "${ARTIFACT_SUFFIX}" >> "$GITHUB_ENV"
+
     - name: Resolve app.yaml
       shell: bash
       env:

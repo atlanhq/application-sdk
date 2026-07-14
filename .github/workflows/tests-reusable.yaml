@@ -222,9 +222,12 @@ jobs:
   # ── Full-DAG e2e (system apps — extract→qi→publish→lineage) ─────────────
   # One matrix leg per discovered suite. fail-fast:false so one suite's failure
   # doesn't cancel the others, and "Re-run failed jobs" re-runs only the failed
-  # leg. Each leg spins its own worker container polling the shared task queue;
-  # legs are independent (own connection + AE workflow slug), so co-serving is
-  # harmless. 120-min timeout (> ae_poll + atlas_poll + build/setup overhead).
+  # leg. Each leg spins its own worker container on its OWN Temporal queue: the
+  # sdr-e2e action derives a per-leg ATLAN_DEPLOYMENT_NAME (base + artifact-
+  # suffix) so legs don't co-serve one queue — under the two-store posture a
+  # shared queue lets Temporal split a workflow's activities across leg-workers
+  # with per-container localstorage, hiding artifacts cross-worker. 120-min
+  # timeout (> ae_poll + atlas_poll + build/setup overhead).
   e2e:
     name: End-to-end (${{ matrix.name }})
     needs: discover-e2e

@@ -111,9 +111,20 @@ class SQLAppE2ETest(BaseE2ETest):
         )
 
     def agent_spec(self) -> AgentSpec | None:
-        """Default AGENT-mode agent identity, or None in DIRECT mode."""
+        """Default AGENT-mode agent identity, or None in DIRECT mode.
+
+        Prefer the base env-derivation (``atlan-{app}-{deployment}``) when the
+        worker's ATLAN_APPLICATION_NAME + ATLAN_DEPLOYMENT_NAME are set, so SQL
+        apps inherit per-leg queue isolation with no per-connector hard-coding.
+        Fall back to the ``agent_name_template`` (run_id-keyed) only when the
+        deployment env is absent — e.g. an Argo template that pins its own queue.
+        """
         if self.mode is RunMode.DIRECT:
             return None
+        if os.environ.get("ATLAN_APPLICATION_NAME") and os.environ.get(
+            "ATLAN_DEPLOYMENT_NAME"
+        ):
+            return super().agent_spec()
         return AgentSpec(
             agent_name=self.agent_name_template.format(
                 connector=self.connector_short_name,
