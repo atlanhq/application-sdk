@@ -26,6 +26,12 @@ runs:
     - name: Discover suites
       id: discover
       shell: bash
+      # Route the caller-supplied input through env (quoted below) rather than
+      # interpolating ${{ }} into the command string. github.action_path is a
+      # trusted GitHub context, so it stays inline.
+      env:
+        TEST_DIR: ${{ inputs.test-dir }}
       run: |
+        set -euo pipefail
         python3 "${{ github.action_path }}/discover_e2e_suites.py" \
-          --test-dir "${{ inputs.test-dir }}" >> "$GITHUB_OUTPUT"
+          --test-dir "$TEST_DIR" >> "$GITHUB_OUTPUT"

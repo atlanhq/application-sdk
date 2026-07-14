@@ -204,6 +204,18 @@ jobs:
         with:
           test-dir: ${{ inputs.e2e-test-path }}
 
+      # This job only runs when e2e was explicitly requested (label / run-e2e),
+      # so zero discovered suites means "requested but nothing found" — a
+      # misconfiguration a plain `pytest ${{ inputs.e2e-test-path }}` would fail
+      # on (exit 5). Fail here rather than skip the e2e job and green the gate.
+      - name: Require at least one discovered suite
+        if: steps.discover.outputs.count == '0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::error::e2e was requested but no suites were discovered under '${{ inputs.e2e-test-path }}' (expected test_*.py). Failing so this is not a silent pass."
+          exit 1
+
   # ── Full-DAG e2e (system apps — extract→qi→publish→lineage) ─────────────
   # One matrix leg per discovered suite. fail-fast:false so one suite's failure
   # doesn't cancel the others, and "Re-run failed jobs" re-runs only the failed
@@ -314,7 +326,7 @@ jobs:
             | Job | Status | Result |
             |---|---|---|
             | tests | ${{ needs.tests.result == 'success' && '✅ Passed' || (needs.tests.result == 'skipped' && '⊘ Skipped' || '❌ Failed') }} | `${{ needs.tests.outputs.summary || 'no summary' }}` |
-            | e2e | ${{ needs.discover-e2e.result == 'skipped' && '⊘ Skipped — add `e2e` label to trigger' || (needs.e2e.result == 'success' && '✅ Passed' || (needs.e2e.result == 'skipped' && '⊘ No suites discovered' || '❌ Failed')) }} | per-suite results + live logs in the run |
+            | e2e | ${{ needs.discover-e2e.result == 'skipped' && '⊘ Skipped — add `e2e` label to trigger' || (needs.discover-e2e.result == 'failure' && '❌ No suites discovered (e2e was requested)' || (needs.e2e.result == 'success' && '✅ Passed' || (needs.e2e.result == 'skipped' && '⊘ Skipped' || '❌ Failed'))) }} | per-suite results + live logs in the run |
 
             **Overall:** ${{ (needs.tests.result == 'success' && needs.discover-e2e.result != 'failure' && (needs.e2e.result == 'success' || needs.e2e.result == 'skipped')) && '✅ All passed' || '❌ Some failed' }} — [view run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
         continue-on-error: true

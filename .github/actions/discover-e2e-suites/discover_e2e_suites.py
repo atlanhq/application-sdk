@@ -65,12 +65,38 @@ def discover(test_dir: str) -> list[dict[str, str]]:
     return entries
 
 
+def _nested_only(test_dir: str) -> list[Path]:
+    """test_*.py found recursively but NOT by the flat (documented) glob.
+
+    Discovery matches the documented flat ``tests/e2e/test_*.py`` layout only;
+    a suite dropped into a subdirectory (e.g. during a migration) would run
+    under a plain ``pytest tests/e2e`` but be silently absent from the matrix.
+    Surfacing these lets the operator catch the drop instead of a silent green.
+    """
+    root = Path(test_dir)
+    flat = {p.resolve() for p in root.glob("test_*.py") if p.is_file()}
+    nested = {p.resolve() for p in root.rglob("test_*.py") if p.is_file()}
+    return sorted(nested - flat)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Discover e2e suites for a matrix.")
     parser.add_argument("--test-dir", default="tests/e2e")
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
 
     entries = discover(args.test_dir)
+
+    nested = _nested_only(args.test_dir)
+    if nested:
+        names = ", ".join(p.name for p in nested)
+        print(
+            f"::warning::{len(nested)} nested e2e test file(s) under {args.test_dir} "
+            f"are NOT in the matrix — discovery matches the flat "
+            f"tests/e2e/test_*.py convention only, so these would run under a "
+            f"plain `pytest {args.test_dir}` but are skipped here: {names}",
+            file=sys.stderr,
+        )
+
     matrix = json.dumps({"include": entries}, separators=(",", ":"))
     print(f"Discovered {len(entries)} e2e suite(s) in {args.test_dir}", file=sys.stderr)
     for e in entries:

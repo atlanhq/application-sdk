@@ -79,6 +79,30 @@ def test_main_emits_matrix_and_count(capsys, tmp_path: Path) -> None:
     assert "count=2" in out
 
 
+def test_main_warns_on_nested_suites(capsys, tmp_path: Path) -> None:
+    e2e = tmp_path / "tests" / "e2e"
+    _mk(e2e, "test_flat.py")
+    _mk(e2e / "sub", "test_nested.py")
+    rc = main(["--test-dir", str(e2e)])
+    captured = capsys.readouterr()
+    assert rc == 0
+    # Flat suite is in the matrix; nested one is NOT, but is warned about.
+    matrix_line = next(
+        ln for ln in captured.out.splitlines() if ln.startswith("matrix=")
+    )
+    payload = json.loads(matrix_line[len("matrix=") :])
+    assert [e["name"] for e in payload["include"]] == ["flat"]
+    assert "::warning::" in captured.err
+    assert "test_nested.py" in captured.err
+
+
+def test_main_no_warning_when_flat_only(capsys, tmp_path: Path) -> None:
+    e2e = tmp_path / "tests" / "e2e"
+    _mk(e2e, "test_a.py", "test_b.py")
+    main(["--test-dir", str(e2e)])
+    assert "::warning::" not in capsys.readouterr().err
+
+
 def test_main_count_zero_for_empty(capsys, tmp_path: Path) -> None:
     e2e = tmp_path / "tests" / "e2e"
     e2e.mkdir(parents=True)
