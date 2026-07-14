@@ -27,6 +27,7 @@ from pathlib import Path
 
 from application_sdk.dev._dapr_errors import (
     DaprComponentsConfigError,
+    DaprComponentsDirNotFoundError,
     DaprdBinaryMissingError,
     DaprReadinessTimeoutError,
     UnsupportedArchitectureError,
@@ -304,7 +305,8 @@ async def embedded_dapr(
 ) -> AsyncIterator[EmbeddedDapr]:
     """Boot an embedded ``daprd`` for local app development.
 
-    Components written into a temp dir:
+    By default (no *components_dir*) these components are auto-generated into a
+    temp dir:
 
     * ``statestore`` — ``state.in-memory``
     * ``secretstore`` / ``deployment-secret-store`` — ``secretstores.local.env``
@@ -340,8 +342,12 @@ async def embedded_dapr(
     grpc_port = _pick_free_port()
     if components_dir is not None:
         # Caller supplies (and owns) the component YAMLs — use them as-is and
-        # do not delete the directory on exit.
+        # do not delete the directory on exit. Validate now: an unchecked bad
+        # path would otherwise surface ~30s later as a readiness timeout with no
+        # hint that the path was the cause.
         components_path = Path(components_dir)
+        if not components_path.is_dir():
+            raise DaprComponentsDirNotFoundError(value_summary=str(components_path))
         _owns_components_dir = False
     else:
         components_path = Path(tempfile.mkdtemp(prefix="atlan-dapr-"))

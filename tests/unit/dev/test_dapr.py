@@ -23,6 +23,7 @@ from application_sdk.dev._dapr import (
 )
 from application_sdk.dev._dapr_errors import (
     DaprComponentsConfigError,
+    DaprComponentsDirNotFoundError,
     UnsupportedArchitectureError,
     UnsupportedOsError,
 )
@@ -267,8 +268,10 @@ class TestEmbeddedDaprLifecycle:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A caller-supplied components_dir is used verbatim, exposed via env +
-        the dataclass, and left in place on exit (the caller owns it)."""
+        the dataclass, left in place on exit (the caller owns it), and the env
+        var is restored on exit."""
         monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("DAPR_COMPONENTS_PATH", raising=False)
         custom = tmp_path / "my-components"
         custom.mkdir()
         (custom / "statestore.yaml").write_text("kind: Component\n")
@@ -281,6 +284,8 @@ class TestEmbeddedDaprLifecycle:
         assert custom.is_dir()
         assert (custom / "statestore.yaml").exists()
         assert not (custom / "pubsub.yaml").exists()
+        # Previously-unset env var is unset again on exit.
+        assert "DAPR_COMPONENTS_PATH" not in os.environ
 
     @pytest.mark.asyncio
     async def test_custom_components_dir_conflicts_with_secrets_file(
@@ -291,6 +296,18 @@ class TestEmbeddedDaprLifecycle:
             async with embedded_dapr(
                 components_dir=str(tmp_path), secrets_file=str(tmp_path / "s.json")
             ):
+                pass
+
+    @pytest.mark.asyncio
+    async def test_missing_components_dir_fails_fast(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A non-existent components_dir raises immediately, not as a slow,
+        misleading readiness timeout."""
+        monkeypatch.chdir(tmp_path)
+        missing = tmp_path / "does-not-exist"
+        with pytest.raises(DaprComponentsDirNotFoundError):
+            async with embedded_dapr(components_dir=str(missing)):
                 pass
 
     @pytest.mark.asyncio
