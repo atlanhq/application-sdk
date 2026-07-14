@@ -586,3 +586,36 @@ class TestStallGuardDefault:
             ae_stall_grace_seconds = 0
 
         assert _OptedOut.ae_stall_grace_seconds == 0
+
+
+class TestConnectionQnUniqueness:
+    """The connection QN must be unique per test instance so parallel matrix
+    legs (and overlapping same-ref runs) don't collide on one connection."""
+
+    def _bootstrap_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ATLAN_BASE_URL", "https://test.example.invalid")
+        monkeypatch.setenv("ATLAN_API_KEY", "test-token")
+        monkeypatch.setenv("GITHUB_RUN_ID", "9999999")
+
+    def test_same_second_instances_get_distinct_numeric_qns(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._bootstrap_env(monkeypatch)
+        # Freeze the clock so both instances share an epoch — the exact
+        # same-second race two parallel matrix legs can hit. The random suffix
+        # must still make them distinct.
+        monkeypatch.setattr("time.time", lambda: 1783979480.0)
+
+        class _T(_ConcreteE2ETest):
+            connection_admin_roles = ("test-admin-role-guid",)  # skip net lookup
+
+        a = _T()
+        a.setup_method()
+        b = _T()
+        b.setup_method()
+
+        assert a.connection_qualified_name != b.connection_qualified_name
+        for qn in (a.connection_qualified_name, b.connection_qualified_name):
+            assert qn.startswith("default/openapi/")
+            # Pure-numeric trailing segment so Atlas never rejects the name.
+            assert qn.rsplit("/", 1)[-1].isdigit()
