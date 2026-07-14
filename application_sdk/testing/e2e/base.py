@@ -7,7 +7,6 @@ A connector test:
     import os
     import pytest
     from application_sdk.testing.e2e import BaseE2ETest, RunMode
-    from application_sdk.testing.e2e.payload import AgentSpec
 
     @pytest.mark.e2e
     class TestOpenAPIE2E(BaseE2ETest):
@@ -15,8 +14,10 @@ A connector test:
         connection_name_prefix = "e2e-ci"
         expected_min_asset_counts = {"APISpec": 1, "APIPath": 10}
 
-        def agent_spec(self) -> AgentSpec:
-            return AgentSpec(agent_name=f"openapi-e2e-ci-{self.run_id}")
+    # agent_spec() is derived from ATLAN_APPLICATION_NAME + ATLAN_DEPLOYMENT_NAME
+    # by default (matching the worker's atlan-{app}-{deployment} queue, including
+    # any per-leg suffix the CI action sets). Override it only to pin an explicit
+    # queue — a run_id-keyed override would silently drop per-leg isolation.
 
 The base class handles submit + native-status poll + Atlas-side
 Connection assertion + per-node duration reporting. Subclasses provide
@@ -473,6 +474,12 @@ class BaseE2ETest:
         matrix leg its own worker + queue (avoiding cross-worker artifact
         invisibility under the two-store posture). Subclasses may still override
         to pin an explicit agent identity.
+
+        Only the two-var shape is derivable here. A worker deployed with
+        ATLAN_APPLICATION_NAME set but ATLAN_DEPLOYMENT_NAME absent polls the
+        bare ``{app}`` queue (see _derive_task_queue's middle branch); the
+        harness can't reconstruct that from env alone, so such deployments must
+        override agent_spec() explicitly.
         """
         if self.mode is RunMode.DIRECT:
             return None

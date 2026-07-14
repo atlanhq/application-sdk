@@ -342,9 +342,17 @@ class BaseFullDAGE2ETest:
         deployment env so the extract node lands on exactly the queue the
         deployed worker polls (``atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}``),
         including any per-leg ``ATLAN_DEPLOYMENT_NAME`` the CI action sets to
-        isolate parallel matrix legs. Mirrors
-        :meth:`application_sdk.testing.e2e.base.BaseE2ETest.agent_spec` (this
-        module is the deprecated alias). Subclasses may still override.
+        isolate parallel matrix legs. Subclasses may still override.
+
+        Only the two-var shape is derivable here: a worker with
+        ATLAN_APPLICATION_NAME set but ATLAN_DEPLOYMENT_NAME absent polls the
+        bare ``{app}`` queue, which the harness can't reconstruct from env — such
+        deployments must override agent_spec() explicitly.
+
+        NOTE: keep this env-derivation in sync with
+        :meth:`application_sdk.testing.e2e.base.BaseE2ETest.agent_spec` — this
+        module is the deprecated alias (removed in v4.0) and shares no
+        inheritance with it, so the block is intentionally duplicated.
         """
         if self.mode is RunMode.DIRECT:
             return None

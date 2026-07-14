@@ -38,7 +38,9 @@ def _bootstrap_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GITHUB_RUN_ID", "9999999")
     # Keep the deployment env absent by default so the run_id template path is
     # deterministic regardless of the ambient CI environment; the env-derivation
-    # test sets it explicitly.
+    # test sets both explicitly. Clear both vars (not just DEPLOYMENT) so the
+    # gate is hermetic against an ambient ATLAN_APPLICATION_NAME.
+    monkeypatch.delenv("ATLAN_APPLICATION_NAME", raising=False)
     monkeypatch.delenv("ATLAN_DEPLOYMENT_NAME", raising=False)
 
 

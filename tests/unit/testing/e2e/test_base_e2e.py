@@ -498,8 +498,22 @@ class TestAgentSpecDerivation:
     def test_agent_mode_without_deployment_env_raises(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # APP set, DEPLOYMENT absent → the app-only queue shape isn't derivable.
         monkeypatch.setenv("ATLAN_APPLICATION_NAME", "openapi")
         monkeypatch.delenv("ATLAN_DEPLOYMENT_NAME", raising=False)
+
+        class _T(_ConcreteE2ETest):
+            mode = RunMode.AGENT
+
+        with pytest.raises(HarnessMethodNotImplementedError):
+            _T().agent_spec()
+
+    def test_agent_mode_without_application_env_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Symmetric branch: DEPLOYMENT set, APP absent → also not derivable.
+        monkeypatch.delenv("ATLAN_APPLICATION_NAME", raising=False)
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "e2e-full-ci-42-connection-create")
 
         class _T(_ConcreteE2ETest):
             mode = RunMode.AGENT
