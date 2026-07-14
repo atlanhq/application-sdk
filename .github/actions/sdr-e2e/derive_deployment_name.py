@@ -52,9 +52,7 @@ def derive(run_id: str, suffix: str) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--run-id", default="", help="GitHub run id (GITHUB_RUN_ID)."
-    )
+    parser.add_argument("--run-id", default="", help="GitHub run id (GITHUB_RUN_ID).")
     parser.add_argument(
         "--suffix",
         default="",

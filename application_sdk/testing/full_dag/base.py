@@ -336,11 +336,28 @@ class BaseFullDAGE2ETest:
         )
 
     def agent_spec(self) -> AgentSpec | None:
-        """Agent identity (tier 4 only). Return None for direct mode."""
+        """Agent identity (tier 4 only). Return None for direct mode.
+
+        Default (AGENT mode): derive the agent identity from the worker's own
+        deployment env so the extract node lands on exactly the queue the
+        deployed worker polls (``atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}``),
+        including any per-leg ``ATLAN_DEPLOYMENT_NAME`` the CI action sets to
+        isolate parallel matrix legs. Mirrors
+        :meth:`application_sdk.testing.e2e.base.BaseE2ETest.agent_spec` (this
+        module is the deprecated alias). Subclasses may still override.
+        """
         if self.mode is RunMode.DIRECT:
             return None
+        app_name = os.environ.get("ATLAN_APPLICATION_NAME", "")
+        deployment_name = os.environ.get("ATLAN_DEPLOYMENT_NAME", "")
+        if app_name and deployment_name:
+            return AgentSpec(agent_name=f"{app_name}-{deployment_name}")
         raise HarnessMethodNotImplementedError(
-            message="subclass must override agent_spec() for AGENT mode",
+            message=(
+                "AGENT mode needs an agent_spec() override, or both "
+                "ATLAN_APPLICATION_NAME and ATLAN_DEPLOYMENT_NAME set in the "
+                "environment to derive the worker's task queue"
+            ),
             operation="agent_spec",
         )
 
