@@ -397,7 +397,9 @@ Guardrails:
 
 - It MUST be a `ClassVar`, not a pydantic field. Declared as a field, the gate
   reads `{}` and silently falls back to the single-triple path (the SDK logs a
-  boot-time warning if you get this wrong — but do not rely on catching it late).
+  warning if you get this wrong, but it fires per gated run while building the
+  gate input — not once at boot — so declare it correctly up front rather than
+  relying on spotting the warning).
 - The named guids must be top-level fields on the input contract (the gate reads
   them from the extraction-input snapshot). If they arrive nested under AE
   `metadata`, lift them onto the contract — the same fix as the phase-0

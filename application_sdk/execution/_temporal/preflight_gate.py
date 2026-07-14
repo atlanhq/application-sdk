@@ -326,13 +326,14 @@ async def _resolve_named_refs(
     """Resolve the app's named credential guids, grouped by ref name.
 
     One fail-open taxonomy, drawn from the resolver's own typed errors: a
-    confirmed dependency outage (``CredentialVaultError`` /
-    ``DependencyUnavailableError``) propagates so the workflow fails open — a
-    Dapr blip must never read as a bad credential and block a healthy run. A
-    genuinely absent credential (``CredentialNotFoundError``, which the resolver
-    also uses for collapsed unexpected vault errors) becomes an empty group, so
+    confirmed dependency outage (a ``CredentialVaultError`` wrapping a
+    ``ColdStartRaceError``, or a ``DependencyUnavailableError``) propagates so
+    the workflow fails open — a Dapr blip must never read as a bad credential and
+    block a healthy run. Every other resolver failure becomes an empty group so
     the handler — not the gate — decides whether a missing credential is
-    ``NOT_READY``.
+    ``NOT_READY``: a genuine ``CredentialNotFoundError``, a plain
+    ``CredentialVaultError``, or any unexpected vault error (the resolver
+    collapses the latter two into ``CredentialNotFoundError``).
     """
     grouped: dict[str, list[HandlerCredential]] = {
         name: [] for name in input.credential_ref_fields
