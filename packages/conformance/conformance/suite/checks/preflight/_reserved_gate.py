@@ -9,11 +9,14 @@ that exact name, and only when the app also defines a ``Handler.preflight_check`
 
 from __future__ import annotations
 
+import ast
+
 from conformance.suite.checks._ast_common import make_finding
 from conformance.suite.schema.findings import Finding
 
 from ._common import (
     Registry,
+    Source,
     _class_defs,
     _iter_class_body_methods,
     effective_task_name,
@@ -26,13 +29,34 @@ _P032 = "P032"
 _P033 = "P033"
 
 
+def _handler_site_for(
+    sites: list[tuple[Source, ast.AsyncFunctionDef]],
+    src: Source,
+    cls: ast.ClassDef,
+) -> tuple[Source, ast.AsyncFunctionDef] | None:
+    """Pick the preflight_check site to reference for a task in *cls*.
+
+    Prefer a handler co-located in the same class, then the same source, and
+    only then fall back to the first site — so the P033 message points at the
+    implementation the offending task actually drifts from.
+    """
+    if not sites:
+        return None
+    class_methods = set(_iter_class_body_methods(cls))
+    same_class = next((s for s in sites if s[0] is src and s[1] in class_methods), None)
+    if same_class is not None:
+        return same_class
+    same_src = next((s for s in sites if s[0] is src), None)
+    return same_src if same_src is not None else sites[0]
+
+
 def scan(reg: Registry) -> list[Finding]:
     preflight_sites = find_preflight_check_sites(reg)
-    handler_site = preflight_sites[0] if preflight_sites else None
 
     findings: list[Finding] = []
     for src in reg.sources:
         for cls in _class_defs(src.tree):
+            handler_site = _handler_site_for(preflight_sites, src, cls)
             for func in _iter_class_body_methods(cls):
                 dec = task_decorator(func, src.prov)
                 if dec is None:

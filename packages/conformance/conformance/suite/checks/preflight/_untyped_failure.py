@@ -33,7 +33,11 @@ def scan(reg: Registry) -> list[Finding]:
                 continue
             if not is_preflightcheck_call(node.func, local_names, module_aliases):
                 continue
-            kwargs = {kw.arg: kw.value for kw in node.keywords if kw.arg is not None}
+            if any(kw.arg is None for kw in node.keywords):
+                # ``**expansion`` may carry a typed error=; skip rather than
+                # false-fire, matching the rule's false-negative-over-false-positive stance.
+                continue
+            kwargs = {kw.arg: kw.value for kw in node.keywords}
             passed = kwargs.get("passed")
             if not (isinstance(passed, ast.Constant) and passed.value is False):
                 continue

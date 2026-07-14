@@ -205,6 +205,27 @@ def test_p033_fires_via_transitive_handler_without_preflight_input_annotation(
     assert ids == ["P033"]
 
 
+def test_p033_message_points_at_colocated_handler(tmp_path: Path) -> None:
+    # With more than one preflight_check in scope, the message must reference the
+    # handler in the task's own source, not whichever site was scanned first.
+    other = _handler_with_preflight()  # a separate handler, another file
+    colocated = (
+        _APP_IMPORTS
+        + _HANDLER_IMPORTS
+        + "class A(App):\n"
+        + "    @task\n"
+        + "    async def run_preflight(self): ...\n"
+        + "class H(Handler):\n"
+        + "    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:\n"
+        + "        return PreflightOutput(checks=[])\n"
+    )
+    findings = _scan(tmp_path, {"other.py": other, "app.py": colocated})
+    p033 = [f for f in findings if f.rule_id == "P033"]
+    assert len(p033) == 1
+    assert "app.py:" in p033[0].message
+    assert "other.py:" not in p033[0].message
+
+
 def test_p033_suppressed(tmp_path: Path) -> None:
     app = (
         _APP_IMPORTS
@@ -277,6 +298,16 @@ def test_p034_silent_on_non_sdk_preflightcheck(tmp_path: Path) -> None:
         "class PreflightCheck:\n    pass\n"
         "def make():\n"
         '    return PreflightCheck(name="x", passed=False)\n'
+    )
+    assert _ids(tmp_path, src) == []
+
+
+def test_p034_silent_on_kwargs_expansion(tmp_path: Path) -> None:
+    # A ``**`` expansion may carry a typed error=; suppress rather than false-fire.
+    src = (
+        "from application_sdk.handler.contracts import PreflightCheck\n"
+        "def make(err):\n"
+        '    return PreflightCheck(name="x", passed=False, **err)\n'
     )
     assert _ids(tmp_path, src) == []
 
