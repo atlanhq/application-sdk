@@ -7,5 +7,77 @@
     "CRITICAL": 7,
     "HIGH": 30
   },
-  "_entry_schema": "Each non-underscore key is a CVE/advisory ID. Required: package, severity (CRITICAL|HIGH only), reason, expires, added_by, case (1-4), ticket. Optional: fix_pr. Keep entries minimal but descriptive."
+  "_entry_schema": "Each non-underscore key is a CVE/advisory ID. Required: package, severity (CRITICAL|HIGH only), reason, expires, added_by, case (1-4), ticket. Optional: fix_pr. Keep entries minimal but descriptive.",
+  "CVE-2026-3441": {
+    "package": "binutils",
+    "severity": "HIGH",
+    "reason": "Case 4: base-image CVE (binutils 2.46-r2 \u2192 2.46.1-r2 needed). Not our dependency \u2014 ships in app-runtime-base:2.8.7-10, the newest v2-line tag available; pinned apk repo snapshot has no newer build. Awaiting base-image rebuild.",
+    "expires": "2026-08-13",
+    "added_by": "avinash.gatreddi@atlan.com",
+    "case": 4,
+    "ticket": "HYP-1952"
+  },
+  "CVE-2026-3442": {
+    "package": "binutils",
+    "severity": "HIGH",
+    "reason": "Case 4: base-image CVE (binutils 2.46-r2 \u2192 2.46.1-r2 needed). Not our dependency \u2014 ships in app-runtime-base:2.8.7-10, the newest v2-line tag available; pinned apk repo snapshot has no newer build. Awaiting base-image rebuild.",
+    "expires": "2026-08-13",
+    "added_by": "avinash.gatreddi@atlan.com",
+    "case": 4,
+    "ticket": "HYP-1952"
+  },
+  "CVE-2026-45447": {
+    "package": "libcrypto3",
+    "severity": "HIGH",
+    "reason": "Case 4: base-image CVE (libcrypto3 3.6.2-r5 \u2192 3.6.3-r0 needed). Not our dependency \u2014 ships in app-runtime-base:2.8.7-10; pinned apk repo snapshot has no newer build. SDK v3 apps clear this for free via app-runtime-base:3's moving tag (auto-rebuilds); v2's dated tags don't get that. Awaiting base-image rebuild.",
+    "expires": "2026-08-13",
+    "added_by": "avinash.gatreddi@atlan.com",
+    "case": 4,
+    "ticket": "HYP-1952"
+  },
+  "CVE-2026-56131": {
+    "package": "libexpat1",
+    "severity": "HIGH",
+    "reason": "Case 4: base-image CVE (libexpat1 2.8.1-r0 \u2192 2.8.2-r0 needed). Not our dependency \u2014 ships in app-runtime-base:2.8.7-10; pinned apk repo snapshot has no newer build. Awaiting base-image rebuild.",
+    "expires": "2026-08-13",
+    "added_by": "avinash.gatreddi@atlan.com",
+    "case": 4,
+    "ticket": "HYP-1952"
+  },
+  "CVE-2026-56407": {
+    "package": "libexpat1",
+    "severity": "HIGH",
+    "reason": "Case 4: base-image CVE (libexpat1 2.8.1-r0 \u2192 2.8.2-r0 needed). Not our dependency \u2014 ships in app-runtime-base:2.8.7-10; pinned apk repo snapshot has no newer build. Awaiting base-image rebuild.",
+    "expires": "2026-08-13",
+    "added_by": "avinash.gatreddi@atlan.com",
+    "case": 4,
+    "ticket": "HYP-1952"
+  },
+  "CVE-2026-56408": {
+    "package": "libexpat1",
+    "severity": "HIGH",
+    "reason": "Case 4: base-image CVE (libexpat1 2.8.1-r0 \u2192 2.8.2-r0 needed). Not our dependency \u2014 ships in app-runtime-base:2.8.7-10; pinned apk repo snapshot has no newer build. Awaiting base-image rebuild.",
+    "expires": "2026-08-13",
+    "added_by": "avinash.gatreddi@atlan.com",
+    "case": 4,
+    "ticket": "HYP-1952"
+  },
+  "CVE-2026-44432": {
+    "package": "py3-pip-wheel",
+    "severity": "HIGH",
+    "reason": "Case 4: base-image CVE \u2014 vendored urllib3 copy bundled inside the OS-level pip/wheel package (py3-pip-wheel 26.1.2-r0 \u2192 26.1.2-r1 needed), distinct from our own uv-managed urllib3 (already 2.7.0, patched). Not our dependency; pinned apk repo snapshot has no newer build. Awaiting base-image rebuild.",
+    "expires": "2026-08-13",
+    "added_by": "avinash.gatreddi@atlan.com",
+    "case": 4,
+    "ticket": "HYP-1952"
+  },
+  "CVE-2026-7210": {
+    "package": "python-3.13",
+    "severity": "HIGH",
+    "reason": "Case 4: base-image CVE in the interpreter itself (python-3.13 3.13.13-r6 \u2192 3.13.14-r0 needed). Not our dependency \u2014 ships in app-runtime-base:2.8.7-10; pinned apk repo snapshot has no newer build. Awaiting base-image rebuild.",
+    "expires": "2026-08-13",
+    "added_by": "avinash.gatreddi@atlan.com",
+    "case": 4,
+    "ticket": "HYP-1952"
+  }
 }
