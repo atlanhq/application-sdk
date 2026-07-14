@@ -494,10 +494,16 @@ class BaseE2ETest:
         deployment_name = os.environ.get("ATLAN_DEPLOYMENT_NAME", "")
         if app_name and deployment_name:
             return AgentSpec(agent_name=f"{app_name}-{deployment_name}")
-        # Local fallback: no CI-exported deployment env. Mirror the run-id-keyed
-        # shape (so a local run lands on its own queue) without requiring a
-        # per-connector override — the worker, started with the same missing env,
-        # derives the matching bare/run-id queue.
+        # Local fallback: no CI-exported deployment env. Reproduce the exact
+        # {connector}-{connection_name_prefix}-{run_id} shape connectors used to
+        # hard-code in a working local override, so a local run lands on its own
+        # queue without needing a per-connector override. NB this does NOT match
+        # what a worker's main._derive_task_queue() would build from the same
+        # partial env — that returns atlan-{app}-{deployment} (both vars),
+        # bare {app} (only app), or {ClassName}-queue (neither), never a run-id
+        # queue. So for a local full-DAG run the worker must be started on this
+        # same agent_name queue explicitly; CI is unaffected (it always exports
+        # both vars, taking the exact-match branch above).
         return AgentSpec(
             agent_name=(
                 f"{self.connector_short_name}-{self.connection_name_prefix}-{self.run_id}"
