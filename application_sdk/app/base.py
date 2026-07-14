@@ -1740,12 +1740,18 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
         # Fail fast on a malformed / wrong-typed payload, before any setup runs.
         # Enforces the entry point's typed contract at the workflow boundary.
         #
-        # Placement is deliberate: this MUST stay above the outer try/except below
-        # (which re-wraps exceptions into ApplicationError). _validate_workflow_input
-        # already raises a non_retryable=True ApplicationError; moving this call
-        # inside that block would re-wrap it with non_retryable derived from
-        # RetryableError membership, flipping it back to retryable and
-        # reintroducing the indefinite Workflow Task retry loop this fix removes.
+        # Placement is deliberate — this MUST stay above the setup and the outer
+        # try/except below, for two reasons:
+        #   1. Downstream code (the preflight gate, _log_summary, the entry method)
+        #      requires a validated typed model; it must never see the raw dict the
+        #      Any-annotated argument decodes to.
+        #   2. It preserves pre-PR behavior: previously a bad payload failed during
+        #      Temporal's decode, so neither the _run body nor the on_complete()
+        #      finally ran. Moving this into the try/except would run on_complete()
+        #      for an input that never entered the workflow proper.
+        # (Retryability is not the reason: the raised ApplicationError is a
+        # FailureError subclass, so the outer handler's `isinstance(e, FailureError)`
+        # branch would bare re-raise it, preserving non_retryable=True either way.)
         input_data = _validate_workflow_input(input_data, input_type)
 
         start_time = _safe_now()

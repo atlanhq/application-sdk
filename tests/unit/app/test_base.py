@@ -1164,8 +1164,10 @@ class TestGenerateWorkflowClass:
             # "Input should be an object [input_value='', input_type=str]" failure.
             await wf_cls.run(mock.MagicMock(), "not-an-object")
 
-        assert getattr(exc.value, "non_retryable", None) is True
-        assert getattr(exc.value, "type", None) == "InputValidationError"
+        # Direct attribute access (not getattr-with-default): a contract-drift
+        # rename should surface as an AttributeError, not a silent None mismatch.
+        assert exc.value.non_retryable is True
+        assert exc.value.type == "InputValidationError"
         # The entry method never ran — we failed before any app code.
         assert ran == []
 
