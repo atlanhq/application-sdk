@@ -26,6 +26,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from application_sdk.dev._dapr_errors import (
+    DaprComponentsConfigError,
+    DaprComponentsDirNotFoundError,
     DaprdBinaryMissingError,
     DaprReadinessTimeoutError,
     UnsupportedArchitectureError,
@@ -298,11 +300,13 @@ async def embedded_dapr(
     objectstore_root: str = DEFAULT_OBJECTSTORE_ROOT,
     eventstore_root: str = DEFAULT_EVENTSTORE_ROOT,
     secrets_file: str | None = None,
+    components_dir: str | None = None,
     log_level: str = "warn",
 ) -> AsyncIterator[EmbeddedDapr]:
     """Boot an embedded ``daprd`` for local app development.
 
-    Components written into a temp dir:
+    By default (no *components_dir*) these components are auto-generated into a
+    temp dir:
 
     * ``statestore`` — ``state.in-memory``
     * ``secretstore`` / ``deployment-secret-store`` — ``secretstores.local.env``
@@ -314,21 +318,59 @@ async def embedded_dapr(
     * ``eventstore`` — ``bindings.localstorage`` rooted at *eventstore_root*
     * ``pubsub`` — ``pubsub.in-memory``
 
-    On entry the context manager sets ``DAPR_HTTP_PORT``, ``DAPR_GRPC_PORT``,
-    and ``DAPR_COMPONENTS_PATH`` so callers (and any background observability
-    flush that races with daprd startup) see the right values. The previous
-    values of those env vars are restored on exit.
+    Pass *components_dir* to supply your own component YAMLs instead of the
+    auto-generated set — e.g. an integration harness that needs a
+    ``secretstores.local.file`` store in ``multiValued`` mode, or any component
+    the defaults don't cover. When given, the SDK still manages the full daprd
+    lifecycle (binary download, free-port allocation, boot, readiness wait, env
+    save/restore, teardown); it just points ``--resources-path`` at your
+    directory and leaves it in place on exit (you own it). *components_dir* and
+    *secrets_file* are mutually exclusive, and *objectstore_root* /
+    *eventstore_root* are ignored when *components_dir* is set (your components
+    define those). The asymmetry is deliberate: *secrets_file* defaults to
+    ``None``, so a set value is unambiguous and conflicting with *components_dir*
+    is raised; the two roots have non-``None`` defaults, so a deliberately-set
+    value can't be told apart from the default and is silently ignored rather
+    than erroring.
+
+    Once arguments are validated and the sidecar is about to start, the context
+    manager sets ``DAPR_HTTP_PORT``, ``DAPR_GRPC_PORT``, and
+    ``DAPR_COMPONENTS_PATH`` so callers (and any background observability flush
+    that races with daprd startup) see the right values; the previous values are
+    restored on exit. An argument error (mutually-exclusive kwargs, or a
+    bad/blank *components_dir*) raises before any env var is touched.
     """
+    # Validate arguments up front — before the expensive daprd download and port
+    # allocation — so a misconfigured call fails truly fast.
+    if components_dir is not None and secrets_file is not None:
+        raise DaprComponentsConfigError()
+    if components_dir is not None and (
+        # Reject blank input explicitly: Path("").is_dir() is True (it resolves
+        # to cwd), so a blank components_dir would otherwise slip past and boot
+        # daprd against the working directory. An unchecked bad path would
+        # otherwise surface ~30s later as a readiness timeout with no hint that
+        # the path was the cause.
+        not components_dir.strip() or not Path(components_dir).is_dir()
+    ):
+        raise DaprComponentsDirNotFoundError(value_summary=repr(components_dir))
+
     binary = _ensure_daprd_binary()
     http_port = _pick_free_port()
     grpc_port = _pick_free_port()
-    components_dir = Path(tempfile.mkdtemp(prefix="atlan-dapr-"))
-    _write_components(
-        components_dir,
-        Path(objectstore_root),
-        Path(eventstore_root),
-        secrets_file=secrets_file,
-    )
+    if components_dir is not None:
+        # Caller supplies (and owns) the component YAMLs — use them as-is and
+        # do not delete the directory on exit (validated above).
+        components_path = Path(components_dir)
+        _owns_components_dir = False
+    else:
+        components_path = Path(tempfile.mkdtemp(prefix="atlan-dapr-"))
+        _write_components(
+            components_path,
+            Path(objectstore_root),
+            Path(eventstore_root),
+            secrets_file=secrets_file,
+        )
+        _owns_components_dir = True
 
     # Set env BEFORE spawning the subprocess so the observability sink's
     # flush cycle (which may fire during the ~3s daprd startup window) finds
@@ -339,7 +381,7 @@ async def embedded_dapr(
     }
     os.environ["DAPR_HTTP_PORT"] = str(http_port)
     os.environ["DAPR_GRPC_PORT"] = str(grpc_port)
-    os.environ["DAPR_COMPONENTS_PATH"] = str(components_dir)
+    os.environ["DAPR_COMPONENTS_PATH"] = str(components_path)
 
     logger.info("Starting embedded Dapr (http=%d grpc=%d)", http_port, grpc_port)
     proc = await asyncio.create_subprocess_exec(
@@ -351,7 +393,7 @@ async def embedded_dapr(
         "--dapr-grpc-port",
         str(grpc_port),
         "--resources-path",
-        str(components_dir),
+        str(components_path),
         "--log-level",
         log_level,
         # Disable the metrics + placement endpoints we don't need for local dev.
@@ -365,7 +407,7 @@ async def embedded_dapr(
         yield EmbeddedDapr(
             http_port=http_port,
             grpc_port=grpc_port,
-            components_dir=str(components_dir),
+            components_dir=str(components_path),
         )
     finally:
         logger.info("Shutting down embedded Dapr")
@@ -376,7 +418,10 @@ async def embedded_dapr(
             except TimeoutError:
                 proc.kill()
                 await proc.wait()
-        shutil.rmtree(components_dir, ignore_errors=True)
+        # Only clean up the temp dir we generated; a caller-supplied
+        # components_dir belongs to the caller.
+        if _owns_components_dir:
+            shutil.rmtree(components_path, ignore_errors=True)
         for _k, _v in _prev_env.items():
             if _v is None:
                 os.environ.pop(_k, None)
