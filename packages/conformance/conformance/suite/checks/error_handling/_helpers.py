@@ -262,23 +262,63 @@ def _body_always_raises(body: list[ast.stmt]) -> bool:
     return False
 
 
-def _body_has_bypassing_exit(body: list[ast.stmt]) -> bool:
+def _body_has_bypassing_exit(body: list[ast.stmt], *, loop_depth: int = 0) -> bool:
     """True when some path through *body* leaves the handler without a
     trace-preserving re-raise.
 
     ``_body_always_raises`` only proves that *a* guaranteeing raise is reached;
-    it does not see a path that bypasses it. A ``return``/``break``/``continue``
-    before that raise swallows the exception, and a ``raise ... from None``
-    discards the traceback — either breaks the "swallows nothing, trace intact"
-    contract, so the handler must not be exempted. Scanned shallowly (nested
-    ``def``/``class`` bodies are excluded, since a ``return`` there belongs to
-    the inner scope). Conservative by design: over-firing merely re-introduces a
+    it does not see a path that bypasses it. Bypasses:
+
+    * ``return`` — exits the enclosing function, swallowing the exception.
+    * ``raise ... from None`` — reaches a raise but discards the traceback.
+    * ``break`` / ``continue`` — only when they belong to a loop *outside* the
+      handler (``loop_depth == 0``): they escape to that outer loop and skip the
+      trailing raise, so the exception is swallowed. A ``break``/``continue``
+      controlling a loop *nested inside* the handler is ordinary loop control —
+      the handler's trailing raise still runs — and must not disqualify.
+
+    Recurses through compound statements (tracking loop nesting) but not into
+    nested ``def``/``class`` bodies, where a ``return`` belongs to the inner
+    scope. Conservative by design: over-firing merely re-introduces a
     suppression, whereas under-firing hides a real swallow (WARN tier).
     """
     for stmt in body:
-        for node in (stmt, *_iter_shallow(stmt)):
-            if isinstance(node, (ast.Return, ast.Break, ast.Continue)):
+        if isinstance(stmt, ast.Return):
+            return True
+        if isinstance(stmt, ast.Raise) and not _raise_preserves_trace(stmt):
+            return True
+        if isinstance(stmt, (ast.Break, ast.Continue)):
+            if loop_depth == 0:
                 return True
-            if isinstance(node, ast.Raise) and not _raise_preserves_trace(node):
+            continue  # loop control for a loop nested in the handler
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue  # different scope — its return/raise is not a handler exit
+        if isinstance(stmt, (ast.For, ast.AsyncFor, ast.While)):
+            # break/continue inside the loop body target this loop, not the
+            # handler; the loop's ``else`` runs after the loop, so it stays at
+            # the handler's depth.
+            if _body_has_bypassing_exit(stmt.body, loop_depth=loop_depth + 1):
+                return True
+            if _body_has_bypassing_exit(stmt.orelse, loop_depth=loop_depth):
+                return True
+            continue
+        for block in _child_stmt_blocks(stmt):
+            if _body_has_bypassing_exit(block, loop_depth=loop_depth):
                 return True
     return False
+
+
+def _child_stmt_blocks(stmt: ast.stmt) -> list[list[ast.stmt]]:
+    """Statement blocks of a non-loop compound statement (``if``/``with``/``try``/
+    ``match``), for depth-preserving recursion. Loops are handled separately so
+    their nesting can be tracked."""
+    blocks: list[list[ast.stmt]] = []
+    for field in ("body", "orelse", "finalbody"):
+        value = getattr(stmt, field, None)
+        if isinstance(value, list):
+            blocks.append(value)
+    if isinstance(stmt, ast.Try):
+        blocks.extend(handler.body for handler in stmt.handlers)
+    if isinstance(stmt, ast.Match):
+        blocks.extend(case.body for case in stmt.cases)
+    return blocks

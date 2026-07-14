@@ -472,6 +472,54 @@ except Exception as e:
     )
 
 
+def test_p004_no_finding_when_break_controls_nested_loop() -> None:
+    # `break` controls a loop nested inside the handler — it is loop control, not
+    # a handler exit; the trailing re-raise still runs, so stay exempt.
+    assert "E004" not in _findings(
+        """\
+try:
+    run()
+except Exception as e:
+    for x in xs:
+        if done(x):
+            break
+    raise AppError("f") from e
+"""
+    )
+
+
+def test_p004_still_flags_return_inside_nested_loop() -> None:
+    # `return` swallows the exception on some path regardless of loop nesting.
+    assert "E004" in _findings(
+        """\
+def f():
+    try:
+        run()
+    except Exception as e:
+        for x in xs:
+            if bad(x):
+                return None
+        raise AppError("f") from e
+"""
+    )
+
+
+def test_p004_still_flags_continue_escaping_to_outer_loop() -> None:
+    # `continue` at the handler's top level targets the loop OUTSIDE the handler,
+    # skipping the trailing re-raise — a genuine swallow, must still fire.
+    assert "E004" in _findings(
+        """\
+for item in items:
+    try:
+        run()
+    except Exception as e:
+        if skip(item):
+            continue
+        raise AppError("f") from e
+"""
+    )
+
+
 # ── P005 — ExceptBlockMissingExcInfo ─────────────────────────────────────────
 
 
