@@ -7,5 +7,14 @@
     "CRITICAL": 7,
     "HIGH": 30
   },
-  "_entry_schema": "Each non-underscore key is a CVE/advisory ID. Required: package, severity (CRITICAL|HIGH only), reason, expires, added_by, case (1-4), ticket. Optional: fix_pr. Keep entries minimal but descriptive."
+  "_entry_schema": "Each non-underscore key is a CVE/advisory ID. Required: package, severity (CRITICAL|HIGH only), reason, expires, added_by, case (1-4), ticket. Optional: fix_pr. Keep entries minimal but descriptive.",
+  "CVE-2026-11940": {
+    "package": "python-3.10-base",
+    "severity": "HIGH",
+    "reason": "Case 4: base-image CVE in Chainguard python packages of app-runtime-base:3 (fixed in apk revision -r10); awaiting base-image rebuild + republish, not a dependency bump.",
+    "expires": "2026-08-13",
+    "added_by": "@atlan-ci (vuln-triage rover)",
+    "case": 4,
+    "ticket": "BLDX-1550"
+  }
 }
