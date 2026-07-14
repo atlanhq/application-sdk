@@ -25,6 +25,8 @@ from application_sdk.testing.e2e.client import (
     DAGNodeStatus,
     DAGRunResult,
     DAGRunStatus,
+    _safe_node_status,
+    _safe_run_status,
 )
 
 _RUN_ID = "test-run-123"
@@ -205,6 +207,40 @@ class TestPollNativeStatusStallGuard:
                     stall_grace_seconds=-1,
                 )
         assert result.status == DAGRunStatus.RUNNING
+
+
+class TestSkippedStatus:
+    """AE emits 'Skipped' as a real status; it must parse as a terminal enum
+    value rather than being swallowed to PENDING (which masked a skipped run as
+    a stalled one and surfaced as a spurious NoWorkerOnTaskQueueError)."""
+
+    def test_run_skipped_parses_and_is_terminal(self):
+        assert _safe_run_status("Skipped") is DAGRunStatus.SKIPPED
+        assert DAGRunStatus.SKIPPED.is_terminal is True
+
+    def test_node_skipped_parses_terminal_but_not_success(self):
+        assert _safe_node_status("Skipped") is DAGNodeStatus.SKIPPED
+        assert DAGNodeStatus.SKIPPED.is_terminal is True
+        assert DAGNodeStatus.SKIPPED.is_success is False
+
+    def test_skipped_run_returns_fast_without_tripping_stall_guard(self):
+        """A Skipped run is terminal, so poll_native_status returns it
+        immediately — even though no node started, the stall guard (which would
+        otherwise raise NoWorkerOnTaskQueueError) must not fire on a terminal
+        status."""
+        client = _make_client()
+        skipped = _result(DAGRunStatus.SKIPPED, DAGNodeStatus.PENDING)
+
+        with patch.object(client, "get_native_status", return_value=skipped):
+            with patch("time.sleep"):
+                result = client.poll_native_status(
+                    _RUN_ID,
+                    interval_seconds=10,
+                    timeout_seconds=600,
+                    stall_grace_seconds=5,
+                    stall_task_queue="atlan-openapi-e2e-full-ci-42",
+                )
+        assert result.status == DAGRunStatus.SKIPPED
 
 
 class TestPollNativeStatusTransientHandling:
