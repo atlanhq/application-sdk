@@ -458,11 +458,34 @@ class BaseE2ETest:
     # ------------------------------------------------------------------
 
     def agent_spec(self) -> AgentSpec | None:
-        """Agent identity (tier 4 only). Return None for direct mode."""
+        """Agent identity (tier 4 only). Return None for direct mode.
+
+        Default (AGENT mode): derive the agent identity from the worker's own
+        deployment env so the extract node is dispatched to exactly the queue
+        the deployed worker polls — no per-connector hard-coding. The worker
+        derives its Temporal queue as
+        ``atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}`` (see
+        :func:`application_sdk.main._derive_task_queue`); mirroring that here as
+        ``agent_name = {ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}`` makes
+        :meth:`_extract_task_queue` (``atlan-{agent_name}``) equal the worker
+        queue automatically. In particular this picks up any *per-leg*
+        ``ATLAN_DEPLOYMENT_NAME`` the CI action sets to give each parallel
+        matrix leg its own worker + queue (avoiding cross-worker artifact
+        invisibility under the two-store posture). Subclasses may still override
+        to pin an explicit agent identity.
+        """
         if self.mode is RunMode.DIRECT:
             return None
+        app_name = os.environ.get("ATLAN_APPLICATION_NAME", "")
+        deployment_name = os.environ.get("ATLAN_DEPLOYMENT_NAME", "")
+        if app_name and deployment_name:
+            return AgentSpec(agent_name=f"{app_name}-{deployment_name}")
         raise HarnessMethodNotImplementedError(
-            message="subclass must override agent_spec() for AGENT mode",
+            message=(
+                "AGENT mode needs an agent_spec() override, or both "
+                "ATLAN_APPLICATION_NAME and ATLAN_DEPLOYMENT_NAME set in the "
+                "environment to derive the worker's task queue"
+            ),
             operation="agent_spec",
         )
 

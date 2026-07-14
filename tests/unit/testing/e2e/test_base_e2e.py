@@ -16,6 +16,7 @@ import pytest
 
 from application_sdk.contracts.types import ConnectionRef
 from application_sdk.testing.e2e._errors import (
+    HarnessMethodNotImplementedError,
     ManifestDagMissingError,
     ManifestFileNotFoundError,
 )
@@ -437,6 +438,74 @@ class TestExtractTaskQueue:
     def test_direct_mode_falls_back_to_connector_default(self) -> None:
         # _ConcreteE2ETest is RunMode.DIRECT → agent_spec() is None.
         assert _ConcreteE2ETest()._extract_task_queue() == "atlan-openapi-default"
+
+
+class TestAgentSpecDerivation:
+    """AGENT mode derives the agent identity — and therefore the extract queue —
+    from the worker's ATLAN_APPLICATION_NAME + ATLAN_DEPLOYMENT_NAME env, so a
+    per-leg ATLAN_DEPLOYMENT_NAME (set by the CI action) isolates each matrix
+    leg's queue with no per-connector hard-coding. Mirrors
+    application_sdk.main._derive_task_queue's atlan-{app}-{deployment} shape.
+    """
+
+    def test_derives_agent_name_and_queue_from_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_APPLICATION_NAME", "openapi")
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "e2e-full-ci-42-connection-create")
+
+        class _T(_ConcreteE2ETest):
+            mode = RunMode.AGENT
+
+        spec = _T().agent_spec()
+        assert spec is not None
+        assert spec.agent_name == "openapi-e2e-full-ci-42-connection-create"
+        # The extract node lands on exactly the worker's atlan-{app}-{deployment}
+        # queue (see _derive_task_queue), byte-for-byte.
+        assert (
+            _T()._extract_task_queue()
+            == "atlan-openapi-e2e-full-ci-42-connection-create"
+        )
+
+    def test_distinct_deployment_yields_distinct_queues(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_APPLICATION_NAME", "openapi")
+
+        class _T(_ConcreteE2ETest):
+            mode = RunMode.AGENT
+
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "e2e-full-ci-42-connection-create")
+        create_q = _T()._extract_task_queue()
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "e2e-full-ci-42-connection-reuse")
+        reuse_q = _T()._extract_task_queue()
+        assert create_q != reuse_q
+
+    def test_subclass_override_still_wins(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_APPLICATION_NAME", "openapi")
+        monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "e2e-full-ci-42")
+
+        class _T(_ConcreteE2ETest):
+            mode = RunMode.AGENT
+
+            def agent_spec(self) -> AgentSpec:
+                return AgentSpec(agent_name="pinned-name")
+
+        assert _T().agent_spec().agent_name == "pinned-name"
+
+    def test_agent_mode_without_deployment_env_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_APPLICATION_NAME", "openapi")
+        monkeypatch.delenv("ATLAN_DEPLOYMENT_NAME", raising=False)
+
+        class _T(_ConcreteE2ETest):
+            mode = RunMode.AGENT
+
+        with pytest.raises(HarnessMethodNotImplementedError):
+            _T().agent_spec()
 
 
 class TestStallGuardDefault:
