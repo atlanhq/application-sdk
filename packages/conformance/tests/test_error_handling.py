@@ -384,6 +384,20 @@ except Exception as e:
     )
 
 
+def test_p004_no_finding_when_reraise_no_from() -> None:
+    # `raise X(...)` with no `from` still preserves the trace (its ``.cause`` is
+    # Python ``None``, not ``raise ... from None``), so E004 must not fire. The
+    # missing explicit chaining is E016 (MissingExceptionChaining)'s concern.
+    assert "E004" not in _findings(
+        """\
+try:
+    run()
+except Exception:
+    raise MetadataFetchError("failed")
+"""
+    )
+
+
 def test_p004_still_flags_reraise_from_none() -> None:
     # `raise ... from None` deliberately discards the original context/trace —
     # this is the trace-losing case E004 should still catch.
