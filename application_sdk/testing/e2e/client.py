@@ -51,6 +51,7 @@ if TYPE_CHECKING:
 from application_sdk.errors.base import AppError
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.e2e._errors import (
+    AtlanApiAlreadyActiveError,
     AtlanApiHttpError,
     AtlanApiResponseInvariantError,
     AtlanApiTimeoutError,
@@ -128,6 +129,27 @@ def _node_glyph(node) -> str:
     # the monochrome glyphs we used before, so the previous tight
     # "✓extract" lost legibility.
     return f"{g} {name}"
+
+
+# AE returns "a run for workflow '<slug>' is already active" (code AE-WF-409-03)
+# when a submit collides with an in-flight run. The package-workflows gateway
+# masks that 409 as an HTTP 500 with the original 409 text embedded in the
+# message, so we detect the conflict by marker regardless of the outer status.
+_ALREADY_ACTIVE_MARKERS = ("AE-WF-409-03", "already active")
+
+
+def _is_already_active_run(status: int, body: Any) -> bool:
+    """True when a submit response signals an already-active run (masked or not).
+
+    A submit is not idempotent: retrying one that AE already accepted spawns a
+    duplicate run AE marks ``Skipped``. This conflict is therefore terminal, not
+    transient — callers use it to stop retrying even when AE surfaces it as a
+    5xx.
+    """
+    if status < 400:
+        return False
+    haystack = body if isinstance(body, str) else repr(body)
+    return any(marker in haystack for marker in _ALREADY_ACTIVE_MARKERS)
 
 
 class DAGNodeStatus(str, Enum):
@@ -270,8 +292,15 @@ class AEWorkflowClient:
         *,
         body: dict[str, Any] | None = None,
         timeout: int = _HTTP_TIMEOUT,
+        retry_network_errors: bool = True,
     ) -> tuple[int, dict[str, Any] | str]:
-        """HTTP request returning ``(status_code, parsed_body_or_text)``."""
+        """HTTP request returning ``(status_code, parsed_body_or_text)``.
+
+        ``retry_network_errors=False`` disables the network-layer retry: a
+        read-timeout on a non-idempotent write (submit) is ambiguous — the
+        server may already have processed it — so re-POSTing would spawn a
+        duplicate. Such callers surface the first timeout instead.
+        """
         url = f"{self.tenant_url}{path}"
         data = orjson.dumps(body) if body is not None else None
         req = urllib.request.Request(url, data=data, method=method)
@@ -313,6 +342,10 @@ class AEWorkflowClient:
                 # handles it instead of a raw crash. NOTE: HTTPError is a URLError
                 # subclass but is caught above, so it never reaches here.
                 last_exc = e
+                if not retry_network_errors:
+                    # Non-idempotent caller (submit): do not re-issue — the
+                    # server may have accepted the first request. Surface it.
+                    break
                 if attempt < _REQUEST_MAX_ATTEMPTS:
                     logger.warning(
                         "transient network error on %s %s (attempt %d/%d): %s — "
@@ -347,6 +380,7 @@ class AEWorkflowClient:
         sleep_seconds: int,
         retryable: Callable[[int, dict[str, Any] | str], bool],
         op_name: str,
+        retry_network_errors: bool = True,
     ) -> tuple[int, dict[str, Any] | str]:
         """POST *path* with unified timeout + retry, returning ``(status, body)``.
 
@@ -370,10 +404,14 @@ class AEWorkflowClient:
         for attempt in range(1, total_attempts + 1):
             try:
                 status, resp_body = self._request(
-                    "POST", path, body=body, timeout=_SUBMIT_TIMEOUT
+                    "POST",
+                    path,
+                    body=body,
+                    timeout=_SUBMIT_TIMEOUT,
+                    retry_network_errors=retry_network_errors,
                 )
             except (TimeoutError, OSError, AtlanApiTimeoutError) as exc:
-                if attempt < total_attempts:
+                if retry_network_errors and attempt < total_attempts:
                     logger.warning(
                         "%s attempt %d/%d: timeout (%s) — retrying in %ds",
                         op_name,
@@ -544,18 +582,46 @@ class AEWorkflowClient:
         response shape is not officially documented; we look for
         ``run_id`` under either the top level or a nested ``data`` key.
 
-        Retries on HTTP 5xx and timeout. 4 retries at 5s intervals covers
-        the longest indexing lag we've observed (~15s) without sitting on
-        a hard failure.
+        Unlike the other write endpoints, a submit is **not idempotent**:
+        re-issuing one AE already accepted spawns a duplicate run that AE marks
+        ``Skipped`` and returns as a *fresh* run_id — so a blind retry makes the
+        harness poll a phantom skipped run while the real one runs to
+        completion under a different id. Two guards prevent that:
+
+        * ``retry_network_errors=False`` — a read-timeout is ambiguous (the
+          server may have accepted the submit), so we never re-POST on timeout.
+        * the ``already active`` conflict (AE-WF-409-03, which the gateway masks
+          as a 500 — see :func:`_is_already_active_run`) is treated as terminal,
+          not a retryable 5xx, and surfaced as
+          :class:`AtlanApiAlreadyActiveError`.
+
+        Genuine 5xx that are *not* the already-active conflict remain retryable.
         """
         status, body = self._post_with_retry(
             "/api/service/package-workflows?submit=true",
             body=payload,
             total_attempts=retries + 1,
             sleep_seconds=retry_sleep_seconds,
-            retryable=lambda s, b: s >= 500,
+            retryable=lambda s, b: s >= 500 and not _is_already_active_run(s, b),
             op_name="submit_workflow",
+            retry_network_errors=False,
         )
+        if _is_already_active_run(status, body):
+            raise AtlanApiAlreadyActiveError(
+                message=(
+                    "AE rejected the submit: a run for this workflow is already "
+                    "active (AE-WF-409-03). The initial submit was accepted "
+                    "server-side but its response was lost (AE latency / gateway "
+                    "timeout), and AE masks the 409 as HTTP 500. A run IS "
+                    "executing, but its run_id is unrecoverable via native-status "
+                    "(keyed by run_id). Not retrying — a retry would spawn a "
+                    f"duplicate Skipped run.\nresponse={body!r}"
+                ),
+                target=(
+                    "POST /api/service/package-workflows?submit=true "
+                    "(AE-WF-409-03 already active)"
+                ),
+            )
         if status < 300 and isinstance(body, dict):
             data = body.get("data") if isinstance(body.get("data"), dict) else body
             run_id = data.get("run_id") if isinstance(data, dict) else None
