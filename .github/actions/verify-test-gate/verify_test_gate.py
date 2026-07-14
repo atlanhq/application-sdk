@@ -40,6 +40,14 @@ def evaluate(tests: str, discover_e2e: str, e2e: str) -> list[str]:
         errors.append(f"e2e discovery did not succeed (result={discover_e2e})")
     if e2e not in _OK_OPTIONAL:
         errors.append(f"one or more e2e suites did not succeed (result={e2e})")
+    # Defensive: a successful discovery means suites exist (discover-e2e fails on
+    # count=0), so the matrix should have run. A skipped matrix here is an
+    # anomaly — this driver is consumed cross-repo via @main, so don't let a
+    # future caller that re-wires the e2e `if` green the gate by skipping it.
+    if discover_e2e == "success" and e2e == "skipped":
+        errors.append(
+            "e2e discovery succeeded (suites found) but the matrix was skipped"
+        )
     return errors
 
 
@@ -58,6 +66,8 @@ def _e2e_status(discover_e2e: str, e2e: str) -> str:
         return "❌ No suites discovered (e2e was requested)"
     if e2e == "success":
         return "✅ Passed"
+    if discover_e2e == "success" and e2e == "skipped":
+        return "❌ Matrix skipped despite discovered suites"
     if e2e == "skipped":
         return "⊘ Skipped"
     return "❌ Failed"

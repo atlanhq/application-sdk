@@ -58,6 +58,17 @@ def test_e2e_cancelled_is_failure() -> None:
     assert evaluate("success", "success", "cancelled") != []
 
 
+def test_e2e_skipped_when_discovery_succeeded_is_failure() -> None:
+    # Discovery success ⇒ suites exist ⇒ the matrix must run. A skipped matrix
+    # here (e.g. a future caller re-wired the e2e `if`) must not green the gate.
+    errors = evaluate("success", "success", "skipped")
+    assert len(errors) == 1
+    assert "matrix was skipped" in errors[0]
+    out = render("success", "success", "skipped")
+    assert out["passed"] == "false"
+    assert out["e2e-status"] == "❌ Matrix skipped despite discovered suites"
+
+
 # --- render() (display strings shared with the summary table) --------------
 
 

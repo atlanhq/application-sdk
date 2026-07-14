@@ -171,6 +171,9 @@ jobs:
   discover-e2e:
     name: Discover e2e suites
     runs-on: ubuntu-latest
+    # Just a checkout + a seconds-long glob; cap it so a wedged runner can't
+    # hold the required check pending for GitHub's 6-hour default.
+    timeout-minutes: 10
     if: |
       inputs.enable-e2e && (
         (github.event_name == 'workflow_dispatch' && inputs.run-e2e == 'true') ||
@@ -311,6 +314,9 @@ jobs:
     needs: [tests, discover-e2e, e2e]
     if: always()
     runs-on: ubuntu-latest
+    # Comment + gate-eval only; cap so a wedged runner can't hold the required
+    # check pending for GitHub's 6-hour default.
+    timeout-minutes: 10
     permissions:
       pull-requests: write
       contents: read
