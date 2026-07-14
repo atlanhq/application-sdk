@@ -292,11 +292,16 @@ class TestEmbeddedDaprLifecycle:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.chdir(tmp_path)
+        # The guard must fire before any env mutation — snapshot and confirm.
+        for k in ("DAPR_HTTP_PORT", "DAPR_GRPC_PORT", "DAPR_COMPONENTS_PATH"):
+            monkeypatch.delenv(k, raising=False)
         with pytest.raises(DaprComponentsConfigError, match="not both"):
             async with embedded_dapr(
                 components_dir=str(tmp_path), secrets_file=str(tmp_path / "s.json")
             ):
                 pass
+        for k in ("DAPR_HTTP_PORT", "DAPR_GRPC_PORT", "DAPR_COMPONENTS_PATH"):
+            assert k not in os.environ
 
     @pytest.mark.asyncio
     async def test_missing_components_dir_fails_fast(
@@ -308,6 +313,18 @@ class TestEmbeddedDaprLifecycle:
         missing = tmp_path / "does-not-exist"
         with pytest.raises(DaprComponentsDirNotFoundError):
             async with embedded_dapr(components_dir=str(missing)):
+                pass
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("blank", ["", "   "])
+    async def test_blank_components_dir_fails_fast(
+        self, blank: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A blank/whitespace components_dir must not slip past the guard —
+        Path("").is_dir() resolves to cwd and would boot daprd there."""
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(DaprComponentsDirNotFoundError):
+            async with embedded_dapr(components_dir=blank):
                 pass
 
     @pytest.mark.asyncio

@@ -327,7 +327,11 @@ async def embedded_dapr(
     directory and leaves it in place on exit (you own it). *components_dir* and
     *secrets_file* are mutually exclusive, and *objectstore_root* /
     *eventstore_root* are ignored when *components_dir* is set (your components
-    define those).
+    define those). The asymmetry is deliberate: *secrets_file* defaults to
+    ``None``, so a set value is unambiguous and conflicting with *components_dir*
+    is raised; the two roots have non-``None`` defaults, so a deliberately-set
+    value can't be told apart from the default and is silently ignored rather
+    than erroring.
 
     On entry the context manager sets ``DAPR_HTTP_PORT``, ``DAPR_GRPC_PORT``,
     and ``DAPR_COMPONENTS_PATH`` so callers (and any background observability
@@ -345,9 +349,12 @@ async def embedded_dapr(
         # do not delete the directory on exit. Validate now: an unchecked bad
         # path would otherwise surface ~30s later as a readiness timeout with no
         # hint that the path was the cause.
+        # Reject blank input explicitly: Path("").is_dir() is True (it resolves
+        # to cwd), so a blank components_dir would otherwise slip past and boot
+        # daprd against the working directory.
         components_path = Path(components_dir)
-        if not components_path.is_dir():
-            raise DaprComponentsDirNotFoundError(value_summary=str(components_path))
+        if not components_dir.strip() or not components_path.is_dir():
+            raise DaprComponentsDirNotFoundError(value_summary=repr(components_dir))
         _owns_components_dir = False
     else:
         components_path = Path(tempfile.mkdtemp(prefix="atlan-dapr-"))
