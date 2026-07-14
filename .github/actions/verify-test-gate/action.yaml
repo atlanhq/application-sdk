@@ -1,0 +1,34 @@
+name: Verify Tests Gate
+description: |
+  Evaluate the aggregator Tests Gate from the tests + e2e job results and fail
+  when any required job did not pass. The pass/fail logic lives in a tested
+  Python driver (per docs/standards/ci.md), co-located with this action so it's
+  checked out with the action when the reusable runs in a consumer repo.
+
+inputs:
+  tests-result:
+    description: needs.tests.result (unit + integration job).
+    required: true
+  discover-e2e-result:
+    description: needs.discover-e2e.result (skipped = e2e not requested).
+    required: true
+  e2e-result:
+    description: needs.e2e.result (matrix aggregate; skipped = not requested).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Verify all test jobs succeeded
+      shell: bash
+      # Route job results through env (quoted below), not inline ${{ }}.
+      env:
+        TESTS_RESULT: ${{ inputs.tests-result }}
+        DISCOVER_E2E_RESULT: ${{ inputs.discover-e2e-result }}
+        E2E_RESULT: ${{ inputs.e2e-result }}
+      run: |
+        set -euo pipefail
+        python3 "${{ github.action_path }}/verify_test_gate.py" \
+          --tests "$TESTS_RESULT" \
+          --discover-e2e "$DISCOVER_E2E_RESULT" \
+          --e2e "$E2E_RESULT"

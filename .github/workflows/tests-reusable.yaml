@@ -331,22 +331,14 @@ jobs:
             **Overall:** ${{ (needs.tests.result == 'success' && needs.discover-e2e.result != 'failure' && (needs.e2e.result == 'success' || needs.e2e.result == 'skipped')) && '✅ All passed' || '❌ Some failed' }} — [view run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
         continue-on-error: true
 
+      # Pass/fail logic lives in a tested Python driver (co-located with the
+      # action so it's checked out cross-repo) per docs/standards/ci.md, now
+      # that the gate spans three job results. Discovery skipped = e2e not
+      # requested (OK); discovery failed = requested but empty (fail). The e2e
+      # matrix aggregate is success only if every leg passed.
       - name: Verify all test jobs succeeded
-        run: |
-          if [ "${{ needs.tests.result }}" != "success" ]; then
-            echo "::error::tests job did not succeed (result=${{ needs.tests.result }})"
-            exit 1
-          fi
-          # Discovery skipped == e2e not requested (no label / not dispatched) → OK.
-          # Discovery failed == real infra error → fail (e2e legs never ran).
-          if [ "${{ needs.discover-e2e.result }}" != "success" ] && [ "${{ needs.discover-e2e.result }}" != "skipped" ]; then
-            echo "::error::e2e discovery did not succeed (result=${{ needs.discover-e2e.result }})"
-            exit 1
-          fi
-          # e2e matrix aggregate: success iff every leg passed; skipped when no
-          # label or zero suites discovered.
-          if [ "${{ needs.e2e.result }}" != "success" ] && [ "${{ needs.e2e.result }}" != "skipped" ]; then
-            echo "::error::one or more e2e suites did not succeed (result=${{ needs.e2e.result }})"
-            exit 1
-          fi
-          echo "All test jobs passed."
+        uses: atlanhq/application-sdk/.github/actions/verify-test-gate@main
+        with:
+          tests-result: ${{ needs.tests.result }}
+          discover-e2e-result: ${{ needs.discover-e2e.result }}
+          e2e-result: ${{ needs.e2e.result }}
