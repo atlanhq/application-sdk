@@ -224,7 +224,11 @@ def _call_is_assertion(call: ast.Call) -> bool:
     name = _call_attr_name(call)
     if name is None:
         return False
-    if name.lower().startswith("assert"):
+    # ``lstrip("_")`` so a project-local ``_assert_*`` helper is recognised — the
+    # documented vocabulary (see this module's docstring and the T005 rule's
+    # ``full_description``) lists it, but a leading underscore fails a bare
+    # ``startswith("assert")``.
+    if name.lower().lstrip("_").startswith("assert"):
         return True
     if name == "fail":
         return True

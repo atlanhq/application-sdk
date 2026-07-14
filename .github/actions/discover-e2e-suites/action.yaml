@@ -1,0 +1,37 @@
+name: Discover e2e suites
+description: |
+  Glob the caller's e2e test files (test_*.py under `test-dir`, default
+  tests/e2e/) and emit a GitHub Actions `strategy.matrix` so the full-DAG e2e
+  job fans out one leg per suite. Runs against the caller's checked-out tree,
+  so the SDK never hard-codes a connector's suites. The driver is co-located
+  with this action (checked out with it in consumer repos).
+
+inputs:
+  test-dir:
+    description: Directory to glob for test_*.py e2e suites.
+    required: false
+    default: tests/e2e
+
+outputs:
+  matrix:
+    description: JSON include-list for strategy.matrix; each entry has file and name.
+    value: ${{ steps.discover.outputs.matrix }}
+  count:
+    description: Number of discovered suites (0 means the e2e job should skip).
+    value: ${{ steps.discover.outputs.count }}
+
+runs:
+  using: composite
+  steps:
+    - name: Discover suites
+      id: discover
+      shell: bash
+      # Route the caller-supplied input through env (quoted below) rather than
+      # interpolating ${{ }} into the command string. github.action_path is a
+      # trusted GitHub context, so it stays inline.
+      env:
+        TEST_DIR: ${{ inputs.test-dir }}
+      run: |
+        set -euo pipefail
+        python3 "${{ github.action_path }}/discover_e2e_suites.py" \
+          --test-dir "$TEST_DIR" >> "$GITHUB_OUTPUT"

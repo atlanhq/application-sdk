@@ -83,14 +83,20 @@ on:
         type: string
         default: "app"
       private_git_auth:
-        description: "Set true if the app has a private-org (atlanhq) git dependency that `uv sync` must clone in the certify gate. When true, certify authenticates atlanhq GitHub remotes with ORG_PAT_GITHUB before installing deps, so the install succeeds and unit tests actually run. Default false — apps with only PyPI deps are unaffected."
+        description: "Set true if the app has a private-org (atlanhq) git dependency that `uv sync` must clone in the certify gate. When true, certify authenticates atlanhq GitHub remotes with a minted fleet App token before installing deps, so the install succeeds and unit tests actually run. Default false — apps with only PyPI deps are unaffected."
         required: false
         type: boolean
         default: false
     secrets:
       ORG_PAT_GITHUB:
         required: true
-        description: "Org-level PAT for GHCR login and gh CLI auth"
+        description: "Org-level PAT for GHCR login (the fleet App only has repo-level Packages permission; these packages are org-level) and, in the build job specifically, everything else that job needs too (the private-dependency git_token BuildKit secret) since it's already using the PAT for GHCR anyway. Also a fallback if the App token can't be minted elsewhere. Cross-repo checkout/dispatch steps in jobs that never touch GHCR (certify, leak-scan, app-deployment-dispatcher) use a minted atlan-app-fleet token instead — see the 'Mint fleet App token' steps."
+      FLEET_APP_ID:
+        required: false
+        description: "atlan-app-fleet App ID (org secret). Not passed explicitly by any current caller — auto-available via 'secrets: inherit', which every caller already uses. Declared here so the contract is self-documenting; a caller using explicit named secrets instead of inherit would need to list this too."
+      FLEET_APP_PRIVATE_KEY:
+        required: false
+        description: "atlan-app-fleet App private key (org secret). Same inherit-only availability as FLEET_APP_ID above."
       DOCKER_HUB_PAT_RW:
         required: false
         description: "DockerHub PAT (read/write) — only needed when atlan.yaml self_deployed_runtime=true"
@@ -394,19 +400,35 @@ jobs:
           path: app
           fetch-depth: 1
 
+      - name: Mint fleet App token
+        # Not scoped to a single repo: also used below to authenticate git
+        # config for the consumer app's own (arbitrary) private atlanhq deps.
+        # continue-on-error + the `|| secrets.ORG_PAT_GITHUB` fallback below:
+        # FLEET_APP_ID/FLEET_APP_PRIVATE_KEY are declared optional (every real
+        # caller uses secrets: inherit, so they're always available in
+        # practice) -- this is defense-in-depth so a caller that somehow
+        # doesn't provide them degrades to the old PAT instead of hard-failing.
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+
       - name: Checkout application-sdk (migration tooling)
         # tools.migrate_v3 ships in the SDK repo, not the published package —
         # pinned to main so the check tracks the latest released rules.
-        # ORG_PAT_GITHUB is required because this workflow runs in the context
+        # A token is required because this workflow runs in the context
         # of a consumer app repo whose GITHUB_TOKEN is scoped to that repo and
         # cannot read other org repos (even public ones via cross-repo reusable
-        # workflow invocations). An org PAT grants the necessary read access.
+        # workflow invocations). The fleet App token grants the necessary read access.
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: atlanhq/application-sdk
           ref: main
           path: sdk
-          token: ${{ secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
@@ -438,7 +460,7 @@ jobs:
       - name: Configure git auth for private dependencies
         if: ${{ inputs.private_git_auth }}
         env:
-          GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GIT_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
         run: |
           git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
           git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
@@ -646,11 +668,21 @@ jobs:
           path: app
           fetch-depth: 1
 
+      - name: Mint fleet App token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+
       - name: Checkout SDK gate assets
         # Pull only the vendored scanner + ruleset from the SDK at main, so the
         # gate is self-contained at publish time (no private cross-repo fetch of
-        # the connector-pulse nightly skill). ORG_PAT_GITHUB grants the
-        # cross-repo read a consumer app's scoped GITHUB_TOKEN cannot.
+        # the connector-pulse nightly skill). A token is required for the
+        # cross-repo read a consumer app's scoped GITHUB_TOKEN cannot do.
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: atlanhq/application-sdk
@@ -658,7 +690,7 @@ jobs:
           path: sdk
           sparse-checkout: .github/scripts/credential-leak-gate
           sparse-checkout-cone-mode: false
-          token: ${{ secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
 
       # ── Layer 1: deterministic hardcoded-secret scan (gitleaks) ───────────────
       - name: Install gitleaks
@@ -1111,6 +1143,10 @@ jobs:
           build-args: |
             ACCESS_TOKEN_USR=${{ github.actor }}
             ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
+          # This job already logs into GHCR with the PAT above, so there's no
+          # benefit to minting a separate App token just for this BuildKit
+          # secret (Dockerfiles cloning a private git dependency, e.g.
+          # atlan-query-redaction) -- the PAT is already in play either way.
           secrets: |
             git_token=${{ secrets.ORG_PAT_GITHUB }}
 
@@ -1297,10 +1333,20 @@ jobs:
       matrix:
         repo: ['atlanhq/atlan-apps-deployment']
     steps:
+      - name: Mint fleet App token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: atlan-apps-deployment
+
       - name: Repository Dispatch
         uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4.0.1
         with:
-          token: ${{ secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
           repository: ${{ matrix.repo }}
           event-type: dispatch_app_builder_workflow
           client-payload: |-

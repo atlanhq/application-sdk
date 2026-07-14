@@ -35,5 +35,4 @@ jobs:
       event_name: ${{ github.event_name }}
       head_sha: ${{ github.event.workflow_run.head_sha }}
       pr_number: ${{ inputs.pr_number }}
-    secrets:
-      org_pat: ${{ secrets.ORG_PAT_GITHUB }}
+    secrets: inherit
