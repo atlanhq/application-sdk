@@ -531,13 +531,17 @@ class TestSubmitWorkflowIdempotency:
 
     def test_is_already_active_detects_bare_409(self):
         assert _is_already_active_run(409, {"code": "AE-WF-409-03"}) is True
-        assert _is_already_active_run(409, "a run is already active") is True
+        # matched by code even in free-form text, case-insensitively
+        assert _is_already_active_run(409, "conflict: ae-wf-409-03") is True
 
     def test_is_already_active_ignores_plain_5xx_and_success(self):
         assert _is_already_active_run(500, {"error": "Internal Server Error"}) is False
         assert _is_already_active_run(503, {"err": "overloaded"}) is False
-        # never match a 2xx body even if it mentioned the phrase
-        assert _is_already_active_run(200, {"message": "already active"}) is False
+        # the generic "already active" phrase WITHOUT the AE-WF-409-03 code must
+        # NOT match — a transient 5xx that happens to mention it stays retryable
+        assert _is_already_active_run(503, "broker already active on node 2") is False
+        # never match a 2xx body even if it carried the code
+        assert _is_already_active_run(200, {"code": "AE-WF-409-03"}) is False
 
     def test_masked_409_raises_and_does_not_retry(self):
         """The masked-500 conflict must raise AtlanAEWorkflowAlreadyActiveError
@@ -547,6 +551,21 @@ class TestSubmitWorkflowIdempotency:
             patch.object(
                 client, "_request", return_value=(500, _MASKED_409_BODY)
             ) as mock_req,
+            patch("time.sleep") as mock_sleep,
+            pytest.raises(AtlanAEWorkflowAlreadyActiveError),
+        ):
+            client.submit_workflow({"any": "payload"})
+        assert mock_req.call_count == 1
+        mock_sleep.assert_not_called()
+
+    def test_bare_409_raises_and_does_not_retry(self):
+        """An unmasked 409 carrying AE-WF-409-03 must also raise
+        AtlanAEWorkflowAlreadyActiveError without retrying — submit's retryable
+        predicate only covers 5xx, and this conflict is terminal regardless."""
+        client = _make_client()
+        bare_409 = (409, {"code": "AE-WF-409-03", "message": "already active"})
+        with (
+            patch.object(client, "_request", return_value=bare_409) as mock_req,
             patch("time.sleep") as mock_sleep,
             pytest.raises(AtlanAEWorkflowAlreadyActiveError),
         ):

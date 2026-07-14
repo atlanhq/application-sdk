@@ -134,9 +134,12 @@ def _node_glyph(node) -> str:
 # AE returns "a run for workflow '<slug>' is already active" (code AE-WF-409-03)
 # when a submit collides with an in-flight run. Heracles (the tenant-facing
 # proxy in front of Automation Engine) masks that 409 as an HTTP 500 with the
-# original 409 text embedded in the message, so we detect the conflict by
-# marker regardless of the outer status.
-_ALREADY_ACTIVE_MARKERS = ("AE-WF-409-03", "already active")
+# original 409 text embedded in the message, so we detect the conflict by its
+# stable error code regardless of the outer status. We match on the code alone
+# (not the generic "already active" prose): the code is unambiguous, whereas the
+# phrase could appear in an unrelated, genuinely-transient 5xx and wrongly mark
+# it terminal.
+_ALREADY_ACTIVE_CODE = "AE-WF-409-03"
 
 
 def _is_already_active_run(status: int, body: Any) -> bool:
@@ -150,7 +153,7 @@ def _is_already_active_run(status: int, body: Any) -> bool:
     if status < 400:
         return False
     haystack = body if isinstance(body, str) else repr(body)
-    return any(marker in haystack for marker in _ALREADY_ACTIVE_MARKERS)
+    return _ALREADY_ACTIVE_CODE.casefold() in haystack.casefold()
 
 
 class DAGNodeStatus(str, Enum):
@@ -362,8 +365,10 @@ class AEWorkflowClient:
                     time.sleep(_REQUEST_BACKOFF_SECONDS)
         raise AtlanApiTimeoutError(
             message=(
-                f"{method} {path} failed after {_REQUEST_MAX_ATTEMPTS} attempts: "
-                f"{last_exc!r}"
+                # `attempt` is the actual count made — 1 when retries are
+                # disabled (submit), up to _REQUEST_MAX_ATTEMPTS otherwise — so
+                # a submit timeout doesn't misreport 4 tries when it made 1.
+                f"{method} {path} failed after {attempt} attempt(s): " f"{last_exc!r}"
             ),
             operation=path,
         )
@@ -610,17 +615,15 @@ class AEWorkflowClient:
         if _is_already_active_run(status, body):
             raise AtlanAEWorkflowAlreadyActiveError(
                 message=(
-                    "AE rejected the submit: a run for this workflow is already "
-                    "active (AE-WF-409-03). The initial submit was accepted "
-                    "server-side but its response was lost (AE latency / gateway "
-                    "timeout), and Heracles masks the AE 409 as HTTP 500. A run "
-                    "IS executing, but its run_id is unrecoverable via "
-                    "native-status (keyed by run_id). Not retrying — a retry "
-                    f"would spawn a duplicate Skipped run.\nresponse={body!r}"
-                ),
-                target=(
-                    "POST /api/service/package-workflows?submit=true "
-                    "(AE-WF-409-03 already active)"
+                    "AE rejected the submit to "
+                    "POST /api/service/package-workflows?submit=true: a run for "
+                    "this workflow is already active (AE-WF-409-03). The initial "
+                    "submit was accepted server-side but its response was lost "
+                    "(AE latency / gateway timeout), and Heracles masks the AE "
+                    "409 as HTTP 500. A run IS executing, but its run_id is "
+                    "unrecoverable via native-status (keyed by run_id). Not "
+                    "retrying — a retry would spawn a duplicate Skipped run.\n"
+                    f"response={body!r}"
                 ),
             )
         if status < 300 and isinstance(body, dict):
