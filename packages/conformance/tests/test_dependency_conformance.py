@@ -1020,6 +1020,27 @@ def test_d003_not_flagged_when_referenced_as_sqlalchemy_driver(tmp_path: Path) -
     assert findings == []
 
 
+def test_d003_dialect_driver_match_is_selective(tmp_path: Path) -> None:
+    """A non-empty dialect_drivers set suppresses only the matching driver — an
+    unrelated declared-but-unimported dependency is still flagged."""
+    findings = _d003_scan(
+        tmp_path,
+        "dependencies = [\n"
+        '    "atlan-application-sdk>=3.17.2,<4.0.0",\n'
+        '    "aiomysql>=0.2,<1",\n'
+        '    "requests>=2,<3",\n'
+        "]\n",
+        imported_modules={"os"},
+        dist_import_map={"aiomysql": {"aiomysql"}, "requests": {"requests"}},
+        dialect_drivers={"aiomysql"},
+    )
+    messages = [f.message for f in findings]
+    assert any("requests" in m for m in messages), "requests must still be flagged"
+    assert not any(
+        "aiomysql" in m for m in messages
+    ), "aiomysql is suppressed by the driver match"
+
+
 def test_d003_collects_dialect_driver_from_source_string(tmp_path: Path) -> None:
     """End-to-end: a ``mysql+aiomysql`` dialect string in source clears the
     aiomysql D003 finding without an explicit import or injected drivers."""
