@@ -247,11 +247,10 @@ runs:
             const stripped = startsWithMarker ? lines.slice(1).join('\n') : raw;
             body = sticky + '\n' + stripped.trimStart();
           } else {
-            // Resolved conclusion but no artifact — happens when the
-            // dispatched run failed/cancelled before its render step
-            // wrote pr-comment-body.md. Post a status-only sticky so
-            // the reviewer sees the outcome + run link without having
-            // to dig through the SDK PR's check_run list.
+            // The normal path: a slim status sticky. The dispatched run's own
+            // per-suite jobs (and their live logs) carry the detail, so we
+            // deliberately keep this to status + run link rather than
+            // reproducing a large report here.
             const titlesByWorkflow = {
               "tests.yaml": `Connector Tests — ${repoName}`,
             };
@@ -271,7 +270,7 @@ runs:
               `**Status:** ${statusLine}`,
               `**Dispatched run:** ${runLine}`,
               ``,
-              `> Cross-repo dispatch from this SDK PR. Detailed report unavailable — the dispatched run did not produce a results artifact.`,
+              `> Cross-repo dispatch from this SDK PR — per-suite results and live logs are in the dispatched run.`,
             ].join('\n');
           }
 
