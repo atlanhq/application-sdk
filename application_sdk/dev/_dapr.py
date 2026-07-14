@@ -340,23 +340,27 @@ async def embedded_dapr(
     restored on exit. An argument error (mutually-exclusive kwargs, or a
     bad/blank *components_dir*) raises before any env var is touched.
     """
+    # Validate arguments up front — before the expensive daprd download and port
+    # allocation — so a misconfigured call fails truly fast.
     if components_dir is not None and secrets_file is not None:
         raise DaprComponentsConfigError()
+    if components_dir is not None and (
+        # Reject blank input explicitly: Path("").is_dir() is True (it resolves
+        # to cwd), so a blank components_dir would otherwise slip past and boot
+        # daprd against the working directory. An unchecked bad path would
+        # otherwise surface ~30s later as a readiness timeout with no hint that
+        # the path was the cause.
+        not components_dir.strip() or not Path(components_dir).is_dir()
+    ):
+        raise DaprComponentsDirNotFoundError(value_summary=repr(components_dir))
 
     binary = _ensure_daprd_binary()
     http_port = _pick_free_port()
     grpc_port = _pick_free_port()
     if components_dir is not None:
         # Caller supplies (and owns) the component YAMLs — use them as-is and
-        # do not delete the directory on exit. Validate now: an unchecked bad
-        # path would otherwise surface ~30s later as a readiness timeout with no
-        # hint that the path was the cause.
-        # Reject blank input explicitly: Path("").is_dir() is True (it resolves
-        # to cwd), so a blank components_dir would otherwise slip past and boot
-        # daprd against the working directory.
+        # do not delete the directory on exit (validated above).
         components_path = Path(components_dir)
-        if not components_dir.strip() or not components_path.is_dir():
-            raise DaprComponentsDirNotFoundError(value_summary=repr(components_dir))
         _owns_components_dir = False
     else:
         components_path = Path(tempfile.mkdtemp(prefix="atlan-dapr-"))
