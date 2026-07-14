@@ -311,7 +311,7 @@ def test_format_generated_covers_all_py_not_just_input(tmp_path, monkeypatch):
 
     def spy_run(cmd, *, check=False):
         if cmd[:2] == ["uvx", "ruff"] and cmd[2] == "format":
-            formatted.extend(cmd[3:])
+            formatted.extend(a for a in cmd[3:] if not a.startswith("-"))
         return types.SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(mod, "run", spy_run)
@@ -380,6 +380,34 @@ def test_format_generated_lints_real_path_not_temp_dir(tmp_path, monkeypatch):
     linted_path = check_calls[0][-1]
     assert not Path(linted_path).is_absolute()
     assert linted_path == str(Path("app/generated/_input.py"))
+
+
+def test_format_generated_passes_force_exclude(tmp_path, monkeypatch):
+    """Both ruff invocations must pass `--force-exclude` so a consumer's
+    `extend-exclude = ["app/generated"]` is honored even though paths are named
+    explicitly (ruff ignores excludes for explicit paths otherwise). Without it,
+    this pass reformats an app that deliberately keeps generated output raw,
+    which the freshness gate then flags as drift (CNCT-70)."""
+    monkeypatch.chdir(tmp_path)
+    gen = tmp_path / "app" / "generated"
+    gen.mkdir(parents=True)
+    (gen / "_input.py").write_text("import os\n")
+
+    calls: list[list[str]] = []
+
+    def spy_run(cmd, *, check=False):
+        if cmd[:2] == ["uvx", "ruff"]:
+            calls.append(cmd)
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(mod, "run", spy_run)
+    mod._format_generated()
+
+    subcommands = {cmd[2] for cmd in calls}
+    assert subcommands == {"check", "format"}
+    for cmd in calls:
+        assert "--force-exclude" in cmd, cmd
+        assert cmd[-1] == str(Path("app/generated/_input.py"))
 
 
 def test_resolve_failure_is_fatal(repo, monkeypatch):
