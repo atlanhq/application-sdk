@@ -40,10 +40,10 @@ on:
     secrets:
       ORG_PAT_GITHUB:
         required: true
-        description: "Org PAT for GHCR auth (App tokens only have repo-level Packages permission; these packages are org-level)."
+        description: "Org PAT for GHCR auth, the git_token BuildKit secret, and Install Trivy's release lookup -- the build/trivy-scan jobs already need it for GHCR (App tokens only have repo-level Packages permission; these packages are org-level), so everything else in those jobs uses it uniformly too rather than minting a redundant App token."
       FLEET_APP_ID:
         required: false
-        description: "atlan-app-fleet App ID (org secret). Not passed explicitly by any current caller — auto-available via 'secrets: inherit'. Declared here so the contract is self-documenting."
+        description: "atlan-app-fleet App ID (org secret), used only by security-gate's cross-repo SDK checkout (that job never touches GHCR). Not passed explicitly by any current caller — auto-available via 'secrets: inherit'. Declared here so the contract is self-documenting."
       FLEET_APP_PRIVATE_KEY:
         required: false
         description: "atlan-app-fleet App private key (org secret). Same availability as FLEET_APP_ID above."
@@ -94,19 +94,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.ORG_PAT_GITHUB }}
 
-      - name: Mint fleet App token
-        # Not scoped to a specific repositories: list -- the private git
-        # dependency a caller's Dockerfile clones (e.g. atlan-query-redaction)
-        # varies per app and isn't known here, so this needs org-wide reach,
-        # same as ae-stack-up's sibling-repo clones.
-        id: app-token
-        continue-on-error: true
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
-        with:
-          app-id: ${{ secrets.FLEET_APP_ID }}
-          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
-          owner: atlanhq
-
       - name: Build image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
@@ -118,13 +105,15 @@ jobs:
           cache-from: type=gha,scope=scan
           cache-to: type=gha,mode=max,scope=scan
           provenance: false
-          # Forward the token as a BuildKit secret too, so Dockerfiles that clone a
+          # Forward the org PAT as a BuildKit secret too, so Dockerfiles that clone a
           # private git dependency via `--mount=type=secret,id=git_token` (e.g. apps
           # pulling atlan-query-redaction) can authenticate during the scan build.
           # Ignored by Dockerfiles that don't mount it, so it's a no-op for every other
-          # app. Mirrors the token the deploy/publish workflow already provides.
+          # app. Mirrors the token the deploy/publish workflow already provides. This
+          # job already logs into GHCR with the PAT above, so there's no benefit to
+          # minting a separate App token just for this -- the PAT is already in play.
           secrets: |
-            git_token=${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+            git_token=${{ secrets.ORG_PAT_GITHUB }}
 
       - name: Upload image artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -160,19 +149,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.ORG_PAT_GITHUB }}
 
-      - name: Mint fleet App token
-        id: app-token
-        continue-on-error: true
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
-        with:
-          app-id: ${{ secrets.FLEET_APP_ID }}
-          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
-          owner: atlanhq
-          repositories: ${{ github.event.repository.name }}
-
       - name: Install Trivy
+        # This job logs into GHCR with the PAT above whenever inputs.image is
+        # set (the build-and-publish-app.yaml call path), so minting a
+        # separate App token just for this single release-lookup call isn't
+        # worth the complexity -- use the PAT uniformly in this job instead.
         env:
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+          GITHUB_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
         run: |
           TRIVY_VERSION=$(curl -s -H "Authorization: Bearer ${GITHUB_TOKEN}" \
             https://api.github.com/repos/aquasecurity/trivy/releases/latest \
