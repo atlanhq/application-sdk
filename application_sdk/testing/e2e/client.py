@@ -104,6 +104,7 @@ _NODE_GLYPHS = {
     "Pending": "🟡",
     "Cancelled": "🚫",
     "TimedOut": "⏰",
+    "Skipped": "⏭️",
 }
 _RUN_GLYPHS = {
     "Succeeded": "✅",
@@ -112,6 +113,7 @@ _RUN_GLYPHS = {
     "Pending": "🟡",
     "Cancelled": "🚫",
     "TimedOut": "⏰",
+    "Skipped": "⏭️",
 }
 
 
@@ -138,6 +140,10 @@ class DAGNodeStatus(str, Enum):
     FAILED = "Failed"
     ERROR = "Error"
     CANCELLED = "Cancelled"
+    # AE emits this when a node is bypassed (e.g. an opted-out DAG leg, or
+    # every downstream node once an upstream one fails). Terminal but not a
+    # success — a skipped node will not run without re-submission.
+    SKIPPED = "Skipped"
 
     @property
     def is_terminal(self) -> bool:
@@ -147,6 +153,7 @@ class DAGNodeStatus(str, Enum):
             DAGNodeStatus.FAILED,
             DAGNodeStatus.ERROR,
             DAGNodeStatus.CANCELLED,
+            DAGNodeStatus.SKIPPED,
         }
 
     @property
@@ -164,6 +171,12 @@ class DAGRunStatus(str, Enum):
     FAILED = "Failed"
     ERROR = "Error"
     CANCELLED = "Cancelled"
+    # A run AE never executed — e.g. deduplicated against an in-flight run, or
+    # every node opted out. Terminal: recognising it lets poll_native_status
+    # return the true outcome immediately instead of mapping the unknown value
+    # to PENDING and waiting out the full stall grace, which surfaces as a
+    # misleading NoWorkerOnTaskQueueError.
+    SKIPPED = "Skipped"
 
     @property
     def is_terminal(self) -> bool:
@@ -172,6 +185,7 @@ class DAGRunStatus(str, Enum):
             DAGRunStatus.FAILED,
             DAGRunStatus.ERROR,
             DAGRunStatus.CANCELLED,
+            DAGRunStatus.SKIPPED,
         }
 
 
