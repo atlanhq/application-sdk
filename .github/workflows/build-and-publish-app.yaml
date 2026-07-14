@@ -90,7 +90,7 @@ on:
     secrets:
       ORG_PAT_GITHUB:
         required: true
-        description: "Org-level PAT for GHCR login and private-dependency build auth (Category C). Cross-repo checkout/dispatch steps use a minted atlan-app-fleet token instead — see the 'Mint fleet App token' steps."
+        description: "Org-level PAT for GHCR login (the fleet App only has repo-level Packages permission; these packages are org-level) and, in the build job specifically, everything else that job needs too (the private-dependency git_token BuildKit secret) since it's already using the PAT for GHCR anyway. Also a fallback if the App token can't be minted elsewhere. Cross-repo checkout/dispatch steps in jobs that never touch GHCR (certify, leak-scan, app-deployment-dispatcher) use a minted atlan-app-fleet token instead — see the 'Mint fleet App token' steps."
       FLEET_APP_ID:
         required: false
         description: "atlan-app-fleet App ID (org secret). Not passed explicitly by any current caller — auto-available via 'secrets: inherit', which every caller already uses. Declared here so the contract is self-documenting; a caller using explicit named secrets instead of inherit would need to list this too."
@@ -1143,6 +1143,10 @@ jobs:
           build-args: |
             ACCESS_TOKEN_USR=${{ github.actor }}
             ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
+          # This job already logs into GHCR with the PAT above, so there's no
+          # benefit to minting a separate App token just for this BuildKit
+          # secret (Dockerfiles cloning a private git dependency, e.g.
+          # atlan-query-redaction) -- the PAT is already in play either way.
           secrets: |
             git_token=${{ secrets.ORG_PAT_GITHUB }}
 
