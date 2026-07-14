@@ -260,3 +260,25 @@ def _body_always_raises(body: list[ast.stmt]) -> bool:
         ):
             return True
     return False
+
+
+def _body_has_bypassing_exit(body: list[ast.stmt]) -> bool:
+    """True when some path through *body* leaves the handler without a
+    trace-preserving re-raise.
+
+    ``_body_always_raises`` only proves that *a* guaranteeing raise is reached;
+    it does not see a path that bypasses it. A ``return``/``break``/``continue``
+    before that raise swallows the exception, and a ``raise ... from None``
+    discards the traceback — either breaks the "swallows nothing, trace intact"
+    contract, so the handler must not be exempted. Scanned shallowly (nested
+    ``def``/``class`` bodies are excluded, since a ``return`` there belongs to
+    the inner scope). Conservative by design: over-firing merely re-introduces a
+    suppression, whereas under-firing hides a real swallow (WARN tier).
+    """
+    for stmt in body:
+        for node in (stmt, *_iter_shallow(stmt)):
+            if isinstance(node, (ast.Return, ast.Break, ast.Continue)):
+                return True
+            if isinstance(node, ast.Raise) and not _raise_preserves_trace(node):
+                return True
+    return False

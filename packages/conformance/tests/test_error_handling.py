@@ -426,6 +426,52 @@ except Exception as e:
     )
 
 
+def test_p004_still_flags_swallow_in_branch_before_reraise() -> None:
+    # A branch that returns (swallows) before the trailing re-raise means not
+    # every path re-raises — E004 must still fire.
+    assert "E004" in _findings(
+        """\
+def f():
+    try:
+        run()
+    except Exception as e:
+        if quiet(e):
+            return None
+        raise AppError("f") from e
+"""
+    )
+
+
+def test_p004_still_flags_from_none_in_branch_before_reraise() -> None:
+    # A `raise ... from None` on a branch before the trailing re-raise discards
+    # the trace on that path — E004 must still fire.
+    assert "E004" in _findings(
+        """\
+try:
+    run()
+except Exception as e:
+    if isinstance(e, TimeoutError):
+        raise AppTimeout("t") from None
+    raise AppError("f") from e
+"""
+    )
+
+
+def test_p004_no_finding_when_benign_branch_then_reraise() -> None:
+    # A branch that does work but does NOT early-exit still reaches the trailing
+    # re-raise on every path — stays exempt (guards against over-firing).
+    assert "E004" not in _findings(
+        """\
+try:
+    run()
+except Exception as e:
+    if noisy(e):
+        logger.info("context")
+    raise AppError("f") from e
+"""
+    )
+
+
 # ── P005 — ExceptBlockMissingExcInfo ─────────────────────────────────────────
 
 
