@@ -77,9 +77,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Mint fleet App token
+        # Dismissing a review or editing a label doesn't require any specific
+        # identity (unlike posting the codeowner approval itself, which must
+        # come from atlan-ci) -- just PR write access, which the App has.
+        # This workflow only ever runs directly in application-sdk (issue_comment/
+        # pull_request_review triggers, not workflow_call), so the org-wide
+        # FLEET_APP_ID/FLEET_APP_PRIVATE_KEY secrets are always available here.
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+
       - name: Dismiss @sdk-review atlan-ci approval(s)
         env:
-          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           # For pull_request_review events the PR number is at
           # event.pull_request.number; for issue_comment on a PR it's

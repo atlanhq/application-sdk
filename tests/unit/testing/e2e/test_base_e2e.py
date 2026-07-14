@@ -22,7 +22,7 @@ from application_sdk.testing.e2e._errors import (
     MissingHarnessEnvError,
 )
 from application_sdk.testing.e2e.base import BaseE2ETest
-from application_sdk.testing.e2e.payload import RunMode
+from application_sdk.testing.e2e.payload import AgentSpec, RunMode
 from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
 
 
@@ -316,6 +316,9 @@ class TestTwoStoreDirectModeWarning:
 
         class _DirectModeTest(_ConcreteE2ETest):
             connection_admin_roles = ("test-admin-role-guid",)
+            # Isolate this test to the two-store warning (disable the stall-guard
+            # DIRECT warning, covered separately below).
+            ae_stall_grace_seconds = 0
 
         _DirectModeTest().setup_method()
 
@@ -345,6 +348,9 @@ class TestTwoStoreDirectModeWarning:
 
         class _DirectModeTest(_ConcreteE2ETest):
             connection_admin_roles = ("test-admin-role-guid",)
+            # Disable the stall-guard DIRECT warning so this test isolates the
+            # two-store path (covered separately below).
+            ae_stall_grace_seconds = 0
 
         _DirectModeTest().setup_method()
 
@@ -481,3 +487,102 @@ class TestWorkerUpTier:
         )
         with pytest.raises(AssertionError, match="did not become healthy"):
             harness.assert_worker_up()
+
+
+class TestStallGuardDirectModeWarning:
+    """setup_method nudges toward the =0 opt-out when the stall guard is armed
+    under RunMode.DIRECT, where a KEDA-idle pod can cold-start past the grace.
+    """
+
+    def _bootstrap_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ATLAN_BASE_URL", "https://test.example.invalid")
+        monkeypatch.setenv("ATLAN_API_KEY", "test-token")
+        monkeypatch.setenv("GITHUB_RUN_ID", "9999999")
+        monkeypatch.delenv("TWO_STORE", raising=False)
+
+    def _warn_messages(self, mock_logger: MagicMock) -> list[str]:
+        return [c.args[0] for c in mock_logger.warning.call_args_list]
+
+    def test_warns_when_direct_and_guard_armed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._bootstrap_env(monkeypatch)
+        mock_logger = MagicMock()
+        monkeypatch.setattr("application_sdk.testing.e2e.base.logger", mock_logger)
+
+        class _DirectGuarded(_ConcreteE2ETest):  # DIRECT + default grace 180
+            connection_admin_roles = ("test-admin-role-guid",)
+
+        _DirectGuarded().setup_method()
+
+        assert any(
+            "ae_stall_grace_seconds" in m for m in self._warn_messages(mock_logger)
+        )
+
+    def test_no_warning_when_guard_disabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._bootstrap_env(monkeypatch)
+        mock_logger = MagicMock()
+        monkeypatch.setattr("application_sdk.testing.e2e.base.logger", mock_logger)
+
+        class _DirectUnguarded(_ConcreteE2ETest):
+            connection_admin_roles = ("test-admin-role-guid",)
+            ae_stall_grace_seconds = 0
+
+        _DirectUnguarded().setup_method()
+
+        mock_logger.warning.assert_not_called()
+
+    def test_no_warning_when_mode_is_agent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._bootstrap_env(monkeypatch)
+        mock_logger = MagicMock()
+        monkeypatch.setattr("application_sdk.testing.e2e.base.logger", mock_logger)
+
+        # AGENT + default grace 180 → the stall guard is fine (dedicated worker).
+        _AgentModeE2ETest().setup_method()
+
+        assert not any(
+            "ae_stall_grace_seconds" in m for m in self._warn_messages(mock_logger)
+        )
+
+
+# ---------------------------------------------------------------------------
+# _extract_task_queue
+# ---------------------------------------------------------------------------
+
+
+class TestExtractTaskQueue:
+    """The extract task queue is the single source of truth shared by the seed
+    DAG and the stall-guard diagnostic (must match the deployed worker's queue).
+    """
+
+    def test_agent_mode_uses_agent_name(self) -> None:
+        class _AgentModeTest(_ConcreteE2ETest):
+            mode = RunMode.AGENT
+
+            def agent_spec(self) -> AgentSpec:
+                return AgentSpec(agent_name="openapi-e2e-full-ci-42")
+
+        assert _AgentModeTest()._extract_task_queue() == "atlan-openapi-e2e-full-ci-42"
+
+    def test_direct_mode_falls_back_to_connector_default(self) -> None:
+        # _ConcreteE2ETest is RunMode.DIRECT → agent_spec() is None.
+        assert _ConcreteE2ETest()._extract_task_queue() == "atlan-openapi-default"
+
+
+class TestStallGuardDefault:
+    """The stall guard is on by default (test-harness only), and a suite that
+    runs against shared / autoscaled infra can disable it by setting 0.
+    """
+
+    def test_enabled_by_default(self) -> None:
+        assert _ConcreteE2ETest.ae_stall_grace_seconds == 180
+
+    def test_subclass_can_opt_out(self) -> None:
+        class _OptedOut(_ConcreteE2ETest):
+            ae_stall_grace_seconds = 0
+
+        assert _OptedOut.ae_stall_grace_seconds == 0

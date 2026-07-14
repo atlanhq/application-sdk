@@ -144,6 +144,18 @@ on:
           worker-up-only check (assert the worker deploys + serves
           /server/health) and skips extraction/publish/Atlas assertions,
           until the owner provisions a source.
+      e2e-parallel-workers:
+        required: false
+        type: string
+        default: ""
+        description: |
+          Opt-in pytest-xdist parallelism for the e2e job. Empty (default)
+          runs the e2e suite sequentially — unchanged behaviour. Set to a
+          worker count (e.g. "2") or "auto" to run mutually-independent e2e
+          test classes concurrently against the shared CI worker (xdist is
+          pulled in on the fly, distributed by loadscope). Only enable when
+          the suite's classes are independent (own connections + AE workflow
+          slugs).
 
 jobs:
 
@@ -270,6 +282,8 @@ jobs:
           container-health-timeout-seconds: "120"
           # `-s` streams the harness poll-loop output in real time.
           pytest-extra-args: "-s"
+          # Opt-in e2e parallelism (empty = sequential, unchanged default).
+          pytest-parallel-workers: ${{ inputs.e2e-parallel-workers }}
           application-sdk-ref: ${{ inputs.application-sdk-ref }}
           base-image-ref: ${{ inputs.base-image-ref }}
           enable-two-store: ${{ inputs.two-store }}
