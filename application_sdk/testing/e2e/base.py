@@ -482,6 +482,12 @@ class BaseE2ETest:
         run-id-keyed shape connectors used to hard-code in an override). That
         keeps local runs working with no override while CI (which always exports
         the per-leg ``ATLAN_DEPLOYMENT_NAME``) still gets the exact worker queue.
+        For a local full-DAG run you must start the connector worker on this same
+        run-id queue explicitly — it is **not** what ``main._derive_task_queue``
+        builds from the same partial env, so the worker won't land there on its
+        own. A one-line ``logger.warning`` is emitted on the fallback path so a
+        CI leg that reaches it (env genuinely mis-set) gets an actionable log
+        line rather than a silent stall.
 
         Subclasses should **not** override this to pin a hard-coded run-id name:
         doing so drops the per-leg suffix the worker inherits and desyncs the two
@@ -504,11 +510,28 @@ class BaseE2ETest:
         # queue. So for a local full-DAG run the worker must be started on this
         # same agent_name queue explicitly; CI is unaffected (it always exports
         # both vars, taking the exact-match branch above).
-        return AgentSpec(
-            agent_name=(
-                f"{self.connector_short_name}-{self.connection_name_prefix}-{self.run_id}"
-            )
+        agent_name = (
+            f"{self.connector_short_name}-{self.connection_name_prefix}-{self.run_id}"
         )
+        # Fire loud: in CI both vars are always exported, so reaching this branch
+        # there means the env is mis-set and the worker will poll a different
+        # queue → silent stall until the run-full-dag stall guard trips. Naming
+        # both vars makes a mis-set CI leg immediately actionable. (On a genuine
+        # local run this is just an FYI that you must start the worker on this
+        # queue.)
+        logger.warning(
+            "AGENT-mode agent_spec fell back to the run-id queue %r because "
+            "ATLAN_APPLICATION_NAME and/or ATLAN_DEPLOYMENT_NAME is unset "
+            "(app=%r deployment=%r). In CI both are always exported, so a mis-set "
+            "leg here will stall — the worker polls atlan-{app}-{deployment}, not "
+            "atlan-%s. Locally, start the connector worker on atlan-%s.",
+            agent_name,
+            app_name,
+            deployment_name,
+            agent_name,
+            agent_name,
+        )
+        return AgentSpec(agent_name=agent_name)
 
     def connection_spec(self) -> ConnectionSpec:
         """Where the resulting Atlas Connection will live."""

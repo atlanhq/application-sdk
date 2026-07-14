@@ -500,7 +500,8 @@ class TestAgentSpecDerivation:
     # silently regress one. run_id is normally set by setup_method() from
     # GITHUB_RUN_ID; these minimal instances deliberately bypass setup_method
     # (see _ConcreteE2ETest), so they pin run_id as a class attribute rather than
-    # mutating the instance post-construction.
+    # mutating the instance post-construction. run_id must be an int — production
+    # sets it via int(GITHUB_RUN_ID) (setup_method), so 42 matches that type.
     class _AgentModeFixed(_ConcreteE2ETest):
         mode = RunMode.AGENT
         run_id = 42
