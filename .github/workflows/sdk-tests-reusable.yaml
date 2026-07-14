@@ -31,9 +31,18 @@ jobs:
         os: [ubuntu-22.04, macOS-latest, windows-latest]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Mint fleet App token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: ${{ github.event.repository.name }}
       - uses: "./.github/actions/unit-tests"
         with:
-          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          github-token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
           fail-under: "85"
           python-version: ${{ matrix.python-version }}
 

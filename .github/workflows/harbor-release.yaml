@@ -106,6 +106,16 @@ jobs:
           username: ${{ secrets.CHAINGUARD_USERNAME }}
           password: ${{ secrets.CHAINGUARD_PASSWORD }}
 
+      - name: Mint fleet App token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: ${{ github.event.repository.name }}
+
       - name: Build, scan, and push image to Harbor
         id: harbor_docker_build
         uses: ./.github/actions/secure-build-push-apps
@@ -116,10 +126,7 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.image_tags.outputs.value }}
-          build-args: |
-            ACCESS_TOKEN_USR=$GITHUB_ACTOR
-            ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
-          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          github-token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
         env:
           DOCKER_CLIENT_TIMEOUT: 600
           COMPOSE_HTTP_TIMEOUT: 600

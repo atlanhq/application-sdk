@@ -90,7 +90,7 @@ on:
     secrets:
       ORG_PAT_GITHUB:
         required: true
-        description: "Org-level PAT for GHCR login and private-dependency build auth (Category C). Cross-repo checkout/dispatch steps use a minted atlan-app-fleet token instead — see the 'Mint fleet App token' steps."
+        description: "Org-level PAT for GHCR login (the fleet App only has repo-level Packages permission; these packages are org-level) and as a fallback if the App token can't be minted. Cross-repo checkout/dispatch and private-dependency git-clone steps use a minted atlan-app-fleet token instead — see the 'Mint fleet App token' steps."
       FLEET_APP_ID:
         required: false
         description: "atlan-app-fleet App ID (org secret). Not passed explicitly by any current caller — auto-available via 'secrets: inherit', which every caller already uses. Declared here so the contract is self-documenting; a caller using explicit named secrets instead of inherit would need to list this too."
@@ -1126,6 +1126,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.ORG_PAT_GITHUB }}
 
+      - name: Mint fleet App token
+        # Not scoped to a specific repositories: list -- the private git
+        # dependency a caller's Dockerfile clones (e.g. atlan-query-redaction)
+        # varies per app and isn't known here, so this needs org-wide reach,
+        # same as ae-stack-up's sibling-repo clones.
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+
       - name: Build and push arch image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
@@ -1140,11 +1153,8 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-          build-args: |
-            ACCESS_TOKEN_USR=${{ github.actor }}
-            ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
           secrets: |
-            git_token=${{ secrets.ORG_PAT_GITHUB }}
+            git_token=${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
 
   # ── Job 3: Merge arch digests into a single multi-arch manifest ───────────────
   merge:
