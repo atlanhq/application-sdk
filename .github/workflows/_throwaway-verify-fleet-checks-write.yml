@@ -1,0 +1,53 @@
+# Throwaway verification workflow — delete after confirming the App works.
+#
+# #2630/#2634 confirmed the atlan-app-fleet App mints a token with an
+# isolated identity + rate limit. #2635 confirmed it can dispatch
+# cross-repo workflows. Neither tested the one thing that actually broke
+# the reverted e2e check-run callback (#2526): the Checks API's write
+# endpoints (create/update a check run) reject PATs outright ("You must
+# authenticate via a GitHub App") — only a real GitHub App installation
+# token works. This confirms that specific call before rebuilding the
+# callback design around it.
+name: _throwaway Verify Fleet App Checks Write
+on: workflow_dispatch
+
+permissions: {}
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mint fleet App token (scoped to this repo)
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+
+      - name: Create a scratch check run
+        id: create
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          response=$(gh api --method POST repos/atlanhq/application-sdk/check-runs \
+            -f name="_throwaway-fleet-checks-write-test" \
+            -f "head_sha=${{ github.sha }}" \
+            -f status=in_progress)
+          echo "$response"
+          echo "id=$(echo "$response" | jq -r .id)" >> "$GITHUB_OUTPUT"
+
+      - name: Complete the scratch check run
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          CHECK_RUN_ID: ${{ steps.create.outputs.id }}
+        run: |
+          set -euo pipefail
+          gh api --method PATCH "repos/atlanhq/application-sdk/check-runs/${CHECK_RUN_ID}" \
+            -f status=completed \
+            -f conclusion=success \
+            -f 'output[title]=Fleet App checks-write test' \
+            -f 'output[summary]=Confirmed: atlan-app-fleet can create + complete check runs.'
+          echo "Checks API write access confirmed via the Fleet App token."

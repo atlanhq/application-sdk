@@ -40,6 +40,13 @@ on:
     secrets:
       ORG_PAT_GITHUB:
         required: true
+        description: "Org PAT for GHCR auth, the git_token BuildKit secret, and Install Trivy's release lookup -- the build/trivy-scan jobs already need it for GHCR (App tokens only have repo-level Packages permission; these packages are org-level), so everything else in those jobs uses it uniformly too rather than minting a redundant App token."
+      FLEET_APP_ID:
+        required: false
+        description: "atlan-app-fleet App ID (org secret), used only by security-gate's cross-repo SDK checkout (that job never touches GHCR). Not passed explicitly by any current caller — auto-available via 'secrets: inherit'. Declared here so the contract is self-documenting."
+      FLEET_APP_PRIVATE_KEY:
+        required: false
+        description: "atlan-app-fleet App private key (org secret). Same availability as FLEET_APP_ID above."
 
 permissions:
   contents: read
@@ -105,7 +112,9 @@ jobs:
           # private git dependency via `--mount=type=secret,id=git_token` (e.g. apps
           # pulling atlan-query-redaction) can authenticate during the scan build.
           # Ignored by Dockerfiles that don't mount it, so it's a no-op for every other
-          # app. Mirrors the token the deploy/publish workflow already provides.
+          # app. Mirrors the token the deploy/publish workflow already provides. This
+          # job already logs into GHCR with the PAT above, so there's no benefit to
+          # minting a separate App token just for this -- the PAT is already in play.
           secrets: |
             git_token=${{ secrets.ORG_PAT_GITHUB }}
 
@@ -144,6 +153,10 @@ jobs:
           password: ${{ secrets.ORG_PAT_GITHUB }}
 
       - name: Install Trivy
+        # This job logs into GHCR with the PAT above whenever inputs.image is
+        # set (the build-and-publish-app.yaml call path), so minting a
+        # separate App token just for this single release-lookup call isn't
+        # worth the complexity -- use the PAT uniformly in this job instead.
         env:
           GITHUB_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
         run: |
@@ -184,6 +197,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Mint fleet App token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+
       - name: Checkout base allowlist from SDK
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -193,7 +216,7 @@ jobs:
             .security
             .github/scripts
           path: _sdk
-          token: ${{ secrets.ORG_PAT_GITHUB }}
+          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
 
       - name: Download Trivy results
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8

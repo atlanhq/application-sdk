@@ -12,10 +12,19 @@ jobs:
   stale:
     runs-on: ubuntu-latest
     steps:
+      - name: Mint fleet App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+
       - name: Close Stale PRs
         uses: actions/stale@1e223db275d687790206a7acac4d1a11bd6fe629 # v10
         with:
-          repo-token: ${{ secrets.ORG_PAT_GITHUB }}
+          repo-token: ${{ steps.app-token.outputs.token }}
           stale-issue-message: 'Stale Issue'
           stale-pr-message: 'Stale Pull Request'
           stale-issue-label: 'Stale'

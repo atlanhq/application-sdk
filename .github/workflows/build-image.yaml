@@ -83,6 +83,9 @@ jobs:
           build-args: |
             ACCESS_TOKEN_USR=$GITHUB_ACTOR
             ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
+          # This job already logs into GHCR with ORG_PAT_GITHUB above, so
+          # there's no benefit to minting a separate App token just for this
+          # generic GHA-cache-API auth -- the PAT is already in play either way.
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
         env:
           DOCKER_CLIENT_TIMEOUT: 600
