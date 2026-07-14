@@ -213,6 +213,9 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
+          build-args: |
+            ACCESS_TOKEN_USR=${{ github.actor }}
+            ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
 
   # ── Job 3: Merge arch digests into a single multi-arch manifest ───────────────
   merge:

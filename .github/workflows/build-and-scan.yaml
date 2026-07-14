@@ -105,6 +105,9 @@ jobs:
           cache-from: type=gha,scope=scan
           cache-to: type=gha,mode=max,scope=scan
           provenance: false
+          build-args: |
+            ACCESS_TOKEN_USR=${{ github.actor }}
+            ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
           # Forward the org PAT as a BuildKit secret too, so Dockerfiles that clone a
           # private git dependency via `--mount=type=secret,id=git_token` (e.g. apps
           # pulling atlan-query-redaction) can authenticate during the scan build.

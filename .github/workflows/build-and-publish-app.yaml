@@ -1140,6 +1140,9 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
+          build-args: |
+            ACCESS_TOKEN_USR=${{ github.actor }}
+            ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
           # This job already logs into GHCR with the PAT above, so there's no
           # benefit to minting a separate App token just for this BuildKit
           # secret (Dockerfiles cloning a private git dependency, e.g.

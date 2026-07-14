@@ -80,6 +80,9 @@ jobs:
           platforms: linux/amd64,linux/arm64
           tags: |
             ghcr.io/atlanhq/app-runtime-base-${{ needs.prepare.outputs.lowercase_branch }}:sha-${{ needs.prepare.outputs.sha }}
+          build-args: |
+            ACCESS_TOKEN_USR=$GITHUB_ACTOR
+            ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
           # This job already logs into GHCR with ORG_PAT_GITHUB above, so
           # there's no benefit to minting a separate App token just for this
           # generic GHA-cache-API auth -- the PAT is already in play either way.
