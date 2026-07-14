@@ -1,0 +1,51 @@
+name: Verify Tests Gate
+description: |
+  Evaluate the aggregator Tests Gate from the tests + e2e job results. Emits the
+  pass/fail decision AND the human-readable status strings the PR summary table
+  renders, so the displayed status and the enforced result share one tested
+  source of truth (docs/standards/ci.md). The caller enforces via a branch-free
+  `if: outputs.passed != 'true'` step — this action never exits non-zero itself.
+  Co-located driver, checked out with the action in consumer repos.
+
+inputs:
+  tests-result:
+    description: needs.tests.result (unit + integration job).
+    required: true
+  discover-e2e-result:
+    description: needs.discover-e2e.result (skipped = e2e not requested).
+    required: true
+  e2e-result:
+    description: needs.e2e.result (matrix aggregate; skipped = not requested).
+    required: true
+
+outputs:
+  passed:
+    description: '"true" when every required job passed, else "false".'
+    value: ${{ steps.gate.outputs.passed }}
+  tests-status:
+    description: Human-readable status for the tests row.
+    value: ${{ steps.gate.outputs.tests-status }}
+  e2e-status:
+    description: Human-readable status for the e2e row.
+    value: ${{ steps.gate.outputs.e2e-status }}
+  overall-status:
+    description: Human-readable overall status.
+    value: ${{ steps.gate.outputs.overall-status }}
+
+runs:
+  using: composite
+  steps:
+    - name: Evaluate Tests Gate
+      id: gate
+      shell: bash
+      # Route job results through env (quoted below), not inline ${{ }}.
+      env:
+        TESTS_RESULT: ${{ inputs.tests-result }}
+        DISCOVER_E2E_RESULT: ${{ inputs.discover-e2e-result }}
+        E2E_RESULT: ${{ inputs.e2e-result }}
+      run: |
+        set -euo pipefail
+        python3 "${{ github.action_path }}/verify_test_gate.py" \
+          --tests "$TESTS_RESULT" \
+          --discover-e2e "$DISCOVER_E2E_RESULT" \
+          --e2e "$E2E_RESULT" >> "$GITHUB_OUTPUT"

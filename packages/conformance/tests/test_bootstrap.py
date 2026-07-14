@@ -944,6 +944,12 @@ def test_tests_yaml_contains_secrets_inherit() -> None:
     assert "secrets: inherit" in content
 
 
+def test_renovate_pkl_sync_yaml_contains_secrets_inherit() -> None:
+    content = render("renovate-pkl-sync.yaml")
+    assert "secrets: inherit" in content
+    assert "push_token" not in content
+
+
 def test_tests_yaml_default_app_name() -> None:
     content = render("tests.yaml")
     assert 'app-name: "app"' in content

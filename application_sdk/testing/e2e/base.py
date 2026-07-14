@@ -32,6 +32,7 @@ To skip the whole class when the harness env isn't configured::
 from __future__ import annotations
 
 import os
+import secrets
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -315,12 +316,20 @@ class BaseE2ETest:
         # connection_type overrides connector_short_name when the Atlan
         # catalog type segment differs from the connector's app name (e.g.
         # OpenAPI: connector_short_name="openapi", connection_type="api").
-        # The name is pure epoch seconds so Atlas never rejects it for
-        # containing hyphens or alpha characters.
+        #
+        # The trailing segment must be unique per test *instance*: with the e2e
+        # matrix, each suite runs as a separate parallel job whose setup_method
+        # can land in the same wall-clock second as another leg's, and rapid
+        # same-ref pushes can overlap too. A shared connection QN would let one
+        # leg's teardown purge another's assets and mix Atlas counts. epoch
+        # alone (1-second resolution) can't guarantee that, so append random
+        # digits. Kept PURE NUMERIC so Atlas never rejects the name for hyphens
+        # or alpha characters (agent queue + AE slug are already run-id-scoped
+        # and unique per run; this closes the connection-QN gap).
         _conn_type = self.connection_type or self.connector_short_name
-        _epoch = int(time.time())
-        self.connection_qualified_name = f"default/{_conn_type}/{_epoch}"
-        self.connection_display_name = f"{_conn_type}-{_epoch}"
+        _unique = f"{int(time.time())}{secrets.randbelow(1_000_000):06d}"
+        self.connection_qualified_name = f"default/{_conn_type}/{_unique}"
+        self.connection_display_name = f"{_conn_type}-{_unique}"
 
         # Atlas requires at least one non-empty admin list on a Connection
         # (ATLAS-400-00-114). When the subclass leaves all three admin attrs
