@@ -36,6 +36,12 @@ def _bootstrap_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ATLAN_BASE_URL", "https://test.example.invalid")
     monkeypatch.setenv("ATLAN_API_KEY", "test-token")
     monkeypatch.setenv("GITHUB_RUN_ID", "9999999")
+    # Keep the deployment env absent by default so the run_id template path is
+    # deterministic regardless of the ambient CI environment; the env-derivation
+    # test sets both explicitly. Clear both vars (not just DEPLOYMENT) so the
+    # gate is hermetic against an ambient ATLAN_APPLICATION_NAME.
+    monkeypatch.delenv("ATLAN_APPLICATION_NAME", raising=False)
+    monkeypatch.delenv("ATLAN_DEPLOYMENT_NAME", raising=False)
 
 
 def test_agent_spec_agent_mode_uses_run_id_template(
@@ -50,6 +56,25 @@ def test_agent_spec_agent_mode_uses_run_id_template(
     assert isinstance(agent, AgentSpec)
     # Default connection_name_prefix = "e2e-full-ci"; run_id = 9999999.
     assert agent.agent_name == "mysql-e2e-full-ci-9999999"
+
+
+def test_agent_spec_prefers_env_derivation_when_deployment_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Per-leg isolation: when ATLAN_APPLICATION_NAME + ATLAN_DEPLOYMENT_NAME are
+    set (the CI worker's env), the agent name — and thus the extract queue — is
+    derived from them (atlan-{app}-{deployment}), not the run_id template, so SQL
+    matrix legs stay on their own per-leg queue. Mirrors the e2e module.
+    """
+    _bootstrap_env(monkeypatch)
+    monkeypatch.setenv("ATLAN_APPLICATION_NAME", "mysql")
+    monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "e2e-full-ci-9999999-connection-reuse")
+    cls = _make_test()
+    instance = cls()
+    instance.setup_method()
+    agent = instance.agent_spec()
+    assert agent is not None
+    assert agent.agent_name == "mysql-e2e-full-ci-9999999-connection-reuse"
 
 
 def test_agent_spec_direct_mode_returns_none(
