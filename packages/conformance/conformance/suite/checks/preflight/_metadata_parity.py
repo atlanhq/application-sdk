@@ -120,14 +120,39 @@ def _str_const(node: ast.expr) -> str | None:
     )
 
 
+def _config_allows_extra(value: ast.expr) -> bool:
+    """True if a ``model_config`` value opts into extra keys.
+
+    Both pydantic v2 forms count and mirror the SDK runtime check
+    (``base.py`` ``model_config.get("extra") == "allow"``): the
+    ``ConfigDict(extra="allow")`` call and the dict literal ``{"extra": "allow"}``.
+    """
+    if isinstance(value, ast.Call):
+        return any(
+            kw.arg == "extra"
+            and isinstance(kw.value, ast.Constant)
+            and kw.value.value == "allow"
+            for kw in value.keywords
+        )
+    if isinstance(value, ast.Dict):
+        return any(
+            isinstance(k, ast.Constant)
+            and k.value == "extra"
+            and isinstance(v, ast.Constant)
+            and v.value == "allow"
+            for k, v in zip(value.keys, value.values)
+        )
+    return False
+
+
 def _opts_into_extra_keys(name: str, reg: Registry, seen: set[str]) -> bool:
     """True if *name* or an in-repo ancestor keeps undeclared keys (``extra="allow"``).
 
-    Only a genuine ``model_config = ConfigDict(extra="allow")`` counts. Note that
-    ``allow_unbounded_fields=True`` does NOT: it only skips payload-safety type
-    validation (``application_sdk/contracts/base.py`` ``__init_subclass__``); the
-    extra policy stays pydantic-default ``"ignore"``, so undeclared metadata keys
-    are still dropped — exactly the drift P035 must keep catching.
+    Only a genuine ``model_config`` opting into extras counts (``ConfigDict(extra="allow")``
+    or the dict-literal form). Note that ``allow_unbounded_fields=True`` does NOT: it only
+    skips payload-safety type validation (``application_sdk/contracts/base.py``
+    ``__init_subclass__``); the extra policy stays pydantic-default ``"ignore"``, so
+    undeclared metadata keys are still dropped — exactly the drift P035 must keep catching.
     """
     if name in seen:
         return False
@@ -146,12 +171,10 @@ def _opts_into_extra_keys(name: str, reg: Registry, seen: set[str]) -> bool:
         is_model_config = any(
             isinstance(t, ast.Name) and t.id == "model_config" for t in targets
         )
-        if is_model_config and isinstance(stmt.value, ast.Call):
-            for kw in stmt.value.keywords:
-                if (
-                    kw.arg == "extra"
-                    and isinstance(kw.value, ast.Constant)
-                    and kw.value.value == "allow"
-                ):
-                    return True
+        if (
+            is_model_config
+            and stmt.value is not None
+            and _config_allows_extra(stmt.value)
+        ):
+            return True
     return any(_opts_into_extra_keys(base, reg, seen) for base in rec.bases)

@@ -429,6 +429,24 @@ def test_p035_silent_when_contract_allows_extra_keys(tmp_path: Path) -> None:
     assert [f.rule_id for f in _scan(tmp_path, files)] == []
 
 
+def test_p035_silent_on_dict_literal_extra_allow(tmp_path: Path) -> None:
+    # The pydantic v2 dict-literal form opts into extras just like ConfigDict → no parity claim.
+    app = (
+        _APP_IMPORTS
+        + "class ExtractInput(Input):\n"
+        + '    model_config = {"extra": "allow"}\n'
+        + "    include_filter: dict = {}\n"
+        + "class A(App):\n"
+        + "    @entrypoint()\n"
+        + "    async def extract(self, input: ExtractInput) -> None: ...\n"
+    )
+    files = {
+        "app.py": app,
+        "h.py": _handler_reading('x = input.metadata.get("anything")'),
+    }
+    assert [f.rule_id for f in _scan(tmp_path, files)] == []
+
+
 def test_p035_fires_despite_allow_unbounded_fields(tmp_path: Path) -> None:
     # allow_unbounded_fields only skips payload-safety type checks; the extra policy
     # stays "ignore", so undeclared keys are still dropped and P035 must still fire.
