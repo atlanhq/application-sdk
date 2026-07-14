@@ -5,7 +5,7 @@
 
 # Test-Quality Rules (T-series)
 
-**16 rules** · Checker: `suite.checks.integration_marking` (T001), `suite.checks.sdr_test_checks` (T002-T003), `suite.checks.dev_entrypoint` (T004), `suite.checks.test_quality` (T005-T009), `suite.checks.test_structure` (T010-T013), and `suite.checks.coverage_config` (T014-T015) (AST/TOML-based)
+**17 rules** · Checker: `suite.checks.integration_marking` (T001), `suite.checks.sdr_test_checks` (T002-T003), `suite.checks.dev_entrypoint` (T004), `suite.checks.test_quality` (T005-T009), `suite.checks.test_structure` (T010-T013), and `suite.checks.coverage_config` (T014-T015) (AST/TOML-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -31,6 +31,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [T014](#t014) | `CoverageGateDisabled` | `warn` | `app` | `coverage-config` | — | 0.12.0 |
 | [T015](#t015) | `CoverageOmitsProductCode` | `warn` | `app` | `coverage-config` | — | 0.12.0 |
 | [T016](#t016) | `E2EDeploymentNameNotInherited` | `warn` | `app` | `e2e-ci` | — | 0.13.0 |
+| [T017](#t017) | `E2EAgentSpecPinsQueue` | `warn` | `app` | `e2e-ci` | — | 0.13.0 |
 
 ---
 
@@ -683,5 +684,64 @@ A bare pass-through list entry (`- ATLAN_DEPLOYMENT_NAME` with no `=`) is also a
 Suppress with `# conformance: ignore[T016] <reason>` on the assignment line only when
 the overlay is intentionally single-queue (never fans out across matrix legs) and the
 hard-coded name is deliberate.
+
+---
+
+## T017 — `E2EAgentSpecPinsQueue` {#t017}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `e2e-ci` · **Autofixable:** — · **Since:** 0.13.0
+
+> e2e agent_spec() override hard-codes the queue instead of inheriting the per-leg ATLAN_DEPLOYMENT_NAME
+
+**Rationale:** The companion to T016. T016 polices the worker side (the compose overlay must inherit
+the sdr-e2e per-leg ATLAN_DEPLOYMENT_NAME); T017 polices the harness side. The worker
+derives its Temporal queue as atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME},
+and the harness derives the extract-node queue it dispatches to from the same two env
+vars via BaseE2ETest.agent_spec. An e2e test that overrides agent_spec with a hard-coded
+agent_name (e.g. AgentSpec(agent_name=f'metabase-e2e-full-ci-{self.run_id}')) that
+neither reads ATLAN_DEPLOYMENT_NAME nor calls super().agent_spec() pins the harness to
+the un-suffixed queue. Once the worker inherits the leg-suffixed value (T016), the two
+queues diverge, no worker polls the harness's queue, the extract node stays Running, and
+the run hangs — the exact atlan-metabase-app regression where the overlay was fixed but
+agent_spec was left hard-coded. Fixing the overlay (T016) and the agent_spec (T017) is a
+matched pair: applying one without the other breaks a previously-passing e2e.
+
+An `agent_spec` override under `tests/` returns a hard-coded `AgentSpec(agent_name=...)`
+(a plain string or an f-string such as `f"myconn-e2e-full-ci-{self.run_id}"`) without
+referencing `ATLAN_DEPLOYMENT_NAME` or calling `super().agent_spec()`.
+
+The harness builds its extract-node Temporal queue as `atlan-{agent_spec().agent_name}`.
+When the worker inherits the sdr-e2e per-leg `ATLAN_DEPLOYMENT_NAME`
+(`e2e-full-ci-<run_id>[-<leg>]`) but the harness pins a hard-coded
+`...-e2e-full-ci-<run_id>` name, the two land on different queues — no worker polls the
+harness's queue and the run hangs with `No Workers Running`.
+
+**Remediation (preferred): delete the override.** `BaseE2ETest.agent_spec` derives
+`atlan-{app}-{deployment}` from the worker's own env in CI and falls back to
+`{connector_short_name}-{connection_name_prefix}-{run_id}` locally, so no override is
+needed on either path — the harness picks up the per-leg suffix automatically and always
+matches the worker queue.
+
+If the override must stay (e.g. to pin a genuinely different agent identity), make it
+read the deployment env — defer to `super().agent_spec()` when `ATLAN_APPLICATION_NAME`
++ `ATLAN_DEPLOYMENT_NAME` are set, keeping the run-id name only as a local fallback
+(mirroring `SQLAppE2ETest.agent_spec`):
+
+```python
+def agent_spec(self) -> AgentSpec:
+    if os.environ.get('ATLAN_APPLICATION_NAME') and os.environ.get(
+        'ATLAN_DEPLOYMENT_NAME'
+    ):
+        return super().agent_spec()
+    return AgentSpec(agent_name=f'myconn-e2e-full-ci-{self.run_id}')
+```
+
+A connector that does not override `agent_spec` at all (inheriting the SDK's env-derived
+default) is never flagged. This rule and T016 are a matched pair — remediate both the
+overlay and the agent_spec together, never one alone.
+
+Suppress with `# conformance: ignore[T017] <reason>` on the `def agent_spec` line only
+when the hard-coded queue is deliberate (e.g. a single-leg suite that never fans out and
+whose overlay also hard-codes the same un-suffixed value).
 
 ---

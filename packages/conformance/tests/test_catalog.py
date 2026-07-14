@@ -191,6 +191,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # connector apps ship a .github/e2e/ docker-compose overlay for the full-DAG
     # worker; the SDK has no such overlay to grade (the sdr-e2e action that
     # derives the per-leg value lives here, but it is not a compose overlay).
+    # T017: e2e agent_spec() override must inherit the per-leg deployment queue —
+    # only connector apps subclass the e2e harness and (may) override agent_spec;
+    # the SDK ships the env-derived default, it doesn't hard-code a connector queue.
     assert app_scoped == {
         "B001",
         "C002",
@@ -241,6 +244,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "T014",
         "T015",
         "T016",
+        "T017",
         "O002",
         "O003",
         "O004",

@@ -108,15 +108,24 @@ the code that ships:
   narrowed ``source``) excludes real product code under ``app/`` — inflating
   the reported percentage by hiding uncovered code from the denominator.
 
-e2e-CI queue-isolation rule:
+e2e-CI queue-isolation rules (a matched pair — the worker's queue and the
+harness's queue must agree; remediate both together, never one alone):
 
-* ``T016`` — E2EDeploymentNameNotInherited: an e2e CI docker-compose overlay
-  under ``.github/`` hard-codes ``ATLAN_DEPLOYMENT_NAME`` in a service's
-  ``environment`` instead of inheriting the per-leg value the SDK's ``sdr-e2e``
-  action exports to ``$GITHUB_ENV``. A hard-coded value overrides the inherited
-  env, so the worker container polls a different Temporal queue than the harness
-  dispatches to (dropping the matrix-leg suffix) → ``No Workers Running`` and a
-  ~20-min CI hang (observed on atlan-mysql-app).
+* ``T016`` — E2EDeploymentNameNotInherited (worker side): an e2e CI
+  docker-compose overlay under ``.github/`` hard-codes ``ATLAN_DEPLOYMENT_NAME``
+  in a service's ``environment`` instead of inheriting the per-leg value the
+  SDK's ``sdr-e2e`` action exports to ``$GITHUB_ENV``. A hard-coded value
+  overrides the inherited env, so the worker container polls a different Temporal
+  queue than the harness dispatches to (dropping the matrix-leg suffix) →
+  ``No Workers Running`` and a ~20-min CI hang (observed on atlan-mysql-app).
+
+* ``T017`` — E2EAgentSpecPinsQueue (harness side): an ``agent_spec`` override
+  under ``tests/`` returns a hard-coded ``AgentSpec(agent_name=...)`` that
+  neither reads ``ATLAN_DEPLOYMENT_NAME`` nor calls ``super().agent_spec()``,
+  pinning the harness's extract queue to the un-suffixed name. Once the worker
+  inherits the leg-suffixed value (T016), the two diverge and the run hangs —
+  the atlan-metabase-app regression where the overlay was fixed but the
+  agent_spec was left hard-coded.
 """
 
 from __future__ import annotations
@@ -1013,6 +1022,85 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t016"
+        ),
+    ),
+    RuleDefinition(
+        id="T017",
+        scope=RuleScope.APP,
+        name="E2EAgentSpecPinsQueue",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="e2e-ci",
+        autofixable=False,
+        since="0.13.0",
+        rationale=(
+            "The companion to T016. T016 polices the worker side (the compose "
+            "overlay must inherit the sdr-e2e per-leg ATLAN_DEPLOYMENT_NAME); "
+            "T017 polices the harness side. The worker derives its Temporal queue "
+            "as atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}, and the "
+            "harness derives the extract-node queue it dispatches to from the same "
+            "two env vars via BaseE2ETest.agent_spec. An e2e test that overrides "
+            "agent_spec with a hard-coded agent_name (e.g. "
+            "AgentSpec(agent_name=f'metabase-e2e-full-ci-{self.run_id}')) that "
+            "neither reads ATLAN_DEPLOYMENT_NAME nor calls super().agent_spec() "
+            "pins the harness to the un-suffixed queue. Once the worker inherits "
+            "the leg-suffixed value (T016), the two queues diverge, no worker polls "
+            "the harness's queue, the extract node stays Running, and the run hangs "
+            "— the exact atlan-metabase-app regression where the overlay was fixed "
+            "but agent_spec was left hard-coded. Fixing the overlay (T016) and the "
+            "agent_spec (T017) is a matched pair: applying one without the other "
+            "breaks a previously-passing e2e."
+        ),
+        short_description=(
+            "e2e agent_spec() override hard-codes the queue instead of inheriting "
+            "the per-leg ATLAN_DEPLOYMENT_NAME"
+        ),
+        full_description=(
+            "An ``agent_spec`` override under ``tests/`` returns a hard-coded\n"
+            "``AgentSpec(agent_name=...)`` (a plain string or an f-string such as\n"
+            "``f\"myconn-e2e-full-ci-{self.run_id}\"``) without referencing\n"
+            "``ATLAN_DEPLOYMENT_NAME`` or calling ``super().agent_spec()``.\n"
+            "\n"
+            "The harness builds its extract-node Temporal queue as\n"
+            "``atlan-{agent_spec().agent_name}``. When the worker inherits the\n"
+            "sdr-e2e per-leg ``ATLAN_DEPLOYMENT_NAME`` (``e2e-full-ci-<run_id>[-<leg>]``)\n"
+            "but the harness pins a hard-coded ``...-e2e-full-ci-<run_id>`` name,\n"
+            "the two land on different queues — no worker polls the harness's\n"
+            "queue and the run hangs with ``No Workers Running``.\n"
+            "\n"
+            "**Remediation (preferred): delete the override.**\n"
+            "``BaseE2ETest.agent_spec`` derives ``atlan-{app}-{deployment}`` from\n"
+            "the worker's own env in CI and falls back to\n"
+            "``{connector_short_name}-{connection_name_prefix}-{run_id}`` locally,\n"
+            "so no override is needed on either path — the harness picks up the\n"
+            "per-leg suffix automatically and always matches the worker queue.\n"
+            "\n"
+            "If the override must stay (e.g. to pin a genuinely different agent\n"
+            "identity), make it read the deployment env — defer to\n"
+            "``super().agent_spec()`` when ``ATLAN_APPLICATION_NAME`` +\n"
+            "``ATLAN_DEPLOYMENT_NAME`` are set, keeping the run-id name only as a\n"
+            "local fallback (mirroring ``SQLAppE2ETest.agent_spec``)::\n"
+            "\n"
+            "    def agent_spec(self) -> AgentSpec:\n"
+            "        if os.environ.get('ATLAN_APPLICATION_NAME') and os.environ.get(\n"
+            "            'ATLAN_DEPLOYMENT_NAME'\n"
+            "        ):\n"
+            "            return super().agent_spec()\n"
+            "        return AgentSpec(agent_name=f'myconn-e2e-full-ci-{self.run_id}')\n"
+            "\n"
+            "A connector that does not override ``agent_spec`` at all (inheriting\n"
+            "the SDK's env-derived default) is never flagged. This rule and T016\n"
+            "are a matched pair — remediate both the overlay and the agent_spec\n"
+            "together, never one alone.\n"
+            "\n"
+            "Suppress with ``# conformance: ignore[T017] <reason>`` on the\n"
+            "``def agent_spec`` line only when the hard-coded queue is deliberate\n"
+            "(e.g. a single-leg suite that never fans out and whose overlay also\n"
+            "hard-codes the same un-suffixed value).\n"
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/tests.md#t017"
         ),
     ),
 )
