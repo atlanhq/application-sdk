@@ -29,7 +29,7 @@ staleness_days: 90
 inputs:
   - app_root: "auto-detected — the directory containing app/ and pyproject.toml"
 outputs:
-  - pyproject.toml / uv.lock (SDK bumped to a gate-capable release)
+  - uv.lock (SDK upgraded to a gate-capable release; pyproject floor left unchanged unless it excluded that release)
   - app/handler.py (status logic per the agreed check tree; typed errors on failed checks)
   - deleted app-owned preflight @task + call sites (collision class, plus any duplicate readiness activities the developer agrees to consolidate — always with a coverage diff)
   - contract/app.pkl + regenerated app/generated/ (only if form-only metadata keys must move onto the input contract)
@@ -141,10 +141,27 @@ Run these detections and report the bucket(s) before changing anything:
    input's `model_dump`; a UI-form-only key is **absent** — a hard `[...]` read
    crashes (fail-open), a defensive `.get(..., default)` silently runs the
    check with wrong config. Every unmatched key needs a decision in phase 2.
+7. **Multi-credential class** — an app that needs more than one credential to
+   verify a source (e.g. an API token AND an object-store credential), whose
+   per-auth-type guids live in separate input fields, not on the single
+   top-level `credential_guid` triple. The gate resolves only that one triple,
+   so the symptom on the gate path is the handler receiving `credentials=[]`,
+   defaulting to one auth type, and raising missing-credential on every gated
+   run (100% fail-open). Detect by: multiple `*_credential_guid` fields on the
+   input contract, or a handler that resolves guids itself (`CredentialResolver`
+   / `get_credentials` called inside `preflight_check`). If found, the app
+   adopts the SDK `preflight_credential_refs` primitive in phase 2 (see 2g) — it
+   must NOT hand-roll credential resolution or the fail-open taxonomy.
 
 ## Phase 1 — Bump and boot
 
-1. Bump `atlan-application-sdk` to the latest release; `uv sync --all-extras --all-groups`.
+1. Pull the latest gate-capable `atlan-application-sdk` **without raising the
+   floor** in `pyproject.toml`: `uv lock --upgrade-package atlan-application-sdk`
+   then `uv sync --all-extras --all-groups`. This upgrades the lockfile to the
+   newest release the existing constraint allows — the gate and the
+   multi-credential primitive ship within the current major, so the declared
+   floor does not need to move. Only edit the pyproject constraint if the
+   existing floor actually excludes the release you need.
 2. **Boot the worker.** Boot is the collision detector.
 3. Collision fix (if bucket 1): delete the app's `@task preflight`, its call
    site in the workflow, and any now-orphaned private preflight input/output
@@ -344,6 +361,57 @@ During the interactive session: when the developer picks the same leaf with
 the same custom message/action for two or more checks, proactively offer to
 extract a subclass into `app/failures.py`.
 
+### 2g. Multi-credential apps — declare named refs, don't hand-roll
+
+Only if phase 0 flagged the multi-credential class. The gate resolves exactly
+one credential off the top-level triple, so an app with per-auth-type guids
+must tell the gate which guids to resolve — **declaratively**. Do not
+re-implement resolution or the outage-vs-not-found taxonomy in the handler:
+that boilerplate is dangerous (a store outage misread as a bad credential
+blocks healthy runs), and the SDK now owns the one correct implementation.
+
+Declare a `ClassVar` map of ref-name → the input field holding that guid, on
+the extraction input:
+
+```python
+class MyAppExtractionInput(ExtractionInput):
+    preflight_credential_refs: ClassVar[dict[str, str]] = {
+        "api": "api_credential_guid",
+        "object_store": "object_store_credential_guid",
+    }
+```
+
+The gate resolves each guid inside the activity under one fail-open taxonomy
+(confirmed outage → the workflow fails open, never blocks; genuine not-found →
+an empty group so the handler decides `NOT_READY`) and hands the handler the
+results grouped by name:
+
+```python
+async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+    api = input.credentials_by_name["api"]
+    obj = input.credentials_by_name.get("object_store", [])
+    ...
+```
+
+Guardrails:
+
+- It MUST be a `ClassVar`, not a pydantic field. Declared as a field, the gate
+  reads `{}` and silently falls back to the single-triple path (the SDK logs a
+  boot-time warning if you get this wrong — but do not rely on catching it late).
+- The named guids must be top-level fields on the input contract (the gate reads
+  them from the extraction-input snapshot). If they arrive nested under AE
+  `metadata`, lift them onto the contract — the same fix as the phase-0
+  silent-drift audit.
+- Delete the app's hand-rolled credential resolution + taxonomy once the
+  primitive is in; that consolidation is the point (one correct implementation
+  in the SDK). Coverage diff still applies (north-star corollary 3).
+- Single-credential apps declare nothing and keep the top-level triple path —
+  zero change.
+
+This primitive ships in the SDK release the phase-1 lock upgrade pulls; if
+`PreflightInput.credentials_by_name` / `preflight_credential_refs` aren't present
+on the installed SDK, the upgrade didn't land — re-run phase 1 before adopting.
+
 ## Phase 3 — Tests (mandatory, thorough)
 
 Update or write unit tests so every verdict path is pinned. Minimum matrix:
@@ -377,6 +445,11 @@ Do not claim done with anything less.
   bug.
 - Skipping the boot check before pushing a bump → collision discovered as a
   prod crash-loop instead of locally.
+- Multi-credential app hand-rolling credential resolution + fail-open taxonomy
+  in the handler → dangerous duplication (a store outage misread as a bad
+  credential blocks healthy runs). Use `preflight_credential_refs` +
+  `credentials_by_name` (2g); declare it as a `ClassVar` — a pydantic field
+  silently no-ops back to the single-triple path.
 
 ## Agent protocol — stop points and what to report at each
 

@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.21.2
-source-sha:    e8aa593940749e0ff3c76a52690ccbfcaf34e20a
-source-date:   2026-07-10T16:41:00+05:30
+sdk-version:   3.22.0
+source-sha:    8bdaa81a4244445f68f68f20abbf00b1e9969904
+source-date:   2026-07-14T20:57:58+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2713,12 +2713,13 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Summary:** Input for the preflight_check handler operation.
 - **Fields:**
   - `credentials: list[HandlerCredential]` `= []` — Credentials to use during preflight.
+  - `credentials_by_name: dict[str, list[HandlerCredential]]` `= Field(default_factory=dict)` — Resolved credentials grouped by the app's declared
   - `entrypoint: str` `= ''` — Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative
   - `entrypoint_ref: str` `= Field(default='', validation_alias=(AliasChoices('entrypoint_ref', 'connector')), serialization_alias='connector')` — App-qualified entry-point reference (``{app_name}-{entrypoint.name}``).
   - `connection_config: BaseConnectionConfig` `= Field(default_factory=BaseConnectionConfig)` — Connection configuration (host, port, database, etc.).
   - `metadata: BaseMetadataConfig` `= Field(default_factory=BaseMetadataConfig)` — Form-level metadata forwarded by heracles alongside the credential.
   - `checks_to_run: list[str]` `= []` — Specific checks to run (empty = run all).
-  - `timeout_seconds: int` `= 60` — Maximum seconds to wait for all checks.
+  - `timeout_seconds: int` `= 60` — Maximum seconds the handler has to run all checks.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `PreflightOutput`
@@ -2792,6 +2793,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import ExtractionInput`
 - **Summary:** Top-level input for a SQL metadata extraction run.
 - **Fields:**
+  - `preflight_credential_refs: dict[str, str]` `= {}` — Opt-in map of ``{ref_name: guid_field}`` for multi-credential apps.
   - `workflow_id: str` `= ''` — Temporal workflow ID for this run.
   - `connection: ConnectionRef` `= Field(default_factory=ConnectionRef)` — Typed connection reference (qualified name, name, admin users, etc.).
   - `credential_guid: str` `= ''` — GUID of credentials stored in the secret store.
