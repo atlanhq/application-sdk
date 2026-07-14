@@ -1621,7 +1621,7 @@ async def _run_preflight_gate(
     # Success: the activity already emitted the proceeded outcome event.
 
 
-def _validate_workflow_input(raw_input: Any, input_type: type) -> Any:
+def _validate_workflow_input(raw_input: Any, input_type: type[Input]) -> Input:
     """Validate a decoded workflow payload against the entry point's typed contract.
 
     The generated workflow declares its argument to Temporal with a permissive
@@ -1739,6 +1739,13 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
 
         # Fail fast on a malformed / wrong-typed payload, before any setup runs.
         # Enforces the entry point's typed contract at the workflow boundary.
+        #
+        # Placement is deliberate: this MUST stay above the outer try/except below
+        # (which re-wraps exceptions into ApplicationError). _validate_workflow_input
+        # already raises a non_retryable=True ApplicationError; moving this call
+        # inside that block would re-wrap it with non_retryable derived from
+        # RetryableError membership, flipping it back to retryable and
+        # reintroducing the indefinite Workflow Task retry loop this fix removes.
         input_data = _validate_workflow_input(input_data, input_type)
 
         start_time = _safe_now()

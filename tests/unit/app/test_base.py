@@ -32,6 +32,7 @@ from application_sdk.app.base import (
     _safe_now,
     _safe_uuid,
     _scan_entrypoints,
+    _validate_workflow_input,
     _workflow_class_cache,
     _wrap_instance_tasks,
     generate_workflow_class,
@@ -1167,6 +1168,14 @@ class TestGenerateWorkflowClass:
         assert getattr(exc.value, "type", None) == "InputValidationError"
         # The entry method never ran — we failed before any app code.
         assert ran == []
+
+    def test_validate_workflow_input_returns_typed_instance_unchanged(self) -> None:
+        """An already-typed instance is returned as the same object (fast-path),
+        not re-validated into a copy. Guards against a future refactor silently
+        dropping the ``isinstance`` early return."""
+        instance = _BLDXInput(value="hi")
+        result = _validate_workflow_input(instance, _BLDXInput)
+        assert result is instance
 
     def _patched_workflow_layer(self, info_mock: mock.MagicMock):
         """Returns a contextlib.ExitStack wired with the patches every _run test needs."""
