@@ -161,6 +161,19 @@ inputs:
       never sets this.
     required: false
     default: "false"
+  source-available:
+    description: |
+      Whether an extraction source is provisioned for this connector in CI.
+      Sourcing is the app owner's responsibility. When "true" (default) the
+      full-DAG e2e runs unchanged (extract -> publish -> assert assets in
+      Atlas). When "false" the run degrades to a worker-up-only check — the
+      harness asserts only that the app worker deploys and serves
+      /server/health, and skips extraction/publish/Atlas assertions (read by
+      BaseE2ETest.setup_method via the E2E_SOURCE_AVAILABLE env var). Apps
+      with no free container / no wired credentials set this false until they
+      provision a source.
+    required: false
+    default: "true"
   ghcr-token:
     description: |
       Optional token used to authenticate the GHCR login for the test-image
@@ -550,6 +563,9 @@ runs:
         # Read by BaseE2ETest.setup_method() to warn if two-store is on
         # but the test class runs in RunMode.DIRECT, where it has no effect.
         TWO_STORE: ${{ inputs.enable-two-store }}
+        # Read by BaseE2ETest.setup_method(): "false" degrades the full-DAG
+        # e2e to a worker-up-only check when no source is provisioned.
+        E2E_SOURCE_AVAILABLE: ${{ inputs.source-available }}
       run: |
         mkdir -p results
         set +e

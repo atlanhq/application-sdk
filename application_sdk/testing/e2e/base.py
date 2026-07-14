@@ -33,6 +33,8 @@ from __future__ import annotations
 
 import os
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
@@ -145,6 +147,24 @@ class BaseE2ETest:
     mode: ClassVar[RunMode] = RunMode.DIRECT
     app_service_url: ClassVar[str] = ""
 
+    # --- source-availability tier --------------------------------------
+    # Sourcing is the app owner's responsibility. When a connector has NO
+    # extraction source provisioned in CI (no free container, and no
+    # app-owner-supplied credentials), the full-DAG e2e can't extract
+    # anything, so it degrades to a worker-up-only check: assert the app
+    # worker deployed and serves /server/health, then stop — no extraction,
+    # publish, or Atlas assertions. The full DAG runs only when a source is
+    # present. Flipped per-run by the E2E_SOURCE_AVAILABLE env var (set from
+    # the sdr-e2e action's `source-available` input); default True so
+    # connectors that already have a source run the full DAG unchanged.
+    source_available: ClassVar[bool] = True
+    # Health endpoint the worker-up tier probes. The CI worker container
+    # serves it on localhost:8000 (the sdr-e2e action gates on the same URL
+    # before pytest). Override via E2E_WORKER_HEALTH_URL for other topologies.
+    worker_health_url: ClassVar[str] = "http://localhost:8000/server/health"
+    worker_health_timeout_seconds: ClassVar[int] = 120
+    worker_health_poll_interval_seconds: ClassVar[int] = 3
+
     # --- optional class attrs ------------------------------------------
     connection_type: ClassVar[str] = ""
     connection_category: ClassVar[str] = "warehouse"
@@ -231,6 +251,29 @@ class BaseE2ETest:
                     message=f"{type(self).__name__}: class attribute '{required}' must be set",
                     field=required,
                 )
+
+        # Source-availability tier. When no extraction source is provisioned
+        # for this connector in CI, degrade to a worker-up-only check (see the
+        # class attr + test_full_dag_runs_end_to_end / assert_worker_up) and
+        # skip the AE/tenant wiring entirely — the worker-up tier needs neither
+        # a tenant nor credentials. E2E_SOURCE_AVAILABLE (from the sdr-e2e
+        # action's `source-available` input) overrides the class default.
+        env_source = os.environ.get("E2E_SOURCE_AVAILABLE")
+        self.source_available = (
+            type(self).source_available
+            if env_source is None
+            else env_source.strip().lower() in ("1", "true", "yes")
+        )
+        if not self.source_available:
+            logger.warning(
+                "%s: no extraction source provisioned (E2E_SOURCE_AVAILABLE"
+                "=false) — the full-DAG e2e degrades to a worker-up-only check; "
+                "extraction, publish, and Atlas assertions are skipped. "
+                "Provision a source (a CI container via source_scaffold, or "
+                "app-owner-supplied credentials) to run the full DAG.",
+                type(self).__name__,
+            )
+            return
 
         # ADR-0014 two-store posture (sdr-e2e's `enable-two-store` input,
         # threaded through as this env var) only changes anything on the
@@ -876,6 +919,44 @@ class BaseE2ETest:
         return failures
 
     # ------------------------------------------------------------------
+    # Worker-up-only tier (no source provisioned)
+    # ------------------------------------------------------------------
+
+    def assert_worker_up(self) -> None:
+        """Assert only that the app worker deployed and serves its health endpoint.
+
+        The no-source tier: when a connector has no extraction source in CI
+        (``source_available`` False), the full-DAG e2e can't extract, so it
+        proves the worker came up instead — a GET of ``/server/health`` returns
+        2xx. The sdr-e2e CI action already gates on the same endpoint before
+        pytest; re-asserting it here makes the pytest run the test of record
+        (and a bare local ``pytest`` meaningful) rather than a no-op skip.
+        """
+        url = os.environ.get("E2E_WORKER_HEALTH_URL", self.worker_health_url)
+        logger.info("Worker-up-only tier: probing %s", url)
+        deadline = time.monotonic() + self.worker_health_timeout_seconds
+        last_error = ""
+        while True:
+            # conformance: ignore[L006] short, bounded readiness poll (worker_health_timeout_seconds) with a modest interval, not a hot loop; the worker is already health-gated by the sdr-e2e action so this converges on the first attempt in CI
+            try:
+                with urllib.request.urlopen(url, timeout=10) as resp:  # noqa: S310 — fixed health URL, not user input
+                    status = resp.status
+                if 200 <= status < 300:
+                    logger.info("App worker healthy: %s -> HTTP %s", url, status)
+                    return
+                last_error = f"HTTP {status}"
+            except (urllib.error.URLError, OSError) as exc:
+                last_error = str(exc)
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    f"App worker for {self.connector_short_name} did not become "
+                    f"healthy at {url} within {self.worker_health_timeout_seconds}s "
+                    f"(last: {last_error}). No source is provisioned, so this run "
+                    "only checks that the worker deploys and serves /server/health."
+                )
+            time.sleep(self.worker_health_poll_interval_seconds)
+
+    # ------------------------------------------------------------------
     # Default test method
     # ------------------------------------------------------------------
 
@@ -892,7 +973,14 @@ class BaseE2ETest:
              the depth declared in ``expected_asset_qn_depth`` (opt-in).
           5. At least one Process/ColumnProcess exists (unless ``expect_lineage``
              is False).
+
+        When no extraction source is provisioned (``source_available`` False),
+        this degrades to a worker-up-only check — see :meth:`assert_worker_up`.
         """
+        if not self.source_available:
+            self.assert_worker_up()
+            return
+
         outcome = self.run_full_dag()
         if not outcome.succeeded:
             failed = outcome.ae_result.failed_nodes

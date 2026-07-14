@@ -131,6 +131,19 @@ on:
           tenant blobstorage, so a connector that forgets to bridge an artifact
           shows up as zero downstream assets instead of being masked by a shared
           bucket. Default false: existing callers are unaffected.
+      source-available:
+        required: false
+        type: boolean
+        default: true
+        description: |
+          Whether an extraction source is provisioned for this connector in
+          CI — forwarded to the sdr-e2e action's `source-available` input.
+          Sourcing is the app owner's responsibility. Default true: the
+          full-DAG e2e runs unchanged. Set false for apps with no free
+          container / no wired credentials — the e2e then degrades to a
+          worker-up-only check (assert the worker deploys + serves
+          /server/health) and skips extraction/publish/Atlas assertions,
+          until the owner provisions a source.
 
 jobs:
 
@@ -260,6 +273,7 @@ jobs:
           application-sdk-ref: ${{ inputs.application-sdk-ref }}
           base-image-ref: ${{ inputs.base-image-ref }}
           enable-two-store: ${{ inputs.two-store }}
+          source-available: ${{ inputs.source-available }}
           # Push the test image with the org PAT (same identity build-and-publish
           # uses) so it can write PAT-published connector packages — a plain
           # GITHUB_TOKEN 403s on those (e.g. atlan-redshift-app). Available here
