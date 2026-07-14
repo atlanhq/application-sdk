@@ -49,7 +49,16 @@ runs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: .venv
-        key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('uv.lock') }}
+        # Hash the whole importable conformance package, not just uv.lock: it is
+        # a non-editable path dependency baked into .venv as a wheel, and
+        # `uv sync` only runs on a cache miss (see below). Keyed on uv.lock
+        # alone, a source-only change reuses a stale build, so type-checks/tests
+        # run against outdated code. Hash `conformance/**` (not just `*.py`) so
+        # bundled non-.py wheel assets the rules read at runtime — data/*.json
+        # (e.g. toolkit_baseline.json), suite/schema/*.json, bootstrap/templates/*
+        # — also bust the cache. The sibling tests/, pyproject.toml, and README
+        # are outside conformance/ and correctly excluded (not in the wheel).
+        key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('uv.lock', 'packages/conformance/conformance/**') }}
 
     - name: Install dependencies
       if: steps.cache-venv.outputs.cache-hit != 'true'
