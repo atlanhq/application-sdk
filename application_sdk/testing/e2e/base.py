@@ -475,11 +475,24 @@ class BaseE2ETest:
         invisibility under the two-store posture). Subclasses may still override
         to pin an explicit agent identity.
 
-        Only the two-var shape is derivable here. A worker deployed with
-        ATLAN_APPLICATION_NAME set but ATLAN_DEPLOYMENT_NAME absent polls the
-        bare ``{app}`` queue (see _derive_task_queue's middle branch); the
-        harness can't reconstruct that from env alone, so such deployments must
-        override agent_spec() explicitly.
+        Only the two-var shape is derivable from env. When the deployment env is
+        absent — e.g. a developer running ``pytest`` locally without the CI
+        action's ``ATLAN_DEPLOYMENT_NAME`` — this falls back to
+        ``{connector_short_name}-{connection_name_prefix}-{run_id}`` (the same
+        run-id-keyed shape connectors used to hard-code in an override). That
+        keeps local runs working with no override while CI (which always exports
+        the per-leg ``ATLAN_DEPLOYMENT_NAME``) still gets the exact worker queue.
+        For a local full-DAG run you must start the connector worker on this same
+        run-id queue explicitly — it is **not** what ``main._derive_task_queue``
+        builds from the same partial env, so the worker won't land there on its
+        own. A one-line ``logger.warning`` is emitted on the fallback path so a
+        CI leg that reaches it (env genuinely mis-set) gets an actionable log
+        line rather than a silent stall.
+
+        Subclasses should **not** override this to pin a hard-coded run-id name:
+        doing so drops the per-leg suffix the worker inherits and desyncs the two
+        queues (conformance rule T017). Override only to pin a genuinely
+        different agent identity (and then read the deployment env yourself).
         """
         if self.mode is RunMode.DIRECT:
             return None
@@ -487,14 +500,42 @@ class BaseE2ETest:
         deployment_name = os.environ.get("ATLAN_DEPLOYMENT_NAME", "")
         if app_name and deployment_name:
             return AgentSpec(agent_name=f"{app_name}-{deployment_name}")
-        raise HarnessMethodNotImplementedError(
-            message=(
-                "AGENT mode needs an agent_spec() override, or both "
-                "ATLAN_APPLICATION_NAME and ATLAN_DEPLOYMENT_NAME set in the "
-                "environment to derive the worker's task queue"
-            ),
-            operation="agent_spec",
+        # Local fallback: no CI-exported deployment env. Reproduce the exact
+        # {connector}-{connection_name_prefix}-{run_id} shape connectors used to
+        # hard-code in a working local override, so a local run lands on its own
+        # queue without needing a per-connector override. NB this does NOT match
+        # what a worker's main._derive_task_queue() would build from the same
+        # partial env — that returns atlan-{app}-{deployment} (both vars),
+        # bare {app} (only app), or {ClassName}-queue (neither), never a run-id
+        # queue. So for a local full-DAG run the worker must be started on this
+        # same agent_name queue explicitly; CI is unaffected (it always exports
+        # both vars, taking the exact-match branch above).
+        agent_name = (
+            f"{self.connector_short_name}-{self.connection_name_prefix}-{self.run_id}"
         )
+        # The real Temporal queue is atlan-{agent_name} (_extract_task_queue
+        # prepends "atlan-"). Render that one consistent, fully-qualified queue
+        # everywhere in the message so a reader doesn't see the name two ways.
+        queue = f"atlan-{agent_name}"
+        # Fire loud: in CI both vars are always exported, so reaching this branch
+        # there means the env is mis-set and the worker will poll a different
+        # queue → silent stall until the run-full-dag stall guard trips. Naming
+        # both vars makes a mis-set CI leg immediately actionable. (On a genuine
+        # local run this is just an FYI that you must start the worker on this
+        # queue.)
+        logger.warning(
+            "AGENT-mode agent_spec fell back to extract queue %s because "
+            "ATLAN_APPLICATION_NAME and/or ATLAN_DEPLOYMENT_NAME is unset "
+            "(app=%r deployment=%r). In CI both are always exported, so a mis-set "
+            "leg here will stall — the worker polls atlan-{app}-{deployment}, not "
+            "%s. Locally, start the connector worker on %s.",
+            queue,
+            app_name,
+            deployment_name,
+            queue,
+            queue,
+        )
+        return AgentSpec(agent_name=agent_name)
 
     def connection_spec(self) -> ConnectionSpec:
         """Where the resulting Atlas Connection will live."""
