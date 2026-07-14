@@ -151,18 +151,6 @@ on:
         required: false
         type: boolean
         default: false
-      e2e-parallel-workers:
-        description: |
-          Opt-in pytest-xdist parallelism for the e2e suite. Empty
-          (default) runs sequentially — unchanged behaviour. Set to a
-          worker count (e.g. "2") or "auto" to run independent test classes
-          concurrently against the shared CI worker; xdist is pulled in on
-          the fly and distribution is by loadscope. Only enable when the
-          suite's test classes are mutually independent (own connections and
-          AE workflow slugs).
-        required: false
-        type: string
-        default: ""
     secrets:
       SDR_TEST_TENANT:
         description: Tenant FQDN (e.g. devex.atlan.com — no https:// prefix). ATLAN_BASE_URL is derived from this.
@@ -239,7 +227,6 @@ jobs:
           # operators can watch the colour-emoji DAG progression
           # instead of waiting for a final dump.
           pytest-extra-args: "-s"
-          pytest-parallel-workers: ${{ inputs.e2e-parallel-workers }}
           application-sdk-ref: ${{ inputs.application-sdk-ref }}
           base-image-ref: ${{ inputs.base-image-ref }}
           enable-two-store: ${{ inputs.two-store }}
