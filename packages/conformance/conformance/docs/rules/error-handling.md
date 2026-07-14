@@ -100,7 +100,11 @@ root-cause analysis impossible.
 
 Catches everything but the specific type is unknown.  HIGH severity when not logged;
 MEDIUM when logged but missing `exc_info=True`.  Acceptable only at top-level handlers
-(worker loops, HTTP handlers) when properly logged with `exc_info=True`.
+(worker loops, HTTP handlers) when properly logged with `exc_info=True`.  A handler that
+unconditionally re-raises while preserving the trace is exempt — bare `raise`, `raise
+X(...)`, or `raise X(...) from e` — because nothing is swallowed; `raise X(...) from
+None` (which discards the trace) and a conditional re-raise that can fall through still
+fire.
 
 ---
 
