@@ -1621,6 +1621,68 @@ async def _run_preflight_gate(
     # Success: the activity already emitted the proceeded outcome event.
 
 
+def _validate_workflow_input(raw_input: Any, input_type: type) -> Any:
+    """Validate a decoded workflow payload against the entry point's typed contract.
+
+    The generated workflow declares its argument to Temporal with a permissive
+    ``Any`` annotation (see ``generate_workflow_class``). That is deliberate: if the
+    argument were annotated as ``input_type``, Temporal's pydantic data converter
+    would validate the payload while *decoding the workflow task*, and a bad payload
+    would surface as a Workflow *Task* failure — which Temporal retries with backoff
+    **indefinitely** (there is no max-attempts for workflow tasks). A permanently
+    invalid input (e.g. a required object field sent as ``""``) would then retry
+    forever instead of failing.
+
+    Validating here, inside the workflow body, converts that into a clean,
+    non-retryable workflow *execution* failure that fails fast.
+
+    This does **not** loosen or bypass the typed contract. The payload is validated
+    against exactly ``input_type`` — the same model the entry point declares — before
+    any app code runs, and the fully typed, validated model is what every downstream
+    caller (preflight gate, ``_log_summary``, the entry point method) receives. The
+    permissive annotation is confined to this generated wire boundary; there is no
+    path by which a raw payload reaches app code, and app authors cannot opt into it.
+
+    Args:
+        raw_input: The decoded payload — a dict from the wire, or (unit tests / the
+            in-process ``/start`` path) an already-constructed ``input_type``.
+        input_type: The entry point's typed input contract.
+
+    Returns:
+        A validated ``input_type`` instance.
+
+    Raises:
+        ApplicationError: non-retryable, if the payload does not satisfy ``input_type``.
+    """
+    if isinstance(raw_input, input_type):
+        # Already the typed model (constructed by the SDK /start path or a test);
+        # it was validated at construction, so re-validation would be redundant.
+        return raw_input
+
+    # deferred import: circular — execution/__init__.py loads _temporal which imports app.base
+    from application_sdk.execution.errors import ApplicationError  # noqa: PLC0415
+
+    try:
+        return input_type.model_validate(raw_input)
+    # conformance: ignore[E004] deterministic input-validation failure; logged via _safe_log with exc_info=True and re-raised as a non-retryable ApplicationError
+    except Exception as e:
+        _safe_log(
+            "error",
+            "Workflow input failed validation against its typed contract",
+            input_type=input_type.__name__,
+            exc_info=True,
+        )
+        # Non-retryable: a payload that fails schema validation is deterministic —
+        # retrying the same input can never succeed. Failing the execution now
+        # avoids the indefinite Workflow Task retry loop that a decode-time failure
+        # would cause.
+        raise ApplicationError(
+            f"Invalid workflow input for {input_type.__name__}: {e}",
+            type="InputValidationError",
+            non_retryable=True,
+        ) from e
+
+
 def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> type:
     """Generate a Temporal workflow class for one entry point.
 
@@ -1665,10 +1727,20 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
             input_type.__name__,
         )
 
-    async def _run(self, input_data: Input) -> Output:
+    # input_data is annotated ``Any`` (not ``input_type``) so Temporal's data
+    # converter decodes the payload without validating it — validation happens
+    # below via _validate_workflow_input so a bad payload fails the workflow
+    # execution (fast, non-retryable) instead of failing the workflow *task*
+    # (retried by the server indefinitely). See _validate_workflow_input.
+    async def _run(self, input_data: Any) -> Output:
         # deferred imports: inside Temporal sandbox (workflow.unsafe.imports_passed_through context)
         # BLDX-878: inter-app calls deactivated pending review.
         # from application_sdk.app.client import WorkflowAppClient
+
+        # Fail fast on a malformed / wrong-typed payload, before any setup runs.
+        # Enforces the entry point's typed contract at the workflow boundary.
+        input_data = _validate_workflow_input(input_data, input_type)
+
         start_time = _safe_now()
         run_id = workflow.info().run_id
         workflow_id = workflow.info().workflow_id
@@ -1851,7 +1923,13 @@ def generate_workflow_class(app_cls: "type[App]", ep: "EntryPointMetadata") -> t
     _run.__name__ = "run"
     _run.__qualname__ = f"{cls_name}.run"
     _run.__module__ = app_cls.__module__
-    _run.__annotations__ = {"input_data": input_type, "return": output_type}
+    # input_data is decoded as ``Any`` on purpose: this is the annotation Temporal's
+    # pydantic data converter reads to decode the workflow task. Decoding as ``Any``
+    # keeps validation out of the converter (where a failure = an indefinitely
+    # retried Workflow Task failure) and defers it to _validate_workflow_input inside
+    # the run body, which enforces ``input_type`` and fails fast on a bad payload.
+    # The return type stays typed so results are still validated/serialized normally.
+    _run.__annotations__ = {"input_data": Any, "return": output_type}
 
     decorated_run = workflow.run(_run)
 
