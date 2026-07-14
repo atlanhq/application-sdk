@@ -1,0 +1,43 @@
+# Throwaway — verifies that a minted atlan-app-fleet App installation token
+# works as a docker/login-action password for ghcr.io (a Docker Registry v2
+# auth flow, distinct from the GitHub REST API auth already proven). Delete
+# after confirmed.
+name: _throwaway GHCR Auth Test
+on: workflow_dispatch
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mint fleet App token
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+
+      - name: Login to GHCR with the App token
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ steps.app-token.outputs.token }}
+
+      - name: Build and push a trivial scratch image
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/ghcr-test
+          cat > /tmp/ghcr-test/Dockerfile <<'DOCKERFILE'
+          FROM scratch
+          COPY README.md /README.md
+          DOCKERFILE
+          cp README.md /tmp/ghcr-test/README.md 2>/dev/null || echo "test" > /tmp/ghcr-test/README.md
+          docker build -t ghcr.io/atlanhq/application-sdk/_throwaway-ghcr-auth-test:latest /tmp/ghcr-test
+          docker push ghcr.io/atlanhq/application-sdk/_throwaway-ghcr-auth-test:latest
+          echo "GHCR push succeeded with the App token."
