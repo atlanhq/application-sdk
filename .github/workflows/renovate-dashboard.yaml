@@ -49,10 +49,18 @@ jobs:
       - name: Checkout application-sdk
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      - name: Mint fleet App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+
       - name: Discover atlan-application-sdk consumers
         id: discover
         env:
-          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           SINGLE_REPO: ${{ inputs.repo }}
         run: |
           set -euo pipefail
@@ -79,7 +87,7 @@ jobs:
               || echo "[]")
 
             if [ "$repos" = "[]" ] || [ -z "$repos" ]; then
-              echo "::warning::No consumer repos discovered. Check ORG_PAT_GITHUB permissions."
+              echo "::warning::No consumer repos discovered. Check the atlan-app-fleet App installation/permissions."
             else
               echo "Discovered $(echo "$repos" | jq '. | length') consumer repos"
             fi
@@ -88,7 +96,7 @@ jobs:
 
       - name: Gather Renovate PR data
         env:
-          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPOS: ${{ steps.discover.outputs.repos }}
           SINGLE_REPO: ${{ inputs.repo }}
         run: |

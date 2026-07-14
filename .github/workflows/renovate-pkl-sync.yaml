@@ -34,9 +34,13 @@ name: Sync Pkl contract artifacts for Renovate (Reusable)
 #       # artifact regeneration is ON by default; opt OUT with:
 #       # with:
 #       #   regenerate-contract: false
+#       secrets: inherit
 #
-# The GITHUB_TOKEN in the called workflow inherits the caller's contents:write
-# permission, which is enough to commit and push to the renovate/** branch.
+# This workflow mints a minted atlan-app-fleet App token to push the commit
+# (a real, non-github-actions[bot] identity is needed so the push re-triggers
+# the PR's required checks against the new commit -- a GITHUB_TOKEN push
+# doesn't). Falls back to the caller's push_token, then plain GITHUB_TOKEN,
+# if the App token can't be minted.
 
 on:
   workflow_call:
@@ -58,11 +62,17 @@ on:
     secrets:
       push_token:
         description: >
-          PAT of an org member to use for the commit push. Required on public
-          repos — a GITHUB_TOKEN push from github-actions[bot] triggers
-          GitHub's outside-collaborator workflow re-approval gate. Falls back
-          to GITHUB_TOKEN when omitted (fine for private repos).
+          Fallback PAT of an org member to use for the commit push, if the
+          fleet App token can't be minted. Falls back further to GITHUB_TOKEN
+          if this is also omitted (fine for private repos, but won't re-fire
+          the PR's required checks against the sync commit).
         required: false
+      FLEET_APP_ID:
+        required: false
+        description: "atlan-app-fleet App ID (org secret). Not passed explicitly by any current caller — auto-available via 'secrets: inherit'. Declared here so the contract is self-documenting."
+      FLEET_APP_PRIVATE_KEY:
+        required: false
+        description: "atlan-app-fleet App private key (org secret). Same availability as FLEET_APP_ID above."
 
 permissions:
   contents: write
@@ -72,9 +82,19 @@ jobs:
     name: Re-resolve and regenerate Pkl contract artifacts
     runs-on: ubuntu-latest
     steps:
+      - name: Mint fleet App token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: ${{ github.event.repository.name }}
+
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          token: ${{ secrets.push_token || secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app-token.outputs.token || secrets.push_token || secrets.GITHUB_TOKEN }}
           ref: ${{ github.ref }}
 
       # Provides `uvx ruff`, used by the driver to format generated Python.

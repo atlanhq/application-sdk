@@ -32,6 +32,7 @@ To skip the whole class when the harness env isn't configured::
 from __future__ import annotations
 
 import os
+import secrets
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -160,6 +161,26 @@ class BaseE2ETest:
 
     ae_poll_interval_seconds: ClassVar[int] = 10
     ae_poll_timeout_seconds: ClassVar[int] = 600
+    # Fail-fast stall guard (test-harness only — this module is never imported
+    # by the production execution path). If no DAG node has started within this
+    # window, run_full_dag raises NoWorkerOnTaskQueueError instead of hanging
+    # for the full ae_poll_timeout_seconds. Catches the common wedge where a
+    # test's agent_spec().agent_name doesn't match the deployed worker's queue
+    # (or a second run_full_dag() in one test targets a different agent_name).
+    #
+    # On by default at 180s: e2e runs against a dedicated worker (the CI
+    # docker-compose container) that long-polls and picks work up within
+    # seconds, so a healthy run never trips it, and the full
+    # ae_poll_timeout_seconds still bounds real work. Set to 0 to disable on a
+    # suite that runs against shared / KEDA-autoscaled infra (e.g. some
+    # RunMode.DIRECT setups hitting a prod pod that may be scaled to zero),
+    # where legitimate pickup can take longer than any fixed grace.
+    #
+    # The guard fires at the first poll where elapsed >= grace, so real
+    # detection latency is grace + up to one ae_poll_interval_seconds
+    # (negligible at the 180/10 defaults; only noticeable if a subclass sets a
+    # grace close to the interval).
+    ae_stall_grace_seconds: ClassVar[int] = 180
     atlas_poll_interval_seconds: ClassVar[int] = 30
     atlas_poll_timeout_seconds: ClassVar[int] = 1500
     # Asset counts use a much shorter poll window: Elasticsearch is eventually
@@ -251,6 +272,22 @@ class BaseE2ETest:
                 type(self).__name__,
             )
 
+        # The stall guard assumes a dedicated worker that picks work up within
+        # seconds. Under RunMode.DIRECT extraction runs on the tenant's own
+        # deployed pod, which may be KEDA-idle and cold-start slower than the
+        # grace — tripping a spurious NoWorkerOnTaskQueueError on an otherwise
+        # healthy run. Nudge the operator toward the opt-out rather than fail.
+        if self.mode is RunMode.DIRECT and self.ae_stall_grace_seconds > 0:
+            logger.warning(
+                "%s runs in RunMode.DIRECT with ae_stall_grace_seconds=%ds — "
+                "extraction runs on the tenant's own (possibly KEDA-idle) pod, "
+                "whose cold-start can exceed the grace and raise a spurious "
+                "NoWorkerOnTaskQueueError. Set ae_stall_grace_seconds = 0 on the "
+                "test class to disable the stall guard if you see false failures.",
+                type(self).__name__,
+                self.ae_stall_grace_seconds,
+            )
+
         tenant_url = os.environ.get("ATLAN_BASE_URL", "").rstrip("/")
         api_token = os.environ.get("ATLAN_API_KEY", "")
         if not tenant_url or not api_token:
@@ -279,12 +316,20 @@ class BaseE2ETest:
         # connection_type overrides connector_short_name when the Atlan
         # catalog type segment differs from the connector's app name (e.g.
         # OpenAPI: connector_short_name="openapi", connection_type="api").
-        # The name is pure epoch seconds so Atlas never rejects it for
-        # containing hyphens or alpha characters.
+        #
+        # The trailing segment must be unique per test *instance*: with the e2e
+        # matrix, each suite runs as a separate parallel job whose setup_method
+        # can land in the same wall-clock second as another leg's, and rapid
+        # same-ref pushes can overlap too. A shared connection QN would let one
+        # leg's teardown purge another's assets and mix Atlas counts. epoch
+        # alone (1-second resolution) can't guarantee that, so append random
+        # digits. Kept PURE NUMERIC so Atlas never rejects the name for hyphens
+        # or alpha characters (agent queue + AE slug are already run-id-scoped
+        # and unique per run; this closes the connection-QN gap).
         _conn_type = self.connection_type or self.connector_short_name
-        _epoch = int(time.time())
-        self.connection_qualified_name = f"default/{_conn_type}/{_epoch}"
-        self.connection_display_name = f"{_conn_type}-{_epoch}"
+        _unique = f"{int(time.time())}{secrets.randbelow(1_000_000):06d}"
+        self.connection_qualified_name = f"default/{_conn_type}/{_unique}"
+        self.connection_display_name = f"{_conn_type}-{_unique}"
 
         # Atlas requires at least one non-empty admin list on a Connection
         # (ATLAS-400-00-114). When the subclass leaves all three admin attrs
@@ -592,6 +637,20 @@ class BaseE2ETest:
     # The actual flow
     # ------------------------------------------------------------------
 
+    def _extract_task_queue(self) -> str:
+        """Task queue the ``extract`` node is dispatched to.
+
+        Single source of truth for both the seed DAG (which pins the extract
+        node's ``task_queue`` to this value) and the stall-guard diagnostic. In
+        AGENT mode this must equal the queue the deployed worker polls
+        (``atlan-{ATLAN_APPLICATION_NAME}-{ATLAN_DEPLOYMENT_NAME}``), so the
+        test's ``agent_spec().agent_name`` has to match that suffix.
+        """
+        agent = self.agent_spec()
+        if agent is not None:
+            return f"atlan-{agent.agent_name}"
+        return f"atlan-{self.connector_short_name}-default"
+
     def _bootstrap_workflow(self) -> str:
         """Ensure an AE workflow exists with a published version.
 
@@ -614,11 +673,7 @@ class BaseE2ETest:
         logger.info("Created (or reused) AE workflow: name=%s slug=%s", name, slug)
         time.sleep(3)
 
-        agent = self.agent_spec()
-        if agent is not None:
-            extract_queue = f"atlan-{agent.agent_name}"
-        else:
-            extract_queue = f"atlan-{self.connector_short_name}-default"
+        extract_queue = self._extract_task_queue()
 
         if self.manifest_path:
             seed_dag = self._seed_dag_from_manifest(extract_queue)
@@ -652,6 +707,8 @@ class BaseE2ETest:
             run_id,
             interval_seconds=self.ae_poll_interval_seconds,
             timeout_seconds=self.ae_poll_timeout_seconds,
+            stall_grace_seconds=self.ae_stall_grace_seconds,
+            stall_task_queue=self._extract_task_queue(),
         )
 
         asset_counts: dict[str, int] = {}
