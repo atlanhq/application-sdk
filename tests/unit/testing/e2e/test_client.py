@@ -14,7 +14,7 @@ from unittest.mock import patch
 import pytest
 
 from application_sdk.testing.e2e._errors import (
-    AtlanApiAlreadyActiveError,
+    AtlanAEWorkflowAlreadyActiveError,
     AtlanApiHttpError,
     AtlanApiTimeoutError,
     NoWorkerOnTaskQueueError,
@@ -507,7 +507,7 @@ class TestRequestNetworkRetry:
 
 
 # The exact body observed in prod: AE's 409 "already active" masked as a 500 by
-# the package-workflows gateway (see application-sdk#2657 openapi e2e leg).
+# Heracles (the AE proxy; see application-sdk#2657 openapi e2e leg).
 _MASKED_409_BODY = {
     "code": 500,
     "error": "Internal Server Error",
@@ -540,15 +540,15 @@ class TestSubmitWorkflowIdempotency:
         assert _is_already_active_run(200, {"message": "already active"}) is False
 
     def test_masked_409_raises_and_does_not_retry(self):
-        """The masked-500 conflict must raise AtlanApiAlreadyActiveError on the
-        first response — not be retried as a transient 5xx."""
+        """The masked-500 conflict must raise AtlanAEWorkflowAlreadyActiveError
+        on the first response — not be retried as a transient 5xx."""
         client = _make_client()
         with (
             patch.object(
                 client, "_request", return_value=(500, _MASKED_409_BODY)
             ) as mock_req,
             patch("time.sleep") as mock_sleep,
-            pytest.raises(AtlanApiAlreadyActiveError),
+            pytest.raises(AtlanAEWorkflowAlreadyActiveError),
         ):
             client.submit_workflow({"any": "payload"})
         assert mock_req.call_count == 1

@@ -51,7 +51,7 @@ if TYPE_CHECKING:
 from application_sdk.errors.base import AppError
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.e2e._errors import (
-    AtlanApiAlreadyActiveError,
+    AtlanAEWorkflowAlreadyActiveError,
     AtlanApiHttpError,
     AtlanApiResponseInvariantError,
     AtlanApiTimeoutError,
@@ -132,9 +132,10 @@ def _node_glyph(node) -> str:
 
 
 # AE returns "a run for workflow '<slug>' is already active" (code AE-WF-409-03)
-# when a submit collides with an in-flight run. The package-workflows gateway
-# masks that 409 as an HTTP 500 with the original 409 text embedded in the
-# message, so we detect the conflict by marker regardless of the outer status.
+# when a submit collides with an in-flight run. Heracles (the tenant-facing
+# proxy in front of Automation Engine) masks that 409 as an HTTP 500 with the
+# original 409 text embedded in the message, so we detect the conflict by
+# marker regardless of the outer status.
 _ALREADY_ACTIVE_MARKERS = ("AE-WF-409-03", "already active")
 
 
@@ -590,10 +591,10 @@ class AEWorkflowClient:
 
         * ``retry_network_errors=False`` — a read-timeout is ambiguous (the
           server may have accepted the submit), so we never re-POST on timeout.
-        * the ``already active`` conflict (AE-WF-409-03, which the gateway masks
+        * the ``already active`` conflict (AE-WF-409-03, which Heracles masks
           as a 500 — see :func:`_is_already_active_run`) is treated as terminal,
           not a retryable 5xx, and surfaced as
-          :class:`AtlanApiAlreadyActiveError`.
+          :class:`AtlanAEWorkflowAlreadyActiveError`.
 
         Genuine 5xx that are *not* the already-active conflict remain retryable.
         """
@@ -607,15 +608,15 @@ class AEWorkflowClient:
             retry_network_errors=False,
         )
         if _is_already_active_run(status, body):
-            raise AtlanApiAlreadyActiveError(
+            raise AtlanAEWorkflowAlreadyActiveError(
                 message=(
                     "AE rejected the submit: a run for this workflow is already "
                     "active (AE-WF-409-03). The initial submit was accepted "
                     "server-side but its response was lost (AE latency / gateway "
-                    "timeout), and AE masks the 409 as HTTP 500. A run IS "
-                    "executing, but its run_id is unrecoverable via native-status "
-                    "(keyed by run_id). Not retrying — a retry would spawn a "
-                    f"duplicate Skipped run.\nresponse={body!r}"
+                    "timeout), and Heracles masks the AE 409 as HTTP 500. A run "
+                    "IS executing, but its run_id is unrecoverable via "
+                    "native-status (keyed by run_id). Not retrying — a retry "
+                    f"would spawn a duplicate Skipped run.\nresponse={body!r}"
                 ),
                 target=(
                     "POST /api/service/package-workflows?submit=true "

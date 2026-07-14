@@ -29,20 +29,20 @@ class AtlanApiHttpError(DependencyUnavailableError):
 
 
 @dataclass(kw_only=True)
-class AtlanApiAlreadyActiveError(AtlanApiHttpError):
-    """AE rejected a submit because a run for the workflow is already active.
+class AtlanAEWorkflowAlreadyActiveError(AtlanApiHttpError):
+    """A run for the AE workflow is already active, so a new submit was rejected.
 
     AE returns ``AE-WF-409-03`` ("a run for workflow '<slug>' is already
-    active") when a submit collides with an in-flight run — but the
-    package-workflows gateway masks it as an HTTP 500 with the original 409
-    text embedded. The harness treats this as *non-retryable*: retrying a
-    non-idempotent submit spawns a duplicate run that AE marks ``Skipped``,
-    which the test then mistracks (surfacing as a spurious
-    ``NoWorkerOnTaskQueueError``). Its run_id is unrecoverable via
+    active") when a submit collides with an in-flight run — but Heracles (the
+    tenant-facing proxy in front of Automation Engine) masks it as an HTTP 500
+    with the original 409 text embedded. The harness treats this as
+    *non-retryable*: retrying a non-idempotent submit spawns a duplicate run
+    that AE marks ``Skipped``, which the test then mistracks (surfacing as a
+    spurious ``NoWorkerOnTaskQueueError``). Its run_id is unrecoverable via
     native-status (keyed by run_id), so we fail fast with the true cause.
     """
 
-    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_ATLAN_API_ALREADY_ACTIVE"
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_AE_WORKFLOW_ALREADY_ACTIVE"
 
 
 @dataclass(kw_only=True)
