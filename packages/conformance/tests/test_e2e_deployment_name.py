@@ -12,11 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from conformance.suite.checks.e2e_deployment_name import (
-    discover,
-    scan_path,
-    scan_text,
-)
+from conformance.suite.checks.e2e_deployment_name import discover, scan_path, scan_text
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
 

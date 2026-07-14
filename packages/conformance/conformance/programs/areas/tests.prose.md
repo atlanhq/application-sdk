@@ -6,13 +6,15 @@ description: >
   test-quality conformance findings: unmarked integration tests (T001), SDR
   test-coverage gaps (T002-T003), dev-entrypoint delegation (T004), assertion
   meaningfulness and silent non-execution (T005-T009), test-tier structure and
-  placement (T010-T013), and coverage-config integrity (T014-T015).  Every
-  rule in this series classifies as "judgment" — each fix requires reading the
-  test's I/O intent, the app's manifest/contract, or the app's App subclass
-  before a fix can be proposed with confidence.  T014/T015 are the most
-  mechanical of the set (usually a one-line pyproject.toml edit) but still
-  route to residue like the rest of the series — picking a real fail_under
-  value or confirming an omit pattern is legitimate still requires judgment.
+  placement (T010-T013), coverage-config integrity (T014-T015), and e2e CI
+  compose-overlay queue isolation (T016).  Every rule in this series classifies
+  as "judgment" — each fix requires reading the test's I/O intent, the app's
+  manifest/contract, or the app's App subclass before a fix can be proposed with
+  confidence.  T014/T015 are the most mechanical of the set (usually a one-line
+  pyproject.toml edit) but still route to residue like the rest of the series —
+  picking a real fail_under value or confirming an omit pattern is legitimate
+  still requires judgment.  T016's fix is deterministic but edits a file under
+  `.github/`, outside the remediator's write-scope, so it too routes to residue.
 ---
 
 ### Maintains
@@ -316,6 +318,50 @@ to residue):
   `classification` is `"judgment"` — confirming a given module is safe to
   keep omitted (vs. real product code that should count) requires reading
   what the module does, not just its path.
+
+- **T016 E2EDeploymentNameNotInherited** — an e2e CI docker-compose overlay
+  under `.github/` (a YAML file with a top-level `services:` key that mentions
+  `ATLAN_DEPLOYMENT_NAME`) assigns `ATLAN_DEPLOYMENT_NAME` in a service's
+  `environment` to a literal that does not reference the inherited
+  `${ATLAN_DEPLOYMENT_NAME...}` env var.  The SDK's `sdr-e2e` composite action
+  derives a per-leg `ATLAN_DEPLOYMENT_NAME` (`e2e-full-ci-<run_id>[-<leg>]`) and
+  exports it to `$GITHUB_ENV`; a hard-coded overlay value overrides that
+  inherited env, so the worker container polls a different Temporal queue than
+  the harness dispatches to — the extract activity stalls with "No Workers
+  Running" until the run times out (observed on atlan-mysql-app; atlan-metabase-app
+  had the same bug in map form).
+
+  The fix is deterministic: wrap the existing hard-coded value as the fallback
+  default so the value is inherited when set and preserved for local
+  `docker compose` runs when not.  For the list form
+  `- ATLAN_DEPLOYMENT_NAME=<value>`:
+
+  ```yaml
+  - ATLAN_DEPLOYMENT_NAME=${ATLAN_DEPLOYMENT_NAME:-<value>}
+  ```
+
+  For the mapping form `ATLAN_DEPLOYMENT_NAME: "<value>"`:
+
+  ```yaml
+  ATLAN_DEPLOYMENT_NAME: "${ATLAN_DEPLOYMENT_NAME:-<value>}"
+  ```
+
+  (A bare pass-through list entry `- ATLAN_DEPLOYMENT_NAME`, with no `=`, is
+  also acceptable — it inherits the runner env directly.)
+
+  **Route to residue** with the suggested edit — this function may not write
+  under `.github/` (see the write-scope constraint in
+  `remediate-finding.prose.md`; the remediator must never touch the CI gate it
+  is judged against), so T016 is not auto-applied even though the transform is
+  mechanical.
+
+  Suppress with `# conformance: ignore[T016] <reason>` on the assignment line
+  only when the overlay is intentionally single-queue (never fans out across
+  matrix legs) and the hard-coded name is deliberate — state that reason
+  explicitly.
+
+  `classification` is always `"judgment"` (edits a file outside write-scope;
+  routed to residue for a human to apply).
 
 **Suppress outcome (strict mode only, WARNING-tier findings)**:
 
