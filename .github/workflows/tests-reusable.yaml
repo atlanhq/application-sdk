@@ -315,6 +315,21 @@ jobs:
       pull-requests: write
       contents: read
     steps:
+      # Single source of truth: the tested driver computes both the pass/fail
+      # decision and the human-readable status strings the summary table below
+      # renders, so displayed status can't drift from the enforced result.
+      # Discovery skipped = e2e not requested (OK); discovery failed = requested
+      # but empty (fail); the e2e matrix aggregate is success iff every leg
+      # passed.
+      - name: Evaluate Tests Gate
+        id: gate
+        if: always()
+        uses: atlanhq/application-sdk/.github/actions/verify-test-gate@main
+        with:
+          tests-result: ${{ needs.tests.result }}
+          discover-e2e-result: ${{ needs.discover-e2e.result }}
+          e2e-result: ${{ needs.e2e.result }}
+
       - name: Post unified test-summary comment on PR
         if: always() && github.event_name == 'pull_request'
         uses: mshick/add-pr-comment@ec328af66588ab8f77cdeb2c264f14aba45bbf59 # v3.12.0
@@ -325,20 +340,15 @@ jobs:
 
             | Job | Status | Result |
             |---|---|---|
-            | tests | ${{ needs.tests.result == 'success' && '✅ Passed' || (needs.tests.result == 'skipped' && '⊘ Skipped' || '❌ Failed') }} | `${{ needs.tests.outputs.summary || 'no summary' }}` |
-            | e2e | ${{ needs.discover-e2e.result == 'skipped' && '⊘ Skipped — add `e2e` label to trigger' || (needs.discover-e2e.result == 'failure' && '❌ No suites discovered (e2e was requested)' || (needs.e2e.result == 'success' && '✅ Passed' || (needs.e2e.result == 'skipped' && '⊘ Skipped' || '❌ Failed'))) }} | per-suite results + live logs in the run |
+            | tests | ${{ steps.gate.outputs.tests-status }} | `${{ needs.tests.outputs.summary || 'no summary' }}` |
+            | e2e | ${{ steps.gate.outputs.e2e-status }} | per-suite results + live logs in the run |
 
-            **Overall:** ${{ (needs.tests.result == 'success' && needs.discover-e2e.result != 'failure' && (needs.e2e.result == 'success' || needs.e2e.result == 'skipped')) && '✅ All passed' || '❌ Some failed' }} — [view run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            **Overall:** ${{ steps.gate.outputs.overall-status }} — [view run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
         continue-on-error: true
 
-      # Pass/fail logic lives in a tested Python driver (co-located with the
-      # action so it's checked out cross-repo) per docs/standards/ci.md, now
-      # that the gate spans three job results. Discovery skipped = e2e not
-      # requested (OK); discovery failed = requested but empty (fail). The e2e
-      # matrix aggregate is success only if every leg passed.
-      - name: Verify all test jobs succeeded
-        uses: atlanhq/application-sdk/.github/actions/verify-test-gate@main
-        with:
-          tests-result: ${{ needs.tests.result }}
-          discover-e2e-result: ${{ needs.discover-e2e.result }}
-          e2e-result: ${{ needs.e2e.result }}
+      # Branch-free enforcement: the decision lives in the driver's `passed`
+      # output; this step just fails the required check when it isn't "true".
+      - name: Enforce gate
+        if: always() && steps.gate.outputs.passed != 'true'
+        shell: bash
+        run: exit 1

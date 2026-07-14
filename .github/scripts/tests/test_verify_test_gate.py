@@ -13,7 +13,7 @@ sys.path.insert(
     0, str(Path(__file__).parent.parent.parent / "actions" / "verify-test-gate")
 )
 
-from verify_test_gate import evaluate, main  # noqa: E402
+from verify_test_gate import evaluate, main, render  # noqa: E402
 
 # --- passing states --------------------------------------------------------
 
@@ -58,16 +58,57 @@ def test_e2e_cancelled_is_failure() -> None:
     assert evaluate("success", "success", "cancelled") != []
 
 
-# --- CLI wrapper -----------------------------------------------------------
+# --- render() (display strings shared with the summary table) --------------
 
 
-def test_main_returns_zero_on_pass(capsys) -> None:
+def test_render_all_pass() -> None:
+    out = render("success", "success", "success")
+    assert out["passed"] == "true"
+    assert out["tests-status"] == "✅ Passed"
+    assert out["e2e-status"] == "✅ Passed"
+    assert out["overall-status"] == "✅ All passed"
+
+
+def test_render_e2e_not_requested() -> None:
+    out = render("success", "skipped", "skipped")
+    assert out["passed"] == "true"
+    assert "add `e2e` label" in out["e2e-status"]
+    assert out["overall-status"] == "✅ All passed"
+
+
+def test_render_discovery_failed_requested_but_empty() -> None:
+    out = render("success", "failure", "skipped")
+    assert out["passed"] == "false"
+    assert out["e2e-status"] == "❌ No suites discovered (e2e was requested)"
+    assert out["overall-status"] == "❌ Some failed"
+
+
+def test_render_e2e_leg_failed() -> None:
+    out = render("success", "success", "failure")
+    assert out["passed"] == "false"
+    assert out["e2e-status"] == "❌ Failed"
+
+
+def test_render_tests_failed() -> None:
+    out = render("failure", "skipped", "skipped")
+    assert out["passed"] == "false"
+    assert out["tests-status"] == "❌ Failed"
+
+
+# --- CLI wrapper (emits outputs; never exits non-zero — job enforces) -------
+
+
+def test_main_always_exits_zero_and_emits_passed_true(capsys) -> None:
     rc = main(["--tests", "success", "--discover-e2e", "skipped", "--e2e", "skipped"])
+    out = capsys.readouterr().out
     assert rc == 0
-    assert "All test jobs passed." in capsys.readouterr().out
+    assert "passed=true" in out
+    assert "tests-status=✅ Passed" in out
 
 
-def test_main_returns_one_and_annotates_on_fail(capsys) -> None:
+def test_main_emits_passed_false_and_annotates_on_fail(capsys) -> None:
     rc = main(["--tests", "success", "--discover-e2e", "success", "--e2e", "failure"])
-    assert rc == 1
-    assert "::error::" in capsys.readouterr().err
+    captured = capsys.readouterr()
+    assert rc == 0  # never fails itself; the gate job enforces via `passed`
+    assert "passed=false" in captured.out
+    assert "::error::" in captured.err
