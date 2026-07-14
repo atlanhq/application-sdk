@@ -131,18 +131,6 @@ on:
           tenant blobstorage, so a connector that forgets to bridge an artifact
           shows up as zero downstream assets instead of being masked by a shared
           bucket. Default false: existing callers are unaffected.
-      e2e-parallel-workers:
-        required: false
-        type: string
-        default: ""
-        description: |
-          Opt-in pytest-xdist parallelism for the e2e job. Empty (default)
-          runs the e2e suite sequentially — unchanged behaviour. Set to a
-          worker count (e.g. "2") or "auto" to run mutually-independent e2e
-          test classes concurrently against the shared CI worker (xdist is
-          pulled in on the fly, distributed by loadscope). Only enable when
-          the suite's classes are independent (own connections + AE workflow
-          slugs).
 
 jobs:
 
@@ -174,32 +162,15 @@ jobs:
           services-script: ${{ inputs.services-script }}
           application-sdk-ref: ${{ inputs.application-sdk-ref }}
 
-  # ── Full-DAG e2e (system apps — extract→qi→publish→lineage) ─────────────
-  # Inlined from e2e-full-reusable.yaml so the whole test suite lives in this
-  # one reusable (the fleet standard: one tests.yaml + one Tests Gate). Each
-  # app's tests.yaml calls a single reusable instead of nesting a second one,
-  # and this lets us retire e2e-full-reusable once its other callers converge.
-  # Behaviour matches the old delegation (the only intentional drop is the dead
-  # "Resolve agent-name" step — see the NOTE by the sdr-e2e step below):
-  #   - 120-min job timeout (> ae_poll + atlas_poll + build/setup overhead —
-  #     see BaseFullDAGE2ETest poll budgets; NOT inputs.timeout-minutes, which
-  #     defaults to 60 and only sizes the unit/integration tier).
-  #   - full-DAG sdr-e2e inputs (secrets-script / components-dir /
-  #     compose-overlay) kept explicit so the S3-objectstore + dynamic-agent
-  #     worker stack is used, not the SDR-pipeline component/compose fallback.
-  #   - SDR_* + ATLAN_API_KEY read from secrets.* here (callers invoke this
-  #     reusable with `secrets: inherit`); this job only runs behind the
-  #     label/dispatch gate below.
-  e2e:
-    name: End-to-end
+  # ── Discover e2e suites → matrix ─────────────────────────────────────────
+  # Globs the connector's tests/e2e/test_*.py into a strategy.matrix so the
+  # e2e job fans out one leg per suite (parallel, live per-job logs, per-suite
+  # re-run, isolation). Connector-agnostic: the SDK never hard-codes a
+  # connector's suites — the discovery script scans the checked-out tree.
+  # Same label/dispatch gate the e2e job used to carry.
+  discover-e2e:
+    name: Discover e2e suites
     runs-on: ubuntu-latest
-    timeout-minutes: 120
-    concurrency:
-      group: tests-e2e-${{ github.ref }}
-      cancel-in-progress: false
-    # On workflow_dispatch with run-e2e=true (covers cross-repo dispatch), or
-    # when the 'e2e' PR label is present.  Forks and bots are excluded.
-    # Skipped entirely when enable-e2e is false (e.g. hello-world).
     if: |
       inputs.enable-e2e && (
         (github.event_name == 'workflow_dispatch' && inputs.run-e2e == 'true') ||
@@ -210,6 +181,52 @@ jobs:
           github.event.pull_request.user.login != 'dependabot[bot]'
         )
       )
+    outputs:
+      matrix: ${{ steps.discover.outputs.matrix }}
+      count: ${{ steps.discover.outputs.count }}
+    steps:
+      # codex-/return-dispatch on the apps-sdk side scans step *names* for
+      # "distinct-id <value>". Emitting it here (the first job in the e2e path)
+      # lets the SDK PR's dispatched run be located quickly via the GH API,
+      # regardless of how the downstream matrix fans out.
+      - name: distinct-id ${{ inputs.distinct-id }}
+        if: inputs.distinct-id != ''
+        shell: bash
+        run: echo "Dispatched with distinct-id=${{ inputs.distinct-id }}"
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Discover suites
+        id: discover
+        uses: atlanhq/application-sdk/.github/actions/discover-e2e-suites@main
+        with:
+          test-dir: ${{ inputs.e2e-test-path }}
+
+  # ── Full-DAG e2e (system apps — extract→qi→publish→lineage) ─────────────
+  # One matrix leg per discovered suite. fail-fast:false so one suite's failure
+  # doesn't cancel the others, and "Re-run failed jobs" re-runs only the failed
+  # leg. Each leg spins its own worker container polling the shared task queue;
+  # legs are independent (own connection + AE workflow slug), so co-serving is
+  # harmless. 120-min timeout (> ae_poll + atlas_poll + build/setup overhead).
+  e2e:
+    name: End-to-end (${{ matrix.name }})
+    needs: discover-e2e
+    if: needs.discover-e2e.result == 'success' && needs.discover-e2e.outputs.count != '0'
+    strategy:
+      fail-fast: false
+      # Fallback to an empty matrix when discovery was skipped (no label / not
+      # dispatched) so fromJson('') doesn't error at job-setup; the `if` above
+      # also skips the job in that case.
+      matrix: ${{ fromJson(needs.discover-e2e.outputs.matrix || '{"include":[]}') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    concurrency:
+      # Per-leg group so matrix legs run concurrently (a shared group would
+      # serialise them). cancel-in-progress:false keeps re-runs from cancelling.
+      group: tests-e2e-${{ github.ref }}-${{ matrix.name }}
+      cancel-in-progress: false
     permissions:
       pull-requests: write
       contents: read
@@ -223,9 +240,6 @@ jobs:
       # Derived so ATLAN_BASE_URL is always the same tenant as SDR_TEST_TENANT.
       ATLAN_BASE_URL: https://${{ secrets.SDR_TEST_TENANT }}
     steps:
-      # codex-/return-dispatch on the apps-sdk side scans step *names* for
-      # "distinct-id <value>". Always-run, no-op; lets the SDK PR's dispatched
-      # e2e job locate this run via the GH Actions API.
       - name: distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
         shell: bash
@@ -245,18 +259,12 @@ jobs:
           version: "0.11.28"
           enable-cache: true
 
-      # NOTE: e2e-full-reusable.yaml had a "Resolve agent-name" step here that
-      # wrote a `name` output — but nothing consumed it (the sdr-e2e action has
-      # no agent-name input and reads no AGENT_NAME env; the worker's queue name
-      # is resolved inside the action/compose overlay). It was dead on arrival,
-      # so it is intentionally NOT carried over. The `agent-name-override` input
-      # is kept declared for caller compatibility but is currently inert until
-      # sdr-e2e grows a real agent-name input.
       - uses: atlanhq/application-sdk/.github/actions/sdr-e2e@main
         with:
           app-name: ${{ inputs.app-name }}
           app-image-name: ${{ inputs.app-image-name }}
-          test-path: ${{ inputs.e2e-test-path }}
+          # One suite per leg (the matrix file), not the whole e2e directory.
+          test-path: ${{ matrix.file }}
           # Full-DAG defaults carried over from e2e-full-reusable.yaml. The
           # full-DAG pipeline lives alongside the SDR (testcontainer) pipeline
           # in connector repos, so these must be explicit — otherwise the action
@@ -267,10 +275,15 @@ jobs:
           # Bump the container-health wait because the worker has to establish
           # the Temporal connection with TLS + auth before /server/health greens.
           container-health-timeout-seconds: "120"
-          # `-s` streams the harness poll-loop output in real time.
+          # `-s` streams the harness poll-loop output in real time — each leg is
+          # a single sequential pytest process, so this is live per-job again.
           pytest-extra-args: "-s"
-          # Opt-in e2e parallelism (empty = sequential, unchanged default).
-          pytest-parallel-workers: ${{ inputs.e2e-parallel-workers }}
+          # Unique per-leg artifact name so parallel legs don't collide on
+          # upload-artifact (which rejects duplicate names within a run).
+          artifact-suffix: ${{ matrix.name }}
+          # One slim summary is posted by the Tests Gate; suppress the per-leg
+          # connector-PR comment so N legs don't post N comments.
+          post-pr-comment: "false"
           application-sdk-ref: ${{ inputs.application-sdk-ref }}
           base-image-ref: ${{ inputs.base-image-ref }}
           enable-two-store: ${{ inputs.two-store }}
@@ -283,7 +296,7 @@ jobs:
   # ── Aggregator gate (single required check for branch protection) ────────
   tests-passed:
     name: Tests Gate
-    needs: [tests, e2e]
+    needs: [tests, discover-e2e, e2e]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -301,9 +314,9 @@ jobs:
             | Job | Status | Result |
             |---|---|---|
             | tests | ${{ needs.tests.result == 'success' && '✅ Passed' || (needs.tests.result == 'skipped' && '⊘ Skipped' || '❌ Failed') }} | `${{ needs.tests.outputs.summary || 'no summary' }}` |
-            | e2e | ${{ needs.e2e.result == 'success' && '✅ Passed' || (needs.e2e.result == 'skipped' && '⊘ Skipped — add `e2e` label to trigger' || '❌ Failed') }} | (see run) |
+            | e2e | ${{ needs.discover-e2e.result == 'skipped' && '⊘ Skipped — add `e2e` label to trigger' || (needs.e2e.result == 'success' && '✅ Passed' || (needs.e2e.result == 'skipped' && '⊘ No suites discovered' || '❌ Failed')) }} | per-suite results + live logs in the run |
 
-            **Overall:** ${{ (needs.tests.result == 'success' && (needs.e2e.result == 'success' || needs.e2e.result == 'skipped')) && '✅ All passed' || '❌ Some failed' }} — [view run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            **Overall:** ${{ (needs.tests.result == 'success' && needs.discover-e2e.result != 'failure' && (needs.e2e.result == 'success' || needs.e2e.result == 'skipped')) && '✅ All passed' || '❌ Some failed' }} — [view run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
         continue-on-error: true
 
       - name: Verify all test jobs succeeded
@@ -312,8 +325,16 @@ jobs:
             echo "::error::tests job did not succeed (result=${{ needs.tests.result }})"
             exit 1
           fi
+          # Discovery skipped == e2e not requested (no label / not dispatched) → OK.
+          # Discovery failed == real infra error → fail (e2e legs never ran).
+          if [ "${{ needs.discover-e2e.result }}" != "success" ] && [ "${{ needs.discover-e2e.result }}" != "skipped" ]; then
+            echo "::error::e2e discovery did not succeed (result=${{ needs.discover-e2e.result }})"
+            exit 1
+          fi
+          # e2e matrix aggregate: success iff every leg passed; skipped when no
+          # label or zero suites discovered.
           if [ "${{ needs.e2e.result }}" != "success" ] && [ "${{ needs.e2e.result }}" != "skipped" ]; then
-            echo "::error::e2e job did not succeed (result=${{ needs.e2e.result }})"
+            echo "::error::one or more e2e suites did not succeed (result=${{ needs.e2e.result }})"
             exit 1
           fi
           echo "All test jobs passed."
