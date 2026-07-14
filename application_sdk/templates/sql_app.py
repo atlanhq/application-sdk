@@ -46,10 +46,23 @@ Usage::
         fetch_column_sql = "SELECT COLUMN_NAME as column_name FROM ..."
 
         def map_table(self, record, connection_qn):
-            from pyatlan_v9.model.assets import Table
-            return Table(
-                qualified_name=f"{connection_qn}/{record['database_name']}/{record['schema_name']}/{record['table_name']}",
+            from pyatlan_v9.model.assets import Database, Schema, Table
+
+            # Build assets with the pyatlan_v9 ``.creator()`` factories: each one
+            # computes its own qualifiedName from its parent's, so the grammar
+            # lives in pyatlan, not in a hand-rolled ``f"{connection_qn}/..."``
+            # string per connector (which conformance P028 flags).
+            database = Database.creator(
+                name=record["database_name"],
+                connection_qualified_name=connection_qn,
+            )
+            schema = Schema.creator(
+                name=record["schema_name"],
+                database_qualified_name=database.qualified_name,
+            )
+            return Table.creator(
                 name=record["table_name"],
+                schema_qualified_name=schema.qualified_name,
             )
 
         def map_column(self, record, connection_qn):

@@ -177,13 +177,19 @@ def _format_generated() -> None:
     patterns (e.g. an app that exempts `app/generated/**` from a rule) only
     match a real relative path — they silently fail to match an absolute
     temp-dir path, which would make this over-apply rules relative to what
-    pre-commit actually enforces."""
+    pre-commit actually enforces.
+
+    `--force-exclude` makes ruff honor those `exclude`/`extend-exclude` patterns
+    even for the explicitly-passed paths (ruff otherwise ignores excludes for
+    paths named on the command line). An app that excludes `app/generated` then
+    keeps its raw pkl output here instead of this pass reformatting it into
+    freshness drift (CNCT-70)."""
     inputs = sorted(Path("app/generated").rglob("*.py"))
     if not inputs:
         return
     paths = [str(p) for p in inputs]
-    run(["uvx", "ruff", "check", "--fix", "--quiet", *paths])
-    run(["uvx", "ruff", "format", *paths])
+    run(["uvx", "ruff", "check", "--fix", "--quiet", "--force-exclude", *paths])
+    run(["uvx", "ruff", "format", "--force-exclude", *paths])
 
 
 def _swap_outputs(out_dir: Path) -> None:
