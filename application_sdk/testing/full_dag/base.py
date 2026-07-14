@@ -10,7 +10,7 @@ A connector test:
         BaseFullDAGE2ETest, RunMode,
     )
     from application_sdk.testing.full_dag.payload import (
-        ConnectionSpec, DatabaseSpec, AgentSpec,
+        ConnectionSpec, DatabaseSpec,
     )
 
     @pytest.mark.full_dag_e2e
@@ -31,8 +31,10 @@ A connector test:
                 password=os.environ["MYSQL_PASSWORD"],
             )
 
-        def agent_spec(self) -> AgentSpec | None:
-            return AgentSpec(agent_name=f"ci-{self.run_id}")
+    # agent_spec() is derived from ATLAN_APPLICATION_NAME + ATLAN_DEPLOYMENT_NAME
+    # by default (matching the worker's atlan-{app}-{deployment} queue, including
+    # any per-leg suffix the CI action sets). Override it only to pin an explicit
+    # queue — a run_id-keyed override would silently drop per-leg isolation.
 
 The base class handles submit + native-status poll + Atlas-side
 Connection assertion + per-node duration reporting. Subclasses just
