@@ -26,7 +26,7 @@ def _make_client(monkeypatch: pytest.MonkeyPatch, responses: list[tuple[int, Any
     client = AEWorkflowClient("https://tenant.example.com/", "fake-token")
     queue = list(responses)
 
-    def fake_request(method, path, *, body=None, timeout=30):
+    def fake_request(method, path, *, body=None, timeout=30, **_kwargs):
         if not queue:
             raise AssertionError("More HTTP calls than queued responses")
         return queue.pop(0)

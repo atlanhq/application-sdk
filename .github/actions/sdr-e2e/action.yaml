@@ -262,6 +262,20 @@ runs:
         fi
         uv lock
 
+    # Regenerate app/generated/** (incl. manifest.json — the AE DAG) from
+    # contract/app.pkl BEFORE the image build, so the connector image bakes a
+    # manifest generated from the CURRENT contract + toolkit rather than a
+    # possibly-stale committed one (BLDX-1493). This is the ONLY regeneration in
+    # this action — it must precede the buildx build below that COPYs the tree.
+    # check-drift is false: uv/ruff aren't installed until setup-deps (later), so
+    # generated-Python formatting is skipped here; the warn-only drift gate lives
+    # in the connector-integration-tests job. Self-skips when no contract/app.pkl.
+    - name: Regenerate contract artifacts (manifest.json) before image build
+      uses: atlanhq/application-sdk/.github/actions/regenerate-contract@main
+      with:
+        application-sdk-ref: ${{ inputs.application-sdk-ref }}
+        check-drift: "false"
+
     # Buildx is required for the GHA cache backend below. Set up once
     # per run, before the image build that uses `cache-from/cache-to`.
     - name: Set up Docker Buildx

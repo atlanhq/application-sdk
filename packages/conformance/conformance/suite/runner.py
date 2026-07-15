@@ -37,6 +37,8 @@ from conformance.suite.checks import (
     determinism,
     dev_entrypoint,
     dockerfile_conformance,
+    e2e_agent_spec,
+    e2e_deployment_name,
     entrypoint_alignment,
     error_handling,
     generated_freshness,
@@ -46,6 +48,7 @@ from conformance.suite.checks import (
     manifest_contract,
     optimizations,
     orchestration,
+    preflight,
     prescriptions,
     security,
     test_quality,
@@ -161,6 +164,16 @@ _CHECKS: list[CheckRegistration] = [
         scan_path=coverage_config.scan_path,
     ),
     CheckRegistration(
+        series=e2e_deployment_name.SERIES,
+        discover=e2e_deployment_name.discover,
+        scan_path=e2e_deployment_name.scan_path,
+    ),
+    CheckRegistration(
+        series=e2e_agent_spec.SERIES,
+        discover=e2e_agent_spec.discover,
+        scan_path=e2e_agent_spec.scan_path,
+    ),
+    CheckRegistration(
         series=dockerfile_conformance.SERIES,
         discover=dockerfile_conformance.discover,
         scan_path=dockerfile_conformance.scan_path,
@@ -182,6 +195,12 @@ _CHECKS: list[CheckRegistration] = [
         discover=app_name_alignment.discover,
         scan_path=app_name_alignment.scan_path,
         scan_all=app_name_alignment.scan_all,
+    ),
+    CheckRegistration(
+        series=preflight.SERIES,
+        discover=preflight.discover,
+        scan_path=preflight.scan_path,
+        scan_all=preflight.scan_all,
     ),
     CheckRegistration(
         series=legacy_contract.SERIES,

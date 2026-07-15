@@ -107,6 +107,30 @@ class NoWorkerOnTaskQueueError(PreconditionError):
 
 
 @dataclass(kw_only=True)
+class AtlanAEWorkflowAlreadyActiveError(PreconditionError):
+    """A run for the AE workflow is already active, so a new submit was rejected.
+
+    AE returns ``AE-WF-409-03`` ("a run for workflow '<slug>' is already
+    active") when a submit collides with an in-flight run — but Heracles (the
+    tenant-facing proxy in front of Automation Engine) masks it as an HTTP 500
+    with the original 409 text embedded.
+
+    This is a *terminal* state-conflict, not a recoverable dependency blip: the
+    same submit cannot succeed until the active run ends. It is therefore a
+    non-retryable ``PreconditionError`` (like the sibling
+    ``NoWorkerOnTaskQueueError``) rather than a retryable
+    ``DependencyUnavailableError``. Retrying a non-idempotent submit spawns a
+    duplicate run that AE marks ``Skipped``, which the test then mistracks
+    (surfacing as a spurious ``NoWorkerOnTaskQueueError``). Its run_id is
+    unrecoverable via native-status (keyed by run_id), so we fail fast with the
+    true cause.
+    """
+
+    code: ClassVar[str] = "PRECONDITION_AE_WORKFLOW_ALREADY_ACTIVE"
+    expected_state: str | None = "no active run for this workflow"
+
+
+@dataclass(kw_only=True)
 class AgentSpecRequiredError(InvalidInputError):
     """Agent mode requires an ``AgentSpec`` but none was provided."""
 
